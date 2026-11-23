@@ -108,4 +108,65 @@ def replayWrite (a b : @& Run) (trace : @& ByteArray) : ByteArray :=
     trace.size.toUInt64) 1
   replayWriteFrom a.view b.view trace trace.usize USize.toNat_ofNat_le 0 0 0 header
 
+/-- Each byte selects one contiguous fixed-width group from the indicated run. -/
+def validateGroups (trace : @& ByteArray) (left right width : Nat) : Bool := Id.run do
+  let mut a := 0
+  let mut b := 0
+  for op in trace do
+    if op == 0 then a := a + width
+    else if op == 1 then b := b + width
+    else return false
+  return a == left && b == right
+
+private def copyGroupsFrom (left right : @& ByteArray) (trace : @& ByteArray)
+    (count : USize) (extent : count.toNat ≤ trace.size)
+    (width pos : USize) (a b offset : Nat) (out : ByteArray) : ByteArray :=
+  if h : pos < count then
+    have order := USize.lt_iff_toNat_lt.mp h
+    if trace.uget pos (by omega) == 0 then
+      let next := left.copySlice a out offset width.toNat
+      copyGroupsFrom left right trace count extent width (pos + 1)
+        (a + width.toNat) b (offset + width.toNat) next
+    else
+      let next := right.copySlice b out offset width.toNat
+      copyGroupsFrom left right trace count extent width (pos + 1)
+        a (b + width.toNat) (offset + width.toNat) next
+  else out
+termination_by count.toNat - pos.toNat
+decreasing_by all_goals
+  have next := addOne pos count order
+  omega
+
+def copyGroups (left right : @& Run) (trace : @& ByteArray) (width : USize)
+    (out : ByteArray) : ByteArray :=
+  let out := storePair out 0 (left.view.count.toUInt64 + right.view.count.toUInt64) 1
+  copyGroupsFrom left.view.bytes right.view.bytes trace trace.usize USize.toNat_ofNat_le
+    width 0 16 16 16 out
+
+/-- Reference copy expressed with array operations, independent of the runtime entry point. -/
+private def copyModel (src dest : ByteArray) (a b n : Nat) : ByteArray :=
+  ⟨dest.data.extract 0 b ++ src.data.extract a (a+n) ++
+    dest.data.extract (b + min n (src.size - a)) dest.size⟩
+
+def checkCopyContract : IO Unit := do
+  let src := Id.run do
+    let mut out := ByteArray.emptyWithCapacity 128
+    for i in [0:128] do out := out.push i.toUInt8
+    return out
+  for width in [0, 16, 32, 64] do
+    for (a, b, size, capacity) in [
+        (3, 7, 96, 96), (3, 96, 96, 192), (3, 96, 96, 96),
+        (123, 4, 96, 96), (130, 4, 96, 96), (3, 200, 96, 192)] do
+      let dest := Id.run do
+        let mut bytes := ByteArray.emptyWithCapacity capacity
+        for _ in [0:size] do bytes := bytes.push 0xa5
+        return bytes
+      let expected := copyModel src dest a b width
+      if src.copySlice a dest b width != expected then
+        throw (IO.userError s!"copy contract failed at {a}, {b}, {width}")
+      if src.copySlice a dest b width false != expected then
+        throw (IO.userError "shared destination contract failed")
+    if src.copySlice 3 src 7 width != copyModel src src 3 7 width then
+      throw (IO.userError "aliased copy contract failed")
+
 end Alvoki.MergePhases

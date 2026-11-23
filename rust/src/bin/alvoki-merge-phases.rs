@@ -119,6 +119,51 @@ fn merge(left: &Run<'_>, right: &Run<'_>) -> Vec<u8> {
     out
 }
 
+fn copy_groups<const WIDTH: usize>(left: &Run<'_>, right: &Run<'_>, trace: &[u8], mut out: Vec<u8>) -> Vec<u8> {
+    out[..8].copy_from_slice(&((left.limit + right.limit) as u64).to_le_bytes());
+    out[8..16].copy_from_slice(&1u64.to_le_bytes());
+    let (mut i, mut j) = (0, 0);
+    for (&op, dst) in trace.iter().zip(out[16..].chunks_exact_mut(WIDTH)) {
+        let source = if op == 0 {
+            let start = i;
+            i += WIDTH;
+            &left.payload[start..i]
+        } else {
+            let start = j;
+            j += WIDTH;
+            &right.payload[start..j]
+        };
+        dst.copy_from_slice(source);
+    }
+    out
+}
+
+fn validate_groups(trace: &[u8], left: usize, right: usize, width: usize) -> bool {
+    let mut zeros: usize = 0;
+    for &op in trace {
+        match op {
+            0 => zeros += 1,
+            1 => (),
+            _ => return false,
+        }
+    }
+    zeros.checked_mul(width) == Some(left) && (trace.len() - zeros).checked_mul(width) == Some(right)
+}
+
+fn pipeline(left: &Run<'_>, right: &Run<'_>, targets: &Run<'_>) -> Result<u64, &'static str> {
+    let bytes = merge(left, right);
+    let output = Block::parse(&bytes)?;
+    let mut sum = bytes[16..].chunks_exact(16).fold(0u64, |sum, record| {
+        let key = u64::from_le_bytes(record[..8].try_into().unwrap());
+        let value = u64::from_le_bytes(record[8..].try_into().unwrap());
+        sum.wrapping_add(key ^ value)
+    });
+    for i in 0..targets.limit {
+        sum = sum.wrapping_add(output.lookup(targets.value(i)).unwrap_or(0));
+    }
+    Ok(sum)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args().skip(1).collect();
     let [mode, left, right, trace, output, repetitions] = args.as_slice() else {
@@ -129,13 +174,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let left = Run::parse(&left_bytes)?;
     let right = Run::parse(&right_bytes)?;
     let trace = fs::read(trace)?;
-    if !validate_trace(&trace, left.limit, right.limit) {
+    let targets = if mode == "pipeline" { Some(Run::parse(&trace)?) } else { None };
+    let width = match mode.strip_prefix("check-").unwrap_or(mode).as_ref() {
+        "copy16" => 16,
+        "copy32" => 32,
+        "copy64" => 64,
+        "copy4096" => 4096,
+        _ => 0,
+    };
+    let valid = if width == 0 {
+        validate_trace(&trace, left.limit, right.limit)
+    } else {
+        validate_groups(&trace, left.limit, right.limit, width / 16)
+    };
+    if mode != "pipeline" && !valid {
         return Err("invalid replay trace".into());
     }
     for _ in 0..repetitions.parse()? {
+        let dest = if width == 0 { Vec::new() } else { vec![0xa5; left_bytes.len() + right_bytes.len() - 16] };
+        black_box(&dest);
         let start = Instant::now();
         let (a, b, ops) = black_box((&left, &right, trace.as_slice()));
         let (bytes, sum) = match mode.as_str() {
+            "pipeline" => (Vec::new(), pipeline(a, b, targets.as_ref().unwrap())?),
             "select" => (Vec::new(), select(a, b)),
             "replay-checksum" => {
                 let mut sum = 0;
@@ -148,6 +209,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (out, 0)
             }
             "merge" | "check-merge" => (merge(a, b), 0),
+            _ if width == 16 => (copy_groups::<16>(a, b, ops, dest), 0),
+            _ if width == 32 => (copy_groups::<32>(a, b, ops, dest), 0),
+            _ if width == 64 => (copy_groups::<64>(a, b, ops, dest), 0),
+            _ if width == 4096 => (copy_groups::<4096>(a, b, ops, dest), 0),
             _ => return Err("unknown mode".into()),
         };
         black_box(&bytes);

@@ -57,3 +57,12 @@ python3 benchmarks/merge_phases.py --summarize /tmp/alvoki-merge-phases.csv
 ```
 
 [Phase timings and next experiments](docs/merge-phases.md)
+
+## Fixed-width copy specialization
+
+```sh
+bash scripts/fixed-copy.sh --out /tmp/alvoki-fixed-copy.csv
+python3 benchmarks/fixed_copy.py --summarize /tmp/alvoki-fixed-copy.csv
+```
+
+[Copy-width sweep and packed-pipeline results](docs/fixed-copy.md)

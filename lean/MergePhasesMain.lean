@@ -1,4 +1,5 @@
 import MergePhases
+import NativeTune
 
 open Alvoki Alvoki.Opt Alvoki.Packed Alvoki.MergePhases
 
@@ -7,24 +8,58 @@ def loadRun (path : String) : IO Run := do
   | .ok run => pure run
   | .error message => throw (IO.userError message)
 
+def pipeline (left right targets : @& Run) : IO UInt64 := do
+  let bytes := merge left right
+  let output ← match parseRun bytes with
+    | .ok run => pure run
+    | .error message => throw (IO.userError message)
+  let mut total := Alvoki.NativeTune.scanScalar output
+  for i in [0:targets.view.count.toNat] do
+    let key := targets.view.value i.toUSize
+    let index := output.view.lowerBound key
+    if index < output.view.count && output.view.key index == key then
+      total := total + output.view.value index
+  return total
+
 def main (args : List String) : IO Unit := do
+  if args == ["copy-contract"] then
+    checkCopyContract
+    return
   let [mode, leftPath, rightPath, tracePath, output, repetitions] := args
     | throw (IO.userError "expected mode left right trace output repetitions")
   let left ← loadRun leftPath
   let right ← loadRun rightPath
   let trace ← IO.FS.readBinFile tracePath
-  if !validateTrace trace left.view.count.toNat right.view.count.toNat then
+  let targets ← if mode == "pipeline" then some <$> loadRun tracePath else pure none
+  let operation := if mode.startsWith "check-" then String.ofList (mode.toList.drop 6) else mode
+  let width : Nat := match operation with
+    | "copy16" => 16
+    | "copy32" => 32
+    | "copy64" => 64
+    | "copy4096" => 4096
+    | _ => 0
+  let total := left.view.count.toNat + right.view.count.toNat
+  let valid := if width == 0 then validateTrace trace left.view.count.toNat right.view.count.toNat
+    else validateGroups trace left.view.count.toNat right.view.count.toNat (width / 16)
+  if mode != "pipeline" && !valid then
     throw (IO.userError "invalid replay trace")
   let input ← IO.mkRef (left, right, trace)
   for _ in [0:repetitions.toNat?.getD 1] do
     let (a, b, ops) ← input.get
+    let prepared ← IO.mkRef (if width == 0 then ByteArray.empty else zeroedBytes (16 + total * 16))
+    let destination ← prepared.swap ByteArray.empty
     let start ← IO.monoNanosNow
     let (bytes, sum) ← match mode with
+      | "pipeline" =>
+        let some query := targets | throw (IO.userError "expected query block")
+        pure (ByteArray.empty, ← pipeline a b query)
       | "select" => pure (ByteArray.empty, select a b)
       | "replay-checksum" => pure (ByteArray.empty, replayChecksum a b ops)
       | "replay-write" | "check-replay-write" => pure (replayWrite a b ops, 0)
       | "merge" | "check-merge" => pure (merge a b, 0)
-      | _ => throw (IO.userError "unknown mode")
+      | _ =>
+        if width == 0 then throw (IO.userError "unknown mode")
+        else pure (copyGroups a b ops width.toUSize destination, 0)
     let elapsed := (← IO.monoNanosNow) - start
     if mode.startsWith "check-" then
       IO.FS.writeBinFile output bytes
