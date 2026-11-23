@@ -91,6 +91,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.repair_complete
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.syncDirectory_valid
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.crash_valid
+#check_axioms Alvoki.WAL.Boundary.ReopenRetry.chosen_pair_from_initial
 #check_axioms Alvoki.WAL.Boundary.reopenRetry_valid
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.recover_chosen
 #check_axioms Alvoki.WAL.Boundary.commit_append_error

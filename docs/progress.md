@@ -211,3 +211,5 @@ Until marker rename, the visible and every surviving marker point to the old pre
 ## From interrupted writes to the marked reopen invariant
 
 If each possible WAL file has a write-cut witness with the same visible marker and the corresponding crash markers, the initial marked reopen invariant follows. The actual decoded marker count identifies the old or extended encoded history and every physical candidate yields that exact prefix. The witnesses can differ in staging state. The adapter proof still needs to establish them for each real failure and crash outcome. [Write-cut validity theorem](../lean/Alvoki/Storage/Disk/DiskRecoveryModel.lean)
+
+Every manifest and marker pair available after a modeled reopen retry was available before the first attempt. Repair and aligned sync can settle the currently visible pair, and a crash selects one of the saved pairs. This lets a combined recovery proof reuse the run-set witness for the initial pair. [Metadata pair theorem](../lean/Alvoki/Storage/Disk/MarkedWalReopenModel.lean)
