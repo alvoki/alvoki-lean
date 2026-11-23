@@ -147,6 +147,36 @@ inductive ReopenRetry (initial : ReopenImage) : ReopenImage → Prop where
   | crash (path : ReopenRetry initial before) (pairSurvives : pair ∈ before.directory.crashImages)
       (walSurvives : wal ∈ before.wal.crashImages) : ReopenRetry initial (.crash pair wal)
 
+/-- Every metadata pair available after reopen was already visible or could
+survive a crash before the first attempt. Sync settles the visible pair, and a
+crash settles one of its saved pairs. -/
+theorem ReopenRetry.chosen_pair_from_initial {initial after : ReopenImage}
+    (path : ReopenRetry initial after) {pair : DirectoryPublication.Bindings}
+    (chosen : pair ∈ after.directory.active :: after.directory.crashImages) :
+    pair ∈ initial.directory.active :: initial.directory.crashImages := by
+  have fromSync (directory : DirectoryPublication.Image)
+      (selected : pair ∈ directory.syncDirectory.active :: directory.syncDirectory.crashImages) :
+      pair ∈ directory.active :: directory.crashImages := by
+    have visible : pair = directory.active := by
+      simpa [DirectoryPublication.Image.syncDirectory] using selected
+    exact List.mem_cons.mpr (.inl visible)
+  induction path with
+  | start => exact chosen
+  | repair _ _ ran earlier =>
+    apply earlier
+    unfold ReopenImage.repairCut at ran
+    obtain ⟨_, _, rfl⟩ := Option.map_eq_some_iff.mp ran
+    dsimp only at chosen
+    split at chosen
+    · exact fromSync _ chosen
+    · exact chosen
+  | syncDirectory _ earlier => exact earlier (fromSync _ chosen)
+  | crash _ survives _ earlier =>
+    apply earlier
+    simp [ReopenImage.crash, DirectoryPublication.Image.settled] at chosen
+    cases chosen
+    exact List.mem_cons.mpr (.inr survives)
+
 theorem reopenRetry_valid {initial after : ReopenImage} {expected : DirectoryPublication.Bindings → ByteArray}
     (valid : initial.Valid expected) (path : ReopenRetry initial after) : after.Valid expected := by
   induction path with
