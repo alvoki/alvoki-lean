@@ -165,3 +165,9 @@ The storage module names now follow the source tree under `Alvoki.Storage.Disk`,
 ## Consecutive WAL replay succeeds
 
 The audited completeness theorem proves that replay accepts every contiguous suffix starting at the checkpoint's next sequence. Each encoded ordinal fits in `UInt64` and establishes that its write passes the overflow guard. When the covered prefix length agrees with the checkpoint watermark, the actual selected-WAL loader succeeds and its final sequence equals the number of selected frames. [Replay completeness](../lean/Alvoki/Storage/Disk/Recovery.lean)
+
+## Combined checkpoint and WAL retry fixture
+
+The native fixture exercises a failed checkpoint, a complete append left unacknowledged, and two failed reopen attempts followed by a successful one. It checks the sync targets and the exact selected WAL bytes, the persisted floor and retained snapshot, the acknowledged overwrite and tombstone, and reuse of the discarded sequence. The sync wrapper tests process-visible outcomes on Linux. The trace proof separately accounts for possible durable bindings after a crash. [Native fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)
+
+The crash refinement review reproduced an old handle reading and releasing a new pin with the same local ID after reopen. The roadmap now records the session identity requirement and the scope of the first crash trace proof. [Disk proof obligations](proof-roadmap.md#disk-guarantees-to-prove)
