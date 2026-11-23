@@ -97,19 +97,38 @@ theorem decodeFrame_reencode {bytes : ByteArray} {event : Write}
       exact finish _ fields.1 fields.2
     · contradiction
 
-/-- A complete frame with a bad checksum, format, or tag fails recovery.
-A final incomplete frame is outside the complete frame count. -/
-private def decodeFrom (bytes : @& ByteArray) (offset remaining : Nat)
+@[inline] private def advanceOrdinal (checkOrdinals : Bool) (ordinal count : Nat) : Nat :=
+  if checkOrdinals then ordinal + count else ordinal
+
+/-- A complete frame with a bad checksum, format, tag, or required ordinal
+fails recovery. A final incomplete frame is outside the complete frame count. -/
+@[specialize checkOrdinals]
+private def decodeFrom (checkOrdinals : Bool) (bytes : @& ByteArray) (ordinal offset remaining : Nat)
     (reversed : List Write) : Except String (List Write) :=
   match remaining with
   | 0 => .ok reversed.reverse
   | n + 1 =>
     match decodeFrame (bytes.extract offset (offset + frameSize)) with
     | .error message => .error message
-    | .ok event => decodeFrom bytes (offset + frameSize) n (event :: reversed)
+    | .ok event =>
+      if checkOrdinals && event.sequence.toNat != ordinal then
+        .error "WAL frame sequence does not match its ordinal"
+      else
+        decodeFrom checkOrdinals bytes (advanceOrdinal checkOrdinals ordinal 1)
+          (offset + frameSize) n (event :: reversed)
 
 def decode (bytes : @& ByteArray) : Except String (List Write) :=
-  decodeFrom bytes 0 (bytes.size / frameSize) []
+  decodeFrom false bytes 1 0 (bytes.size / frameSize) []
+
+/-- Decode a whole WAL prefix, checking the frame sequence against its
+one-based position during the same pass. -/
+def decodeOrdinals (bytes : @& ByteArray) : Except String (List Write) :=
+  decodeFrom true bytes 1 0 (bytes.size / frameSize) []
+
+/-- A contiguous sequence of frame ordinals beginning at `first`. -/
+def OrdinalsFrom : Nat → List Write → Prop
+  | _, [] => True
+  | first, event :: rest => event.sequence.toNat = first ∧ OrdinalsFrom (first + 1) rest
 
 def encode : List Write → ByteArray
   | [] => ByteArray.empty
@@ -129,34 +148,47 @@ theorem encode_append (left right : List Write) :
     simp only [encode, ByteArray.size_append, encodeFrame_size, ih, frameSize, List.length_cons]
     omega
 
-private theorem decodeFrom_shift (prefixBytes bytes : ByteArray) (offset remaining : Nat)
+private theorem decodeFrom_shift (checkOrdinals : Bool) (prefixBytes bytes : ByteArray)
+    (ordinal offset remaining : Nat)
     (reversed : List Write) :
-    decodeFrom (prefixBytes ++ bytes) (prefixBytes.size + offset) remaining reversed =
-      decodeFrom bytes offset remaining reversed := by
-  induction remaining generalizing offset reversed with
+    decodeFrom checkOrdinals (prefixBytes ++ bytes) ordinal (prefixBytes.size + offset) remaining reversed =
+      decodeFrom checkOrdinals bytes ordinal offset remaining reversed := by
+  induction remaining generalizing ordinal offset reversed with
   | zero => rfl
   | succ n ih =>
     rw [decodeFrom, decodeFrom, Nat.add_assoc, ByteArray.extract_append_size_add]
     split
     · rfl
-    · exact ih (offset + frameSize) _
+    · split
+      · rfl
+      · exact ih (advanceOrdinal checkOrdinals ordinal 1) (offset + frameSize) _
 
-private theorem decodeFrom_append_encoded (events : List Write) (tail : ByteArray) (remaining : Nat)
-    (reversed : List Write) :
-    decodeFrom (encode events ++ tail) 0 (events.length + remaining) reversed =
-      decodeFrom tail 0 remaining (events.reverse ++ reversed) := by
-  induction events generalizing reversed with
-  | nil => simp [encode]
+private theorem decodeFrom_append_encoded (checkOrdinals : Bool) (events : List Write)
+    (tail : ByteArray) (ordinal remaining : Nat) (reversed : List Write)
+    (ordered : checkOrdinals = true → OrdinalsFrom ordinal events) :
+    decodeFrom checkOrdinals (encode events ++ tail) ordinal 0 (events.length + remaining) reversed =
+      decodeFrom checkOrdinals tail (advanceOrdinal checkOrdinals ordinal events.length)
+        0 remaining (events.reverse ++ reversed) := by
+  induction events generalizing ordinal reversed with
+  | nil => simp [encode, advanceOrdinal]
   | cons event rest ih =>
     simp only [encode, ByteArray.append_assoc, List.length_cons,
       Nat.add_right_comm rest.length 1 remaining, decodeFrom, Nat.zero_add]
     rw [ByteArray.extract_append_eq_left (encodeFrame_size event).symm, decodeFrame_encode]
-    dsimp only
-    have shifted := decodeFrom_shift (encodeFrame event) (encode rest ++ tail) 0
+    have accepted : (checkOrdinals && event.sequence.toNat != ordinal) = false := by
+      cases checkOrdinals with
+      | false => rfl
+      | true => simp [(ordered rfl).1]
+    simp only [accepted, Bool.false_eq_true, ↓reduceIte]
+    let next := advanceOrdinal checkOrdinals ordinal 1
+    have shifted := decodeFrom_shift checkOrdinals (encodeFrame event) (encode rest ++ tail) next 0
       (rest.length + remaining) (event :: reversed)
-    rw [encodeFrame_size, Nat.add_zero] at shifted
-    rw [shifted, ih]
-    simp [List.reverse_cons, List.append_assoc]
+    simp only [encodeFrame_size, Nat.add_zero] at shifted
+    have remainingOrdered (enabled : checkOrdinals = true) : OrdinalsFrom next rest := by
+      simpa [next, advanceOrdinal, enabled] using (ordered enabled).2
+    rw [shifted, ih next _ remainingOrdered]
+    cases checkOrdinals <;> simp [next, advanceOrdinal, List.reverse_cons,
+      List.append_assoc, Nat.add_assoc, Nat.add_comm 1]
 
 theorem decode_ignores_incomplete_tail (events : List Write) (tail : ByteArray)
     (incomplete : tail.size < frameSize) :
@@ -166,13 +198,47 @@ theorem decode_ignores_incomplete_tail (events : List Write) (tail : ByteArray)
     change (48 * events.length + tail.size) / 48 = events.length
     change tail.size < 48 at incomplete
     omega
-  have parsed := decodeFrom_append_encoded events tail 0 []
+  have parsed := decodeFrom_append_encoded false events tail 1 0 [] (by simp)
   rw [decode, count]
   simpa [decodeFrom] using parsed
 
 theorem decode_encode (events : List Write) : decode (encode events) = .ok events := by
   have h := decode_ignores_incomplete_tail events ByteArray.empty (by decide)
   simpa only [ByteArray.append_empty] using h
+
+theorem decodeOrdinals_encode (events : List Write) (ordered : OrdinalsFrom 1 events) :
+    decodeOrdinals (encode events) = .ok events := by
+  have count : (encode events).size / frameSize = events.length := by
+    rw [encode_size, Nat.mul_div_cancel_left _ (by decide : 0 < frameSize)]
+  have parsed := decodeFrom_append_encoded true events ByteArray.empty 1 0 [] (fun _ => ordered)
+  rw [decodeOrdinals, count]
+  simpa [decodeFrom] using parsed
+
+private theorem decodeFrom_ordinals (bytes : ByteArray) (ordinal offset remaining : Nat)
+    (reversed result : List Write) (decoded : decodeFrom true bytes ordinal offset remaining reversed = .ok result) :
+    ∃ suffix, OrdinalsFrom ordinal suffix ∧ result = reversed.reverse ++ suffix := by
+  induction remaining generalizing ordinal offset reversed with
+  | zero =>
+    cases decoded
+    exact ⟨[], trivial, by simp⟩
+  | succ remaining ih =>
+    rw [decodeFrom] at decoded
+    split at decoded
+    · contradiction
+    · rename_i event _
+      split at decoded
+      · contradiction
+      · rename_i sequence
+        have number : event.sequence.toNat = ordinal := by simpa using sequence
+        obtain ⟨suffix, ordered, combined⟩ := ih (ordinal + 1) (offset + frameSize) (event :: reversed) decoded
+        exact ⟨event :: suffix, ⟨number, ordered⟩, by simpa [List.reverse_cons, List.append_assoc] using combined⟩
+
+/-- Every complete frame returned by the selected-WAL decoder has the
+sequence assigned to its one-based position. -/
+theorem decodeOrdinals_sound {bytes : ByteArray} {events : List Write}
+    (decoded : decodeOrdinals bytes = .ok events) : OrdinalsFrom 1 events := by
+  obtain ⟨suffix, ordered, reconstructed⟩ := decodeFrom_ordinals bytes 1 0 (bytes.size / frameSize) [] events decoded
+  simpa using reconstructed.symm ▸ ordered
 
 /-- A complete, malformed last frame cannot be treated as a short tear by the
 current decoder. A durable replay boundary must come from outside this codec. -/
@@ -185,7 +251,7 @@ theorem decode_bad_final_frame (events : List Write) {last : ByteArray} {message
     omega
   have entire : last.extract 0 frameSize = last := by
     rw [← full, ByteArray.extract_zero_size]
-  rw [decode, count, decodeFrom_append_encoded]
+  rw [decode, count, decodeFrom_append_encoded false events last 1 1 [] (by simp)]
   simp [decodeFrom, entire, bad]
 
 /-- After replay validates the complete frames, return replacement bytes only for a short tail. -/
@@ -205,11 +271,11 @@ theorem repairPrefix_encode (events : List Write) (tail : ByteArray) (incomplete
   rw [length, ByteArray.extract_append_eq_left rfl, ByteArray.size_append]
   split <;> split <;> simp_all <;> omega
 
-private theorem decodeFrom_prefix (bytes : ByteArray) (limit offset remaining : Nat)
+private theorem decodeFrom_prefix (bytes : ByteArray) (limit ordinal offset remaining : Nat)
     (reversed : List Write) (fits : offset + remaining * frameSize ≤ limit) :
-    decodeFrom (bytes.extract 0 limit) offset remaining reversed =
-      decodeFrom bytes offset remaining reversed := by
-  induction remaining generalizing offset reversed with
+    decodeFrom false (bytes.extract 0 limit) ordinal offset remaining reversed =
+      decodeFrom false bytes ordinal offset remaining reversed := by
+  induction remaining generalizing ordinal offset reversed with
   | zero => rfl
   | succ remaining ih =>
     simp only [Nat.succ_mul] at fits
@@ -218,7 +284,7 @@ private theorem decodeFrom_prefix (bytes : ByteArray) (limit offset remaining : 
       Nat.min_eq_left frameFits]
     split
     · rfl
-    · exact ih _ _ (by omega)
+    · exact ih _ _ _ (by omega)
 
 /-- Trimming a short tail preserves the entire decoder result, including errors
 in any complete frame. Replay uses this same decoder before publishing repair. -/
@@ -236,7 +302,7 @@ theorem decode_repairPrefix (bytes : ByteArray) :
       omega
     change decode (bytes.extract 0 complete) = decode bytes
     rw [decode, decode, frames]
-    exact decodeFrom_prefix bytes complete 0 count [] (by simp [complete])
+    exact decodeFrom_prefix bytes complete 1 0 count [] (by simp [complete])
   · rfl
 
 end Alvoki.WAL

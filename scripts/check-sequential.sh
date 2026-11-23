@@ -33,6 +33,7 @@ lake env leanchecker SequentialPurge
 lake env leanchecker SnapshotTable
 lake env leanchecker CompactionRead
 lake env leanchecker PackedTable
+lake env leanchecker WriteAheadLog
 lake env leanchecker Recovery
 lake env leanchecker Manifest
 lake env leanchecker DiskTable

@@ -143,6 +143,29 @@ private def checkMissingAndMalformedFiles (dir : FilePath) : IO Unit := do
   check ((← restored.lookup pin.handle 2) == some (some 20)) "failed opens kept the lock or changed the data"
   restored.close
 
+private def checkCoveredWalDuplicate (dir : FilePath) : IO Unit := do
+  let db ← DiskTable.open dir
+  let _ ← db.write 1 (some 10)
+  let _ ← db.write 2 (some 20)
+  let _ ← db.write 3 (some 30)
+  db.checkpoint
+  db.close
+  expectManifest dir 1 3 0 1
+  let wal := dir / "WAL"
+  let original ← IO.FS.readBinFile wal
+  let duplicate := original.extract WAL.frameSize (2 * WAL.frameSize)
+  let corrupted := original.extract 0 (2 * WAL.frameSize) ++ duplicate
+  check (corrupted.size == original.size) "duplicate frame changed the selected byte count"
+  let .ok events := WAL.decode corrupted | throw (IO.userError "duplicate frame was not checksum-valid")
+  check (events.map (·.sequence) == [1, 2, 2]) "fixture did not duplicate a covered frame"
+  IO.FS.writeBinFile wal corrupted
+  rejects (do (← DiskTable.open dir).close) "open accepted a checksum-valid duplicate below the checkpoint watermark"
+  IO.FS.writeBinFile wal original
+  let reopened ← DiskTable.open dir
+  let pin ← reopened.acquire
+  check ((← reopened.lookup pin.handle 3) == some (some 30)) "valid checkpoint did not survive the fixture"
+  reopened.close
+
 private def checkBoundedRecovery (dir : FilePath) : IO Unit := do
   let wal := dir / "WAL"
   let marker := dir / "WAL.commit"
@@ -424,11 +447,12 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkReopen
     IO.FS.withTempDir checkInterruptedPublication
     IO.FS.withTempDir checkMissingAndMalformedFiles
+    IO.FS.withTempDir checkCoveredWalDuplicate
     IO.FS.withTempDir checkBoundedRecovery
     IO.FS.withTempDir checkDirectoryIdentity
     IO.FS.withTempDir checkDanglingFiles
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkFirstCheckpointCuts
     IO.FS.withTempDir checkCheckpointRetryWithFewerRuns
-    IO.println "Passed disk identity, WAL boundaries, checkpoint cuts, and sync retry checks."
+    IO.println "Passed disk identity, WAL boundaries and ordinals, checkpoint cuts, and sync retry checks."
   | _ => throw (IO.userError "unexpected disk fixture arguments")

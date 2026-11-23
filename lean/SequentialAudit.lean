@@ -40,6 +40,8 @@ import CheckpointPublicationModel
 #check_axioms Alvoki.WAL.decodeFrame_reencode
 #check_axioms Alvoki.WAL.decode_ignores_incomplete_tail
 #check_axioms Alvoki.WAL.decode_bad_final_frame
+#check_axioms Alvoki.WAL.decodeOrdinals_encode
+#check_axioms Alvoki.WAL.decodeOrdinals_sound
 #check_axioms Alvoki.WAL.repairPrefix_encode
 #check_axioms Alvoki.WAL.decode_repairPrefix
 #check_axioms Alvoki.Manifest.decode_encode

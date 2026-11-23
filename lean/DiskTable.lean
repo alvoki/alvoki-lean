@@ -192,8 +192,7 @@ theorem recoverRunSet_committedBoundary {checkpoint committed : PackedTable} (ge
     (floor : checkpoint.pins.floor ≤ checkpoint.committed)
     (bounded : ∀ run ∈ checkpoint.runs, ∀ row ∈ run.history.rows, row.sequence ≤ checkpoint.committed)
     (covered pending : List WAL.Write)
-    (old : ∀ event ∈ covered, event.sequence ≤ checkpoint.committed)
-    (new : ∀ event ∈ pending, checkpoint.committed < event.sequence)
+    (ordinals : WAL.OrdinalsFrom 1 (covered ++ pending))
     (count : covered.length = checkpoint.committed.toNat)
     (applied : replay checkpoint pending = .ok committed) (tail : ByteArray)
     (walFits : (WAL.encode (covered ++ pending)).size < UInt64.size) :
@@ -211,9 +210,7 @@ theorem recoverRunSet_committedBoundary {checkpoint committed : PackedTable} (ge
   obtain ⟨restored, loads, physical⟩ := loadRunSet_written header checkpoint.runs runCount floor bounded
   have same := PackedTable.restore_sameData flushed physical
   obtain ⟨reopened, replayed, reference⟩ := replay_sameData same pending applied
-  have accepted := recoverSelected_encoded restored covered pending
-    (by simpa only [same.committed] using old)
-    (by simpa only [same.committed] using new)
+  have accepted := recoverSelected_encoded restored covered pending ordinals
     (by simpa only [same.committed] using count)
   exact ⟨restored, reopened, loads, WAL.Boundary.select_encoded (covered ++ pending) tail walFits,
     accepted.trans replayed, reference⟩

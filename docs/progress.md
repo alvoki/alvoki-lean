@@ -124,7 +124,7 @@ The release median rose from 1.28 to 3.11 milliseconds per acknowledged write. T
 
 The native adapter and Lean model now share the checkpoint publication schedule. At a fixed synced WAL watermark, the model proves exact run-set durability for every live or crash-selectable manifest through repeated interrupted publication and reopen. The recovery composition proves the actual byte selector, run loader, and frame-count guard succeed for the corresponding ordered WAL history. Native fixtures inject failures at run syncs and directory barriers and verify recovery after orphan generation reuse. The Lean kernel and axiom checks, native fixtures, and reproduction suite passed. Checkpoint release medians stayed within 7% across the measured run counts. [Checkpoint proof](../lean/storage/publication/CheckpointPublicationModel.lean) · [Benchmarks](benchmarks.md#shared-checkpoint-publication-schedule)
 
-The next proof should connect checkpoint issuance and successful reopen to the model's fresh-generation and fixed WAL assumptions across alternating writes and checkpoints. Checkpoint run-content integrity and whole-WAL sequence validation remain separate runtime obligations. [Proof roadmap](proof-roadmap.md#disk-guarantees-to-prove)
+The next proof should connect checkpoint issuance and successful reopen to the model's fresh-generation and fixed WAL assumptions across alternating writes and checkpoints. This milestone identified separate obligations for checkpoint run-content integrity and whole-WAL sequence validation. [Proof roadmap](proof-roadmap.md#disk-guarantees-to-prove)
 
 ## WAL sync latency investigation
 
@@ -141,3 +141,7 @@ The checkpoint model now proves that the next generation calculated by the adapt
 ## Publication source layout
 
 The single-file and checkpoint publication modules and their models live under `lean/storage/publication/`. Per-library Lake source directories preserve module names, imports, build targets, and generated artifact paths. Lake editor setup, the sequential proof and native fixture suite, and baseline reproduction passed with the new source paths. [Publication model](../lean/storage/publication/DiskPublicationModel.lean) · [Checkpoint model](../lean/storage/publication/CheckpointPublicationModel.lean)
+
+## Selected WAL frame ordinals
+
+Disk recovery checks the one-based sequence of every selected WAL frame, including those covered by a checkpoint. It checks ordinals during decoding and skips the covered prefix by length. The codec audit checks that the decoder accepts correctly numbered logs and returns only correctly numbered frames. A native fixture with a valid checkpoint and a checksum-valid duplicate below the checkpoint watermark is rejected. In seven interleaved native reopen measurements against commit `562baf5`, median ratios ranged from 0.97× to 1.02× for checkpointed logs of 2,000 to 50,000 frames and a log-only fixture of 20,000 frames. [WAL decoder](../lean/WriteAheadLog.lean) · [Recovery](../lean/Recovery.lean)

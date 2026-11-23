@@ -141,9 +141,11 @@ def recoverCheckpoint (state : PackedTable) (bytes : ByteArray) : Except String 
   | .error message => .error message
   | .ok events => replay state (afterCheckpoint state.committed events)
 
-/-- The current disk format keeps all selected frames, starting at sequence 1. -/
+/-- The disk format keeps all selected frames, including those already stored
+in the checkpoint. Each frame's position determines its expected sequence. -/
 def recoverSelected (state : PackedTable) (bytes : ByteArray) : Except String PackedTable := do
-  let table ← recoverCheckpoint state bytes
+  let events ← WAL.decodeOrdinals bytes
+  let table ← replay state (events.drop state.committed.toNat)
   if table.committed.toNat == bytes.size / frameSize then .ok table
   else .error "selected WAL frame count disagrees with the recovered sequence"
 
@@ -170,14 +172,15 @@ theorem recoverCheckpoint_suffix (state : PackedTable) (installed later : List W
   simp [old, new]
 
 theorem recoverSelected_encoded (state : PackedTable) (covered pending : List Write)
-    (old : ∀ e ∈ covered, e.sequence ≤ state.committed)
-    (new : ∀ e ∈ pending, state.committed < e.sequence)
+    (ordinals : WAL.OrdinalsFrom 1 (covered ++ pending))
     (count : covered.length = state.committed.toNat) :
     recoverSelected state (WAL.encode (covered ++ pending)) = replay state pending := by
-  have decoded := recoverCheckpoint_suffix state covered pending old new ByteArray.empty (by decide)
-  rw [ByteArray.append_empty] at decoded
-  unfold recoverSelected
-  rw [decoded]
+  rw [recoverSelected, WAL.decodeOrdinals_encode _ ordinals]
+  change (do
+    let table ← replay state ((covered ++ pending).drop state.committed.toNat)
+    if table.committed.toNat == (WAL.encode (covered ++ pending)).size / frameSize then .ok table
+    else .error "selected WAL frame count disagrees with the recovered sequence") = _
+  rw [← count, List.drop_left]
   cases applied : replay state pending with
   | error => rfl
   | ok table =>
