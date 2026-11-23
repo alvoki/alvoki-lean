@@ -242,7 +242,7 @@ private abbrev FixedBytes (size : Nat) := { bytes : ByteArray // bytes.size = si
         (v := splitByte value lane.toNat) (h := index)
       exact hu.trans hsize⟩
 
-@[inline] private def storeWord (bytes : ByteArray) (offset : USize) (value : UInt64) : ByteArray :=
+@[inline] def storeWord (bytes : ByteArray) (offset : USize) (value : UInt64) : ByteArray :=
   if h : 7 < bytes.usize && offset < bytes.usize - 7 then
     have sizeBound : bytes.usize.toNat ≤ bytes.size := USize.toNat_ofNat_le
     have hle : (7 : USize) ≤ bytes.usize :=

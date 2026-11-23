@@ -20,3 +20,11 @@ name = "Optimizations"
 
 [[lean_lib]]
 name = "OptProofs"
+
+[[lean_lib]]
+name = "Packed"
+
+[[lean_exe]]
+name = "alvoki-packed"
+root = "PackedMain"
+moreLinkArgs = [".lake/alvoki-packed.o"]

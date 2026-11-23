@@ -30,3 +30,12 @@ python3 benchmarks/optimize.py --summarize /tmp/alvoki-opt-trials.csv
 ```
 
 The suite compares the existing implementations with native Lean specializations and a layout-matched Rust control. See the [optimization report](docs/optimizations.md).
+
+## Packed ownership, merge, and bulk writes
+
+```sh
+bash scripts/packed.sh --out /tmp/alvoki-packed.csv
+python3 benchmarks/packed.py --summarize /tmp/alvoki-packed.csv
+```
+
+The script builds a separate experiment binary with optional C-backed modes. See the [experiment results and C interface contract](docs/packed-experiments.md).
