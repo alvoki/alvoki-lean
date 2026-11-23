@@ -12,7 +12,7 @@ Alvoki explores formally verified storage primitives in native Lean 4. The exper
 
 ## Stock Lean API
 
-Import `PackedRun` and use `Alvoki.Packed.parseRun` to validate a version-1 block. The returned run supports checked record access, lookup, and half-open range checksums. `Alvoki.Packed.merge` produces the version-1 right-biased union. `Alvoki.FusedMerge.scan` folds that same union directly. [Implementation and proof boundaries](docs/verification-status.md)
+Import `PackedRun` and use `Alvoki.Packed.parseRun` to validate a version-1 block. The returned run supports checked record access, lookup, and half-open range checksums. `Alvoki.Packed.merge` produces the version-1 right-biased union. Import `FusedMerge` to fold that union directly with `Alvoki.FusedMerge.scan`. [Implementation and proof boundaries](docs/verification-status.md)
 
 ## Reproduce on Linux x86-64
 

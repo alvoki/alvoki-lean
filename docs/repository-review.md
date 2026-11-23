@@ -4,7 +4,7 @@
 
 Alvoki has a reproducible research history and enough evidence to select a stock-Lean core. The main architectural problem is that the repository is organized by experiment round. The current packed reader, merge strategies, benchmark harnesses, and some generic proofs sit in those layers. A new storage feature would have to choose between overlapping APIs and reconstruct their guarantees from several reports. The next structural milestone should make one validated packed-run API easy to find, build, prove against, and compare with the historical baselines. [Current module map](architecture.md) · [Proof coverage](verification-status.md)
 
-The findings below describe the reviewed revision. The current implementation and proof coverage are tracked separately. [Current architecture](architecture.md) · [Verification status](verification-status.md)
+The findings below describe the reviewed revision. The follow-up records the fixes, current proof coverage, and new benchmark results. [Review follow-up](review-follow-up.md) · [Current architecture](architecture.md) · [Verification status](verification-status.md)
 
 ## What is working
 
