@@ -17,3 +17,5 @@ The long-term proof target is end-to-end refinement of the storage engine across
 5. Study object storage and reactive materialization once the local engine supports repeatable correctness and performance experiments.
 
 Review each milestone before starting its successor. Check the executable entry points, theorem assumptions, fault fixtures, and native timings. During larger milestones, review at natural checkpoints. Record confirmed issues and new obligations here or in the proof roadmap, with dependencies and clear completion criteria.
+
+For single-write latency, evaluate a persistent sync-only helper against the current adapter and its failure fixtures. Preserve acknowledgement ordering, keep rename under the database lock, and measure the supported native path. Evaluate durable batches to amortize the remaining sync costs. [WAL sync process experiment](benchmarks.md#wal-sync-process-overhead)

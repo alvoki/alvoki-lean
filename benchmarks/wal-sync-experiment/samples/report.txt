@@ -1,0 +1,26 @@
+CPU 4
+end-to-end acknowledged write (p50 / min / max of 7 trial means)
+legacy                 1.166   1.092   1.307 ms
+reference              2.578   2.451   3.351 ms
+plain                  2.510   2.453   2.745 ms
+stderr                 2.485   2.370   2.705 ms
+once                   1.793   1.695   1.897 ms
+persistent             0.715   0.677   1.069 ms
+direct                 1.843   1.746   2.032 ms
+Lean process primitives, settled files (p50/min/max of 32 single invocations)
+true-output            0.688   0.653   0.894 ms
+true-plain             0.632   0.598   0.874 ms
+rust-noop-output       0.887   0.829   1.127 ms
+rust-noop-plain        0.816   0.774   1.349 ms
+sync-one-output        0.842   0.769   1.144 ms
+sync-two-output        0.883   0.834   1.131 ms
+sync-dir-output        0.811   0.763   1.075 ms
+sync-two-plain         0.831   0.768   1.030 ms
+sync-dir-plain         0.753   0.716   0.930 ms
+Rust in-process stages, same record sizes and syscall order (p50/min/max of 128 operations)
+prepare               22.183  17.266  60.461 us
+fsync_wal            169.625 137.668 422.377 us
+fsync_marker         217.273 177.397 926.117 us
+rename                13.180  11.027  29.184 us
+fsync_dir            135.674 124.177 507.055 us
+total                629.610 481.647 1337.398 us

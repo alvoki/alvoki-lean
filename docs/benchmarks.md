@@ -106,3 +106,16 @@ Warm-cache reopen medians ranged from 0.92× to 1.10× across the same-machine W
 ### Shared checkpoint publication schedule
 
 `bash scripts/disk-checkpoint.sh 4 128 7` measures checkpoint publication starting from an installed run set. Generation setup, open, and post-checkpoint reopen and read checks are outside the timer. For one, four, and sixteen runs of 128 rows, the same-machine medians were 5.91, 9.91, and 28.70 ms before switching to the shared schedule and 5.51, 10.13, and 27.58 ms afterward. Both implementations issue the same file syncs, directory barriers, and rename. [Before samples](../benchmarks/disk-checkpoint-before.csv) · [After samples](../benchmarks/disk-checkpoint-after.csv) · [Environment and command](../benchmarks/disk-checkpoint-environment.txt)
+
+### WAL sync process overhead
+
+In an interleaved native experiment with seven 64-write trials per mode, the old one-sync control took 1.17 ms per write and the durable-boundary reference took 2.58 ms per write. Lean launching and waiting for `/usr/bin/true` took 0.69 ms. This identifies process startup as a substantial part of the regression. A native control measured 0.63 ms for staging, all three sync calls, and rename without per-write process startup.
+
+| Mode | Median write time |
+|---|---:|
+| Current GNU `sync` protocol | 2.58 ms |
+| GNU `sync` with only stderr captured | 2.49 ms |
+| One Rust sync helper per write | 1.79 ms |
+| Persistent Rust sync helper per open | 0.72 ms |
+
+Both helper prototypes leave rename in the Lean process under the database lock, sync the files before rename, and report directory sync success before acknowledgement. Both passed the scratch fixtures for a successful write, file sync failure, directory sync failure, and helper death. The experiment also provides a direct-rename control. That control can outlive the lock holder and is unsuitable for the adapter. These are experimental results on one VM. [Reproduction and raw samples](../benchmarks/wal-sync-experiment)
