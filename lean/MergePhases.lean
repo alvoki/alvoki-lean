@@ -1,4 +1,4 @@
-import PackedRun
+import NativeTune
 
 namespace Alvoki.MergePhases
 open Alvoki.Opt Alvoki.Packed
@@ -108,6 +108,16 @@ def replayWrite (a b : @& Run) (trace : @& ByteArray) : ByteArray :=
     trace.size.toUInt64) 1
   replayWriteFrom a.view b.view trace trace.usize USize.toNat_ofNat_le 0 0 0 header
 
+/-- The replay loop consumes this checked trace without per-record cursor checks. -/
+structure ReplayPlan where
+  left : Run
+  right : Run
+  trace : ByteArray
+  valid : validateTrace trace left.view.count.toNat right.view.count.toNat = true
+
+@[noinline] def ReplayPlan.write (plan : @& ReplayPlan) : ByteArray :=
+  replayWrite plan.left plan.right plan.trace
+
 /-- Each byte selects one contiguous fixed-width group from the indicated run. -/
 def validateGroups (trace : @& ByteArray) (left right width : Nat) : Bool := Id.run do
   let mut a := 0
@@ -168,5 +178,8 @@ def checkCopyContract : IO Unit := do
         throw (IO.userError "shared destination contract failed")
     if src.copySlice 3 src 7 width != copyModel src src 3 7 width then
       throw (IO.userError "aliased copy contract failed")
+
+@[noinline] def denseRewrite (run : @& Run) : ByteArray :=
+  Alvoki.NativeTune.encodeCopyWords run 0xfedcba9876543210
 
 end Alvoki.MergePhases

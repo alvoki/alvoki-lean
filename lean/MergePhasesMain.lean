@@ -30,6 +30,13 @@ def main (args : List String) : IO Unit := do
   let left ← loadRun leftPath
   let right ← loadRun rightPath
   let trace ← IO.FS.readBinFile tracePath
+  let needsTrace := mode == "replay-write" || mode == "check-replay-write"
+  let plan ← if needsTrace then
+    if h : validateTrace trace left.view.count.toNat right.view.count.toNat = true then
+      pure (some (ReplayPlan.mk left right trace h))
+    else throw (IO.userError "invalid replay trace")
+  else pure none
+  let replayInput ← IO.mkRef plan
   let targets ← if mode == "pipeline" then some <$> loadRun tracePath else pure none
   let operation := if mode.startsWith "check-" then String.ofList (mode.toList.drop 6) else mode
   let width : Nat := match operation with
@@ -41,7 +48,7 @@ def main (args : List String) : IO Unit := do
   let total := left.view.count.toNat + right.view.count.toNat
   let valid := if width == 0 then validateTrace trace left.view.count.toNat right.view.count.toNat
     else validateGroups trace left.view.count.toNat right.view.count.toNat (width / 16)
-  if mode != "pipeline" && !valid then
+  if mode != "pipeline" && mode != "dense" && mode != "check-dense" && !needsTrace && !valid then
     throw (IO.userError "invalid replay trace")
   let input ← IO.mkRef (left, right, trace)
   for _ in [0:repetitions.toNat?.getD 1] do
@@ -55,7 +62,10 @@ def main (args : List String) : IO Unit := do
         pure (ByteArray.empty, ← pipeline a b query)
       | "select" => pure (ByteArray.empty, select a b)
       | "replay-checksum" => pure (ByteArray.empty, replayChecksum a b ops)
-      | "replay-write" | "check-replay-write" => pure (replayWrite a b ops, 0)
+      | "replay-write" | "check-replay-write" =>
+        let some checked ← replayInput.get | throw (IO.userError "expected checked trace")
+        pure (checked.write, 0)
+      | "dense" | "check-dense" => pure (denseRewrite a, 0)
       | "merge" | "check-merge" => pure (merge a b, 0)
       | _ =>
         if width == 0 then throw (IO.userError "unknown mode")

@@ -66,3 +66,12 @@ python3 benchmarks/fixed_copy.py --summarize /tmp/alvoki-fixed-copy.csv
 ```
 
 [Copy-width sweep and packed-pipeline results](docs/fixed-copy.md)
+
+## Scoped output builder
+
+```sh
+bash scripts/scoped-builder.sh --out /tmp/alvoki-scoped-builder.csv
+python3 benchmarks/scoped_builder.py --summarize /tmp/alvoki-scoped-builder.csv
+```
+
+[Scoped builder results, Rust controls, and trust assumptions](docs/scoped-builder.md)
