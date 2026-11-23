@@ -262,6 +262,29 @@ theorem Image.unreachable_after_reopen (image : Image) (generation : UInt64)
     · exact (List.mem_singleton.mp survives).symm
   exact fresh bytes fromActive header decoded
 
+/-- A successful `DiskTable.openLocked` installs the decoded generation from
+`openCheckpoint` or zero for an absent manifest. Once reopen settles the
+visible manifest, the successor chosen by `DiskTable.checkpoint` is unreachable
+from every live or durable manifest. `fits` is the generation overflow guard. -/
+theorem Image.next_generation_unreachable_after_reopen (image : Image) (installedGeneration : UInt64)
+    (loaded : (image.manifest.active = none ∧ installedGeneration = 0) ∨
+      ∃ bytes header, image.manifest.active = some bytes ∧ Manifest.decode bytes = .ok header ∧
+        installedGeneration = header.generation)
+    (fits : installedGeneration.toNat + 1 < UInt64.size) :
+    image.settleVisible.Unreachable (UInt64.ofNat (installedGeneration.toNat + 1)) := by
+  apply image.unreachable_after_reopen
+  intro bytes active header decoded
+  rcases loaded with ⟨missing, _⟩ | ⟨loadedBytes, loadedHeader, visible, read, generation⟩
+  · rw [missing] at active
+    contradiction
+  · have sameBytes : bytes = loadedBytes := Option.some.inj (active.symm.trans visible)
+    rw [sameBytes, read] at decoded
+    cases decoded
+    intro same
+    have naturals := congrArg UInt64.toNat same
+    rw [UInt64.toNat_ofNat_of_lt' fits, generation] at naturals
+    omega
+
 /-- Repeated checkpoint attempts, power loss, and successful reopen barriers
 with a fixed synced WAL watermark. A process failure leaves the visible image
 of its cut; a power loss chooses one of the admitted durable manifest images. -/
