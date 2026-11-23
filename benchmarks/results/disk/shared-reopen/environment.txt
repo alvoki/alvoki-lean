@@ -8,6 +8,7 @@ The same independently encoded descending WAL bytes and present durable marker a
 Aligned and torn-tail WALs tested at 32 and 2048 records. Each process performs one warmup and one timed open. Paired build order alternates.
 The replay benchmark validates sequence, contents during its warmup, and repair size. The timer covers only DiskTable.open.
 compare.py generates fixtures and interleaves 14 pairs per workload, pinned to CPU 1 if available.
+trials-rerun.csv repeats this comparison on CPU 1 with the same binaries.
 Integrated runtime commit: 7831bc15d845c09d2a168654d3beecd1b012ddc6 (same measured runtime changes).
 
 Copy this directory to a temporary directory. Build alvoki-disk-replay with

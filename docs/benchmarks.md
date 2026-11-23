@@ -113,7 +113,7 @@ Add `--reopen` to time `DiskTable.open` with an installed run set and a WAL full
 
 ### Shared reopen durability branch
 
-The native adapter and proof use the same decision between staged tail repair and a grouped sync of the already aligned WAL and directory. On the same VM and CPU, 14 interleaved pairs per workload timed a marked WAL with 32 or 2,048 records in each branch. Median paired ratios ranged from 0.992× to 1.031×. Generated C inlines branch selection and calls the existing replacement and sync paths. [Raw samples, driver and environment](../benchmarks/results/disk/shared-reopen)
+The native adapter and proof use the same decision between staged tail repair and a grouped sync of the already aligned WAL and directory. On the same VM and CPU, 14 interleaved pairs per workload timed a marked WAL with 32 or 2,048 records in each branch. Median paired ratios ranged from 0.992× to 1.031× in the first run and 0.947× to 1.053× when reproducing the experiment with the same binaries. Generated C inlines branch selection and calls the existing replacement and sync paths. [Raw samples, driver and environment](../benchmarks/results/disk/shared-reopen)
 
 ### Selected WAL frame ordinals
 

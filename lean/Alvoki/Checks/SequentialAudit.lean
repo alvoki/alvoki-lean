@@ -96,6 +96,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.ReopenRetry.chosen_pair_from_initial
 #check_axioms Alvoki.WAL.Boundary.reopenRetry_valid
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.recover_chosen
+#check_axioms Alvoki.WAL.Boundary.recoverWriteCutAfterReopenRetry
 #check_axioms Alvoki.WAL.Boundary.commit_append_error
 #check_axioms Alvoki.WAL.Boundary.write_cut_selects_old_or_new
 #check_axioms Alvoki.WAL.Boundary.write_cut_active_bounds_marker

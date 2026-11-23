@@ -221,3 +221,7 @@ The Linux adapter uses the audited `Publication.runReopen` to choose between sta
 ## Directory sync can take effect before an error
 
 A native fixture verifies that the final standalone directory sync really succeeds before the wrapper returns an error. The write receives no acknowledgement. Reopen selects the extended WAL and preserves the acknowledged prefix, the checkpoint floor, and retained snapshot reads. This exercises the Linux adapter's error and retry behavior when the sync has taken effect. [Fault fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)
+
+## Abstract recovery after modeled reopen retries
+
+For one interrupted write and a fixed matching checkpoint, the audited proof traces the final manifest and marker to the original write cut. The actual loader and selector recover the original history or the history with that one appended write. The abstract state applies the same suffix, reaches the same sequence, and agrees with point and range reads through newly acquired pins at every supported snapshot. The next adapter theorem must show that reachable filesystem states provide the physical write-cut and checkpoint witnesses and follow the modeled retry relation. [Composed recovery proof](../lean/Alvoki/Storage/Disk/DiskRecoveryModel.lean) · [Remaining trace obligations](proof-roadmap.md#disk-guarantees-to-prove)
