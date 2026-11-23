@@ -37,6 +37,41 @@ def select (length : UInt64) (wal : ByteArray) : Except String ByteArray :=
   else if wal.size = count then .ok wal
   else .ok (wal.extract 0 count)
 
+private theorem select_eq_ok_iff {length : UInt64} {wal selected : ByteArray} :
+    select length wal = .ok selected ↔
+      length.toNat % frameSize = 0 ∧ length.toNat ≤ wal.size ∧
+        selected = wal.extract 0 length.toNat := by
+  by_cases aligned : length.toNat % frameSize = 0
+  · by_cases enough : length.toNat ≤ wal.size
+    · by_cases exactSize : wal.size = length.toNat
+      · have entire : wal.extract 0 length.toNat = wal := by
+          rw [← exactSize, ByteArray.extract_zero_size]
+        simp [select, aligned, exactSize, entire, eq_comm]
+      · simp [select, aligned, enough, Nat.not_lt.mpr enough, exactSize, eq_comm]
+    · simp [select, aligned, enough, Nat.lt_of_not_ge enough]
+  · simp [select, aligned]
+
+/-- Trimming to the currently visible marker preserves selection at any still
+possible marker whose length is at most the visible length. -/
+theorem select_shorter_after_trim {shorter length : UInt64} {wal trimmed : ByteArray}
+    (trim : select length wal = .ok trimmed) (bounded : shorter.toNat ≤ length.toNat) :
+    select shorter trimmed = select shorter wal := by
+  obtain ⟨_, fits, rfl⟩ := select_eq_ok_iff.mp trim
+  by_cases aligned : shorter.toNat % frameSize = 0
+  · have trimmedSize : (wal.extract 0 length.toNat).size = length.toNat := by
+      simp [Nat.min_eq_left fits]
+    have extractPrefix :
+        (wal.extract 0 length.toNat).extract 0 shorter.toNat = wal.extract 0 shorter.toNat := by
+      simp [ByteArray.extract_extract, Nat.min_eq_left bounded]
+    have trimmedFits : shorter.toNat ≤ (wal.extract 0 length.toNat).size := by
+      simpa only [trimmedSize] using bounded
+    have afterTrim : select shorter (wal.extract 0 length.toNat) = .ok (wal.extract 0 shorter.toNat) :=
+      select_eq_ok_iff.mpr ⟨aligned, trimmedFits, extractPrefix.symm⟩
+    have beforeTrim : select shorter wal = .ok (wal.extract 0 shorter.toNat) :=
+      select_eq_ok_iff.mpr ⟨aligned, Nat.le_trans bounded fits, rfl⟩
+    exact afterTrim.trans beforeTrim.symm
+  · simp [select, aligned]
+
 /-- The adapter flushes the append first. Boundary installation syncs both
 files before making the new boundary visible. -/
 @[inline] def commit [Monad m] (appendFrame installBoundary : m Unit) : m Unit := do
