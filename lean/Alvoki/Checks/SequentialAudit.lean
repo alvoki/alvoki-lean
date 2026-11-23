@@ -66,6 +66,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.recoverSelected_encoded_complete
 #check_axioms Alvoki.Storage.recoverRunSet_committedBoundary
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loads
+#check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest
 #check_axioms Alvoki.Storage.recoverWriteCutSelectedPair
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_cut_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_complete

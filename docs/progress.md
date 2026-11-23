@@ -229,3 +229,7 @@ For one interrupted write and a fixed matching checkpoint, the audited proof tra
 ## Grouped sync errors with partial effects
 
 The native fixture makes the aligned reopen sync fail after actually syncing only the directory. During write publication it makes the WAL and staged-marker group fail after actually syncing only the staged marker. The active marker remains unchanged, and reopen trims the unselected append and returns the acknowledged and retained snapshot data. The ordered trace records the successful sync call before each injected error. This tests process-visible effects and retries. It leaves incidental writeback and power-loss outcomes to the filesystem contract. [Native fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)
+
+## Durable checkpoint files in recovery order
+
+`CheckpointForRecovery.of_durable_manifest` connects the checkpoint publication invariant to the recovery loader's ordered run witness. For a published manifest, reading the modeled durable run names at its decoded generation and indices returns the exact ordered checkpoint bytes. An absent manifest supplies the empty checkpoint. The storage contract still governs whether actual reads return those bytes or report an I/O error. [Checkpoint recovery witness](../lean/Alvoki/Storage/Disk/DiskRecoveryModel.lean)
