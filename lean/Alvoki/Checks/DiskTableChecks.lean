@@ -479,6 +479,63 @@ private def checkGroupedSyncPartialEffects (root : FilePath) : IO Unit := do
       (← reopened.lookup latest.handle 7) == some (some 70)) "reopen changed the selected WAL history"
   finally reopened.close
 
+private def checkCheckpointReadFailureBeforeWalRepair (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 7 (some 70)) == 1) "unexpected checkpoint write sequence"
+    check (← db.advanceFloor 1) "could not advance the checkpoint floor"
+    db.checkpoint
+    check ((← db.write 4 (some 41)) == 2) "unexpected acknowledged suffix sequence"
+  finally db.close
+  let run := dir / "run-1-0.v3"
+  let wal := dir / "WAL"
+  let marker := dir / "WAL.commit"
+  let manifest := dir / "MANIFEST"
+  let stagedWal := dir / "WAL.next"
+  let stagedMarker := dir / "WAL.commit.next"
+  let runBytes ← IO.FS.readBinFile run
+  let acknowledged ← IO.FS.readBinFile wal
+  let markerBytes ← IO.FS.readBinFile marker
+  let manifestBytes ← IO.FS.readBinFile manifest
+  let untrimmed := acknowledged ++ WAL.encodeFrame ⟨3, 7, some 99⟩
+  IO.FS.writeBinFile wal untrimmed
+  IO.FS.removeFile run
+  IO.FS.createDir run
+  match ← (DiskTable.open dir).toBaseIO with
+  | .error (.inappropriateType _ osCode _) =>
+    check (osCode == 21) "installed run directory did not cause Linux EISDIR"
+  | .error error => throw error
+  | .ok opened =>
+    opened.close
+    throw (IO.userError "open accepted a directory as an installed run")
+  let (opened, syncs) ← probeDisk bin dir none
+  check (!opened && syncs.isEmpty) "failed checkpoint read reached the WAL sync protocol"
+  check (decide ((← IO.FS.readBinFile wal) = untrimmed ∧
+    (← IO.FS.readBinFile marker) = markerBytes ∧ (← IO.FS.readBinFile manifest) = manifestBytes))
+    "failed checkpoint read changed WAL or metadata bytes"
+  check (!(← stagedWal.pathExists) && !(← stagedMarker.pathExists))
+    "failed checkpoint read created a WAL staging file"
+  IO.FS.removeDir run
+  IO.FS.writeBinFile run runBytes
+  let (opened, syncs) ← probeDisk bin dir none
+  check (opened && syncs == [stagedWal.toString, dir.toString])
+    "restored checkpoint did not allow the WAL repair syncs"
+  check (decide ((← IO.FS.readBinFile wal) = acknowledged ∧ (← IO.FS.readBinFile marker) = markerBytes))
+    "retry did not trim exactly the unselected WAL tail"
+  let reopened ← DiskTable.open dir
+  try
+    check ((← reopened.acquireAt 0).isNone) "retry lost the checkpoint floor"
+    let some historical ← reopened.acquireAt 1 | throw (IO.userError "retry lost the checkpoint snapshot")
+    let oldRows := (← reopened.range historical.handle 0 8).map (List.map fun row => (row.key, row.payload))
+    check (oldRows == some [(7, some 70)]) "retry changed the retained snapshot range"
+    let latest ← reopened.acquire
+    check (latest.sequence == 2 && (← reopened.lookup latest.handle 4) == some (some 41) &&
+      (← reopened.lookup latest.handle 7) == some (some 70)) "retry changed the acknowledged data"
+  finally reopened.close
+
 private def checkFirstCheckpointCuts (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
@@ -656,6 +713,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkWriteSyncErrorAfterEffect
     IO.FS.withTempDir checkGroupedSyncPartialEffects
+    IO.FS.withTempDir checkCheckpointReadFailureBeforeWalRepair
     IO.FS.withTempDir checkFirstCheckpointCuts
     IO.FS.withTempDir checkCheckpointRetryWithFewerRuns
     IO.FS.withTempDir checkRecoveryAfterCheckpointAndWriteFailures
