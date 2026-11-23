@@ -119,6 +119,20 @@ end Alvoki.Storage
 namespace Alvoki.WAL.Boundary
 open Storage
 
+private theorem encoded_history_grows (before : List WAL.Write) (event : WAL.Write) :
+    (WAL.encode before).size < (WAL.encode (before ++ [event])).size := by
+  simp [WAL.frameSize, Nat.mul_add]
+
+private theorem marker_chosen_of_pair {directory : DirectoryPublication.Image}
+    {image : Publication.Image} {pair : DirectoryPublication.Bindings}
+    (chosen : pair ∈ directory.active :: directory.crashImages)
+    (visible : image.active = directory.active.walBoundary)
+    (candidates : ∀ pair ∈ directory.crashImages, pair.walBoundary ∈ image.crashImages) :
+    pair.walBoundary = image.active ∨ pair.walBoundary ∈ image.crashImages := by
+  rcases List.mem_cons.mp chosen with rfl | afterCrash
+  · exact Or.inl visible.symm
+  · exact Or.inr (candidates pair afterCrash)
+
 /-- Expected WAL contents for a selectable pair after an interrupted write.
 At such a pair the marker is well formed, and its count is either the old or
 the extended WAL length. -/
@@ -142,20 +156,16 @@ theorem ReopenImage.valid_of_writeCut {image : ReopenImage}
         markerImage.active = image.directory.active.walBoundary ∧
         ∀ pair ∈ image.directory.crashImages, pair.walBoundary ∈ markerImage.crashImages) :
     image.Valid (writeCutPrefix before event) := by
-  have grows : (WAL.encode before).size < (WAL.encode (before ++ [event])).size := by
-    simp [WAL.frameSize, Nat.mul_add]
+  have grows := encoded_history_grows before event
   have accept (binding : Option ByteArray) (possible : binding ∈ image.wal.active :: image.wal.crashImages) :
       ∀ pair ∈ image.directory.active :: image.directory.crashImages,
         ∃ marker contents length, pair.walBoundary = some marker ∧ binding = some contents ∧
           decode marker = .ok length ∧ select length contents = .ok (writeCutPrefix before event pair) := by
     obtain ⟨contents, markerImage, present, cut, visible, candidates⟩ := physical binding possible
     intro pair chosen
-    have markerChosen : pair.walBoundary = markerImage.active ∨ pair.walBoundary ∈ markerImage.crashImages := by
-      rcases List.mem_cons.mp chosen with rfl | afterCrash
-      · exact Or.inl visible.symm
-      · exact Or.inr (candidates pair afterCrash)
     obtain ⟨marker, events, bound, history, selected⟩ :=
-      write_cut_selects_old_or_new cut (Nat.lt_trans grows fits) fits markerChosen
+      write_cut_selects_old_or_new cut (Nat.lt_trans grows fits) fits
+        (marker_chosen_of_pair chosen visible candidates)
     cases decoded : decode marker with
     | error message =>
       rw [decoded] at selected
@@ -173,5 +183,72 @@ theorem ReopenImage.valid_of_writeCut {image : ReopenImage}
         simp only [writeCutPrefix, bound, Option.map_some, decoded, ite_eq_right (Nat.ne_of_gt larger)]
   exact ⟨survives, accept _ (List.mem_cons_self ..),
     fun binding possible => accept binding (List.mem_cons_of_mem _ possible)⟩
+
+/-- With a fixed matching checkpoint, a selected metadata pair after any
+modeled marked reopen retries recovers its original WAL prefix. The abstract
+suffix and retained snapshot reads follow from that selection. The caller
+supplies the initial physical candidates, ordered history and checkpoint. -/
+theorem recoverWriteCutAfterReopenRetry {initial after : ReopenImage}
+    {pair : DirectoryPublication.Bindings} {walBinding : Option ByteArray} {files : List ByteArray}
+    {checkpoint : PackedTable} {model : Sequential.SnapshotTable UInt64}
+    {covered pending : List WAL.Write} {event : WAL.Write}
+    (path : ReopenRetry initial after)
+    (metadataChosen : pair ∈ after.directory.active :: after.directory.crashImages)
+    (walChosen : walBinding ∈ after.wal.active :: after.wal.crashImages)
+    (hasCrash : initial.wal.crashImages ≠ [])
+    (fits : (WAL.encode ((covered ++ pending) ++ [event])).size < UInt64.size)
+    (physical : ∀ binding ∈ initial.wal.active :: initial.wal.crashImages,
+      ∃ contents markerImage, binding = some contents ∧ WriteCut (covered ++ pending) event contents markerImage ∧
+        markerImage.active = initial.directory.active.walBoundary ∧
+        ∀ pair ∈ initial.directory.crashImages, pair.walBoundary ∈ markerImage.crashImages)
+    (written : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
+      CheckpointForRecovery pair.manifest files checkpoint)
+    (represents : checkpoint.Refines model)
+    (ordered : WAL.OrdinalsFrom 1 ((covered ++ pending) ++ [event]))
+    (watermark : covered.length = checkpoint.committed.toNat) :
+    ∃ marker contents events base reopened abstract,
+      pair.walBoundary = some marker ∧ walBinding = some contents ∧
+      (match pair.manifest with
+      | none => Except.ok PackedTable.empty
+      | some bytes => do
+        let header ← Manifest.decode bytes
+        loadRunSet header files) = .ok base ∧
+      (do
+        let count ← decode marker
+        let selected ← select count contents
+        recoverSelected base selected) = .ok reopened ∧
+      (events = covered ++ pending ∨ events = (covered ++ pending) ++ [event]) ∧
+      reopened.committed.toNat = events.length ∧
+      SnapshotWalReplay model (events.drop covered.length) abstract ∧
+      abstract.committed.toNat = events.length ∧
+      ∀ snapshot : UInt64, abstract.pins.floor ≤ snapshot → snapshot.toNat ≤ events.length →
+        ∃ pin pinned, reopened.acquireAt snapshot = some (pin, pinned) ∧
+          (∀ key, pinned.lookup pin.handle key = some (abstract.table.lookup key snapshot)) ∧
+          (∀ start stop, pinned.range pin.handle start stop =
+            some (abstract.table.range start stop snapshot)) := by
+  have initialChosen := path.chosen_pair_from_initial metadataChosen
+  have valid := ReopenImage.valid_of_writeCut hasCrash fits physical
+  obtain ⟨initialContents, markerImage, present, cut, visible, candidates⟩ :=
+    physical initial.wal.active (List.mem_cons_self ..)
+  have oldFits := Nat.lt_trans (encoded_history_grows (covered ++ pending) event) fits
+  obtain ⟨initialMarker, events, base, reopened, _, bound, loaded, selected, recovered,
+    history, sequence, _, _, abstractReplay⟩ :=
+    recoverWriteCutSelectedPair (written pair initialChosen) cut
+      (marker_chosen_of_pair initialChosen visible candidates) oldFits fits ordered watermark
+  obtain ⟨markerBytes, walBytes, length, sameMarker, sameWal, decoded, accepted⟩ :=
+    valid.activeValid pair initialChosen
+  have markerMatches := Option.some.inj (sameMarker.symm.trans bound)
+  have walMatches := Option.some.inj (sameWal.symm.trans present)
+  subst markerBytes
+  subst walBytes
+  have expected : writeCutPrefix (covered ++ pending) event pair = WAL.encode events := by
+    rw [decoded] at selected
+    exact Except.ok.inj (accepted.symm.trans selected)
+  obtain ⟨marker, contents, bound, present, recoverAfter⟩ :=
+    ReopenImage.recover_chosen (reopenRetry_valid valid path) base metadataChosen walChosen
+  obtain ⟨abstract, replayed, counted, reads⟩ := abstractReplay model represents
+  rw [expected, recovered] at recoverAfter
+  exact ⟨marker, contents, events, base, reopened, abstract, bound, present, loaded, recoverAfter,
+    history, sequence, replayed, counted, reads⟩
 
 end Alvoki.WAL.Boundary
