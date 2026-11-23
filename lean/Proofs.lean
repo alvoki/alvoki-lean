@@ -164,7 +164,7 @@ theorem range_ordered (key : Nat → UInt64) (n i j lo hi : Nat)
     (endBound : hi ≤ n) (order : lo ≤ i ∧ i < j ∧ j < hi) :
     key i < key j := strict _ _ order.2.1 (by omega)
 
-private theorem getBang_eq_index (bytes : ByteArray) (i : Nat) :
+theorem getBang_eq_index (bytes : ByteArray) (i : Nat) :
     bytes.get! i = bytes[i]! := by
   by_cases h : i < bytes.size
   · rw [getElem!_pos bytes i h]
@@ -183,5 +183,38 @@ theorem pushWordFast_roundtrip (bytes : ByteArray) (value : UInt64) :
         ite_true]
       simp
     _ = value := word_roundtrip value
+
+set_option maxHeartbeats 1200000 in
+/-- Each byte lane can be recovered from the little-endian word. -/
+theorem splitByte_joinBytes (byte : Nat → UInt8) (lane : Nat) (bound : lane < 8) :
+    splitByte (joinBytes fun i => (byte i).toUInt64) lane = byte lane := by
+  have lanes : lane = 0 ∨ lane = 1 ∨ lane = 2 ∨ lane = 3 ∨
+      lane = 4 ∨ lane = 5 ∨ lane = 6 ∨ lane = 7 := by omega
+  rcases lanes with h | h | h | h | h | h | h | h <;>
+    subst lane <;> apply UInt8.toBitVec_inj.mp <;> apply BitVec.eq_of_getLsbD_eq <;>
+    intro i hi <;>
+    simp only [joinBytes, splitByte, UInt64.toBitVec_or, UInt64.toBitVec_shiftLeft,
+      UInt64.toBitVec_shiftRight, UInt8.toBitVec_toUInt64, UInt64.toBitVec_toUInt8,
+      BitVec.getLsbD_or, BitVec.getLsbD_shiftLeft', BitVec.ushiftRight_eq',
+      BitVec.getLsbD_ushiftRight, BitVec.getLsbD_setWidth,
+      show (UInt64.toBitVec ((8 * 0 : Nat).toUInt64) % 64).toNat = 0 by rfl,
+      show (UInt64.toBitVec 8 % 64).toNat = 8 by rfl,
+      show (UInt64.toBitVec ((8 * 1 : Nat).toUInt64) % 64).toNat = 8 by rfl,
+      show (UInt64.toBitVec 16 % 64).toNat = 16 by rfl,
+      show (UInt64.toBitVec ((8 * 2 : Nat).toUInt64) % 64).toNat = 16 by rfl,
+      show (UInt64.toBitVec 24 % 64).toNat = 24 by rfl,
+      show (UInt64.toBitVec ((8 * 3 : Nat).toUInt64) % 64).toNat = 24 by rfl,
+      show (UInt64.toBitVec 32 % 64).toNat = 32 by rfl,
+      show (UInt64.toBitVec ((8 * 4 : Nat).toUInt64) % 64).toNat = 32 by rfl,
+      show (UInt64.toBitVec 40 % 64).toNat = 40 by rfl,
+      show (UInt64.toBitVec ((8 * 5 : Nat).toUInt64) % 64).toNat = 40 by rfl,
+      show (UInt64.toBitVec 48 % 64).toNat = 48 by rfl,
+      show (UInt64.toBitVec ((8 * 6 : Nat).toUInt64) % 64).toNat = 48 by rfl,
+      show (UInt64.toBitVec 56 % 64).toNat = 56 by rfl,
+      show (UInt64.toBitVec ((8 * 7 : Nat).toUInt64) % 64).toNat = 56 by rfl] <;>
+    simp (discharger := omega) only [decide_eq_true, decide_eq_false,
+      Bool.true_and, Bool.false_and, Bool.not_true, Bool.not_false,
+      Bool.false_or, Bool.or_false, BitVec.getLsbD_of_ge, Nat.zero_add,
+      Nat.add_sub_cancel_left]
 
 end Alvoki

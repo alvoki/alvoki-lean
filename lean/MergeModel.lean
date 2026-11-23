@@ -45,6 +45,9 @@ def union (left right : List Row) : List Row :=
     else b :: union (a :: as) bs
 termination_by left.length + right.length
 
+theorem union_nil_right (left : List Row) : union left [] = left := by
+  cases left <;> rw [union] <;> simp
+
 def bytesOf : List Row → ByteArray
   | [] => ByteArray.empty
   | row :: rest => row.bytes ++ bytesOf rest
@@ -127,5 +130,66 @@ theorem copyRows (view : View) (i : USize) (out : ByteArray) :
       rw [ByteArray.extract_eq_empty_iff]
       omega
     simp [empty]
+
+/-- Rows in a winning span, with their exact byte extent and the remaining suffix. -/
+theorem rowsSpan (view : View) (i stop : USize) (lo : i.toNat ≤ stop.toNat)
+    (hi : stop.toNat ≤ view.count.toNat) (rival : UInt64)
+    (wins : ∀ k : USize, i.toNat ≤ k.toNat → k.toNat < stop.toNat → view.keyOrZero k < rival) :
+    ∃ rows, rowsFrom view i = rows ++ rowsFrom view stop ∧
+      bytesOf rows = view.bytes.extract (16 + i.toNat * 16) (16 + stop.toNat * 16) ∧
+      ∀ row ∈ rows, row.record.1 < rival := by
+  by_cases done : i = stop
+  · subst stop
+    exact ⟨[], rfl, (ByteArray.extract_eq_empty_iff.mpr (Nat.min_le_left ..)).symm, by simp⟩
+  · have ne : i.toNat ≠ stop.toNat := fun e => done (USize.toNat.inj e)
+    have hit : i < view.count := USize.lt_iff_toNat_lt.mpr (by omega)
+    have step := addOne i view.count (USize.lt_iff_toNat_lt.mp hit)
+    obtain ⟨rows, tail, bytes, smaller⟩ := rowsSpan view (i + 1) stop (by omega) hi rival
+      (fun k h1 h2 => wins k (by omega) h2)
+    refine ⟨rowAt view i hit :: rows, ?_, ?_, ?_⟩
+    · rw [rowsFrom_cons view i hit, tail, List.cons_append]
+    · rw [bytesOf, bytes]
+      simp only [rowAt, step]
+      have next : 16 + (i.toNat + 1) * 16 = 16 + i.toNat * 16 + 16 := by omega
+      rw [next]
+      exact (ByteArray.extract_eq_extract_append_extract _ (by omega) (by omega)).symm
+    · intro row mem
+      rcases List.mem_cons.mp mem with e | rest
+      · subst row
+        exact (view.key_eq hit) ▸ wins i (Nat.le_refl _) (by omega)
+      · exact smaller row rest
+termination_by stop.toNat - i.toNat
+decreasing_by omega
+
+theorem union_prefixLeft (prefixRows left : List Row) (b : Row) (right : List Row)
+    (wins : ∀ row ∈ prefixRows, row.record.1 < b.record.1) :
+    union (prefixRows ++ left) (b :: right) = prefixRows ++ union left (b :: right) := by
+  induction prefixRows with
+  | nil => rfl
+  | cons a rest ih =>
+    rw [List.cons_append, union, ite_eq_left (wins a (by simp)),
+      ih (fun row mem => wins row (by simp [mem]))]
+    rfl
+
+theorem union_prefixRight (prefixRows right : List Row) (a : Row) (left : List Row)
+    (wins : ∀ row ∈ prefixRows, row.record.1 < a.record.1) :
+    union (a :: left) (prefixRows ++ right) = prefixRows ++ union (a :: left) right := by
+  induction prefixRows with
+  | nil => rfl
+  | cons b rest ih =>
+    have smaller := wins b (by simp)
+    have notLess : ¬ a.record.1 < b.record.1 := UInt64.not_lt.mpr (UInt64.le_of_lt smaller)
+    have notEqual : ¬ (a.record.1 == b.record.1) = true := by
+      simp only [beq_iff_eq]
+      exact fun e => UInt64.lt_irrefl _ (e ▸ smaller)
+    rw [List.cons_append, union, ite_eq_right notLess, ite_eq_right notEqual,
+      ih (fun row mem => wins row (by simp [mem]))]
+    rfl
+
+theorem bytesOf_append (a b : List Row) : bytesOf (a ++ b) = bytesOf a ++ bytesOf b := by
+  induction a with
+  | nil => simp [bytesOf]
+  | cons row rest ih =>
+    simp only [List.cons_append, bytesOf, ih, ByteArray.append_assoc]
 
 end Alvoki.Packed.MergeModel

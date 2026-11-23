@@ -1,5 +1,5 @@
 import Optimizations
-import PackedRun
+import SpanMerge
 
 namespace Alvoki.NativeTune
 open Alvoki.Opt Alvoki.Packed
@@ -77,8 +77,8 @@ def scanUnrolled (run : @& Run) : UInt64 :=
 
 /-- Probe before doing a binary search so short winning spans take the one-record path. -/
 @[inline] private def spanEnd (view : @& View) (start : USize) (key : UInt64) : USize :=
-  if view.count - start ≥ 8 && view.keyUnchecked (start + 7) < key then
-    let endIndex := searchMachineLoop (fun i => view.keyUnchecked i) key (start + 1) view.count
+  if view.count - start ≥ 8 && view.keyOrZero (start + 7) < key then
+    let endIndex := searchMachineLoop (fun i => view.keyOrZero i) key (start + 1) view.count
     if start + 1 < endIndex then endIndex else start + 1
   else start + 1
 
@@ -95,8 +95,8 @@ private theorem spanProgress (view : View) (start : USize) (key : UInt64) :
 private def mergeSpansFrom (left right : @& View) (i j : USize) (out : ByteArray) : ByteArray :=
   if hi : i < left.count then
     if hj : j < right.count then
-      let a := left.keyUnchecked i
-      let b := right.keyUnchecked j
+      let a := left.keyOrZero i
+      let b := right.keyOrZero j
       if a < b then
         let next := spanEnd left i b
         mergeSpansFrom left right next j (appendSpan left i next out)
@@ -114,8 +114,8 @@ decreasing_by
     have rj := USize.lt_iff_toNat_lt.mp hj
     have ls := addOne i left.count li
     have rs := addOne j right.count rj
-    have lp := spanProgress left i (right.keyUnchecked j)
-    have rp := spanProgress right j (left.keyUnchecked i)
+    have lp := spanProgress left i (right.keyOrZero j)
+    have rp := spanProgress right j (left.keyOrZero i)
     omega
 
 def mergeSpans (a b : @& Run) : ByteArray :=
@@ -125,61 +125,12 @@ def mergeSpans (a b : @& Run) : ByteArray :=
   let header := pushWordFast (ByteArray.emptyWithCapacity 8) ((out.size - 16) / 16).toUInt64
   header.copySlice 0 out 0 8
 
-@[inline] private def appendRecord (view : @& View) (index : USize) (out : ByteArray) : ByteArray :=
-  view.bytes.copySlice (16 + index.toNat * 16) out out.size 16 false
-
-@[inline] private def adaptiveEnd (view : @& View) (i : USize) (rival : UInt64)
-    (streak trigger : UInt8) : USize :=
-  if trigger != 0 && streak == trigger then spanEnd view i rival else i + 1
-
-private theorem adaptiveProgress (view : View) (i : USize) (rival : UInt64) (streak trigger : UInt8) :
-    (i + 1).toNat ≤ (adaptiveEnd view i rival streak trigger).toNat := by
-  unfold adaptiveEnd
-  split
-  · exact spanProgress view i rival
-  · omega
-
-/-- Cache both heads. Probe after a configurable number of consecutive wins. -/
-private def mergeCachedFrom (left right : @& View) (trigger : UInt8)
-    (i j : USize) (a b : UInt64) (leftStreak rightStreak : UInt8) (out : ByteArray) : ByteArray :=
-  if hi : i < left.count then
-    if hj : j < right.count then
-      if a < b then
-        let i' := adaptiveEnd left i b leftStreak trigger
-        have advance : (i + 1).toNat ≤ i'.toNat := adaptiveProgress left i b leftStreak trigger
-        let out' := if i' == i + 1 then appendRecord left i out else appendSpan left i i' out
-        mergeCachedFrom left right trigger i' j (left.keyUnchecked i') b ((leftStreak + 1) &&& trigger) 0 out'
-      else if a == b then
-        let i' := i + 1
-        let j' := j + 1
-        mergeCachedFrom left right trigger i' j' (left.keyUnchecked i') (right.keyUnchecked j') 0 0
-          (appendRecord right j out)
-      else
-        let j' := adaptiveEnd right j a rightStreak trigger
-        have advance : (j + 1).toNat ≤ j'.toNat := adaptiveProgress right j a rightStreak trigger
-        let out' := if j' == j + 1 then appendRecord right j out else appendSpan right j j' out
-        mergeCachedFrom left right trigger i j' a (right.keyUnchecked j') 0 ((rightStreak + 1) &&& trigger) out'
-    else appendSpan left i left.count out
-  else appendSpan right j right.count out
-termination_by (left.count.toNat - i.toNat) + (right.count.toNat - j.toNat)
-decreasing_by
-  all_goals
-    have li := USize.lt_iff_toNat_lt.mp hi
-    have rj := USize.lt_iff_toNat_lt.mp hj
-    have ls := addOne i left.count li
-    have rs := addOne j right.count rj
-    try dsimp [i'] at advance
-    try dsimp [j'] at advance
-    omega
-
 def mergeCached (a b : @& Run) (trigger : UInt8) : ByteArray :=
-  let left := a.view
-  let right := b.view
-  let capacity := 16 + (left.count.toNat + right.count.toNat) * 16
-  let initial := pushWordFast (pushWordFast (ByteArray.emptyWithCapacity capacity) 0) 1
-  let out := mergeCachedFrom left right trigger 0 0 (left.keyUnchecked 0) (right.keyUnchecked 0) 0 0 initial
-  let header := pushWordFast (ByteArray.emptyWithCapacity 8) ((out.size - 16) / 16).toUInt64
-  header.copySlice 0 out 0 8
+  mergeSpansWith a b false trigger
+
+theorem mergeCached_eq (a b : Run) (trigger : UInt8) :
+    mergeCached a b trigger = Alvoki.Packed.merge a b :=
+  mergeSpansWith_eq a b false trigger
 
 @[inline] private def copyAt (view : @& View) (start : USize) (len dst : Nat)
     (out : ByteArray) : ByteArray :=
@@ -189,8 +140,8 @@ private def mergeCopyIntoFrom (left right : @& View) (i j : USize) (dst : Nat)
     (out : ByteArray) : ByteArray × Nat :=
   if _hi : i < left.count then
     if hj : j < right.count then
-      let a := left.keyUnchecked i
-      let b := right.keyUnchecked j
+      let a := left.keyOrZero i
+      let b := right.keyOrZero j
       if a < b then
         mergeCopyIntoFrom left right (i + 1) j (dst + 16) (copyAt left i 16 dst out)
       else if a == b then
@@ -257,7 +208,7 @@ def encodeCopyWords (run : @& Run) (mask : UInt64) : ByteArray := Id.run do
   let view := run.view
   let mut out := view.bytes.extract 0 view.bytes.size
   for i in [0:view.count.toNat] do
-    out := storeWord out (24 + i.toUSize * 16) (view.valueUnchecked i.toUSize ^^^ mask)
+    out := storeWord out (24 + i.toUSize * 16) (view.valueOrZero i.toUSize ^^^ mask)
   return out
 
 /-- Re-encode a packed input into a fresh block, flipping the low bit of each value. -/
@@ -267,32 +218,32 @@ def encodeDirect (run : @& Run) : ByteArray := Id.run do
   out := storeWord (storeWord out 0 view.count.toUInt64) 8 1
   for i in [0:view.count.toNat] do
     let offset := (16 + i * 16).toUSize
-    out := storeWord (storeWord out offset (view.keyUnchecked i.toUSize)) (offset + 8)
-      (view.valueUnchecked i.toUSize ^^^ 1)
+    out := storeWord (storeWord out offset (view.keyOrZero i.toUSize)) (offset + 8)
+      (view.valueOrZero i.toUSize ^^^ 1)
   return out
 
 def encodePair (run : @& Run) (mask : UInt64 := 1) : ByteArray := Id.run do
   let view := run.view
   let mut out := storePair (zeroedBytes view.bytes.size) 0 view.count.toUInt64 1
   for i in [0:view.count.toNat] do
-    out := storePair out (16 + i.toUSize * 16) (view.keyUnchecked i.toUSize) (view.valueUnchecked i.toUSize ^^^ mask)
+    out := storePair out (16 + i.toUSize * 16) (view.keyOrZero i.toUSize) (view.valueOrZero i.toUSize ^^^ mask)
   return out
 
 private def mergeIndexedFrom (left right : @& View) (i j dst : USize)
     (out : ByteArray) : ByteArray × Nat :=
   if _hi : i < left.count then
     if hj : j < right.count then
-      let a := left.keyUnchecked i
-      let b := right.keyUnchecked j
+      let a := left.keyOrZero i
+      let b := right.keyOrZero j
       if a < b then
         mergeIndexedFrom left right (i + 1) j (dst + 16)
-          (storePair out dst a (left.valueUnchecked i))
+          (storePair out dst a (left.valueOrZero i))
       else if a == b then
         mergeIndexedFrom left right (i + 1) (j + 1) (dst + 16)
-          (storePair out dst b (right.valueUnchecked j))
+          (storePair out dst b (right.valueOrZero j))
       else
         mergeIndexedFrom left right i (j + 1) (dst + 16)
-          (storePair out dst b (right.valueUnchecked j))
+          (storePair out dst b (right.valueOrZero j))
     else
       let remaining := (left.count.toNat - i.toNat) * 16
       (left.bytes.copySlice (16+i.toNat*16) out dst.toNat remaining false, dst.toNat + remaining)
@@ -322,8 +273,8 @@ def encodeStaged (run : @& Run) : ByteArray := Id.run do
   let mut scratch := zeroedBytes 4096
   let mut offset : USize := 0
   for i in [0:view.count.toNat] do
-    scratch := storeWord (storeWord scratch offset (view.keyUnchecked i.toUSize)) (offset + 8)
-      (view.valueUnchecked i.toUSize ^^^ 1)
+    scratch := storeWord (storeWord scratch offset (view.keyOrZero i.toUSize)) (offset + 8)
+      (view.valueOrZero i.toUSize ^^^ 1)
     offset := offset + 16
     if offset == 4096 then
       out := scratch.copySlice 0 out out.size 4096 false

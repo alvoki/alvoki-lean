@@ -1,13 +1,20 @@
 """Build inputs for the generated-code specialization, leaving Lake objects intact."""
 from pathlib import Path
+import sys
 
-RSP = Path(".lake/build/bin/alvoki-merge-phases.rsp")
-TEMP = Path(".lake/fixed-inline")
+if len(sys.argv) == 1:
+    target, temp, modules = "alvoki-merge-phases", ".lake/fixed-inline", ("MergePhases", "PackedRun")
+else:
+    target, temp, *modules = sys.argv[1:]
+    if not modules:
+        raise SystemExit("expected executable, output directory and one or more modules")
+RSP = Path(f".lake/build/bin/{target}.rsp")
+TEMP = Path(temp)
 TEMP.mkdir(parents=True, exist_ok=True)
 link_args = RSP.read_text().splitlines()
 symbol = "lean_byte_array_copy_slice("
 header = Path("runtime-experiment/fixed-copy.h").resolve()
-for module in ("MergePhases", "PackedRun"):
+for module in modules:
     ir = Path(f".lake/build/ir/{module}.c")
     lines = ir.read_text().splitlines()
     declarations = [i for i, line in enumerate(lines) if line.startswith(f"lean_object* {symbol}")]

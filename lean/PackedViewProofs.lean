@@ -19,23 +19,25 @@ private theorem wordAt_eq (view : View) (base i : USize)
   rw [wordMachine_eq _ _ fits (by rwa [offset]), offset]
 
 theorem View.key_eq (view : View) {i : USize} (valid : i < view.count) :
-    view.keyUnchecked i = (view.logicalRecord i.toNat).1 := by
+    view.keyOrZero i = (view.logicalRecord i.toNat).1 := by
   have base : (16 : USize).toNat = 16 := USize.toNat_ofNat_of_lt_32 (by decide)
   have index := USize.lt_iff_toNat_lt.mp valid
   have size := view.size_eq
   have extent : (16 : USize).toNat + i.toNat * view.stride.toNat + 7 < view.bytes.size := by
     rcases view.layout with ⟨stride, _⟩ | ⟨stride, _⟩
     all_goals rw [base, stride]; omega
-  unfold View.keyUnchecked View.logicalRecord
+  rw [view.keyOrZero_wordMachine i valid]
+  unfold View.logicalRecord
   simpa only [base] using wordAt_eq view 16 i extent
 
 theorem View.value_eq (view : View) {i : USize} (valid : i < view.count) :
-    view.valueUnchecked i = (view.logicalRecord i.toNat).2 := by
+    view.valueOrZero i = (view.logicalRecord i.toNat).2 := by
   have index := USize.lt_iff_toNat_lt.mp valid
   have size := view.size_eq
   have extent : view.values.toNat + i.toNat * view.stride.toNat + 7 < view.bytes.size := by
     rcases view.layout with ⟨stride, values⟩ | ⟨stride, values⟩
     all_goals rw [stride, values]; omega
+  rw [view.valueOrZero_wordMachine i valid]
   exact wordAt_eq view view.values i extent
 
 theorem View.record?_eq (view : View) (i : USize) :
@@ -65,7 +67,7 @@ theorem parseView_lowerBound {bytes : ByteArray} {view : View} (accepted : parse
       (view.lowerBound target).toNat := by
   have parsed := (parseView_spec accepted).2.2.1
   have monotone (i j : Nat) (le : i ≤ j) (bound : j < view.count.toNat) :
-      view.keyUnchecked i.toUSize ≤ view.keyUnchecked j.toUSize := by
+      view.keyOrZero i.toUSize ≤ view.keyOrZero j.toUSize := by
     have limit := view.count.toNat_lt_size
     by_cases same : i = j
     · simp [same]
@@ -74,9 +76,9 @@ theorem parseView_lowerBound {bytes : ByteArray} {view : View} (accepted : parse
       have ij : i.toUSize < j.toUSize := USize.lt_iff_toNat_lt.mpr (by rw [exact_i, exact_j]; omega)
       have jc : j.toUSize < view.count := USize.lt_iff_toNat_lt.mpr (by rwa [exact_j])
       exact UInt64.le_of_lt (view.validate_ordered parsed ij jc)
-  have partition := searchMachine_partition view.keyUnchecked target view.count monotone
+  have partition := searchMachine_partition view.keyOrZero target view.count monotone
   have key_eq (i : Nat) (bound : i < view.count.toNat) :
-      view.keyUnchecked i.toUSize = (view.logicalRecord i).1 := by
+      view.keyOrZero i.toUSize = (view.logicalRecord i).1 := by
     have ie : i.toUSize.toNat = i := USize.toNat_ofNat_of_lt (Nat.lt_trans bound view.count.toNat_lt_size)
     have ic : i.toUSize < view.count := USize.lt_iff_toNat_lt.mpr (by rwa [ie])
     simpa only [ie] using view.key_eq ic

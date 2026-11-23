@@ -10,7 +10,7 @@ open Alvoki.Opt Alvoki.Packed Alvoki.ScopedBytes
 
 private def consumeTail (view : @& View) (i : USize) (sum : UInt64) : UInt64 :=
   if h : i < view.count then
-    consumeTail view (i + 1) (consume sum (view.keyUnchecked i) (view.valueUnchecked i))
+    consumeTail view (i + 1) (consume sum (view.keyOrZero i) (view.valueOrZero i))
   else sum
 termination_by view.count.toNat - i.toNat
 decreasing_by
@@ -21,14 +21,14 @@ decreasing_by
 private def selectFrom (left right : @& View) (i j : USize) (sum : UInt64) : UInt64 :=
   if hi : i < left.count then
     if hj : j < right.count then
-      let a := left.keyUnchecked i
-      let b := right.keyUnchecked j
+      let a := left.keyOrZero i
+      let b := right.keyOrZero j
       if a < b then
-        selectFrom left right (i + 1) j (consume sum a (left.valueUnchecked i))
+        selectFrom left right (i + 1) j (consume sum a (left.valueOrZero i))
       else if a == b then
-        selectFrom left right (i + 1) (j + 1) (consume sum b (right.valueUnchecked j))
+        selectFrom left right (i + 1) (j + 1) (consume sum b (right.valueOrZero j))
       else
-        selectFrom left right i (j + 1) (consume sum b (right.valueUnchecked j))
+        selectFrom left right i (j + 1) (consume sum b (right.valueOrZero j))
     else consumeTail left i sum
   else consumeTail right j sum
 termination_by (left.count.toNat - i.toNat) + (right.count.toNat - j.toNat)
@@ -42,25 +42,34 @@ decreasing_by
 
 def select (a b : @& Run) : UInt64 := selectFrom a.view b.view 0 0 0
 
+private def checkTraceFrom (left right : @& View) (trace : @& ByteArray)
+    (endPos : USize) (extent : endPos.toNat ≤ trace.size) (pos i j : USize) : Bool :=
+  if h : pos < endPos then
+    have order := USize.lt_iff_toNat_lt.mp h
+    let op := trace.uget pos (by omega)
+    if i < left.count then
+      if j < right.count then
+        let a := left.keyOrZero i
+        let b := right.keyOrZero j
+        if a < b then op == 0 && checkTraceFrom left right trace endPos extent (pos + 1) (i + 1) j
+        else if a == b then op == 2 && checkTraceFrom left right trace endPos extent (pos + 1) (i + 1) (j + 1)
+        else op == 1 && checkTraceFrom left right trace endPos extent (pos + 1) i (j + 1)
+      else op == 0 && checkTraceFrom left right trace endPos extent (pos + 1) (i + 1) j
+    else if j < right.count then
+      op == 1 && checkTraceFrom left right trace endPos extent (pos + 1) i (j + 1)
+    else false
+  else pos == endPos && i == left.count && j == right.count
+termination_by endPos.toNat - pos.toNat
+decreasing_by
+  all_goals
+    have step := addOne pos endPos order
+    omega
+
 /-- Check each trace decision against the heads of the validated runs before timing replay.
     0 emits left, 1 emits right, and 2 consumes equal keys and emits right. -/
-def validateMergeTrace (trace : @& ByteArray) (left right : @& Run) : Bool := Id.run do
-  let mut i : USize := 0
-  let mut j : USize := 0
-  for op in trace do
-    if i >= left.count && j >= right.count then return false
-    let expected : UInt8 :=
-      if i < left.count then
-        if j < right.count then
-          let a := left.view.keyUnchecked i
-          let b := right.view.keyUnchecked j
-          if a < b then 0 else if a == b then 2 else 1
-        else 0
-      else 1
-    if op != expected then return false
-    if op != 1 then i := i + 1
-    if op != 0 then j := j + 1
-  return i == left.count && j == right.count
+def validateMergeTrace (trace : @& ByteArray) (left right : @& Run) : Bool :=
+  decide (trace.size < USize.size) &&
+    checkTraceFrom left.view right.view trace trace.usize USize.toNat_ofNat_le 0 0 0
 
 private def replayChecksumFrom (left right : @& View) (trace : @& ByteArray)
     (endPos : USize) (extent : endPos.toNat ≤ trace.size)
@@ -70,11 +79,11 @@ private def replayChecksumFrom (left right : @& View) (trace : @& ByteArray)
     let op := trace.uget pos (by omega)
     if op == 0 then
       replayChecksumFrom left right trace endPos extent (pos + 1) (i + 1) j
-        (consume sum (left.keyUnchecked i) (left.valueUnchecked i))
+        (consume sum (left.keyOrZero i) (left.valueOrZero i))
     else
       let nextLeft := if op == 2 then i + 1 else i
       replayChecksumFrom left right trace endPos extent (pos + 1) nextLeft (j + 1)
-        (consume sum (right.keyUnchecked j) (right.valueUnchecked j))
+        (consume sum (right.keyOrZero j) (right.valueOrZero j))
   else sum
 termination_by endPos.toNat - pos.toNat
 decreasing_by
@@ -154,6 +163,81 @@ decreasing_by
     have step := addOne pos endPos order
     omega
 
+open MergeModel in
+private theorem checkTraceFrom_refines (left right : View) (trace : ByteArray)
+    (endPos : USize) (extent : endPos.toNat ≤ trace.size) (pos i j : USize)
+    (ok : checkTraceFrom left right trace endPos extent pos i j = true) :
+    let rows := union (rowsFrom left i) (rowsFrom right j)
+    replayModelFrom left right trace endPos extent pos i j = bytesOf rows ∧
+      rows.length = endPos.toNat - pos.toNat := by
+  dsimp only
+  rw [checkTraceFrom] at ok
+  rw [replayModelFrom]
+  by_cases remaining : pos < endPos
+  · have order := USize.lt_iff_toNat_lt.mp remaining
+    have step := addOne pos endPos order
+    simp only [remaining, dite_true] at ok ⊢
+    by_cases hl : i < left.count
+    · by_cases hr : j < right.count
+      · simp only [hl, hr, ite_true] at ok
+        rw [rowsFrom_cons left i hl, rowsFrom_cons right j hr, union]
+        have ka : (rowAt left i hl).record.1 = left.keyOrZero i := (left.key_eq hl).symm
+        have kb : (rowAt right j hr).record.1 = right.keyOrZero j := (right.key_eq hr).symm
+        simp only [ka, kb]
+        by_cases smaller : left.keyOrZero i < right.keyOrZero j
+        · simp only [smaller, ite_true, Bool.and_eq_true, beq_iff_eq] at ok
+          rw [ite_eq_left smaller, ← rowsFrom_cons right j hr]
+          obtain ⟨result, size⟩ := checkTraceFrom_refines left right trace endPos extent
+            (pos + 1) (i + 1) j ok.2
+          simp only [ok.1, beq_self_eq_true, ite_true, result, bytesOf, List.length_cons, rowAt]
+          exact ⟨True.intro, by omega⟩
+        · simp only [smaller, ite_false] at ok ⊢
+          by_cases equal : (left.keyOrZero i == right.keyOrZero j) = true
+          · simp only [equal, ite_true, Bool.and_eq_true, beq_iff_eq] at ok
+            rw [ite_eq_left equal]
+            obtain ⟨result, size⟩ := checkTraceFrom_refines left right trace endPos extent
+              (pos + 1) (i + 1) (j + 1) ok.2
+            simp only [ok.1, show ((2 : UInt8) == 0) = false by decide, Bool.false_eq_true,
+              beq_self_eq_true, ite_true, ite_false, result, bytesOf, List.length_cons, rowAt]
+            exact ⟨True.intro, by omega⟩
+          · rw [ite_eq_right equal] at ok
+            simp only [Bool.and_eq_true, beq_iff_eq] at ok
+            rw [ite_eq_right equal, ← rowsFrom_cons left i hl]
+            obtain ⟨result, size⟩ := checkTraceFrom_refines left right trace endPos extent
+              (pos + 1) i (j + 1) ok.2
+            simp only [ok.1, show ((1 : UInt8) == 0) = false by decide,
+              show ((1 : UInt8) == 2) = false by decide, Bool.false_eq_true, ite_false,
+              result, bytesOf, List.length_cons, rowAt]
+            exact ⟨True.intro, by omega⟩
+      · simp only [hl, hr, ite_true, ite_false, Bool.and_eq_true, beq_iff_eq] at ok
+        rw [rowsFrom_cons left i hl, rowsFrom_nil right j hr, union]
+        have tail := checkTraceFrom_refines left right trace endPos extent (pos + 1) (i + 1) j ok.2
+        rw [rowsFrom_nil right j hr, union_nil_right] at tail
+        simp only [ok.1, beq_self_eq_true, ite_true, tail.1, bytesOf, List.length_cons, rowAt]
+        exact ⟨True.intro, by have := tail.2; omega⟩
+        all_goals simp
+    · by_cases hr : j < right.count
+      · simp only [hl, hr, ite_false, ite_true, Bool.and_eq_true, beq_iff_eq] at ok
+        rw [rowsFrom_nil left i hl, union, rowsFrom_cons right j hr]
+        have tail := checkTraceFrom_refines left right trace endPos extent (pos + 1) i (j + 1) ok.2
+        rw [rowsFrom_nil left i hl, union] at tail
+        simp only [ok.1, show ((1 : UInt8) == 0) = false by decide,
+          show ((1 : UInt8) == 2) = false by decide, Bool.false_eq_true, ite_false,
+          tail.1, bytesOf, List.length_cons, rowAt]
+        exact ⟨True.intro, by have := tail.2; omega⟩
+      · simp [hl, hr] at ok
+  · simp only [remaining, dite_false, Bool.and_eq_true, beq_iff_eq] at ok ⊢
+    rcases ok with ⟨⟨samePos, sameLeft⟩, sameRight⟩
+    subst pos i j
+    rw [rowsFrom_nil left _ (USize.lt_irrefl _), rowsFrom_nil right _ (USize.lt_irrefl _), union]
+    simp [bytesOf]
+termination_by endPos.toNat - pos.toNat
+decreasing_by
+  all_goals
+    have order : pos.toNat < endPos.toNat := USize.lt_iff_toNat_lt.mp (by assumption)
+    have step := addOne pos endPos order
+    omega
+
 /-- The sequence of record slices selected by the trace, excluding the header. -/
 def replayPayloadModel (a b : Run) (trace : ByteArray) : ByteArray :=
   replayModelFrom a.view b.view trace trace.usize USize.toNat_ofNat_le 0 0 0
@@ -169,6 +253,18 @@ theorem replayWrite_refines (a b : Run) (trace : ByteArray) :
     (Builder.ofPrefix (pushWordFast (pushWordFast
       (ByteArray.emptyWithCapacity (16 + trace.size * 16)) trace.size.toUInt64) 1))
 
+theorem acceptedTrace_refines (left right : Run) (trace : ByteArray)
+    (accepted : validateMergeTrace trace left right = true) :
+    replayPayloadModel left right trace = MergeModel.bytesOf (mergedRows left right) ∧
+      trace.size = (mergedRows left right).length := by
+  obtain ⟨fits, checked⟩ := Bool.and_eq_true_iff.mp accepted
+  obtain ⟨eq, size⟩ := checkTraceFrom_refines left.view right.view trace trace.usize
+    USize.toNat_ofNat_le 0 0 0 checked
+  have pos : (0 : USize).toNat = 0 := rfl
+  rw [pos, Nat.sub_zero, show trace.usize.toNat = trace.size from USize.toNat_ofNat_of_lt
+    (of_decide_eq_true fits)] at size
+  exact ⟨eq, size.symm⟩
+
 /-- The replay loop consumes this checked merge trace without per-record cursor checks. -/
 structure ReplayPlan where
   private mk ::
@@ -183,6 +279,13 @@ def checkReplayPlan (left right : Run) (trace : ByteArray) : Except String Repla
 
 @[noinline] def ReplayPlan.write (plan : @& ReplayPlan) : ByteArray :=
   replayWrite plan.left plan.right plan.trace
+
+theorem ReplayPlan.write_eq (plan : ReplayPlan) : plan.write = merge plan.left plan.right := by
+  have h := acceptedTrace_refines plan.left plan.right plan.trace plan.mergeTrace
+  unfold ReplayPlan.write
+  rw [replayWrite_refines, h.1, merge_refines]
+  rw [h.2]
+  rfl
 
 private def recordSlice (run : Run) (start count : Nat) : Except String Slice :=
   let offset := 16 + start * 16

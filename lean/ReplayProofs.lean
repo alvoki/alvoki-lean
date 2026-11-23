@@ -25,3 +25,5 @@ theorem prepared_write_refines (prepared : Alvoki.MergePhases.PreparedReplay) :
 end Alvoki.ScopedBytes
 
 #print axioms Alvoki.MergePhases.replayWrite_refines
+
+#print axioms Alvoki.MergePhases.ReplayPlan.write_eq

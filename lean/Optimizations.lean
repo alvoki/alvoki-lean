@@ -39,7 +39,7 @@ decreasing_by all_goals omega
 private def View.decodeFrom (view : @& View) (i : USize)
     (records : Array ScalarRecord) : Array ScalarRecord :=
   if _h : i < view.count then
-    view.decodeFrom (i + 1) (records.push ⟨view.keyUnchecked i, view.valueUnchecked i⟩)
+    view.decodeFrom (i + 1) (records.push ⟨view.keyOrZero i, view.valueOrZero i⟩)
   else records
 termination_by view.count.toNat - i.toNat
 decreasing_by

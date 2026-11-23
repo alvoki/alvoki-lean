@@ -69,7 +69,7 @@ def main (args : List String) : IO Unit := do
         let mut sum : UInt64 := 0
         for (_, key) in targets do
           let index := view.lowerBound key
-          if index < view.count && view.keyUnchecked index == key then sum := sum + view.valueUnchecked index
+          if index < view.count && view.keyOrZero index == key then sum := sum + view.valueOrZero index
         pure sum
       | "range-machine", _ | "check", _ => do
         let mut sum : UInt64 := 0
@@ -79,8 +79,8 @@ def main (args : List String) : IO Unit := do
           let hi := view.lowerBound (if key > top - width then top else key + width)
           let scan := view.scan index hi
           if mode == "check" then
-            let hit := if index < view.count && view.keyUnchecked index == key then
-              toString (view.valueUnchecked index) else "-"
+            let hit := if index < view.count && view.keyOrZero index == key then
+              toString (view.valueOrZero index) else "-"
             IO.println s!"{hit} {index.toNat} {hi.toNat} {scan}"
           sum := sum + scan
         pure sum

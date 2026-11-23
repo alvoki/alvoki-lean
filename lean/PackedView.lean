@@ -97,17 +97,6 @@ structure View where
   layout : (stride.toNat = 16 ∧ values.toNat = 24) ∨
     (stride.toNat = 8 ∧ values.toNat = 16 + 8 * count.toNat)
 
-/-- Internal packed kernel accessor. Callers must bound the index before using the result. -/
-@[inline] def View.keyUnchecked (view : @& View) (i : USize) : UInt64 :=
-  wordMachine view.bytes (16 + i * view.stride)
-
-/-- Internal packed kernel accessor. Callers must bound the index before using the result. -/
-@[inline] def View.valueUnchecked (view : @& View) (i : USize) : UInt64 :=
-  wordMachine view.bytes (view.values + i * view.stride)
-
-@[inline] def View.record? (view : @& View) (i : USize) : Option Record :=
-  if i < view.count then some (view.keyUnchecked i, view.valueUnchecked i) else none
-
 private theorem View.keyExtent (view : View) {i : USize} (within : i < view.count) :
     ((16 : USize) + i * view.stride).toNat + 7 < view.bytes.size := by
   have index := USize.lt_iff_toNat_lt.mp within
@@ -122,15 +111,51 @@ private theorem View.keyExtent (view : View) {i : USize} (within : i < view.coun
     rw [stride] at offset ⊢
     exact Nat.lt_of_le_of_lt (Nat.add_le_add_right offset 7) (by omega)
 
+private theorem View.valueExtent (view : View) {i : USize} (within : i < view.count) :
+    (view.values + i * view.stride).toNat + 7 < view.bytes.size := by
+  have index := USize.lt_iff_toNat_lt.mp within
+  have size := view.size_eq
+  rw [USize.toNat_add, USize.toNat_mul]
+  have offset : (view.values.toNat + i.toNat * view.stride.toNat % USize.size) % USize.size ≤
+      view.values.toNat + i.toNat * view.stride.toNat :=
+    Nat.le_trans (Nat.mod_le ..) (Nat.add_le_add_left (Nat.mod_le ..) view.values.toNat)
+  rcases view.layout with ⟨stride, value⟩ | ⟨stride, value⟩
+  all_goals
+    rw [stride, value] at offset ⊢
+    exact Nat.lt_of_le_of_lt (Nat.add_le_add_right offset 7) (by omega)
+
+/-- Checked scalar access for kernels that use a zero sentinel at exhaustion. -/
+@[inline] def View.keyOrZero (view : @& View) (i : USize) : UInt64 :=
+  if within : i < view.count then wordBounded view.bytes (16 + i * view.stride) (view.keyExtent within)
+  else 0
+
+@[inline] def View.valueOrZero (view : @& View) (i : USize) : UInt64 :=
+  if within : i < view.count then wordBounded view.bytes
+    (view.values + i * view.stride) (view.valueExtent within)
+  else 0
+
+theorem View.keyOrZero_wordMachine (view : View) (i : USize) (within : i < view.count) :
+    view.keyOrZero i = wordMachine view.bytes (16 + i * view.stride) := by
+  rw [keyOrZero, dite_eq_left within]
+  exact (wordMachine_of_extent view.bytes _ view.fits (view.keyExtent within)).symm
+
+theorem View.valueOrZero_wordMachine (view : View) (i : USize) (within : i < view.count) :
+    view.valueOrZero i = wordMachine view.bytes (view.values + i * view.stride) := by
+  rw [valueOrZero, dite_eq_left within]
+  exact (wordMachine_of_extent view.bytes _ view.fits (view.valueExtent within)).symm
+
+@[inline] def View.record? (view : @& View) (i : USize) : Option Record :=
+  if i < view.count then some (view.keyOrZero i, view.valueOrZero i) else none
+
 @[inline] private def View.keyInBounds (view : @& View) (i offset : USize)
     (position : offset = 16 + i * view.stride) (within : i < view.count) : UInt64 :=
   wordBounded view.bytes offset (position.symm ▸ view.keyExtent within)
 
 private theorem View.keyInBounds_eq (view : View) (i offset : USize)
     (position : offset = 16 + i * view.stride) (within : i < view.count) :
-    view.keyInBounds i offset position within = view.keyUnchecked i := by
+    view.keyInBounds i offset position within = view.keyOrZero i := by
   subst offset
-  exact (wordMachine_of_extent view.bytes _ view.fits (view.keyExtent within)).symm
+  simp only [keyInBounds, keyOrZero, dite_eq_left within]
 
 private theorem View.nextKeyOffset (view : View) (i offset : USize)
     (position : offset = 16 + i * view.stride) :
@@ -165,13 +190,13 @@ decreasing_by
   omega
 
 def View.validate (view : @& View) : Bool :=
-  view.count == 0 || view.validateFrom 1 (16 + view.stride) (by rw [USize.one_mul]) (view.keyUnchecked 0)
+  view.count == 0 || view.validateFrom 1 (16 + view.stride) (by rw [USize.one_mul]) (view.keyOrZero 0)
 
 private theorem View.validateFrom_ordered (view : View) (i offset : USize)
     (position : offset = 16 + i * view.stride) (previous : UInt64)
     (accepted : view.validateFrom i offset position previous = true) :
-    (∀ j, i ≤ j → j < view.count → previous < view.keyUnchecked j) ∧
-      (∀ j k, i ≤ j → j < k → k < view.count → view.keyUnchecked j < view.keyUnchecked k) := by
+    (∀ j, i ≤ j → j < view.count → previous < view.keyOrZero j) ∧
+      (∀ j k, i ≤ j → j < k → k < view.count → view.keyOrZero j < view.keyOrZero k) := by
   rw [View.validateFrom] at accepted
   split at accepted
   next within =>
@@ -182,13 +207,13 @@ private theorem View.validateFrom_ordered (view : View) (i offset : USize)
     next increasing =>
       have step := addOne i view.count (USize.lt_iff_toNat_lt.mp within)
       have tail := view.validateFrom_ordered (i + 1) (offset + view.stride)
-        (view.nextKeyOffset i offset position) (view.keyUnchecked i) accepted
+        (view.nextKeyOffset i offset position) (view.keyOrZero i) accepted
       have next_le (j : USize) (after : i ≤ j) (different : j ≠ i) : i + 1 ≤ j := by
         rw [USize.le_iff_toNat_le, step]
         have le := USize.le_iff_toNat_le.mp after
         have ne : j.toNat ≠ i.toNat := fun same => different (USize.toNat_inj.mp same)
         omega
-      have prev_lt : previous < view.keyUnchecked i := UInt64.not_le.mp increasing
+      have prev_lt : previous < view.keyOrZero i := UInt64.not_le.mp increasing
       constructor
       · intro j after before
         by_cases same : j = i
@@ -213,7 +238,7 @@ decreasing_by
 
 theorem View.validate_ordered (view : View) (accepted : view.validate = true)
     {i j : USize} (less : i < j) (before : j < view.count) :
-    view.keyUnchecked i < view.keyUnchecked j := by
+    view.keyOrZero i < view.keyOrZero j := by
   have order := USize.lt_iff_toNat_lt.mp less
   have bound := USize.lt_iff_toNat_lt.mp before
   have zero : (0 : USize).toNat = 0 := USize.toNat_ofNat_of_lt_32 (by decide)
@@ -223,10 +248,10 @@ theorem View.validate_ordered (view : View) (accepted : view.validate = true)
     rw [empty, zero] at bound
     omega
   have valid : view.validateFrom 1 (16 + view.stride) (by rw [USize.one_mul])
-      (view.keyUnchecked 0) = true := by
+      (view.keyOrZero 0) = true := by
     simpa [View.validate, nonempty] using accepted
   have tail := view.validateFrom_ordered 1 (16 + view.stride) (by rw [USize.one_mul])
-    (view.keyUnchecked 0) valid
+    (view.keyOrZero 0) valid
   by_cases initial : i = 0
   · subst i
     exact tail.1 j (USize.le_iff_toNat_le.mpr (by omega)) before
@@ -234,6 +259,32 @@ theorem View.validate_ordered (view : View) (accepted : view.validate = true)
       rw [← zero]
       exact fun same => initial (USize.toNat_inj.mp same)
     exact tail.2 i j (USize.le_iff_toNat_le.mpr (by omega)) less before
+
+private theorem View.validateFrom_complete (view : View) (i offset : USize)
+    (position : offset = 16 + i * view.stride) (previous : UInt64)
+    (sorted : ∀ j k, j < k → k < view.count → view.keyOrZero j < view.keyOrZero k)
+    (prev : i < view.count → previous < view.keyOrZero i) :
+    view.validateFrom i offset position previous = true := by
+  rw [View.validateFrom]
+  by_cases within : i < view.count
+  · simp only [dite_eq_left within]
+    try dsimp only
+    rw [view.keyInBounds_eq i offset position within, ite_eq_right (UInt64.not_le.mpr (prev within))]
+    have index := USize.lt_iff_toNat_lt.mp within
+    have step := addOne i view.count index
+    exact view.validateFrom_complete (i + 1) (offset + view.stride)
+      (view.nextKeyOffset i offset position) (view.keyOrZero i) sorted
+      (fun hit => sorted i (i + 1) (USize.lt_iff_toNat_lt.mpr (by omega)) hit)
+  · simp [within]
+termination_by view.count.toNat - i.toNat
+decreasing_by omega
+
+theorem View.validate_complete (view : View)
+    (sorted : ∀ j k, j < k → k < view.count → view.keyOrZero j < view.keyOrZero k) :
+    view.validate = true := by
+  unfold View.validate
+  exact Bool.or_eq_true_iff.mpr (.inr (view.validateFrom_complete 1 (16 + view.stride)
+    (by rw [USize.one_mul]) (view.keyOrZero 0) sorted (fun h => sorted 0 1 (USize.lt_iff_toNat_lt.mpr (by simp)) h)))
 
 @[inline] private def View.checked (view : View) : Except String View :=
   if view.validate then .ok view else .error "keys must increase"
@@ -315,6 +366,42 @@ theorem parseView_spec {bytes : ByteArray} {view : View} (accepted : parseView b
           omega
       · contradiction
 
+/-- A v1 block with a complete header and strictly ordered keys is accepted. -/
+theorem parseView_v1_complete (bytes : ByteArray) (count : Nat)
+    (size : bytes.size = 16 + 16 * count) (fits : bytes.size < USize.size)
+    (version : word bytes 8 = 1) (countField : (word bytes 0).toNat = count)
+    (ordered : ∀ view : View, view.bytes = bytes → view.count.toNat = count →
+      view.stride.toNat = 16 → view.values.toNat = 24 → view.validate = true) :
+    ∃ view, parseView bytes = .ok view ∧ view.count.toNat = count := by
+  have short : ¬bytes.size < 16 := by omega
+  have aligned : (bytes.size - 16) % 16 = 0 := by omega
+  have derived : (bytes.size - 16) / 16 = count := by omega
+  have valid : bytes.size < USize.size ∧ (bytes.size - 16) % 16 = 0 ∧
+      (word bytes 0).toNat = (bytes.size - 16) / 16 :=
+    ⟨fits, aligned, countField.trans derived.symm⟩
+  have countExact : count.toUSize.toNat = count := USize.toNat_ofNat_of_lt (by omega)
+  let view := View.mk bytes count.toUSize 16 24 fits (by rwa [countExact])
+    (.inl ⟨USize.toNat_ofNat_of_lt_32 (by decide), USize.toNat_ofNat_of_lt_32 (by decide)⟩)
+  refine ⟨view, ?_, countExact⟩
+  have accepted := ordered view rfl countExact (USize.toNat_ofNat_of_lt_32 (by decide))
+    (USize.toNat_ofNat_of_lt_32 (by decide))
+  unfold parseView
+  rw [dite_eq_right short]
+  try dsimp only
+  have validVersion : ¬(word bytes 8 != 1 && word bytes 8 != 2) = true := by simp [version]
+  rw [ite_eq_right validVersion]
+  try dsimp only
+  rw [dite_eq_left valid]
+  try dsimp only
+  rw [ite_eq_left (show (word bytes 8 == 1) = true by simp [version])]
+  have same : View.mk bytes ((bytes.size - 16) / 16).toUSize 16 24 fits
+      (by
+        rw [show ((bytes.size - 16) / 16).toUSize.toNat = count by rw [derived, countExact]]
+        exact size)
+      (.inl ⟨USize.toNat_ofNat_of_lt_32 (by decide), USize.toNat_ofNat_of_lt_32 (by decide)⟩) = view := by
+    simp [view, derived]
+  rw [same, View.checked, ite_eq_left accepted]
+
 theorem midpoint_toNat (lo hi : USize) (h : lo < hi) :
     (lo + (hi - lo) / 2).toNat = lo.toNat + (hi.toNat - lo.toNat) / 2 := by
   have order := USize.lt_iff_toNat_lt.mp h
@@ -344,16 +431,16 @@ decreasing_by all_goals (dsimp [mid] at midNat next below; omega)
   searchMachineLoop readKey key 0 count
 
 @[inline] def View.lowerBound (view : @& View) (key : UInt64) : USize :=
-  searchMachine (fun i => view.keyUnchecked i) key view.count
+  searchMachine (fun i => view.keyOrZero i) key view.count
 
 @[inline] def View.lookup (view : @& View) (key : UInt64) : Option UInt64 :=
   let i := view.lowerBound key
-  if i < view.count && view.keyUnchecked i == key then some (view.valueUnchecked i) else none
+  if i < view.count && view.keyOrZero i == key then some (view.valueOrZero i) else none
 
 /-- Internal scan worker. Use `scan` to bound the input to the view. -/
 def View.scanFrom (view : @& View) (index hi : USize) (sum : UInt64) : UInt64 :=
   if _h : index < hi then
-    view.scanFrom (index + 1) hi (sum + (view.keyUnchecked index ^^^ view.valueUnchecked index))
+    view.scanFrom (index + 1) hi (sum + (view.keyOrZero index ^^^ view.valueOrZero index))
   else sum
 termination_by hi.toNat - index.toNat
 decreasing_by

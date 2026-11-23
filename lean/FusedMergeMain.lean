@@ -13,10 +13,10 @@ def readPacked (bytes : ByteArray) (targets : @& Option Run) : IO UInt64 := do
   let mut total := Alvoki.NativeTune.scanScalar run
   if let some query := targets then
     for i in [0:query.view.count.toNat] do
-      let key := query.view.valueUnchecked i.toUSize
+      let key := query.view.valueOrZero i.toUSize
       let index := run.view.lowerBound key
-      if index < run.view.count && run.view.keyUnchecked index == key then
-        total := total + run.view.valueUnchecked index
+      if index < run.view.count && run.view.keyOrZero index == key then
+        total := total + run.view.valueOrZero index
   return total
 
 def main (args : List String) : IO Unit := do

@@ -15,10 +15,10 @@ def pipeline (left right targets : @& Run) : IO UInt64 := do
     | .error message => throw (IO.userError message)
   let mut total := Alvoki.NativeTune.scanScalar output
   for i in [0:targets.view.count.toNat] do
-    let key := targets.view.valueUnchecked i.toUSize
+    let key := targets.view.valueOrZero i.toUSize
     let index := output.view.lowerBound key
-    if index < output.view.count && output.view.keyUnchecked index == key then
-      total := total + output.view.valueUnchecked index
+    if index < output.view.count && output.view.keyOrZero index == key then
+      total := total + output.view.valueOrZero index
   return total
 
 def buildSlices (plan : @& ReplayPlan) : IO PreparedReplay :=

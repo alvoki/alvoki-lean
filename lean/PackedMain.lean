@@ -15,16 +15,16 @@ def foldOwned (records : @& Array ScalarRecord) : UInt64 := Id.run do
 def keySum (view : @& View) (targets : @& View) : UInt64 := Id.run do
   let mut sum := 0
   for i in [0:targets.count.toNat] do
-    let key := targets.valueUnchecked i.toUSize
+    let key := targets.valueOrZero i.toUSize
     let index := view.lowerBound key
-    if index < view.count && view.keyUnchecked index == key then sum := sum + view.valueUnchecked index
+    if index < view.count && view.keyOrZero index == key then sum := sum + view.valueOrZero index
   return sum
 
 @[specialize] def chunkKeySum (lookup : UInt64 → Option UInt64)
     (targets : @& View) : UInt64 := Id.run do
   let mut sum := 0
   for i in [0:targets.count.toNat] do
-    sum := sum + (lookup (targets.valueUnchecked i.toUSize)).getD 0
+    sum := sum + (lookup (targets.valueOrZero i.toUSize)).getD 0
   return sum
 
 def shouldWrite (mode : String) : Bool :=

@@ -74,3 +74,16 @@ name = "FusedMerge"
 [[lean_exe]]
 name = "alvoki-fused-merge"
 root = "FusedMergeMain"
+
+[[lean_lib]]
+name = "Compaction"
+
+[[lean_exe]]
+name = "alvoki-compaction"
+root = "CompactionMain"
+
+[[lean_lib]]
+name = "SpanMerge"
+
+[[lean_lib]]
+name = "BlockCodec"
