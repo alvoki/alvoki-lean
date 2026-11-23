@@ -21,6 +21,11 @@ def pipeline (left right targets : @& Run) : IO UInt64 := do
       total := total + output.view.value index
   return total
 
+def buildSlices (plan : @& ReplayPlan) : IO PreparedReplay :=
+  match plan.prepare with
+  | .ok slices => pure slices
+  | .error message => throw (IO.userError message)
+
 def main (args : List String) : IO Unit := do
   if args == ["copy-contract"] then
     checkCopyContract
@@ -30,13 +35,21 @@ def main (args : List String) : IO Unit := do
   let left ← loadRun leftPath
   let right ← loadRun rightPath
   let trace ← IO.FS.readBinFile tracePath
-  let needsTrace := mode == "replay-write" || mode == "check-replay-write"
+  let preparedMode := mode == "replay-prepared" || mode == "check-replay-prepared"
+  let needsTrace := preparedMode || mode == "replay-prepare-and-write" ||
+    mode == "check-replay-prepare-and-write" || mode == "replay-spans" ||
+    mode == "check-replay-spans" || mode == "replay-write" || mode == "check-replay-write"
   let plan ← if needsTrace then
     if h : validateTrace trace left.view.count.toNat right.view.count.toNat = true then
       pure (some (ReplayPlan.mk left right trace h))
     else throw (IO.userError "invalid replay trace")
   else pure none
   let replayInput ← IO.mkRef plan
+  let preparedSlices ← if preparedMode then
+    let some checked := plan | throw (IO.userError "expected checked trace")
+    some <$> buildSlices checked
+  else pure none
+  let preparedInput ← IO.mkRef preparedSlices
   let targets ← if mode == "pipeline" then some <$> loadRun tracePath else pure none
   let operation := if mode.startsWith "check-" then String.ofList (mode.toList.drop 6) else mode
   let width : Nat := match operation with
@@ -65,6 +78,15 @@ def main (args : List String) : IO Unit := do
       | "replay-write" | "check-replay-write" =>
         let some checked ← replayInput.get | throw (IO.userError "expected checked trace")
         pure (checked.write, 0)
+      | "replay-prepared" | "check-replay-prepared" =>
+        let some ready ← preparedInput.get | throw (IO.userError "expected prepared replay")
+        pure (ready.write, 0)
+      | "replay-spans" | "check-replay-spans" =>
+        let some checked ← replayInput.get | throw (IO.userError "expected checked trace")
+        pure (checked.writeSpans, 0)
+      | "replay-prepare-and-write" | "check-replay-prepare-and-write" =>
+        let some checked ← replayInput.get | throw (IO.userError "expected checked trace")
+        pure ((← buildSlices checked).write, 0)
       | "dense" | "check-dense" => pure (denseRewrite a, 0)
       | "merge" | "check-merge" => pure (merge a b, 0)
       | _ =>

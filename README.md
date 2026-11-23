@@ -75,3 +75,12 @@ python3 benchmarks/scoped_builder.py --summarize /tmp/alvoki-scoped-builder.csv
 ```
 
 [Scoped builder results, Rust controls, and trust assumptions](docs/scoped-builder.md)
+
+## Proved builder on stock Lean
+
+```sh
+bash scripts/stock-builder.sh --out /tmp/alvoki-stock-builder.csv
+python3 benchmarks/stock_builder.py --summarize /tmp/alvoki-stock-builder.csv
+```
+
+[Byte-level contracts, stock benchmarks, and open optimization work](docs/stock-builder.md)

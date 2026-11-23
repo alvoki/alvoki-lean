@@ -46,3 +46,9 @@ name = "MergePhases"
 [[lean_exe]]
 name = "alvoki-merge-phases"
 root = "MergePhasesMain"
+
+[[lean_lib]]
+name = "ScopedBytes"
+
+[[lean_lib]]
+name = "ScopedBytesProofs"
