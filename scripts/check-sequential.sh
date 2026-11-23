@@ -12,10 +12,10 @@ lake build AxiomPolicy RunMergeProofs CodecVariants DiskTable DiskPublicationMod
   CheckpointPublicationModel
 {
   printf 'import AxiomPolicy\n'
-  sed 's/^#print axioms /#check_axioms /' ProofRoadmapAudit.lean
+  sed 's/^#print axioms /#check_axioms /' checks/ProofRoadmapAudit.lean
 } > "$scratch/Audit.lean"
 lake env lean "$scratch/Audit.lean"
-lake env lean SequentialAudit.lean
+lake env lean checks/SequentialAudit.lean
 
 # This standard declaration serves as a negative control outside the allowlist.
 printf 'import AxiomPolicy\nnoncomputable def unexpectedDependency := @sorryAx\n#check_axioms unexpectedDependency\n' > "$scratch/Reject.lean"
@@ -41,6 +41,6 @@ lake env leanchecker DiskPublicationModel
 lake env leanchecker WalBoundary
 lake env leanchecker WalBoundaryModel
 lake env leanchecker CheckpointPublicationModel
-lake env lean --run SequentialChecks.lean
-lake env lean --run PackedTableChecks.lean
+lake env lean --run checks/SequentialChecks.lean
+lake env lean --run checks/PackedTableChecks.lean
 lake exe alvoki-disk-checks

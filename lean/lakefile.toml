@@ -115,6 +115,7 @@ srcDir = "storage/table"
 
 [[lean_lib]]
 name = "AxiomPolicy"
+srcDir = "checks"
 
 [[lean_lib]]
 name = "SequentialPurge"
@@ -175,6 +176,7 @@ srcDir = "storage/disk"
 [[lean_exe]]
 name = "alvoki-disk-checks"
 root = "DiskTableChecks"
+srcDir = "checks"
 
 [[lean_exe]]
 name = "alvoki-disk-replay"

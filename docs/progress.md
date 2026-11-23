@@ -86,7 +86,7 @@ The handoff records the first unmeasured experiment, a whole-loop v3 writer, and
 
 ## Packed table and local durability
 
-`PackedTable` refines the sequential snapshot model for writes, handle lifecycle, lookup, range, flush and compaction. Read workers binary-seek within packed v3 runs. Flush appends rows into a byte array and matches the canonical v3 encoding. The differential harness compares histories and reads against `SnapshotTable` in a fixed scenario and 512 generated operations. Packed reclamation remains a separate integration task. [Packed table](../lean/storage/table/PackedTable.lean) · [Differential fixtures](../lean/PackedTableChecks.lean)
+`PackedTable` refines the sequential snapshot model for writes, handle lifecycle, lookup, range, flush and compaction. Read workers binary-seek within packed v3 runs. Flush appends rows into a byte array and matches the canonical v3 encoding. The differential harness compares histories and reads against `SnapshotTable` in a fixed scenario and 512 generated operations. Packed reclamation remains a separate integration task. [Packed table](../lean/storage/table/PackedTable.lean) · [Differential fixtures](../lean/checks/PackedTableChecks.lean)
 
 `DiskTable` adds checksummed WAL frames, validated manifests, immutable checkpoint generations, and Linux reopen. The codecs have byte-exact round trips. Replay proofs cover acknowledged prefixes, torn tails and the suffix above an installed checkpoint. Local fixtures cover reopen after compaction, persisted floors, malformed frames, torn-tail repair and interrupted manifest publication. The adapter keeps old runs and WAL entries. The next persistence obligations are a filesystem crash model, safe cleanup, and checksums for run payloads. [Engine API and protocol](architecture.md#sequential-storage) · [Local checks](../scripts/check-sequential.sh)
 
@@ -137,6 +137,10 @@ The reviewer identifies changes against a pinned checkout and rechecks the exact
 ## Checkpoint generation after reopen
 
 The checkpoint model now proves that the next generation calculated by the adapter is unreachable after reopen settles the visible manifest. The theorem covers bootstrap and an existing decoded manifest and uses the same overflow guard as the adapter. The next composition proof must establish the model's settlement and WAL coverage premises across real engine traces. [Generation proof](../lean/storage/publication/CheckpointPublicationModel.lean)
+
+## Audit and correctness source layout
+
+Proof audit entry points and correctness harnesses live under `lean/checks/`. Lake source directories preserve the registered `AxiomPolicy` and `DiskTableChecks` module names and artifact paths. [Audit and correctness sources](../lean/checks/) · [Sequential proof and fixture suite](../scripts/check-sequential.sh)
 
 ## Publication source layout
 

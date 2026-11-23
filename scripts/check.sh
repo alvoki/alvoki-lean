@@ -18,8 +18,8 @@ case "${1:-}" in
         CompactionModel Compaction CompactionCodec CompactionProofs SequentialModel; do
         lake env leanchecker "$module"
       done
-      lake env lean ProofRoadmapAudit.lean
-      lake env lean --run CoreChecks.lean
+      lake env lean checks/ProofRoadmapAudit.lean
+      lake env lean --run checks/CoreChecks.lean
     )
     ;;
   --runtime)
