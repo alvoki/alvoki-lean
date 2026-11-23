@@ -40,7 +40,7 @@ python3 benchmarks/fixed_copy.py --summarize /tmp/alvoki-fixed-copy.csv
 objdump -d --disassemble=__wrap_lean_byte_array_copy_slice lean/.lake/build/bin/alvoki-merge-phases-fixed
 ```
 
-- [Raw trials](../benchmarks/fixed-copy-trials.csv)
-- [Summary](../benchmarks/fixed-copy-summary.csv)
-- [VM environment](../benchmarks/fixed-copy-environment.txt)
+- [Raw trials](../benchmarks/results/packed/fixed-copy-trials.csv)
+- [Summary](../benchmarks/results/packed/fixed-copy-summary.csv)
+- [VM environment](../benchmarks/results/packed/fixed-copy-environment.txt)
 - [Stock Lean runtime source](https://github.com/leanprover/lean4/blob/v4.36.0/src/runtime/object.cpp)

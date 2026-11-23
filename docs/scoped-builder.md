@@ -42,7 +42,7 @@ bash scripts/scoped-builder.sh --out /tmp/alvoki-scoped-builder.csv
 python3 benchmarks/scoped_builder.py --summarize /tmp/alvoki-scoped-builder.csv
 ```
 
-- [Raw trials](../benchmarks/scoped-builder-trials.csv)
-- [Summary](../benchmarks/scoped-builder-summary.csv)
-- [Assembly excerpts](../benchmarks/scoped-builder-codegen.txt)
-- [VM environment](../benchmarks/scoped-builder-environment.txt)
+- [Raw trials](../benchmarks/results/packed/scoped-builder-trials.csv)
+- [Summary](../benchmarks/results/packed/scoped-builder-summary.csv)
+- [Assembly excerpts](../benchmarks/results/packed/scoped-builder-codegen.txt)
+- [VM environment](../benchmarks/results/packed/scoped-builder-environment.txt)

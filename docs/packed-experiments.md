@@ -54,6 +54,6 @@ objdump -d --disassemble=alvoki_write_pair lean/.lake/build/bin/alvoki-packed
 objdump -d --disassemble=alvoki_encode_batch lean/.lake/build/bin/alvoki-packed
 ```
 
-- [Raw measurements](../benchmarks/packed-trials.csv)
-- [Summary](../benchmarks/packed-summary.csv)
-- [VM environment](../benchmarks/packed-environment.txt)
+- [Raw measurements](../benchmarks/results/packed/packed-trials.csv)
+- [Summary](../benchmarks/results/packed/packed-summary.csv)
+- [VM environment](../benchmarks/results/packed/packed-environment.txt)

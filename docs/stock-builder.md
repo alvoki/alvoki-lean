@@ -39,6 +39,6 @@ python3 benchmarks/stock_builder.py --summarize /tmp/alvoki-stock-builder.csv
 
 Eight exact output fixtures, five malformed trace fixtures, and exact comparisons on all benchmark inputs passed. Existing reproduction, Verus, merge-phase, and prior runtime experiment fixture suites also passed.
 
-- [Raw runs](../benchmarks/stock-builder-trials.csv)
-- [Summary](../benchmarks/stock-builder-summary.csv)
-- [VM environment](../benchmarks/stock-builder-environment.txt)
+- [Raw runs](../benchmarks/results/packed/stock-builder-trials.csv)
+- [Summary](../benchmarks/results/packed/stock-builder-summary.csv)
+- [VM environment](../benchmarks/results/packed/stock-builder-environment.txt)

@@ -14,7 +14,7 @@ One million interleaved version-1 records, median of nine timed batches on the V
 | Rust, vectorization disabled | 0.336 ms |
 | Rust, default release | 0.237 ms |
 
-Clang reported vectorization width 2 and interleave count 2 for the simple reduction. Disassembly shows packed loads, XOR, and 64-bit lane adds. The four-accumulator loop compiled to an unrolled scalar loop in the inspected entry point. The Rust controls use the same source and were built separately with loop and SLP vectorization disabled for the scalar control. We inspected both binaries. At 1,000 records, the vectorized Lean and Rust scans measured 241 and 240 ns per block. At 100,000 records they measured 22.3 and 21.3 µs. The small differences at these scales are VM observations. [Code generation evidence](../benchmarks/native-codegen.txt)
+Clang reported vectorization width 2 and interleave count 2 for the simple reduction. Disassembly shows packed loads, XOR, and 64-bit lane adds. The four-accumulator loop compiled to an unrolled scalar loop in the inspected entry point. The Rust controls use the same source and were built separately with loop and SLP vectorization disabled for the scalar control. We inspected both binaries. At 1,000 records, the vectorized Lean and Rust scans measured 241 and 240 ns per block. At 100,000 records they measured 22.3 and 21.3 µs. The small differences at these scales are VM observations. [Code generation evidence](../benchmarks/results/packed/native-codegen.txt)
 
 The Lean loop borrows the input, performs a fixed-stride XOR and wrapping-add reduction, and passes erased bounds proofs to the byte-load primitive. The generated hot loop has no per-word extent branches. The earlier gap included the effect of those branches, as well as the benefit Rust was getting from SIMD. Vectorization is a result of this loop shape and compiler configuration.
 
@@ -59,6 +59,6 @@ python3 benchmarks/native.py --summarize /tmp/alvoki-native.csv
 objdump -d --disassemble=lp_alvoki_Alvoki_NativeTune_scanScalar lean/.lake/build/bin/alvoki-native
 ```
 
-- [Raw trials](../benchmarks/native-trials.csv)
-- [Summary](../benchmarks/native-summary.csv)
-- [VM environment](../benchmarks/native-environment.txt)
+- [Raw trials](../benchmarks/results/packed/native-trials.csv)
+- [Summary](../benchmarks/results/packed/native-summary.csv)
+- [VM environment](../benchmarks/results/packed/native-environment.txt)

@@ -54,12 +54,14 @@ Counts below exclude blank and comment-only lines. Lean proof lines include lemm
 
 The shared Python correctness code has 35 lines in the oracle and 18 lines in fixture generation, which the benchmark also uses. Lean's axiom audit adds eight lines. The Lean and Verus proof sizes cover different obligations, and the experiment did not track engineer-hours.
 
-After cleaning the build outputs, Rust release compilation took 0.456 s and the Lean native build took 2.748 s. Building Lean's proof module with the executable dependency already built took 2.040 s. Rechecking the module with `leanchecker` took 1.706 s. Verus took 1.175 s and reported four verified and zero errors. See the raw run logs for the commands and tool output.
+After cleaning the build outputs, Rust release compilation took 0.456 s and the Lean native build took 2.748 s. Building Lean's proof module with the executable dependency already built took 2.040 s. Rechecking the module with `leanchecker` took 1.706 s. Verus took 1.175 s and reported four verified and zero errors.
 
-- [Raw observations](../benchmarks/results-cloud.csv)
-- [Derived summary](../benchmarks/summary-cloud.csv)
-- [Environment](../benchmarks/environment-cloud.txt)
-- [Build and verification log](../benchmarks/reproduction-cloud.txt)
+The archived logs preserve the paths recorded at the time of each run. The current reproduction examples write fresh samples to `/tmp`. [Reproduction commands](../README.md#reproduce-on-linux-x86-64)
+
+- [Raw observations](../benchmarks/results/packed/baseline/results-cloud.csv)
+- [Derived summary](../benchmarks/results/packed/baseline/summary-cloud.csv)
+- [Environment](../benchmarks/results/packed/baseline/environment-cloud.txt)
+- [Build and verification log](../benchmarks/results/packed/baseline/reproduction-cloud.txt)
 
 ## Disk replay
 

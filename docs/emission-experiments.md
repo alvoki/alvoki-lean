@@ -13,7 +13,7 @@ Medians at one million version-1 records, with nine timed trials on the VM. Each
 | Dense mask, rebuild records | 7.61 ms | 1.26 ms |
 | Dense mask, bulk copy then update one word per record | 4.93 ms | 1.01 ms |
 
-Copying unchanged bytes through the standard slice primitive removes per-byte stores for keys and headers. The low-bit variant also avoids rewriting the seven unchanged bytes in each value. Generated x86-64 code retains one copy-on-write slow-path call site in the byte-patch loop, eight in the word writer, and sixteen in the record writer. These are branch destinations, so the counts do not imply that the runtime copied the buffer at every store. [Disassembly counts](../benchmarks/emission-codegen.txt)
+Copying unchanged bytes through the standard slice primitive removes per-byte stores for keys and headers. The low-bit variant also avoids rewriting the seven unchanged bytes in each value. Generated x86-64 code retains one copy-on-write slow-path call site in the byte-patch loop, eight in the word writer, and sixteen in the record writer. These are branch destinations, so the counts do not imply that the runtime copied the buffer at every store. [Disassembly counts](../benchmarks/results/packed/emission-codegen.txt)
 
 The low-bit result supports preserving known-unchanged packed bytes for transformations. The dense result leaves about a 4.9× gap against the equivalent Rust copy-and-patch path. The experiment starts from packed bytes and measures production of a new block. Encoding from an array of owned records is a separate workload.
 
@@ -45,6 +45,6 @@ bash scripts/native.sh --out /tmp/alvoki-emission.csv
 python3 benchmarks/native.py --summarize /tmp/alvoki-emission.csv
 ```
 
-- [Raw trials](../benchmarks/emission-trials.csv)
-- [Summary](../benchmarks/emission-summary.csv)
-- [VM environment](../benchmarks/emission-environment.txt)
+- [Raw trials](../benchmarks/results/packed/emission-trials.csv)
+- [Summary](../benchmarks/results/packed/emission-summary.csv)
+- [VM environment](../benchmarks/results/packed/emission-environment.txt)

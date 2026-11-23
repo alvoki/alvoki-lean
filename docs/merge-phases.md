@@ -33,6 +33,6 @@ bash scripts/merge-phases.sh --out /tmp/alvoki-merge-phases.csv
 python3 benchmarks/merge_phases.py --summarize /tmp/alvoki-merge-phases.csv
 ```
 
-- [Raw timings](../benchmarks/merge-phases-trials.csv)
-- [Summary](../benchmarks/merge-phases-summary.csv)
-- [VM environment](../benchmarks/merge-phases-environment.txt)
+- [Raw timings](../benchmarks/results/packed/merge-phases-trials.csv)
+- [Summary](../benchmarks/results/packed/merge-phases-summary.csv)
+- [VM environment](../benchmarks/results/packed/merge-phases-environment.txt)
