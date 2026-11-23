@@ -203,3 +203,7 @@ The selected-pair theorem now combines the executable loader and replay with abs
 ## Disk snapshot session isolation
 
 Every successful disk open allocates a distinct session token. Disk handles keep their token alive and the adapter checks reference identity before using the local pin ID. The native fixture rejects stale and foreign point and range reads and checks that releasing either kind of handle leaves a matching live pin active. The fixture failed on the old adapter at the stale point read. The adapter relies on Lean's runtime identity contract for live references. Paired read timings and the reproduction harness are archived. [Disk adapter](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Native fixture](../lean/Alvoki/Checks/DiskTableChecks.lean) · [Read benchmark](benchmarks.md#disk-snapshot-session-identity)
+
+## Modeled write cuts bound surviving marker lengths
+
+Until marker rename, the visible and every surviving marker point to the old prefix. After rename, the visible marker points to the extended prefix and every crash choice is old or extended. A crash settles the chosen marker. With the byte-limit guards, Lean proves that all of these candidates fit within the visible marker. The repair model can use the bound whenever the joint image's markers agree with that write cut. [Write-cut bound](../lean/Alvoki/Storage/Disk/WalBoundaryModel.lean) · [Repair bridge](../lean/Alvoki/Storage/Disk/MarkedWalReopenModel.lean)
