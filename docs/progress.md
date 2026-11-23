@@ -161,3 +161,7 @@ The disk adapter, codecs and recovery first moved under `lean/storage/disk/`. Th
 ## Qualified storage and check imports
 
 The storage module names now follow the source tree under `Alvoki.Storage.Disk`, `Alvoki.Storage.Table`, and `Alvoki.Storage.Publication`. Audit and fixture modules follow `Alvoki.Checks`. The audit scripts use the qualified module names, and the native executables keep the established command names. [Import examples](architecture.md#lean-paths)
+
+## Consecutive WAL replay succeeds
+
+The audited completeness theorem proves that replay accepts every contiguous suffix starting at the checkpoint's next sequence. Each encoded ordinal fits in `UInt64` and establishes that its write passes the overflow guard. When the covered prefix length agrees with the checkpoint watermark, the actual selected-WAL loader succeeds and its final sequence equals the number of selected frames. [Replay completeness](../lean/Alvoki/Storage/Disk/Recovery.lean)

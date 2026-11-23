@@ -55,7 +55,9 @@ import Alvoki.Storage.Publication.CheckpointPublicationModel
 #check_axioms Alvoki.Storage.loadRunSet_written
 #check_axioms Alvoki.Storage.recoverRunSet_written
 #check_axioms Alvoki.Storage.replay_committed_count
+#check_axioms Alvoki.Storage.replay_ordinals_complete
 #check_axioms Alvoki.Storage.recoverSelected_encoded
+#check_axioms Alvoki.Storage.recoverSelected_encoded_complete
 #check_axioms Alvoki.Storage.recoverRunSet_committedBoundary
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_cut_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_complete
