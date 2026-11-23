@@ -225,3 +225,7 @@ A native fixture verifies that the final standalone directory sync really succee
 ## Abstract recovery after modeled reopen retries
 
 For one interrupted write and a fixed matching checkpoint, the audited proof traces the final manifest and marker to the original write cut. The actual loader and selector recover the original history or the history with that one appended write. The abstract state applies the same suffix, reaches the same sequence, and agrees with point and range reads through newly acquired pins at every supported snapshot. The next adapter theorem must show that reachable filesystem states provide the physical write-cut and checkpoint witnesses and follow the modeled retry relation. [Composed recovery proof](../lean/Alvoki/Storage/Disk/DiskRecoveryModel.lean) · [Remaining trace obligations](proof-roadmap.md#disk-guarantees-to-prove)
+
+## Grouped sync errors with partial effects
+
+The native fixture makes the aligned reopen sync fail after actually syncing only the directory. During write publication it makes the WAL and staged-marker group fail after actually syncing only the staged marker. The active marker remains unchanged, and reopen trims the unselected append and returns the acknowledged and retained snapshot data. The ordered trace records the successful sync call before each injected error. This tests process-visible effects and retries. It leaves incidental writeback and power-loss outcomes to the filesystem contract. [Native fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)
