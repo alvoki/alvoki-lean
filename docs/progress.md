@@ -217,3 +217,7 @@ Every manifest and marker pair available after a modeled reopen retry was availa
 ## Shared reopen durability decision
 
 The Linux adapter uses the audited `Publication.runReopen` to choose between staged WAL repair and the grouped sync of an aligned WAL and its directory. The branch equations expose the chosen action for the trace proof. Generated C retains the original staging path placement and sync calls. Median paired reopen ratios ranged from 0.992× to 1.031× across the four native workloads. Correspondence between the model's successful and failed effects and the filesystem operations remains a trace proof obligation. [Shared decision](../lean/Alvoki/Storage/Publication/DiskPublication.lean) · [Reopen timings](benchmarks.md#shared-reopen-durability-branch)
+
+## Directory sync can take effect before an error
+
+A native fixture verifies that the final standalone directory sync really succeeds before the wrapper returns an error. The write receives no acknowledgement. Reopen selects the extended WAL and preserves the acknowledged prefix, the checkpoint floor, and retained snapshot reads. This exercises the Linux adapter's error and retry behavior when the sync has taken effect. [Fault fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)
