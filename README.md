@@ -21,3 +21,12 @@ bash scripts/environment.sh
 ```
 
 The default reproduction builds both native binaries, checks the Lean theorems and their axioms, runs Verus, and checks both Lean variants and Rust against the Python reference. The `--out` flag additionally benchmarks all three binaries. Use `--sizes 1000 --trials 3` for a shorter run.
+
+## Optimization experiments
+
+```sh
+bash scripts/optimize.sh --out /tmp/alvoki-opt-trials.csv --trials 9
+python3 benchmarks/optimize.py --summarize /tmp/alvoki-opt-trials.csv
+```
+
+The suite compares the existing implementations with native Lean specializations and a layout-matched Rust control. See the [optimization report](docs/optimizations.md).

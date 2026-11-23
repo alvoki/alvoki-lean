@@ -13,3 +13,9 @@ The Lean search proofs use an invariant over the left and right regions outside 
 Verus proves the analogous loop invariant with quantified sequence properties. It needs explicit instantiation of sortedness after changing either bound and an explicit trigger on range membership. The verified source is a separate executable core, so its results do not establish correctness for the Rust packed parser or search integration.
 
 `lake env leanchecker Proofs` successfully rechecked the built Lean module. The separately packaged `lean4lean Proofs` failed with an incompatible olean header. The proofs concern Lean or Verus source semantics and use their normal trusted bases. Native execution also relies on the respective compilers, runtimes, and standard libraries. Kernel or Verus checks do not establish correctness of the VM, OS, file I/O, or generated machine code.
+
+## Optimized reader and search
+
+`lean/OptProofs.lean` proves that the tail-recursive machine-index search agrees with the original natural-number lower bound after index conversion. It derives the same partition guarantee for monotone logical keys. `wordMachine_eq` proves the optimized reader is equal to the original byte reader when the eight-byte extent is in bounds and the array size fits in a machine word. Each proof-carrying byte load and indexed store uses an explicit bound, and Lean checks the progress of the machine-index loops.
+
+The optimized parser, view offsets, range fold, and encoders are tested against both external layouts or the version 1 output fixture where applicable. Connecting parser acceptance and offset arithmetic to the logical sortedness assumptions remains open. `scripts/optimize.sh` builds and rechecks the new theorems using `leanchecker`; the axiom audit lists only standard Lean axioms.

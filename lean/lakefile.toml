@@ -10,3 +10,13 @@ name = "Proofs"
 [[lean_exe]]
 name = "alvoki"
 root = "Main"
+
+[[lean_exe]]
+name = "alvoki-opt"
+root = "OptMain"
+
+[[lean_lib]]
+name = "Optimizations"
+
+[[lean_lib]]
+name = "OptProofs"
