@@ -412,6 +412,63 @@ private def checkCheckpointRetryWithFewerRuns (root : FilePath) : IO Unit := do
       "reopen with the shorter run set changed the latest range"
   finally final.close
 
+private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 4 (some 40)) == 1) "unexpected initial write sequence"
+    check ((← db.write 7 (some 70)) == 2) "unexpected checkpoint write sequence"
+    check (← db.advanceFloor 2) "could not advance the checkpoint floor"
+    db.checkpoint
+    check ((← db.write 4 (some 41)) == 3) "unexpected overwrite sequence"
+    check ((← db.write 7 none) == 4) "unexpected tombstone sequence"
+  finally db.close
+  let wal := dir / "WAL"
+  let marker := dir / "WAL.commit"
+  let stagedManifest := dir / "MANIFEST.next"
+  let stagedMarker := dir / "WAL.commit.next"
+  let alignedOpen := [wal.toString, dir.toString]
+  let runSyncs := [dir / "run-2-0.v3", dir / "run-2-1.v3", dir, stagedManifest]
+  let (published, syncs) ← probeDisk bin dir (some stagedManifest) (operation := "--checkpoint-once")
+  check (!published && syncs == alignedOpen ++ runSyncs.map FilePath.toString)
+    "checkpoint fixture did not fail before the new manifest rename"
+  expectManifest dir 1 2 2 1
+  let events : List WAL.Write := [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩, ⟨4, 7, none⟩]
+  let acknowledged := WAL.encode events
+  let boundary := WAL.Boundary.encode acknowledged.size.toUInt64
+  let (written, syncs) ← probeDisk bin dir (some stagedMarker) (operation := "--write-once")
+  check (!written && syncs == alignedOpen ++ [wal.toString, stagedMarker.toString])
+    "write fixture did not fail before the new WAL marker rename"
+  check (decide ((← IO.FS.readBinFile wal) = acknowledged ++ WAL.encodeFrame ⟨5, 7, some 99⟩))
+    "write fixture did not leave the complete unacknowledged append"
+  check (decide ((← IO.FS.readBinFile marker) = boundary)) "failed write changed the selected WAL marker"
+  let (opened, syncs) ← probeDisk bin dir (some dir)
+  check (!opened && syncs == [(dir / "WAL.next").toString, dir.toString])
+    "reopen did not fail at the directory sync after repairing the WAL"
+  check (decide ((← IO.FS.readBinFile wal) = acknowledged)) "WAL repair rename did not trim the rejected append"
+  let (opened, syncs) ← probeDisk bin dir (some dir)
+  check (!opened && syncs == alignedOpen) "reopen retry did not sync the directory for the repaired WAL"
+  let recovered ← DiskTable.open dir
+  try
+    expectManifest dir 1 2 2 1
+    check ((← recovered.acquireAt 1).isNone) "reopen lost the checkpoint floor"
+    let some historical ← recovered.acquireAt 2 | throw (IO.userError "reopen lost the checkpoint snapshot")
+    check ((← recovered.lookup historical.handle 4) == some (some 40) &&
+      (← recovered.lookup historical.handle 7) == some (some 70)) "reopen changed the checkpoint snapshot"
+    let latest ← recovered.acquire
+    check (latest.sequence == 4 && (← recovered.lookup latest.handle 4) == some (some 41) &&
+      (← recovered.lookup latest.handle 7) == some none) "reopen changed the acknowledged WAL suffix"
+    check ((← recovered.write 7 (some 71)) == 5) "reopen did not reuse the discarded write sequence"
+  finally recovered.close
+  let final ← DiskTable.open dir
+  try
+    let latest ← final.acquire
+    check (latest.sequence == 5 && (← final.lookup latest.handle 7) == some (some 71))
+      "another reopen lost the replacement for the discarded write"
+  finally final.close
+
 private def checkPublicationCuts : IO Unit := do
   let events : List WAL.Write := [⟨1, 7, some 60⟩]
   let complete := WAL.encode events
@@ -454,5 +511,6 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkFirstCheckpointCuts
     IO.FS.withTempDir checkCheckpointRetryWithFewerRuns
+    IO.FS.withTempDir checkRecoveryAfterCheckpointAndWriteFailures
     IO.println "Passed disk identity, WAL boundaries and ordinals, checkpoint cuts, and sync retry checks."
   | _ => throw (IO.userError "unexpected disk fixture arguments")
