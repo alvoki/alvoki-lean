@@ -129,3 +129,7 @@ The next proof should connect checkpoint issuance and successful reopen to the m
 ## WAL sync latency investigation
 
 Delegated native measurements isolated the cost of launching GNU `sync` during each write. The durable-boundary reference took 2.58 ms per write in the paired experiment. A persistent sync-only helper with rename still under the Lean lock took 0.72 ms and passed scratch fault injection. The production adapter uses the GNU sync protocol. The experiment provides a baseline for deciding whether to add a helper and for measuring future durable batches. [Measurements](benchmarks.md#wal-sync-process-overhead)
+
+## Independent Lean readability review
+
+The reviewer identifies changes against a pinned checkout and rechecks the exact candidate commit from the implementer's isolated branch. The first approved change uses `IO.ofExcept`, keeps partial checkpoint data separate from the installed state, and names the three crash invariant facts. A comment explains why both recovery paths sync the directory before returning a handle. The integrated proof audit, native fault checks, and reproduction suite passed. Same-machine timing checks included an interleaved rerun of the checkpoint comparison. [Agent workflow](../AGENTS.md#agent-work-and-review) · [Timings](benchmarks.md#lean-readability-review)
