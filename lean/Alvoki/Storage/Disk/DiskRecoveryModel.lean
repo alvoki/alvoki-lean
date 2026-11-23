@@ -43,10 +43,17 @@ private theorem ordinals_prefix {first : Nat} {initial suffix : List WAL.Write}
   | nil => trivial
   | cons event rest ih => exact ⟨ordered.1, ih ordered.2⟩
 
+private theorem PackedTable.SameData.symm {left right : PackedTable} (same : left.SameData right) :
+    right.SameData left :=
+  ⟨same.runs.symm, same.memory.symm, same.committed.symm, same.floor.symm⟩
+
 /-- For a supplied manifest and marker pair, the production loader, selector
 and replay recover the old or extended history. The reference replays from
-the original checkpoint and may have a different pin registry. A trace
-invariant must establish that the checkpoint represents the covered prefix. -/
+the original checkpoint and may have a different pin registry. Given an
+abstract checkpoint, replay applies the exact selected suffix and newly
+acquired pins read that abstract result at every supported snapshot. A trace
+invariant must establish that the selected pair is reachable and the checkpoint
+represents the covered prefix. -/
 theorem recoverWriteCutSelectedPair {manifest marker : Option ByteArray} {files : List ByteArray}
     {checkpoint : PackedTable} {covered pending : List WAL.Write}
     {event : WAL.Write} {wal : ByteArray} {image : Publication.Image}
@@ -70,35 +77,41 @@ theorem recoverWriteCutSelectedPair {manifest marker : Option ByteArray} {files 
       (events = covered ++ pending ∨ events = (covered ++ pending) ++ [event]) ∧
       reopened.committed.toNat = events.length ∧
       replay checkpoint (events.drop covered.length) = .ok reference ∧
-      reference.SameData reopened := by
+      reference.SameData reopened ∧
+      (∀ model : Sequential.SnapshotTable UInt64, checkpoint.Refines model →
+        ∃ abstract, SnapshotWalReplay model (events.drop covered.length) abstract ∧
+          abstract.committed.toNat = events.length ∧
+          ∀ snapshot : UInt64, abstract.pins.floor ≤ snapshot → snapshot.toNat ≤ events.length →
+            ∃ pin pinned, reopened.acquireAt snapshot = some (pin, pinned) ∧
+              (∀ key, pinned.lookup pin.handle key = some (abstract.table.lookup key snapshot)) ∧
+              (∀ start stop, pinned.range pin.handle start stop =
+                some (abstract.table.range start stop snapshot))) := by
   obtain ⟨base, loaded, same⟩ := written.loads
   obtain ⟨markerBytes, events, bound, history, selected⟩ :=
     WAL.Boundary.write_cut_selects_old_or_new cut oldFits newFits chosen
-  have recoverSuffix (suffix : List WAL.Write) (ordinals : WAL.OrdinalsFrom 1 (covered ++ suffix)) :
-      ∃ reopened reference, recoverSelected base (WAL.encode (covered ++ suffix)) = .ok reopened ∧
-        reopened.committed.toNat = (covered ++ suffix).length ∧
-        replay checkpoint suffix = .ok reference ∧ reference.SameData reopened := by
-    have count : covered.length = base.committed.toNat := by simpa only [same.committed] using watermark
-    obtain ⟨reopened, recovered, sequence⟩ := recoverSelected_encoded_complete base covered suffix ordinals count
-    have replayed := (recoverSelected_encoded base covered suffix ordinals count).symm.trans recovered
-    have sameBase : checkpoint.SameData base :=
-      ⟨same.runs.symm, same.memory.symm, same.committed.symm, same.floor.symm⟩
-    obtain ⟨reference, expected, agrees⟩ := replay_sameData sameBase suffix replayed
-    exact ⟨reopened, reference, recovered, by simpa only [List.length_append] using sequence,
-      expected, agrees⟩
-  rcases history with rfl | rfl
-  · obtain ⟨reopened, reference, recovered, sequence, expected, agrees⟩ :=
-      recoverSuffix pending (ordinals_prefix ordered)
-    exact ⟨markerBytes, covered ++ pending, base, reopened, reference, bound, loaded, selected,
-      recovered, Or.inl rfl, sequence, by simpa only [List.drop_left] using expected, agrees⟩
-  · have ordinals : WAL.OrdinalsFrom 1 (covered ++ (pending ++ [event])) := by
-      simpa only [List.append_assoc] using ordered
-    obtain ⟨reopened, reference, recovered, sequence, expected, agrees⟩ :=
-      recoverSuffix (pending ++ [event]) ordinals
-    refine ⟨markerBytes, (covered ++ pending) ++ [event], base, reopened, reference, bound,
-      loaded, selected, ?_, Or.inr rfl, ?_, ?_, agrees⟩
-    · simpa only [List.append_assoc] using recovered
-    · simpa only [List.append_assoc] using sequence
-    · simpa only [List.append_assoc, List.drop_left] using expected
+  obtain ⟨suffix, split, ordinals⟩ :
+      ∃ suffix, events = covered ++ suffix ∧ WAL.OrdinalsFrom 1 (covered ++ suffix) := by
+    rcases history with prior | advanced
+    · exact ⟨pending, prior, ordinals_prefix ordered⟩
+    · exact ⟨pending ++ [event], by simpa only [List.append_assoc] using advanced,
+        by simpa only [List.append_assoc] using ordered⟩
+  subst events
+  have count : covered.length = base.committed.toNat := by simpa only [same.committed] using watermark
+  obtain ⟨reopened, recovered, sequence⟩ := recoverSelected_encoded_complete base covered suffix ordinals count
+  have replayed := (recoverSelected_encoded base covered suffix ordinals count).symm.trans recovered
+  obtain ⟨reference, expected, agrees⟩ := replay_sameData same.symm suffix replayed
+  have finalCount : reopened.committed.toNat = (covered ++ suffix).length := by
+    simpa only [List.length_append] using sequence
+  refine ⟨markerBytes, covered ++ suffix, base, reopened, reference, bound, loaded, selected,
+    recovered, history, finalCount, by simpa only [List.drop_left] using expected, agrees, ?_⟩
+  intro model represents
+  obtain ⟨abstract, modeled, refined⟩ := replay_refines represents expected
+  refine ⟨abstract, by simpa only [List.drop_left] using modeled, ?_, ?_⟩
+  · rw [← refined.committed, agrees.committed, finalCount]
+  · intro snapshot retained within
+    have floor : reference.pins.floor ≤ snapshot := by simpa only [refined.pins] using retained
+    have committed : snapshot ≤ reference.committed := UInt64.le_iff_toNat_le.mpr (by
+      simpa only [agrees.committed, finalCount] using within)
+    simpa only [refined.table] using agrees.symm.acquireAt_reads floor committed
 
 end Alvoki.Storage
