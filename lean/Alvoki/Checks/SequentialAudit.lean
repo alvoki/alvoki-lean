@@ -2,6 +2,7 @@ import Alvoki.Checks.AxiomPolicy
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.WalWritePublicationModel
 import Alvoki.Storage.Disk.DiskRecoveryModel
+import Alvoki.Storage.Disk.MarkedAdapterRefinement
 import Alvoki.Storage.Publication.DiskPublicationModel
 import Alvoki.Storage.Disk.WalBoundaryModel
 import Alvoki.Storage.Disk.MarkedWalReopenModel
@@ -111,6 +112,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.runWriteEffects_hasWriteCuts
 #check_axioms Alvoki.WAL.Boundary.runWriteEffects_success
 #check_axioms Alvoki.WAL.Boundary.runWriteEffects_success_pair_marker
+#check_axioms Alvoki.WAL.Boundary.recoverPreparedWriteAfterReopenAttempts
 #check_axioms Alvoki.WAL.Boundary.commit_append_error
 #check_axioms Alvoki.WAL.Boundary.write_cut_selects_old_or_new
 #check_axioms Alvoki.WAL.Boundary.write_cut_active_bounds_marker
