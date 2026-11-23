@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalBoundary
+import Alvoki.Storage.Disk.WalBoundaryModel
 import Alvoki.Storage.Publication.DirectoryPublicationModel
 
 namespace Alvoki.WAL.Boundary
@@ -29,6 +29,36 @@ structure ReopenImage.RepairsTo (image : ReopenImage) (length : UInt64) (trimmed
     trimmed.size < contents.size
   coversCandidates : ∀ pair ∈ image.directory.active :: image.directory.crashImages,
     ∀ marker count, pair.walBoundary = some marker → decode marker = .ok count → count.toNat ≤ length.toNat
+
+/-- A marked reopen after a modeled write cut can trim to the visible prefix.
+Each joint crash pair supplies a marker allowed by the one-write model. -/
+theorem ReopenImage.repairsTo_of_write_cut {image : ReopenImage} {boundary : Publication.Image}
+    {before : List WAL.Write} {event : WAL.Write} {wal marker trimmed : ByteArray}
+    (cut : WriteCut before event wal boundary)
+    (oldFits : (WAL.encode before).size < UInt64.size)
+    (newFits : (WAL.encode (before ++ [event])).size < UInt64.size)
+    (activeAgrees : image.directory.active.walBoundary = boundary.active)
+    (crashAgrees : ∀ pair ∈ image.directory.crashImages, pair.walBoundary ∈ boundary.crashImages)
+    (visibleMarker : image.directory.active.walBoundary = some marker)
+    (visibleWal : image.wal.active = some wal)
+    (selected : (do let length ← decode marker; select length wal) = .ok trimmed)
+    (shorter : trimmed.size < wal.size) : ∃ length, image.RepairsTo length trimmed := by
+  obtain ⟨active, length, present, decoded, bounded⟩ := write_cut_active_bounds_marker cut oldFits newFits
+  have sameVisibleMarker : marker = active :=
+    Option.some.inj (visibleMarker.symm.trans (activeAgrees.trans present))
+  have visibleDecode : decode marker = .ok length := sameVisibleMarker.symm ▸ decoded
+  rw [visibleDecode] at selected
+  refine ⟨length, ⟨⟨marker, visibleMarker, visibleDecode⟩, ⟨wal, visibleWal, selected, shorter⟩, ?_⟩⟩
+  intro pair chosen markerBytes count marked decodedCount
+  have markerChosen : pair.walBoundary = boundary.active ∨ pair.walBoundary ∈ boundary.crashImages := by
+    rcases List.mem_cons.mp chosen with rfl | survives
+    · exact .inl activeAgrees
+    · exact .inr (crashAgrees pair survives)
+  obtain ⟨candidate, candidateCount, sameMarker, candidateDecode, fits⟩ := bounded _ markerChosen
+  have bytesAgree : markerBytes = candidate := Option.some.inj (marked.symm.trans sameMarker)
+  have countAgree : count = candidateCount :=
+    Except.ok.inj (decodedCount.symm.trans (bytesAgree.symm ▸ candidateDecode))
+  simpa only [countAgree] using fits
 
 /-- The WAL repair uses the ordinary replacement schedule. A cut before its
 last operation leaves both metadata bindings unsettled. A cut including the
