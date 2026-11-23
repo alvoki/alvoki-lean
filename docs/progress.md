@@ -175,3 +175,7 @@ The crash refinement review reproduced an old handle reading and releasing a new
 ## Shared directory sync model
 
 The proof model keeps the manifest and WAL marker in a single crash choice. Successful directory sync settles both visible bindings. A failed sync can retain the earlier possibilities or settle both. The audited retry theorem preserves any acceptance predicate that holds for the initial pairs and each possible pair added by rename. Proving that the adapter supplies that rename premise requires the WAL and checkpoint content invariants. [Directory publication model](../lean/Alvoki/Storage/Publication/DirectoryPublicationModel.lean)
+
+## Recovery for one selected checkpoint and WAL marker
+
+Given the exact checkpoint run bytes and a marker allowed by a modeled write cut, Lean proves that the production manifest and run loader, WAL selector and replay succeed. The selected history is the acknowledged prefix or that prefix plus the interrupted write, and its length equals the recovered sequence. The result agrees with replay of the selected suffix on the supplied checkpoint. The trace still needs to show that each reachable pair has those exact bytes and that its checkpoint represents the covered prefix of the same history. [Selected-pair recovery theorem](../lean/Alvoki/Storage/Disk/DiskRecoveryModel.lean)

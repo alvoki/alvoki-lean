@@ -1,5 +1,6 @@
 import Alvoki.Checks.AxiomPolicy
 import Alvoki.Storage.Disk.DiskTable
+import Alvoki.Storage.Disk.DiskRecoveryModel
 import Alvoki.Storage.Publication.DiskPublicationModel
 import Alvoki.Storage.Disk.WalBoundaryModel
 import Alvoki.Storage.Publication.CheckpointPublicationModel
@@ -60,6 +61,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.recoverSelected_encoded
 #check_axioms Alvoki.Storage.recoverSelected_encoded_complete
 #check_axioms Alvoki.Storage.recoverRunSet_committedBoundary
+#check_axioms Alvoki.Storage.CheckpointForRecovery.loads
+#check_axioms Alvoki.Storage.recoverWriteCutSelectedPair
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_cut_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_complete
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_retry_valid
