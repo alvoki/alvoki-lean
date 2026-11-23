@@ -124,7 +124,7 @@ Seven interleaved native release trials per build timed `DiskTable.open` on a wa
 
 ### Disk snapshot session identity
 
-The disk read guard compares the handle's session token with the database's token before accessing the pin. Each native trial opens one checkpoint with a 256-row run, acquires a pin and warms both loops before timing. The loops perform 1,048,576 point reads and 131,072 eight-row ranges. The harness sums payloads and checks the totals after timing. Each core ran 14 pairs, alternating build order. The first run on CPU 4 had wider scheduling variation than the rerun on CPU 1. [Raw samples, harness and reproduction](../benchmarks/results/disk/session-handles)
+The disk read guard compares the handle's session token with the database's token before accessing the pin. Each native trial opens one checkpoint with a 256-row run, acquires a pin and warms both loops before timing. The loops perform 1,048,576 point reads and 131,072 eight-row ranges. The harness sums payloads and checks the totals after timing. Each core ran 14 pairs, alternating build order. The first run on CPU 4 had more variable elapsed times than the rerun on CPU 1. [Raw samples, harness and reproduction](../benchmarks/results/disk/session-handles)
 
 | Core | Read | Baseline median | Checked median | Median paired ratio |
 |---|---|---:|---:|---:|

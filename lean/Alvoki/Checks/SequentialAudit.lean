@@ -83,9 +83,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DirectoryPublication.retry_preserves
 #check_axioms Alvoki.WAL.Boundary.decode_encode
 #check_axioms Alvoki.WAL.Boundary.select_encoded
+#check_axioms Alvoki.WAL.Boundary.select_size
 #check_axioms Alvoki.WAL.Boundary.select_shorter_after_trim
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.repairCut_valid
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.repairsTo_of_write_cut
+#check_axioms Alvoki.WAL.Boundary.ReopenImage.valid_of_writeCut
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.repair_complete
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.syncDirectory_valid
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.crash_valid

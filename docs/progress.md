@@ -207,3 +207,7 @@ Every successful disk open allocates a distinct session token. Disk handles keep
 ## Modeled write cuts bound surviving marker lengths
 
 Until marker rename, the visible and every surviving marker point to the old prefix. After rename, the visible marker points to the extended prefix and every crash choice is old or extended. A crash settles the chosen marker. With the byte-limit guards, Lean proves that all of these candidates fit within the visible marker. The repair model can use the bound whenever the joint image's markers agree with that write cut. [Write-cut bound](../lean/Alvoki/Storage/Disk/WalBoundaryModel.lean) · [Repair bridge](../lean/Alvoki/Storage/Disk/MarkedWalReopenModel.lean)
+
+## From interrupted writes to the marked reopen invariant
+
+If each possible WAL file has a write-cut witness with the same visible marker and the corresponding crash markers, the initial marked reopen invariant follows. The actual decoded marker count identifies the old or extended encoded history and every physical candidate yields that exact prefix. The witnesses can differ in staging state. The adapter proof still needs to establish them for each real failure and crash outcome. [Write-cut validity theorem](../lean/Alvoki/Storage/Disk/DiskRecoveryModel.lean)
