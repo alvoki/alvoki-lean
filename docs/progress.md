@@ -187,3 +187,7 @@ Starting from a packed table that refines an abstract snapshot table, successful
 ## Reads through a newly acquired snapshot
 
 If a recovered packed table has the same data, committed sequence and floor as a reference, every snapshot in that interval can be acquired again. Point and range reads through the returned pin match the reference at that sequence. The proof uses the actual acquire and read operations. [Snapshot reacquisition theorem](../lean/Alvoki/Storage/Table/PackedTable.lean)
+
+## Marked WAL repair across reopen retries
+
+Trimming to the visible marker preserves the exact selected bytes for each shorter marker. The retry model uses that fact when the visible marker covers every crash candidate. It permits the old or repaired WAL binding until the directory sync, which settles the manifest, marker and WAL names together. The theorem preserves the input to the production replay worker after each modeled retry. The adapter trace must establish the coverage premise and justify the modeled sync steps. [WAL reopen proof](../lean/Alvoki/Storage/Disk/MarkedWalReopenModel.lean)

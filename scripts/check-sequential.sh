@@ -40,6 +40,7 @@ lake env leanchecker Alvoki.Storage.Disk.DiskRecoveryModel
 lake env leanchecker Alvoki.Storage.Publication.DiskPublicationModel
 lake env leanchecker Alvoki.Storage.Disk.WalBoundary
 lake env leanchecker Alvoki.Storage.Disk.WalBoundaryModel
+lake env leanchecker Alvoki.Storage.Disk.MarkedWalReopenModel
 lake env leanchecker Alvoki.Storage.Publication.CheckpointPublicationModel
 lake env leanchecker Alvoki.Storage.Publication.DirectoryPublicationModel
 lake env lean --run Alvoki/Checks/SequentialChecks.lean

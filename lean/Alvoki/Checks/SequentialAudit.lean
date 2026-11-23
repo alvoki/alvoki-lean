@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.DiskRecoveryModel
 import Alvoki.Storage.Publication.DiskPublicationModel
 import Alvoki.Storage.Disk.WalBoundaryModel
+import Alvoki.Storage.Disk.MarkedWalReopenModel
 import Alvoki.Storage.Publication.CheckpointPublicationModel
 import Alvoki.Storage.Publication.DirectoryPublicationModel
 
@@ -81,6 +82,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DirectoryPublication.retry_preserves
 #check_axioms Alvoki.WAL.Boundary.decode_encode
 #check_axioms Alvoki.WAL.Boundary.select_encoded
+#check_axioms Alvoki.WAL.Boundary.select_shorter_after_trim
+#check_axioms Alvoki.WAL.Boundary.ReopenImage.repairCut_valid
+#check_axioms Alvoki.WAL.Boundary.ReopenImage.repair_complete
+#check_axioms Alvoki.WAL.Boundary.ReopenImage.syncDirectory_valid
+#check_axioms Alvoki.WAL.Boundary.ReopenImage.crash_valid
+#check_axioms Alvoki.WAL.Boundary.reopenRetry_valid
+#check_axioms Alvoki.WAL.Boundary.ReopenImage.recover_chosen
 #check_axioms Alvoki.WAL.Boundary.commit_append_error
 #check_axioms Alvoki.WAL.Boundary.write_cut_selects_old_or_new
 #check_axioms Alvoki.WAL.Boundary.write_cut_replays_old_or_new
