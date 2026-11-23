@@ -107,6 +107,8 @@ Warm-cache reopen medians ranged from 0.92× to 1.10× across the same-machine W
 
 `bash scripts/disk-checkpoint.sh 4 128 7` measures checkpoint publication starting from an installed run set. Generation setup, open, and post-checkpoint reopen and read checks are outside the timer. For one, four, and sixteen runs of 128 rows, the same-machine medians were 5.91, 9.91, and 28.70 ms before switching to the shared schedule and 5.51, 10.13, and 27.58 ms afterward. Both implementations issue the same file syncs, directory barriers, and rename. [Before samples](../benchmarks/results/disk/disk-checkpoint-before.csv) · [After samples](../benchmarks/results/disk/disk-checkpoint-after.csv) · [Environment and command](../benchmarks/results/disk/disk-checkpoint-environment.txt)
 
+Add `--reopen` to time `DiskTable.open` with an installed run set and a WAL fully covered by the checkpoint. The harness checks the manifest's generation, run count, and WAL watermark before timing, then verifies recovered rows after each trial.
+
 ### WAL sync process overhead
 
 In an interleaved native experiment with seven 64-write trials per mode, the old one-sync control took 1.17 ms per write and the durable-boundary reference took 2.58 ms per write. Lean launching and waiting for `/usr/bin/true` took 0.69 ms. This identifies process startup as a substantial part of the regression. A native control measured 0.63 ms for staging, all three sync calls, and rename without per-write process startup.
