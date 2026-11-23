@@ -60,6 +60,44 @@ private theorem replayWrite_advances {state result : PackedTable} {event : Write
     exact UInt64.toNat_ofNat_of_lt' fits
   · contradiction
 
+private theorem ordinals_append_iff (start : Nat) (left right : List Write) :
+    WAL.OrdinalsFrom start (left ++ right) ↔
+      WAL.OrdinalsFrom start left ∧ WAL.OrdinalsFrom (start + left.length) right := by
+  induction left generalizing start with
+  | nil => simp [WAL.OrdinalsFrom]
+  | cons event rest ih =>
+    have next : start + (event :: rest).length = (start + 1) + rest.length := by
+      simp only [List.length_cons]
+      omega
+    simp only [List.cons_append, WAL.OrdinalsFrom, ih, next, and_assoc]
+
+/-- Preparing a write adds the next consecutive event and exactly one frame
+to an encoded history that covers the current committed sequence. -/
+theorem prepareWrite_extends_history {state next : PackedTable} {key : UInt64}
+    {value : Option UInt64} {event : Write} {history : List Write}
+    (ordinals : WAL.OrdinalsFrom 1 history) (count : history.length = state.committed.toNat)
+    (prepared : prepareWrite state key value = some (event, next)) :
+    event = ⟨next.committed, key, value⟩ ∧ next.committed.toNat = history.length + 1 ∧
+      WAL.OrdinalsFrom 1 (history ++ [event]) ∧
+      WAL.encode (history ++ [event]) = WAL.encode history ++ WAL.encodeFrame event ∧
+      (WAL.encode (history ++ [event])).size = (WAL.encode history).size + WAL.frameSize := by
+  have eventFields : event = ⟨next.committed, key, value⟩ := by
+    unfold prepareWrite at prepared
+    obtain ⟨_, _, same⟩ := Option.map_eq_some_iff.mp prepared
+    cases same
+    rfl
+  have nextOrdinal : next.committed.toNat = history.length + 1 := by
+    rw [replayWrite_advances (replay_prepared prepared), count]
+  have numbered : WAL.OrdinalsFrom 1 (history ++ [event]) := by
+    apply (ordinals_append_iff 1 history [event]).mpr
+    refine ⟨ordinals, ?_⟩
+    exact ⟨by simpa only [eventFields, Nat.add_comm 1 history.length] using nextOrdinal, trivial⟩
+  have encoding : WAL.encode (history ++ [event]) = WAL.encode history ++ WAL.encodeFrame event := by
+    rw [WAL.encode_append]
+    simp [WAL.encode]
+  exact ⟨eventFields, nextOrdinal, numbered, encoding, by
+    rw [encoding, ByteArray.size_append, WAL.encodeFrame_size]⟩
+
 theorem replay_committed_count {state result : PackedTable} (events : List Write)
     (applied : replay state events = .ok result) :
     result.committed.toNat = state.committed.toNat + events.length := by
@@ -251,18 +289,6 @@ theorem recoverSelected_encoded (state : PackedTable) (covered pending : List Wr
     change (if table.committed.toNat == _ then Except.ok table else Except.error _) = _
     simp [guard]
 
-private theorem ordinals_append_right (start : Nat) (covered pending : List Write)
-    (ordinals : WAL.OrdinalsFrom start (covered ++ pending)) :
-    WAL.OrdinalsFrom (start + covered.length) pending := by
-  induction covered generalizing start with
-  | nil => simpa using ordinals
-  | cons event rest ih =>
-    have next : start + (event :: rest).length = (start + 1) + rest.length := by
-      simp only [List.length_cons]
-      omega
-    rw [next]
-    exact ih (start + 1) ordinals.2
-
 /-- The production selected-WAL loader succeeds if the checkpoint watermark
 matches the covered length and the complete selected history is consecutive. -/
 theorem recoverSelected_encoded_complete (state : PackedTable) (covered pending : List Write)
@@ -272,7 +298,7 @@ theorem recoverSelected_encoded_complete (state : PackedTable) (covered pending 
       result.committed.toNat = covered.length + pending.length := by
   have numbered : WAL.OrdinalsFrom (state.committed.toNat + 1) pending := by
     simpa only [count, Nat.add_comm 1 state.committed.toNat] using
-      ordinals_append_right 1 covered pending ordinals
+      ((ordinals_append_iff 1 covered pending).mp ordinals).2
   rw [recoverSelected_encoded state covered pending ordinals count, count]
   exact replay_ordinals_complete state pending numbered
 
