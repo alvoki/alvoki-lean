@@ -245,3 +245,7 @@ The native fixture presents a directory at an installed run path while a complet
 ## Reopen effects refine the retry model
 
 The marked reopen interpreter uses the shared repair schedule and the same repair-versus-aligned decision as the adapter. Grouped sync can report an error with just the file or directory effect, with both, or with neither. The model keeps conservative WAL candidates when only some effects are known. The audited theorem projects each attempt to the retry relation and proves that a successful schedule settles the visible metadata and WAL choices. Read or validation errors in preflight leave the modeled durable state untouched. Filesystem behavior and the supplied read results remain explicit at the interface. [Reopen effect proof](../lean/Alvoki/Storage/Disk/MarkedWalReopenModel.lean)
+
+## Shared publication file targets
+
+The executable adapter uses `Publication.performReplacement` to select callback paths for staging, grouped file sync, rename and directory sync. An axiom-free equation exposes the exact callback order and targets for both the IO and model instantiations. The equation concerns execution order. The filesystem contract supplies the effects of each callback. Native paired measurements isolate the refactor. [Publication schedule](../lean/Alvoki/Storage/Publication/DiskPublication.lean) · [Benchmarks](benchmarks.md#shared-publication-file-and-sync-targets)
