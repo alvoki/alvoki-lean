@@ -267,10 +267,9 @@ private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTabl
   let table ← IO.ofExcept (recoverSelected checkpointTable selected)
   -- Both paths sync the directory to settle the visible checkpoint and WAL marker,
   -- including any rename reached by a prior process before its directory sync.
-  if selected.size < bytes.size then
-    atomicReplace dir .stagedWal .wal selected
-  else
-    syncPaths #[walPath, dir.path]
+  Publication.runReopen bytes.size selected.size
+    (fun _ => atomicReplace dir .stagedWal .wal selected)
+    (fun _ => syncPaths #[walPath, dir.path])
   -- Bootstrap an empty or legacy WAL only after its selected prefix is durable.
   if boundary.isNone then
     unless selected.size < UInt64.size do throw (IO.userError "WAL byte count is too large")
