@@ -58,6 +58,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.recoverRunSet_written
 #check_axioms Alvoki.Storage.replay_committed_count
 #check_axioms Alvoki.Storage.replay_ordinals_complete
+#check_axioms Alvoki.Storage.replay_refines
 #check_axioms Alvoki.Storage.recoverSelected_encoded
 #check_axioms Alvoki.Storage.recoverSelected_encoded_complete
 #check_axioms Alvoki.Storage.recoverRunSet_committedBoundary
