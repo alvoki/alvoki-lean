@@ -16,8 +16,14 @@ SCALAR = ROOT / "rust/target/scalar/release/alvoki-native"
 RUST_MERGE = ROOT / "rust/target/release/alvoki-packed"
 SCAN = [(LEAN, variant) for variant in ("scan-original", "scan-bounded", "scan-unrolled")]
 SCAN += [(RUST, "scan"), (SCALAR, "scan")]
-ENCODE = [(LEAN, "encode-direct"), (LEAN, "encode-staged"), (LEAN, "encode-pair"), (RUST, "encode")]
-MERGE = [(LEAN, "merge"), (LEAN, "merge-spans"), (LEAN, "merge-indexed"), (RUST_MERGE, "merge")]
+ENCODE = [(LEAN, mode) for mode in (
+    "encode-direct", "encode-staged", "encode-pair", "encode-copy-low", "encode-copy-word",
+)] + [(RUST, "encode"), (RUST, "copy-low")]
+DENSE = [(LEAN, "encode-pair-dense"), (LEAN, "encode-copy-dense"),
+         (RUST, "encode-dense"), (RUST, "copy-dense")]
+MERGE = [(LEAN, mode) for mode in (
+    "merge", "merge-spans", "merge-indexed", "merge-copy-into", "merge-cached", "merge-adaptive", "merge-adaptive-early",
+)] + [(RUST_MERGE, "merge")]
 SPANS = (1, 4, 16, 64, 256)
 
 
@@ -32,8 +38,21 @@ def split_spans(records, length):
     return sides
 
 
-def flipped(records):
-    return [(key, value ^ 1) for key, value in records]
+def mixed_spans(records):
+    sides = ([], [])
+    start = 0
+    turn = 0
+    lengths = (1, 1, 4, 16, 64, 256, 16, 4)
+    while start < len(records):
+        length = lengths[turn % len(lengths)]
+        sides[turn % 2].extend(records[start:start + length])
+        start += length
+        turn += 1
+    return sides
+
+
+def flipped(records, mask=1):
+    return [(key, value ^ mask) for key, value in records]
 
 
 def check(directory):
@@ -48,12 +67,18 @@ def check(directory):
         for binary, mode in SCAN:
             samples, _, _ = measured(label(binary, mode), binary, mode, data, aux, 0, 1)
             assert int(samples[0].split()[1]) == checksum(records), (binary, mode, len(records))
-        for binary, mode in [(LEAN, "check-direct"), (LEAN, "check-staged"), (LEAN, "check-pair"), (RUST, "check-encode")]:
-            run_once(binary, mode, data, aux, output)
-            assert output.read_bytes() == block(flipped(records)), (binary, mode, len(records))
+        encoders = [
+            (LEAN, mode) for mode in ("direct", "staged", "pair", "copy-low", "copy-word")
+        ] + [(RUST, "encode"), (RUST, "copy-low")]
+        dense = [(LEAN, "pair-dense"), (LEAN, "copy-dense"),
+                 (RUST, "encode-dense"), (RUST, "copy-dense")]
+        for variants, mask in ((encoders, 1), (dense, 0xFEDCBA9876543210)):
+            for binary, mode in variants:
+                run_once(binary, "check-" + mode, data, aux, output)
+                assert output.read_bytes() == block(flipped(records, mask)), (binary, mode, len(records))
     merges = [(a, b) for a, b in zip(cases, reversed(cases))]
     merges += [split_spans(cases[-1], length) for length in SPANS]
-    merges += [(cases[-1], flipped(cases[-1])), merge_inputs(1027, "overlap")]
+    merges += [mixed_spans(cases[-1]), (cases[-1], flipped(cases[-1])), merge_inputs(1027, "overlap")]
     for left, right in merges:
         data.write_bytes(block(left))
         aux.write_bytes(block(right))
@@ -75,12 +100,16 @@ def run(directory, path, sizes, trials):
         for size in sizes:
             records = dataset(size)
             data.write_bytes(block(records))
-            jobs = [("scan", SCAN), ("encode", ENCODE)]
+            jobs = [("scan", SCAN), ("encode", ENCODE), ("encode-dense", DENSE)]
             jobs += [(f"span-{length}", MERGE) for length in SPANS]
-            jobs += [("overlap", MERGE), ("disjoint", MERGE)]
+            jobs += [("mixed-spans", MERGE), ("overlap", MERGE), ("disjoint", MERGE)]
             for workload, variants in jobs:
                 if workload.startswith("span-"):
                     left, right = split_spans(records, int(workload.removeprefix("span-")))
+                    data.write_bytes(block(left))
+                    aux.write_bytes(block(right))
+                elif workload == "mixed-spans":
+                    left, right = mixed_spans(records)
                     data.write_bytes(block(left))
                     aux.write_bytes(block(right))
                 elif variants == MERGE:

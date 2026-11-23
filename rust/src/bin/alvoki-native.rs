@@ -10,15 +10,32 @@ fn scan(payload: &[u8]) -> u64 {
     })
 }
 
-fn encode(source: &[u8]) -> Vec<u8> {
+fn encode(source: &[u8], mask: u64) -> Vec<u8> {
     let mut out = Vec::with_capacity(source.len());
     out.extend_from_slice(&source[..16]);
     for record in source[16..].chunks_exact(16) {
         out.extend_from_slice(&record[..8]);
-        let value = u64::from_le_bytes(record[8..].try_into().unwrap()) ^ 1;
+        let value = u64::from_le_bytes(record[8..].try_into().unwrap()) ^ mask;
         out.extend_from_slice(&value.to_le_bytes());
     }
     out
+}
+
+fn copy_patch_low(source: &[u8]) -> Vec<u8> {
+    let mut result = source.to_vec();
+    for record in result[16..].chunks_exact_mut(16) {
+        record[8] ^= 1;
+    }
+    result
+}
+
+fn copy_patch(source: &[u8], mask: u64) -> Vec<u8> {
+    let mut result = source.to_vec();
+    for record in result[16..].chunks_exact_mut(16) {
+        let value = u64::from_le_bytes(record[8..].try_into().unwrap()) ^ mask;
+        record[8..].copy_from_slice(&value.to_le_bytes());
+    }
+    result
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,7 +50,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let data = black_box(source.as_slice());
         let (bytes, sum) = match mode.as_str() {
             "scan" => (Vec::new(), scan(&data[16..])),
-            "encode" | "check-encode" => (encode(data), 0),
+            "encode" | "check-encode" => (encode(data, 1), 0),
+            "encode-dense" | "check-encode-dense" => (encode(data, 0xfedcba9876543210), 0),
+            "copy-low" | "check-copy-low" => (copy_patch_low(data), 0),
+            "copy-dense" | "check-copy-dense" => (copy_patch(data, 0xfedcba9876543210), 0),
             _ => return Err("unknown experiment".into()),
         };
         black_box(&bytes);

@@ -47,4 +47,4 @@ bash scripts/native.sh --out /tmp/alvoki-native.csv
 python3 benchmarks/native.py --summarize /tmp/alvoki-native.csv
 ```
 
-This suite compares a compiler-vectorized native Lean scan, Rust scalar and SIMD controls, and native merge and encoding variants. [Results and assembly evidence](docs/native-experiments.md)
+This suite compares a compiler-vectorized native Lean scan, Rust scalar and SIMD controls, and native merge and encoding variants. [SIMD results and assembly evidence](docs/native-experiments.md) · [Single-record emission and packed updates](docs/emission-experiments.md)

@@ -124,6 +124,141 @@ def mergeSpans (a b : @& Run) : ByteArray :=
   let header := pushWordFast (ByteArray.emptyWithCapacity 8) ((out.size - 16) / 16).toUInt64
   header.copySlice 0 out 0 8
 
+@[inline] private def appendRecord (view : @& View) (index : USize) (out : ByteArray) : ByteArray :=
+  view.bytes.copySlice (16 + index.toNat * 16) out out.size 16 false
+
+@[inline] private def adaptiveEnd (view : @& View) (i : USize) (rival : UInt64)
+    (streak trigger : UInt8) : USize :=
+  if trigger != 0 && streak == trigger then spanEnd view i rival else i + 1
+
+private theorem adaptiveProgress (view : View) (i : USize) (rival : UInt64) (streak trigger : UInt8) :
+    (i + 1).toNat ≤ (adaptiveEnd view i rival streak trigger).toNat := by
+  unfold adaptiveEnd
+  split
+  · exact spanProgress view i rival
+  · omega
+
+/-- Cache both heads. Probe after a configurable number of consecutive wins. -/
+private def mergeCachedFrom (left right : @& View) (trigger : UInt8)
+    (i j : USize) (a b : UInt64) (leftStreak rightStreak : UInt8) (out : ByteArray) : ByteArray :=
+  if hi : i < left.count then
+    if hj : j < right.count then
+      if a < b then
+        let i' := adaptiveEnd left i b leftStreak trigger
+        have advance : (i + 1).toNat ≤ i'.toNat := adaptiveProgress left i b leftStreak trigger
+        let out' := if i' == i + 1 then appendRecord left i out else appendSpan left i i' out
+        mergeCachedFrom left right trigger i' j (left.key i') b ((leftStreak + 1) &&& trigger) 0 out'
+      else if a == b then
+        let i' := i + 1
+        let j' := j + 1
+        mergeCachedFrom left right trigger i' j' (left.key i') (right.key j') 0 0
+          (appendRecord right j out)
+      else
+        let j' := adaptiveEnd right j a rightStreak trigger
+        have advance : (j + 1).toNat ≤ j'.toNat := adaptiveProgress right j a rightStreak trigger
+        let out' := if j' == j + 1 then appendRecord right j out else appendSpan right j j' out
+        mergeCachedFrom left right trigger i j' a (right.key j') 0 ((rightStreak + 1) &&& trigger) out'
+    else appendSpan left i left.count out
+  else appendSpan right j right.count out
+termination_by (left.count.toNat - i.toNat) + (right.count.toNat - j.toNat)
+decreasing_by
+  all_goals
+    have li := USize.lt_iff_toNat_lt.mp hi
+    have rj := USize.lt_iff_toNat_lt.mp hj
+    have ls := addOne i left.count li
+    have rs := addOne j right.count rj
+    try dsimp [i'] at advance
+    try dsimp [j'] at advance
+    omega
+
+def mergeCached (a b : @& Run) (trigger : UInt8) : ByteArray :=
+  let left := a.view
+  let right := b.view
+  let capacity := 16 + (left.count.toNat + right.count.toNat) * 16
+  let initial := pushWordFast (pushWordFast (ByteArray.emptyWithCapacity capacity) 0) 1
+  let out := mergeCachedFrom left right trigger 0 0 (left.key 0) (right.key 0) 0 0 initial
+  let header := pushWordFast (ByteArray.emptyWithCapacity 8) ((out.size - 16) / 16).toUInt64
+  header.copySlice 0 out 0 8
+
+@[inline] private def copyAt (view : @& View) (start : USize) (len dst : Nat)
+    (out : ByteArray) : ByteArray :=
+  view.bytes.copySlice (16 + start.toNat * 16) out dst len false
+
+private def mergeCopyIntoFrom (left right : @& View) (i j : USize) (dst : Nat)
+    (out : ByteArray) : ByteArray × Nat :=
+  if _hi : i < left.count then
+    if hj : j < right.count then
+      let a := left.key i
+      let b := right.key j
+      if a < b then
+        mergeCopyIntoFrom left right (i + 1) j (dst + 16) (copyAt left i 16 dst out)
+      else if a == b then
+        mergeCopyIntoFrom left right (i + 1) (j + 1) (dst + 16) (copyAt right j 16 dst out)
+      else
+        mergeCopyIntoFrom left right i (j + 1) (dst + 16) (copyAt right j 16 dst out)
+    else
+      let len := (left.count.toNat - i.toNat) * 16
+      (copyAt left i len dst out, dst + len)
+  else
+    let len := (right.count.toNat - j.toNat) * 16
+    (copyAt right j len dst out, dst + len)
+termination_by (left.count.toNat - i.toNat) + (right.count.toNat - j.toNat)
+decreasing_by
+  all_goals
+    have ls := addOne i left.count (USize.lt_iff_toNat_lt.mp _hi)
+    have rs := addOne j right.count (USize.lt_iff_toNat_lt.mp hj)
+    have li := USize.lt_iff_toNat_lt.mp _hi
+    have rj := USize.lt_iff_toNat_lt.mp hj
+    omega
+
+/-- Compare whole-record overwrite on a pre-sized buffer with append and indexed byte writes. -/
+def mergeCopyInto (a b : @& Run) : ByteArray :=
+  let capacity := 16 + (a.view.count.toNat + b.view.count.toNat) * 16
+  if capacity ≥ USize.size then merge a b else
+    let (bytes, used) := mergeCopyIntoFrom a.view b.view 0 0 16 (zeroedBytes capacity)
+    let bytes := storePair bytes 0 ((used - 16) / 16).toUInt64 1
+    if used == capacity then bytes else bytes.extract 0 used
+
+private def patchLowFrom (bytes : ByteArray) (i count : USize)
+    (extent : 16 + count.toNat * 16 ≤ bytes.size) : ByteArray :=
+  if h : i < count then
+    let offset := i * 16 + 24
+    have order := USize.lt_iff_toNat_lt.mp h
+    have bound : offset.toNat < bytes.size := by
+      dsimp [offset]
+      rw [USize.toNat_add, USize.toNat_mul]
+      rw [show (16 : USize).toNat = 16 from USize.toNat_ofNat_of_lt_32 (by decide)]
+      rw [show (24 : USize).toNat = 24 from USize.toNat_ofNat_of_lt_32 (by decide)]
+      have hm := Nat.mod_le (i.toNat * 16) (2 ^ System.Platform.numBits)
+      have ha := Nat.mod_le ((i.toNat * 16) % (2 ^ System.Platform.numBits) + 24)
+        (2 ^ System.Platform.numBits)
+      omega
+    let updated := bytes.uset offset (bytes.uget offset bound ^^^ 1) bound
+    have same : updated.size = bytes.size := by
+      exact Array.size_uset bound
+    patchLowFrom updated (i + 1) count (same ▸ extent)
+  else bytes
+termination_by count.toNat - i.toNat
+decreasing_by
+  have step := addOne i count order
+  omega
+
+/-- Copy the block once, then change only the byte affected by the low-bit transform. -/
+def encodeCopyLow (run : @& Run) : ByteArray :=
+  let view := run.view
+  let bytes := view.bytes.extract 0 view.bytes.size
+  if extent : 16 + view.count.toNat * 16 ≤ bytes.size then
+    patchLowFrom bytes 0 view.count extent
+  else bytes
+
+/-- Copy the original block, then rewrite one full value word per record. -/
+def encodeCopyWords (run : @& Run) (mask : UInt64) : ByteArray := Id.run do
+  let view := run.view
+  let mut out := view.bytes.extract 0 view.bytes.size
+  for i in [0:view.count.toNat] do
+    out := storeWord out (24 + i.toUSize * 16) (view.value i.toUSize ^^^ mask)
+  return out
+
 /-- Re-encode a packed input into a fresh block, flipping the low bit of each value. -/
 def encodeDirect (run : @& Run) : ByteArray := Id.run do
   let view := run.view
@@ -135,16 +270,16 @@ def encodeDirect (run : @& Run) : ByteArray := Id.run do
       (view.value i.toUSize ^^^ 1)
   return out
 
-def encodePair (run : @& Run) : ByteArray := Id.run do
+def encodePair (run : @& Run) (mask : UInt64 := 1) : ByteArray := Id.run do
   let view := run.view
   let mut out := storePair (zeroedBytes view.bytes.size) 0 view.count.toUInt64 1
   for i in [0:view.count.toNat] do
-    out := storePair out (16 + i.toUSize * 16) (view.key i.toUSize) (view.value i.toUSize ^^^ 1)
+    out := storePair out (16 + i.toUSize * 16) (view.key i.toUSize) (view.value i.toUSize ^^^ mask)
   return out
 
 private def mergeIndexedFrom (left right : @& View) (i j dst : USize)
     (out : ByteArray) : ByteArray × Nat :=
-  if hi : i < left.count then
+  if _hi : i < left.count then
     if hj : j < right.count then
       let a := left.key i
       let b := right.key j
@@ -166,7 +301,7 @@ private def mergeIndexedFrom (left right : @& View) (i j dst : USize)
 termination_by (left.count.toNat - i.toNat) + (right.count.toNat - j.toNat)
 decreasing_by
   all_goals
-    have li := USize.lt_iff_toNat_lt.mp hi
+    have li := USize.lt_iff_toNat_lt.mp _hi
     have rj := USize.lt_iff_toNat_lt.mp hj
     have ls := addOne i left.count li
     have rs := addOne j right.count rj
