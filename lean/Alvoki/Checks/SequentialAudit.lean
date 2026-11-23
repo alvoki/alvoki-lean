@@ -51,6 +51,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Manifest.decode_encode
 #check_axioms Alvoki.Manifest.decode_reencode
 #check_axioms Alvoki.Storage.replay_prepared
+#check_axioms Alvoki.Storage.prepareWrite_extends_history
 #check_axioms Alvoki.Storage.recover_acknowledged
 #check_axioms Alvoki.Storage.recoverCheckpoint_suffix
 #check_axioms Alvoki.Storage.recoverCheckpoint_repair
