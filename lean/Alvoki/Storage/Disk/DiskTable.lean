@@ -103,11 +103,9 @@ private def writeFlushed (path : FilePath) (content : ByteArray) : IO Unit := do
   file.flush
 
 private def performReplacement (dir : DiskDirectory) (stagedPath : FilePath) (active : DiskFile)
-    (bytes : ByteArray) (alsoSync : Array FilePath) : Publication.Step → IO Unit
-  | .writeStaged => writeFlushed stagedPath bytes
-  | .syncStaged => syncPaths (alsoSync.push stagedPath)
-  | .renameStaged => IO.FS.rename stagedPath (dir.file active)
-  | .syncDirectory => syncPath dir.path
+    (bytes : ByteArray) (alsoSync : Array FilePath) (step : Publication.Step) : IO Unit :=
+  Publication.performReplacement (writeFlushed · bytes) syncPaths IO.FS.rename
+    stagedPath dir.path (fun _ => dir.file active) alsoSync step
 
 private def atomicReplace (dir : DiskDirectory) (staged active : DiskFile) (bytes : ByteArray)
     (alsoSync : Array FilePath := #[]) : IO Unit :=
