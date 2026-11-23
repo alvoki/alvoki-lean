@@ -18,3 +18,9 @@ The encoder expects strictly ordered input. Parsing performs the order check. Lo
 The optimization suite also reads a columnar block. It uses the same 16-byte header, with version set to 2 and the same total byte length. Keys occupy one contiguous region at offsets `16 + 8*i`. Values start at `16 + 8*n` and occupy offsets `16 + 8*n + 8*i`. Key and value at the same index form a record. Validation, lookup, and range semantics are the same as in version 1.
 
 Version 2 is exercised through the separate optimization binaries. The experimental encoders produce version 1.
+
+## Version-1 run merge
+
+Given two valid version-1 runs, a materialized merge produces a version-1 block containing each key in either input exactly once, in strictly increasing unsigned order. When a key is present in both inputs, the output uses the right input's value. Otherwise it uses the value from the only input containing that key. Either run may be empty.
+
+The direct merged checksum scan consumes the same logical records without producing a block. The experiment sums each record's key XOR value with wrapping 64-bit addition. The replay benchmark accepts a supplied sequence of cursor moves. Its shape check establishes that the moves stay within the two input runs and consume both completely. A merge trace additionally needs to make the ordered, right-biased choices above. [Verification status](verification-status.md)

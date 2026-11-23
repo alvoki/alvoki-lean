@@ -1,9 +1,11 @@
 # Alvoki
 
-Alvoki is an experiment in building formally verified storage primitives in native Lean 4. The first milestone compares an immutable sorted key–value block in Lean and Rust and verifies the core search algorithm in Lean and Verus.
+Alvoki explores formally verified storage primitives in native Lean 4. The experiments cover packed lookup, scans, encoding, and right-biased merge of immutable sorted key–value runs. Lean and Verus proofs cover the search core, and Lean also checks byte-level contracts for packed readers and builders.
 
+- [Performance guide for Lean reads, writes, merge, and code generation](docs/high-performance-lean.md)
+- [Repository review and architectural priorities](docs/repository-review.md)
 - [Binary format and behavior](docs/specifications.md)
-- [Implementation and benchmark design](docs/architecture.md)
+- [Current module and benchmark map](docs/architecture.md)
 - [VM measurements and code generation findings](docs/benchmarks.md)
 - [Proof coverage and assumptions](docs/verification-status.md)
 - [Roadmap](docs/roadmap.md) and [handoff](docs/progress.md)
@@ -20,7 +22,7 @@ python3 benchmarks/summarize.py /tmp/alvoki-trials.csv
 bash scripts/environment.sh
 ```
 
-The default reproduction builds both native binaries, checks the Lean theorems and their axioms, runs Verus, and checks both Lean variants and Rust against the Python reference. The `--out` flag additionally benchmarks all three binaries. Use `--sizes 1000 --trials 3` for a shorter run.
+The default reproduction builds the baseline Lean and Rust executables, checks the original Lean theorems and their axioms, runs Verus, and compares both baseline Lean variants and Rust with the Python reference. The `--out` flag additionally benchmarks all three configurations. Use `--sizes 1000 --trials 3` for a shorter run. The sections below give the build, proof, and fixture commands for the later experiments.
 
 ## Optimization experiments
 

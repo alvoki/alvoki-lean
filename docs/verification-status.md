@@ -19,3 +19,14 @@ Verus proves the analogous loop invariant with quantified sequence properties. I
 `lean/OptProofs.lean` proves that the tail-recursive machine-index search agrees with the original natural-number lower bound after index conversion. It derives the same partition guarantee for monotone logical keys. `wordMachine_eq` proves the optimized reader is equal to the original byte reader when the eight-byte extent is in bounds and the array size fits in a machine word. Each proof-carrying byte load and indexed store uses an explicit bound, and Lean checks the progress of the machine-index loops.
 
 The optimized parser, view offsets, range fold, and encoders are tested against both external layouts or the version 1 output fixture where applicable. Connecting parser acceptance and offset arithmetic to the logical sortedness assumptions remains open. `scripts/optimize.sh` builds and rechecks the new theorems using `leanchecker`; the axiom audit lists only standard Lean axioms.
+
+## Packed output and merge
+
+| Component | Kernel-checked source guarantee | Remaining boundary |
+|---|---|---|
+| [Stock byte builder](../lean/ScopedBytes.lean) | Appending an in-bounds slice preserves the prefix, appends the exact source bytes in order, and gives the specified length. Batch append agrees with concatenating the supplied slices. Combining adjacent source extents preserves their byte sequence. | Native execution relies on the stock compiler and runtime, including `ByteArray.copySlice`. Capacity and exclusivity are runtime concerns. |
+| [Streaming and prepared replay](stock-builder.md#byte-contract) | Streaming output refines the header and payload of the supplied trace. Prepared output has the specified header, slice bytes and payload length for the supplied plan. | The trace checker establishes move and cursor validity. The benchmark oracle supplies the right-biased choices. Planner and coalescer equivalence remain open. |
+| [Online merge and direct scan](fused-merge.md#verification-and-reproduction) | Lean checks loop termination and the explicit bounds required by proof-carrying accesses. The fused emitter uses the stock builder's proved byte operations. | Exact merge fixtures and checksum comparisons cover the tested implementations. Full refinement to the sorted union and direct fold remains open. |
+| [Fixed-width copy](fixed-copy.md) and [scoped runtime](scoped-builder.md) prototypes | The source-level byte contract provides a reference for the experiment. | The alternate native implementations depend on the pinned generated-code ABI and their runtime contracts. Differential fixtures check their outputs. Runtime refinement remains open. |
+
+`scripts/stock-builder.sh` checks the stock builder and replay proofs with the bundled `leanchecker` and audits their axiom dependencies. The stock proof audit reported only the standard Lean axioms. [Builder proof audit](../lean/ScopedBytesProofs.lean) · [Review findings](repository-review.md)
