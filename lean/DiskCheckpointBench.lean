@@ -18,6 +18,14 @@ private def seedCheckpoint (dir : FilePath) (runs rows : Nat) : IO Unit := do
   IO.FS.writeBinFile (dir / "WAL.commit") (WAL.Boundary.encode wal.size.toUInt64)
   IO.FS.writeBinFile (dir / "MANIFEST") (Manifest.encode ⟨1, total.toUInt64, 0, runs.toUInt64⟩)
 
+private def checkPublished (dir : FilePath) (runs total : Nat) : IO Unit := do
+  let .ok manifest := Manifest.decode (← IO.FS.readBinFile (dir / "MANIFEST"))
+    | throw (IO.userError "checkpoint benchmark did not install a valid manifest")
+  unless manifest.generation == 2 && manifest.runCount == runs.toUInt64 do
+    throw (IO.userError "checkpoint benchmark installed the wrong run set")
+  unless manifest.committed == total.toUInt64 do
+    throw (IO.userError "checkpoint benchmark manifest does not cover the seeded WAL")
+
 private def checkRecovered (db : DiskTable) (total : Nat) : IO Unit := do
   let pin ← db.acquire
   let lastKey := (total - 1).toUInt64
@@ -42,6 +50,7 @@ def main (args : List String) : IO Unit := do
       -- Republish once so the fixture uses the checkpoint format emitted by this build.
       let db ← DiskTable.open dir
       try db.checkpoint finally db.close
+      checkPublished dir runs total
       for trial in [:trials + 1] do
         let start ← IO.monoNanosNow
         let reopened ← DiskTable.open dir
@@ -61,10 +70,7 @@ def main (args : List String) : IO Unit := do
         db.checkpoint
         pure ((← IO.monoNanosNow) - start)
       finally db.close
-      let .ok manifest := Manifest.decode (← IO.FS.readBinFile (dir / "MANIFEST"))
-        | throw (IO.userError "checkpoint benchmark did not install a valid manifest")
-      unless manifest.generation == 2 && manifest.runCount == runs.toUInt64 do
-        throw (IO.userError "checkpoint benchmark installed the wrong run set")
+      checkPublished dir runs total
       let reopened ← DiskTable.open dir
       try checkRecovered reopened total finally reopened.close
       if trial > 0 then IO.println s!"{runs},{rows},{trial},{elapsed}"
