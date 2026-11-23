@@ -249,3 +249,5 @@ The marked reopen interpreter uses the shared repair schedule and the same repai
 ## Shared publication file targets
 
 The executable adapter uses `Publication.performReplacement` to select callback paths for staging, grouped file sync, rename and directory sync. An axiom-free equation exposes the exact callback order and targets for both the IO and model instantiations. The equation concerns execution order. The filesystem contract supplies the effects of each callback. Native paired measurements isolate the refactor. [Publication schedule](../lean/Alvoki/Storage/Publication/DiskPublication.lean) · [Benchmarks](benchmarks.md#shared-publication-file-and-sync-targets)
+
+The write-effect proof now identifies the fixed manifest in every selectable metadata pair. If the modeled write reports success, every selectable pair carries the exact extended marker. Pair lineage preserves that choice across modeled reopen attempts. [Marker witnesses](../lean/Alvoki/Storage/Disk/WalWritePublicationModel.lean)
