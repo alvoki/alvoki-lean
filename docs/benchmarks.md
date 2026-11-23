@@ -111,6 +111,10 @@ Warm-cache reopen medians ranged from 0.92× to 1.10× across the same-machine W
 
 Add `--reopen` to time `DiskTable.open` with an installed run set and a WAL fully covered by the checkpoint. The harness checks the manifest's generation, run count, and WAL watermark before timing, then verifies recovered rows after each trial.
 
+### Shared reopen durability branch
+
+The native adapter and proof use the same decision between staged tail repair and a grouped sync of the already aligned WAL and directory. On the same VM and CPU, 14 interleaved pairs per workload timed a marked WAL with 32 or 2,048 records in each branch. Median paired ratios ranged from 0.992× to 1.031×. Generated C inlines branch selection and calls the existing replacement and sync paths. [Raw samples, driver and environment](../benchmarks/results/disk/shared-reopen)
+
 ### Selected WAL frame ordinals
 
 Seven interleaved native release trials per build timed `DiskTable.open` on a warm cache, pinned to CPU 4. The checkpointed fixtures held a single run and a WAL fully covered by the checkpoint. The log-only fixture used descending keys. Ordinal validation runs during decoding and adds no sync calls. Checkpointed reopen medians stayed within 2% of baseline across the measured sizes. [Raw samples](../benchmarks/results/disk/ordinals/replay-ordinals-trials.csv) · [Environment](../benchmarks/results/disk/ordinals/replay-ordinals-environment.txt)

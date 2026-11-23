@@ -73,6 +73,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.unreachable_after_reopen
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.next_generation_unreachable_after_reopen
 #check_axioms Alvoki.Storage.Publication.run_model_success
+#check_axioms Alvoki.Storage.Publication.runReopen_repair
+#check_axioms Alvoki.Storage.Publication.runReopen_aligned
 #check_axioms Alvoki.Storage.Publication.retry_preserves
 #check_axioms Alvoki.Storage.Publication.repair_retry_preserves_replay
 #check_axioms Alvoki.Storage.DirectoryPublication.Image.project_survives_iff
