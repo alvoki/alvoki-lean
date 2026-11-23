@@ -248,6 +248,42 @@ theorem PackedTable.range_refines {state : PackedTable} {model : SnapshotTable U
   simp only [PackedTable.range, SnapshotTable.range, refinement.pins,
     PackedTable.rangeAt_eq, refinement.table]
 
+private theorem PackedTable.acquireAt_reads {before after : PackedTable} {snapshot : UInt64}
+    {pin : SnapshotPin} (acquired : before.acquireAt snapshot = some (pin, after)) :
+    (∀ key, after.lookup pin.handle key = some (before.describe.lookup key snapshot)) ∧
+    (∀ start stop, after.range pin.handle start stop =
+      some (before.describe.range start stop snapshot)) := by
+  unfold PackedTable.acquireAt at acquired
+  obtain ⟨⟨newPin, pins⟩, added, same⟩ := Option.map_eq_some_iff.mp acquired
+  cases same
+  obtain ⟨_, _, sequence, _, active, _, _⟩ := SnapshotPins.acquire_spec added
+  have found : pins.find pin.handle = some pin := by
+    change (pins.active.find? (fun p => decide (p.handle = pin.handle))) = some pin
+    simp [active]
+  constructor
+  · intro key
+    simp only [PackedTable.lookup, found, Option.map_some, sequence, PackedTable.lookupAt_eq]
+    rfl
+  · intro start stop
+    simp only [PackedTable.range, found, Option.map_some, sequence, PackedTable.rangeAt_eq]
+    rfl
+
+/-- Reacquiring a retained snapshot after replay reads the reference data,
+regardless of the identifiers issued in the old pin registry. -/
+theorem PackedTable.SameData.acquireAt_reads {reopened reference : PackedTable}
+    (same : reopened.SameData reference) {snapshot : UInt64}
+    (retained : reference.pins.floor ≤ snapshot) (committed : snapshot ≤ reference.committed) :
+    ∃ pin after, reopened.acquireAt snapshot = some (pin, after) ∧
+      (∀ key, after.lookup pin.handle key = some (reference.describe.lookup key snapshot)) ∧
+      (∀ start stop, after.range pin.handle start stop =
+        some (reference.describe.range start stop snapshot)) := by
+  have available : (reopened.acquireAt snapshot).isSome = true := by
+    rw [PackedTable.acquireAt, Option.isSome_map, SnapshotPins.acquire_iff, same.floor, same.committed]
+    exact ⟨retained, committed⟩
+  obtain ⟨⟨pin, after⟩, acquired⟩ := Option.isSome_iff_exists.mp available
+  exact ⟨pin, after, acquired, by
+    simpa only [same.describe] using PackedTable.acquireAt_reads acquired⟩
+
 theorem PackedTable.write_refines {before after : PackedTable} {model : SnapshotTable UInt64}
     {key : UInt64} {value : Option UInt64} (same : before.Refines model)
     (written : before.write key value = some after) :
