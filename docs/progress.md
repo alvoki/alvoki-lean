@@ -150,6 +150,10 @@ The single-file and checkpoint publication modules and their models live under `
 
 Disk recovery checks the one-based sequence of every selected WAL frame, including those covered by a checkpoint. It checks ordinals during decoding and skips the covered prefix by length. The codec audit checks that the decoder accepts correctly numbered logs and returns only correctly numbered frames. A native fixture with a valid checkpoint and a checksum-valid duplicate below the checkpoint watermark is rejected. In seven interleaved native reopen measurements against commit `562baf5`, median ratios ranged from 0.97× to 1.02× for checkpointed logs of 2,000 to 50,000 frames and a log-only fixture of 20,000 frames. [WAL decoder](../lean/storage/disk/WriteAheadLog.lean) · [Recovery](../lean/storage/disk/Recovery.lean)
 
+## WAL bytes selected at a modeled write cut
+
+The audited model proves that a visible or crash-surviving marker selects the exact bytes of the acknowledged prefix or that prefix plus the interrupted write. The existing replay theorems now use this byte-level result. The next proof can feed those bytes directly into the run-set loader for the jointly selected checkpoint. [Selector proof](../lean/storage/disk/WalBoundaryModel.lean) · [Shared directory sync obligation](proof-roadmap.md#disk-guarantees-to-prove)
+
 ## Disk and table source layout
 
 The disk adapter, codecs and recovery live under `lean/storage/disk/`. The sequential table models, packed table and its checked v3 run adapter live under `lean/storage/table/`. Each Lake target keeps its import name and generated artifact paths through a per-library source directory. [Module map](architecture.md#lean-paths)
