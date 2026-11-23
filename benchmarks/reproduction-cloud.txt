@@ -1,0 +1,43 @@
+   Compiling alvoki-block v0.1.0 (/workspace/alvoki-lean/rust)
+    Finished `release` profile [optimized] target(s) in 0.44s
+
+real	0m0.456s
+user	0m0.272s
+sys	0m0.178s
+✔ [2/8] Built Block (637ms)
+✔ [4/8] Built Main (813ms)
+✔ [6/8] Built Block:c.o (1.2s)
+✔ [7/8] Built Main:c.o (858ms)
+✔ [8/8] Built alvoki:exe (333ms)
+Build completed successfully (8 jobs).
+
+real	0m2.748s
+user	0m3.466s
+sys	0m0.640s
+✔ [4/6] Built Proofs (1.9s)
+Build completed successfully (6 jobs).
+
+real	0m2.040s
+user	0m2.906s
+sys	0m0.195s
+'Alvoki.lowerBound_partition' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Alvoki.point_complete' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Alvoki.lookup_sound' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Alvoki.range_exact' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Alvoki.range_ordered' depends on axioms: [propext, Quot.sound]
+'Alvoki.wordFast_eq_word' depends on axioms: [propext, Quot.sound]
+'Alvoki.pushWordFast_roundtrip' depends on axioms: [propext, Classical.choice, Quot.sound]
+
+real	0m0.297s
+user	0m0.195s
+sys	0m0.102s
+
+real	0m1.706s
+user	0m1.352s
+sys	0m0.346s
+verification results:: 4 verified, 0 errors
+
+real	0m1.175s
+user	0m0.604s
+sys	0m0.562s
+Passed 9 valid and 8 malformed fixtures across 3 binaries.

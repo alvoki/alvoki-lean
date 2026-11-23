@@ -1,0 +1,12 @@
+name = "alvoki"
+defaultTargets = ["alvoki"]
+
+[[lean_lib]]
+name = "Block"
+
+[[lean_lib]]
+name = "Proofs"
+
+[[lean_exe]]
+name = "alvoki"
+root = "Main"
