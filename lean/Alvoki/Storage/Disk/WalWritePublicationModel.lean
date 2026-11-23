@@ -57,6 +57,15 @@ theorem WriteFiles.reopenImage_crashWal_nonempty (files : WriteFiles) (before : 
     (manifest : Option ByteArray) : (files.reopenImage before manifest).wal.crashImages ≠ [] := by
   simpa [reopenImage] using files.crashPossible
 
+theorem WriteFiles.reopenImage_manifest_eq (files : WriteFiles) (before : List WAL.Write)
+    (manifest : Option ByteArray) {pair : DirectoryPublication.Bindings}
+    (chosen : pair ∈ (files.reopenImage before manifest).directory.active ::
+      (files.reopenImage before manifest).directory.crashImages) : pair.manifest = manifest := by
+  rcases List.mem_cons.mp chosen with rfl | survives
+  · rfl
+  · obtain ⟨_, _, rfl⟩ := List.mem_map.mp survives
+    rfl
+
 private def appendEffect (event : WAL.Write) (effects : WriteEffects) : EStateM Unit WriteFiles Unit :=
   fun files =>
     let candidates := ByteArray.empty :: effects.appendCrashTails
@@ -211,5 +220,18 @@ theorem runWriteEffects_success {before : List WAL.Write} {event : WAL.Write}
     cases directory with
     | errorBeforeEffect | errorAfterEffect => contradiction
     | success => cases ran; exact ⟨rfl, rfl, rfl⟩
+
+/-- A successful write leaves the new marker in every selectable metadata pair. -/
+theorem runWriteEffects_success_pair_marker {before : List WAL.Write} {event : WAL.Write}
+    {effects : WriteEffects} {files : WriteFiles}
+    (ran : runWriteEffects before event effects = .ok () files) (manifest : Option ByteArray)
+    {pair : DirectoryPublication.Bindings}
+    (chosen : pair ∈ (files.reopenImage before manifest).directory.active ::
+      (files.reopenImage before manifest).directory.crashImages) :
+    pair.walBoundary = some (encode (WAL.encode (before ++ [event])).size.toUInt64) := by
+  have settled := (runWriteEffects_success ran).2.2
+  have selected : pair = ⟨manifest, some (encode (WAL.encode (before ++ [event])).size.toUInt64)⟩ := by
+    simpa [WriteFiles.reopenImage, settled, Publication.Image.settled] using chosen
+  rw [selected]
 
 end Alvoki.WAL.Boundary
