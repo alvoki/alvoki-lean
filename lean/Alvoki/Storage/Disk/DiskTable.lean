@@ -4,7 +4,7 @@ import Alvoki.Storage.Publication.CheckpointPublication
 
 namespace Alvoki.Storage
 open System Alvoki.Compaction
-open Alvoki.Sequential (SnapshotHandle SnapshotPin)
+open Alvoki.Sequential (SnapshotHandle)
 
 /-- The files the Linux disk protocol addresses within a database directory. -/
 inductive DiskFile where
@@ -64,6 +64,17 @@ private inductive Phase where
   | poisoned
   | closed
 
+/-- An opaque snapshot handle tied to the open disk session that issued it. -/
+structure DiskSnapshotHandle where
+  private mk ::
+  private session : IO.Ref Unit
+  private localHandle : SnapshotHandle
+
+structure DiskSnapshotPin where
+  private mk ::
+  handle : DiskSnapshotHandle
+  sequence : UInt64
+
 /-- Linux adapter for a sequential caller. The lock excludes a second open
 writer. An I/O failure during publication requires reopening the directory. -/
 structure DiskTable where
@@ -71,6 +82,7 @@ structure DiskTable where
   private dir : DiskDirectory
   private lock : IO.FS.Handle
   private phase : IO.Ref Phase
+  private session : IO.Ref Unit
 
 private def fromOption (result : Option α) (message : String) : IO α :=
   match result with
@@ -264,7 +276,9 @@ private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTabl
     unless selected.size < UInt64.size do throw (IO.userError "WAL byte count is too large")
     publishWalBoundary dir selected.size
   let installed : Installed := { table, generation := checkpointGeneration, walBytes := selected.size }
-  return ⟨dir, lock, ← IO.mkRef (.ready installed)⟩
+  -- ST.Ref.ptrEq distinguishes allocations. Keeping a separate cell lets a
+  -- stale handle retain its identity without retaining the database state.
+  return ⟨dir, lock, ← IO.mkRef (.ready installed), ← IO.mkRef ()⟩
 
 /-- Open a database in an existing directory and replay its durable WAL. -/
 def DiskTable.open (path : FilePath) : IO DiskTable := do
@@ -303,29 +317,34 @@ def DiskTable.write (db : DiskTable) (key : UInt64) (value : Option UInt64) : IO
   db.phase.set (.ready { state with table, walBytes })
   return event.sequence
 
-def DiskTable.acquireAt (db : DiskTable) (snapshot : UInt64) : IO (Option SnapshotPin) := do
+def DiskTable.acquireAt (db : DiskTable) (snapshot : UInt64) : IO (Option DiskSnapshotPin) := do
   let state ← db.installed
   match state.table.acquireAt snapshot with
   | none => return none
   | some (pin, table) =>
     db.phase.set (.ready { state with table })
-    return some pin
+    return some ⟨⟨db.session, pin.handle⟩, pin.sequence⟩
 
-def DiskTable.acquire (db : DiskTable) : IO SnapshotPin := do
+def DiskTable.acquire (db : DiskTable) : IO DiskSnapshotPin := do
   let state ← db.installed
   fromOption (← db.acquireAt state.table.committed) "cannot acquire the latest snapshot"
 
-def DiskTable.release (db : DiskTable) (handle : SnapshotHandle) : IO Unit := do
+def DiskTable.release (db : DiskTable) (handle : DiskSnapshotHandle) : IO Unit := do
   let state ← db.installed
-  db.phase.set (.ready { state with table := state.table.release handle })
+  if ← handle.session.ptrEq db.session then
+    db.phase.set (.ready { state with table := state.table.release handle.localHandle })
 
-def DiskTable.lookup (db : DiskTable) (handle : SnapshotHandle) (key : UInt64) :
+def DiskTable.lookup (db : DiskTable) (handle : DiskSnapshotHandle) (key : UInt64) :
     IO (Option (Option UInt64)) := do
-  return (← db.installed).table.lookup handle key
+  let state ← db.installed
+  unless ← handle.session.ptrEq db.session do return none
+  return state.table.lookup handle.localHandle key
 
-def DiskTable.range (db : DiskTable) (handle : SnapshotHandle) (lo hi : UInt64) :
+def DiskTable.range (db : DiskTable) (handle : DiskSnapshotHandle) (lo hi : UInt64) :
     IO (Option (List (Alvoki.Compaction.Model.Entry (Option UInt64)))) := do
-  return (← db.installed).table.range handle lo hi
+  let state ← db.installed
+  unless ← handle.session.ptrEq db.session do return none
+  return state.table.range handle.localHandle lo hi
 
 def DiskTable.advanceFloor (db : DiskTable) (floor : UInt64) : IO Bool := do
   let state ← db.installed

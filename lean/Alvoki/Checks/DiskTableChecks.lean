@@ -248,6 +248,40 @@ private def checkDanglingFiles (dir : FilePath) : IO Unit := do
     check (!targetExists) s!"open created the target of a dangling {name}"
     IO.FS.removeFile linked
 
+private def checkSnapshotSessions (root : FilePath) : IO Unit := do
+  let firstDir := root / "first"
+  let secondDir := root / "second"
+  IO.FS.createDir firstDir
+  IO.FS.createDir secondDir
+  let original ← DiskTable.open firstDir
+  let stale ← try
+    let _ ← original.write 7 (some 70)
+    original.acquire
+  finally original.close
+  let first ← DiskTable.open firstDir
+  try
+    let second ← DiskTable.open secondDir
+    try
+      let _ ← second.write 7 (some 71)
+      -- Each acquisition is the first in its session, so the local IDs agree.
+      let firstPin ← first.acquire
+      let secondPin ← second.acquire
+      for (db, valid, invalid, value, label) in
+          [(first, firstPin.handle, stale.handle, 70, "stale"),
+           (first, firstPin.handle, secondPin.handle, 70, "foreign"),
+           (second, secondPin.handle, firstPin.handle, 71, "foreign")] do
+        check ((← db.lookup invalid 7).isNone) s!"{label} handle resolved a point read"
+        check ((← db.range invalid 0 8).isNone) s!"{label} handle resolved a range read"
+        db.release invalid
+        check ((← db.lookup valid 7) == some (some value)) s!"{label} release removed a live pin"
+        check ((← db.range valid 0 8).map (List.map (·.payload)) == some [some value])
+          s!"{label} release changed a live pin's range"
+      rejects (original.lookup firstPin.handle 7) "closed database accepted a foreign lookup"
+      rejects (original.range firstPin.handle 0 8) "closed database accepted a foreign range"
+      rejects (original.release firstPin.handle) "closed database accepted a foreign release"
+    finally second.close
+  finally first.close
+
 private def syncFixture : String := r#"#!/bin/sh
 set -eu
 for path do
@@ -508,6 +542,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkBoundedRecovery
     IO.FS.withTempDir checkDirectoryIdentity
     IO.FS.withTempDir checkDanglingFiles
+    IO.FS.withTempDir checkSnapshotSessions
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkFirstCheckpointCuts
     IO.FS.withTempDir checkCheckpointRetryWithFewerRuns

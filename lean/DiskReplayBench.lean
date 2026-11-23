@@ -2,7 +2,7 @@ import Alvoki.Storage.Disk.DiskTable
 
 open Alvoki.Storage
 
-private def checkContents (db : DiskTable) (handle : Alvoki.Sequential.SnapshotHandle)
+private def checkContents (db : DiskTable) (handle : DiskSnapshotHandle)
     (size : UInt64) : IO Unit := do
   let some rows ← db.range handle 0 size
     | throw (IO.userError "replay benchmark could not scan the recovered snapshot")
