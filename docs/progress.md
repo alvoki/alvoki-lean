@@ -171,3 +171,7 @@ The audited completeness theorem proves that replay accepts every contiguous suf
 The native fixture exercises a failed checkpoint, a complete append left unacknowledged, and two failed reopen attempts followed by a successful one. It checks the sync targets and the exact selected WAL bytes, the persisted floor and retained snapshot, the acknowledged overwrite and tombstone, and reuse of the discarded sequence. The sync wrapper tests process-visible outcomes on Linux. The trace proof separately accounts for possible durable bindings after a crash. [Native fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)
 
 The crash refinement review reproduced an old handle reading and releasing a new pin with the same local ID after reopen. The roadmap now records the session identity requirement and the scope of the first crash trace proof. [Disk proof obligations](proof-roadmap.md#disk-guarantees-to-prove)
+
+## Shared directory sync model
+
+The proof model keeps the manifest and WAL marker in a single crash choice. Successful directory sync settles both visible bindings. A failed sync can retain the earlier possibilities or settle both. The audited retry theorem preserves any acceptance predicate that holds for the initial pairs and each possible pair added by rename. Proving that the adapter supplies that rename premise requires the WAL and checkpoint content invariants. [Directory publication model](../lean/Alvoki/Storage/Publication/DirectoryPublicationModel.lean)

@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Publication.DiskPublicationModel
 import Alvoki.Storage.Disk.WalBoundaryModel
 import Alvoki.Storage.Publication.CheckpointPublicationModel
+import Alvoki.Storage.Publication.DirectoryPublicationModel
 
 #check_axioms Alvoki.Sequential.SnapshotPins.floor_check_cost
 #check_axioms Alvoki.Sequential.SnapshotPins.advance_iff
@@ -67,6 +68,12 @@ import Alvoki.Storage.Publication.CheckpointPublicationModel
 #check_axioms Alvoki.Storage.Publication.run_model_success
 #check_axioms Alvoki.Storage.Publication.retry_preserves
 #check_axioms Alvoki.Storage.Publication.repair_retry_preserves_replay
+#check_axioms Alvoki.Storage.DirectoryPublication.Image.project_survives_iff
+#check_axioms Alvoki.Storage.DirectoryPublication.Image.syncDirectory_project
+#check_axioms Alvoki.Storage.DirectoryPublication.Image.survives_syncDirectory_iff
+#check_axioms Alvoki.Storage.DirectoryPublication.Image.Valid.project
+#check_axioms Alvoki.Storage.DirectoryPublication.Image.step_valid
+#check_axioms Alvoki.Storage.DirectoryPublication.retry_preserves
 #check_axioms Alvoki.WAL.Boundary.decode_encode
 #check_axioms Alvoki.WAL.Boundary.select_encoded
 #check_axioms Alvoki.WAL.Boundary.commit_append_error
