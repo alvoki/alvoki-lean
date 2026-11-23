@@ -7,21 +7,20 @@ import random
 import subprocess
 import tempfile
 
-from merge_phases import BINARIES, decisions, tag
-from packed import merged_records, summarize
-from scoped_builder import compactions
-from run import ROOT
+from support import MERGE_BINARIES, ROOT, compactions, merged_records, summarize, tag
 from generate import WORD_MASK, block, dataset, workloads
 
 LEAN = ROOT / "lean/.lake/build/bin/alvoki-fused-merge"
-RUST = BINARIES["rust"]
+RUST = MERGE_BINARIES["rust"]
 MERGE = [(f"lean-{mode}", LEAN, f"{mode}-merge") for mode in ("plain", "adaptive", "fused")]
-MERGE += [("rust", RUST, "merge"), ("rust-scoped", RUST, "builder-merge")]
+MERGE += [("rust", RUST, "merge"), ("rust-scoped", RUST, "builder-merge"), ("rust-spans", RUST, "span-merge")]
 SCAN = [(f"lean-{mode}", LEAN, f"{mode}-scan") for mode in ("plain", "adaptive", "fused", "direct", "selected")]
 SCAN += [("rust", RUST, "merge-scan"), ("rust-scoped", RUST, "builder-merge-scan"),
+         ("rust-spans", RUST, "span-merge-scan"),
          ("rust-direct", RUST, "direct-scan"), ("rust-selected", RUST, "selected-scan")]
 PIPELINE = [("lean-adaptive", LEAN, "adaptive-pipeline"), ("lean-fused", LEAN, "fused-pipeline"),
-            ("rust", RUST, "pipeline"), ("rust-scoped", RUST, "builder-pipeline")]
+            ("rust", RUST, "pipeline"), ("rust-scoped", RUST, "builder-pipeline"),
+            ("rust-spans", RUST, "span-pipeline")]
 
 
 def invoke(binary, mode, paths, output, reps=1, rss=False):
@@ -62,7 +61,6 @@ def check(directory):
     for left, right in fixtures:
         paths[0].write_bytes(block(left))
         paths[1].write_bytes(block(right))
-        paths[2].write_bytes(decisions(left, right))
         expected = merged_records(left, right)
         for _, binary, mode in MERGE:
             check_merge(binary, mode, paths, output, block(expected))
@@ -104,10 +102,8 @@ def run(directory, destination, sizes, trials):
                 jobs = [("merge", MERGE, tag(encoded)), ("scan", SCAN, checksum),
                         ("pipeline", PIPELINE, pipeline_checksum)]
                 for task, variants, wanted in jobs:
-                    # Legacy Rust merge requires a valid trace. New stock Lean
-                    # experiments never read this auxiliary file in these modes.
-                    paths[2].write_bytes(block(list(enumerate(targets))) if task == "pipeline"
-                                         else decisions(left, right))
+                    if task == "pipeline":
+                        paths[2].write_bytes(block(list(enumerate(targets))))
                     options = list(variants)
                     rng.shuffle(options)
                     for label, binary, mode in options:

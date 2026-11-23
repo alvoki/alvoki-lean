@@ -6,8 +6,7 @@ from pathlib import Path
 import random
 import tempfile
 
-from packed import checksum, merge_inputs, merged_records, run_once, summarize
-from run import ROOT, measured
+from support import ROOT, checksum, measured, merge_inputs, merged_records, mixed_spans, run_once, split_spans, summarize
 from generate import WORD_MASK, block, dataset
 
 LEAN = ROOT / "lean/.lake/build/bin/alvoki-native"
@@ -29,26 +28,6 @@ SPANS = (1, 4, 16, 64, 256)
 
 def label(binary, mode):
     return f"{'lean' if binary == LEAN else 'rust-scalar' if binary == SCALAR else 'rust'}-{mode}"
-
-
-def split_spans(records, length):
-    sides = ([], [])
-    for start in range(0, len(records), length):
-        sides[(start // length) % 2].extend(records[start:start + length])
-    return sides
-
-
-def mixed_spans(records):
-    sides = ([], [])
-    start = 0
-    turn = 0
-    lengths = (1, 1, 4, 16, 64, 256, 16, 4)
-    while start < len(records):
-        length = lengths[turn % len(lengths)]
-        sides[turn % 2].extend(records[start:start + length])
-        start += length
-        turn += 1
-    return sides
 
 
 def flipped(records, mask=1):

@@ -40,8 +40,18 @@ impl<'a> Block<'a> {
         word(self.bytes, 16 + index * 16)
     }
 
-    pub fn record(&self, index: usize) -> Record {
+    #[inline]
+    fn record_in_bounds(&self, index: usize) -> Record {
         (self.key(index), word(self.bytes, 24 + index * 16))
+    }
+
+    pub fn get(&self, index: usize) -> Option<Record> {
+        (index < self.len()).then(|| self.record_in_bounds(index))
+    }
+
+    /// Panics when the index is outside the block. Use `get` to handle a miss.
+    pub fn record(&self, index: usize) -> Record {
+        self.get(index).expect("record index out of bounds")
     }
 
     pub fn lower_bound(&self, key: u64) -> usize {
@@ -71,11 +81,11 @@ impl<'a> Block<'a> {
     }
 
     pub fn iter_indices(&self, range: Range<usize>) -> impl Iterator<Item = Record> + '_ {
-        (range.start..range.end.min(self.len())).map(|index| self.record(index))
+        (range.start..range.end.min(self.len())).map(|index| self.record_in_bounds(index))
     }
 
     pub fn decode(&self) -> Vec<Record> {
-        (0..self.len()).map(|index| self.record(index)).collect()
+        (0..self.len()).map(|index| self.record_in_bounds(index)).collect()
     }
 }
 
@@ -89,4 +99,25 @@ pub fn encode(records: &[Record]) -> Vec<u8> {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indexed_read_checks_before_offset_arithmetic() {
+        let bytes = encode(&[(10, 100)]);
+        let block = Block::parse(&bytes).unwrap();
+        assert_eq!(block.get(0), Some((10, 100)));
+        assert_eq!(block.get(block.len()), None);
+        assert_eq!(block.get(1 << (usize::BITS - 4)), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "record index out of bounds")]
+    fn record_rejects_an_index_that_would_wrap() {
+        let bytes = encode(&[(10, 100)]);
+        Block::parse(&bytes).unwrap().record(1 << (usize::BITS - 4));
+    }
 }

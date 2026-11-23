@@ -7,7 +7,8 @@ export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
 (cd rust && cargo build --release --bin alvoki-merge-phases)
 (
   cd lean
-  lake build alvoki-merge-phases ScopedBytesProofs
+  lake build alvoki-merge-phases ScopedBytesProofs ReplayProofs
   lake env leanchecker ScopedBytesProofs
+  lake env leanchecker ReplayProofs
 )
 python3 benchmarks/stock_builder.py "$@"

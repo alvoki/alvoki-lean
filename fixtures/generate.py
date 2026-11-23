@@ -9,6 +9,12 @@ def block(records):
     return RECORD.pack(len(records), 1) + b"".join(RECORD.pack(*r) for r in records)
 
 
+def columnar(records):
+    return (RECORD.pack(len(records), 2)
+            + b"".join(key.to_bytes(8, "little") for key, _ in records)
+            + b"".join(value.to_bytes(8, "little") for _, value in records))
+
+
 def dataset(size):
     return [(i * 2, i * 0x9E3779B97F4A7C15 & WORD_MASK) for i in range(size)]
 

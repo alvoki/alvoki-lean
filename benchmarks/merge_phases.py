@@ -4,29 +4,14 @@ import csv
 import os
 from pathlib import Path
 import random
-import subprocess
 import tempfile
 
-from native import mixed_spans, split_spans
-from packed import merged_records, summarize
-from run import ROOT
+from support import MERGE_BINARIES as BINARIES
+from support import invoke_replay as invoke
+from support import INVALID_TRACES, TRACE_FIXTURE, merged_records, mixed_spans, set_inputs, split_spans, summarize, tag
 from generate import WORD_MASK, block, dataset
 
-BINARIES = {
-    "lean": ROOT / "lean/.lake/build/bin/alvoki-merge-phases",
-    "rust": ROOT / "rust/target/release/alvoki-merge-phases",
-}
 MODES = ("select", "replay-checksum", "replay-write", "merge")
-
-
-def decisions(left, right):
-    """Build a trace outside the timer from the independent sorted-union oracle."""
-    left_keys = set(dict(left))
-    right_keys = set(dict(right))
-    return bytes(
-        2 if key in left_keys and key in right_keys else int(key in right_keys)
-        for key in sorted(left_keys | right_keys)
-    )
 
 
 def checksum(records):
@@ -34,23 +19,6 @@ def checksum(records):
     for key, value in records:
         result = (result * 3 + (key ^ value)) & WORD_MASK
     return result
-
-
-def tag(encoded):
-    return int.from_bytes(encoded[:8], "little") ^ int.from_bytes(encoded[-8:], "little") ^ len(encoded)
-
-
-def invoke(binary, mode, inputs, output, reps=1, check=True):
-    result = subprocess.run([binary, mode, *inputs, output, str(reps)],
-                            text=True, capture_output=True, check=check)
-    return result if not check else [tuple(map(int, line.split())) for line in result.stdout.splitlines()]
-
-
-def set_inputs(inputs, left, right):
-    a, b, trace = inputs
-    a.write_bytes(block(left))
-    b.write_bytes(block(right))
-    trace.write_bytes(decisions(left, right))
 
 
 def check_cases(directory):
@@ -77,13 +45,18 @@ def check_cases(directory):
                 invoke(binary, mode, paths, output)
                 assert output.read_bytes() == block(expected), (binary, mode)
 
-    set_inputs(paths, [(0, 1)], [(1, 2)])
-    for malformed in (b"", b"\x00", b"\x00\x00", b"\xff\x01", b"\x02\x01"):
+    set_inputs(paths, *TRACE_FIXTURE)
+    for malformed in INVALID_TRACES:
         paths[2].write_bytes(malformed)
         for binary in BINARIES.values():
-            result = invoke(binary, "replay-write", paths, output, check=False)
-            assert result.returncode != 0 and "invalid replay trace" in result.stderr
-    print(f"Passed {len(cases)} exact merge and checksum fixtures and 5 malformed trace fixtures.")
+            for mode in ("replay-checksum", "check-replay-write"):
+                result = invoke(binary, mode, paths, output, check=False)
+                assert result.returncode != 0 and "invalid replay trace" in result.stderr, (binary, mode, malformed)
+    paths[2].unlink()
+    for binary in BINARIES.values():
+        invoke(binary, "check-merge", paths, output)
+        assert output.read_bytes() == block(merged_records(*TRACE_FIXTURE)), binary
+    print(f"Passed {len(cases)} exact merge and checksum fixtures and {len(INVALID_TRACES)} invalid trace fixtures.")
 
 
 def run(directory, destination, sizes, trials):

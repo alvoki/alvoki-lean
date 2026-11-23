@@ -7,13 +7,12 @@ import random
 import subprocess
 import tempfile
 
-from merge_phases import BINARIES, invoke, tag, set_inputs
-from native import split_spans
-from packed import summarize
-from run import ROOT
+from support import MERGE_BINARIES
+from support import ROOT, set_inputs, split_spans, summarize, tag
+from support import invoke_replay as invoke
 from generate import WORD_MASK, block, dataset, workloads
 
-BINARIES = dict(BINARIES, fixed=ROOT / "lean/.lake/build/bin/alvoki-merge-phases-fixed",
+BINARIES = dict(MERGE_BINARIES, fixed=ROOT / "lean/.lake/build/bin/alvoki-merge-phases-fixed",
                 inline=ROOT / "lean/.lake/build/bin/alvoki-merge-phases-inline")
 GROUP = 256
 

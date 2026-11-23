@@ -10,8 +10,9 @@ import subprocess
 import sys
 import tempfile
 
-from run import BINARIES, ROOT, measured
-from generate import RECORD, WORD_MASK, block, dataset, workloads
+from support import BLOCK_BINARIES as BINARIES
+from support import ROOT, measured
+from generate import WORD_MASK, block, columnar, dataset, workloads
 
 LEAN = ROOT / "lean/.lake/build/bin/alvoki-opt"
 RUST = ROOT / "rust/target/release/alvoki-opt"
@@ -26,12 +27,6 @@ RANGE = [(CHECKED, "range"), (LEAN, "range-machine"), (RUST, "range-machine")]
 READ = [(LEAN, "read-checked"), (LEAN, "read-guarded"),
         (LEAN, "read-machine"), (RUST, "read-wide")]
 WRITE = [(LEAN, "write-loop"), (LEAN, "write-unrolled"), (LEAN, "write-scalar"), (LEAN, "write-indexed"), (RUST, "write-wide")]
-
-
-def columnar(records):
-    return (RECORD.pack(len(records), 2)
-            + b"".join(key.to_bytes(8, "little") for key, _ in records)
-            + b"".join(value.to_bytes(8, "little") for _, value in records))
 
 
 def label(binary, mode):

@@ -6,10 +6,10 @@ from pathlib import Path
 import random
 import tempfile
 
-from merge_phases import invoke, set_inputs, tag
-from native import split_spans
-from packed import merged_records, summarize
-from run import ROOT
+from support import (
+    INVALID_TRACES, MASK, ROOT, TRACE_FIXTURE, compactions, merged_records, native_mode, set_inputs, summarize, tag,
+)
+from support import invoke_replay as invoke
 from generate import WORD_MASK, block, dataset, workloads
 
 LEAN = ROOT / "lean/.lake/build/bin"
@@ -21,36 +21,6 @@ BINARIES = {
     "rust": ROOT / "rust/target/release/alvoki-merge-phases",
     "rust-scoped": ROOT / "rust/target/release/alvoki-merge-phases",
 }
-MASK = 0xFEDCBA9876543210
-
-
-def native_mode(variant, mode):
-    return f"builder-{mode}" if variant == "rust-scoped" else mode
-
-
-def compactions(records):
-    rng = random.Random(471)
-    shuffled = ([], [])
-    for record in records:
-        shuffled[rng.randrange(2)].append(record)
-    clustered = ([], [])
-    offset = 0
-    side = 0
-    while offset < len(records):
-        end = offset + rng.choice((32, 128, 512, 2048))
-        clustered[side].extend(records[offset:end])
-        offset = end
-        side ^= 1
-    half = len(records) // 2
-    updates = len(records) - half
-    common = min(half, updates * 3 // 4)
-    hot = sorted(rng.sample(records[:half], common) + records[half:half + updates - common])
-    return (
-        ("alternating", split_spans(records, 1)),
-        ("shuffled-interleave", shuffled),
-        ("clustered-ranges", clustered),
-        ("update-heavy", (records[:half], [(key, value ^ MASK) for key, value in hot])),
-    )
 
 
 def check(directory):
@@ -69,13 +39,13 @@ def check(directory):
             invoke(binary, native_mode(variant, "check-dense"), paths, output)
             assert output.read_bytes() == block([(k, v ^ MASK) for k, v in left]), variant
 
-    set_inputs(paths, [(0, 1)], [(1, 2)])
-    for malformed in (b"", b"\x00", b"\x00\x00", b"\xff\x01", b"\x02\x01"):
+    set_inputs(paths, *TRACE_FIXTURE)
+    for malformed in INVALID_TRACES:
         paths[2].write_bytes(malformed)
         for variant, binary in BINARIES.items():
             result = invoke(binary, native_mode(variant, "replay-write"), paths, output, check=False)
             assert result.returncode != 0 and "invalid replay trace" in result.stderr, variant
-    print(f"Passed {len(fixtures)} exact builder fixtures and 5 malformed trace fixtures.")
+    print(f"Passed {len(fixtures)} exact builder fixtures and {len(INVALID_TRACES)} invalid trace fixtures.")
 
 
 def sample(writer, rng, paths, output, size, label, mode, trials, cpu, expected_bytes=None, checksum=None):

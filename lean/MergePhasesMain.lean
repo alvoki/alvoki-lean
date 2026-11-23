@@ -15,10 +15,10 @@ def pipeline (left right targets : @& Run) : IO UInt64 := do
     | .error message => throw (IO.userError message)
   let mut total := Alvoki.NativeTune.scanScalar output
   for i in [0:targets.view.count.toNat] do
-    let key := targets.view.value i.toUSize
+    let key := targets.view.valueUnchecked i.toUSize
     let index := output.view.lowerBound key
-    if index < output.view.count && output.view.key index == key then
-      total := total + output.view.value index
+    if index < output.view.count && output.view.keyUnchecked index == key then
+      total := total + output.view.valueUnchecked index
   return total
 
 def buildSlices (plan : @& ReplayPlan) : IO PreparedReplay :=
@@ -34,15 +34,20 @@ def main (args : List String) : IO Unit := do
     | throw (IO.userError "expected mode left right trace output repetitions")
   let left ← loadRun leftPath
   let right ← loadRun rightPath
-  let trace ← IO.FS.readBinFile tracePath
-  let preparedMode := mode == "replay-prepared" || mode == "check-replay-prepared"
-  let needsTrace := preparedMode || mode == "replay-prepare-and-write" ||
-    mode == "check-replay-prepare-and-write" || mode == "replay-spans" ||
-    mode == "check-replay-spans" || mode == "replay-write" || mode == "check-replay-write"
+  let operation := if mode.startsWith "check-" then String.ofList (mode.toList.drop 6) else mode
+  let width : Nat := match operation with
+    | "copy16" => 16
+    | "copy32" => 32
+    | "copy64" => 64
+    | "copy4096" => 4096
+    | _ => 0
+  let preparedMode := operation == "replay-prepared"
+  let needsTrace := operation.startsWith "replay-"
+  let trace ← if needsTrace || width != 0 then IO.FS.readBinFile tracePath else pure ByteArray.empty
   let plan ← if needsTrace then
-    if h : validateTrace trace left.view.count.toNat right.view.count.toNat = true then
-      pure (some (ReplayPlan.mk left right trace h))
-    else throw (IO.userError "invalid replay trace")
+    match checkReplayPlan left right trace with
+    | .ok checked => pure (some checked)
+    | .error message => throw (IO.userError message)
   else pure none
   let replayInput ← IO.mkRef plan
   let preparedSlices ← if preparedMode then
@@ -51,17 +56,8 @@ def main (args : List String) : IO Unit := do
   else pure none
   let preparedInput ← IO.mkRef preparedSlices
   let targets ← if mode == "pipeline" then some <$> loadRun tracePath else pure none
-  let operation := if mode.startsWith "check-" then String.ofList (mode.toList.drop 6) else mode
-  let width : Nat := match operation with
-    | "copy16" => 16
-    | "copy32" => 32
-    | "copy64" => 64
-    | "copy4096" => 4096
-    | _ => 0
   let total := left.view.count.toNat + right.view.count.toNat
-  let valid := if width == 0 then validateTrace trace left.view.count.toNat right.view.count.toNat
-    else validateGroups trace left.view.count.toNat right.view.count.toNat (width / 16)
-  if mode != "pipeline" && mode != "dense" && mode != "check-dense" && !needsTrace && !valid then
+  if width != 0 && !validateGroups trace left.count.toNat right.count.toNat (width / 16) then
     throw (IO.userError "invalid replay trace")
   let input ← IO.mkRef (left, right, trace)
   for _ in [0:repetitions.toNat?.getD 1] do

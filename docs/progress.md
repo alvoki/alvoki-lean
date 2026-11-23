@@ -47,3 +47,9 @@ The bounded-window fused builder cut clustered merge time from 1.23 to 1.07 ms a
 ## Performance guide and repository review
 
 The performance guide synthesizes the stock Lean techniques, the workload trade-offs, and the native prototype results. The repository review maps the module and proof boundaries and proposes a unified correctness gate, a validated v1 run API, and a shared merge specification. All nine fixture or proof suites passed during the review. Small counterexamples confirmed the current replay, index, and Python assertion boundaries. [Performance guide](high-performance-lean.md) · [Review and recommended order](repository-review.md)
+
+## Review fixes
+
+Replay validation now checks the two current keys at each step. Both languages reject the out-of-order and false-collision counterexamples. The stock Lean run API checks natural-number indices before converting them to machine width. Rust offers checked access and rejects invalid indices before offset arithmetic. A shared benchmark support module refuses to run with Python assertions disabled.
+
+The default Lean build includes the validated v1 run library. Parser and search refinements verify the logical records of an accepted view. The stock per-record merge and branching direct scan refine the same right-biased union. Generic builder proofs now build independently of replay. The stock and opt-in runtime correctness commands passed after a fresh checksum-verified bootstrap. [Current architecture](architecture.md) · [Proof coverage](verification-status.md) · [Correctness command](../scripts/check.sh)

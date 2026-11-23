@@ -1,3 +1,4 @@
+import Optimizations
 import PackedRun
 
 namespace Alvoki.Packed

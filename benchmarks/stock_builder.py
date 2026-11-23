@@ -6,9 +6,9 @@ from pathlib import Path
 import random
 import tempfile
 
-from merge_phases import BINARIES, invoke, set_inputs, tag
-from packed import merged_records, summarize
-from scoped_builder import compactions, native_mode
+from support import MERGE_BINARIES as BINARIES
+from support import invoke_replay as invoke
+from support import INVALID_TRACES, TRACE_FIXTURE, compactions, merged_records, native_mode, set_inputs, summarize, tag
 from generate import WORD_MASK, block, dataset
 
 MODES = [
@@ -34,13 +34,13 @@ def cases(directory):
         for label, binary, mode in MODES:
             invoke(binary, native_mode(label, f"check-{mode}"), paths, output)
             assert output.read_bytes() == expected, (label, len(left), len(right))
-    set_inputs(paths, [(0, 1)], [(1, 2)])
-    for malformed in (b"", b"\x00", b"\x00\x00", b"\xff\x01", b"\x02\x01"):
+    set_inputs(paths, *TRACE_FIXTURE)
+    for malformed in INVALID_TRACES:
         paths[2].write_bytes(malformed)
         for label, binary, mode in MODES:
             result = invoke(binary, native_mode(label, mode), paths, output, check=False)
             assert result.returncode and "invalid replay trace" in result.stderr, label
-    print(f"Passed {len(fixtures)} exact byte fixtures and 5 malformed traces.")
+    print(f"Passed {len(fixtures)} exact byte fixtures and {len(INVALID_TRACES)} invalid trace fixtures.")
 
 
 def run(directory, out, sizes, trials):

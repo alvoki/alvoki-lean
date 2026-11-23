@@ -1,5 +1,5 @@
 name = "alvoki"
-defaultTargets = ["alvoki"]
+defaultTargets = ["PackedRun", "alvoki"]
 
 [[lean_lib]]
 name = "Block"
@@ -33,6 +33,18 @@ moreLinkArgs = [".lake/alvoki-packed.o"]
 name = "PackedRun"
 
 [[lean_lib]]
+name = "PackedView"
+
+[[lean_lib]]
+name = "PackedViewProofs"
+
+[[lean_lib]]
+name = "MergeModel"
+
+[[lean_lib]]
+name = "MergeProofs"
+
+[[lean_lib]]
 name = "NativeTune"
 moreLeancArgs = ["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize", "-Rpass-analysis=loop-vectorize"]
 
@@ -52,6 +64,9 @@ name = "ScopedBytes"
 
 [[lean_lib]]
 name = "ScopedBytesProofs"
+
+[[lean_lib]]
+name = "ReplayProofs"
 
 [[lean_lib]]
 name = "FusedMerge"

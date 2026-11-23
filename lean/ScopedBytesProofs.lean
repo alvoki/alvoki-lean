@@ -1,4 +1,4 @@
-import MergePhases
+import ScopedBytes
 
 namespace Alvoki.ScopedBytes
 
@@ -48,7 +48,7 @@ theorem adjacent_model (src : ByteArray) (start len₁ len₂ : Nat)
   simp only [Slice.model, ← Nat.add_assoc]
   exact ByteArray.extract_eq_extract_append_extract (start + len₁) (by omega) (by omega)
 
-private theorem sliceBytes_size (slices : List Slice) (initial : Nat) :
+theorem sliceBytes_size (slices : List Slice) (initial : Nat) :
     slices.foldl (fun n slice => n + slice.length) initial =
       initial + (sliceBytes slices).size := by
   induction slices generalizing initial with
@@ -56,27 +56,7 @@ private theorem sliceBytes_size (slices : List Slice) (initial : Nat) :
   | cons slice rest ih =>
     simp [List.foldl_cons, ih, sliceBytes, Slice.model_size, Nat.add_assoc]
 
-theorem prepared_payload_size (prepared : Alvoki.MergePhases.PreparedReplay) :
-    (sliceBytes prepared.slices.toList).size = prepared.count * 16 := by
-  have complete := prepared.complete
-  rw [Slice.totalLength, ← Array.foldl_toList, sliceBytes_size, Nat.zero_add] at complete
-  exact complete
-
-theorem prepared_write_refines (prepared : Alvoki.MergePhases.PreparedReplay) :
-    prepared.write =
-      Alvoki.pushWordFast (Alvoki.pushWordFast
-        (ByteArray.emptyWithCapacity (16 + prepared.count * 16)) prepared.count.toUInt64) 1 ++
-      sliceBytes prepared.slices.toList := by
-  unfold Alvoki.MergePhases.PreparedReplay.write
-  dsimp only
-  rw [appendAll_refines]
-  rfl
-
 #print axioms Alvoki.ScopedBytes.appendAll_refines
 #print axioms Alvoki.ScopedBytes.adjacent_model
-#print axioms Alvoki.ScopedBytes.prepared_write_refines
-#print axioms Alvoki.ScopedBytes.prepared_payload_size
 
 end Alvoki.ScopedBytes
-
-#print axioms Alvoki.MergePhases.replayWrite_refines

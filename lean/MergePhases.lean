@@ -1,3 +1,4 @@
+import Optimizations
 import NativeTune
 import ScopedBytes
 
@@ -9,7 +10,7 @@ open Alvoki.Opt Alvoki.Packed Alvoki.ScopedBytes
 
 private def consumeTail (view : @& View) (i : USize) (sum : UInt64) : UInt64 :=
   if h : i < view.count then
-    consumeTail view (i + 1) (consume sum (view.key i) (view.value i))
+    consumeTail view (i + 1) (consume sum (view.keyUnchecked i) (view.valueUnchecked i))
   else sum
 termination_by view.count.toNat - i.toNat
 decreasing_by
@@ -20,14 +21,14 @@ decreasing_by
 private def selectFrom (left right : @& View) (i j : USize) (sum : UInt64) : UInt64 :=
   if hi : i < left.count then
     if hj : j < right.count then
-      let a := left.key i
-      let b := right.key j
+      let a := left.keyUnchecked i
+      let b := right.keyUnchecked j
       if a < b then
-        selectFrom left right (i + 1) j (consume sum a (left.value i))
+        selectFrom left right (i + 1) j (consume sum a (left.valueUnchecked i))
       else if a == b then
-        selectFrom left right (i + 1) (j + 1) (consume sum b (right.value j))
+        selectFrom left right (i + 1) (j + 1) (consume sum b (right.valueUnchecked j))
       else
-        selectFrom left right i (j + 1) (consume sum b (right.value j))
+        selectFrom left right i (j + 1) (consume sum b (right.valueUnchecked j))
     else consumeTail left i sum
   else consumeTail right j sum
 termination_by (left.count.toNat - i.toNat) + (right.count.toNat - j.toNat)
@@ -41,25 +42,25 @@ decreasing_by
 
 def select (a b : @& Run) : UInt64 := selectFrom a.view b.view 0 0 0
 
-/-- 0 consumes left, 1 consumes right, 2 consumes both and emits right.
-    Check the trace's shape and cursor bounds before timing replay. -/
-def validateTrace (trace : @& ByteArray) (left right : Nat) : Bool := Id.run do
-  let mut i := 0
-  let mut j := 0
+/-- Check each trace decision against the heads of the validated runs before timing replay.
+    0 emits left, 1 emits right, and 2 consumes equal keys and emits right. -/
+def validateMergeTrace (trace : @& ByteArray) (left right : @& Run) : Bool := Id.run do
+  let mut i : USize := 0
+  let mut j : USize := 0
   for op in trace do
-    match op with
-    | 0 =>
-      if i ≥ left then return false
-      i := i + 1
-    | 1 =>
-      if j ≥ right then return false
-      j := j + 1
-    | 2 =>
-      if i ≥ left || j ≥ right then return false
-      i := i + 1
-      j := j + 1
-    | _ => return false
-  return i == left && j == right
+    if i >= left.count && j >= right.count then return false
+    let expected : UInt8 :=
+      if i < left.count then
+        if j < right.count then
+          let a := left.view.keyUnchecked i
+          let b := right.view.keyUnchecked j
+          if a < b then 0 else if a == b then 2 else 1
+        else 0
+      else 1
+    if op != expected then return false
+    if op != 1 then i := i + 1
+    if op != 0 then j := j + 1
+  return i == left.count && j == right.count
 
 private def replayChecksumFrom (left right : @& View) (trace : @& ByteArray)
     (endPos : USize) (extent : endPos.toNat ≤ trace.size)
@@ -69,11 +70,11 @@ private def replayChecksumFrom (left right : @& View) (trace : @& ByteArray)
     let op := trace.uget pos (by omega)
     if op == 0 then
       replayChecksumFrom left right trace endPos extent (pos + 1) (i + 1) j
-        (consume sum (left.key i) (left.value i))
+        (consume sum (left.keyUnchecked i) (left.valueUnchecked i))
     else
       let nextLeft := if op == 2 then i + 1 else i
       replayChecksumFrom left right trace endPos extent (pos + 1) nextLeft (j + 1)
-        (consume sum (right.key j) (right.value j))
+        (consume sum (right.keyUnchecked j) (right.valueUnchecked j))
   else sum
 termination_by endPos.toNat - pos.toNat
 decreasing_by
@@ -168,12 +169,17 @@ theorem replayWrite_refines (a b : Run) (trace : ByteArray) :
     (Builder.ofPrefix (pushWordFast (pushWordFast
       (ByteArray.emptyWithCapacity (16 + trace.size * 16)) trace.size.toUInt64) 1))
 
-/-- The replay loop consumes this checked trace without per-record cursor checks. -/
+/-- The replay loop consumes this checked merge trace without per-record cursor checks. -/
 structure ReplayPlan where
+  private mk ::
   left : Run
   right : Run
   trace : ByteArray
-  valid : validateTrace trace left.view.count.toNat right.view.count.toNat = true
+  mergeTrace : validateMergeTrace trace left right = true
+
+def checkReplayPlan (left right : Run) (trace : ByteArray) : Except String ReplayPlan :=
+  if valid : validateMergeTrace trace left right then .ok ⟨left, right, trace, valid⟩
+  else .error "invalid replay trace"
 
 @[noinline] def ReplayPlan.write (plan : @& ReplayPlan) : ByteArray :=
   replayWrite plan.left plan.right plan.trace

@@ -84,23 +84,26 @@ fn scan_selected(left: &Run<'_>, right: &Run<'_>) -> u64 {
     sum
 }
 
-fn validate_trace(trace: &[u8], left: usize, right: usize) -> bool {
+fn validate_merge_trace(trace: &[u8], left: &Run<'_>, right: &Run<'_>) -> bool {
     let (mut i, mut j) = (0, 0);
     for &op in trace {
-        match op {
-            0 => i += 1,
-            1 => j += 1,
-            2 => {
-                i += 1;
-                j += 1;
-            }
-            _ => return false,
-        }
-        if i > left || j > right {
+        let expected = match (i < left.limit, j < right.limit) {
+            (true, true) => match left.key(i).cmp(&right.key(j)) {
+                std::cmp::Ordering::Less => 0,
+                std::cmp::Ordering::Greater => 1,
+                std::cmp::Ordering::Equal => 2,
+            },
+            (true, false) => 0,
+            (false, true) => 1,
+            (false, false) => return false,
+        };
+        if op != expected {
             return false;
         }
+        i += usize::from(op != 1);
+        j += usize::from(op != 0);
     }
-    i == left && j == right
+    i == left.limit && j == right.limit
 }
 
 fn replay(left: &Run<'_>, right: &Run<'_>, trace: &[u8], mut emit: impl FnMut(&Run<'_>, usize)) {
@@ -137,6 +140,57 @@ fn merge(left: &Run<'_>, right: &Run<'_>) -> Vec<u8> {
             out.extend_from_slice(right.record(j));
             i += usize::from(a == b);
             j += 1;
+        }
+    }
+    out.extend_from_slice(&left.payload[16 * i..]);
+    out.extend_from_slice(&right.payload[16 * j..]);
+    let count = ((out.len() - 16) / 16) as u64;
+    out[..8].copy_from_slice(&count.to_le_bytes());
+    out
+}
+
+/// Match the stock Lean fused emitter's eight-record probe and bounded window.
+fn winning_end(run: &Run<'_>, start: usize, rival: u64, consecutive: bool) -> usize {
+    if !consecutive || run.limit - start < 8 || run.key(start + 7) >= rival {
+        return start + 1;
+    }
+    let stop = start + (run.limit - start).min(256);
+    if run.key(stop - 1) < rival {
+        return stop;
+    }
+    let (mut lo, mut hi) = (start + 8, stop);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if run.key(mid) < rival {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn span_merge(left: &Run<'_>, right: &Run<'_>) -> Vec<u8> {
+    let mut out = header(left.limit + right.limit, 0);
+    let (mut i, mut j, mut last) = (0, 0, 2);
+    while i < left.limit && j < right.limit {
+        let a = left.key(i);
+        let b = right.key(j);
+        if a < b {
+            let stop = winning_end(left, i, b, last == 0);
+            out.extend_from_slice(&left.payload[16 * i..16 * stop]);
+            i = stop;
+            last = 0;
+        } else if a == b {
+            out.extend_from_slice(right.record(j));
+            i += 1;
+            j += 1;
+            last = 2;
+        } else {
+            let stop = winning_end(right, j, a, last == 1);
+            out.extend_from_slice(&right.payload[16 * j..16 * stop]);
+            j = stop;
+            last = 1;
         }
     }
     out.extend_from_slice(&left.payload[16 * i..]);
@@ -208,7 +262,7 @@ fn builder_merge(left: &Run<'_>, right: &Run<'_>) -> Vec<u8> {
     out
 }
 
-/// Requires a fully consumed trace accepted by validate_trace for these runs.
+/// Requires a fully consumed trace accepted by validate_merge_trace for these runs.
 unsafe fn builder_replay(left: &Run<'_>, right: &Run<'_>, trace: &[u8]) -> Vec<u8> {
     let mut out = header(trace.len(), trace.len());
     let (mut i, mut j, mut dst) = (0, 0, 16);
@@ -231,9 +285,8 @@ unsafe fn builder_replay(left: &Run<'_>, right: &Run<'_>, trace: &[u8]) -> Vec<u
     out
 }
 
-fn pipeline(left: &Run<'_>, right: &Run<'_>, targets: Option<&Run<'_>>, scoped: bool) -> Result<u64, &'static str> {
-    let bytes = if scoped { builder_merge(left, right) } else { merge(left, right) };
-    let output = Block::parse(&bytes)?;
+fn read_merged(bytes: &[u8], targets: Option<&Run<'_>>) -> Result<u64, &'static str> {
+    let output = Block::parse(bytes)?;
     let mut sum = bytes[16..].chunks_exact(16).fold(0u64, |sum, record| {
         let key = u64::from_le_bytes(record[..8].try_into().unwrap());
         let value = u64::from_le_bytes(record[8..].try_into().unwrap());
@@ -260,25 +313,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let right_bytes = fs::read(right)?;
     let left = Run::parse(&left_bytes)?;
     let right = Run::parse(&right_bytes)?;
-    let trace = if matches!(mode, "merge-scan" | "direct-scan" | "selected-scan") {
-        Vec::new()
-    } else {
-        fs::read(trace)?
-    };
-    let targets = if mode == "pipeline" { Some(Run::parse(&trace)?) } else { None };
-    let width = match mode.strip_prefix("check-").unwrap_or(mode) {
+    let operation = mode.strip_prefix("check-").unwrap_or(mode);
+    let width = match operation {
         "copy16" => 16,
         "copy32" => 32,
         "copy64" => 64,
         "copy4096" => 4096,
         _ => 0,
     };
-    let valid = if width == 0 {
-        validate_trace(&trace, left.limit, right.limit)
+    let needs_trace = operation.starts_with("replay-");
+    let needs_targets = matches!(mode, "pipeline" | "span-pipeline");
+    let trace = if needs_trace || width != 0 || needs_targets {
+        fs::read(trace)?
     } else {
-        validate_groups(&trace, left.limit, right.limit, width / 16)
+        Vec::new()
     };
-    if !matches!(mode, "pipeline" | "merge-scan" | "direct-scan" | "selected-scan" | "dense" | "check-dense") && !valid {
+    let targets = if needs_targets { Some(Run::parse(&trace)?) } else { None };
+    if (needs_trace && !validate_merge_trace(&trace, &left, &right))
+        || (width != 0 && !validate_groups(&trace, left.limit, right.limit, width / 16))
+    {
         return Err("invalid replay trace".into());
     }
     for _ in 0..repetitions.parse()? {
@@ -295,8 +348,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 (bytes, 0)
             }
-            "pipeline" => (Vec::new(), pipeline(a, b, targets.as_ref(), scoped)?),
-            "merge-scan" => (Vec::new(), pipeline(a, b, None, scoped)?),
+            "pipeline" | "merge-scan" => {
+                let bytes = if scoped { builder_merge(a, b) } else { merge(a, b) };
+                (Vec::new(), read_merged(&bytes, targets.as_ref())?)
+            }
+            "span-pipeline" | "span-merge-scan" =>
+                (Vec::new(), read_merged(&span_merge(a, b), targets.as_ref())?),
             "selected-scan" => (Vec::new(), scan_selected(a, b)),
             "direct-scan" => (Vec::new(), consume_winners(a, b, |sum, k, v| sum.wrapping_add(k ^ v))),
             "select" => (Vec::new(), select(a, b)),
@@ -316,6 +373,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "merge" | "check-merge" =>
                 (if scoped { builder_merge(a, b) } else { merge(a, b) }, 0),
+            "span-merge" | "check-span-merge" => (span_merge(a, b), 0),
             _ if width == 16 => (copy_groups::<16>(a, b, ops, dest), 0),
             _ if width == 32 => (copy_groups::<32>(a, b, ops, dest), 0),
             _ if width == 64 => (copy_groups::<64>(a, b, ops, dest), 0),

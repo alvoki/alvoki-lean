@@ -5,41 +5,11 @@ import csv
 import os
 from pathlib import Path
 import random
-import subprocess
-import sys
 import tempfile
-import time
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "fixtures"))
+from support import BLOCK_BINARIES as BINARIES
+from support import invoke_block as invoke, measured
 from generate import WORD_MASK, block, dataset, workloads
-
-BINARIES = {
-    "rust": ROOT / "rust/target/release/alvoki-block",
-    "lean-fast": ROOT / "lean/.lake/build/bin/alvoki",
-    "lean": ROOT / "lean/.lake/build/bin/alvoki",
-}
-
-
-def invoke(label, binary, mode, data, queries, param, repeats, **kwargs):
-    env = dict(os.environ, ALVOKI_FAST="1" if label == "lean-fast" else "0")
-    env.pop("ALVOKI_RSS", None)
-    return subprocess.run(
-        [binary, mode, data, queries, str(param), str(repeats)],
-        text=True, capture_output=True, env=env, **kwargs,
-    )
-
-
-def measured(label, binary, mode, data, queries, param, repeats):
-    env = dict(os.environ, ALVOKI_FAST="1" if label == "lean-fast" else "0", ALVOKI_RSS="1")
-    command = [binary, mode, data, queries, str(param), str(repeats)]
-    start = time.perf_counter_ns()
-    output = subprocess.run(command, text=True, capture_output=True, env=env, check=True)
-    elapsed = time.perf_counter_ns() - start
-    *samples, rss = output.stdout.splitlines()
-    header, amount, unit = rss.split()
-    assert (header, unit) == ("VmHWM:", "kB")
-    return samples, int(amount), elapsed
 
 
 def check(directory):

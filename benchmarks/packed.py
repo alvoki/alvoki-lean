@@ -4,12 +4,9 @@ import csv
 import os
 from pathlib import Path
 import random
-from statistics import median
-import subprocess
-import sys
 import tempfile
 
-from run import ROOT, measured
+from support import ROOT, checksum, measured, merge_inputs, merged_records, run_once, summarize
 from generate import WORD_MASK, block, dataset, workloads
 
 LEAN = ROOT / "lean/.lake/build/bin/alvoki-packed"
@@ -25,19 +22,6 @@ INIT = [(LEAN, "init-lean"), (LEAN, "init-c"), (RUST, "init")]
 
 def name(binary, mode):
     return f"{'lean' if binary == LEAN else 'rust'}-{mode}"
-
-
-def run_once(binary, mode, data, aux, output):
-    subprocess.run([binary, mode, data, aux, output, "1"], check=True,
-                   env={key: value for key, value in os.environ.items() if key != "ALVOKI_RSS"})
-
-
-def merged_records(left, right):
-    return sorted((dict(left) | dict(right)).items())
-
-
-def checksum(records):
-    return sum(k ^ v for k, v in records) & WORD_MASK
 
 
 def check(directory):
@@ -81,17 +65,6 @@ def check(directory):
     print(f"Passed {len(cases)} storage fixtures and {len(merge_cases)} exact merge fixtures.")
 
 
-def merge_inputs(size, order):
-    half = size // 2
-    records = dataset(size)
-    if order == "alternating":
-        return records[::2], records[1::2]
-    if order == "disjoint":
-        return records[:half], records[half:]
-    # The right side overwrites keys shared with the last quarter of the left side.
-    return records[:half], [(k, v ^ WORD_MASK) for k, v in records[size // 4:size // 4 + size - half]]
-
-
 def run(directory, out, sizes, trials):
     cpu = min(os.sched_getaffinity(0))
     os.sched_setaffinity(0, {cpu})
@@ -129,22 +102,6 @@ def run(directory, out, sizes, trials):
                         writer.writerow((size, workload, label, trial, ns, units, tag, cpu, rss))
                 assert len(checksums) == 1, (size, workload, checksums)
                 result.flush()
-
-
-def summarize(path):
-    groups = {}
-    with path.open() as source:
-        for row in csv.DictReader(source):
-            key = tuple(row[name] for name in ("records", "workload", "variant"))
-            groups.setdefault(key, []).append(row)
-    writer = csv.writer(sys.stdout, lineterminator="\n")
-    writer.writerow(("records", "workload", "variant", "trials", "min_ms", "median_ms", "max_ms",
-                     "median_ns_per_unit", "peak_rss_kib"))
-    for group, rows in sorted(groups.items(), key=lambda pair: (int(pair[0][0]), *pair[0][1:])):
-        times = [int(row["ns"]) for row in rows]
-        writer.writerow((*group, len(rows), f"{min(times) / 1e6:.6f}", f"{median(times) / 1e6:.6f}",
-                         f"{max(times) / 1e6:.6f}", f"{median(times) / int(rows[0]['operations']):.3f}",
-                         rows[0]["peak_rss_kib"]))
 
 
 def main():
