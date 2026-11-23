@@ -217,4 +217,46 @@ theorem splitByte_joinBytes (byte : Nat → UInt8) (lane : Nat) (bound : lane < 
       Bool.false_or, Bool.or_false, BitVec.getLsbD_of_ge, Nat.zero_add,
       Nat.add_sub_cancel_left]
 
+private theorem mem_indices {i start n : Nat} :
+    i ∈ List.range' start n ↔ start ≤ i ∧ i < start + n := by
+  simp only [List.mem_range', Nat.one_mul]
+  refine ⟨fun ⟨k, hk, eq⟩ => by omega, fun ⟨ge, lt⟩ => ⟨i - start, by omega, by omega⟩⟩
+
+theorem filterIndexRange (p : Nat → Bool) (lower upper n : Nat)
+    (hi : upper ≤ n) (exactly : ∀ i, i < n → (p i = true ↔ lower ≤ i ∧ i < upper)) :
+    (List.range n).filter p = List.range' lower (upper - lower) := by
+  by_cases valid : lower ≤ upper
+  · have left : List.range' 0 lower ++ List.range' lower (upper - lower) = List.range' 0 upper := by
+      simpa [Nat.add_sub_of_le valid] using
+        (List.range'_append_1 (s := 0) (m := lower) (n := upper - lower))
+    have right : List.range' 0 upper ++ List.range' upper (n - upper) = List.range n := by
+      rw [List.range_eq_range']
+      simpa [Nat.add_sub_of_le hi] using
+        (List.range'_append_1 (s := 0) (m := upper) (n := n - upper))
+    rw [← right, ← left, List.filter_append, List.filter_append]
+    have emptyLeft : (List.range' 0 lower).filter p = [] := by
+      apply List.filter_eq_nil_iff.mpr
+      intro i mem holds
+      have h := mem_indices.mp mem
+      have h' := (exactly i (by omega)).mp holds
+      omega
+    have emptyRight : (List.range' upper (n - upper)).filter p = [] := by
+      apply List.filter_eq_nil_iff.mpr
+      intro i mem holds
+      have h := mem_indices.mp mem
+      have h' := (exactly i (by omega)).mp holds
+      omega
+    have allMiddle : (List.range' lower (upper - lower)).filter p =
+        List.range' lower (upper - lower) := by
+      apply List.filter_eq_self.mpr
+      intro i mem
+      have h := mem_indices.mp mem
+      exact (exactly i (by omega)).mpr ⟨h.1, by omega⟩
+    simp [emptyLeft, emptyRight, allMiddle]
+  · rw [show upper - lower = 0 by omega, List.range'_zero]
+    apply List.filter_eq_nil_iff.mpr
+    intro i mem holds
+    have h := (exactly i (List.mem_range.mp mem)).mp holds
+    omega
+
 end Alvoki

@@ -13,12 +13,21 @@ private def lane (row : RawEntry) : Nat → UInt64
   | 3 => row.payload.2
   | _ => 0
 
-def encodeV3Row (row : RawEntry) : ByteArray :=
-  pushWordFast (pushWordFast (pushWordFast (pushWordFast ByteArray.empty row.key)
+def appendV3Row (out : ByteArray) (row : RawEntry) : ByteArray :=
+  pushWordFast (pushWordFast (pushWordFast (pushWordFast out row.key)
     row.sequence) row.payload.1) row.payload.2
 
+def encodeV3Row (row : RawEntry) : ByteArray := appendV3Row ByteArray.empty row
+
+theorem appendV3Row_eq (out : ByteArray) (row : RawEntry) :
+    appendV3Row out row = out ++ encodeV3Row row := by
+  have pushAppend (a b : ByteArray) (value : UInt64) :
+      pushWordFast (a ++ b) value = a ++ pushWordFast b value := by
+    rw [pushWordFast_append (a ++ b), ByteArray.append_assoc, ← pushWordFast_append b]
+  simp only [encodeV3Row, appendV3Row, pushWordFast_append out row.key, pushAppend]
+
 @[simp] theorem encodeV3Row_size (row : RawEntry) : (encodeV3Row row).size = 32 := by
-  simp only [encodeV3Row, pushWordFast_size, ByteArray.size_empty]
+  simp only [encodeV3Row, appendV3Row, pushWordFast_size, ByteArray.size_empty]
 
 private theorem encodeV3Row_lane (row : RawEntry) (l : Nat) (valid : l < 4) :
     word (encodeV3Row row) (8 * l) = lane row l := by

@@ -1,0 +1,17 @@
+UTC 2026-11-23 18:40:23
+Linux 6.18.57 x86_64 GNU/Linux
+CPU(s):                                  5
+Model name:                              AMD EPYC 9V74 80-Core Processor
+Hypervisor vendor:                       KVM
+Virtualization type:                     full
+L1d cache:                               96 KiB (3 instances)
+L1i cache:                               96 KiB (3 instances)
+L2 cache:                                3 MiB (3 instances)
+L3 cache:                                32 MiB (1 instance)
+cpu.max = 400000 100000
+memory.max = 17179869184
+Python 3.12.14
+Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)
+sync (GNU coreutils) 9.7
+Temporary fixture filesystem overlayfs
+Benchmark command bash scripts/disk-replay.sh --repair-tail --sizes 100 5000 10000 --trials 7 --out /tmp/alvoki-tail-repair.csv

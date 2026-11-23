@@ -60,3 +60,45 @@ After cleaning the build outputs, Rust release compilation took 0.456 s and the 
 - [Derived summary](../benchmarks/summary-cloud.csv)
 - [Environment](../benchmarks/environment-cloud.txt)
 - [Build and verification log](../benchmarks/reproduction-cloud.txt)
+
+## Disk replay
+
+`scripts/disk-replay.sh` measures native `DiskTable.open` on a database with only a WAL. All three workloads write the same set of keys and values in ascending, descending, or deterministically shuffled order. The independent Python driver generates the WAL frames before timing. The Lean executable validates the entire recovered key range on the untimed warmup and checks the recovered watermark on every sample.
+
+Each sample measures lock acquisition, WAL file loading, decoding, and replay. It excludes fixture generation, process startup, validation, and close. The warmup makes this a warm-cache measurement. The driver pins itself and its child to one CPU and records the raw samples in CSV. Use the same machine, sizes, and storage setup for baseline comparisons.
+
+```sh
+bash scripts/disk-replay.sh --out /tmp/alvoki-replay-before.csv
+bash scripts/disk-replay.sh --out /tmp/alvoki-replay-after.csv \
+  --baseline /tmp/alvoki-replay-before.csv --max-slowdown 1.25
+```
+
+`--sizes` selects the row counts and `--trials` sets the timed samples per case. The default runs 5,000, 10,000, and 20,000 rows with five samples each. `--baseline` compares medians case by case, and `--max-slowdown` is an optional local failure threshold. [Raw reference run](../benchmarks/disk-replay-trials.csv) · [Environment](../benchmarks/disk-replay-environment.txt)
+
+| Records | Ascending median | Descending median | Shuffled median |
+|---:|---:|---:|---:|
+| 5,000 | 79.7 ms | 1.16 ms | 42.6 ms |
+| 10,000 | 329 ms | 2.59 ms | 174 ms |
+| 20,000 | 1,328 ms | 4.89 ms | 857 ms |
+
+Ascending insertion traverses the sorted memtable on every replayed record, so doubling the row count roughly quadruples time. Descending insertion adds each key at the front and takes roughly linear time. These timings establish the baseline for replacing the memtable. [Current insertion](../lean/PackedTable.lean)
+
+### Canonical database path at open
+
+We measured the directory-identity change on the same Linux VM using seven release trials for each of 100, 5,000, and 10,000 records in all three replay orders. The median ratios after the change ranged from 0.84× to 1.08× at 5,000 and 10,000 records. At 100 records the shuffled median rose from 39.6 to 48.0 microseconds and the other two medians moved by less than one microsecond. The comparison uses one run per build. Native code performs `realpath` and the absolute-path check once on open, and the path proof is erased. [Before samples](../benchmarks/disk-identity-before.csv) · [After samples](../benchmarks/disk-identity-after.csv) · [Environment and command](../benchmarks/disk-identity-environment.txt)
+
+### WAL sync on successful reopen
+
+The same-machine comparison uses seven release trials at each size and order. For 100 records, the median ranged from 29 to 49 microseconds before the fix and from 0.97 to 1.21 milliseconds after it. For 10,000 descending records it rose from 2.50 to 3.82 milliseconds, and for ascending records from 326 to 330 milliseconds. An aligned reopen invokes one GNU `sync` process for the WAL and directory. The benchmark includes that operation and replay. Retain these results as a reference for work on the durability barrier and the memtable. [Before samples](../benchmarks/disk-reopen-before.csv) · [After samples](../benchmarks/disk-reopen-after.csv) · [Environment and command](../benchmarks/disk-reopen-environment.txt)
+
+### Torn WAL repair
+
+Use `bash scripts/disk-replay.sh --repair-tail --out /tmp/alvoki-tail-repair.csv` to measure reopen with an incomplete final frame. Each trial reinstalls the same independent WAL fixture outside the timer and verifies that open trimmed the tail. The timed work includes replay, staged file write and sync, rename, and directory sync.
+
+We used seven trials per size and order to compare the shared replacement sequence with the previous inline sequence. Median ratios were 0.92× to 1.00× at 5,000 and 10,000 records and 0.85× to 1.17× at 100 records. These runs measure the full tail-repair path. [Before samples](../benchmarks/disk-publication-before.csv) · [After samples](../benchmarks/disk-publication-after.csv) · [Environment and command](../benchmarks/disk-publication-environment.txt)
+
+### Durable WAL boundary
+
+`bash scripts/disk-write.sh 64 7` measures consecutive acknowledged writes in a fresh database. It excludes opening the database, checking the result, and closing. Seven same-machine release trials give a median of 1.28 ms per write before the durable marker and 3.11 ms per write after it. Publication groups the WAL and staged marker file syncs in one process and uses a second invocation for the directory after rename. A future durable batch can amortize publication across several writes. [Write samples before](../benchmarks/disk-boundary-write-before.csv) · [Write samples after](../benchmarks/disk-boundary-write-after.csv) · [Environment and commands](../benchmarks/disk-boundary-environment.txt)
+
+Warm-cache reopen medians ranged from 0.92× to 1.10× across the same-machine WAL-only workload matrix. The aligned selector reuses the original byte array. [Reopen samples before](../benchmarks/disk-boundary-replay-before.csv) · [Reopen samples after](../benchmarks/disk-boundary-replay-after.csv)

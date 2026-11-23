@@ -68,6 +68,8 @@ structure Table (α : Type) where
 
 def Table.histories (table : Table α) : List (History α) := table.runs ++ [table.memory]
 
+/-- Insert a supplied version into the raw history. SnapshotTable.write assigns
+sequences for callers of the snapshot API. -/
 def Table.write (table : Table α) (row : Entry (Option α)) : Table α :=
   { table with memory := table.memory.union (.singleton row) }
 
@@ -94,7 +96,7 @@ theorem Table.range_ordered (table : Table α) (start stop snapshot : UInt64) :
     (table.range start stop snapshot).Pairwise (fun a b => a.key < b.key) :=
   (visibleRows_key_order (combined table.histories).ordered snapshot Option.isSome).filter _
 
-private theorem across_append_empty (runs : List (History α)) (key snapshot : UInt64) :
+theorem across_append_empty (runs : List (History α)) (key snapshot : UInt64) :
     across key snapshot (runs ++ [.empty]) = across key snapshot runs := by
   induction runs with
   | nil => rfl
@@ -106,6 +108,24 @@ private theorem Table.range_preserved {before after : Table α} (start stop snap
   unfold Table.range
   rw [visibleRows_congr (combined after.histories).ordered (combined before.histories).ordered
     snapshot Option.isSome (fun key => by simpa only [combined_winner] using same key)]
+
+/-- The winning put with its original sequence, if the key is visible. -/
+def Table.visibleEntry (table : Table α) (key snapshot : UInt64) : Option (Entry (Option α)) :=
+  (across key snapshot table.histories).filter (fun row => row.payload.isSome)
+
+theorem Table.lookup_eq_visibleEntry (table : Table α) (key snapshot : UInt64) :
+    table.lookup key snapshot = (table.visibleEntry key snapshot).bind Entry.payload := by
+  unfold Table.lookup Table.visibleEntry
+  cases across key snapshot table.histories with
+  | none => rfl
+  | some row => cases h : row.payload <;> simp [Option.filter, h]
+
+theorem Table.range_of_visibleEntry_eq {before after : Table α} (start stop snapshot : UInt64)
+    (same : ∀ key, after.visibleEntry key snapshot = before.visibleEntry key snapshot) :
+    after.range start stop snapshot = before.range start stop snapshot := by
+  unfold Table.range
+  rw [visibleRows_congr_visible (combined after.histories).ordered (combined before.histories).ordered
+    snapshot Option.isSome (fun key => by simpa only [combined_winner, Table.visibleEntry] using same key)]
 
 theorem Table.flush_lookup (table : Table α) (key snapshot : UInt64) :
     table.flush.lookup key snapshot = table.lookup key snapshot := by
@@ -149,47 +169,212 @@ theorem Table.compact_range (older : List (History α)) (left right : History α
   simp only [Table.histories, List.append_assoc, List.cons_append]
   exact across_compact _ _ _ _ key live
 
-/-- Each successful acquisition adds a pin. Multiple readers may pin the same sequence. -/
-structure SnapshotPins where
-  floor : UInt64
-  active : List UInt64
-  safe : ∀ snap ∈ active, floor ≤ snap
+def replaceSuffix (replace : List β → Option (List β)) :
+    Nat → List β → Option (List β)
+  | 0, rows => replace rows
+  | _ + 1, [] => none
+  | n + 1, head :: rows => (replaceSuffix replace n rows).map (head :: ·)
 
-def SnapshotPins.acquire (pins : SnapshotPins) (snapshot : UInt64) : Option SnapshotPins :=
-  if h : pins.floor ≤ snapshot then
-    some ⟨pins.floor, snapshot :: pins.active, fun s mem => by
-      rcases List.mem_cons.mp mem with rfl | tail
-      · exact h
-      · exact pins.safe s tail⟩
+private theorem replaceSuffix_spec {replace : List β → Option (List β)}
+    {index : Nat} {rows result : List β} (changed : replaceSuffix replace index rows = some result) :
+    ∃ prefixRows suffix replacement, rows = prefixRows ++ suffix ∧
+      result = prefixRows ++ replacement ∧ replace suffix = some replacement := by
+  induction index generalizing rows result with
+  | zero => exact ⟨[], rows, result, rfl, rfl, changed⟩
+  | succ n ih =>
+    cases rows with
+    | nil => simp [replaceSuffix] at changed
+    | cons row rows =>
+      cases h : replaceSuffix replace n rows with
+      | none => simp [replaceSuffix, h] at changed
+      | some rest =>
+        obtain ⟨prefixRows, suffix, replacement, old, new, valid⟩ := ih h
+        have eq : row :: rest = result := by simpa [replaceSuffix, h] using changed
+        exact ⟨row :: prefixRows, suffix, replacement,
+          congrArg (row :: ·) old, eq.symm.trans (congrArg (row :: ·) new), valid⟩
+
+theorem replaceSuffix_map_success (interpret : β → γ)
+    (replace : List β → Option (List β)) (spec : List γ → Option (List γ))
+    (agrees : ∀ input output, replace input = some output →
+      spec (input.map interpret) = some (output.map interpret))
+    {index : Nat} {rows result : List β} (changed : replaceSuffix replace index rows = some result) :
+    replaceSuffix spec index (rows.map interpret) = some (result.map interpret) := by
+  induction index generalizing rows result with
+  | zero => exact agrees _ _ changed
+  | succ n ih =>
+    cases rows with
+    | nil => simp [replaceSuffix] at changed
+    | cons head rest =>
+      cases h : replaceSuffix replace n rest with
+      | none => simp [replaceSuffix, h] at changed
+      | some output =>
+        have eq : head :: output = result := by simpa [replaceSuffix, h] using changed
+        rw [← eq]
+        simp [replaceSuffix, ih h]
+
+def compactSuffix (floor : UInt64) : List (History α) → Option (List (History α))
+  | a :: b :: rest => some (compactPair a b floor :: rest)
+  | _ => none
+
+/-- Compact the two adjacent runs starting at the given index. -/
+def Table.compactAt (table : Table α) (index : Nat) (floor : UInt64) : Option (Table α) :=
+  (replaceSuffix (compactSuffix floor) index table.runs).map fun runs => { table with runs }
+
+theorem Table.compactAt_winner {table result : Table α} {index : Nat} {floor snapshot : UInt64}
+    (changed : table.compactAt index floor = some result) (live : floor ≤ snapshot) (key : UInt64) :
+    across key snapshot result.histories = across key snapshot table.histories := by
+  unfold Table.compactAt at changed
+  cases h : replaceSuffix (compactSuffix floor) index table.runs with
+  | none => simp [h] at changed
+  | some runs =>
+    have eq : { table with runs := runs } = result := by simpa [h] using changed
+    subst result
+    have ⟨older, suffix, replacement, original, updated, valid⟩ := replaceSuffix_spec h
+    rcases suffix with _ | ⟨left, _ | ⟨right, newer⟩⟩ <;> simp [compactSuffix] at valid
+    subst replacement
+    simp only [Table.histories, original, updated, List.append_assoc, List.cons_append]
+    exact across_compact older left right (newer ++ [table.memory]) key live
+
+/-- A handle belongs to one table's sequential history. IDs are never reused. -/
+structure SnapshotHandle where
+  private mk ::
+  id : Nat
+  deriving DecidableEq, Repr
+
+structure SnapshotPin where
+  handle : SnapshotHandle
+  sequence : UInt64
+  deriving DecidableEq, Repr
+
+structure SnapshotPins where
+  private mk ::
+  floor : UInt64
+  active : List SnapshotPin
+  nextHandle : Nat
+  safe : ∀ pin ∈ active, floor ≤ pin.sequence
+  issued : ∀ pin ∈ active, pin.handle.id < nextHandle
+  unique : (active.map SnapshotPin.handle).Nodup
+
+def SnapshotPins.empty : SnapshotPins := ⟨0, [], 0, by simp, by simp, by simp⟩
+
+/-- Allocate a fresh handle for a snapshot in the supported committed interval. -/
+def SnapshotPins.acquire (pins : SnapshotPins) (committed snapshot : UInt64) :
+    Option (SnapshotPin × SnapshotPins) :=
+  if h : pins.floor ≤ snapshot ∧ snapshot ≤ committed then
+    let pin : SnapshotPin := ⟨⟨pins.nextHandle⟩, snapshot⟩
+    some (pin, ⟨pins.floor, pin :: pins.active, pins.nextHandle + 1,
+      fun s mem => by
+        rcases List.mem_cons.mp mem with rfl | tail
+        · exact h.1
+        · exact pins.safe s tail,
+      fun s mem => by
+        rcases List.mem_cons.mp mem with rfl | tail
+        · exact Nat.lt_succ_self _
+        · exact Nat.lt_succ_of_lt (pins.issued s tail),
+      by
+        rw [List.map_cons, List.nodup_cons]
+        refine ⟨?_, pins.unique⟩
+        intro mem
+        obtain ⟨s, found, same⟩ := List.mem_map.mp mem
+        have below := pins.issued s found
+        have id := congrArg SnapshotHandle.id same
+        exact (Nat.ne_of_lt below) id⟩)
   else none
 
-/-- On release only one occurrence is removed. -/
-def SnapshotPins.release (pins : SnapshotPins) (snapshot : UInt64) : SnapshotPins :=
-  ⟨pins.floor, pins.active.erase snapshot, fun s mem => pins.safe s (List.mem_of_mem_erase mem)⟩
+theorem SnapshotPins.acquire_spec {pins next : SnapshotPins} {committed snapshot : UInt64}
+    {pin : SnapshotPin} (h : pins.acquire committed snapshot = some (pin, next)) :
+    pins.floor ≤ snapshot ∧ snapshot ≤ committed ∧ pin.sequence = snapshot ∧
+      pin.handle.id = pins.nextHandle ∧ next.active = pin :: pins.active ∧
+      next.nextHandle = pins.nextHandle + 1 ∧ next.floor = pins.floor := by
+  unfold SnapshotPins.acquire at h
+  split at h
+  · rename_i valid
+    cases h
+    exact ⟨valid.1, valid.2, rfl, rfl, rfl, rfl, rfl⟩
+  · contradiction
+
+theorem SnapshotPins.acquire_iff (pins : SnapshotPins) (committed snapshot : UInt64) :
+    (pins.acquire committed snapshot).isSome = true ↔
+      pins.floor ≤ snapshot ∧ snapshot ≤ committed := by
+  unfold SnapshotPins.acquire
+  split <;> simp_all
+
+/-- Release is idempotent. A handle removes only its own acquisition. -/
+def SnapshotPins.release (pins : SnapshotPins) (handle : SnapshotHandle) : SnapshotPins :=
+  let keep := fun pin : SnapshotPin => decide (pin.handle ≠ handle)
+  have sub := List.filter_sublist (p := keep) (l := pins.active)
+  ⟨pins.floor, pins.active.filter keep, pins.nextHandle,
+    fun p h => pins.safe p (sub.subset h), fun p h => pins.issued p (sub.subset h),
+    pins.unique.sublist (sub.map SnapshotPin.handle)⟩
+
+@[simp] theorem SnapshotPins.mem_release (pins : SnapshotPins) (handle : SnapshotHandle)
+    (pin : SnapshotPin) : pin ∈ (pins.release handle).active ↔
+      pin ∈ pins.active ∧ pin.handle ≠ handle := by
+  simp [SnapshotPins.release]
+
+theorem SnapshotPins.release_idempotent (pins : SnapshotPins) (handle : SnapshotHandle) :
+    (pins.release handle).release handle = pins.release handle := by
+  unfold SnapshotPins.release
+  simp only [List.filter_filter, Bool.and_self]
+
+/-- Specification of the short-circuit traversal with one unit charged per pin comparison. -/
+private def floorScan (next : UInt64) : List SnapshotPin → Bool × Nat
+  | [] => (true, 0)
+  | pin :: rest =>
+    if next ≤ pin.sequence then
+      let suffix := floorScan next rest
+      (suffix.1, suffix.2 + 1)
+    else (false, 1)
+
+theorem SnapshotPins.floor_check_cost (next : UInt64) (active : List SnapshotPin) :
+    (floorScan next active).1 = active.all (fun pin => next ≤ pin.sequence) ∧
+      (floorScan next active).2 ≤ active.length := by
+  induction active with
+  | nil => simp [floorScan]
+  | cons pin rest ih =>
+    by_cases h : next ≤ pin.sequence <;> simp [floorScan, h, ih.1, ih.2]
 
 def SnapshotPins.advance (pins : SnapshotPins) (next : UInt64) : Option SnapshotPins :=
-  if good : pins.floor ≤ next ∧ ∀ s ∈ pins.active, next ≤ s then
-    some ⟨next, pins.active, good.2⟩
+  if good : (decide (pins.floor ≤ next) && pins.active.all (fun p => next ≤ p.sequence)) = true then
+    some ⟨next, pins.active, pins.nextHandle,
+      List.all_eq_true.mp (Bool.and_eq_true_iff.mp good).2 |> fun h p mem =>
+        of_decide_eq_true (h p mem), pins.issued, pins.unique⟩
   else none
+
+theorem SnapshotPins.advance_iff (pins : SnapshotPins) (next : UInt64) :
+    (pins.advance next).isSome = true ↔
+      pins.floor ≤ next ∧ ∀ pin ∈ pins.active, next ≤ pin.sequence := by
+  have spec : (decide (pins.floor ≤ next) && pins.active.all (fun p => next ≤ p.sequence)) = true ↔
+      pins.floor ≤ next ∧ ∀ pin ∈ pins.active, next ≤ pin.sequence := by
+    constructor
+    · intro h
+      have both := Bool.and_eq_true_iff.mp h
+      exact ⟨of_decide_eq_true both.1, fun p mem =>
+        of_decide_eq_true (List.all_eq_true.mp both.2 p mem)⟩
+    · intro h
+      exact Bool.and_eq_true_iff.mpr ⟨decide_eq_true h.1,
+        List.all_eq_true.mpr (fun p mem => decide_eq_true (h.2 p mem))⟩
+  unfold SnapshotPins.advance
+  rw [← spec]
+  split <;> simp_all
 
 theorem SnapshotPins.advance_spec {pins result : SnapshotPins} {next : UInt64}
     (advanced : pins.advance next = some result) :
     pins.floor ≤ result.floor ∧ result.floor = next ∧ result.active = pins.active ∧
-      ∀ snap ∈ pins.active, next ≤ snap := by
+      result.nextHandle = pins.nextHandle ∧ ∀ pin ∈ pins.active, next ≤ pin.sequence := by
+  have legal := (pins.advance_iff next).mp (by simp [advanced])
   unfold SnapshotPins.advance at advanced
   split at advanced
-  · rename_i good
-    injection advanced with same
-    subst result
-    exact ⟨good.1, rfl, rfl, good.2⟩
+  · cases advanced
+    exact ⟨legal.1, rfl, rfl, rfl, legal.2⟩
   · contradiction
 
-theorem SnapshotPins.active_compaction (pins : SnapshotPins) {snapshot : UInt64}
-    (pinned : snapshot ∈ pins.active) (older : List (History α)) (left right : History α)
+theorem SnapshotPins.active_compaction (pins : SnapshotPins) {pin : SnapshotPin}
+    (pinned : pin ∈ pins.active) (older : List (History α)) (left right : History α)
     (newer : List (History α)) (memory : History α) (key : UInt64) :
-    (Table.mk (older ++ compactPair left right pins.floor :: newer) memory).lookup key snapshot =
-      (Table.mk (older ++ left :: right :: newer) memory).lookup key snapshot :=
-  Table.compact_lookup older left right newer memory key (pins.safe snapshot pinned)
+    (Table.mk (older ++ compactPair left right pins.floor :: newer) memory).lookup key pin.sequence =
+      (Table.mk (older ++ left :: right :: newer) memory).lookup key pin.sequence :=
+  Table.compact_lookup older left right newer memory key (pins.safe pin pinned)
 
 private def keepVersion (key sequence : UInt64) (row : Entry (Option α)) : Bool :=
   !(row.key == key && row.sequence == sequence && row.payload.isNone)
@@ -240,5 +425,47 @@ theorem History.purgeTombstone_preserves (history : History α) (key sequence fl
       subst key
       rw [remaining, Compaction.Model.read, found]
       exact removed.2.2.symm
+
+private def purgeSuffix (key sequence : UInt64) :
+    List (History α) → Option (List (History α))
+  | run :: rest => some (run.purgeTombstone key sequence :: rest)
+  | [] => none
+
+/-- Proposal for replacing one run by the same run with a tombstone removed. -/
+def Table.purgeCandidate (table : Table α) (index : Nat) (key sequence : UInt64) :
+    Option (Table α) :=
+  (replaceSuffix (purgeSuffix key sequence) index table.runs).map fun runs => { table with runs }
+
+private theorem History.purge_other_key (run : History α) (key sequence query snapshot : UInt64)
+    (different : query ≠ key) :
+    winner (run.purgeTombstone key sequence).rows query snapshot = winner run.rows query snapshot := by
+  simp only [History.purgeTombstone, winner, List.find?_filter]
+  congr 1
+  funext row
+  by_cases found : row.key = query
+  · simp [eligible, keepVersion, found, different]
+  · simp [eligible, found]
+
+theorem Table.purgeCandidate_other_key {table result : Table α} {index : Nat}
+    {key sequence : UInt64} (candidate : table.purgeCandidate index key sequence = some result)
+    (query snapshot : UInt64) (different : query ≠ key) :
+    across query snapshot result.histories = across query snapshot table.histories := by
+  unfold Table.purgeCandidate at candidate
+  cases h : replaceSuffix (purgeSuffix key sequence) index table.runs with
+  | none => simp [h] at candidate
+  | some runs =>
+    have eq : { table with runs := runs } = result := by simpa [h] using candidate
+    subst result
+    have ⟨older, suffix, replacement, original, updated, valid⟩ := replaceSuffix_spec h
+    cases suffix with
+    | nil => simp [purgeSuffix] at valid
+    | cons run newer =>
+      simp [purgeSuffix] at valid
+      subst replacement
+      simp only [Table.histories, original, updated, List.append_assoc, List.cons_append]
+      clear candidate original updated h runs
+      induction older with
+      | nil => simp [across, run.purge_other_key key sequence query snapshot different]
+      | cons head older ih => simp only [List.cons_append, across, ih]
 
 end Alvoki.Sequential

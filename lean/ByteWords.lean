@@ -81,4 +81,51 @@ theorem word_extract (bytes : ByteArray) (start stop offset : Nat)
     lane 3 (by decide), lane 4 (by decide), lane 5 (by decide), lane 6 (by decide),
     lane 7 (by decide)]
 
+/-- Encode consecutive unsigned little-endian words. -/
+def encodeWords : List UInt64 → ByteArray
+  | [] => ByteArray.empty
+  | word :: rest => pushWordFast ByteArray.empty word ++ encodeWords rest
+
+@[simp] theorem encodeWords_size (words : List UInt64) :
+    (encodeWords words).size = 8 * words.length := by
+  induction words with
+  | nil => rfl
+  | cons head rest ih =>
+    simp only [encodeWords, ByteArray.size_append, pushWordFast_size, ByteArray.size_empty,
+      ih, List.length_cons]
+    omega
+
+theorem word_encodeWords (words : List UInt64) (i : Nat) (within : i < words.length) :
+    word (encodeWords words) (8 * i) = words[i] := by
+  induction words generalizing i with
+  | nil => simp at within
+  | cons head rest ih =>
+    let prefixBytes := pushWordFast ByteArray.empty head
+    have size : prefixBytes.size = 8 := pushWordFast_size _ _
+    cases i with
+    | zero =>
+      change word (prefixBytes ++ encodeWords rest) 0 = head
+      rw [word_left _ _ _ (by rw [size]; decide)]
+      exact pushWordFast_roundtrip _ _
+    | succ i =>
+      change word (prefixBytes ++ encodeWords rest) (8 * (i + 1)) = rest[i]'(by simpa using within)
+      have hit : i < rest.length := by simpa using within
+      have position : 8 * (i + 1) = prefixBytes.size + 8 * i := by omega
+      rw [position, word_right _ _ _ (by simp; omega)]
+      exact ih i hit
+
+theorem encodeSixWords (bytes : ByteArray) (size : bytes.size = 48) :
+    encodeWords [word bytes 0, word bytes 8, word bytes 16, word bytes 24, word bytes 32,
+      word bytes 40] = bytes := by
+  apply eq_of_aligned_words (by simp [size])
+  intro k bound
+  have lane : k = 0 ∨ k = 1 ∨ k = 2 ∨ k = 3 ∨ k = 4 ∨ k = 5 := by omega
+  rcases lane with rfl | rfl | rfl | rfl | rfl | rfl <;> rw [word_encodeWords] <;> first | rfl | simp
+
+/-- FNV-1a over the little-endian encoding of consecutive words. -/
+def checksumWords (words : List UInt64) : UInt64 :=
+  words.foldl (fun hash field =>
+    (List.range 8).foldl (fun state lane =>
+      (state ^^^ (splitByte field lane).toUInt64) * 1099511628211) hash) 14695981039346656037
+
 end Alvoki.ByteWords

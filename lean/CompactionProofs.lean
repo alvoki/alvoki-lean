@@ -160,7 +160,7 @@ theorem compact_scan_eq {left right out : Run} {leftBytes rightBytes : ByteArray
   rw [out.scan_refines snapshot outFits, scan_refines left right snapshot leftFits rightFits,
     compact_visibleRows_eq lp rp parsed live]
 
-private def decodedValue (payload : UInt64 × UInt64) : Option UInt64 :=
+def decodedValue (payload : UInt64 × UInt64) : Option UInt64 :=
   if isPut payload then some payload.2 else none
 
 /-- Turn an accepted v3 block into a sequential history with typed tombstones. -/

@@ -15,6 +15,8 @@ Alvoki explores formally verified storage primitives in native Lean 4. The exper
 
 Import `PackedRun` and use `Alvoki.Packed.parseRun` to validate a version-1 block. The returned run supports checked record access, lookup, and half-open range checksums. `Alvoki.Packed.merge` produces the version-1 right-biased union, and `Alvoki.Packed.scanMerged` folds it directly. Import `SpanMerge` for the proved span writer or `BlockCodec` for the round-trip-checked v1 encoder and decoder. [Implementation and proof boundaries](docs/verification-status.md)
 
+Import `PackedTable` for a sequential snapshot table over packed v3 runs. Import `DiskTable` for the Linux adapter with a write-ahead log, checkpoints, and reopen. The adapter uses an existing dedicated directory. A snapshot handle belongs to its open session. Run `bash scripts/check-sequential.sh` from the root to build and exercise both APIs and audit the proofs. [Engine API and checkpoint protocol](docs/architecture.md#sequential-storage)
+
 ## Reproduce on Linux x86-64
 
 Run from the repository root with Bash, curl, tar, unzip, sha256sum, and Python 3 available. The bootstrap script installs pinned tools in `../work/toolchains`. Set `ALVOKI_TOOLCHAINS` and pass the same directory to bootstrap to use a different location.
@@ -31,6 +33,16 @@ bash scripts/environment.sh
 The stock check runs the baseline, latest Lean and Verus proof audits, and exact-output fixtures. GitHub Actions runs the same command. The runtime option runs the opt-in C and linkage experiment fixtures. Benchmark drivers require Python assertions to be enabled. [Correctness workflow](.github/workflows/correctness.yml)
 
 The default reproduction builds the baseline Lean and Rust executables, checks the original Lean theorems and their axioms, runs Verus, and compares both baseline Lean variants and Rust with the Python reference. The `--out` flag additionally benchmarks all three configurations. Use `--sizes 1000 --trials 3` for a shorter run. The sections below give the build, proof, and fixture commands for the later experiments.
+
+## Storage engine replay benchmark
+
+```sh
+bash scripts/disk-replay.sh --out /tmp/alvoki-replay-before.csv
+bash scripts/disk-replay.sh --out /tmp/alvoki-replay-after.csv \
+  --baseline /tmp/alvoki-replay-before.csv
+```
+
+The native benchmark measures reopening databases with the same keys inserted in ascending, descending, and seeded shuffled order. It records individual samples and compares medians against a saved run on the same machine. Add `--max-slowdown 1.25` to fail a comparison when any median exceeds 125% of its baseline. [Workload and measurements](docs/benchmarks.md#disk-replay)
 
 ## Optimization experiments
 
@@ -113,4 +125,4 @@ bash scripts/compaction.sh --fixed-copy --out /tmp/alvoki-compaction.csv
 python3 benchmarks/compaction.py --summarize /tmp/alvoki-compaction.csv
 ```
 
-[Compaction semantics and results](docs/compaction.md)
+[Compaction semantics and results](docs/compaction.md) · [Write-path performance handoff](docs/compaction.md#resuming-write-path-optimization)

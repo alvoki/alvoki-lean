@@ -72,4 +72,50 @@ The stock v1 parser, lookup, range checksum and right-biased merge now have end-
 
 Both stock v3 writers produce the reference encoding of the retained history. The parser recognizes exactly the valid v3 bytes, and both codec round trips check. For every snapshot at or above the floor the direct scan and a reparsed output consume the same ordered visible rows, including when a boundary tombstone masks an older run.
 
-The sequential model proves flush and adjacent-run replacement preserve point and range reads in their publication context. Snapshot pins constrain floor advancement. The executable packed compactor implements the model's replacement operation. Table-level publication, persistent codecs and recovery, and concurrency remain future engine work. [Proof roadmap](proof-roadmap.md) · [Verification status](verification-status.md)
+The sequential model proves flush and adjacent-run replacement preserve point and range reads in their publication context. Snapshot pins constrain floor advancement. The executable packed compactor implements the model's replacement operation. [Proof roadmap](proof-roadmap.md) · [Verification status](verification-status.md)
+
+## Snapshot and reclamation review fixes
+
+Floor advancement now traverses the active pin list with a checked comparison bound. The sequential snapshot table assigns fresh write sequences and uses per-acquisition handles. A retained handle has stable point and range reads across any sequence of table operations. Handles are local to one sequential table history.
+
+Reclamation now checks the actual before and after run lists, including unmerged equal-sequence candidates. The floor and relevant version boundaries suffice to certify equality at every supported snapshot. The local sequential checker exercises the review regressions and fails on axiom dependencies outside the allowlist. [Local checks](../scripts/check-sequential.sh) · [Proof roadmap](proof-roadmap.md)
+
+## Compaction performance handoff
+
+The handoff records the first unmeasured experiment, a whole-loop v3 writer, and the smaller runtime and compiler alternatives. It points to the existing C prototypes, byte and snapshot contracts, pinned benchmark harness, and raw results. [Resume write-path optimization](compaction.md#resuming-write-path-optimization)
+
+## Packed table and local durability
+
+`PackedTable` refines the sequential snapshot model for writes, handle lifecycle, lookup, range, flush and compaction. Read workers binary-seek within packed v3 runs. Flush appends rows into a byte array and matches the canonical v3 encoding. The differential harness compares histories and reads against `SnapshotTable` in a fixed scenario and 512 generated operations. Packed reclamation remains a separate integration task. [Packed table](../lean/PackedTable.lean) · [Differential fixtures](../lean/PackedTableChecks.lean)
+
+`DiskTable` adds checksummed WAL frames, validated manifests, immutable checkpoint generations, and Linux reopen. The codecs have byte-exact round trips. Replay proofs cover acknowledged prefixes, torn tails and the suffix above an installed checkpoint. Local fixtures cover reopen after compaction, persisted floors, malformed frames, torn-tail repair and interrupted manifest publication. The adapter keeps old runs and WAL entries. The next persistence obligations are a filesystem crash model, safe cleanup, and checksums for run payloads. [Engine API and protocol](architecture.md#sequential-storage) · [Local checks](../scripts/check-sequential.sh)
+
+The disk proof roadmap now spells out database identity, crash and retry durability, complete checkpoint publication, corruption handling, and snapshot session isolation. The native replay benchmark measures reopening ascending, descending and shuffled WALs. The initial 20,000-record medians were 1,328 ms, 4.89 ms and 857 ms respectively. The local comparison command retains raw samples and can flag a slowdown against a saved baseline. [Disk proof obligations](proof-roadmap.md#disk-guarantees-to-prove) · [Replay benchmark](benchmarks.md#disk-replay)
+
+The roadmap sets an end-to-end crash refinement target. The first milestone is recovery safety and progress across repeated crashes, followed by lifting snapshot guarantees to disk traces and proving safe reclamation. Later proof targets cover atomic batches and retries, resource bounds, backups, and format migration. [End-to-end storage guarantees](proof-roadmap.md#end-to-end-storage-guarantees)
+
+Garbage collection is an implementation milestone with separate safety and progress obligations. Old runs and WAL segments can be deleted once every recoverable state is covered, and version collection must preserve supported snapshot reads. The performance criteria cover proof erasure, replay work, retained space, and foreground latency during collection. [Garbage collection contract](proof-roadmap.md#garbage-collection-contract) · [Performance requirements](proof-roadmap.md#performance-requirements-for-verified-paths)
+
+## Disk path identity review
+
+The adapter resolves the canonical absolute directory before taking the lock and uses it for every file role. Lean proves working-directory independence, and the native fixture verifies that a write and checkpoint stay in the locked database after changing directories. Kernel rechecking, the axiom audit, and the sequential suite passed. The review recorded native replay timings before and after the change. The adapter relies on the canonical directory staying in place while open. [Verification status](verification-status.md#packed-output-and-merge) · [Replay measurements](benchmarks.md#canonical-database-path-at-open)
+
+The review found that `FilePath.pathExists` converts every metadata error to absence. The next recovery milestone must propagate lookup errors other than genuine absence, then make the visible WAL name and recovered prefix durable before open succeeds, including after an interrupted repair. [Disk proof obligations](proof-roadmap.md#disk-guarantees-to-prove)
+
+## Reopen sync and lookup fixes
+
+Open now checks WAL and manifest entries without following links, accepts absence only on `ENOENT`, and propagates other lookup errors. An aligned WAL and its directory are synced before open returns. Tail repair syncs a staged file before rename and syncs the directory before returning. Native fixtures inject repeated directory-sync failures during creation and after a repair rename, then verify that successful retry preserves acknowledged data. The audited `recoverCheckpoint_repair` theorem shows that the selected trimming operation preserves the entire replay result. [Recovery protocol](architecture.md#sequential-storage) · [Verification status](verification-status.md#packed-output-and-merge)
+
+The release benchmark measured roughly one millisecond of added latency on a 100-record reopen. The common path uses one GNU `sync` process for both targets. The filesystem model still needs to characterize crashes and failed operations as they affect file content and directory names, including a full-length damaged final frame. [Replay measurements](benchmarks.md#wal-sync-on-successful-reopen) · [Disk proof obligations](proof-roadmap.md#disk-guarantees-to-prove)
+
+## Atomic replacement crash model
+
+WAL-tail repair and manifest replacement now run a shared four-step sequence. The Lean model separates synced staged bytes from the live and crash-recoverable name bindings. It proves that a successful replacement settles the new bytes and that interruption at any cut, followed by arbitrary crashes and retries, preserves the WAL replay result when the initial candidate images agree. Native checks cover each cut and the actual sync failure and retry paths. The repair benchmark and its raw before and after samples cover the changed path. [Publication proof](../lean/DiskPublicationModel.lean) · [Repair benchmark](benchmarks.md#torn-wal-repair)
+
+The review isolated the remaining full-length torn-frame case. The codec theorem shows that a full invalid frame after valid records causes rejection. The next recovery proof needs the append and acknowledgment model and a durable boundary for selecting the bytes that must replay. [Disk proof obligations](proof-roadmap.md#disk-guarantees-to-prove)
+
+## Durable WAL boundary and checkpoint review
+
+`WAL.commit` selects the synced replay prefix. The Linux adapter publishes it after syncing the WAL and staged marker, and acknowledges after directory sync. The checked model shows that interruptions can select the old boundary or the complete new append. A successful publication fixes the new boundary. Native fixtures cover a full-sized damaged tail, a complete unacknowledged frame, corruption inside the boundary, migration, and failures on both sides of rename. [Append and publication proofs](../lean/WalBoundaryModel.lean) · [WAL format](specifications.md#durable-wal-boundary)
+
+The release median rose from 1.28 to 3.11 milliseconds per acknowledged write. This makes publication cost a concrete target for durable batches. The delegated review found that duplicate sequences in checksum-valid frames already covered by a checkpoint can pass the frame-count check. Replay currently verifies consecutive sequences above the checkpoint watermark. Whole-WAL sequence validation and the combined checkpoint and WAL crash proof remain open. [Measurements](benchmarks.md#durable-wal-boundary) · [Disk proof obligations](proof-roadmap.md#disk-guarantees-to-prove)

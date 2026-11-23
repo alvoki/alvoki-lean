@@ -111,3 +111,54 @@ name = "CodecVariants"
 
 [[lean_lib]]
 name = "SequentialModel"
+
+[[lean_lib]]
+name = "AxiomPolicy"
+
+[[lean_lib]]
+name = "SequentialPurge"
+
+[[lean_lib]]
+name = "SnapshotTable"
+
+[[lean_lib]]
+name = "CompactionRead"
+
+[[lean_lib]]
+name = "PackedTable"
+
+[[lean_lib]]
+name = "WriteAheadLog"
+
+[[lean_lib]]
+name = "Recovery"
+
+[[lean_lib]]
+name = "WalBoundary"
+
+[[lean_lib]]
+name = "Manifest"
+
+[[lean_lib]]
+name = "DiskPublication"
+
+[[lean_lib]]
+name = "DiskPublicationModel"
+
+[[lean_lib]]
+name = "WalBoundaryModel"
+
+[[lean_lib]]
+name = "DiskTable"
+
+[[lean_exe]]
+name = "alvoki-disk-checks"
+root = "DiskTableChecks"
+
+[[lean_exe]]
+name = "alvoki-disk-replay"
+root = "DiskReplayBench"
+
+[[lean_exe]]
+name = "alvoki-disk-write"
+root = "DiskWriteBench"

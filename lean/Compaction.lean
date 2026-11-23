@@ -226,6 +226,26 @@ private theorem keys_eq (run : Run) {i : USize} (within : i < run.count)
     show (16 : USize).toNat = 16 from USize.toNat_ofNat_of_lt_32 (by decide),
     show (24 : USize).toNat = 24 from USize.toNat_ofNat_of_lt_32 (by decide), Nat.mul_comm, and_self]
 
+/-- Read the packed key at an in-bounds cursor, or zero outside the run. -/
+@[inline] def Run.keyOrZero (run : @& Run) (i : USize) : UInt64 :=
+  if hit : i < run.count then key run i hit else 0
+
+theorem Run.keyOrZero_eq (run : Run) (i : USize) (hit : i < run.count)
+    (fits : run.bytes.size < USize.size) :
+    run.keyOrZero i = (rawRow run.bytes i.toNat).key := by
+  simp only [Run.keyOrZero, hit, dite_true, (keys_eq run hit fits).1]
+
+@[inline] def Run.rowAt (run : @& Run) (i : USize) (hit : i < run.count) :
+    Model.Entry (UInt64 × UInt64) :=
+  ⟨key run i hit, sequence run i hit, (kind run i, value run i)⟩
+
+theorem Run.rowAt_eq (run : Run) (i : USize) (hit : i < run.count)
+    (fits : run.bytes.size < USize.size) :
+    run.rowAt i hit = rawRow run.bytes i.toNat := by
+  have ⟨k, seq⟩ := keys_eq run hit fits
+  have ⟨tag, v⟩ := tagValue_eq run hit fits
+  simp only [Run.rowAt, k, seq, tag, v]
+
 private def rawSuffix (run : Run) (i : USize) : List (Model.Entry (UInt64 × UInt64)) :=
   (List.range' i.toNat (run.count.toNat - i.toNat)).map (rawRow run.bytes)
 

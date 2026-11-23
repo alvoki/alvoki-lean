@@ -28,3 +28,24 @@ The direct merged checksum scan consumes the same logical records without produc
 ## Experimental versioned runs
 
 The compaction experiment uses version 3, with a sequence and kind field for each entry. The workload specifies tombstone precedence, retention at the oldest snapshot, and visibility for later reads. [Versioned format and visibility](compaction.md#format-and-visibility)
+
+## WAL and checkpoint manifest
+
+Each frame and manifest occupies exactly 48 bytes. All fields use unsigned 64-bit little-endian words. The checksum is 64-bit FNV-1a over the first 40 bytes in storage order, with wrapping multiplication. It detects ordinary corruption and has no cryptographic guarantee.
+
+| Byte offset | WAL frame | Checkpoint manifest |
+|---:|---|---|
+| 0 | ASCII `ALVOWAL1` | ASCII `ALVOMNF1` |
+| 8 | Write sequence | Run generation |
+| 16 | Key | Committed sequence watermark |
+| 24 | Kind, `0` for put and `1` for delete | Retention floor at or below the watermark |
+| 32 | Value, exactly zero for a delete | Run count |
+| 40 | Checksum | Checksum |
+
+The committed part of the WAL is a concatenation of complete frames. Decode validates every frame passed to it and rejects unknown formats, bad checksums and noncanonical operation fields. Replay rejects gaps, duplicates and reordered writes in the suffix above the checkpoint watermark. The manifest indexes the ordered immutable v3 files from zero through `runCount - 1`. Opening a checkpoint requires all referenced files and verifies that their versions are at or below the watermark. [WAL codec](../lean/WriteAheadLog.lean) · [Manifest codec](../lean/Manifest.lean) · [Publication protocol](architecture.md#sequential-storage)
+
+### Durable WAL boundary
+
+`WAL.commit` is a 24-byte file containing three unsigned 64-bit little-endian words. They are the eight ASCII bytes `ALVOCMT1`, the committed WAL byte count, and the 64-bit FNV-1a checksum of the preceding 16 bytes. The count must be a multiple of 48 and at most the WAL file size. Replay validates exactly that prefix and checks that its frame count matches the recovered sequence. The current format retains all frames starting at sequence 1. If any bytes follow the committed prefix, reopen replaces the WAL with that prefix before accepting another write. Errors within the committed prefix fail recovery.
+
+An absent `WAL.commit` denotes an empty database or a legacy directory under the stable-directory assumptions. The adapter validates the legacy WAL using its existing short-tail rule, syncs the selected prefix, and installs the initial boundary before returning from open. A legacy WAL with a malformed full frame fails validation. Use an adapter that supports `WAL.commit` after this upgrade. [Boundary codec and selector](../lean/WalBoundary.lean)

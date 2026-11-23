@@ -8,7 +8,7 @@ structure Entry (α : Type) where
   key : UInt64
   sequence : UInt64
   payload : α
-  deriving Repr
+  deriving Repr, DecidableEq
 
 def Entry.mapPayload (f : α → β) (row : Entry α) : Entry β :=
   ⟨row.key, row.sequence, f row.payload⟩
@@ -493,9 +493,10 @@ theorem visibleRows_key_order {rows : List (Entry α)} (ordered : Ordered rows)
     subst b
     exact False.elim ((UInt64.lt_irrefl _) older)
 
-theorem visibleRows_congr {left right : List (Entry α)} (lo : Ordered left) (ro : Ordered right)
+theorem visibleRows_congr_visible {left right : List (Entry α)} (lo : Ordered left) (ro : Ordered right)
     (snapshot : UInt64) (put : α → Bool)
-    (same : ∀ key, winner left key snapshot = winner right key snapshot) :
+    (same : ∀ key, (winner left key snapshot).filter (fun row => put row.payload) =
+      (winner right key snapshot).filter (fun row => put row.payload)) :
     visibleRows left snapshot put = visibleRows right snapshot put := by
   have leftKeys := visibleRows_key_order lo snapshot put
   have rightKeys := visibleRows_key_order ro snapshot put
@@ -503,9 +504,19 @@ theorem visibleRows_congr {left right : List (Entry α)} (lo : Ordered left) (ro
     fun eq => (UInt64.lt_irrefl _) (eq ▸ h)
   have permutation := (List.perm_ext_iff_of_nodup (leftKeys.imp different)
     (rightKeys.imp different)).mpr (fun row => by
-      rw [mem_visibleRows lo, mem_visibleRows ro, same])
+      rw [mem_visibleRows lo, mem_visibleRows ro]
+      have shows (found : Option (Entry α)) :
+          (found.filter fun r => put r.payload) = some row ↔
+            found = some row ∧ put row.payload = true := Option.filter_eq_some_iff
+      rw [← shows (winner left row.key snapshot), ← shows (winner right row.key snapshot), same])
   apply permutation.eq_of_pairwise _ leftKeys rightKeys
   intro a b _ _ lt gt
   exact False.elim ((UInt64.lt_irrefl _) (UInt64.lt_trans lt gt))
+
+theorem visibleRows_congr {left right : List (Entry α)} (lo : Ordered left) (ro : Ordered right)
+    (snapshot : UInt64) (put : α → Bool)
+    (same : ∀ key, winner left key snapshot = winner right key snapshot) :
+    visibleRows left snapshot put = visibleRows right snapshot put :=
+  visibleRows_congr_visible lo ro snapshot put (fun key => congrArg (Option.filter (fun row => put row.payload)) (same key))
 
 end Alvoki.Compaction.Model
