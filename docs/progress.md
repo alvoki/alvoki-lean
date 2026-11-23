@@ -199,3 +199,7 @@ The audited proof links `prepareWrite` to the exact submitted key and value, the
 ## Abstract reads after selected-pair recovery
 
 The selected-pair theorem now combines the executable loader and replay with abstract writes and snapshot reads. If the supplied checkpoint refines an abstract state, recovery applies exactly the selected suffix and the abstract committed sequence equals the selected frame count. A newly acquired packed pin returns the abstract point and range results at every supported snapshot. The proof still requires the pair and its checkpoint to be compatible with the same reachable history. [Selected-pair refinement](../lean/Alvoki/Storage/Disk/DiskRecoveryModel.lean)
+
+## Disk snapshot session isolation
+
+Every successful disk open allocates a distinct session token. Disk handles keep their token alive and the adapter checks reference identity before using the local pin ID. The native fixture rejects stale and foreign point and range reads and checks that releasing either kind of handle leaves a matching live pin active. The fixture failed on the old adapter at the stale point read. The adapter relies on Lean's runtime identity contract for live references. Paired read timings and the reproduction harness are archived. [Disk adapter](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Native fixture](../lean/Alvoki/Checks/DiskTableChecks.lean) · [Read benchmark](benchmarks.md#disk-snapshot-session-identity)

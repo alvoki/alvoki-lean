@@ -1,0 +1,2 @@
+lookup: 111.18 -> 131.99 ns/op; pooled ratio 1.1872; median paired ratio 1.1284
+range: 609.49 -> 888.49 ns/op; pooled ratio 1.4578; median paired ratio 1.1011

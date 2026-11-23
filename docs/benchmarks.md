@@ -122,6 +122,17 @@ Seven interleaved native release trials per build timed `DiskTable.open` on a wa
 | Checkpointed | 50,000 | 16.891 ms | 16.577 ms |
 | Log only | 20,000 | 6.395 ms | 6.196 ms |
 
+### Disk snapshot session identity
+
+The disk read guard compares the handle's session token with the database's token before accessing the pin. Each native trial opens one checkpoint with a 256-row run, acquires a pin and warms both loops before timing. The loops perform 1,048,576 point reads and 131,072 eight-row ranges. The harness sums payloads and checks the totals after timing. Each core ran 14 pairs, alternating build order. The first run on CPU 4 had wider scheduling variation than the rerun on CPU 1. [Raw samples, harness and reproduction](../benchmarks/results/disk/session-handles)
+
+| Core | Read | Baseline median | Checked median | Median paired ratio |
+|---|---|---:|---:|---:|
+| 1 | Point | 116.17 ns | 116.50 ns | 1.028× |
+| 1 | Eight-row range | 592.64 ns | 604.31 ns | 1.024× |
+| 4 | Point | 111.18 ns | 131.99 ns | 1.128× |
+| 4 | Eight-row range | 609.49 ns | 888.49 ns | 1.101× |
+
 ### WAL sync process overhead
 
 In an interleaved native experiment with seven 64-write trials per mode, the old one-sync control took 1.17 ms per write and the durable-boundary reference took 2.58 ms per write. Lean launching and waiting for `/usr/bin/true` took 0.69 ms. This identifies process startup as a substantial part of the regression. A native control measured 0.63 ms for staging, all three sync calls, and rename without per-write process startup.
