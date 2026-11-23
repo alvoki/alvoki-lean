@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.DiskTable
-import Alvoki.Storage.Disk.WalBoundaryModel
+import Alvoki.Storage.Disk.MarkedWalReopenModel
 
 namespace Alvoki.Storage
 open Alvoki.Compaction (CheckedRun)
@@ -115,3 +115,63 @@ theorem recoverWriteCutSelectedPair {manifest marker : Option ByteArray} {files 
     simpa only [refined.table] using agrees.symm.acquireAt_reads floor committed
 
 end Alvoki.Storage
+
+namespace Alvoki.WAL.Boundary
+open Storage
+
+/-- Expected WAL contents for a selectable pair after an interrupted write.
+At such a pair the marker is well formed, and its count is either the old or
+the extended WAL length. -/
+def writeCutPrefix (before : List WAL.Write) (event : WAL.Write)
+    (pair : DirectoryPublication.Bindings) : ByteArray :=
+  match pair.walBoundary.map decode with
+  | some (.ok count) =>
+    if count.toNat = (WAL.encode before).size then WAL.encode before
+    else WAL.encode (before ++ [event])
+  | _ => WAL.encode before
+
+/-- Begin the marked reopen proof when each physical WAL candidate comes
+from a write cut accounting for the same visible and crash-selectable
+markers. Staging can differ because it does not select the replay prefix. -/
+theorem ReopenImage.valid_of_writeCut {image : ReopenImage}
+    {before : List WAL.Write} {event : WAL.Write}
+    (survives : image.wal.crashImages ≠ [])
+    (fits : (WAL.encode (before ++ [event])).size < UInt64.size)
+    (physical : ∀ binding ∈ image.wal.active :: image.wal.crashImages,
+      ∃ contents markerImage, binding = some contents ∧ WriteCut before event contents markerImage ∧
+        markerImage.active = image.directory.active.walBoundary ∧
+        ∀ pair ∈ image.directory.crashImages, pair.walBoundary ∈ markerImage.crashImages) :
+    image.Valid (writeCutPrefix before event) := by
+  have grows : (WAL.encode before).size < (WAL.encode (before ++ [event])).size := by
+    simp [WAL.frameSize, Nat.mul_add]
+  have accept (binding : Option ByteArray) (possible : binding ∈ image.wal.active :: image.wal.crashImages) :
+      ∀ pair ∈ image.directory.active :: image.directory.crashImages,
+        ∃ marker contents length, pair.walBoundary = some marker ∧ binding = some contents ∧
+          decode marker = .ok length ∧ select length contents = .ok (writeCutPrefix before event pair) := by
+    obtain ⟨contents, markerImage, present, cut, visible, candidates⟩ := physical binding possible
+    intro pair chosen
+    have markerChosen : pair.walBoundary = markerImage.active ∨ pair.walBoundary ∈ markerImage.crashImages := by
+      rcases List.mem_cons.mp chosen with rfl | afterCrash
+      · exact Or.inl visible.symm
+      · exact Or.inr (candidates pair afterCrash)
+    obtain ⟨marker, events, bound, history, selected⟩ :=
+      write_cut_selects_old_or_new cut (Nat.lt_trans grows fits) fits markerChosen
+    cases decoded : decode marker with
+    | error message =>
+      rw [decoded] at selected
+      contradiction
+    | ok length =>
+      rw [decoded] at selected
+      change select length contents = .ok (WAL.encode events) at selected
+      have count := select_size selected
+      refine ⟨marker, contents, length, bound, present, decoded, ?_⟩
+      rw [selected]
+      congr 1
+      rcases history with rfl | rfl
+      · simp only [writeCutPrefix, bound, Option.map_some, decoded, ite_eq_left count.symm]
+      · have larger : (WAL.encode before).size < length.toNat := count ▸ grows
+        simp only [writeCutPrefix, bound, Option.map_some, decoded, ite_eq_right (Nat.ne_of_gt larger)]
+  exact ⟨survives, accept _ (List.mem_cons_self ..),
+    fun binding possible => accept binding (List.mem_cons_of_mem _ possible)⟩
+
+end Alvoki.WAL.Boundary

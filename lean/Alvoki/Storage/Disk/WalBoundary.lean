@@ -51,6 +51,11 @@ private theorem select_eq_ok_iff {length : UInt64} {wal selected : ByteArray} :
     · simp [select, aligned, enough, Nat.lt_of_not_ge enough]
   · simp [select, aligned]
 
+theorem select_size {length : UInt64} {wal selected : ByteArray}
+    (accepted : select length wal = .ok selected) : selected.size = length.toNat := by
+  obtain ⟨_, fits, rfl⟩ := select_eq_ok_iff.mp accepted
+  simp [Nat.min_eq_left fits]
+
 /-- Trimming to the currently visible marker preserves selection at any still
 possible marker whose length is at most the visible length. -/
 theorem select_shorter_after_trim {shorter length : UInt64} {wal trimmed : ByteArray}
