@@ -59,6 +59,7 @@ import CheckpointPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_complete
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_retry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.unreachable_after_reopen
+#check_axioms Alvoki.Storage.CheckpointPublication.Image.next_generation_unreachable_after_reopen
 #check_axioms Alvoki.Storage.Publication.run_model_success
 #check_axioms Alvoki.Storage.Publication.retry_preserves
 #check_axioms Alvoki.Storage.Publication.repair_retry_preserves_replay

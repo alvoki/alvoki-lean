@@ -133,3 +133,7 @@ Delegated native measurements isolated the cost of launching GNU `sync` during e
 ## Independent Lean readability review
 
 The reviewer identifies changes against a pinned checkout and rechecks the exact candidate commit from the implementer's isolated branch. The first approved change uses `IO.ofExcept`, keeps partial checkpoint data separate from the installed state, and names the three crash invariant facts. A comment explains why both recovery paths sync the directory before returning a handle. The integrated proof audit, native fault checks, and reproduction suite passed. Same-machine timing checks included an interleaved rerun of the checkpoint comparison. [Agent workflow](../AGENTS.md#agent-work-and-review) · [Timings](benchmarks.md#lean-readability-review)
+
+## Checkpoint generation after reopen
+
+The checkpoint model now proves that the next generation calculated by the adapter is unreachable after reopen settles the visible manifest. The theorem covers bootstrap and an existing decoded manifest and uses the same overflow guard as the adapter. The next composition proof must establish the model's settlement and WAL coverage premises across real engine traces. [Generation proof](../lean/CheckpointPublicationModel.lean)
