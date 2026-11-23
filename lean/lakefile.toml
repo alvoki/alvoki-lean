@@ -146,6 +146,12 @@ name = "DiskPublication"
 name = "DiskPublicationModel"
 
 [[lean_lib]]
+name = "CheckpointPublication"
+
+[[lean_lib]]
+name = "CheckpointPublicationModel"
+
+[[lean_lib]]
 name = "WalBoundaryModel"
 
 [[lean_lib]]
@@ -162,3 +168,7 @@ root = "DiskReplayBench"
 [[lean_exe]]
 name = "alvoki-disk-write"
 root = "DiskWriteBench"
+
+[[lean_exe]]
+name = "alvoki-disk-checkpoint"
+root = "DiskCheckpointBench"

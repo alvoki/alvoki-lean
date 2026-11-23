@@ -2,6 +2,7 @@ import AxiomPolicy
 import DiskTable
 import DiskPublicationModel
 import WalBoundaryModel
+import CheckpointPublicationModel
 
 #check_axioms Alvoki.Sequential.SnapshotPins.floor_check_cost
 #check_axioms Alvoki.Sequential.SnapshotPins.advance_iff
@@ -51,6 +52,13 @@ import WalBoundaryModel
 #check_axioms Alvoki.Storage.DiskDirectory.paths_independent_of_cwd
 #check_axioms Alvoki.Storage.loadRunSet_written
 #check_axioms Alvoki.Storage.recoverRunSet_written
+#check_axioms Alvoki.Storage.replay_committed_count
+#check_axioms Alvoki.Storage.recoverSelected_encoded
+#check_axioms Alvoki.Storage.recoverRunSet_committedBoundary
+#check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_cut_valid
+#check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_complete
+#check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_retry_valid
+#check_axioms Alvoki.Storage.CheckpointPublication.Image.unreachable_after_reopen
 #check_axioms Alvoki.Storage.Publication.run_model_success
 #check_axioms Alvoki.Storage.Publication.retry_preserves
 #check_axioms Alvoki.Storage.Publication.repair_retry_preserves_replay

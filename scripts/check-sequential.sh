@@ -8,7 +8,8 @@ export PATH="$ELAN_HOME/bin:$PATH"
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 cd lean
-lake build AxiomPolicy RunMergeProofs CodecVariants DiskTable DiskPublicationModel WalBoundaryModel
+lake build AxiomPolicy RunMergeProofs CodecVariants DiskTable DiskPublicationModel WalBoundaryModel \
+  CheckpointPublicationModel
 {
   printf 'import AxiomPolicy\n'
   sed 's/^#print axioms /#check_axioms /' ProofRoadmapAudit.lean
@@ -38,6 +39,7 @@ lake env leanchecker DiskTable
 lake env leanchecker DiskPublicationModel
 lake env leanchecker WalBoundary
 lake env leanchecker WalBoundaryModel
+lake env leanchecker CheckpointPublicationModel
 lake env lean --run SequentialChecks.lean
 lake env lean --run PackedTableChecks.lean
 lake exe alvoki-disk-checks

@@ -35,6 +35,46 @@ theorem replay_prepared {state next : PackedTable} {key : UInt64} {value : Optio
   unfold replayWrite prepareWrite
   simp [success]
 
+private theorem replayWrite_advances {state result : PackedTable} {event : Write}
+    (applied : replayWrite state event = .ok result) :
+    result.committed.toNat = state.committed.toNat + 1 := by
+  unfold replayWrite prepareWrite at applied
+  cases written : state.write event.key event.value with
+  | none => simp [written] at applied
+  | some next =>
+    simp only [written, Option.map_some] at applied
+    split at applied
+    · cases applied
+      unfold PackedTable.write at written
+      split at written
+      · rename_i fits
+        cases written
+        exact UInt64.toNat_ofNat_of_lt' fits
+      · contradiction
+    · contradiction
+
+theorem replay_committed_count {state result : PackedTable} (events : List Write)
+    (applied : replay state events = .ok result) :
+    result.committed.toNat = state.committed.toNat + events.length := by
+  induction events generalizing state with
+  | nil =>
+    change Except.ok state = Except.ok result at applied
+    cases applied
+    simp
+  | cons event rest ih =>
+    unfold replay at applied
+    rw [List.foldlM_cons] at applied
+    cases step : replayWrite state event with
+    | error message =>
+      rw [step] at applied
+      change Except.error message = Except.ok result at applied
+      contradiction
+    | ok next =>
+      rw [step] at applied
+      change replay next rest = .ok result at applied
+      simp only [ih applied, replayWrite_advances step, List.length_cons]
+      omega
+
 theorem replay_append {initial committed : PackedTable} {acknowledged : List Write}
     (safe : replay initial acknowledged = .ok committed) (extra : List Write) :
     replay initial (acknowledged ++ extra) = replay committed extra := by
@@ -101,6 +141,12 @@ def recoverCheckpoint (state : PackedTable) (bytes : ByteArray) : Except String 
   | .error message => .error message
   | .ok events => replay state (afterCheckpoint state.committed events)
 
+/-- The current disk format keeps all selected frames, starting at sequence 1. -/
+def recoverSelected (state : PackedTable) (bytes : ByteArray) : Except String PackedTable := do
+  let table ← recoverCheckpoint state bytes
+  if table.committed.toNat == bytes.size / frameSize then .ok table
+  else .error "selected WAL frame count disagrees with the recovered sequence"
+
 theorem recoverCheckpoint_repair (state : PackedTable) (bytes : ByteArray) :
     recoverCheckpoint state ((WAL.repairPrefix bytes).getD bytes) = recoverCheckpoint state bytes := by
   simp only [recoverCheckpoint, WAL.decode_repairPrefix]
@@ -122,6 +168,25 @@ theorem recoverCheckpoint_suffix (state : PackedTable) (installed later : List W
   have new : later.filter (fun event => decide (state.committed < event.sequence)) = later :=
     List.filter_eq_self.mpr fun e mem => decide_eq_true (pending e mem)
   simp [old, new]
+
+theorem recoverSelected_encoded (state : PackedTable) (covered pending : List Write)
+    (old : ∀ e ∈ covered, e.sequence ≤ state.committed)
+    (new : ∀ e ∈ pending, state.committed < e.sequence)
+    (count : covered.length = state.committed.toNat) :
+    recoverSelected state (WAL.encode (covered ++ pending)) = replay state pending := by
+  have decoded := recoverCheckpoint_suffix state covered pending old new ByteArray.empty (by decide)
+  rw [ByteArray.append_empty] at decoded
+  unfold recoverSelected
+  rw [decoded]
+  cases applied : replay state pending with
+  | error => rfl
+  | ok table =>
+    have frames : (WAL.encode (covered ++ pending)).size / frameSize = covered.length + pending.length := by
+      rw [WAL.encode_size, Nat.mul_div_cancel_left _ (by decide : 0 < frameSize), List.length_append]
+    have guard : table.committed.toNat = (WAL.encode (covered ++ pending)).size / frameSize := by
+      rw [replay_committed_count pending applied, ← count, frames]
+    change (if table.committed.toNat == _ then Except.ok table else Except.error _) = _
+    simp [guard]
 
 /-- Reopening a flushed run set and replaying the durable suffix preserves
 the committed data and floor, including when a final frame is incomplete. -/

@@ -238,7 +238,7 @@ for path do
 done
 "#
 
-private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (write := false)
+private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation := "--open-once")
     (skipFailures : Nat := 0) : IO (Bool × List String) := do
   let log := bin / "sync.log"
   IO.FS.writeFile log ""
@@ -246,7 +246,7 @@ private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (write := 
   let executable ← IO.appPath
   let result ← IO.Process.output {
     cmd := executable.toString
-    args := #[if write then "--write-once" else "--open-once", dir.toString]
+    args := #[operation, dir.toString]
     env := #[("PATH", some (bin.toString ++ ":" ++ path)),
       ("ALVOKI_CHECK_SYNC_LOG", some log.toString),
       ("ALVOKI_CHECK_SYNC_FAIL", failAt.map FilePath.toString),
@@ -254,13 +254,17 @@ private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (write := 
   let paths := (← IO.FS.readFile log).splitOn "\n" |>.filter (!·.isEmpty)
   return (result.exitCode == 0, paths)
 
-private def checkRetrySync (root : FilePath) : IO Unit := do
+private def syncFixtureBin (root : FilePath) : IO FilePath := do
   let bin := root / "bin"
   IO.FS.createDir bin
   let wrapper := bin / "sync"
   IO.FS.writeFile wrapper syncFixture
   let chmod ← IO.Process.output { cmd := "chmod", args := #["+x", "--", wrapper.toString] }
   check (chmod.exitCode == 0) "could not make sync fault fixture executable"
+  return bin
+
+private def checkRetrySync (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
   let dir := root / "db"
   IO.FS.createDir dir
   let wal := dir / "WAL"
@@ -286,7 +290,7 @@ private def checkRetrySync (root : FilePath) : IO Unit := do
   check (!opened && syncs == expected) "repair retry skipped sync for an aligned WAL"
   let (opened, syncs) ← probeDisk bin dir none
   check (opened && syncs == expected) "successful repair retry skipped the recovery sync"
-  let (written, syncs) ← probeDisk bin dir (some stagedBoundary) (write := true)
+  let (written, syncs) ← probeDisk bin dir (some stagedBoundary) (operation := "--write-once")
   check (!written && syncs == expected ++ [wal.toString, stagedBoundary.toString])
     "fixture did not fail after WAL sync and before durable boundary publication"
   check ((← IO.FS.readBinFile wal).size == acknowledged.size + WAL.frameSize)
@@ -298,7 +302,7 @@ private def checkRetrySync (root : FilePath) : IO Unit := do
       "repair retry lost its acknowledged prefix"
     check ((← recovered.write 7 (some 61)) == 2) "append after repair retry used the wrong sequence"
   finally recovered.close
-  let (written, syncs) ← probeDisk bin dir (some dir) (write := true) (skipFailures := 1)
+  let (written, syncs) ← probeDisk bin dir (some dir) (operation := "--write-once") (skipFailures := 1)
   check (!written && syncs == expected ++ [wal.toString, stagedBoundary.toString, dir.toString])
     "fixture did not fail after the boundary rename"
   let recovered ← DiskTable.open dir
@@ -307,6 +311,83 @@ private def checkRetrySync (root : FilePath) : IO Unit := do
     check (pin.sequence == 3 && (← recovered.lookup pin.handle 7) == some (some 99))
       "reopen did not settle the visible boundary after failed directory sync"
   finally recovered.close
+
+private def checkFirstCheckpointCuts (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 4 (some 40)) == 1) "unexpected initial checkpoint sequence"
+  finally db.close
+  let run := dir / "run-1-0.v3"
+  let staged := dir / "MANIFEST.next"
+  let beforePublish := [(dir / "WAL").toString, dir.toString, run.toString, dir.toString]
+  let (published, syncs) ← probeDisk bin dir (some dir) (operation := "--checkpoint-once") (skipFailures := 1)
+  check (!published && syncs == beforePublish) "first checkpoint did not stop at the run directory sync"
+  check (!(← (dir / "MANIFEST").pathExists)) "first checkpoint installed a manifest before its runs were synced"
+  let (published, syncs) ← probeDisk bin dir (some dir) (operation := "--checkpoint-once") (skipFailures := 2)
+  check (!published && syncs == beforePublish ++ [staged.toString, dir.toString])
+    "first checkpoint did not reach the directory sync after manifest rename"
+  expectManifest dir 1 1 0 1
+  let reopened ← DiskTable.open dir
+  try
+    let pin ← reopened.acquire
+    check (pin.sequence == 1 && (← reopened.lookup pin.handle 4) == some (some 40))
+      "reopen lost the first checkpoint after its manifest rename"
+  finally reopened.close
+  expectManifest dir 1 1 0 1
+
+private def checkCheckpointRetryWithFewerRuns (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let db ← DiskTable.open dir
+  try
+    let _ ← db.write 4 (some 40)
+    db.checkpoint
+    let _ ← db.write 7 (some 70)
+    db.checkpoint
+    let _ ← db.write 4 (some 41)
+    let _ ← db.write 7 none
+  finally db.close
+  let wal := dir / "WAL"
+  let boundary := dir / "WAL.commit"
+  let originalWal ← IO.FS.readBinFile wal
+  let originalBoundary ← IO.FS.readBinFile boundary
+  let paths := [dir / "run-3-0.v3", dir / "run-3-1.v3", dir / "run-3-2.v3", dir, dir / "MANIFEST.next"]
+  for (target, cut) in paths.zipIdx do
+    let skip := if target == dir then 1 else 0
+    let (published, syncs) ← probeDisk bin dir (some target) (operation := "--checkpoint-once") (skipFailures := skip)
+    let expected := [wal.toString, dir.toString] ++ (paths.take (cut + 1)).map FilePath.toString
+    check (!published && syncs == expected) s!"checkpoint did not stop at sync for {target}"
+    expectManifest dir 2 2 0 2
+  check (decide ((← IO.FS.readBinFile wal) = originalWal ∧ (← IO.FS.readBinFile boundary) = originalBoundary))
+    "failed checkpoint changed the acknowledged WAL"
+  let orphan := dir / "run-3-2.v3"
+  check (← orphan.pathExists) "failed publication did not leave a third run in the orphan generation"
+  let reopened ← DiskTable.open dir
+  try
+    let latest ← reopened.acquire
+    check (latest.sequence == 4 && (← reopened.lookup latest.handle 4) == some (some 41))
+      "old checkpoint did not replay its acknowledged suffix"
+    check (← reopened.compact 0) "could not compact before reusing the orphan generation"
+    reopened.checkpoint
+    expectManifest dir 3 4 0 2
+  finally reopened.close
+  -- A stale file beyond the installed run count must not affect reopen.
+  IO.FS.writeBinFile orphan ByteArray.empty
+  let final ← DiskTable.open dir
+  try
+    let some historical ← final.acquireAt 2 | throw (IO.userError "reopen lost the pre-compaction snapshot")
+    check ((← final.lookup historical.handle 4) == some (some 40) &&
+      (← final.lookup historical.handle 7) == some (some 70)) "retry changed historical values"
+    let latest ← final.acquire
+    check (latest.sequence == 4 && (← final.lookup latest.handle 4) == some (some 41) &&
+      (← final.lookup latest.handle 7) == some none) "reopen with the shorter run set changed latest values"
+    check ((← final.range latest.handle 0 8).map (List.map (·.key)) == some [4])
+      "reopen with the shorter run set changed the latest range"
+  finally final.close
 
 private def checkPublicationCuts : IO Unit := do
   let events : List WAL.Write := [⟨1, 7, some 60⟩]
@@ -334,6 +415,9 @@ def main (args : List String) : IO Unit := do
     try
       let _ ← db.write 7 (some 99)
     finally db.close
+  | ["--checkpoint-once", dir] =>
+    let db ← DiskTable.open ⟨dir⟩
+    try db.checkpoint finally db.close
   | [] =>
     checkCodecs
     checkPublicationCuts
@@ -344,5 +428,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkDirectoryIdentity
     IO.FS.withTempDir checkDanglingFiles
     IO.FS.withTempDir checkRetrySync
-    IO.println "Passed disk identity, publication cuts, durable WAL boundaries, and sync retry checks."
+    IO.FS.withTempDir checkFirstCheckpointCuts
+    IO.FS.withTempDir checkCheckpointRetryWithFewerRuns
+    IO.println "Passed disk identity, WAL boundaries, checkpoint cuts, and sync retry checks."
   | _ => throw (IO.userError "unexpected disk fixture arguments")

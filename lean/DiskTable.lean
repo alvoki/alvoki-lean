@@ -1,6 +1,6 @@
 import WalBoundary
 import Manifest
-import DiskPublication
+import CheckpointPublication
 
 namespace Alvoki.Storage
 open System Alvoki.Compaction
@@ -95,18 +95,16 @@ private def writeFlushed (path : FilePath) (content : ByteArray) : IO Unit := do
   file.write content
   file.flush
 
-private def writeAndSync (path : FilePath) (content : ByteArray) : IO Unit := do
-  writeFlushed path content
-  syncPath path
+private def performReplacement (dir : DiskDirectory) (stagedPath : FilePath) (active : DiskFile)
+    (bytes : ByteArray) (alsoSync : Array FilePath) : Publication.Step → IO Unit
+  | .writeStaged => writeFlushed stagedPath bytes
+  | .syncStaged => syncPaths (alsoSync.push stagedPath)
+  | .renameStaged => IO.FS.rename stagedPath (dir.file active)
+  | .syncDirectory => syncPath dir.path
 
 private def atomicReplace (dir : DiskDirectory) (staged active : DiskFile) (bytes : ByteArray)
-    (alsoSync : Array FilePath := #[]) : IO Unit := do
-  let stagedPath := dir.file staged
-  Publication.run fun
-    | .writeStaged => writeFlushed stagedPath bytes
-    | .syncStaged => syncPaths (alsoSync.push stagedPath)
-    | .renameStaged => IO.FS.rename stagedPath (dir.file active)
-    | .syncDirectory => syncPath dir.path
+    (alsoSync : Array FilePath := #[]) : IO Unit :=
+  Publication.run (performReplacement dir (dir.file staged) active bytes alsoSync)
 
 private def publishWalBoundary (dir : DiskDirectory) (bytes : Nat) (alsoSync : Array FilePath := #[]) : IO Unit :=
   atomicReplace dir .stagedWalBoundary .walBoundary (WAL.Boundary.encode bytes.toUInt64) alsoSync
@@ -191,6 +189,40 @@ theorem recoverRunSet_written {checkpoint committed : PackedTable} (generation :
   rw [loads]
   exact recovered
 
+/-- The exact checkpoint and durable WAL bytes pass the native loader and
+frame-count guard. Bytes beyond the durable marker do not affect either. -/
+theorem recoverRunSet_committedBoundary {checkpoint committed : PackedTable} (generation : UInt64)
+    (fits : checkpoint.runs.length < UInt64.size)
+    (flushed : checkpoint.memory = Alvoki.Sequential.History.empty)
+    (floor : checkpoint.pins.floor ≤ checkpoint.committed)
+    (bounded : ∀ run ∈ checkpoint.runs, ∀ row ∈ run.history.rows, row.sequence ≤ checkpoint.committed)
+    (covered pending : List WAL.Write)
+    (old : ∀ event ∈ covered, event.sequence ≤ checkpoint.committed)
+    (new : ∀ event ∈ pending, checkpoint.committed < event.sequence)
+    (count : covered.length = checkpoint.committed.toNat)
+    (applied : replay checkpoint pending = .ok committed) (tail : ByteArray)
+    (walFits : (WAL.encode (covered ++ pending)).size < UInt64.size) :
+    let header := checkpointHeader checkpoint generation
+    let files := checkpoint.runs.map (·.run.bytes)
+    let wal := WAL.encode (covered ++ pending)
+    ∃ restored reopened,
+      loadRunSet header files = .ok restored ∧
+      WAL.Boundary.select wal.size.toUInt64 (wal ++ tail) = .ok wal ∧
+      recoverSelected restored wal = .ok reopened ∧
+      reopened.SameData committed := by
+  let header := checkpointHeader checkpoint generation
+  have runCount : checkpoint.runs.length = header.runCount.toNat :=
+    (UInt64.toNat_ofNat_of_lt' fits).symm
+  obtain ⟨restored, loads, physical⟩ := loadRunSet_written header checkpoint.runs runCount floor bounded
+  have same := PackedTable.restore_sameData flushed physical
+  obtain ⟨reopened, replayed, reference⟩ := replay_sameData same pending applied
+  have accepted := recoverSelected_encoded restored covered pending
+    (by simpa only [same.committed] using old)
+    (by simpa only [same.committed] using new)
+    (by simpa only [same.committed] using count)
+  exact ⟨restored, reopened, loads, WAL.Boundary.select_encoded (covered ++ pending) tail walFits,
+    accepted.trans replayed, reference⟩
+
 private def readOptionalFile (path : FilePath) : IO (Option ByteArray) := do
   match ← path.symlinkMetadata.toBaseIO with
   | .ok metadata =>
@@ -228,9 +260,7 @@ private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTabl
   let selected ← match boundary with
     | some count => fromExcept (WAL.Boundary.select count bytes)
     | none => pure ((WAL.repairPrefix bytes).getD bytes)
-  let table ← fromExcept (recoverCheckpoint base.table selected)
-  unless table.committed.toNat == selected.size / WAL.frameSize do
-    throw (IO.userError "selected WAL frame count disagrees with the recovered sequence")
+  let table ← fromExcept (recoverSelected base.table selected)
   if selected.size < bytes.size then
     atomicReplace dir .stagedWal .wal selected
   else
@@ -325,12 +355,17 @@ def DiskTable.checkpoint (db : DiskTable) : IO Unit := do
   unless next < UInt64.size ∧ count < UInt64.size do
     throw (IO.userError "checkpoint generation or run count is too large")
   let generation := UInt64.ofNat next
-  let manifest := checkpointHeader table generation
+  let runs := table.runs.toArray
+  let manifestBytes := Manifest.encode (checkpointHeader table generation)
+  let stagedManifest := db.dir.file .stagedManifest
   db.phase.set .poisoned
-  for (run, index) in table.runs.zipIdx do
-    writeAndSync (db.dir.file (.run generation index)) run.run.bytes
-  syncPath db.dir.path
-  atomicReplace db.dir .stagedManifest .manifest (Manifest.encode manifest)
+  CheckpointPublication.run runs.size fun
+    | .writeRun index => do
+      let run ← fromOption runs[index]? "checkpoint run index is out of bounds"
+      writeFlushed (db.dir.file (.run generation index)) run.run.bytes
+    | .syncRun index => syncPath (db.dir.file (.run generation index))
+    | .syncRunsDirectory => syncPath db.dir.path
+    | .manifest step => performReplacement db.dir stagedManifest .manifest manifestBytes #[] step
   db.phase.set (.ready { state with table, generation })
 
 end Alvoki.Storage
