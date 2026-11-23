@@ -237,3 +237,7 @@ The native fixture makes the aligned reopen sync fail after actually syncing onl
 ## Write-cut witnesses from ordered write effects
 
 The write model executes the same append and publication schedules as the adapter in a monad that retains state on error. Failed append, staging or grouped sync cannot reach rename. A grouped sync error records WAL durability and staged-marker durability independently. The rename and directory sync can report an error before or after applying their effect. `runWriteEffects_hasWriteCuts` derives the existing physical and marker witnesses for every visible and crash-surviving WAL candidate. A successful execution settles the extended marker and exact encoded frame. [Write-effect model](../lean/Alvoki/Storage/Disk/WalWritePublicationModel.lean)
+
+## Failed checkpoint read leaves the pending repair untouched
+
+The native fixture presents a directory at an installed run path while a complete unselected WAL frame awaits repair. The run read returns `EISDIR`. A failed open issues no sync and preserves the WAL, marker, manifest and staging paths. With the exact run bytes restored, the retry follows the repair sync sequence, trims only the unselected frame, and preserves the latest and retained snapshot reads. [Read-error fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)
