@@ -12,7 +12,7 @@ Alvoki explores formally verified storage primitives in native Lean 4. The exper
 
 ## Stock Lean API
 
-Import `PackedRun` and use `Alvoki.Packed.parseRun` to validate a version-1 block. The returned run supports checked record access, lookup, and half-open range checksums. `Alvoki.Packed.merge` produces the version-1 right-biased union. Import `FusedMerge` to fold that union directly with `Alvoki.FusedMerge.scan`. [Implementation and proof boundaries](docs/verification-status.md)
+Import `PackedRun` and use `Alvoki.Packed.parseRun` to validate a version-1 block. The returned run supports checked record access, lookup, and half-open range checksums. `Alvoki.Packed.merge` produces the version-1 right-biased union, and `Alvoki.Packed.scanMerged` folds it directly. Import `SpanMerge` for the proved span writer or `BlockCodec` for the round-trip-checked v1 encoder and decoder. [Implementation and proof boundaries](docs/verification-status.md)
 
 ## Reproduce on Linux x86-64
 
@@ -102,3 +102,14 @@ python3 benchmarks/fused_merge.py --summarize /tmp/alvoki-fused-merge.csv
 ```
 
 [Stock Lean timings, peak memory, and correctness checks](docs/fused-merge.md)
+
+## Versioned compaction experiment
+
+Compare stock Lean and Rust compaction over versioned runs with tombstones and an oldest retained snapshot. The optional fixed-copy build measures the existing native specialization on the same workload.
+
+```sh
+bash scripts/compaction.sh --fixed-copy --out /tmp/alvoki-compaction.csv
+python3 benchmarks/compaction.py --summarize /tmp/alvoki-compaction.csv
+```
+
+[Compaction semantics and results](docs/compaction.md)

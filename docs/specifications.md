@@ -24,3 +24,7 @@ Version 2 is exercised through the separate optimization binaries. The experimen
 Given two valid version-1 runs, a materialized merge produces a version-1 block containing each key in either input exactly once, in strictly increasing unsigned order. When a key is present in both inputs, the output uses the right input's value. Otherwise it uses the value from the only input containing that key. Either run may be empty.
 
 The direct merged checksum scan consumes the same logical records without producing a block. It sums each record's key XOR value with wrapping 64-bit addition. The replay benchmark accepts a supplied sequence of cursor moves only when each move matches the ordered, right-biased choice at the two current heads and the moves consume both runs completely. [Verification status](verification-status.md)
+
+## Experimental versioned runs
+
+The compaction experiment uses version 3, with a sequence and kind field for each entry. The workload specifies tombstone precedence, retention at the oldest snapshot, and visibility for later reads. [Versioned format and visibility](compaction.md#format-and-visibility)

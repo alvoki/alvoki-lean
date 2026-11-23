@@ -1,0 +1,44 @@
+Candidate revision: 71abc32aee49b8e2c02fa0eb9581206e70dcaa93
+Paired baseline revision: 511fb143524e40a309f1df17b8faeeb5a71003ce
+UTC 2026-11-23 13:50:20
+Linux 6.18.57 x86_64 GNU/Linux
+CPU(s):                                  5
+Model name:                              AMD EPYC 9V74 80-Core Processor
+Hypervisor vendor:                       KVM
+Virtualization type:                     full
+L1d cache:                               96 KiB (3 instances)
+L1i cache:                               96 KiB (3 instances)
+L2 cache:                                3 MiB (3 instances)
+L3 cache:                                32 MiB (1 instance)
+cpu.max = 400000 100000
+memory.max = 17179869184
+Python 3.12.14
+Lake version 5.0.0-src+611c117 (Lean version 4.36.0)
+Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)
+clang version 23.1.1 (https://github.com/llvm/llvm-project 6dfe1677ab8dffbc6ec13d53a1e0215d75147689)
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /workspace/work/toolchains/elan/toolchains/leanprover--lean4---v4.36.0/bin
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+cargo 1.100.0 (3acc79c0c 2026-11-05)
+Verus
+  Version: 0.2026.11.22.1ce6a59
+  Profile: release
+  Platform: linux_x86_64
+  Toolchain: 1.100.0-x86_64-unknown-linux-gnu (overridden by environment variable RUSTUP_TOOLCHAIN)
+
+
+Commands from the Alvoki root
+bash scripts/check.sh
+bash scripts/check.sh --runtime
+bash scripts/compaction.sh --fixed-copy --out /tmp/alvoki-compaction.csv --sizes 100000 1000000 --trials 9
+bash scripts/fused-merge.sh --out /tmp/alvoki-v1-fused.csv --sizes 1000000 --trials 9
+before=$(mktemp -d)
+git archive 511fb14 | tar -x -C "$before"
+(cd "$before/lean" && lake build alvoki-fused-merge alvoki-opt alvoki-native)
+python3 benchmarks/compare_stock.py --baseline-bin "$before/lean/.lake/build/bin" --out /tmp/alvoki-v1-paired.csv
+
+Use the same pinned ELAN_HOME and PATH for the paired baseline and candidate.
+Lean code is compiled with -O3 -DNDEBUG. Rust is built with Cargo release mode.
+The fixed-copy code generator uses -O3 -DNDEBUG -DLEAN_EXPORTING and the existing ABI guard.
+Trial CPU is recorded on every CSV row.
