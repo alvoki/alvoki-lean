@@ -110,7 +110,7 @@ The release benchmark measured roughly one millisecond of added latency on a 100
 
 ## Atomic replacement crash model
 
-WAL-tail repair and manifest replacement now run a shared four-step sequence. The Lean model separates synced staged bytes from the live and crash-recoverable name bindings. It proves that a successful replacement settles the new bytes and that interruption at any cut, followed by arbitrary crashes and retries, preserves the WAL replay result when the initial candidate images agree. Native checks cover each cut and the actual sync failure and retry paths. The repair benchmark and its raw before and after samples cover the changed path. [Publication proof](../lean/DiskPublicationModel.lean) · [Repair benchmark](benchmarks.md#torn-wal-repair)
+WAL-tail repair and manifest replacement now run a shared four-step sequence. The Lean model separates synced staged bytes from the live and crash-recoverable name bindings. It proves that a successful replacement settles the new bytes and that interruption at any cut, followed by arbitrary crashes and retries, preserves the WAL replay result when the initial candidate images agree. Native checks cover each cut and the actual sync failure and retry paths. The repair benchmark and its raw before and after samples cover the changed path. [Publication proof](../lean/storage/publication/DiskPublicationModel.lean) · [Repair benchmark](benchmarks.md#torn-wal-repair)
 
 The review isolated the remaining full-length torn-frame case. The codec theorem shows that a full invalid frame after valid records causes rejection. The next recovery proof needs the append and acknowledgment model and a durable boundary for selecting the bytes that must replay. [Disk proof obligations](proof-roadmap.md#disk-guarantees-to-prove)
 
@@ -122,7 +122,7 @@ The release median rose from 1.28 to 3.11 milliseconds per acknowledged write. T
 
 ## Checkpoint publication model
 
-The native adapter and Lean model now share the checkpoint publication schedule. At a fixed synced WAL watermark, the model proves exact run-set durability for every live or crash-selectable manifest through repeated interrupted publication and reopen. The recovery composition proves the actual byte selector, run loader, and frame-count guard succeed for the corresponding ordered WAL history. Native fixtures inject failures at run syncs and directory barriers and verify recovery after orphan generation reuse. The Lean kernel and axiom checks, native fixtures, and reproduction suite passed. Checkpoint release medians stayed within 7% across the measured run counts. [Checkpoint proof](../lean/CheckpointPublicationModel.lean) · [Benchmarks](benchmarks.md#shared-checkpoint-publication-schedule)
+The native adapter and Lean model now share the checkpoint publication schedule. At a fixed synced WAL watermark, the model proves exact run-set durability for every live or crash-selectable manifest through repeated interrupted publication and reopen. The recovery composition proves the actual byte selector, run loader, and frame-count guard succeed for the corresponding ordered WAL history. Native fixtures inject failures at run syncs and directory barriers and verify recovery after orphan generation reuse. The Lean kernel and axiom checks, native fixtures, and reproduction suite passed. Checkpoint release medians stayed within 7% across the measured run counts. [Checkpoint proof](../lean/storage/publication/CheckpointPublicationModel.lean) · [Benchmarks](benchmarks.md#shared-checkpoint-publication-schedule)
 
 The next proof should connect checkpoint issuance and successful reopen to the model's fresh-generation and fixed WAL assumptions across alternating writes and checkpoints. Checkpoint run-content integrity and whole-WAL sequence validation remain separate runtime obligations. [Proof roadmap](proof-roadmap.md#disk-guarantees-to-prove)
 
@@ -136,4 +136,8 @@ The reviewer identifies changes against a pinned checkout and rechecks the exact
 
 ## Checkpoint generation after reopen
 
-The checkpoint model now proves that the next generation calculated by the adapter is unreachable after reopen settles the visible manifest. The theorem covers bootstrap and an existing decoded manifest and uses the same overflow guard as the adapter. The next composition proof must establish the model's settlement and WAL coverage premises across real engine traces. [Generation proof](../lean/CheckpointPublicationModel.lean)
+The checkpoint model now proves that the next generation calculated by the adapter is unreachable after reopen settles the visible manifest. The theorem covers bootstrap and an existing decoded manifest and uses the same overflow guard as the adapter. The next composition proof must establish the model's settlement and WAL coverage premises across real engine traces. [Generation proof](../lean/storage/publication/CheckpointPublicationModel.lean)
+
+## Publication source layout
+
+The single-file and checkpoint publication modules and their models live under `lean/storage/publication/`. Per-library Lake source directories preserve module names, imports, build targets, and generated artifact paths. Lake editor setup, the sequential proof and native fixture suite, and baseline reproduction passed with the new source paths. [Publication model](../lean/storage/publication/DiskPublicationModel.lean) · [Checkpoint model](../lean/storage/publication/CheckpointPublicationModel.lean)

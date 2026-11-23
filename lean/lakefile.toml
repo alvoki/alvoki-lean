@@ -141,15 +141,19 @@ name = "Manifest"
 
 [[lean_lib]]
 name = "DiskPublication"
+srcDir = "storage/publication"
 
 [[lean_lib]]
 name = "DiskPublicationModel"
+srcDir = "storage/publication"
 
 [[lean_lib]]
 name = "CheckpointPublication"
+srcDir = "storage/publication"
 
 [[lean_lib]]
 name = "CheckpointPublicationModel"
+srcDir = "storage/publication"
 
 [[lean_lib]]
 name = "WalBoundaryModel"
