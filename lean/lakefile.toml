@@ -52,3 +52,10 @@ name = "ScopedBytes"
 
 [[lean_lib]]
 name = "ScopedBytesProofs"
+
+[[lean_lib]]
+name = "FusedMerge"
+
+[[lean_exe]]
+name = "alvoki-fused-merge"
+root = "FusedMergeMain"

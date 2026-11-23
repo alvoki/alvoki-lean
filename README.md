@@ -84,3 +84,12 @@ python3 benchmarks/stock_builder.py --summarize /tmp/alvoki-stock-builder.csv
 ```
 
 [Byte-level contracts, stock benchmarks, and open optimization work](docs/stock-builder.md)
+
+## Fused span emission and direct scans
+
+```sh
+bash scripts/fused-merge.sh --out /tmp/alvoki-fused-merge.csv
+python3 benchmarks/fused_merge.py --summarize /tmp/alvoki-fused-merge.csv
+```
+
+[Stock Lean timings, peak memory, and correctness checks](docs/fused-merge.md)

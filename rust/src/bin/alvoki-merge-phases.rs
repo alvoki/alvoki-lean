@@ -34,7 +34,11 @@ fn consume(sum: u64, key: u64, value: u64) -> u64 {
     sum.wrapping_mul(3).wrapping_add(key ^ value)
 }
 
-fn select(left: &Run<'_>, right: &Run<'_>) -> u64 {
+fn consume_winners(
+    left: &Run<'_>,
+    right: &Run<'_>,
+    consume: impl Fn(u64, u64, u64) -> u64,
+) -> u64 {
     let (mut i, mut j, mut sum) = (0, 0, 0);
     while i < left.limit && j < right.limit {
         let a = left.key(i);
@@ -53,6 +57,29 @@ fn select(left: &Run<'_>, right: &Run<'_>) -> u64 {
     }
     for index in j..right.limit {
         sum = consume(sum, right.key(index), right.value(index));
+    }
+    sum
+}
+
+fn select(left: &Run<'_>, right: &Run<'_>) -> u64 {
+    consume_winners(left, right, consume)
+}
+
+fn scan_selected(left: &Run<'_>, right: &Run<'_>) -> u64 {
+    let (mut i, mut j, mut sum) = (0, 0, 0u64);
+    while i < left.limit && j < right.limit {
+        let a = left.key(i);
+        let b = right.key(j);
+        let (source, index, key) = if a < b { (left, i, a) } else { (right, j, b) };
+        sum = sum.wrapping_add(key ^ source.value(index));
+        i += usize::from(a <= b);
+        j += usize::from(b <= a);
+    }
+    for index in i..left.limit {
+        sum = sum.wrapping_add(left.key(index) ^ left.value(index));
+    }
+    for index in j..right.limit {
+        sum = sum.wrapping_add(right.key(index) ^ right.value(index));
     }
     sum
 }
@@ -204,7 +231,7 @@ unsafe fn builder_replay(left: &Run<'_>, right: &Run<'_>, trace: &[u8]) -> Vec<u
     out
 }
 
-fn pipeline(left: &Run<'_>, right: &Run<'_>, targets: &Run<'_>, scoped: bool) -> Result<u64, &'static str> {
+fn pipeline(left: &Run<'_>, right: &Run<'_>, targets: Option<&Run<'_>>, scoped: bool) -> Result<u64, &'static str> {
     let bytes = if scoped { builder_merge(left, right) } else { merge(left, right) };
     let output = Block::parse(&bytes)?;
     let mut sum = bytes[16..].chunks_exact(16).fold(0u64, |sum, record| {
@@ -212,8 +239,10 @@ fn pipeline(left: &Run<'_>, right: &Run<'_>, targets: &Run<'_>, scoped: bool) ->
         let value = u64::from_le_bytes(record[8..].try_into().unwrap());
         sum.wrapping_add(key ^ value)
     });
-    for i in 0..targets.limit {
-        sum = sum.wrapping_add(output.lookup(targets.value(i)).unwrap_or(0));
+    if let Some(query) = targets {
+        for i in 0..query.limit {
+            sum = sum.wrapping_add(output.lookup(query.value(i)).unwrap_or(0));
+        }
     }
     Ok(sum)
 }
@@ -231,7 +260,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let right_bytes = fs::read(right)?;
     let left = Run::parse(&left_bytes)?;
     let right = Run::parse(&right_bytes)?;
-    let trace = fs::read(trace)?;
+    let trace = if matches!(mode, "merge-scan" | "direct-scan" | "selected-scan") {
+        Vec::new()
+    } else {
+        fs::read(trace)?
+    };
     let targets = if mode == "pipeline" { Some(Run::parse(&trace)?) } else { None };
     let width = match mode.strip_prefix("check-").unwrap_or(mode) {
         "copy16" => 16,
@@ -245,7 +278,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         validate_groups(&trace, left.limit, right.limit, width / 16)
     };
-    if mode != "pipeline" && mode != "dense" && mode != "check-dense" && !valid {
+    if !matches!(mode, "pipeline" | "merge-scan" | "direct-scan" | "selected-scan" | "dense" | "check-dense") && !valid {
         return Err("invalid replay trace".into());
     }
     for _ in 0..repetitions.parse()? {
@@ -262,7 +295,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 (bytes, 0)
             }
-            "pipeline" => (Vec::new(), pipeline(a, b, targets.as_ref().unwrap(), scoped)?),
+            "pipeline" => (Vec::new(), pipeline(a, b, targets.as_ref(), scoped)?),
+            "merge-scan" => (Vec::new(), pipeline(a, b, None, scoped)?),
+            "selected-scan" => (Vec::new(), scan_selected(a, b)),
+            "direct-scan" => (Vec::new(), consume_winners(a, b, |sum, k, v| sum.wrapping_add(k ^ v))),
             "select" => (Vec::new(), select(a, b)),
             "replay-checksum" => {
                 let mut sum = 0;
@@ -300,6 +336,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             println!("{elapsed} {}", black_box(tag));
         }
+    }
+    if env::var_os("ALVOKI_RSS").is_some() {
+        let status = fs::read_to_string("/proc/self/status")?;
+        let peak = status.lines().find(|line| line.starts_with("VmHWM:")).ok_or("missing VmHWM")?;
+        println!("{peak}");
     }
     Ok(())
 }

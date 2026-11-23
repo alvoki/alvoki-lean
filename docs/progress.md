@@ -39,3 +39,7 @@ A separate runtime lowering fills an exclusively owned packed destination for an
 ## Proved stock Lean builder
 
 Stock Lean now builds and checks an append-only packed builder, including exact prefix, source-byte, length, batch and streaming-replay contracts. Online span emission helps clustered traces, while alternating writes still spend one runtime slice-copy call per record and lag the Rust scoped control. The verified builder provides an implementation contract for future standard toolchain optimization. [Proof and benchmark results](stock-builder.md)
+
+## Fused spans and direct scans
+
+The bounded-window fused builder cut clustered merge time from 1.23 to 1.07 ms at one million records, with the prior adaptive baseline faster on the clustered pipeline and most other merges. Direct scanning was substantially faster on alternating, shuffled and update-heavy profiles and avoided a separate packed output. [Timing and memory comparison](fused-merge.md)
