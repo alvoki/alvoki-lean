@@ -48,3 +48,12 @@ python3 benchmarks/native.py --summarize /tmp/alvoki-native.csv
 ```
 
 This suite compares a compiler-vectorized native Lean scan, Rust scalar and SIMD controls, and native merge and encoding variants. [SIMD results and assembly evidence](docs/native-experiments.md) · [Single-record emission and packed updates](docs/emission-experiments.md)
+
+## Merge selection and output replay
+
+```sh
+bash scripts/merge-phases.sh --out /tmp/alvoki-merge-phases.csv
+python3 benchmarks/merge_phases.py --summarize /tmp/alvoki-merge-phases.csv
+```
+
+[Phase timings and next experiments](docs/merge-phases.md)

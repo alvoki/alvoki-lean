@@ -39,3 +39,10 @@ moreLeancArgs = ["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize", "-Rpas
 [[lean_exe]]
 name = "alvoki-native"
 root = "NativeMain"
+
+[[lean_lib]]
+name = "MergePhases"
+
+[[lean_exe]]
+name = "alvoki-merge-phases"
+root = "MergePhasesMain"
