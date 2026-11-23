@@ -21,6 +21,45 @@ private def accepts (directory : DirectoryPublication.Image)
 def ReopenImage.Valid (image : ReopenImage) (expected : DirectoryPublication.Bindings → ByteArray) : Prop :=
   image.wal.Valid (accepts image.directory expected)
 
+/-- The visible marker covers the lengths stored in all selectable pairs. -/
+def MarkerBound (directory : DirectoryPublication.Image) : Prop :=
+  ∃ marker length, directory.active.walBoundary = some marker ∧ decode marker = .ok length ∧
+    ∀ pair ∈ directory.active :: directory.crashImages,
+      ∃ candidate count, pair.walBoundary = some candidate ∧ decode candidate = .ok count ∧
+        count.toNat ≤ length.toNat
+
+theorem ReopenImage.markerBound_of_write_cut {image : ReopenImage} {boundary : Publication.Image}
+    {before : List WAL.Write} {event : WAL.Write} {wal : ByteArray}
+    (cut : WriteCut before event wal boundary)
+    (oldFits : (WAL.encode before).size < UInt64.size)
+    (newFits : (WAL.encode (before ++ [event])).size < UInt64.size)
+    (activeAgrees : image.directory.active.walBoundary = boundary.active)
+    (crashAgrees : ∀ pair ∈ image.directory.crashImages, pair.walBoundary ∈ boundary.crashImages) :
+    MarkerBound image.directory := by
+  obtain ⟨marker, length, present, decoded, bounded⟩ := write_cut_active_bounds_marker cut oldFits newFits
+  refine ⟨marker, length, activeAgrees.trans present, decoded, ?_⟩
+  intro pair chosen
+  rcases List.mem_cons.mp chosen with rfl | survives
+  · exact bounded _ (.inl activeAgrees)
+  · exact bounded _ (.inr (crashAgrees pair survives))
+
+private theorem MarkerBound.covers {directory : DirectoryPublication.Image}
+    (bound : MarkerBound directory) {marker : ByteArray} {length : UInt64}
+    (visible : directory.active.walBoundary = some marker) (decoded : decode marker = .ok length) :
+    ∀ pair ∈ directory.active :: directory.crashImages,
+      ∀ marker count, pair.walBoundary = some marker → decode marker = .ok count → count.toNat ≤ length.toNat := by
+  obtain ⟨active, limit, present, activeDecode, bounded⟩ := bound
+  have sameActive : active = marker := Option.some.inj (present.symm.trans visible)
+  subst active
+  have sameLimit : limit = length := Except.ok.inj (activeDecode.symm.trans decoded)
+  subst limit
+  intro pair chosen markerBytes count marked decodedCount
+  obtain ⟨candidate, candidateCount, candidateMarked, candidateDecode, fits⟩ := bounded pair chosen
+  have sameCandidate : candidate = markerBytes := Option.some.inj (candidateMarked.symm.trans marked)
+  subst candidate
+  have sameCount : candidateCount = count := Except.ok.inj (candidateDecode.symm.trans decodedCount)
+  simpa only [sameCount] using fits
+
 /-- The repair path takes its replacement from the visible marker and WAL.
 Every marker that could still survive a crash must fit in that replacement. -/
 structure ReopenImage.RepairsTo (image : ReopenImage) (length : UInt64) (trimmed : ByteArray) : Prop where
@@ -29,6 +68,15 @@ structure ReopenImage.RepairsTo (image : ReopenImage) (length : UInt64) (trimmed
     trimmed.size < contents.size
   coversCandidates : ∀ pair ∈ image.directory.active :: image.directory.crashImages,
     ∀ marker count, pair.walBoundary = some marker → decode marker = .ok count → count.toNat ≤ length.toNat
+
+theorem ReopenImage.repairsTo_of_markerBound {image : ReopenImage} {marker wal trimmed : ByteArray}
+    {length : UInt64} (bound : MarkerBound image.directory)
+    (visibleMarker : image.directory.active.walBoundary = some marker)
+    (visibleWal : image.wal.active = some wal) (decoded : decode marker = .ok length)
+    (selected : select length wal = .ok trimmed) (shorter : trimmed.size < wal.size) :
+    image.RepairsTo length trimmed :=
+  ⟨⟨marker, visibleMarker, decoded⟩, ⟨wal, visibleWal, selected, shorter⟩,
+    bound.covers visibleMarker decoded⟩
 
 /-- A marked reopen after a modeled write cut can trim to the visible prefix.
 Each joint crash pair supplies a marker allowed by the one-write model. -/
@@ -43,22 +91,13 @@ theorem ReopenImage.repairsTo_of_write_cut {image : ReopenImage} {boundary : Pub
     (visibleWal : image.wal.active = some wal)
     (selected : (do let length ← decode marker; select length wal) = .ok trimmed)
     (shorter : trimmed.size < wal.size) : ∃ length, image.RepairsTo length trimmed := by
-  obtain ⟨active, length, present, decoded, bounded⟩ := write_cut_active_bounds_marker cut oldFits newFits
-  have sameVisibleMarker : marker = active :=
-    Option.some.inj (visibleMarker.symm.trans (activeAgrees.trans present))
+  have bound := ReopenImage.markerBound_of_write_cut cut oldFits newFits activeAgrees crashAgrees
+  have visibleBound := bound
+  obtain ⟨active, length, present, decoded, _⟩ := visibleBound
+  have sameVisibleMarker : marker = active := Option.some.inj (visibleMarker.symm.trans present)
   have visibleDecode : decode marker = .ok length := sameVisibleMarker.symm ▸ decoded
   rw [visibleDecode] at selected
-  refine ⟨length, ⟨⟨marker, visibleMarker, visibleDecode⟩, ⟨wal, visibleWal, selected, shorter⟩, ?_⟩⟩
-  intro pair chosen markerBytes count marked decodedCount
-  have markerChosen : pair.walBoundary = boundary.active ∨ pair.walBoundary ∈ boundary.crashImages := by
-    rcases List.mem_cons.mp chosen with rfl | survives
-    · exact .inl activeAgrees
-    · exact .inr (crashAgrees pair survives)
-  obtain ⟨candidate, candidateCount, sameMarker, candidateDecode, fits⟩ := bounded _ markerChosen
-  have bytesAgree : markerBytes = candidate := Option.some.inj (marked.symm.trans sameMarker)
-  have countAgree : count = candidateCount :=
-    Except.ok.inj (decodedCount.symm.trans (bytesAgree.symm ▸ candidateDecode))
-  simpa only [countAgree] using fits
+  exact ⟨length, ReopenImage.repairsTo_of_markerBound bound visibleMarker visibleWal visibleDecode selected shorter⟩
 
 /-- The WAL repair uses the ordinary replacement schedule. A cut before its
 last operation leaves both metadata bindings unsettled. A cut including the
@@ -205,6 +244,42 @@ theorem ReopenRetry.chosen_pair_from_initial {initial after : ReopenImage}
     simp [ReopenImage.crash, DirectoryPublication.Image.settled] at chosen
     cases chosen
     exact List.mem_cons.mpr (.inr survives)
+
+private theorem markerBound_single {directory : DirectoryPublication.Image}
+    {marker : ByteArray} {count : UInt64} (single : directory.crashImages = [directory.active])
+    (visible : directory.active.walBoundary = some marker) (decoded : decode marker = .ok count) :
+    MarkerBound directory := by
+  refine ⟨marker, count, visible, decoded, ?_⟩
+  intro pair chosen
+  have same : pair = directory.active := by simpa [single] using chosen
+  exact ⟨marker, count, same.symm ▸ visible, decoded, Nat.le_refl _⟩
+
+private theorem MarkerBound.syncDirectory {directory : DirectoryPublication.Image}
+    (bound : MarkerBound directory) : MarkerBound directory.syncDirectory := by
+  obtain ⟨marker, count, visible, decoded, _⟩ := bound
+  exact markerBound_single rfl visible decoded
+
+/-- An attempt preserves the marker bound. Settlement or crash reduces the
+directory choices to one decoded pair, which covers itself. -/
+theorem ReopenRetry.markerBound {initial after : ReopenImage}
+    (path : ReopenRetry initial after) (bound : MarkerBound initial.directory) :
+    MarkerBound after.directory := by
+  induction path with
+  | start => exact bound
+  | repair _ _ ran earlier =>
+    unfold ReopenImage.repairCut at ran
+    obtain ⟨_, _, rfl⟩ := Option.map_eq_some_iff.mp ran
+    dsimp only
+    split
+    · exact earlier.syncDirectory
+    · exact earlier
+  | syncDirectory _ earlier => exact earlier.syncDirectory
+  | syncMetadata _ earlier => exact earlier.syncDirectory
+  | allowVisibleWal _ earlier => exact earlier
+  | crash _ survives _ earlier =>
+    obtain ⟨_, _, _, _, choices⟩ := earlier
+    obtain ⟨marker, count, visible, decoded, _⟩ := choices _ (List.mem_cons.mpr (.inr survives))
+    exact markerBound_single rfl visible decoded
 
 theorem reopenRetry_valid {initial after : ReopenImage} {expected : DirectoryPublication.Bindings → ByteArray}
     (valid : initial.Valid expected) (path : ReopenRetry initial after) : after.Valid expected := by
@@ -476,5 +551,74 @@ theorem ReopenRetry.runMarkedReopen_effect {initial before : ReopenImage}
         · split
           · exact .allowVisibleWal path
           · exact path
+
+/-- Reads under the database lock may fail. A successful marked read
+returns the visible marker or WAL bytes. Opening the checkpoint supplies
+its own observed result. -/
+structure MarkedReopenReads (image : ReopenImage) where
+  checkpoint : Except String PackedTable
+  marker : Except String ByteArray
+  wal : Except String ByteArray
+  markerVisible : ∀ bytes, marker = .ok bytes → image.directory.active.walBoundary = some bytes
+  walVisible : ∀ bytes, wal = .ok bytes → image.wal.active = some bytes
+
+def MarkedReopenReads.preflight {image : ReopenImage} (reads : MarkedReopenReads image) :
+    Except String (ByteArray × ByteArray) :=
+  markedReopenPreflight reads.checkpoint reads.marker reads.wal
+
+private theorem MarkedReopenReads.retry_effect {initial before : ReopenImage}
+    (reads : MarkedReopenReads before) (path : ReopenRetry initial before)
+    (bound : MarkerBound before.directory) (report : Publication.Step → RepairReport)
+    (aligned : AlignedSyncReport) :
+    match runMarkedReopen reads.preflight report false aligned before with
+    | .ok _ after => ReopenRetry initial after
+    | .error _ after => ReopenRetry initial after := by
+  have repair : ∀ contents selected, reads.preflight = .ok (contents, selected) →
+      selected.size < contents.size → ∃ length, before.RepairsTo length selected := by
+    intro contents selected ready shorter
+    obtain ⟨_, marker, length, _, _, readMarker, readWal, decoded, accepted, _⟩ :=
+      markedReopenPreflight_selected (checkpoint := reads.checkpoint) (marker := reads.marker)
+        (wal := reads.wal) ready
+    exact ⟨length, ReopenImage.repairsTo_of_markerBound bound (reads.markerVisible marker readMarker)
+      (reads.walVisible contents readWal) decoded accepted shorter⟩
+  have effect := path.runMarkedReopen_effect reads.preflight report false aligned repair
+  cases result : runMarkedReopen reads.preflight report false aligned before with
+  | ok _ after =>
+    rw [result] at effect
+    exact effect.1
+  | error message after =>
+    rw [result] at effect
+    exact effect
+
+/-- A finite sequence of observed marked reopen attempts and crashes. The
+aligned model treats earlier WAL sync knowledge conservatively. -/
+inductive MarkedReopenAttempts (initial : ReopenImage) : ReopenImage → Prop where
+  | start : MarkedReopenAttempts initial initial
+  | success (path : MarkedReopenAttempts initial before) (reads : MarkedReopenReads before)
+      (report : Publication.Step → RepairReport) (aligned : AlignedSyncReport)
+      (ran : runMarkedReopen reads.preflight report false aligned before = .ok () after) :
+      MarkedReopenAttempts initial after
+  | failure (path : MarkedReopenAttempts initial before) (reads : MarkedReopenReads before)
+      (report : Publication.Step → RepairReport) (aligned : AlignedSyncReport)
+      (ran : runMarkedReopen reads.preflight report false aligned before = .error message after) :
+      MarkedReopenAttempts initial after
+  | crash (path : MarkedReopenAttempts initial before)
+      (pairSurvives : pair ∈ before.directory.crashImages) (walSurvives : wal ∈ before.wal.crashImages) :
+      MarkedReopenAttempts initial (.crash pair wal)
+
+/-- The initial marker bound suffices for the whole trace. Each short branch
+derives its repair choice from the actual preflight bytes and current bound. -/
+theorem MarkedReopenAttempts.toRetry {initial after : ReopenImage}
+    (attempts : MarkedReopenAttempts initial after) (bound : MarkerBound initial.directory) :
+    ReopenRetry initial after := by
+  induction attempts with
+  | start => exact .start
+  | success _ reads report aligned ran earlier =>
+    have effect := reads.retry_effect earlier (earlier.markerBound bound) report aligned
+    rwa [ran] at effect
+  | failure _ reads report aligned ran earlier =>
+    have effect := reads.retry_effect earlier (earlier.markerBound bound) report aligned
+    rwa [ran] at effect
+  | crash _ pairSurvives walSurvives earlier => exact .crash earlier pairSurvives walSurvives
 
 end Alvoki.WAL.Boundary
