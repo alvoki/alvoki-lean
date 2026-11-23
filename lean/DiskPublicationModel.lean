@@ -29,13 +29,16 @@ def Image.step (image : Image) (bytes : ByteArray) (action : Step) : Option Imag
 def Image.execute (image : Image) (bytes : ByteArray) (actions : List Step) : Option Image :=
   actions.foldlM (fun current action => current.step bytes action) image
 
-def Image.Valid (acceptable : Option ByteArray → Prop) (image : Image) : Prop :=
-  image.crashImages ≠ [] ∧ acceptable image.active ∧
-    ∀ candidate ∈ image.crashImages, acceptable candidate
+structure Image.Valid (acceptable : Option ByteArray → Prop) (image : Image) : Prop where
+  hasCrashImage : image.crashImages ≠ []
+  activeValid : acceptable image.active
+  crashValid : ∀ candidate ∈ image.crashImages, acceptable candidate
 
 theorem Image.settled_valid {acceptable : Option ByteArray → Prop} {active : Option ByteArray}
     (valid : acceptable active) : (settled active).Valid acceptable := by
-  simp [settled, Valid, valid]
+  refine { hasCrashImage := by simp [settled], activeValid := valid, crashValid := ?_ }
+  intro candidate survives
+  exact (List.mem_singleton.mp survives).symm ▸ valid
 
 /-- Full success publishes the exact new bytes and settles the directory entry. -/
 theorem successful_replace (initial : Image) (bytes : ByteArray) :
@@ -55,13 +58,24 @@ private theorem cut_preserves {acceptable : Option ByteArray → Prop} {initial 
     after.Valid acceptable := by
   rcases cut with _ | _ | _ | _ | cut
   · cases ran; exact old
-  · cases ran; exact old
-  · cases ran; exact old
   · cases ran
-    refine ⟨by simp, new, fun candidate atCut => ?_⟩
+    exact {
+      hasCrashImage := old.hasCrashImage
+      activeValid := old.activeValid
+      crashValid := old.crashValid
+    }
+  · cases ran
+    exact {
+      hasCrashImage := old.hasCrashImage
+      activeValid := old.activeValid
+      crashValid := old.crashValid
+    }
+  · cases ran
+    refine { hasCrashImage := by simp, activeValid := new, crashValid := ?_ }
+    intro candidate atCut
     rcases List.mem_cons.mp atCut with rfl | earlier
     · exact new
-    · exact old.2.2 candidate earlier
+    · exact old.crashValid candidate earlier
   · simp [steps, Image.execute, Image.step] at ran
     cases ran
     exact Image.settled_valid new
@@ -83,7 +97,7 @@ theorem retry_preserves {mayReplace : Image → ByteArray → Prop}
   induction path with
   | refl => exact old
   | attempt _ chosen cut ran earlier => exact cut_preserves earlier (validReplacement _ _ earlier chosen) cut ran
-  | crash _ survives earlier => exact Image.settled_valid (earlier.2.2 _ survives)
+  | crash _ survives earlier => exact Image.settled_valid (earlier.crashValid _ survives)
 
 def choosesRepair (image : Image) (replacement : ByteArray) : Prop :=
   ∃ bytes, image.active = some bytes ∧ WAL.repairPrefix bytes = some replacement
@@ -104,7 +118,7 @@ theorem repair_retry_preserves_replay {initial after : Image} {base : PackedTabl
   apply retry_preserves _ old path
   intro before replacement valid chosen
   obtain ⟨current, active, selected⟩ := chosen
-  obtain ⟨matched, same, recovered⟩ := valid.2.1
+  obtain ⟨matched, same, recovered⟩ := valid.activeValid
   rw [active] at same
   cases same
   exact ⟨replacement, rfl, (repaired_bytes_have_same_replay selected).trans recovered⟩

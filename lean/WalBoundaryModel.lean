@@ -53,7 +53,7 @@ theorem write_cut_replays_old_or_new (base : PackedTable) {before : List WAL.Wri
     have valid : image.Valid allowed := retry_preserves
       (fun _ next _ written => Or.inr (congrArg some written))
       (Image.settled_valid (Or.inl rfl)) path
-    rcases valid.2.2 onDisk survives with old | new
+    rcases valid.crashValid onDisk survives with old | new
     · refine ⟨marker before, old, Or.inl ?_⟩
       rw [WAL.encode_append]
       exact select_marker base before (WAL.encode [event]) oldFits

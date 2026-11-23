@@ -213,9 +213,12 @@ theorem checkpoint_cut_valid {initial after : Image} {next : RunSet} {walSequenc
       (Publication.steps.take (cut - barrier.length))).map finish) = some after at ran
     obtain ⟨manifest, replaced, rfl⟩ := Option.map_eq_some_iff.mp ran
     let accepts := installed.Accepts walSequence expected
-    have prior : initial.manifest.Valid accepts := ⟨initialValid.1,
-      old_names_preserved fresh (.inl rfl) initialValid.2.1,
-      fun _ live => old_names_preserved fresh (.inr live) (initialValid.2.2 _ live)⟩
+    have prior : initial.manifest.Valid accepts := {
+      hasCrashImage := initialValid.hasCrashImage
+      activeValid := old_names_preserved fresh (.inl rfl) initialValid.activeValid
+      crashValid := fun candidate survives =>
+        old_names_preserved fresh (.inr survives) (initialValid.crashValid candidate survives)
+    }
     have published : accepts (some (Manifest.encode next.header)) :=
       ⟨next.header, next.files, Manifest.decode_encode _ floor, intent, covered, count,
         fun _ _ => by simp [installed, installRunNames]⟩
@@ -289,7 +292,7 @@ theorem checkpoint_retry_valid {initial after : Image} {walSequence : UInt64}
   | attempt _ _ fresh covered floor count intent cut ran previous =>
     exact checkpoint_cut_valid previous fresh covered floor count intent cut ran
   | crash _ survives previous =>
-    exact Publication.Image.settled_valid (previous.2.2 _ survives)
-  | reopen _ previous => exact Publication.Image.settled_valid previous.2.1
+    exact Publication.Image.settled_valid (previous.crashValid _ survives)
+  | reopen _ previous => exact Publication.Image.settled_valid previous.activeValid
 
 end Alvoki.Storage.CheckpointPublication

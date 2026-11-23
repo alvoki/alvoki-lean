@@ -72,11 +72,6 @@ structure DiskTable where
   private lock : IO.FS.Handle
   private phase : IO.Ref Phase
 
-private def fromExcept (result : Except String α) : IO α :=
-  match result with
-  | .ok value => pure value
-  | .error message => throw (IO.userError message)
-
 private def fromOption (result : Option α) (message : String) : IO α :=
   match result with
   | some value => pure value
@@ -234,22 +229,22 @@ private def readOptionalFile (path : FilePath) : IO (Option ByteArray) := do
     if osCode == 2 then return none else throw error
   | .error error => throw error
 
-private def openCheckpoint (dir : DiskDirectory) : IO (Option Installed) := do
+private def openCheckpoint (dir : DiskDirectory) : IO (Option (PackedTable × UInt64)) := do
   let manifestPath := dir.file .manifest
   let some header ← readOptionalFile manifestPath | return none
-  let manifest ← fromExcept (Manifest.decode header)
+  let manifest ← IO.ofExcept (Manifest.decode header)
   let mut files : Array ByteArray := #[]
   for index in [:manifest.runCount.toNat] do
     files := files.push (← IO.FS.readBinFile (dir.file (.run manifest.generation index)))
-  let table ← fromExcept (loadRunSet manifest files.toList)
-  return some ⟨table, manifest.generation, 0⟩
+  let table ← IO.ofExcept (loadRunSet manifest files.toList)
+  return some (table, manifest.generation)
 
 private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTable := do
   let checkpoint ← openCheckpoint dir
-  let base := checkpoint.getD ⟨.empty, 0, 0⟩
+  let (checkpointTable, checkpointGeneration) := checkpoint.getD (.empty, 0)
   let walPath := dir.file .wal
   let boundary ← (← readOptionalFile (dir.file .walBoundary)).mapM fun bytes =>
-    fromExcept (WAL.Boundary.decode bytes)
+    IO.ofExcept (WAL.Boundary.decode bytes)
   let bytes ← match ← readOptionalFile walPath with
     | some bytes => pure bytes
     | none =>
@@ -258,19 +253,21 @@ private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTabl
       writeFlushed walPath ByteArray.empty
       pure ByteArray.empty
   let selected ← match boundary with
-    | some count => fromExcept (WAL.Boundary.select count bytes)
+    | some count => IO.ofExcept (WAL.Boundary.select count bytes)
     | none => pure ((WAL.repairPrefix bytes).getD bytes)
-  let table ← fromExcept (recoverSelected base.table selected)
+  let table ← IO.ofExcept (recoverSelected checkpointTable selected)
+  -- Both paths sync the directory to settle the visible checkpoint and WAL marker,
+  -- including any rename reached by a prior process before its directory sync.
   if selected.size < bytes.size then
     atomicReplace dir .stagedWal .wal selected
   else
-    -- A previous process may have reached rename or append before its sync completed.
     syncPaths #[walPath, dir.path]
   -- Bootstrap an empty or legacy WAL only after its selected prefix is durable.
   if boundary.isNone then
     unless selected.size < UInt64.size do throw (IO.userError "WAL byte count is too large")
     publishWalBoundary dir selected.size
-  return ⟨dir, lock, ← IO.mkRef (.ready { base with table, walBytes := selected.size })⟩
+  let installed : Installed := { table, generation := checkpointGeneration, walBytes := selected.size }
+  return ⟨dir, lock, ← IO.mkRef (.ready installed)⟩
 
 /-- Open a database in an existing directory and replay its durable WAL. -/
 def DiskTable.open (path : FilePath) : IO DiskTable := do
@@ -349,7 +346,7 @@ def DiskTable.compact (db : DiskTable) (index : Nat) : IO Bool := do
 files and WAL frames remain available through interrupted publication. -/
 def DiskTable.checkpoint (db : DiskTable) : IO Unit := do
   let state ← db.installed
-  let table ← if state.table.memory.rows.isEmpty then pure state.table else fromExcept state.table.flush
+  let table ← if state.table.memory.rows.isEmpty then pure state.table else IO.ofExcept state.table.flush
   let count := table.runs.length
   let next := state.generation.toNat + 1
   unless next < UInt64.size ∧ count < UInt64.size do
