@@ -61,3 +61,7 @@ A proven byte cursor removed repeated key offset and extent work from validation
 Both v1 codec round trips check. The shared span writer proves the adaptive and bounded-window policies emit the right-biased union. Accepted traces have the union's row count and payload, and checked streaming replay writes its exact bytes. The scalar kernels now use checked record bounds and the proved direct scan has a stable entry point in `PackedRun`. [Fast-path audit and regression timings](fast-path-refinement.md)
 
 The v3 experiment models updates, tombstones, and snapshot retention over two in-memory runs. Lean's direct scans were near Rust latency and the stock materializer took 1.50–2.02× Rust time at one million inputs. The fixed-width candidate reduced per-row writing time by 27–42%, with smaller effects after span coalescing. The stock and opt-in correctness suites passed. [Compaction semantics and measurements](compaction.md)
+
+## Proof roadmap
+
+The roadmap records the executable v1 codec guarantees and the remaining proof obligations. It prioritizes the v3 snapshot preservation law and its connection to the parser and compaction paths, alongside completing the v1 lookup, range, and merge API proofs. It also records the contracts needed when alternative writer paths and future engine features become supported. [Proof roadmap](proof-roadmap.md)

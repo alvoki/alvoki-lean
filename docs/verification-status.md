@@ -1,5 +1,7 @@
 # Verification status
 
+The [proof roadmap](proof-roadmap.md) lists the remaining codec, implementation, and storage-engine theorems in dependency order.
+
 | Property | Lean 4 | Verus |
 |---|---|---|
 | Lower-bound partition and termination | Kernel-checked for the executable `lowerBound` with a monotone predicate | Verified for the corresponding binary search over a sorted `&[u64]` |
@@ -18,7 +20,7 @@ Verus proves the analogous loop invariant with quantified sequence properties. I
 
 `lean/OptProofs.lean` proves that the tail-recursive machine-index search agrees with the original natural-number lower bound after index conversion. It derives the same partition guarantee for monotone logical keys. `wordMachine_eq` proves the optimized reader is equal to the original byte reader when the eight-byte extent is in bounds and the array size fits in a machine word. Each proof-carrying byte load and indexed store uses an explicit bound, and Lean checks the progress of the machine-index loops.
 
-The parser acceptance proof certifies input bytes, header count and version, layout, and strict order at logical offsets. Checked record access agrees with those offsets, and the optimized lower bound partitions the keys of accepted blocks. The v1 run API checks natural-number indices before converting them to machine width. Scalar kernel access checks the record bound and returns zero at exhaustion. The full v1 encoding accepts and decodes every strictly ordered array within the format and machine bounds. Decoding and re-encoding an accepted block reproduces its bytes. [Parser contract](../lean/PackedView.lean) · [Codec and audit](../lean/BlockCodec.lean)
+The parser acceptance proof certifies input bytes, header count and version, layout, and strict order at logical offsets. Checked record access agrees with those offsets, and the optimized lower bound partitions the keys of accepted blocks. The v1 run API checks natural-number indices before converting them to machine width. Scalar kernel access checks the record bound and returns zero at exhaustion. For every strictly ordered array within the format and machine bounds, `encodeV1` followed by `parseRun` and `Run.decodeV1` recovers the exact array. Decoding and re-encoding an accepted block reproduces its bytes. The baseline and benchmark codecs have separate definitions and fixture coverage. [Parser contract](../lean/PackedView.lean) · [Codec and audit](../lean/BlockCodec.lean) · [Codec proof roadmap](proof-roadmap.md#complete-the-v1-api-and-codec-contracts)
 
 ## Packed output and merge
 

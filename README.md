@@ -8,6 +8,7 @@ Alvoki explores formally verified storage primitives in native Lean 4. The exper
 - [Current module and benchmark map](docs/architecture.md)
 - [VM measurements and code generation findings](docs/benchmarks.md)
 - [Proof coverage and assumptions](docs/verification-status.md)
+- [Proof roadmap from binary codecs to storage guarantees](docs/proof-roadmap.md)
 - [Roadmap](docs/roadmap.md) and [handoff](docs/progress.md)
 
 ## Stock Lean API
