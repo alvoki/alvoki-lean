@@ -35,23 +35,30 @@ theorem replay_prepared {state next : PackedTable} {key : UInt64} {value : Optio
   unfold replayWrite prepareWrite
   simp [success]
 
-private theorem replayWrite_advances {state result : PackedTable} {event : Write}
+private theorem replayWrite_spec {state result : PackedTable} {event : Write}
     (applied : replayWrite state event = .ok result) :
-    result.committed.toNat = state.committed.toNat + 1 := by
+    state.write event.key event.value = some result ∧ result.committed = event.sequence := by
   unfold replayWrite prepareWrite at applied
   cases written : state.write event.key event.value with
   | none => simp [written] at applied
   | some next =>
     simp only [written, Option.map_some] at applied
     split at applied
-    · cases applied
-      unfold PackedTable.write at written
-      split at written
-      · rename_i fits
-        cases written
-        exact UInt64.toNat_ofNat_of_lt' fits
-      · contradiction
+    · rename_i sequence
+      cases applied
+      exact ⟨rfl, sequence⟩
     · contradiction
+
+private theorem replayWrite_advances {state result : PackedTable} {event : Write}
+    (applied : replayWrite state event = .ok result) :
+    result.committed.toNat = state.committed.toNat + 1 := by
+  have written := (replayWrite_spec applied).1
+  unfold PackedTable.write at written
+  split at written
+  · rename_i fits
+    cases written
+    exact UInt64.toNat_ofNat_of_lt' fits
+  · contradiction
 
 theorem replay_committed_count {state result : PackedTable} (events : List Write)
     (applied : replay state events = .ok result) :
@@ -111,6 +118,40 @@ theorem replay_append {initial committed : PackedTable} {acknowledged : List Wri
   rw [safe]
   rfl
 
+/-- The abstract table applies exactly the listed WAL writes in order. Each
+step uses the recorded key and value and commits the recorded sequence. -/
+inductive SnapshotWalReplay : Sequential.SnapshotTable UInt64 → List Write →
+    Sequential.SnapshotTable UInt64 → Prop where
+  | nil (state : Sequential.SnapshotTable UInt64) : SnapshotWalReplay state [] state
+  | cons {before next after : Sequential.SnapshotTable UInt64} {event : Write} {rest : List Write}
+      (written : before.write event.key event.value = some next)
+      (sequence : next.committed = event.sequence) (suffix : SnapshotWalReplay next rest after) :
+      SnapshotWalReplay before (event :: rest) after
+
+theorem replay_refines {state result : PackedTable} {model : Sequential.SnapshotTable UInt64}
+    {events : List Write} (same : state.Refines model) (applied : replay state events = .ok result) :
+    ∃ after, SnapshotWalReplay model events after ∧ result.Refines after := by
+  induction events generalizing state model with
+  | nil =>
+    change Except.ok state = Except.ok result at applied
+    cases applied
+    exact ⟨model, .nil model, same⟩
+  | cons event rest ih =>
+    unfold replay at applied
+    rw [List.foldlM_cons] at applied
+    cases step : replayWrite state event with
+    | error message =>
+      rw [step] at applied
+      change Except.error message = Except.ok result at applied
+      contradiction
+    | ok next =>
+      rw [step] at applied
+      change replay next rest = .ok result at applied
+      obtain ⟨written, sequence⟩ := replayWrite_spec step
+      obtain ⟨nextModel, nextWrite, nextSame⟩ := PackedTable.write_refines same written
+      obtain ⟨after, suffix, refined⟩ := ih nextSame applied
+      exact ⟨after, .cons nextWrite (nextSame.committed.symm.trans sequence) suffix, refined⟩
+
 theorem replay_sameData {left right result : PackedTable} (same : left.SameData right)
     (events : List Write) (applied : replay right events = .ok result) :
     ∃ reopened, replay left events = .ok reopened ∧ reopened.SameData result := by
@@ -130,22 +171,13 @@ theorem replay_sameData {left right result : PackedTable} (same : left.SameData 
     | ok next =>
       rw [step] at applied
       change replay next rest = .ok result at applied
-      unfold replayWrite prepareWrite at step
-      cases written : right.write event.key event.value with
-      | none => simp [written] at step
-      | some after =>
-        simp only [written, Option.map_some] at step
-        split at step
-        · rename_i sequence
-          cases step
-          obtain ⟨replayed, sameWrite, relation⟩ := same.write written
-          have accepted : replayWrite left event = .ok replayed := by
-            unfold replayWrite prepareWrite
-            simp [sameWrite, relation.committed, sequence]
-          rw [accepted]
-          change ∃ reopened, replay replayed rest = .ok reopened ∧ reopened.SameData result
-          exact ih relation applied
-        · contradiction
+      obtain ⟨written, sequence⟩ := replayWrite_spec step
+      obtain ⟨replayed, sameWrite, relation⟩ := same.write written
+      have accepted : replayWrite left event = .ok replayed := by
+        simp [replayWrite, prepareWrite, sameWrite, relation.committed, sequence]
+      rw [accepted]
+      change ∃ reopened, replay replayed rest = .ok reopened ∧ reopened.SameData result
+      exact ih relation applied
 
 /-- A torn tail has no effect on replay of the complete frames preceding it. -/
 theorem recover_prefix (initial : PackedTable) (events : List Write) (tail : ByteArray)
