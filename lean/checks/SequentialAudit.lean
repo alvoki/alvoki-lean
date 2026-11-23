@@ -68,5 +68,6 @@ import CheckpointPublicationModel
 #check_axioms Alvoki.WAL.Boundary.decode_encode
 #check_axioms Alvoki.WAL.Boundary.select_encoded
 #check_axioms Alvoki.WAL.Boundary.commit_append_error
+#check_axioms Alvoki.WAL.Boundary.write_cut_selects_old_or_new
 #check_axioms Alvoki.WAL.Boundary.write_cut_replays_old_or_new
 #check_axioms Alvoki.WAL.Boundary.acknowledged_write_replays_new
