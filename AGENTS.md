@@ -11,6 +11,8 @@
 
 ## Agent work and review
 
+- Aim to keep five subagents working in parallel on independent roadmap tasks. Use fewer when dependencies leave fewer ready tasks. Prioritize the end-to-end crash refinement in the proof roadmap.
 - Pin independent Lean readability reviews to a commit and a concrete task or set of files. Favor straightforward code that makes mistakes harder. Introduce an abstraction only when it simplifies the code, and use comments to explain subtle reasons and invariants.
 - Give each write task its own worktree and local branch. The task agent commits its candidate there for review.
-- The coordinator reviews the exact candidate diff, obtains any needed revisions, and verifies the applicable checks before integrating the commit. The coordinator alone pushes integrated work, one verified milestone at a time.
+- The coordinator and an independent reviewer review the exact candidate diff. The task agent addresses findings, then the coordinator runs the applicable integration checks. The coordinator alone pushes integrated work, one verified milestone at a time.
+- After each push, the coordinator sends the new `main` commit to the active agents. Agents working on dependent changes rebase their task branches and rerun the affected checks before returning their candidates.
