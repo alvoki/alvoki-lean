@@ -24,6 +24,21 @@ def decodeScalar (block : @& Block) : Array ScalarRecord := Id.run do
     rw [USize.toNat_add]
     exact Nat.lt_of_le_of_lt (Nat.mod_le ..) bound)).toUInt64
 
+/-- Read one word when the caller has already established the byte extent. -/
+@[inline] def wordBounded (bytes : @& ByteArray) (offset : USize)
+    (bound : offset.toNat + 7 < bytes.size) : UInt64 :=
+  have small (n : Nat) (hn : n ≤ 7) :
+      offset.toNat + (USize.ofNat n).toNat < bytes.size :=
+    Nat.lt_of_le_of_lt (Nat.add_le_add_left (Nat.le_trans USize.toNat_ofNat_le hn) _) bound
+  byteMachine bytes offset 0 (small 0 (by decide)) |||
+    (byteMachine bytes offset 1 (small 1 (by decide)) <<< 8) |||
+    (byteMachine bytes offset 2 (small 2 (by decide)) <<< 16) |||
+    (byteMachine bytes offset 3 (small 3 (by decide)) <<< 24) |||
+    (byteMachine bytes offset 4 (small 4 (by decide)) <<< 32) |||
+    (byteMachine bytes offset 5 (small 5 (by decide)) <<< 40) |||
+    (byteMachine bytes offset 6 (small 6 (by decide)) <<< 48) |||
+    (byteMachine bytes offset 7 (small 7 (by decide)) <<< 56)
+
 /-- Assemble a word using proof-carrying machine-sized byte offsets. -/
 @[inline] def wordMachine (bytes : @& ByteArray) (offset : USize) : UInt64 :=
   if h : 7 < bytes.usize && offset < bytes.usize - 7 then
@@ -35,17 +50,7 @@ def decodeScalar (block : @& Block) : Array ScalarRecord := Id.run do
       rw [USize.lt_iff_toNat_lt, USize.toNat_sub_of_le _ _ hle] at hi
       rw [show (7 : USize).toNat = 7 from USize.toNat_ofNat_of_lt_32 (by decide)] at hi
       omega
-    have small (n : Nat) (hn : n ≤ 7) :
-        offset.toNat + (USize.ofNat n).toNat < bytes.size :=
-      Nat.lt_of_le_of_lt (Nat.add_le_add_left (Nat.le_trans USize.toNat_ofNat_le hn) _) hb
-    byteMachine bytes offset 0 (small 0 (by decide)) |||
-      (byteMachine bytes offset 1 (small 1 (by decide)) <<< 8) |||
-      (byteMachine bytes offset 2 (small 2 (by decide)) <<< 16) |||
-      (byteMachine bytes offset 3 (small 3 (by decide)) <<< 24) |||
-      (byteMachine bytes offset 4 (small 4 (by decide)) <<< 32) |||
-      (byteMachine bytes offset 5 (small 5 (by decide)) <<< 40) |||
-      (byteMachine bytes offset 6 (small 6 (by decide)) <<< 48) |||
-      (byteMachine bytes offset 7 (small 7 (by decide)) <<< 56)
+    wordBounded bytes offset hb
   else 0
 
 private theorem byteMachine_eq (bytes : ByteArray) (offset i : USize)
@@ -79,7 +84,7 @@ theorem wordMachine_eq (bytes : ByteArray) (offset : USize)
     omega
   have digit (n : Nat) (hn : n < 8) : (USize.ofNat n).toNat = n :=
     USize.toNat_ofNat_of_lt_32 (by omega)
-  unfold wordMachine word joinBytes
+  unfold wordMachine word joinBytes wordBounded
   rw [dite_eq_left (Bool.and_eq_true_iff.mpr ⟨decide_eq_true short, decide_eq_true inBounds⟩)]
   simp only [byteMachine_eq _ _ _ limit,
     show (0 : USize).toNat = 0 from digit 0 (by decide),
@@ -242,28 +247,49 @@ private abbrev FixedBytes (size : Nat) := { bytes : ByteArray // bytes.size = si
         (v := splitByte value lane.toNat) (h := index)
       exact hu.trans hsize⟩
 
+private theorem machineExtent (bytes : ByteArray) (offset extra : USize)
+    (h : (decide (extra < bytes.usize) && decide (offset < bytes.usize - extra)) = true) :
+    offset.toNat + extra.toNat < bytes.size := by
+  have hsize : bytes.usize.toNat ≤ bytes.size := USize.toNat_ofNat_le
+  have hle : extra ≤ bytes.usize :=
+    USize.le_of_lt (of_decide_eq_true (Bool.and_eq_true_iff.mp h).1)
+  have hi : offset < bytes.usize - extra := of_decide_eq_true (Bool.and_eq_true_iff.mp h).2
+  rw [USize.lt_iff_toNat_lt, USize.toNat_sub_of_le _ _ hle] at hi
+  omega
+
+@[inline] private def storeWordIn (bytes : FixedBytes size) (offset : USize)
+    (value : UInt64) (extent : offset.toNat + 7 < size) : FixedBytes size :=
+  have laneBound (n : Nat) (hn : n ≤ 7) :
+      offset.toNat + (USize.ofNat n).toNat < size :=
+    have small : (USize.ofNat n).toNat ≤ n := USize.toNat_ofNat_le
+    by omega
+  let b1 := storeLane bytes offset 0 value (laneBound 0 (by decide))
+  let b2 := storeLane b1 offset 1 value (laneBound 1 (by decide))
+  let b3 := storeLane b2 offset 2 value (laneBound 2 (by decide))
+  let b4 := storeLane b3 offset 3 value (laneBound 3 (by decide))
+  let b5 := storeLane b4 offset 4 value (laneBound 4 (by decide))
+  let b6 := storeLane b5 offset 5 value (laneBound 5 (by decide))
+  let b7 := storeLane b6 offset 6 value (laneBound 6 (by decide))
+  storeLane b7 offset 7 value (laneBound 7 (by decide))
+
 @[inline] def storeWord (bytes : ByteArray) (offset : USize) (value : UInt64) : ByteArray :=
   if h : 7 < bytes.usize && offset < bytes.usize - 7 then
-    have sizeBound : bytes.usize.toNat ≤ bytes.size := USize.toNat_ofNat_le
-    have hle : (7 : USize) ≤ bytes.usize :=
-      USize.le_of_lt (of_decide_eq_true (Bool.and_eq_true_iff.mp h).1)
-    have hi : offset < bytes.usize - 7 := of_decide_eq_true (Bool.and_eq_true_iff.mp h).2
-    have hiNat : offset.toNat < bytes.usize.toNat - 7 := by
-      rwa [USize.lt_iff_toNat_lt, USize.toNat_sub_of_le _ _ hle,
-        show (7 : USize).toNat = 7 from USize.toNat_ofNat_of_lt_32 (by decide)] at hi
-    have laneBound (n : Nat) (hn : n ≤ 7) :
-        offset.toNat + (USize.ofNat n).toNat < bytes.size :=
-      have small : (USize.ofNat n).toNat ≤ n := USize.toNat_ofNat_le
-      by omega
-    let b0 : FixedBytes bytes.size := ⟨bytes, rfl⟩
-    let b1 := storeLane b0 offset 0 value (laneBound 0 (by decide))
-    let b2 := storeLane b1 offset 1 value (laneBound 1 (by decide))
-    let b3 := storeLane b2 offset 2 value (laneBound 2 (by decide))
-    let b4 := storeLane b3 offset 3 value (laneBound 3 (by decide))
-    let b5 := storeLane b4 offset 4 value (laneBound 4 (by decide))
-    let b6 := storeLane b5 offset 5 value (laneBound 5 (by decide))
-    let b7 := storeLane b6 offset 6 value (laneBound 6 (by decide))
-    (storeLane b7 offset 7 value (laneBound 7 (by decide))).val
+    have extent := machineExtent bytes offset 7 h
+    have seven : (7 : USize).toNat = 7 := USize.toNat_ofNat_of_lt_32 (by decide)
+    (storeWordIn ⟨bytes, rfl⟩ offset value (by rwa [seven] at extent)).val
+  else bytes
+
+/-- Write both words with one extent check. A short destination is preserved. -/
+@[inline] def storePair (bytes : ByteArray) (offset : USize) (key value : UInt64) : ByteArray :=
+  if h : 15 < bytes.usize && offset < bytes.usize - 15 then
+    have extent := machineExtent bytes offset 15 h
+    have fifteen : (15 : USize).toNat = 15 := USize.toNat_ofNat_of_lt_32 (by decide)
+    have bound : offset.toNat + 15 < bytes.size := by rwa [fifteen] at extent
+    let middle := storeWordIn ⟨bytes, rfl⟩ offset key (by omega)
+    (storeWordIn middle (offset + 8) value (by
+      rw [USize.toNat_add, show (8 : USize).toNat = 8 from USize.toNat_ofNat_of_lt_32 (by decide)]
+      have hm := Nat.mod_le (offset.toNat + 8) (2 ^ System.Platform.numBits)
+      omega)).val
   else bytes
 
 /-- Grow a zero-filled destination by copying successively larger zero spans. -/

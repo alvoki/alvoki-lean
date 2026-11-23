@@ -39,3 +39,12 @@ python3 benchmarks/packed.py --summarize /tmp/alvoki-packed.csv
 ```
 
 The script builds a separate experiment binary with optional C-backed modes. See the [experiment results and C interface contract](docs/packed-experiments.md).
+
+## Native SIMD and merge spans
+
+```sh
+bash scripts/native.sh --out /tmp/alvoki-native.csv
+python3 benchmarks/native.py --summarize /tmp/alvoki-native.csv
+```
+
+This suite compares a compiler-vectorized native Lean scan, Rust scalar and SIMD controls, and native merge and encoding variants. [Results and assembly evidence](docs/native-experiments.md)

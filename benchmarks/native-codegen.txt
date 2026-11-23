@@ -1,0 +1,52 @@
+Clang remarks for the bounded loop
+NativeTune.c:512:16: remark: vectorized loop (vectorization width: 2, interleaved count: 2) [-Rpass=loop-vectorize]
+
+SIMD instructions in the executable Lean bounded scan
+  10c3eb:	66 0f ef c0          	pxor   %xmm0,%xmm0
+  10c3f2:	66 0f ef c9          	pxor   %xmm1,%xmm1
+  10c400:	f3 0f 6f 50 e0       	movdqu -0x20(%rax),%xmm2
+  10c405:	f3 0f 6f 58 f0       	movdqu -0x10(%rax),%xmm3
+  10c40a:	f3 0f 6f 20          	movdqu (%rax),%xmm4
+  10c40e:	f3 0f 6f 68 10       	movdqu 0x10(%rax),%xmm5
+  10c417:	66 0f 6c f3          	punpcklqdq %xmm3,%xmm6
+  10c41b:	66 0f 6d d3          	punpckhqdq %xmm3,%xmm2
+  10c41f:	66 0f ef d6          	pxor   %xmm6,%xmm2
+  10c423:	66 0f d4 ca          	paddq  %xmm2,%xmm1
+  10c42b:	66 0f 6c d5          	punpcklqdq %xmm5,%xmm2
+  10c42f:	66 0f 6d e5          	punpckhqdq %xmm5,%xmm4
+  10c433:	66 0f ef e2          	pxor   %xmm2,%xmm4
+  10c437:	66 0f d4 c4          	paddq  %xmm4,%xmm0
+  10c445:	66 0f d4 c1          	paddq  %xmm1,%xmm0
+  10c44e:	66 0f d4 c8          	paddq  %xmm0,%xmm1
+
+Vectorized and scalar Rust scan controls
+rust/target/release/alvoki-native
+   17e79:	66 0f ef c0          	pxor   %xmm0,%xmm0
+   17e80:	66 0f ef c9          	pxor   %xmm1,%xmm1
+   17e90:	f3 0f 6f 57 e0       	movdqu -0x20(%rdi),%xmm2
+   17e95:	f3 0f 6f 5f f0       	movdqu -0x10(%rdi),%xmm3
+   17e9a:	f3 0f 6f 27          	movdqu (%rdi),%xmm4
+   17e9e:	f3 0f 6f 6f 10       	movdqu 0x10(%rdi),%xmm5
+   17ea7:	66 0f 6c f3          	punpcklqdq %xmm3,%xmm6
+   17eab:	66 0f 6d d3          	punpckhqdq %xmm3,%xmm2
+   17eaf:	66 0f ef d6          	pxor   %xmm6,%xmm2
+   17eb3:	66 0f d4 ca          	paddq  %xmm2,%xmm1
+   17ebb:	66 0f 6c d5          	punpcklqdq %xmm5,%xmm2
+   17ebf:	66 0f 6d e5          	punpckhqdq %xmm5,%xmm4
+   17ec3:	66 0f ef e2          	pxor   %xmm2,%xmm4
+   17ec7:	66 0f d4 c4          	paddq  %xmm4,%xmm0
+   17ed5:	66 0f d4 c1          	paddq  %xmm1,%xmm0
+   17ede:	66 0f d4 c8          	paddq  %xmm0,%xmm1
+rust/target/scalar/release/alvoki-native
+   17e36:	31 c0                	xor    %eax,%eax
+   17e39:	48 83 c6 f0          	add    $0xfffffffffffffff0,%rsi
+   17e52:	31 c0                	xor    %eax,%eax
+   17e5a:	31 c0                	xor    %eax,%eax
+   17e64:	48 33 37             	xor    (%rdi),%rsi
+   17e6b:	48 01 f0             	add    %rsi,%rax
+   17e6e:	4c 33 47 10          	xor    0x10(%rdi),%r8
+   17e76:	48 33 77 20          	xor    0x20(%rdi),%rsi
+   17e7a:	4c 01 c6             	add    %r8,%rsi
+   17e7d:	48 01 c6             	add    %rax,%rsi
+   17e84:	48 33 47 30          	xor    0x30(%rdi),%rax
+   17e88:	48 83 c7 40          	add    $0x40,%rdi

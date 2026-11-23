@@ -28,3 +28,14 @@ name = "Packed"
 name = "alvoki-packed"
 root = "PackedMain"
 moreLinkArgs = [".lake/alvoki-packed.o"]
+
+[[lean_lib]]
+name = "PackedRun"
+
+[[lean_lib]]
+name = "NativeTune"
+moreLeancArgs = ["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize", "-Rpass-analysis=loop-vectorize"]
+
+[[lean_exe]]
+name = "alvoki-native"
+root = "NativeMain"
