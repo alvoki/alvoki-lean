@@ -109,6 +109,17 @@ Warm-cache reopen medians ranged from 0.92× to 1.10× across the same-machine W
 
 Add `--reopen` to time `DiskTable.open` with an installed run set and a WAL fully covered by the checkpoint. The harness checks the manifest's generation, run count, and WAL watermark before timing, then verifies recovered rows after each trial.
 
+### Selected WAL frame ordinals
+
+Seven interleaved native release trials per build timed `DiskTable.open` on a warm cache, pinned to CPU 4. The checkpointed fixtures held a single run and a WAL fully covered by the checkpoint. The log-only fixture used descending keys. Ordinal validation runs during decoding and adds no sync calls. Checkpointed reopen medians stayed within 2% of baseline across the measured sizes. [Raw samples](../benchmarks/results/disk/ordinals/replay-ordinals-trials.csv) · [Environment](../benchmarks/results/disk/ordinals/replay-ordinals-environment.txt)
+
+| Workload | WAL frames | Baseline median | Checked median |
+|---|---:|---:|---:|
+| Checkpointed | 2,000 | 1.772 ms | 1.742 ms |
+| Checkpointed | 20,000 | 7.252 ms | 7.347 ms |
+| Checkpointed | 50,000 | 16.891 ms | 16.577 ms |
+| Log only | 20,000 | 6.395 ms | 6.196 ms |
+
 ### WAL sync process overhead
 
 In an interleaved native experiment with seven 64-write trials per mode, the old one-sync control took 1.17 ms per write and the durable-boundary reference took 2.58 ms per write. Lean launching and waiting for `/usr/bin/true` took 0.69 ms. This identifies process startup as a substantial part of the regression. A native control measured 0.63 ms for staging, all three sync calls, and rename without per-write process startup.
