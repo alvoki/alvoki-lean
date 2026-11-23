@@ -75,6 +75,34 @@ theorem replay_committed_count {state result : PackedTable} (events : List Write
       simp only [ih applied, replayWrite_advances step, List.length_cons]
       omega
 
+/-- Each correctly numbered event supplies a representable next sequence, so
+replaying a contiguous suffix cannot hit the write path's exhaustion guard. -/
+theorem replay_ordinals_complete (state : PackedTable) (events : List Write)
+    (ordinals : WAL.OrdinalsFrom (state.committed.toNat + 1) events) :
+    ∃ result, replay state events = .ok result ∧
+      result.committed.toNat = state.committed.toNat + events.length := by
+  have succeeds : ∃ result, replay state events = .ok result := by
+    induction events generalizing state with
+    | nil => exact ⟨state, rfl⟩
+    | cons event rest ih =>
+      obtain ⟨sequence, remaining⟩ := ordinals
+      have fits : state.committed.toNat + 1 < UInt64.size :=
+        sequence ▸ event.sequence.toNat_lt_size
+      have sequenceMatches : UInt64.ofNat (state.committed.toNat + 1) = event.sequence :=
+        UInt64.toNat_inj.mp ((UInt64.toNat_ofNat_of_lt' fits).trans sequence.symm)
+      have canReplay : ∃ next, replayWrite state event = .ok next := by
+        simp [replayWrite, prepareWrite, PackedTable.write, fits, sequenceMatches]
+      obtain ⟨next, step⟩ := canReplay
+      have numbered : WAL.OrdinalsFrom (next.committed.toNat + 1) rest := by
+        rwa [replayWrite_advances step]
+      obtain ⟨result, applied⟩ := ih next numbered
+      refine ⟨result, ?_⟩
+      unfold replay
+      rw [List.foldlM_cons, step]
+      exact applied
+  obtain ⟨result, applied⟩ := succeeds
+  exact ⟨result, applied, replay_committed_count events applied⟩
+
 theorem replay_append {initial committed : PackedTable} {acknowledged : List Write}
     (safe : replay initial acknowledged = .ok committed) (extra : List Write) :
     replay initial (acknowledged ++ extra) = replay committed extra := by
@@ -190,6 +218,31 @@ theorem recoverSelected_encoded (state : PackedTable) (covered pending : List Wr
       rw [replay_committed_count pending applied, ← count, frames]
     change (if table.committed.toNat == _ then Except.ok table else Except.error _) = _
     simp [guard]
+
+private theorem ordinals_append_right (start : Nat) (covered pending : List Write)
+    (ordinals : WAL.OrdinalsFrom start (covered ++ pending)) :
+    WAL.OrdinalsFrom (start + covered.length) pending := by
+  induction covered generalizing start with
+  | nil => simpa using ordinals
+  | cons event rest ih =>
+    have next : start + (event :: rest).length = (start + 1) + rest.length := by
+      simp only [List.length_cons]
+      omega
+    rw [next]
+    exact ih (start + 1) ordinals.2
+
+/-- The production selected-WAL loader succeeds if the checkpoint watermark
+matches the covered length and the complete selected history is consecutive. -/
+theorem recoverSelected_encoded_complete (state : PackedTable) (covered pending : List Write)
+    (ordinals : WAL.OrdinalsFrom 1 (covered ++ pending))
+    (count : covered.length = state.committed.toNat) :
+    ∃ result, recoverSelected state (WAL.encode (covered ++ pending)) = .ok result ∧
+      result.committed.toNat = covered.length + pending.length := by
+  have numbered : WAL.OrdinalsFrom (state.committed.toNat + 1) pending := by
+    simpa only [count, Nat.add_comm 1 state.committed.toNat] using
+      ordinals_append_right 1 covered pending ordinals
+  rw [recoverSelected_encoded state covered pending ordinals count, count]
+  exact replay_ordinals_complete state pending numbered
 
 /-- Reopening a flushed run set and replaying the durable suffix preserves
 the committed data and floor, including when a final frame is incomplete. -/
