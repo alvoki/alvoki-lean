@@ -48,7 +48,7 @@ theorem View.record?_eq (view : View) (i : USize) :
   · have bound : ¬i.toNat < view.count.toNat := fun lt => valid (USize.lt_iff_toNat_lt.mpr lt)
     simp [View.record?, valid, bound]
 
-theorem parseView_ordered {bytes : ByteArray} {view : View} (accepted : parseView bytes = .ok view) :
+theorem View.logical_ordered (view : View) (validated : view.validate = true) :
     ∀ i j, i < j → j < view.count.toNat →
       (view.logicalRecord i).1 < (view.logicalRecord j).1 := by
   intro i j order bound
@@ -59,13 +59,16 @@ theorem parseView_ordered {bytes : ByteArray} {view : View} (accepted : parseVie
   have jc : j.toUSize < view.count := USize.lt_iff_toNat_lt.mpr (by rwa [je])
   have ic : i.toUSize < view.count := USize.lt_trans ij jc
   simpa only [view.key_eq ic, view.key_eq jc, ie, je] using
-    view.validate_ordered (parseView_spec accepted).2.2.1 ij jc
+    view.validate_ordered validated ij jc
 
-theorem parseView_lowerBound {bytes : ByteArray} {view : View} (accepted : parseView bytes = .ok view)
-    (target : UInt64) :
+theorem parseView_ordered {bytes : ByteArray} {view : View} (accepted : parseView bytes = .ok view) :
+    ∀ i j, i < j → j < view.count.toNat →
+      (view.logicalRecord i).1 < (view.logicalRecord j).1 :=
+  view.logical_ordered (parseView_spec accepted).2.2.1
+
+theorem View.lowerBound_partition (view : View) (validated : view.validate = true) (target : UInt64) :
     Partition (fun i => decide ((view.logicalRecord i).1 < target)) view.count.toNat
       (view.lowerBound target).toNat := by
-  have parsed := (parseView_spec accepted).2.2.1
   have monotone (i j : Nat) (le : i ≤ j) (bound : j < view.count.toNat) :
       view.keyOrZero i.toUSize ≤ view.keyOrZero j.toUSize := by
     have limit := view.count.toNat_lt_size
@@ -75,7 +78,7 @@ theorem parseView_lowerBound {bytes : ByteArray} {view : View} (accepted : parse
       have exact_j : j.toUSize.toNat = j := USize.toNat_ofNat_of_lt (by omega)
       have ij : i.toUSize < j.toUSize := USize.lt_iff_toNat_lt.mpr (by rw [exact_i, exact_j]; omega)
       have jc : j.toUSize < view.count := USize.lt_iff_toNat_lt.mpr (by rwa [exact_j])
-      exact UInt64.le_of_lt (view.validate_ordered parsed ij jc)
+      exact UInt64.le_of_lt (view.validate_ordered validated ij jc)
   have partition := searchMachine_partition view.keyOrZero target view.count monotone
   have key_eq (i : Nat) (bound : i < view.count.toNat) :
       view.keyOrZero i.toUSize = (view.logicalRecord i).1 := by
@@ -91,6 +94,12 @@ theorem parseView_lowerBound {bytes : ByteArray} {view : View} (accepted : parse
     change decide ((view.logicalRecord i).1 < target) = false
     rw [← key_eq i bound]
     exact partition.2.2 i after bound
+
+theorem parseView_lowerBound {bytes : ByteArray} {view : View} (accepted : parseView bytes = .ok view)
+    (target : UInt64) :
+    Partition (fun i => decide ((view.logicalRecord i).1 < target)) view.count.toNat
+      (view.lowerBound target).toNat :=
+  view.lowerBound_partition (parseView_spec accepted).2.2.1 target
 
 #print axioms Alvoki.Opt.parseView_spec
 #print axioms Alvoki.Opt.View.record?_eq

@@ -11,9 +11,16 @@ case "${1:-}" in
     export ELAN_HOME="$toolchains/elan" RUSTUP_HOME="$toolchains/rustup" CARGO_HOME="$toolchains/cargo"
     export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
     (cd rust && cargo test --release --lib)
-    (cd lean && lake build MergeProofs BlockCodec && lake env leanchecker PackedViewProofs &&
-      lake env leanchecker MergeProofs && lake env leanchecker BlockCodec &&
-      lake env lean --run CoreChecks.lean)
+    (
+      cd lean
+      lake build MergeProofs RunMergeProofs CodecVariants CompactionProofs
+      for module in PackedViewProofs MergeProofs BlockCodec RunProofs RunMergeProofs CodecVariants \
+        CompactionModel Compaction CompactionCodec CompactionProofs SequentialModel; do
+        lake env leanchecker "$module"
+      done
+      lake env lean ProofRoadmapAudit.lean
+      lake env lean --run CoreChecks.lean
+    )
     ;;
   --runtime)
     bash scripts/packed.sh

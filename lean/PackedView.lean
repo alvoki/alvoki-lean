@@ -69,12 +69,11 @@ private theorem wordMachine_of_extent (bytes : ByteArray) (offset : USize)
   unfold wordMachine
   rw [dite_eq_left (Bool.and_eq_true_iff.mpr ⟨decide_eq_true short, decide_eq_true inBounds⟩)]
 
-theorem wordMachine_eq (bytes : ByteArray) (offset : USize)
+theorem wordBounded_eq (bytes : ByteArray) (offset : USize)
     (limit : bytes.size < USize.size) (bound : offset.toNat + 7 < bytes.size) :
-    wordMachine bytes offset = word bytes offset.toNat := by
+    wordBounded bytes offset bound = word bytes offset.toNat := by
   have digit (n : Nat) (hn : n < 8) : (USize.ofNat n).toNat = n :=
     USize.toNat_ofNat_of_lt_32 (by omega)
-  rw [wordMachine_of_extent bytes offset limit bound]
   unfold word joinBytes wordBounded
   simp only [byteMachine_eq _ _ _ limit,
     show (0 : USize).toNat = 0 from digit 0 (by decide),
@@ -85,6 +84,11 @@ theorem wordMachine_eq (bytes : ByteArray) (offset : USize)
     show (5 : USize).toNat = 5 from digit 5 (by decide),
     show (6 : USize).toNat = 6 from digit 6 (by decide),
     show (7 : USize).toNat = 7 from digit 7 (by decide)]
+
+theorem wordMachine_eq (bytes : ByteArray) (offset : USize)
+    (limit : bytes.size < USize.size) (bound : offset.toNat + 7 < bytes.size) :
+    wordMachine bytes offset = word bytes offset.toNat := by
+  rw [wordMachine_of_extent bytes offset limit bound, wordBounded_eq bytes offset limit bound]
 
 structure View where
   private mk ::

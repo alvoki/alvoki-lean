@@ -10,6 +10,8 @@ A snapshot sees the highest sequence at or below its sequence for each key. A to
 
 The independent Python oracle stores the exact versions in a dictionary, applies right-hand precedence, and groups the ordered history by key. Fixtures cover empty runs, sequence and key extrema, older snapshots, tombstones, reinsertion, equal-sequence conflicts, malformed headers and rows, and requests outside the supported snapshot bounds. Each timed dataset is also checked byte for byte for both writers. Snapshot folds are checked against the oracle. [Oracle and fixtures](../benchmarks/compaction.py)
 
+The Lean proofs connect the stock parser, per-row and span writers, and both scans to the logical history. A reparsed compaction preserves the winning entry and the full ordered visible row list at every supported snapshot. The sequential model extends that replacement theorem to arbitrary older and newer runs. [Proof inventory](verification-status.md) · [Executable refinements](../lean/CompactionProofs.lean)
+
 ## Workloads and timing
 
 The seeded workload proxies start with a sorted base run comprising two thirds of the input rows. The other run models range ingestion in batches, repeated updates to a hot set, deletion and reinsertion in that hot set, or a uniform mix of inserts and updates. The snapshot floor is one quarter of the update window behind the latest sequence. The delete–reinsert case reads at that older floor. The other cases read at the latest sequence.

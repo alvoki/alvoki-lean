@@ -65,3 +65,11 @@ The v3 experiment models updates, tombstones, and snapshot retention over two in
 ## Proof roadmap
 
 The roadmap records the executable v1 codec guarantees and the remaining proof obligations. It prioritizes the v3 snapshot preservation law and its connection to the parser and compaction paths, alongside completing the v1 lookup, range, and merge API proofs. It also records the contracts needed when alternative writer paths and future engine features become supported. [Proof roadmap](proof-roadmap.md)
+
+## Packed API and snapshot proofs
+
+The stock v1 parser, lookup, range checksum and right-biased merge now have end-to-end contracts against decoded records. The baseline, scalar and indexed encoders emit the canonical bytes, including the indexed fallback. The indexed store proofs describe the exact written bytes, untouched positions, buffer length, and offset bounds.
+
+Both stock v3 writers produce the reference encoding of the retained history. The parser recognizes exactly the valid v3 bytes, and both codec round trips check. For every snapshot at or above the floor the direct scan and a reparsed output consume the same ordered visible rows, including when a boundary tombstone masks an older run.
+
+The sequential model proves flush and adjacent-run replacement preserve point and range reads in their publication context. Snapshot pins constrain floor advancement. The executable packed compactor implements the model's replacement operation. Table-level publication, persistent codecs and recovery, and concurrency remain future engine work. [Proof roadmap](proof-roadmap.md) · [Verification status](verification-status.md)

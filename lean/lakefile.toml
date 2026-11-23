@@ -87,3 +87,27 @@ name = "SpanMerge"
 
 [[lean_lib]]
 name = "BlockCodec"
+
+[[lean_lib]]
+name = "CompactionModel"
+
+[[lean_lib]]
+name = "RunProofs"
+
+[[lean_lib]]
+name = "ByteWords"
+
+[[lean_lib]]
+name = "CompactionCodec"
+
+[[lean_lib]]
+name = "CompactionProofs"
+
+[[lean_lib]]
+name = "RunMergeProofs"
+
+[[lean_lib]]
+name = "CodecVariants"
+
+[[lean_lib]]
+name = "SequentialModel"

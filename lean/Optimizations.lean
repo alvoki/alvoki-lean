@@ -1,4 +1,4 @@
-import PackedView
+import PackedViewProofs
 
 namespace Alvoki.Opt
 
@@ -148,5 +148,103 @@ decreasing_by
 
 def View.readUnaligned (view : @& View) : UInt64 :=
   readUnalignedFrom view.bytes 0 view.count 0
+
+private theorem View.decodeFrom_records (view : View) (i : USize) (out : Array ScalarRecord) :
+    (view.decodeFrom i out).toList.map (fun row => (row.key, row.value)) =
+      out.toList.map (fun row => (row.key, row.value)) ++
+        (List.range' i.toNat (view.count.toNat - i.toNat)).map view.logicalRecord := by
+  rw [View.decodeFrom]
+  by_cases hit : i < view.count
+  · have bound := USize.lt_iff_toNat_lt.mp hit
+    have step := addOne i view.count bound
+    have length : view.count.toNat - i.toNat = (view.count.toNat - (i + 1).toNat) + 1 := by omega
+    rw [dite_eq_left hit, View.decodeFrom_records, Array.toList_push, List.map_append,
+      length, List.range'_succ, List.map_cons, ← step, view.key_eq hit, view.value_eq hit,
+      List.append_assoc]
+    rfl
+  · have noneLeft : view.count.toNat - i.toNat = 0 := by
+      rw [USize.lt_iff_toNat_lt] at hit
+      omega
+    simp [hit, noneLeft]
+termination_by view.count.toNat - i.toNat
+decreasing_by omega
+
+theorem View.decode_records (view : View) :
+    view.decode.toList.map (fun row => (row.key, row.value)) =
+      (List.range view.count.toNat).map view.logicalRecord := by
+  rw [View.decode, view.decodeFrom_records,
+    show (0 : USize).toNat = 0 from USize.toNat_ofNat_of_lt_32 (by decide),
+    Nat.sub_zero, ← List.range_eq_range']
+  rfl
+
+private theorem storeLane_byte (bytes : FixedBytes size) (offset lane : USize)
+    (v : UInt64) (extent : offset.toNat + lane.toNat < size)
+    (fits : size < USize.size) (j : Nat) :
+    (storeLane bytes offset lane v extent).val.data[j]? =
+      if offset.toNat + lane.toNat = j then some (splitByte v lane.toNat) else bytes.val.data[j]? := by
+  have exactOffset : (offset + lane).toNat = offset.toNat + lane.toNat := by
+    rw [USize.toNat_add, Nat.mod_eq_of_lt (Nat.lt_trans extent fits)]
+  obtain ⟨⟨data⟩, width⟩ := bytes
+  unfold storeLane ByteArray.uset
+  dsimp only
+  rw [Array.uset_eq_set, Array.getElem?_set, exactOffset]
+
+private theorem storeWordIn_byte (bytes : FixedBytes size) (offset : USize)
+    (v : UInt64) (extent : offset.toNat + 7 < size) (fits : size < USize.size) (j : Nat) :
+    (storeWordIn bytes offset v extent).val.data[j]? =
+      if offset.toNat ≤ j ∧ j < offset.toNat + 8 then some (splitByte v (j - offset.toNat))
+      else bytes.val.data[j]? := by
+  have small (n : Nat) (h : n < 8) : (USize.ofNat n).toNat = n :=
+    USize.toNat_ofNat_of_lt_32 (by omega)
+  simp only [storeWordIn, storeLane_byte _ _ _ _ _ fits j,
+    show (0 : USize).toNat = 0 from small 0 (by decide),
+    show (1 : USize).toNat = 1 from small 1 (by decide),
+    show (2 : USize).toNat = 2 from small 2 (by decide),
+    show (3 : USize).toNat = 3 from small 3 (by decide),
+    show (4 : USize).toNat = 4 from small 4 (by decide),
+    show (5 : USize).toNat = 5 from small 5 (by decide),
+    show (6 : USize).toNat = 6 from small 6 (by decide),
+    show (7 : USize).toNat = 7 from small 7 (by decide)]
+  by_cases hit : offset.toNat ≤ j ∧ j < offset.toNat + 8
+  · have n : j = offset.toNat + 0 ∨ j = offset.toNat + 1 ∨ j = offset.toNat + 2 ∨
+        j = offset.toNat + 3 ∨ j = offset.toNat + 4 ∨ j = offset.toNat + 5 ∨
+        j = offset.toNat + 6 ∨ j = offset.toNat + 7 := by omega
+    rcases n with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> simp [hit]
+  · have separate (n : Nat) (h : n < 8) : offset.toNat + n ≠ j := by omega
+    simp [hit, show offset.toNat ≠ j by omega, separate 1 (by decide), separate 2 (by decide),
+      separate 3 (by decide), separate 4 (by decide), separate 5 (by decide),
+      separate 6 (by decide), separate 7 (by decide)]
+
+@[simp] theorem storeWord_size (bytes : ByteArray) (offset : USize) (v : UInt64) :
+    (storeWord bytes offset v).size = bytes.size := by
+  unfold storeWord
+  split
+  · exact (storeWordIn ..).property
+  · rfl
+
+theorem storeWord_fallback (bytes : ByteArray) (offset : USize) (v : UInt64)
+    (outside : ¬ (7 < bytes.usize && offset < bytes.usize - 7) = true) :
+    storeWord bytes offset v = bytes := by
+  unfold storeWord
+  rw [dite_eq_right outside]
+
+/-- For a machine-sized buffer and a valid extent, a word store changes exactly
+its eight little-endian bytes. Every other byte and out-of-range index is preserved. -/
+theorem storeWord_byte (bytes : ByteArray) (offset : USize) (v : UInt64)
+    (fits : bytes.size < USize.size) (extent : offset.toNat + 7 < bytes.size) (j : Nat) :
+    (storeWord bytes offset v).data[j]? =
+      if offset.toNat ≤ j ∧ j < offset.toNat + 8 then some (splitByte v (j - offset.toNat))
+      else bytes.data[j]? := by
+  have size : bytes.usize.toNat = bytes.size := USize.toNat_ofNat_of_lt fits
+  have seven : (7 : USize).toNat = 7 := USize.toNat_ofNat_of_lt_32 (by decide)
+  have enough : (7 : USize) < bytes.usize := by rw [USize.lt_iff_toNat_lt, seven, size]; omega
+  have bound : offset < bytes.usize - 7 := by
+    rw [USize.lt_iff_toNat_lt, USize.toNat_sub_of_le _ _ (USize.le_of_lt enough), seven, size]
+    omega
+  have guard : (7 < bytes.usize && offset < bytes.usize - 7) = true :=
+    Bool.and_eq_true_iff.mpr ⟨decide_eq_true enough, decide_eq_true bound⟩
+  unfold storeWord
+  rw [dite_eq_left guard]
+  exact storeWordIn_byte ⟨bytes, rfl⟩ offset v extent fits j
 
 end Alvoki.Opt
