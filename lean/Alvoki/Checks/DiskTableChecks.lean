@@ -284,13 +284,21 @@ private def checkSnapshotSessions (root : FilePath) : IO Unit := do
 
 private def syncFixture : String := r#"#!/bin/sh
 set -eu
+mode=${ALVOKI_CHECK_SYNC_FAIL_MODE-before}
+if [ "$mode" = second-only ] && [ "$#" -eq 3 ] && [ "$1" = -- ] &&
+   [ "$3" = "${ALVOKI_CHECK_SYNC_FAIL-}" ]; then
+  printf '%s\n' "$2" "$3" >> "$ALVOKI_CHECK_SYNC_LOG"
+  command -p sync -- "$3"
+  printf 'synced second target before error: %s\n' "$3" >> "$ALVOKI_CHECK_SYNC_LOG"
+  exit 1
+fi
 for path do
   [ "$path" = -- ] && continue
   printf '%s\n' "$path" >> "$ALVOKI_CHECK_SYNC_LOG"
-  if [ "$path" = "${ALVOKI_CHECK_SYNC_FAIL-}" ]; then
+  if [ "$mode" != second-only ] && [ "$path" = "${ALVOKI_CHECK_SYNC_FAIL-}" ]; then
     seen=$(grep -Fxc -- "$path" "$ALVOKI_CHECK_SYNC_LOG")
     if [ "$seen" -gt "${ALVOKI_CHECK_SYNC_SKIP-0}" ]; then
-      if [ "${ALVOKI_CHECK_SYNC_FAIL_AFTER-0}" = 1 ]; then
+      if [ "$mode" = after ]; then
         [ "$#" -eq 2 ]
         [ "$1" = -- ]
         command -p sync -- "$path"
@@ -303,12 +311,22 @@ for path do
 done
 "#
 
+private inductive SyncFailureMode where
+  | beforeSync
+  | afterSync
+  | secondOnly
+
 private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation := "--open-once")
-    (skipFailures : Nat := 0) (failAfterSync := false) : IO (Bool × List String) := do
+    (skipFailures : Nat := 0) (failureMode : SyncFailureMode := .beforeSync) :
+    IO (Bool × List String) := do
   let log := bin / "sync.log"
   IO.FS.writeFile log ""
   let path := (← IO.getEnv "PATH").getD "/usr/bin:/bin"
   let executable ← IO.appPath
+  let mode := match failureMode with
+    | .beforeSync => "before"
+    | .afterSync => "after"
+    | .secondOnly => "second-only"
   let result ← IO.Process.output {
     cmd := executable.toString
     args := #[operation, dir.toString]
@@ -316,7 +334,7 @@ private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation
       ("ALVOKI_CHECK_SYNC_LOG", some log.toString),
       ("ALVOKI_CHECK_SYNC_FAIL", failAt.map FilePath.toString),
       ("ALVOKI_CHECK_SYNC_SKIP", some (toString skipFailures)),
-      ("ALVOKI_CHECK_SYNC_FAIL_AFTER", some (if failAfterSync then "1" else "0"))] }
+      ("ALVOKI_CHECK_SYNC_FAIL_MODE", some mode)] }
   let paths := (← IO.FS.readFile log).splitOn "\n" |>.filter (!·.isEmpty)
   return (result.exitCode == 0, paths)
 
@@ -395,7 +413,7 @@ private def checkWriteSyncErrorAfterEffect (root : FilePath) : IO Unit := do
   let staged := dir / "WAL.commit.next"
   -- The first directory target belongs to the grouped sync during open.
   let (written, syncs) ← probeDisk bin dir (some dir) (operation := "--write-once")
-    (skipFailures := 1) (failAfterSync := true)
+    (skipFailures := 1) (failureMode := .afterSync)
   let expectedSyncs := [wal.toString, dir.toString, wal.toString, staged.toString, dir.toString,
     s!"synced before error: {dir}"]
   check (!written && syncs == expectedSyncs) "write did not fail after the final directory sync succeeded"
@@ -415,6 +433,50 @@ private def checkWriteSyncErrorAfterEffect (root : FilePath) : IO Unit := do
     check (latest.sequence == 4 && (← reopened.lookup latest.handle 4) == some (some 41) &&
       (← reopened.lookup latest.handle 7) == some (some 99))
       "reopen lost an acknowledged write or the write made durable before returning an error"
+  finally reopened.close
+
+private def checkGroupedSyncPartialEffects (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 7 (some 70)) == 1) "unexpected checkpoint write sequence"
+    check (← db.advanceFloor 1) "could not advance the checkpoint floor"
+    db.checkpoint
+    check ((← db.write 4 (some 41)) == 2) "unexpected acknowledged suffix sequence"
+  finally db.close
+  let wal := dir / "WAL"
+  let marker := dir / "WAL.commit"
+  let staged := dir / "WAL.commit.next"
+  let acknowledged := WAL.encode [⟨1, 7, some 70⟩, ⟨2, 4, some 41⟩]
+  let oldMarker := WAL.Boundary.encode acknowledged.size.toUInt64
+  let (opened, syncs) ← probeDisk bin dir (some dir) (failureMode := .secondOnly)
+  check (!opened && syncs == [wal.toString, dir.toString, s!"synced second target before error: {dir}"])
+    "aligned reopen did not fail after syncing only the directory"
+  check (decide ((← IO.FS.readBinFile wal) = acknowledged ∧ (← IO.FS.readBinFile marker) = oldMarker))
+    "failed aligned reopen changed the acknowledged WAL"
+  let (written, syncs) ← probeDisk bin dir (some staged) (operation := "--write-once")
+    (failureMode := .secondOnly)
+  check (!written && syncs == [wal.toString, dir.toString, wal.toString, staged.toString,
+    s!"synced second target before error: {staged}"])
+    "write did not fail after syncing only the staged marker"
+  let appended := acknowledged ++ WAL.encodeFrame ⟨3, 7, some 99⟩
+  check (decide ((← IO.FS.readBinFile wal) = appended ∧
+    (← IO.FS.readBinFile staged) = WAL.Boundary.encode appended.size.toUInt64))
+    "failed staging sync did not leave the complete append and staged marker"
+  check (decide ((← IO.FS.readBinFile marker) = oldMarker)) "failed staging sync published the new marker"
+  let reopened ← DiskTable.open dir
+  try
+    expectManifest dir 1 1 1 1
+    check (decide ((← IO.FS.readBinFile wal) = acknowledged)) "reopen did not trim the unacknowledged append"
+    check ((← reopened.acquireAt 0).isNone) "reopen lost the checkpoint floor"
+    let some historical ← reopened.acquireAt 1 | throw (IO.userError "reopen lost the checkpoint snapshot")
+    let oldRows := (← reopened.range historical.handle 0 8).map (List.map fun row => (row.key, row.payload))
+    check (oldRows == some [(7, some 70)]) "reopen changed the retained snapshot range"
+    let latest ← reopened.acquire
+    check (latest.sequence == 2 && (← reopened.lookup latest.handle 4) == some (some 41) &&
+      (← reopened.lookup latest.handle 7) == some (some 70)) "reopen changed the selected WAL history"
   finally reopened.close
 
 private def checkFirstCheckpointCuts (root : FilePath) : IO Unit := do
@@ -593,6 +655,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkSnapshotSessions
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkWriteSyncErrorAfterEffect
+    IO.FS.withTempDir checkGroupedSyncPartialEffects
     IO.FS.withTempDir checkFirstCheckpointCuts
     IO.FS.withTempDir checkCheckpointRetryWithFewerRuns
     IO.FS.withTempDir checkRecoveryAfterCheckpointAndWriteFailures
