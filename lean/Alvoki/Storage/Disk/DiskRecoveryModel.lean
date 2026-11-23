@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.MarkedWalReopenModel
+import Alvoki.Storage.Publication.CheckpointPublicationModel
 
 namespace Alvoki.Storage
 open Alvoki.Compaction (CheckedRun)
@@ -36,6 +37,48 @@ theorem CheckpointForRecovery.loads {manifest : Option ByteArray} {files : List 
       loadRunSet decoded (checkpoint.runs.map fun run : CheckedRun => run.run.bytes)) = .ok base
     rw [Manifest.decode_encode header validFloor]
     exact loaded
+
+private theorem read_ordered_runs (read : Nat → Option ByteArray) (first : Nat)
+    (files : List ByteArray)
+    (durable : ∀ index, index < files.length → read (first + index) = files[index]?) :
+    (List.range' first files.length).mapM read = some files := by
+  induction files generalizing first with
+  | nil => rfl
+  | cons bytes files ih =>
+    have head : read first = some bytes := by
+      simpa using durable 0 (by simp)
+    have tail : (List.range' (first + 1) files.length).mapM read = some files := by
+      apply ih
+      intro index within
+      simpa [Nat.add_assoc, Nat.add_comm 1 index] using durable (index + 1) (by simpa using within)
+    simp [List.range'_succ, List.mapM_cons, head, tail]
+
+/-- A manifest admitted by the publication model supplies the exact ordered
+run bytes for recovery, provided its published content has a checkpoint
+witness. The absent manifest uses the empty checkpoint. -/
+theorem CheckpointForRecovery.of_durable_manifest {image : CheckpointPublication.Image}
+    {walSequence : UInt64} {manifest : Option ByteArray}
+    (accepted : image.Accepts walSequence (fun header files =>
+      ∃ checkpoint, CheckpointForRecovery (some (Manifest.encode header)) files checkpoint) manifest) :
+    ∃ files checkpoint, CheckpointForRecovery manifest files checkpoint ∧
+      (match manifest with
+      | none => some []
+      | some bytes => do
+        let header ← (Manifest.decode bytes).toOption
+        (List.range header.runCount.toNat).mapM (image.durable header.generation)) = some files := by
+  cases manifest with
+  | none => exact ⟨[], .empty, .absent, rfl⟩
+  | some bytes =>
+    obtain ⟨header, files, decoded, ⟨checkpoint, witness⟩, _, count, durable⟩ := accepted
+    refine ⟨files, checkpoint, ?_, ?_⟩
+    · simpa only [Manifest.decode_reencode decoded] using witness
+    · change (do
+        let header ← (Manifest.decode bytes).toOption
+        (List.range header.runCount.toNat).mapM (image.durable header.generation)) = some files
+      rw [decoded]
+      change (List.range header.runCount.toNat).mapM (image.durable header.generation) = some files
+      rw [count, List.range_eq_range']
+      exact read_ordered_runs _ 0 files (by simpa using durable)
 
 private theorem ordinals_prefix {first : Nat} {initial suffix : List WAL.Write}
     (ordered : WAL.OrdinalsFrom first (initial ++ suffix)) : WAL.OrdinalsFrom first initial := by
