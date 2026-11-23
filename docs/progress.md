@@ -233,3 +233,7 @@ The native fixture makes the aligned reopen sync fail after actually syncing onl
 ## Durable checkpoint files in recovery order
 
 `CheckpointForRecovery.of_durable_manifest` connects the checkpoint publication invariant to the recovery loader's ordered run witness. For a published manifest, reading the modeled durable run names at its decoded generation and indices returns the exact ordered checkpoint bytes. An absent manifest supplies the empty checkpoint. The storage contract still governs whether actual reads return those bytes or report an I/O error. [Checkpoint recovery witness](../lean/Alvoki/Storage/Disk/DiskRecoveryModel.lean)
+
+## Write-cut witnesses from ordered write effects
+
+The write model executes the same append and publication schedules as the adapter in a monad that retains state on error. Failed append, staging or grouped sync cannot reach rename. A grouped sync error records WAL durability and staged-marker durability independently. The rename and directory sync can report an error before or after applying their effect. `runWriteEffects_hasWriteCuts` derives the existing physical and marker witnesses for every visible and crash-surviving WAL candidate. A successful execution settles the extended marker and exact encoded frame. [Write-effect model](../lean/Alvoki/Storage/Disk/WalWritePublicationModel.lean)

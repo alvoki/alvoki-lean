@@ -41,6 +41,7 @@ lake env leanchecker Alvoki.Storage.Publication.DiskPublication
 lake env leanchecker Alvoki.Storage.Publication.DiskPublicationModel
 lake env leanchecker Alvoki.Storage.Disk.WalBoundary
 lake env leanchecker Alvoki.Storage.Disk.WalBoundaryModel
+lake env leanchecker Alvoki.Storage.Disk.WalWritePublicationModel
 lake env leanchecker Alvoki.Storage.Disk.MarkedWalReopenModel
 lake env leanchecker Alvoki.Storage.Publication.CheckpointPublicationModel
 lake env leanchecker Alvoki.Storage.Publication.DirectoryPublicationModel
