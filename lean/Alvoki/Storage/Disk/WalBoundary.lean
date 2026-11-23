@@ -1,4 +1,4 @@
-import Recovery
+import Alvoki.Storage.Disk.Recovery
 
 namespace Alvoki.WAL.Boundary
 open Alvoki.ByteWords

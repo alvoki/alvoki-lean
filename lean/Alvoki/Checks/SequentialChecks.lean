@@ -1,4 +1,4 @@
-import SnapshotTable
+import Alvoki.Storage.Table.SnapshotTable
 
 open Alvoki.Sequential
 

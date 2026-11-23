@@ -1,4 +1,4 @@
-import DiskPublication
+import Alvoki.Storage.Publication.DiskPublication
 
 namespace Alvoki.Storage.CheckpointPublication
 

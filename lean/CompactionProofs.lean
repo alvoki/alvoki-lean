@@ -1,5 +1,5 @@
 import CompactionCodec
-import SequentialModel
+import Alvoki.Storage.Table.SequentialModel
 
 namespace Alvoki.Compaction
 open Alvoki.Opt

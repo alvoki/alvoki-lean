@@ -15,7 +15,7 @@ Alvoki explores formally verified storage primitives in native Lean 4. The exper
 
 Import `PackedRun` and use `Alvoki.Packed.parseRun` to validate a version-1 block. The returned run supports checked record access, lookup, and half-open range checksums. `Alvoki.Packed.merge` produces the version-1 right-biased union, and `Alvoki.Packed.scanMerged` folds it directly. Import `SpanMerge` for the proved span writer or `BlockCodec` for the round-trip-checked v1 encoder and decoder. [Implementation and proof boundaries](docs/verification-status.md)
 
-Import `PackedTable` for a sequential snapshot table over packed v3 runs. Import `DiskTable` for the Linux adapter with a write-ahead log, checkpoints, and reopen. The adapter uses an existing dedicated directory. A snapshot handle belongs to its open session. Run `bash scripts/check-sequential.sh` from the root to build and exercise both APIs and audit the proofs. [Engine API and checkpoint protocol](docs/architecture.md#sequential-storage)
+Import `Alvoki.Storage.Table.PackedTable` for a sequential snapshot table over packed v3 runs. Import `Alvoki.Storage.Disk.DiskTable` for the Linux adapter with a write-ahead log, checkpoints, and reopen. The adapter uses an existing dedicated directory. A snapshot handle belongs to its open session. Run `bash scripts/check-sequential.sh` from the root to build and exercise both APIs and audit the proofs. [Engine API and checkpoint protocol](docs/architecture.md#sequential-storage)
 
 ## Reproduce on Linux x86-64
 

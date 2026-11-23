@@ -1,5 +1,5 @@
-import CompactionRead
-import SnapshotTable
+import Alvoki.Storage.Table.CompactionRead
+import Alvoki.Storage.Table.SnapshotTable
 
 namespace Alvoki.Storage
 open Alvoki.Compaction (CheckedRun inRange)

@@ -1,6 +1,6 @@
-import WalBoundary
-import Manifest
-import CheckpointPublication
+import Alvoki.Storage.Disk.WalBoundary
+import Alvoki.Storage.Disk.Manifest
+import Alvoki.Storage.Publication.CheckpointPublication
 
 namespace Alvoki.Storage
 open System Alvoki.Compaction

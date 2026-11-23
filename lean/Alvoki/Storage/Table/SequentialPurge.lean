@@ -1,4 +1,4 @@
-import SequentialModel
+import Alvoki.Storage.Table.SequentialModel
 
 namespace Alvoki.Sequential
 open Compaction.Model

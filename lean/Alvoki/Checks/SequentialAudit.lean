@@ -1,8 +1,8 @@
-import AxiomPolicy
-import DiskTable
-import DiskPublicationModel
-import WalBoundaryModel
-import CheckpointPublicationModel
+import Alvoki.Checks.AxiomPolicy
+import Alvoki.Storage.Disk.DiskTable
+import Alvoki.Storage.Publication.DiskPublicationModel
+import Alvoki.Storage.Disk.WalBoundaryModel
+import Alvoki.Storage.Publication.CheckpointPublicationModel
 
 #check_axioms Alvoki.Sequential.SnapshotPins.floor_check_cost
 #check_axioms Alvoki.Sequential.SnapshotPins.advance_iff

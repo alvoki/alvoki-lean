@@ -1,5 +1,5 @@
-import DiskPublication
-import Recovery
+import Alvoki.Storage.Publication.DiskPublication
+import Alvoki.Storage.Disk.Recovery
 
 namespace Alvoki.Storage.Publication
 

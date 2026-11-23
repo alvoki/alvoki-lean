@@ -1,4 +1,4 @@
-import DiskTable
+import Alvoki.Storage.Disk.DiskTable
 
 open System Alvoki Alvoki.Compaction Alvoki.Storage
 

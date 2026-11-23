@@ -1,5 +1,5 @@
-import WalBoundary
-import DiskPublicationModel
+import Alvoki.Storage.Disk.WalBoundary
+import Alvoki.Storage.Publication.DiskPublicationModel
 
 namespace Alvoki.WAL.Boundary
 open Storage Storage.Publication

@@ -83,7 +83,7 @@ bash scripts/disk-replay.sh --out /tmp/alvoki-replay-after.csv \
 | 10,000 | 329 ms | 2.59 ms | 174 ms |
 | 20,000 | 1,328 ms | 4.89 ms | 857 ms |
 
-Ascending insertion traverses the sorted memtable on every replayed record, so doubling the row count roughly quadruples time. Descending insertion adds each key at the front and takes roughly linear time. These timings establish the baseline for replacing the memtable. [Current insertion](../lean/storage/table/PackedTable.lean)
+Ascending insertion traverses the sorted memtable on every replayed record, so doubling the row count roughly quadruples time. Descending insertion adds each key at the front and takes roughly linear time. These timings establish the baseline for replacing the memtable. [Current insertion](../lean/Alvoki/Storage/Table/PackedTable.lean)
 
 ### Canonical database path at open
 

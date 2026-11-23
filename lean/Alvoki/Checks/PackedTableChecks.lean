@@ -1,4 +1,4 @@
-import PackedTable
+import Alvoki.Storage.Table.PackedTable
 
 open Alvoki.Storage Alvoki.Sequential
 

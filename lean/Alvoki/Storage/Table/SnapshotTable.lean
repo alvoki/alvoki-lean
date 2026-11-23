@@ -1,4 +1,4 @@
-import SequentialPurge
+import Alvoki.Storage.Table.SequentialPurge
 
 namespace Alvoki.Sequential
 open Compaction.Model

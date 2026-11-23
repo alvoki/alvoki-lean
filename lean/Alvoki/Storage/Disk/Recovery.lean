@@ -1,5 +1,5 @@
-import PackedTable
-import WriteAheadLog
+import Alvoki.Storage.Table.PackedTable
+import Alvoki.Storage.Disk.WriteAheadLog
 
 namespace Alvoki.Storage
 open Alvoki.WAL
