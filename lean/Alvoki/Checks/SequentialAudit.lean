@@ -98,6 +98,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.ReopenRetry.chosen_pair_from_initial
 #check_axioms Alvoki.WAL.Boundary.reopenRetry_valid
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.recover_chosen
+#check_axioms Alvoki.WAL.Boundary.markedReopenPreflight_selected
+#check_axioms Alvoki.WAL.Boundary.runMarkedReopen_preflight_error
+#check_axioms Alvoki.WAL.Boundary.ReopenRetry.runMarkedReopen_effect
 #check_axioms Alvoki.WAL.Boundary.recoverWriteCutAfterReopenRetry
 #check_axioms Alvoki.WAL.Boundary.WriteFiles.reopenImage_crashWal_nonempty
 #check_axioms Alvoki.WAL.Boundary.runWriteEffects_hasWriteCuts

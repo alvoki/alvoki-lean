@@ -241,3 +241,7 @@ The write model executes the same append and publication schedules as the adapte
 ## Failed checkpoint read leaves the pending repair untouched
 
 The native fixture presents a directory at an installed run path while a complete unselected WAL frame awaits repair. The run read returns `EISDIR`. A failed open issues no sync and preserves the WAL, marker, manifest and staging paths. With the exact run bytes restored, the retry follows the repair sync sequence, trims only the unselected frame, and preserves the latest and retained snapshot reads. [Read-error fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)
+
+## Reopen effects refine the retry model
+
+The marked reopen interpreter uses the shared repair schedule and the same repair-versus-aligned decision as the adapter. Grouped sync can report an error with just the file or directory effect, with both, or with neither. The model keeps conservative WAL candidates when only some effects are known. The audited theorem projects each attempt to the retry relation and proves that a successful schedule settles the visible metadata and WAL choices. Read or validation errors in preflight leave the modeled durable state untouched. Filesystem behavior and the supplied read results remain explicit at the interface. [Reopen effect proof](../lean/Alvoki/Storage/Disk/MarkedWalReopenModel.lean)
