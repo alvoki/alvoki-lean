@@ -107,6 +107,12 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (report : cut.CachedReopenReports descriptor) (installed : report.Installs after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.uncertainBatch cut.batch]) descriptor after
+  | batchMarkerProcessExit
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (cut : SegmentedBatchMarkerPowerLossReport directory before writer) (observed : cut.Reached)
+      (report : cut.ProcessExitCachedReopenReports descriptor) (installed : report.reopen.InstallsFromCut after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch cut.batch]) descriptor after
   | batchAppendPowerLoss
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedBatchAppendPowerLossReport directory before descriptor) (observed : report.Valid)
@@ -155,7 +161,8 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     change _ ++ _ = _
     rw [beforeHistory, List.append_assoc]
   | batchError _ _ installed ih
-  | batchPowerLoss _ _ _ _ installed ih =>
+  | batchPowerLoss _ _ _ _ installed ih
+  | batchMarkerProcessExit _ _ _ _ installed ih =>
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history installed.history⟩
   | batchAppendPowerLoss _ _ _ installed ih
@@ -219,6 +226,19 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterBatchPowerLoss
         (log ++ [.uncertainBatch cut.batch]) descriptor after := by
   obtain ⟨after, installed⟩ := report.installs observed (trace.preservesRetained ready).1
   exact ⟨after, installed, .batchPowerLoss trace cut observed report installed⟩
+
+/-- Process exit during marker publication records one uncertain batch.
+The exact final cached installation supplies the next writer in the trace. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterBatchMarkerProcessExit
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (ready : initial.RetainedReady directory initialDescriptor)
+    (cut : SegmentedBatchMarkerPowerLossReport directory before writer) (observed : cut.Reached)
+    (report : cut.ProcessExitCachedReopenReports descriptor) :
+    ∃ after, report.reopen.InstallsFromCut after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch cut.batch]) descriptor after := by
+  obtain ⟨after, installed⟩ := report.installs observed (trace.preservesRetained ready).1
+  exact ⟨after, installed, .batchMarkerProcessExit trace cut observed report installed⟩
 
 /-- A batch interrupted before marker publication contributes one uncertain
 submission and no retained frames. The next cached open installs the old
