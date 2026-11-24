@@ -37,7 +37,7 @@ theorem reopenAfterWriteError_completes {writer : MarkedWriterState}
         (·.getD 0) : Except String UInt64) = .ok generation ∧
       after.SettledFor checkpoint.manifest events ∧
       (events = writer.history ∨ events = writer.history ++ [event]) ∧
-      table.committed.toNat = events.length := by
+      table.committed.toNat = events.length ∧ before.directory.active.walBoundary ≠ none := by
   let old := checkpoint.covered ++ pending
   let stagedMarker := writer.image.directory.staged .walBoundary
   let stagedManifest := writer.image.directory.staged .manifest
@@ -121,7 +121,7 @@ theorem reopenAfterWriteError_completes {writer : MarkedWriterState}
     rw [visibleManifest, markerAt, markerEncoding]
   have onlyMetadata : after.directory.crashImages = [after.directory.active] := by rw [directory]; rfl
   refine ⟨events, table, _, after, nativeOpened, installedGeneration,
-    ⟨metadata, onlyMetadata, walActive, walActive.symm ▸ walChoices⟩, ?_, count⟩
+    ⟨metadata, onlyMetadata, walActive, walActive.symm ▸ walChoices⟩, ?_, count, isMarked⟩
   simpa only [history] using selectedHistory
 
 end Alvoki.WAL.Boundary

@@ -197,7 +197,7 @@ theorem RecoveryBoundary.completes
     obtain ⟨generation, completed⟩ := reads.shared_aligned_success settled report opened
     exact ⟨table, generation, _, _, completed, settled, rfl, count⟩
   | interruptedWrite fixed reads ready history prepared fits failed attempts report aligned durability =>
-    obtain ⟨events, table, generation, after, opened, _, settled, allowed, count⟩ :=
+    obtain ⟨events, table, generation, after, opened, _, settled, allowed, count, _⟩ :=
       reopenAfterWriteError_completes fixed ready history prepared fits failed attempts
         reads.checkpointReads reads.walReads reads.readManifest reads.readRuns reads.readMarker reads.readWal report aligned
         durability
