@@ -63,9 +63,9 @@ def clean_up(process, sync_pid_file):
 
 
 @contextmanager
-def native_process(binary, operation, database, env=None, sync_pid_file=None):
+def native_process(binary, operation, database, *args, env=None, sync_pid_file=None):
     process = subprocess.Popen(
-        [binary, operation, database], env=env, start_new_session=True,
+        [binary, operation, database, *args], env=env, start_new_session=True,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
     )
     try:
@@ -77,8 +77,8 @@ def native_process(binary, operation, database, env=None, sync_pid_file=None):
             process.stderr.close()
 
 
-def run_probe(binary, operation, database):
-    with native_process(binary, operation, database) as process:
+def run_probe(binary, operation, database, *args):
+    with native_process(binary, operation, database, *args) as process:
         _, stderr = process.communicate(timeout=TIMEOUT)
         return process.returncode, stderr
 
@@ -121,17 +121,37 @@ def check_process_death(binary, root, after_rename, rotated):
     require(status == 0, f"could not prepare the fixed checkpoint: {stderr}")
     acknowledged = wal.read_bytes()
     boundary = marker.read_bytes()
-    checkpoint = {name: (database / name).read_bytes() for name in ("MANIFEST", "run-1-0.v3")}
-    sealed = (database / "WAL-segment-0").read_bytes() if rotated else None
+    fixed_names = ["MANIFEST", "run-1-0.v3"]
+    if rotated:
+        fixed_names.append("WAL-segment-0")
+    fixed_files = {name: (database / name).read_bytes() for name in fixed_names}
+
+    def check_fixed_files():
+        require(all((database / name).read_bytes() == data for name, data in fixed_files.items()),
+                "recovery changed the fixed checkpoint or sealed prefix")
+
     control = root / "control"
     shutil.copytree(database, control)
-    status, stderr = run_probe(binary, "--write-once", control)
+    submitted_value = "100"
+    status, stderr = run_probe(binary, "--write-once", control, submitted_value)
     require(status == 0, f"could not prepare exact expected append: {stderr}")
     appended = (control / segment).read_bytes()
     require(acknowledged and len(appended) == 2 * len(acknowledged) and appended.startswith(acknowledged),
             "the acknowledged control write did not extend the WAL by one frame")
     expected_wal = appended if after_rename else acknowledged
     expected_marker = (control / "WAL.commit").read_bytes() if after_rename else boundary
+    expected_sequence = 1 + int(rotated) + int(after_rename)
+    recovery_args = (str(expected_sequence), submitted_value if after_rename else "99")
+    resume_control = control
+    if not after_rename:
+        resume_control = root / "resume-control"
+        shutil.copytree(database, resume_control)
+    status, stderr = run_probe(binary, "--resume-recovered", resume_control, *recovery_args)
+    require(status == 0, f"could not prepare exact resumed append: {stderr}")
+    resumed_wal = (resume_control / segment).read_bytes()
+    resumed_marker = (resume_control / "WAL.commit").read_bytes()
+    require(resumed_wal.startswith(expected_wal) and len(resumed_wal) == len(expected_wal) + len(acknowledged),
+            "control did not append one frame to the recovered keeper")
 
     ready = root / "sync.pid"
     release = root / "release-sync"
@@ -163,7 +183,7 @@ fi
 exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
 ''')
     wrapper.chmod(0o700)
-    with native_process(binary, "--write-once", database, sync_pid_file=ready, env={
+    with native_process(binary, "--write-once", database, submitted_value, sync_pid_file=ready, env={
         **os.environ,
         "PATH": os.pathsep.join([str(root), os.defpath]),
         "ALVOKI_CHECK_SYNC_ARITY": "2" if after_rename else "3",
@@ -191,8 +211,8 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
         owner.kill()
         require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "fixture owner was not killed")
         require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child did not outlive its owner")
-        status, stderr = run_probe(binary, "--open-once", database)
-        require(status == 0, f"could not reopen after owner death: {stderr}")
+        status, stderr = run_probe(binary, "--check-recovered-table", database, *recovery_args)
+        require(status == 0, f"reopen after owner death returned the wrong table: {stderr}")
         require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during recovery")
         recovered_wal = wal.stat()
         if not after_rename:
@@ -206,11 +226,13 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
         require(os.path.samestat(wal.stat(), recovered_wal), "delayed sync changed the recovered WAL binding")
         require(wal.read_bytes() == expected_wal and marker.read_bytes() == expected_marker,
                 "recovery or delayed sync changed the selected WAL bytes")
-        require(all((database / name).read_bytes() == data for name, data in checkpoint.items()),
-                "recovery or delayed sync changed the fixed checkpoint")
-        if sealed is not None:
-            require((database / "WAL-segment-0").read_bytes() == sealed,
-                    "recovery or delayed sync changed the sealed prefix")
+        check_fixed_files()
+        status, stderr = run_probe(binary, "--resume-recovered", database, *recovery_args)
+        require(status == 0, f"could not append from the recovered state: {stderr}")
+        require(os.path.samestat(wal.stat(), recovered_wal)
+                and wal.read_bytes() == resumed_wal and marker.read_bytes() == resumed_marker,
+                "the next append did not extend the recovered keeper and absolute marker")
+        check_fixed_files()
 
 
 if __name__ == "__main__":
@@ -220,4 +242,4 @@ if __name__ == "__main__":
         for after_rename in (False, True):
             with tempfile.TemporaryDirectory(prefix="alvoki-process-death-") as directory:
                 check_process_death(binary, Path(directory).resolve(), after_rename, rotated)
-    print("Reopened zero and rotated WAL keepers after owner death and delayed sync.")
+    print("Recovered and extended zero and rotated WAL keepers after owner death and delayed sync.")
