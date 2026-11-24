@@ -249,7 +249,7 @@ private def checkDirectoryIdentity (dir : FilePath) : IO Unit := do
   finally IO.Process.setCurrentDir original
 
 private def checkDanglingFiles (dir : FilePath) : IO Unit := do
-  for name in ["MANIFEST", "WAL"] do
+  for name in ["MANIFEST", "WAL.commit", "WAL"] do
     let linked := dir / name
     let missing := dir / "missing"
     let result ← IO.Process.output {

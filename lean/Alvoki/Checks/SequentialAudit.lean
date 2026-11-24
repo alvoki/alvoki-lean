@@ -13,6 +13,7 @@ import Alvoki.Storage.Disk.MarkedSessionHistory
 import Alvoki.Storage.Disk.MarkedDatabaseState
 import Alvoki.Storage.Disk.ObservedMarkedState
 import Alvoki.Storage.Disk.MarkedDatabaseTrace
+import Alvoki.Storage.Disk.OptionalFileRead
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.LegacyWalRecovery
 import Alvoki.Storage.Disk.LegacyMarkedBootstrap
@@ -108,6 +109,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest_with
 #check_axioms Alvoki.Storage.readCheckpointRunBytes_eq_mapM
 #check_axioms Alvoki.Storage.CheckpointReadObservations.loaded
+#check_axioms Alvoki.Storage.OptionalPathRead.resultVisible
 #check_axioms Alvoki.Storage.CheckpointReadObservations.loaded_table
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loaded_observation
 #check_axioms Alvoki.Storage.recoverWriteCutSelectedPair

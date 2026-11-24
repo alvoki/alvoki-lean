@@ -251,16 +251,25 @@ theorem recoverRunSet_committedBoundary {checkpoint committed : PackedTable} (ge
   exact ⟨restored, reopened, loads, WAL.Boundary.select_encoded (covered ++ pending) tail walFits,
     accepted.trans replayed, reference⟩
 
-private def readOptionalFile (path : FilePath) : IO (Option ByteArray) := do
-  match ← path.symlinkMetadata.toBaseIO with
+/-- Look up a directory entry before reading it. Only a missing entry
+reported by the lookup can supply an absent database file. -/
+@[macro_inline] def readOptionalDatabaseFile [Monad m]
+    (lookup : m (Except IO.Error IO.FS.Metadata)) (read : Unit → m ByteArray)
+    (notRegular : Unit → IO.Error) (fail : IO.Error → m (Option ByteArray)) :
+    m (Option ByteArray) := do
+  match ← lookup with
   | .ok metadata =>
     unless metadata.type == .file do
-      throw (IO.userError s!"expected a regular database file: '{path}'")
-    return some (← IO.FS.readBinFile path)
+      return ← fail (notRegular ())
+    return some (← read ())
   | .error error@(.noFileOrDirectory _ osCode _) =>
     -- Linux ENOENT identifies a missing directory entry.
-    if osCode == 2 then return none else throw error
-  | .error error => throw error
+    if osCode == 2 then return none else fail error
+  | .error error => fail error
+
+private def readOptionalFile (path : FilePath) : IO (Option ByteArray) :=
+  readOptionalDatabaseFile path.symlinkMetadata.toBaseIO (fun _ => IO.FS.readBinFile path)
+    (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
 
 /-- Read the manifest's run files in increasing index order. Grow the array
 as reads succeed since the run count comes from on-disk input. -/

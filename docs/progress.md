@@ -371,3 +371,7 @@ The mixed trace carries the writer table, file image, installed generation and d
 ## History survives the first legacy marker publication
 
 Reported legacy repair, sync and marker-publication cuts preserve the complete decoded WAL history. The cut may expose a marker that a later crash still drops. Every admitted combination of metadata and WAL yields the same selected bytes and replayed table when the checkpoint base is the same validated table. If a marker is selectable, all possible WAL copies are already exact and require no tail repair. The invariant assumes an owned directory, a fixed optional manifest, and the same complete ordinal history in each initial WAL choice. [Legacy cut proof](../lean/Alvoki/Storage/Disk/LegacyBootstrapCuts.lean)
+
+## Optional filesystem reads
+
+The native adapter and observation proof share the lstat and read decision for the manifest, WAL marker and WAL. Only an `ENOENT` from directory-entry lookup can yield absence. A dangling symlink or a file read that fails after successful lookup gives an error. The locked and stable namespace contract supplies the correspondence between successful reads and the visible bindings. The native dangling-link fixture now covers all three names. Paired reopen ratios ranged from 0.983× to 1.015×. [Optional read proof](../lean/Alvoki/Storage/Disk/OptionalFileRead.lean) · [Measurements](../benchmarks/results/disk/optional-file-reads)
