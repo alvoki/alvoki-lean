@@ -15,6 +15,7 @@ import Alvoki.Storage.Disk.SegmentedKeeperSyncBeforeBarrier
 import Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
 import Alvoki.Storage.Disk.SegmentedCollectionBarrierError
 import Alvoki.Storage.Disk.SegmentedCollectionKeeperError
+import Alvoki.Storage.Disk.SegmentedCollectionRetryPowerLoss
 import Alvoki.Storage.Disk.WalGroupSyncSchedule
 import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.RetainedWriterReopen
@@ -115,6 +116,7 @@ import Alvoki.Storage.Disk.WalSegmentSizedOpen
 import Alvoki.Storage.Disk.IntegrityCheckpointSizedRead
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
+import Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -856,6 +858,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.PendingCollectionOpenTrace.keepsVisible
 #check_axioms Alvoki.Storage.DiskSession.PendingCollectionOpenTrace.keepsSettled
 #check_axioms Alvoki.Storage.DiskSession.PendingCollectionOpenTrace.continues
+#check_axioms Alvoki.Storage.DiskSession.PendingCollectionOpenTrace.keepsOtherOwner
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionPowerLossReport.installsAfterPending
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.Installs.unique
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.Installs.history
@@ -931,6 +935,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readSizedCheckpoint_eq
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.reopenSizedCheckpoint_eq
 #check_axioms Alvoki.Storage.DiskSession.AppendCutReady.withSizedCheckpoint
+#check_axioms Alvoki.Storage.WalSegmentRepair.selectWalExtentsThrough_offsets
+#check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_rejectsSeal
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalPayloadReports.byteCount
+#check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reported
+#check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_reported
+#check_axioms Alvoki.Storage.WalSegmentRepair.prepareBoundedMarkedFromReaders_reported
+#check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_eq_of_wal
+#check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_eq_of_selectedWal
 #check_axioms Alvoki.Storage.SyncPathGroup.run_pair
 #check_axioms Alvoki.Storage.SyncPathGroup.failedWalPublication
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.resolve_owned
