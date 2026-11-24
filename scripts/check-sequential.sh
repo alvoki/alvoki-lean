@@ -220,6 +220,7 @@ lake env leanchecker Alvoki.Storage.Disk.SyncHandleRouting
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 lake env leanchecker Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
+lake env leanchecker Alvoki.Storage.Disk.SegmentedDelayedAppendReopen
 lake env leanchecker Alvoki.Storage.Disk.SegmentedKeeperSyncBeforeBarrier
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointPublication
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointReopen

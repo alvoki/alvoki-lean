@@ -11,6 +11,7 @@ import Alvoki.Storage.Disk.SegmentedCheckpointPowerLoss
 import Alvoki.Storage.Disk.RetainedAppendReports
 import Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
+import Alvoki.Storage.Disk.SegmentedDelayedAppendReopen
 import Alvoki.Storage.Disk.SegmentedKeeperSyncBeforeBarrier
 import Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
 import Alvoki.Storage.Disk.SegmentedCollectionBarrierError
@@ -923,6 +924,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.selectsCrashNames
 #check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.continuesLineage
 #check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.afterLastWriterDrop
+#check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.retainedAppendCutAfterLastDrop
+#check_axioms Alvoki.Storage.DiskSession.SegmentedAppendFailure.retainedCut
+#check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.reopensRetainedAppendError
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.continuesLineage
 #check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_crashImages_subset
 #check_axioms Alvoki.Storage.WalSegmentRepair.Prepared.allowVisibleKeeper
