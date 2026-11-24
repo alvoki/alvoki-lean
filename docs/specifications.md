@@ -31,6 +31,8 @@ The direct merged checksum scan consumes the same logical records without produc
 
 `PackedTable` uses this layout for its immutable runs. Disk checkpoints write those bytes to `run-<generation>-<index>.v3`. Each field is an unsigned 64-bit little-endian integer.
 
+Alvoki is pre-release and has one active encoding per on-disk artifact. The run version and checkpoint manifest version label independent encodings. The version-1 run layout above is used by the codec and merge experiments. Changes to the active format can remove obsolete readers, proof branches, and fixtures without a migration path.
+
 | Byte offset | Field |
 |---:|---|
 | 0 | Entry count `n` |

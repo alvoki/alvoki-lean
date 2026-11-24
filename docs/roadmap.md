@@ -8,17 +8,23 @@ The [proof roadmap](proof-roadmap.md) records the completed codec and snapshot p
 
 The sequential multi-run engine now includes packed v3 reads, writes, flush, compaction, a WAL, checkpoint publication, and reopen. Differential traces cover the packed table and filesystem fixtures exercise recovery. [Sequential storage](architecture.md#sequential-storage)
 
-The long-term proof target is end-to-end refinement of the storage engine across crashes. It includes recovery progress, maintenance and reclamation, atomic batches and retries, resource bounds, and backup and format migration. [End-to-end storage guarantees](proof-roadmap.md#end-to-end-storage-guarantees)
+The long-term proof target is end-to-end refinement of the storage engine across crashes. It includes recovery progress, maintenance and reclamation, atomic batches and retries, resource bounds, and backup. While the engine is pre-release, adopt one active encoding per artifact and remove obsolete compatibility paths as their proof dependencies are replaced. [End-to-end storage guarantees](proof-roadmap.md#end-to-end-storage-guarantees)
 
 1. Complete the native primitive and live-session contracts for the locked mixed recovery proof. [Disk proof obligations](proof-roadmap.md#disk-guarantees-to-prove)
 2. Extend opt-in native collection beyond strictly older run generations. Add covered WAL segment and obsolete version collection. Measure retained space, replay work, and foreground latency during sustained collection. [Garbage collection contract](proof-roadmap.md#garbage-collection-contract)
-3. Use the native replay baseline when changing the memtable or WAL protocol. Extend engine measurements to report sync time separately from replay so startup cost stays visible. Measure compaction and checkpoint write amplification. [Performance requirements](proof-roadmap.md#performance-requirements-for-verified-paths) · [WAL sync measurements](benchmarks.md#wal-sync-on-successful-reopen)
-4. Evaluate MVCC, concurrency, and transaction semantics after a sequential LSM model stabilizes.
+3. Prove conditional recovery progress and bound the work by the retained checkpoint, required WAL and repair actions. Keep using the native replay baseline for changes to this path. [Performance requirements](proof-roadmap.md#performance-requirements-for-verified-paths) · [WAL sync measurements](benchmarks.md#wal-sync-on-successful-reopen)
+4. Extend the current unsigned 64-bit key and value API as product requirements become concrete. Evaluate concurrency and transaction semantics after the sequential LSM model stabilizes.
 5. Study object storage and reactive materialization once the local engine supports repeatable correctness and performance experiments.
 
 Review each milestone before starting its successor. Check the executable entry points, theorem assumptions, fault fixtures, and native timings. During larger milestones, review at natural checkpoints. Record confirmed issues and new obligations here or in the proof roadmap, with dependencies and clear completion criteria.
 
 For single-write latency, evaluate a persistent sync-only helper against the current adapter and its failure fixtures. Preserve acknowledgement ordering, keep rename under the database lock, and measure the supported native path. Evaluate durable batches to amortize the remaining sync costs. [WAL sync process experiment](benchmarks.md#wal-sync-process-overhead)
+
+## Release performance
+
+After the crash and reclamation proof priorities, record release-to-release microbenchmarks for codecs, merge and replay, and macrobenchmarks for the public engine under sustained writes, mixed reads and writes, checkpoints, compaction, reopen and pinned snapshots. Keep throughput, read and write latency percentiles, peak memory, retained bytes and write amplification as separate measurements. Report sync time separately from replay. Keep these measurements in the benchmark workflow for now.
+
+Use YCSB workload mixes as starting points for comparisons with RocksDB and Fjall. Run the same key and value sizes, durability guarantees, dataset, workload and hardware wherever the APIs permit it. Document workload differences when an engine cannot match those parameters. Performance changes to the native path carry the corresponding end-to-end proof and fault checks. [YCSB](https://github.com/brianfrankcooper/YCSB) · [RocksDB](https://github.com/facebook/rocksdb) · [Fjall](https://github.com/fjall-rs/fjall)
 
 ## Repository review follow-ups
 
