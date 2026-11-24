@@ -13,6 +13,7 @@ import Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
 import Alvoki.Storage.Disk.SegmentedDelayedAppendReopen
 import Alvoki.Storage.Disk.SegmentedKeeperReachedReplacement
+import Alvoki.Storage.Disk.SegmentedDelayedKeeperPowerLoss
 import Alvoki.Storage.Disk.SegmentedKeeperSyncBeforeBarrier
 import Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
 import Alvoki.Storage.Disk.SegmentedCollectionBarrierError
@@ -127,6 +128,7 @@ import Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
+import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
@@ -936,6 +938,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendFailure.retainedCut
 #check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.reopensRetainedAppendError
 #check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.atBoundedReplacementBarrier
+#check_axioms Alvoki.Storage.DiskSession.DelayedKeeperReplacementPowerLoss.reopensRetainedCached
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.continuesLineage
 #check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_crashImages_subset
 #check_axioms Alvoki.Storage.WalSegmentRepair.Prepared.allowVisibleKeeper
@@ -967,6 +970,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenExtentFailure.reopen_error
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenExtentFailure.reached_eq_of_readonly
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedSealExtentError
+#check_axioms Alvoki.Storage.SyncHandleRouting.readKeeperWith_rejectsExtent
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.read_error
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.keeperReached_eq_of_readonly
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.reopen_keeperExtentError
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedKeeperExtentError
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.selectedThroughEnd
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithPrefix_liftReports
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readSelectedCached
