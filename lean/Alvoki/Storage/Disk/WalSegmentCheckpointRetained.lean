@@ -1,9 +1,27 @@
-import Alvoki.Storage.Disk.WalSegmentCheckpointPublication
+import Alvoki.Storage.Disk.VersionedCheckpointRetry
+import Alvoki.Storage.Disk.WalSegmentReadPlan
 
 namespace Alvoki.Storage.CheckpointPublication
 
 open Manifest
 open WAL (frameSize)
+
+/-- A checkpoint cut changes the manifest and run namespace. Reuse its
+directory projection with the same settled marker and untouched segments. -/
+def Image.segmentedCheckpointView (published : Image) (before : WalSegmentImage) : WalSegmentImage :=
+  { before with directory :=
+      (published.markedReopenImage ⟨before.directory, .settled (some before.active.bytes)⟩).directory }
+
+theorem walRange_of_reports {pair : DirectoryPublication.Bindings} {marker : ByteArray}
+    {count : UInt64} {watermark through : Nat}
+    (checkpoint : selectedCheckpointWatermark pair.manifest = some watermark)
+    (visible : pair.walBoundary = some marker) (decoded : WAL.Boundary.decode marker = .ok count)
+    (size : count.toNat = through * frameSize) (covered : watermark ≤ through) :
+    pair.walRange = some ⟨watermark, through⟩ := by
+  simp only [DirectoryPublication.Bindings.walRange, checkpoint, visible, decoded, Except.toOption,
+    Bind.bind, Option.bind]
+  rw [size, Nat.mul_mod_left, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
+  simp only [covered, and_self, ite_true]
 
 private theorem coveredAtHistoryEnd {image : WalSegmentImage}
     {history : List WAL.Write} (layout : image.ReadLayout history) :

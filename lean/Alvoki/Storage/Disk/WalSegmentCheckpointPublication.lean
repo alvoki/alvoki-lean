@@ -1,17 +1,10 @@
-import Alvoki.Storage.Disk.VersionedCheckpointRetry
-import Alvoki.Storage.Disk.WalSegmentReadPlan
+import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 
 namespace Alvoki.Storage.CheckpointPublication
 
 open Manifest
 open WAL (frameSize)
 open WAL.Boundary (CheckpointRepresentsPrefix)
-
-/-- A checkpoint cut changes the manifest and run namespace. Reuse its
-directory projection with the same settled marker and untouched segments. -/
-def Image.segmentedCheckpointView (published : Image) (before : WalSegmentImage) : WalSegmentImage :=
-  { before with directory :=
-      (published.markedReopenImage ⟨before.directory, .settled (some before.active.bytes)⟩).directory }
 
 private theorem Image.segmentedCheckpointView_pair {published : Image} {before : WalSegmentImage}
     {pair : DirectoryPublication.Bindings} (chosen : (published.segmentedCheckpointView before).Selects pair) :
@@ -21,17 +14,6 @@ private theorem Image.segmentedCheckpointView_pair {published : Image} {before :
   · exact ⟨rfl, .inl rfl⟩
   · obtain ⟨candidate, member, rfl⟩ := List.mem_map.mp survives
     exact ⟨rfl, .inr member⟩
-
-theorem walRange_of_reports {pair : DirectoryPublication.Bindings} {marker : ByteArray}
-    {count : UInt64} {watermark through : Nat}
-    (checkpoint : selectedCheckpointWatermark pair.manifest = some watermark)
-    (visible : pair.walBoundary = some marker) (decoded : WAL.Boundary.decode marker = .ok count)
-    (size : count.toNat = through * frameSize) (covered : watermark ≤ through) :
-    pair.walRange = some ⟨watermark, through⟩ := by
-  simp only [DirectoryPublication.Bindings.walRange, checkpoint, visible, decoded, Except.toOption,
-    Bind.bind, Option.bind]
-  rw [size, Nat.mul_mod_left, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
-  simp only [covered, and_self, ite_true]
 
 /-- A complete strict checkpoint settles the new manifest. Every selection
 pairs it with the same WAL marker and untouched segment chain. -/
@@ -78,10 +60,10 @@ theorem Image.segmentedCheckpointView_settled
 a prefix of the checkpoint schedule. Every selectable manifest remains tied
 to the same marker and immutable segment layout. Its exact durable run
 bytes describe the covered history, and its watermark determines the
-canonical WAL read suffix. This case retains the full chain from zero. -/
+canonical WAL read suffix, including after covered files have been collected. -/
 theorem segmentedCheckpoint_cut
     {before : WalSegmentImage} {initial published : Image} {history : List WAL.Write}
-    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
+    (layout : before.ReadLayout history) (beforeValid : before.Valid history)
     (settled : before.directory.crashImages = [before.directory.active])
     (marker : before.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
     (walFits : (WAL.encode history).size < UInt64.size)
@@ -219,10 +201,16 @@ theorem segmentedCheckpoint_cut
         rw [exactBytes, decoded] at parse
         cases parse
         exact count
-  have afterLayout : after.ReadLayout history := ⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩
-  have afterValid : after.Valid history := WalSegmentImage.Valid.of_chain chain fun pair chosen => by
-    obtain ⟨_, _, _, _, range, decoded, through, _⟩ := readInputs pair chosen
-    exact ⟨range, decoded, Nat.zero_le _, Nat.le_of_eq through⟩
+  obtain ⟨afterLayout, afterValid⟩ := Image.segmentedCheckpointView_retained layout beforeValid (by
+    intro pair chosen
+    obtain ⟨sameMarker, choice, _, _, range, decoded, through, watermark⟩ := readInputs pair chosen
+    rcases choice with old | next
+    · exact .inl (DirectoryPublication.Bindings.mk.injEq _ _ _ _ |>.mpr ⟨old, sameMarker⟩)
+    · have exactRange : range = ⟨history.length, history.length⟩ := by
+        cases range
+        simp only [MarkedWalRange.mk.injEq]
+        exact ⟨watermark next, through⟩
+      exact .inr (exactRange ▸ decoded))
   refine ⟨afterLayout, afterValid, fun pair chosen => ?_⟩
   obtain ⟨sameMarker, choice, accepted, runs, range, decoded, through, newCount⟩ := readInputs pair chosen
   obtain ⟨first, starts, _, addresses, required, _⟩ := afterLayout.selects afterValid chosen decoded
@@ -231,7 +219,7 @@ theorem segmentedCheckpoint_cut
 /-- A reported error determines the executed prefix of the checkpoint schedule. -/
 theorem segmentedCheckpoint_reportedCut
     {before : WalSegmentImage} {initial published : Image} {history : List WAL.Write}
-    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
+    (layout : before.ReadLayout history) (beforeValid : before.Valid history)
     (settled : before.directory.crashImages = [before.directory.active])
     (marker : before.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
     (walFits : (WAL.encode history).size < UInt64.size)
@@ -267,7 +255,7 @@ theorem segmentedCheckpoint_reportedCut
           WalSegment.Chain history first (after.readDescriptors range.watermark) := by
   intro next reported
   obtain ⟨cut, executed⟩ := initial.runVersionedWithReports_outcome next report reported
-  exact segmentedCheckpoint_cut layout chain settled marker walFits projected previous strict
+  exact segmentedCheckpoint_cut layout beforeValid settled marker walFits projected previous strict
     refines represents rowBounds flushed runCountFits generation fresh runBytesFit executed
 
 end Alvoki.Storage.CheckpointPublication

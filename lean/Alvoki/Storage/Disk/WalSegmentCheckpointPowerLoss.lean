@@ -150,7 +150,7 @@ theorem selectsAcknowledgedHistory (cut : CheckpointPowerCut directory before)
   obtain ⟨published, executed⟩ := before.published.executeVersioned_exists cut.checkpoint.plan
     (cut.completed.length + (if cut.tookEffect then 1 else 0))
   rw [← cut.reachedCount.1] at executed
-  obtain ⟨layout, valid, inputs⟩ := segmentedCheckpoint_cut ready.layout ready.chain append.settled
+  obtain ⟨layout, valid, inputs⟩ := segmentedCheckpoint_cut ready.layout ready.walValid append.settled
     append.marker walFits projected append.checkpoint strict refined represented ready.resumed.bounds
     cut.flushed cut.runCountFits generation (ready.freshCheckpoint cut.generationFits) runBytesFit executed
   refine ⟨published, executed, layout, ready.chain, valid, ?_, ?_⟩

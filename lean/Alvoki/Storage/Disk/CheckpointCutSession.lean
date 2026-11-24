@@ -130,7 +130,7 @@ the same file cut. -/
 theorem runCheckpointFailureHandoff {directory : DiskDirectory} {owners : LockOwners}
     {writerDescriptor : Nat} (ownership : owners.Owns directory writerDescriptor)
     {before : WalSegmentImage} {history : List WAL.Write}
-    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
+    (layout : before.ReadLayout history) (beforeValid : before.Valid history)
     (settled : before.directory.crashImages = [before.directory.active])
     (marker : before.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
     (walFits : (WAL.encode history).size < UInt64.size)
@@ -200,14 +200,14 @@ theorem runCheckpointFailureHandoff {directory : DiskDirectory} {owners : LockOw
     | error cause => simp [decodedBytes, Option.mapM, Functor.map, Except.map] at matched
     | ok parsed => exact ⟨parsed, rfl⟩
   obtain ⟨walLayout, walValid, inputs⟩ := CheckpointPublication.segmentedCheckpoint_reportedCut
-    layout chain settled marker walFits projected previous strict refines represents rowBounds flushed runCountFits
+    layout beforeValid settled marker walFits projected previous strict refines represents rowBounds flushed runCountFits
     generation freshGeneration runBytesFit report publication
   refine ⟨walLayout, walValid, ?_⟩
   intro pair selects
   obtain ⟨sameMarker, chosen, accepted, _, range, _, decoded, through, _⟩ := inputs pair selects
   exact ⟨sameMarker, by simpa only [exactManifest] using chosen, accepted, range, decoded, through⟩
 
-/-- From a ready writer with settled segment files and a complete WAL,
+/-- From a ready writer with settled segment files and the required WAL suffix,
 follow a reported checkpoint file error through release and the next
 healthy bounded open. The visible cut retains all manifest choices until
 directory sync. A crash uses only a manifest/marker pair admitted by that
@@ -215,7 +215,7 @@ cut. Primitive reports describe this same owned directory on both sides. -/
 theorem runOpenAfterCheckpointFailure {directory : DiskDirectory} {owners : LockOwners}
     {writerDescriptor descriptor nextRef : Nat} (ownership : owners.Owns directory writerDescriptor)
     {before : WalSegmentImage} {history : List WAL.Write}
-    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
+    (layout : before.ReadLayout history) (beforeValid : before.Valid history)
     (ordered : WAL.OrdinalsFrom 1 history)
     (settled : before.directory.crashImages = [before.directory.active])
     (marker : before.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
@@ -293,7 +293,7 @@ theorem runOpenAfterCheckpointFailure {directory : DiskDirectory} {owners : Lock
   intro generation plan perform poisoned released freshGeneration encoded reported failed
   obtain ⟨exactGeneration, exactManifest, poison, close, drops, canAcquire, published, projectedCut,
       walLayout, walValid, inputs⟩ :=
-    runCheckpointFailureHandoff ownership layout chain settled marker walFits initial projected previous
+    runCheckpointFailureHandoff ownership layout beforeValid settled marker walFits initial projected previous
       installed model installedGeneration refines represents rowBounds checkpoint flushed generationFits runCountFits
       runBytesFit checkpointWrite checkpointStage checkpointSync checkpointRename report
       freshGeneration encoded reported failed

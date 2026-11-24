@@ -2,6 +2,8 @@ import Alvoki.Storage.Disk.CheckpointRetrySession
 import Alvoki.Storage.Disk.SegmentedCheckpointStep
 
 import Alvoki.Storage.Disk.SegmentedFailureRelease
+import Alvoki.Storage.Disk.RetainedWriterReopen
+import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 
@@ -154,7 +156,7 @@ structure Installs (failure : SegmentedCheckpointFailure directory before writer
       after.target.pair.manifest = some failure.checkpoint.manifest)
 
 private theorem checkpointRetryFiles_exact (published : CheckpointPublication.Image)
-    (ready : before.Ready directory writer) :
+    (ready : before.RetainedReady directory writer) :
     let wal := published.segmentedCheckpointView before.wal
     wal.checkpointReopenFiles wal.directory before.files.keeper.staged =
       { before.files with directory := wal.directory } := by
@@ -179,20 +181,57 @@ private theorem checkpointRetryFiles_exact (published : CheckpointPublication.Im
     ⟨wal.directory, before.files.kept, before.files.keeper, before.files.later⟩
   rw [← ready.sealedFiles, ← keeper, ← later]
 
-/-- Recover the exact ready writer through the reported release and any
+private theorem freshCheckpoint (ready : before.RetainedReady directory writer)
+    (fits : before.installed.generation.toNat + 1 < UInt64.size) :
+    before.published.UnreachableVersioned (SegmentedCheckpointReport.generation before) := by
+  have visible : before.published.manifest.active = before.target.pair.manifest := by
+    rw [ready.manifestFiles]
+    exact congrArg DirectoryPublication.Bindings.manifest ready.resumed.ready.selected
+  have settled : before.published.manifest.crashImages = [before.published.manifest.active] := by
+    simp [ready.manifestFiles, DirectoryPublication.Image.project, ready.resumed.ready.settled,
+      ready.resumed.ready.selected]
+  have loaded : (before.published.manifest.active = none ∧ before.installed.generation = 0) ∨
+      ∃ bytes selected, before.published.manifest.active = some bytes ∧
+        Manifest.VersionedCheckpoint.decode bytes = .ok selected ∧
+        before.installed.generation = selected.header.generation := by
+    have generation := CheckpointPowerCut.selectedGeneration ready.resumed.selected
+    rw [← ready.resumed.generation, ← visible] at generation
+    cases binding : before.published.manifest.active with
+    | none =>
+      rw [binding] at generation
+      exact .inl ⟨rfl, (Except.ok.inj generation).symm⟩
+    | some bytes =>
+      rw [binding, Option.mapM] at generation
+      cases strict : Manifest.IntegrityCheckpoint.decode bytes with
+      | error cause => simp [strict, Functor.map, Except.map] at generation
+      | ok manifest =>
+        rw [strict] at generation
+        exact .inr ⟨bytes, .integrity manifest, rfl, Manifest.VersionedCheckpoint.decode_integrity strict,
+          (Except.ok.inj generation).symm⟩
+  intro bytes chosen manifest decoded
+  exact before.published.nextVersionedGeneration_unreachable_after_reopen before.installed.generation loaded fits
+    bytes (by simpa only [CheckpointPublication.Image.settleVisible, Publication.Image.settled, ← settled] using chosen)
+    manifest decoded
+
+/-- Recover the exact retained writer through the reported release and any
 finite delay of bounded-open failures, reference drops, and power losses.
-The complete acknowledged WAL and the keeper remain in place. -/
-theorem installs (failure : SegmentedCheckpointFailure directory before writer descriptor)
-    (ready : before.Ready directory writer) :
-    ∃ after, failure.Installs after ∧ after.Ready directory descriptor := by
+The required WAL suffix and the keeper remain in place. -/
+theorem installsRetained (failure : SegmentedCheckpointFailure directory before writer descriptor)
+    (ready : before.RetainedReady directory writer) :
+    ∃ after, failure.Installs after ∧ after.RetainedReady directory descriptor := by
   obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
-  have append := ready.appendInput
   have projects : before.published.manifest = before.wal.directory.project .manifest := by
     rw [← ready.directoryFiles]
     exact ready.manifestFiles
-  obtain ⟨_, _, _, count, _, _, counted⟩ := DirectoryPublication.Bindings.walRange_accounting append.range
+  have marker := congrArg Publication.Image.active ready.resumed.markerImage
+  change before.files.directory.active.walBoundary =
+    some (WAL.Boundary.encode (WAL.encode before.history).size.toUInt64) at marker
+  rw [ready.directoryFiles] at marker
+  have generation := CheckpointPowerCut.selectedGeneration ready.resumed.selected
+  rw [← ready.resumed.generation, ← ready.walPair] at generation
+  obtain ⟨_, _, _, count, _, _, counted⟩ := DirectoryPublication.Bindings.walRange_accounting before.target.decoded
   have bytes : (WAL.encode before.history).size = count.toNat := by
-    rw [counted, WAL.encode_size, Nat.mul_comm]
+    rw [counted, ready.resumed.through, WAL.encode_size, Nat.mul_comm]
   have walFits : (WAL.encode before.history).size < UInt64.size := bytes.symm ▸ count.toNat_lt_size
   have runBytesFit : ∀ bytes ∈ failure.checkpoint.table.runs.map (·.run.bytes), bytes.size < UInt64.size := by
     by_cases bounded : (failure.checkpoint.table.runs.map (·.run.bytes)).all
@@ -205,13 +244,14 @@ theorem installs (failure : SegmentedCheckpointFailure directory before writer d
     simpa only [List.size_toArray] using failure.failed
   obtain ⟨_, _, poisoned, closed, drops, published, projected, retryProof⟩ :=
     BoundedReopenTrace.installsAfterCheckpointError (descriptor := descriptor) ready.held
-      ready.layout ready.chain append.ordered append.settled append.marker walFits before.published projects
-      append.checkpoint before.installed model append.generation append.first refined represented ready.resumed.bounds
+      ready.layout ready.valid ready.resumed.ordered ready.walDirectorySettled marker walFits before.published projects
+      (ready.walPair.symm ▸ ready.resumed.accepted) before.installed model generation
+      (ready.resumed.keeper.trans ready.active) refined represented ready.resumed.bounds
       failure.checkpoint.table failure.flushed failure.generationFits failure.runCountFits runBytesFit
       failure.checkpoint.writeRun failure.checkpoint.writeStage failure.checkpoint.sync failure.checkpoint.renameFile
       failure.checkpoint.report before.files.keeper.staged failure.liveRefs failure.fresh failure.reopen.unlock
       failure.reopen.removeFile failure.reopen.write failure.reopen.sync failure.reopen.renameFile
-      (ready.freshCheckpoint failure.generationFits) failure.encoded failure.reached failed
+      (freshCheckpoint ready failure.generationFits) failure.encoded failure.reached failed
   have exactPublished : published = failure.published := Option.some.inj (projected.symm.trans failure.projected)
   subst published
   have released : failure.release.Observed (directory := directory)
@@ -224,7 +264,7 @@ theorem installs (failure : SegmentedCheckpointFailure directory before writer d
   have initial := checkpointRetryFiles_exact failure.published ready
   dsimp only at attempts initial
   rw [← initial] at attempts
-  obtain ⟨kept, layout, chain, manifestChoice, _, selected, _, keeper, tail, _, _, bounded⟩ :=
+  obtain ⟨kept, layout, valid, chosen, manifestChoice, _, selected, _, keeper, tail, _, _, bounded⟩ :=
     retryProof attempts failure.acquisition
   obtain ⟨raw, recover⟩ := failure.reads selected tail
   have opened := bounded raw failure.settles (failure.healthy selected keeper tail)
@@ -234,8 +274,19 @@ theorem installs (failure : SegmentedCheckpointFailure directory before writer d
         failure.retry := by
     rw [BoundedReopenAttempt.run, failure.reopenDescriptor, failure.acquired, recover]
   rw [← execution] at opened
-  obtain ⟨session, final, after, returned, path, lock, phase, files, owners, wal, target, history, durable, resumed⟩ :=
-    opened.writerReady layout chain keeper kept
+  let selectedWal := { failure.published.segmentedCheckpointView before.wal with
+    directory := DirectoryPublication.Image.settled failure.retry.image.directory.active }
+  have selectedLayout : selectedWal.ReadLayout before.history :=
+    ⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩
+  have selectedValid : selectedWal.Valid before.history := by
+    intro pair selectable
+    have exactPair : pair = failure.retry.image.directory.active := by
+      simpa [selectedWal, WalSegmentImage.Selects, DirectoryPublication.Image.settled] using selectable
+    subst pair
+    exact valid _ chosen
+  obtain ⟨session, final, after, returned, path, lock, phase, files, owners, wal, target, history, _, durable,
+    resumed⟩ :=
+    opened.writerRetained selectedLayout selectedValid ready.spans rfl keeper kept
   have exactWal : after.wal = { before.wal with directory := after.files.directory } := by
     rw [wal, files]; rfl
   have targetPair : after.target.pair = failure.retry.image.directory.active := by rw [target]; rfl
@@ -246,11 +297,11 @@ theorem installs (failure : SegmentedCheckpointFailure directory before writer d
         after.target.pair.manifest = before.wal.directory.active.manifest) ∨
       (after.installed.generation = SegmentedCheckpointReport.generation before ∧
         after.target.pair.manifest = some failure.checkpoint.manifest) := by
-    have installedGeneration := resumed.generationRead
-    rw [targetPair] at installedGeneration
+    have installedGeneration := CheckpointPowerCut.selectedGeneration resumed.resumed.selected
+    rw [← resumed.resumed.generation, targetPair] at installedGeneration
     rcases manifestChoice with old | new
     · rw [old] at installedGeneration
-      exact .inl ⟨Except.ok.inj (installedGeneration.symm.trans append.generation),
+      exact .inl ⟨Except.ok.inj (installedGeneration.symm.trans generation),
         (congrArg DirectoryPublication.Bindings.manifest targetPair).trans old⟩
     · let generation := SegmentedCheckpointReport.generation before
       let runs := failure.checkpoint.table.runs.map (·.run.bytes)
@@ -272,9 +323,27 @@ theorem installs (failure : SegmentedCheckpointFailure directory before writer d
     history, exactWal, durable, resumed.manifestFiles, targetPair, targetFirst, targetBytes,
     resumed.resumed.selected⟩, poisoned, released, generationChoice⟩, resumed⟩
 
+/-- The full-history compatibility theorem keeps the stronger chain
+witness because checkpoint publication and recovery retain every segment. -/
+theorem installs (failure : SegmentedCheckpointFailure directory before writer descriptor)
+    (ready : before.Ready directory writer) :
+    ∃ after, failure.Installs after ∧ after.Ready directory descriptor := by
+  obtain ⟨after, endpoint, retained⟩ := failure.installsRetained ready.toRetained
+  have chain : WalSegment.Chain after.history 0 after.wal.segments := by
+    rw [endpoint.history, endpoint.wal]
+    exact ready.chain
+  exact ⟨after, endpoint, ⟨retained.resumed, retained.layout, chain, retained.directoryFiles,
+    retained.sealedFiles, retained.active, retained.manifestFiles, retained.held⟩⟩
+
 theorem Installs.unique {failure : SegmentedCheckpointFailure directory before writer descriptor}
     {left right : SegmentedWriterState} (a : failure.Installs left) (b : failure.Installs right) : left = right :=
   a.toSegmentedCheckpointReopened.unique b.toSegmentedCheckpointReopened
+
+theorem Installs.preservesRetained {failure : SegmentedCheckpointFailure directory before writer descriptor}
+    {after : SegmentedWriterState} (endpoint : failure.Installs after) (ready : before.RetainedReady directory writer) :
+    after.RetainedReady directory descriptor := by
+  obtain ⟨selected, installs, next⟩ := failure.installsRetained ready
+  exact installs.unique endpoint ▸ next
 
 theorem Installs.preservesReady {failure : SegmentedCheckpointFailure directory before writer descriptor}
     {after : SegmentedWriterState} (endpoint : failure.Installs after) (ready : before.Ready directory writer) :

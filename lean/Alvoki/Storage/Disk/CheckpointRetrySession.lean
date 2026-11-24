@@ -79,7 +79,7 @@ using the selected generation (zero for an absent manifest). -/
 theorem BoundedReopenTrace.installsAfterCheckpointError {directory : DiskDirectory} {owners : LockOwners}
     {writerDescriptor descriptor nextRef : Nat} (ownership : owners.Owns directory writerDescriptor)
     {before : WalSegmentImage} {history : List WAL.Write}
-    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
+    (layout : before.ReadLayout history) (beforeValid : before.Valid history)
     (ordered : WAL.OrdinalsFrom 1 history)
     (settled : before.directory.crashImages = [before.directory.active])
     (marker : before.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
@@ -138,7 +138,7 @@ theorem BoundedReopenTrace.installsAfterCheckpointError {directory : DiskDirecto
           ⟨files, released.owners⟩ retry →
         TryLockObserves retry.owners directory (.ok true) →
         retry.image.kept = files.kept ∧
-        wal.ReadLayout history ∧ WalSegment.Chain history 0 wal.segments ∧
+        wal.ReadLayout history ∧ wal.Valid history ∧ wal.Selects retry.image.directory.active ∧
         (retry.image.directory.active.manifest = before.directory.active.manifest ∨
           retry.image.directory.active.manifest = some manifest) ∧
         retry.image.directory.active.walBoundary = before.directory.active.walBoundary ∧
@@ -163,7 +163,7 @@ theorem BoundedReopenTrace.installsAfterCheckpointError {directory : DiskDirecto
                   (raw.reopen removeFile write sync renameFile) retry) := by
   intro generation plan perform poisoned released freshGeneration encoded reported failed
   obtain ⟨exactGeneration, exactManifest, poison, close, drops, _, published, projectedCut, layout, valid, inputs⟩ :=
-    runCheckpointFailureHandoff ownership layout chain settled marker walFits initial projected previous
+    runCheckpointFailureHandoff ownership layout beforeValid settled marker walFits initial projected previous
       installed model installedGeneration refines represents rowBounds checkpoint flushed generationFits runCountFits
       runBytesFit checkpointWrite checkpointStage checkpointSync checkpointRename report
       freshGeneration encoded reported failed
@@ -174,7 +174,7 @@ theorem BoundedReopenTrace.installsAfterCheckpointError {directory : DiskDirecto
       (fun pair selects => (inputs pair selects).2.2) liveRefs freshRefs acquisition unlock removeFile write sync
       renameFile
   obtain ⟨sameMarker, sameManifest, _⟩ := inputs retry.image.directory.active chosen
-  exact ⟨kept, layout, chain, sameManifest, sameMarker, selected, keeper.trans installedKeeper.symm, keeper,
+  exact ⟨kept, layout, valid, chosen, sameManifest, sameMarker, selected, keeper.trans installedKeeper.symm, keeper,
     noTail, selectedGeneration, exactGeneration, bounded⟩
 
 end Alvoki.Storage.DiskSession
