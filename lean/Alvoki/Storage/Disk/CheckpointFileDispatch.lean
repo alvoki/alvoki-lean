@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.DiskTable
-import Alvoki.Storage.Publication.CheckpointPublicationModel
+import Alvoki.Storage.Disk.VersionedCheckpointPublication
 
 namespace Alvoki.Storage
 open System Alvoki.Compaction
@@ -7,7 +7,7 @@ open System Alvoki.Compaction
 /-- The primitive file effects for the model's exact checkpoint run list.
 Each run is synced before the run directory barrier. The manifest is then
 staged, synced, renamed and settled by the final directory sync. -/
-def runCheckpointFilePlan [Monad m] (dir : DiskDirectory) (plan : CheckpointPublication.RunSet)
+def runCheckpointFilePlan [Monad m] (dir : DiskDirectory) (plan : CheckpointPublication.RunSet) (manifest : ByteArray)
     (write : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
     (renameFile : FilePath → FilePath → m Unit) : m Unit := do
   plan.files.zipIdx.forM fun (bytes, index) => do
@@ -16,7 +16,7 @@ def runCheckpointFilePlan [Monad m] (dir : DiskDirectory) (plan : CheckpointPubl
     sync #[path]
   sync #[dir.path]
   let staged := dir.file .stagedManifest
-  write staged (Manifest.encode plan.header)
+  write staged manifest
   sync #[staged]
   renameFile staged (dir.file .manifest)
   sync #[dir.path]
@@ -59,6 +59,7 @@ manifest replacement. The equation describes callback order and arguments.
 Each primitive's filesystem effects are supplied by its own contract. -/
 theorem run_performCheckpointFileStep [Monad m] [LawfulMonad m]
     (dir : DiskDirectory) (table : PackedTable) (generation : UInt64)
+    (manifest : ByteArray)
     (checkRun : Option CheckedRun → m CheckedRun)
     (write : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
     (renameFile : FilePath → FilePath → m Unit) (checked : ∀ run, checkRun (some run) = pure run) :
@@ -66,15 +67,15 @@ theorem run_performCheckpointFileStep [Monad m] [LawfulMonad m]
       ⟨checkpointHeader table generation, table.runs.map (·.run.bytes)⟩
     CheckpointPublication.run table.runs.toArray.size
       (performCheckpointFileStep dir generation table.runs.toArray (dir.file .stagedManifest)
-        (Manifest.encode plan.header) checkRun write sync renameFile) =
-      runCheckpointFilePlan dir plan write sync renameFile := by
+        manifest checkRun write sync renameFile) =
+      runCheckpointFilePlan dir plan manifest write sync renameFile := by
   intro plan
   have bytesAt (offset : Nat) :
       (table.runs.toArray[0 + offset]?).map (·.run.bytes) = plan.files[offset]? := by
     simp [plan]
   have runSteps :=
     runFileSteps_exact dir generation table.runs.toArray (dir.file .stagedManifest)
-      (Manifest.encode plan.header) checkRun write sync renameFile checked plan.files 0 bytesAt
+      manifest checkRun write sync renameFile checked plan.files 0 bytesAt
   simp only [plan, List.length_map, ← List.range_eq_range', List.forM_eq_forM] at runSteps
   simp only [CheckpointPublication.run, CheckpointPublication.steps, List.forM_eq_forM, List.forM_append,
     List.size_toArray, CheckpointPublication.runSteps]
@@ -95,23 +96,31 @@ private theorem checkpointIOLawful : LawfulMonad IO := .mk'
     cases op world <;> rfl)
   (map_const := fun _ _ => rfl)
 
-/-- The dispatch equation also holds for the native exception monad and the
-adapter's checked array access. -/
+/-- The native encoder and checked array access pass the integrity plan's
+exact manifest and ordered run bytes to the shared file schedule. -/
 theorem run_performCheckpointFileStep_io
     (dir : DiskDirectory) (table : PackedTable) (generation : UInt64)
+    {manifest : ByteArray} (encoded : encodeCheckpointIntegrityManifest table generation = .ok manifest)
     (write : FilePath → ByteArray → IO Unit) (sync : Array FilePath → IO Unit)
     (renameFile : FilePath → FilePath → IO Unit) :
-    let plan : CheckpointPublication.RunSet :=
+    let plan := CheckpointPublication.VersionedRunSet.integrity
       ⟨checkpointHeader table generation, table.runs.map (·.run.bytes)⟩
     CheckpointPublication.run table.runs.toArray.size
       (performCheckpointFileStep dir generation table.runs.toArray (dir.file .stagedManifest)
-        (Manifest.encode plan.header)
+        manifest
         (fun found => match found with
           | some run => pure run
           | none => throw (IO.userError "checkpoint run index is out of bounds"))
         write sync renameFile) =
-      runCheckpointFilePlan dir plan write sync renameFile := by
+      runCheckpointFilePlan dir plan.runSet plan.manifest.encode write sync renameFile := by
+  let files := table.runs.map (·.run.bytes)
+  have fits : ∀ bytes ∈ files, bytes.size < UInt64.size := by
+    by_cases bounded : files.all (fun bytes => decide (bytes.size < UInt64.size)) = true
+    · exact fun bytes member => of_decide_eq_true (List.all_eq_true.mp bounded bytes member)
+    · simp [encodeCheckpointIntegrityManifest, files, bounded, Bind.bind, Except.bind] at encoded
+  have exactBytes := Except.ok.inj ((encodeCheckpointIntegrityManifest_exact generation fits).symm.trans encoded)
+  subst manifest
   letI := checkpointIOLawful
-  exact run_performCheckpointFileStep dir table generation _ write sync renameFile (fun _ => rfl)
+  exact run_performCheckpointFileStep dir table generation _ _ write sync renameFile (fun _ => rfl)
 
 end Alvoki.Storage

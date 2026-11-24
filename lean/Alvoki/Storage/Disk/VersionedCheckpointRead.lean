@@ -1,25 +1,19 @@
-import Alvoki.Storage.Disk.CheckpointRead
-import Alvoki.Storage.Disk.ManifestIntegrity
+import Alvoki.Storage.Disk.IntegrityCheckpointRead
 
 namespace Alvoki.Storage
 open Manifest
-
-def checkpointIntegrityMismatch : String := "checkpoint run integrity mismatch"
 
 /-- Use the same ordered files for integrity checking and structural
 loading. V1 continues to use the original structural loader. -/
 def loadVersionedRunSet (manifest : VersionedCheckpoint) (files : List ByteArray) : Except String PackedTable :=
   match manifest with
   | .legacy header => loadRunSet header files
-  | .integrity manifest =>
-    if manifest.validateRuns files then loadRunSet manifest.header files
-    else .error checkpointIntegrityMismatch
+  | .integrity manifest => loadIntegrityRunSet manifest files
 
 theorem loadVersionedRunSet_integrity_iff {manifest : IntegrityCheckpoint} {files : List ByteArray}
     {table : PackedTable} : loadVersionedRunSet (.integrity manifest) files = .ok table ↔
-      manifest.validateRuns files = true ∧ loadRunSet manifest.header files = .ok table := by
-  simp [loadVersionedRunSet]
-  split <;> simp_all
+      manifest.validateRuns files = true ∧ loadRunSet manifest.header files = .ok table :=
+  loadIntegrityRunSet_iff
 
 theorem loadVersionedRunSet_fromRuns {header : Checkpoint} {files : List ByteArray} {table : PackedTable}
     (loaded : loadRunSet header files = .ok table) (count : files.length = header.runCount.toNat)
@@ -37,6 +31,22 @@ and return the checkpoint used by WAL recovery only after validation. -/
   let files ← readCheckpointRunBytes readRun manifest.header
   let table ← validate (loadVersionedRunSet manifest files)
   return some (table, manifest.header.generation)
+
+/-- The deployed v2-only reader has the same ordered read and validation
+effects as the model's v2 case on the accepted manifest. -/
+theorem readIntegrityCheckpoint_integrity [Monad m] [LawfulMonad m] (readRun : UInt64 → Nat → m ByteArray)
+    (validate : {α : Type} → Except String α → m α)
+    (accepts : ∀ {α : Type} (value : α), validate (.ok value) = pure value)
+    {bytes : ByteArray} {manifest : IntegrityCheckpoint} (decoded : IntegrityCheckpoint.decode bytes = .ok manifest) :
+    readIntegrityCheckpoint (pure (some bytes)) readRun validate =
+      readVersionedCheckpoint (pure (some bytes)) readRun validate := by
+  simp [readIntegrityCheckpoint, readVersionedCheckpoint, decoded, VersionedCheckpoint.decode_integrity decoded,
+    accepts, VersionedCheckpoint.header, loadVersionedRunSet]
+
+theorem readIntegrityCheckpoint_absent [Monad m] [LawfulMonad m] (readRun : UInt64 → Nat → m ByteArray)
+    (validate : {α : Type} → Except String α → m α) :
+    readIntegrityCheckpoint (pure none) readRun validate = readVersionedCheckpoint (pure none) readRun validate := by
+  simp [readIntegrityCheckpoint, readVersionedCheckpoint]
 
 theorem readVersionedCheckpoint_absent [Monad m] [LawfulMonad m] (readRun : UInt64 → Nat → m ByteArray)
     (validate : {α : Type} → Except String α → m α) :
@@ -113,6 +123,6 @@ theorem readVersionedCheckpoint_integrity_rejects
     (resume : Option (PackedTable × UInt64) → Except String α) :
     (readVersionedCheckpoint readManifest readRun id >>= resume) = .error checkpointIntegrityMismatch := by
   rw [readVersionedCheckpoint_integrity_step readRun visible decoded, observed]
-  simp [loadVersionedRunSet, invalid, bind, Except.bind]
+  simp [loadVersionedRunSet, loadIntegrityRunSet, invalid, bind, Except.bind]
 
 end Alvoki.Storage

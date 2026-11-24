@@ -22,6 +22,7 @@ import Alvoki.Storage.Disk.DiskLockLifecycle
 import Alvoki.Storage.Disk.RunGenerationCollection
 import Alvoki.Storage.Disk.RunUnlinkSchedule
 import Alvoki.Storage.Disk.LockedRunCollection
+import Alvoki.Storage.Disk.VersionedRunCollection
 import Alvoki.Storage.Disk.RecoveryProgress
 import Alvoki.Storage.Disk.LockedOpenFileReads
 import Alvoki.Storage.Disk.LockedMarkedRead
@@ -176,6 +177,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.collectObsoleteRuns_fileEffects
 #check_axioms Alvoki.Storage.LockedRunInventory.selectOlderRuns_iff
 #check_axioms Alvoki.Storage.LockedRunInventory.runOlderCollection_outcome
+#check_axioms Alvoki.Storage.validateIntegrityRunCollectionGeneration_none
+#check_axioms Alvoki.Storage.validateIntegrityRunCollectionGeneration_some
+#check_axioms Alvoki.Storage.CheckpointPublication.Image.olderUnreachable_afterIntegrityPreflight
+#check_axioms Alvoki.Storage.CheckpointPublication.RunUnlinkRetry.preservesVersionedCheckpoint
+#check_axioms Alvoki.Storage.LockedRunInventory.selectOlderVersionedRuns_iff
+#check_axioms Alvoki.Storage.LockedRunInventory.runVersionedOlderCollection_preserves
 #check_axioms Alvoki.WAL.Boundary.checkpointMarked_reported
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_recoveryInputs
@@ -295,6 +302,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.readVersionedCheckpoint_legacy_io
 #check_axioms Alvoki.Storage.readVersionedCheckpoint_integrity_observed
 #check_axioms Alvoki.Storage.readVersionedCheckpoint_integrity_rejects
+#check_axioms Alvoki.Manifest.IntegrityCheckpoint.rejectsLegacy
+#check_axioms Alvoki.Storage.loadIntegrityRunSet_iff
+#check_axioms Alvoki.Storage.readIntegrityCheckpoint_decode_error
+#check_axioms Alvoki.Storage.readIntegrityCheckpoint_integrity
+#check_axioms Alvoki.Storage.readIntegrityCheckpoint_absent
+#check_axioms Alvoki.Storage.encodeCheckpointIntegrityManifest_exact
+#check_axioms Alvoki.Storage.DiskTable.checkpoint_fileEffects
 #check_axioms Alvoki.Manifest.VersionedCheckpoint.decoded_case
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_legacy_iff
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_integrity_iff

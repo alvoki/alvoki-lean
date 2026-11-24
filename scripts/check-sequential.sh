@@ -67,6 +67,7 @@ lake env leanchecker Alvoki.Storage.Disk.RunUnlinkEffects
 lake env leanchecker Alvoki.Storage.Publication.RunCollection
 lake env leanchecker Alvoki.Storage.Disk.RunUnlinkSchedule
 lake env leanchecker Alvoki.Storage.Disk.LockedRunCollection
+lake env leanchecker Alvoki.Storage.Disk.VersionedRunCollection
 lake env leanchecker Alvoki.Storage.Disk.RecoveryProgress
 lake env leanchecker Alvoki.Storage.Disk.LockedOpenFileReads
 lake env leanchecker Alvoki.Storage.Disk.LockedMarkedRead
@@ -76,6 +77,7 @@ lake env leanchecker Alvoki.Storage.Disk.LockedRecoveryCompletion
 lake env leanchecker Alvoki.Storage.Disk.UncertainWriteTraceEntry
 lake env leanchecker Alvoki.Storage.Disk.LockedInterruptedCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.ManifestIntegrity
+lake env leanchecker Alvoki.Storage.Disk.IntegrityCheckpointRead
 lake env leanchecker Alvoki.Storage.Disk.ManifestIntegritySingleByte
 lake env leanchecker Alvoki.Storage.Disk.VersionedCheckpointRead
 lake env leanchecker Alvoki.Storage.Disk.VersionedCheckpointLineage

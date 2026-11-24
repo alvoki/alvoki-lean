@@ -4,6 +4,22 @@ import Alvoki.Storage.Disk.RunGenerationCollection
 namespace Alvoki.Storage
 open System CheckpointPublication
 
+/-- Decode the generation for the v1 collection model. Absence and a
+manifest naming generation zero remain distinct. -/
+def runCollectionGeneration (manifest : Option ByteArray) : Except String (Option UInt64) :=
+  (manifest.mapM Manifest.decode).map (Option.map (·.generation))
+
+/-- The v1 model checks the same installed-generation condition as v2. -/
+def validateRunCollectionGeneration (installed : UInt64) (manifest : Option ByteArray) :
+    Except String (Option UInt64) :=
+  validateObservedRunGeneration installed (runCollectionGeneration manifest)
+
+theorem validateRunCollectionGeneration_ok_iff {installed : UInt64} {manifest : Option ByteArray}
+    {current : Option UInt64} :
+    validateRunCollectionGeneration installed manifest = .ok current ↔
+      runCollectionGeneration manifest = .ok current ∧ current.getD 0 = installed :=
+  validateObservedRunGeneration_ok_iff
+
 /-- With the manifest settled and readable, reachability is exactly the
 observed generation. Independent holders still take precedence. -/
 theorem CheckpointPublication.Image.collectable_iff_generation {image : Image}

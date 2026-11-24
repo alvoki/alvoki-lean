@@ -133,6 +133,17 @@ private theorem RunUnlinkRetry.effects {approved : List RunAddress} {files : Run
     obtain rfl := List.mem_singleton.mp chosen
     exact prior.2 _ survives
 
+/-- The live map and every crash outcome agree on the original binding at an
+unapproved address, so it remains guaranteed. -/
+theorem RunUnlinkRetry.keepsUnapproved {approved : List RunAddress} {files : RunFiles}
+    {after : RunUnlinkImage} (retry : RunUnlinkRetry approved (.settled files) after)
+    {name : RunAddress} (unapproved : name ∉ approved) :
+    after.guaranteed name.1 name.2 = files name.1 name.2 := by
+  obtain ⟨visible, durable⟩ := retry.effects
+  apply RunUnlinkImage.guaranteed_of_same ((visible name).resolve_right (fun cut => unapproved cut.1))
+  intro candidate survives
+  exact (durable candidate survives name).resolve_right (fun cut => unapproved cut.1)
+
 /-- Starting from a settled run map, every retry state projects to an allowed
 loss of guarantees. Only approved, individually collectable addresses can
 lose their guaranteed bindings. The checkpoint manifest is unchanged. -/
@@ -141,7 +152,7 @@ theorem RunUnlinkRetry.projectsDeletion {approved : List RunAddress} {files : Ru
     (manifest : Publication.Image) (held : UInt64 → Prop)
     (eligible : ∀ address ∈ approved, (⟨manifest, files⟩ : Image).Collectable held address.1) :
     RunDeletion held ⟨manifest, files⟩ (after.project manifest) := by
-  obtain ⟨visible, durable⟩ := retry.effects
+  have visible := retry.effects.1
   refine ⟨rfl, ?_⟩
   intro generation index
   by_cases selected : (generation, index) ∈ approved
@@ -157,11 +168,7 @@ theorem RunUnlinkRetry.projectsDeletion {approved : List RunAddress} {files : Ru
       · exact Or.inl (witnessed.trans same)
       · exact Or.inr ⟨eligible _ selected, witnessed.trans removed⟩
     · exact Or.inr ⟨eligible _ selected, unknown⟩
-  · have live := (visible (generation, index)).resolve_right (fun removed => selected removed.1)
-    have copies : ∀ chosen ∈ after.crashImages, chosen generation index = files generation index := by
-      intro chosen survives
-      exact (durable _ survives (generation, index)).resolve_right (fun removed => selected removed.1)
-    exact Or.inl (RunUnlinkImage.guaranteed_of_same live copies)
+  · exact Or.inl (retry.keepsUnapproved selected)
 
 /-- All selected requests complete, then the directory sync settles every
 name. The barrier also applies to an empty list because a retry can see an

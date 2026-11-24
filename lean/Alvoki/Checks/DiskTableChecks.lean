@@ -25,8 +25,11 @@ private def expectRejectedWrite (db : DiskTable) (cause : String) : IO Unit := d
 private def expectManifest (dir : FilePath) (generation watermark floor runCount : UInt64) :
     IO Unit := do
   let header ← IO.FS.readBinFile (dir / "MANIFEST")
-  let .ok manifest := Manifest.decode header | throw (IO.userError "cannot decode installed manifest")
-  check (decide (manifest = ⟨generation, watermark, floor, runCount⟩)) "unexpected manifest"
+  let .ok manifest := Manifest.IntegrityCheckpoint.decode header
+    | throw (IO.userError "cannot decode installed manifest")
+  check (decide (manifest.header = ⟨generation, watermark, floor, runCount⟩)) "unexpected manifest"
+  let files ← (List.range runCount.toNat).mapM fun index => IO.FS.readBinFile (dir / s!"run-{generation}-{index}.v3")
+  check (manifest.validateRuns files) "manifest does not identify the exact ordered run files"
 
 private def checkCodecs : IO Unit := do
   let first : WAL.Write := ⟨1, 4, some 40⟩
@@ -45,11 +48,13 @@ private def checkCodecs : IO Unit := do
   check (failed (recover (WAL.encode [second]))) "recovery accepted a gap"
   check (failed (recover (WAL.encode [first, first]))) "recovery accepted a duplicated sequence"
   check (failed (recover (WAL.encode [second, first]))) "recovery accepted reordered writes"
-  let valid := Manifest.encode ⟨5, 3, 2, 4⟩
+  let files := List.replicate 4 ByteArray.empty
+  let valid := (Manifest.IntegrityCheckpoint.fromRuns ⟨5, 3, 2, 4⟩ files).encode
   for offset in [:valid.size] do
-    check (failed (Manifest.decode (valid.set! offset (valid[offset]! ^^^ 1))))
+    check (failed (Manifest.IntegrityCheckpoint.decode (valid.set! offset (valid[offset]! ^^^ 1))))
       s!"manifest accepted corrupted byte {offset}"
-  check (failed (Manifest.decode (Manifest.encode ⟨5, 3, 4, 1⟩)))
+  let invalidFloor := (Manifest.IntegrityCheckpoint.fromRuns ⟨5, 3, 4, 4⟩ files).encode
+  check (failed (Manifest.IntegrityCheckpoint.decode invalidFloor))
     "manifest accepted a floor above its watermark"
 
 private def checkReopen (dir : FilePath) : IO Unit := do
@@ -142,9 +147,9 @@ private def checkMissingAndMalformedFiles (dir : FilePath) : IO Unit := do
   IO.FS.writeBinFile run (original.extract 0 (original.size - 1))
   rejects (DiskTable.open dir) "open accepted a truncated referenced run"
   IO.FS.writeBinFile run original
-  IO.FS.writeBinFile (dir / "MANIFEST") (Manifest.encode ⟨1, 0, 0, 1⟩)
+  IO.FS.writeBinFile (dir / "MANIFEST") (Manifest.IntegrityCheckpoint.fromRuns ⟨1, 0, 0, 1⟩ [original]).encode
   rejects (DiskTable.open dir) "open accepted a run newer than the checkpoint watermark"
-  IO.FS.writeBinFile (dir / "MANIFEST") (Manifest.encode ⟨1, 1, 0, 1⟩)
+  IO.FS.writeBinFile (dir / "MANIFEST") (Manifest.IntegrityCheckpoint.fromRuns ⟨1, 1, 0, 1⟩ [original]).encode
   let wal := dir / "WAL"
   let frames ← IO.FS.readBinFile wal
   IO.FS.removeFile wal
@@ -590,6 +595,14 @@ private def checkCheckpointReadFailureBeforeWalRepair (root : FilePath) : IO Uni
   let markerBytes ← IO.FS.readBinFile marker
   let manifestBytes ← IO.FS.readBinFile manifest
   let untrimmed := acknowledged ++ WAL.encodeFrame ⟨3, 7, some 99⟩
+  let expectNoWalEffects := fun expectedManifest => do
+    let (opened, syncs) ← probeDisk bin dir none
+    check (!opened && syncs.isEmpty) "failed checkpoint read reached the WAL sync protocol"
+    check (decide ((← IO.FS.readBinFile wal) = untrimmed ∧
+      (← IO.FS.readBinFile marker) = markerBytes ∧ (← IO.FS.readBinFile manifest) = expectedManifest))
+      "failed checkpoint read changed WAL or metadata bytes"
+    check (!(← stagedWal.pathExists) && !(← stagedMarker.pathExists))
+      "failed checkpoint read created a WAL staging file"
   IO.FS.writeBinFile wal untrimmed
   IO.FS.removeFile run
   IO.FS.createDir run
@@ -600,15 +613,24 @@ private def checkCheckpointReadFailureBeforeWalRepair (root : FilePath) : IO Uni
   | .ok opened =>
     opened.close
     throw (IO.userError "open accepted a directory as an installed run")
-  let (opened, syncs) ← probeDisk bin dir none
-  check (!opened && syncs.isEmpty) "failed checkpoint read reached the WAL sync protocol"
-  check (decide ((← IO.FS.readBinFile wal) = untrimmed ∧
-    (← IO.FS.readBinFile marker) = markerBytes ∧ (← IO.FS.readBinFile manifest) = manifestBytes))
-    "failed checkpoint read changed WAL or metadata bytes"
-  check (!(← stagedWal.pathExists) && !(← stagedMarker.pathExists))
-    "failed checkpoint read created a WAL staging file"
+  expectNoWalEffects manifestBytes
   IO.FS.removeDir run
+  let corrupt := Compaction.encodeV3 [⟨7, 1, (0, 71)⟩]
+  check (corrupt.size == runBytes.size) "integrity fixture did not preserve the run length"
+  IO.FS.writeBinFile run corrupt
+  match ← (DiskTable.open dir).toBaseIO with
+  | .error (.userError message) =>
+    check (message == checkpointIntegrityMismatch) "same-length corruption bypassed the integrity check"
+  | .error error => throw error
+  | .ok opened =>
+    opened.close
+    throw (IO.userError "open accepted a different run with the same length")
+  expectNoWalEffects manifestBytes
   IO.FS.writeBinFile run runBytes
+  let legacyManifest := Manifest.encode ⟨1, 1, 1, 1⟩
+  IO.FS.writeBinFile manifest legacyManifest
+  expectNoWalEffects legacyManifest
+  IO.FS.writeBinFile manifest manifestBytes
   let (opened, syncs) ← probeDisk bin dir none
   check (opened && syncs == [stagedWal.toString, dir.toString])
     "restored checkpoint did not allow the WAL repair syncs"
@@ -684,7 +706,8 @@ private def checkCheckpointRetryWithFewerRuns (root : FilePath) : IO Unit := do
   check (!published && syncs == alignedOpen ++ runSyncs ++ [s!"synced before error: {orphan}"])
     "checkpoint continued past a run sync that completed and reported failure"
   check (!(← stagedManifest.pathExists)) "run sync failure staged a manifest"
-  check (decide ((← IO.FS.readBinFile manifest) = Manifest.encode ⟨2, 2, 0, 2⟩ ∧
+  let priorManifest := (Manifest.IntegrityCheckpoint.fromRuns ⟨2, 2, 0, 2⟩ [firstRun, secondRun]).encode
+  check (decide ((← IO.FS.readBinFile manifest) = priorManifest ∧
     (← IO.FS.readBinFile wal) = originalWal ∧ (← IO.FS.readBinFile boundary) = originalBoundary))
     "run sync failure changed selected metadata or WAL bytes"
   for (path, bytes) in newRuns ++ [(dir / "run-2-0.v3", firstRun), (dir / "run-2-1.v3", secondRun)] do
@@ -722,7 +745,8 @@ private def checkCheckpointRetryWithFewerRuns (root : FilePath) : IO Unit := do
   let final ← DiskTable.open dir
   try
     let merged := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩, ⟨7, 2, (0, 70)⟩]
-    check (decide ((← IO.FS.readBinFile manifest) = Manifest.encode ⟨3, 4, 0, 2⟩ ∧
+    let expectedManifest := (Manifest.IntegrityCheckpoint.fromRuns ⟨3, 4, 0, 2⟩ [merged, suffixRun]).encode
+    check (decide ((← IO.FS.readBinFile manifest) = expectedManifest ∧
       (← IO.FS.readBinFile (dir / "run-3-0.v3")) = merged ∧
       (← IO.FS.readBinFile (dir / "run-3-1.v3")) = suffixRun))
       "retry did not select the exact shorter checkpoint"
@@ -787,8 +811,9 @@ private def checkObsoleteRunCollection (root : FilePath) : IO Unit := do
     check (link.exitCode == 0) "could not create an obsolete run symlink"
     let history := WAL.encode [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩,
       ⟨4, 7, none⟩, ⟨5, 6, some 60⟩]
-    let manifestBytes ← IO.FS.readBinFile manifest
-    let protectedFiles := [(manifest, manifestBytes), (wal, history),
+    let header : Manifest.Checkpoint := ⟨3, 4, 2, 3⟩
+    let checkpoint := Manifest.IntegrityCheckpoint.fromRuns header [firstRun, secondRun, thirdRun]
+    let protectedFiles := [(manifest, checkpoint.encode), (wal, history),
       (dir / "WAL.commit", WAL.Boundary.encode history.size.toUInt64),
       (selected, firstRun), (dir / "run-3-1.v3", secondRun), (dir / "run-3-2.v3", thirdRun),
       (aliasPath, filler), (currentExtra, filler), (futureOrphan, filler)]
@@ -804,8 +829,10 @@ private def checkObsoleteRunCollection (root : FilePath) : IO Unit := do
         | throw (IO.userError "collection accepted a different manifest generation")
       check (message == "checkpoint generation changed before run collection")
         "collection did not reject the generation mismatch"
+      IO.FS.writeBinFile manifest (Manifest.encode header)
+      rejects (db.collectObsoleteRuns [2]) "collection accepted a manifest without v2 run integrity"
       check (decide ((← IO.FS.readBinFile retired) = firstRun))
-        "collection unlinked a run before rejecting the manifest generation"
+        "collection unlinked a run before rejecting the fixture manifest"
     finally IO.FS.rename savedManifest manifest
     let restored ← IO.Process.output { cmd := "sync", args := #["--", dir.toString] }
     check (restored.exitCode == 0) "could not settle the restored fixture manifest"
@@ -902,7 +929,8 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
     check (decide ((← IO.FS.readBinFile wal) = walBytes ∧
       (← IO.FS.readBinFile marker) = WAL.Boundary.encode walBytes.size.toUInt64))
       "checkpoint recovery changed the selected WAL bytes"
-    check (decide ((← IO.FS.readBinFile (dir / "MANIFEST")) = Manifest.encode ⟨2, 5, 4, 2⟩))
+    let expected := (Manifest.IntegrityCheckpoint.fromRuns ⟨2, 5, 4, 2⟩ [firstRun, secondRun]).encode
+    check (decide ((← IO.FS.readBinFile (dir / "MANIFEST")) = expected))
       "checkpoint recovery changed the published manifest"
     for (path, bytes) in [(dir / "run-1-0.v3", firstRun),
         (dir / "run-2-0.v3", firstRun), (dir / "run-2-1.v3", secondRun)] do

@@ -31,21 +31,23 @@ The compaction experiment uses version 3, with a sequence and kind field for eac
 
 ## WAL and checkpoint manifest
 
-Each frame and manifest occupies exactly 48 bytes. All fields use unsigned 64-bit little-endian words. The checksum is 64-bit FNV-1a over the first 40 bytes in storage order, with wrapping multiplication. It detects ordinary corruption and has no cryptographic guarantee.
+Each WAL frame occupies 48 bytes. A checkpoint manifest has a 48-byte v2 header followed by a 16-byte integrity record for each run. All fields use unsigned 64-bit little-endian words. Checksums use 64-bit FNV-1a with wrapping multiplication.
 
-| Byte offset | WAL frame | Checkpoint manifest |
+| Byte offset | WAL frame | Checkpoint manifest v2 |
 |---:|---|---|
-| 0 | ASCII `ALVOWAL1` | ASCII `ALVOMNF1` |
+| 0 | ASCII `ALVOWAL1` | ASCII `ALVOMNF2` |
 | 8 | Write sequence | Run generation |
 | 16 | Key | Committed sequence watermark |
 | 24 | Kind, `0` for put and `1` for delete | Retention floor at or below the watermark |
 | 32 | Value, exactly zero for a delete | Run count |
-| 40 | Checksum | Checksum |
+| 40 | Checksum over the first 40 bytes | Checksum over the first 40 bytes followed by the ordered integrity records |
 
-The committed part of the WAL is a concatenation of complete frames. Decode validates every frame passed to it and rejects unknown formats, bad checksums and noncanonical operation fields. Replay rejects gaps, duplicates and reordered writes in the suffix above the checkpoint watermark. The manifest indexes the ordered immutable v3 files from zero through `runCount - 1`. Opening a checkpoint requires all referenced files and verifies that their versions are at or below the watermark. [WAL codec](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean) · [Manifest codec](../lean/Alvoki/Storage/Disk/Manifest.lean) · [Publication protocol](architecture.md#sequential-storage)
+Starting at offset 48, each manifest record stores a run's file length and checksum over its complete bytes. The records index immutable v3 run files from zero through `runCount - 1`. Open checks the recorded lengths and checksums and structurally validates the same ordered run bytes before using the checkpoint watermark. Changes confined to one payload byte change the checksum. Multiple changes can collide. [Manifest codec](../lean/Alvoki/Storage/Disk/ManifestIntegrity.lean) · [Single-byte detection](../lean/Alvoki/Storage/Disk/ManifestIntegritySingleByte.lean)
+
+The committed part of the WAL is a concatenation of complete frames. Decode validates every frame passed to it and rejects unknown formats, bad checksums and noncanonical operation fields. Replay rejects gaps, duplicates and reordered writes in the suffix above the checkpoint watermark. [WAL codec](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean) · [Publication protocol](architecture.md#sequential-storage)
 
 ### Durable WAL boundary
 
 `WAL.commit` is a 24-byte file containing three unsigned 64-bit little-endian words. They are the eight ASCII bytes `ALVOCMT1`, the committed WAL byte count, and the 64-bit FNV-1a checksum of the preceding 16 bytes. The count must be a multiple of 48 and at most the WAL file size. Reopen checks the sequence against the one-based position of every selected frame, including those covered by a checkpoint. It skips the covered frames for replay and checks that the total frame count matches the recovered sequence. If any bytes follow the committed prefix, reopen replaces the WAL with that prefix before accepting another write. Errors within the committed prefix fail recovery.
 
-An absent `WAL.commit` denotes an empty database or a legacy directory under the stable-directory assumptions. The adapter validates the legacy WAL using its existing short-tail rule, syncs the selected prefix, and installs the initial boundary before returning from open. A legacy WAL with a malformed full frame fails validation. Use an adapter that supports `WAL.commit` after this upgrade. [Boundary codec and selector](../lean/Alvoki/Storage/Disk/WalBoundary.lean)
+When `WAL.commit` is absent, the adapter validates any unmarked WAL using its short-tail rule, syncs the selected prefix, and installs the initial boundary before returning. A malformed complete frame fails validation. A directory with both the manifest and marker absent can also create an empty WAL. [Boundary codec and selector](../lean/Alvoki/Storage/Disk/WalBoundary.lean)

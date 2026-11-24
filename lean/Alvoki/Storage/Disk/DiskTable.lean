@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.DiskPaths
 import Alvoki.Storage.Disk.WalBoundary
 import Alvoki.Storage.Disk.CheckpointRead
+import Alvoki.Storage.Disk.IntegrityCheckpointRead
 import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.RunFileSelection
 import Alvoki.Storage.Publication.CheckpointPublication
@@ -170,7 +171,7 @@ private def readOptionalFile (path : FilePath) : IO (Option ByteArray) :=
     (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
 
 private def openCheckpoint (dir : DiskDirectory) : IO (Option (PackedTable × UInt64)) :=
-  readCheckpoint (readOptionalFile (dir.file .manifest))
+  readIntegrityCheckpoint (readOptionalFile (dir.file .manifest))
     (fun generation index => IO.FS.readBinFile (dir.file (.run generation index))) IO.ofExcept
 
 /-- After loading the checkpoint, read and validate the WAL, settle its
@@ -230,7 +231,7 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
         let readOptional : FilePath → IO (Option ByteArray) := fun target =>
           readOptionalDatabaseFile target.symlinkMetadata.toBaseIO (fun _ => IO.FS.readBinFile target)
             (fun _ => IO.userError s!"expected a regular database file: '{target}'") throw
-        let checkpoint ← readCheckpoint (readOptional (dir.file .manifest))
+        let checkpoint ← readIntegrityCheckpoint (readOptional (dir.file .manifest))
           (fun generation index => IO.FS.readBinFile (dir.file (.run generation index))) IO.ofExcept
         withRecoveredOpen checkpoint (readOptional (dir.file .walBoundary)) (readOptional (dir.file .wal))
           IO.ofExcept (fun message => throw (IO.userError message))
@@ -358,8 +359,23 @@ operations. The native caller caches the run array and encoded manifest. -/
     Publication.performReplacement (write · manifestBytes) sync renameFile
       stagedManifest dir.path (fun _ => dir.file .manifest) #[] step
 
-/-- Flush pending writes and publish a fresh generation. All previous run
-files and WAL frames remain available through interrupted publication. -/
+/-- Encode lengths and checksums for the exact run payloads the writer uses. -/
+def encodeCheckpointIntegrityManifest (table : PackedTable) (generation : UInt64) : Except String ByteArray := do
+  let files := table.runs.map (·.run.bytes)
+  unless files.all (fun bytes => decide (bytes.size < UInt64.size)) do
+    throw "checkpoint run byte count is too large"
+  return (Manifest.IntegrityCheckpoint.fromRuns (checkpointHeader table generation) files).encode
+
+theorem encodeCheckpointIntegrityManifest_exact {table : PackedTable} (generation : UInt64)
+    (fits : ∀ bytes ∈ table.runs.map (·.run.bytes), bytes.size < UInt64.size) :
+    encodeCheckpointIntegrityManifest table generation = .ok
+      (Manifest.IntegrityCheckpoint.fromRuns (checkpointHeader table generation) (table.runs.map (·.run.bytes))).encode := by
+  have bounded : (table.runs.map (·.run.bytes)).all (fun bytes => decide (bytes.size < UInt64.size)) = true :=
+    List.all_eq_true.mpr (fun bytes member => decide_eq_true (fits bytes member))
+  simp [encodeCheckpointIntegrityManifest, bounded, pure, Except.pure]
+
+/-- Flush pending writes and publish a fresh generation with run integrity
+metadata. Previous run files and WAL frames support interrupted publication. -/
 def DiskTable.checkpoint (db : DiskTable) : IO Unit := do
   let state ← db.installed
   let table ← flushForCheckpoint state.table IO.ofExcept
@@ -369,13 +385,30 @@ def DiskTable.checkpoint (db : DiskTable) : IO Unit := do
     throw (IO.userError "checkpoint generation or run count is too large")
   let generation := UInt64.ofNat next
   let runs := table.runs.toArray
-  let manifestBytes := Manifest.encode (checkpointHeader table generation)
+  let manifestBytes ← IO.ofExcept (encodeCheckpointIntegrityManifest table generation)
   let stagedManifest := db.dir.file .stagedManifest
   db.phase.set .poisoned
   CheckpointPublication.run runs.size
     (performCheckpointFileStep db.dir generation runs stagedManifest manifestBytes
       (fromOption · "checkpoint run index is out of bounds") writeFlushed syncPaths IO.FS.rename)
   db.phase.set (.ready { state with table, generation })
+
+/-- The native writer publishes the computed v2 manifest and the exact run
+array via the shared schedule before installing the ready state. -/
+theorem DiskTable.checkpoint_fileEffects (db : DiskTable) : db.checkpoint = (do
+      let state ← db.installed
+      let table ← flushForCheckpoint state.table IO.ofExcept
+      let next := state.generation.toNat + 1
+      unless next < UInt64.size ∧ table.runs.length < UInt64.size do
+        throw (IO.userError "checkpoint generation or run count is too large")
+      let generation := UInt64.ofNat next
+      let manifestBytes ← IO.ofExcept (encodeCheckpointIntegrityManifest table generation)
+      db.phase.set .poisoned
+      CheckpointPublication.run table.runs.length
+        (performCheckpointFileStep db.dir generation table.runs.toArray (db.dir.file .stagedManifest)
+          manifestBytes (fromOption · "checkpoint run index is out of bounds") writeFlushed syncPaths IO.FS.rename)
+      db.phase.set (.ready { state with table, generation })) := by
+  simp only [checkpoint, List.size_toArray]
 
 /-- Inspect the final component without following symlinks. A missing entry
 in the owned parent is ineligible. Other lookup errors stop the pass. -/
@@ -387,7 +420,7 @@ private def runCollectionKindAt (path : FilePath) : IO (Except String IO.FS.File
 
 /-- Reclaim strictly older, unheld run generations in a ready writer session.
 Open and checkpoint settle the selected manifest before the writer becomes
-ready. Under the same lock, check that the observed v1 generation still
+ready. Under the same lock, check that the observed v2 generation still
 matches before inspecting run paths. Callers must keep external file holds
 stable and pass their generations. Snapshot pins use runs in memory.
 
@@ -396,7 +429,7 @@ again. Even an empty retry syncs the directory to settle earlier unlinks. -/
 def DiskTable.collectObsoleteRuns (db : DiskTable) (heldGenerations : List UInt64 := []) : IO Unit := do
   let state ← db.installed
   let manifest ← readOptionalFile (db.dir.file .manifest)
-  let current ← IO.ofExcept (validateRunCollectionGeneration state.generation manifest)
+  let current ← IO.ofExcept (validateIntegrityRunCollectionGeneration state.generation manifest)
   let entries ← db.dir.path.readDir
   let names := entries.toList.map (·.fileName)
   let selected ← selectRunFilesWith db.dir current (retainRunGeneration state.generation heldGenerations)
@@ -415,7 +448,7 @@ theorem DiskTable.collectObsoleteRuns_fileEffects (db : DiskTable) (heldGenerati
       let manifest ← readOptionalDatabaseFile manifestPath.symlinkMetadata.toBaseIO
         (fun _ => IO.FS.readBinFile manifestPath)
         (fun _ => IO.userError s!"expected a regular database file: '{manifestPath}'") throw
-      let current ← IO.ofExcept (validateRunCollectionGeneration state.generation manifest)
+      let current ← IO.ofExcept (validateIntegrityRunCollectionGeneration state.generation manifest)
       let entries ← db.dir.path.readDir
       let selected ← selectRunFilesWith db.dir current (retainRunGeneration state.generation heldGenerations)
         (fun path => do

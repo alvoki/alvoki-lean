@@ -3,12 +3,14 @@ import Alvoki.Storage.Disk.DiskTable
 open System Alvoki Alvoki.Compaction Alvoki.Storage
 
 private def seedCheckpoint (dir : FilePath) (runs rows : Nat) : IO Unit := do
+  let mut files : Array ByteArray := #[]
   for index in [:runs] do
     let mut bytes := encodeV3Header rows
     for offset in [:rows] do
       let key := index * rows + offset
       bytes := appendV3Row bytes ⟨key.toUInt64, (key + 1).toUInt64, (0, key.toUInt64)⟩
     IO.FS.writeBinFile (dir / s!"run-1-{index}.v3") bytes
+    files := files.push bytes
   let total := runs * rows
   -- Repeated appends into this buffer avoid copying the whole WAL for each frame.
   let mut wal := ByteArray.emptyWithCapacity (total * WAL.frameSize)
@@ -16,14 +18,15 @@ private def seedCheckpoint (dir : FilePath) (runs rows : Nat) : IO Unit := do
     wal := wal ++ WAL.encodeFrame ⟨(key + 1).toUInt64, key.toUInt64, some key.toUInt64⟩
   IO.FS.writeBinFile (dir / "WAL") wal
   IO.FS.writeBinFile (dir / "WAL.commit") (WAL.Boundary.encode wal.size.toUInt64)
-  IO.FS.writeBinFile (dir / "MANIFEST") (Manifest.encode ⟨1, total.toUInt64, 0, runs.toUInt64⟩)
+  let header : Manifest.Checkpoint := ⟨1, total.toUInt64, 0, runs.toUInt64⟩
+  IO.FS.writeBinFile (dir / "MANIFEST") (Manifest.IntegrityCheckpoint.fromRuns header files.toList).encode
 
 private def checkPublished (dir : FilePath) (runs total : Nat) : IO Unit := do
-  let .ok manifest := Manifest.decode (← IO.FS.readBinFile (dir / "MANIFEST"))
+  let .ok manifest := Manifest.IntegrityCheckpoint.decode (← IO.FS.readBinFile (dir / "MANIFEST"))
     | throw (IO.userError "checkpoint benchmark did not install a valid manifest")
-  unless manifest.generation == 2 && manifest.runCount == runs.toUInt64 do
+  unless manifest.header.generation == 2 && manifest.header.runCount == runs.toUInt64 do
     throw (IO.userError "checkpoint benchmark installed the wrong run set")
-  unless manifest.committed == total.toUInt64 do
+  unless manifest.header.committed == total.toUInt64 do
     throw (IO.userError "checkpoint benchmark manifest does not cover the seeded WAL")
 
 private def checkRecovered (db : DiskTable) (total : Nat) : IO Unit := do

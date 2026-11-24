@@ -1,34 +1,55 @@
 import Alvoki.Storage.Disk.RunFileName
-import Alvoki.Storage.Disk.Manifest
+import Alvoki.Storage.Disk.ManifestIntegrity
 
 namespace Alvoki.Storage
 open System
 
-/-- Decode the manifest's generation for selection. Absence and generation
-zero are distinct. A malformed manifest cannot supply an observation. -/
-def runCollectionGeneration (manifest : Option ByteArray) : Except String (Option UInt64) :=
-  (manifest.mapM Manifest.decode).map (Option.map (·.generation))
-
-/-- Check the observed v1 manifest against the generation of the ready writer.
-The default generation of an absent manifest is zero. -/
-def validateRunCollectionGeneration (installed : UInt64) (manifest : Option ByteArray) :
+/-- Check the decoded generation against the ready writer. An absent manifest
+can match only generation zero. -/
+def validateObservedRunGeneration (installed : UInt64) (observed : Except String (Option UInt64)) :
     Except String (Option UInt64) := do
-  let current ← runCollectionGeneration manifest
+  let current ← observed
   if current.getD 0 = installed then return current
   else throw "checkpoint generation changed before run collection"
 
-theorem validateRunCollectionGeneration_ok_iff {installed : UInt64} {manifest : Option ByteArray}
+theorem validateObservedRunGeneration_ok_iff {installed : UInt64} {observed : Except String (Option UInt64)}
     {current : Option UInt64} :
-    validateRunCollectionGeneration installed manifest = .ok current ↔
-      runCollectionGeneration manifest = .ok current ∧ current.getD 0 = installed := by
-  cases decoded : runCollectionGeneration manifest with
-  | error message => simp [validateRunCollectionGeneration, decoded, bind, Except.bind]
+    validateObservedRunGeneration installed observed = .ok current ↔
+      observed = .ok current ∧ current.getD 0 = installed := by
+  cases observed with
+  | error message => simp [validateObservedRunGeneration, bind, Except.bind]
   | ok observed =>
     by_cases equal : observed.getD 0 = installed
-    · simp [validateRunCollectionGeneration, decoded, bind, Except.bind, equal, pure, Except.pure]
+    · simp [validateObservedRunGeneration, bind, Except.bind, equal, pure, Except.pure]
       exact fun same => same ▸ equal
-    · simp [validateRunCollectionGeneration, decoded, bind, Except.bind, equal]
+    · simp [validateObservedRunGeneration, bind, Except.bind, equal]
       exact fun same => by simpa only [same] using equal
+
+/-- Decode the active v2 manifest before allowing collection. The generation
+must still match the ready writer under the held directory lock. -/
+def validateIntegrityRunCollectionGeneration (installed : UInt64) (manifest : Option ByteArray) :
+    Except String (Option UInt64) :=
+  validateObservedRunGeneration installed
+    ((manifest.mapM Manifest.IntegrityCheckpoint.decode).map (Option.map (·.header.generation)))
+
+theorem validateIntegrityRunCollectionGeneration_none {installed : UInt64} {current : Option UInt64} :
+    validateIntegrityRunCollectionGeneration installed none = .ok current ↔
+      current = none ∧ installed = 0 := by
+  rw [validateIntegrityRunCollectionGeneration, validateObservedRunGeneration_ok_iff]
+  change (Except.ok none = Except.ok current ∧ current.getD 0 = installed) ↔
+    current = none ∧ installed = 0
+  cases current <;> simp [eq_comm]
+
+theorem validateIntegrityRunCollectionGeneration_some {installed : UInt64} {bytes : ByteArray}
+    {current : Option UInt64} :
+    validateIntegrityRunCollectionGeneration installed (some bytes) = .ok current ↔
+      ∃ selected, Manifest.IntegrityCheckpoint.decode bytes = .ok selected ∧
+        current = some selected.header.generation ∧ installed = selected.header.generation := by
+  rw [validateIntegrityRunCollectionGeneration, validateObservedRunGeneration_ok_iff]
+  cases decoded : Manifest.IntegrityCheckpoint.decode bytes <;>
+    simp [Option.mapM, Functor.map, Except.map, decoded, eq_comm]
+  intro same
+  simp [same]
 
 /-- Keep the writer's current generation, every newer generation, and all
 explicit holds. This leaves failed future checkpoint attempts alone. -/

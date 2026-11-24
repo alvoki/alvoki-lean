@@ -3,20 +3,18 @@ import Alvoki.Storage.Disk.RunUnlinkSchedule
 namespace Alvoki.Storage
 open System CheckpointPublication
 
-private theorem olderThanValidatedGeneration {manifest : Option ByteArray} {current : Option UInt64}
-    {installed generation : UInt64} (checked : validateRunCollectionGeneration installed manifest = .ok current)
+private theorem olderThanInstalledGeneration {current : Option UInt64}
+    {installed generation : UInt64} (matching : current.getD 0 = installed)
     (older : generation < installed) : current ≠ some generation := by
   intro same
-  have matching := (validateRunCollectionGeneration_ok_iff.mp checked).2
   have equal : generation = installed := by simpa [same] using matching
   exact (UInt64.lt_irrefl installed) (equal ▸ older)
 
-/-- The native age and hold policy selects exactly listed older regular run
-files after the observed manifest passes the ready-generation check. -/
-theorem LockedRunInventory.selectOlderRuns_iff {dir : DiskDirectory} {regularAt : FilePath → Prop}
+/-- The age and hold policy depends on the decoded generation, independently
+of the manifest format that recorded it. -/
+theorem LockedRunInventory.selectOlderRunsAt_iff {dir : DiskDirectory} {regularAt : FilePath → Prop}
     (inventory : LockedRunInventory dir regularAt) {installed generation : UInt64} {index : Nat}
-    {manifest : Option ByteArray} {current : Option UInt64} (held : List UInt64)
-    (checked : validateRunCollectionGeneration installed manifest = .ok current) :
+    {current : Option UInt64} (held : List UInt64) (matching : current.getD 0 = installed) :
     (generation, index) ∈ selectRunFiles dir current (retainRunGeneration installed held)
       inventory.kindAt inventory.names ↔
     renderRunFileName generation index ∈ inventory.names ∧ generation < installed ∧
@@ -27,8 +25,19 @@ theorem LockedRunInventory.selectOlderRuns_iff {dir : DiskDirectory} {regularAt 
     obtain ⟨older, unheld⟩ := retainRunGeneration_false_iff.mp retained
     exact ⟨listed, older, unheld, regular⟩
   · rintro ⟨listed, older, unheld, regular⟩
-    exact ⟨listed, olderThanValidatedGeneration checked older,
+    exact ⟨listed, olderThanInstalledGeneration matching older,
       retainRunGeneration_false_iff.mpr ⟨older, unheld⟩, regular⟩
+
+/-- The v1 model preflight supplies the matching generation. -/
+theorem LockedRunInventory.selectOlderRuns_iff {dir : DiskDirectory} {regularAt : FilePath → Prop}
+    (inventory : LockedRunInventory dir regularAt) {installed generation : UInt64} {index : Nat}
+    {manifest : Option ByteArray} {current : Option UInt64} (held : List UInt64)
+    (checked : validateRunCollectionGeneration installed manifest = .ok current) :
+    (generation, index) ∈ selectRunFiles dir current (retainRunGeneration installed held)
+      inventory.kindAt inventory.names ↔
+    renderRunFileName generation index ∈ inventory.names ∧ generation < installed ∧
+      generation ∉ held ∧ inventory.kindAt (dir.file (.run generation index)) = .ok .file :=
+  inventory.selectOlderRunsAt_iff held (validateRunCollectionGeneration_ok_iff.mp checked).2
 
 /-- Interpret the collector after a successful read-only inventory, using
 the same selector and unlink schedule as the native method. The namespace
@@ -70,7 +79,7 @@ theorem LockedRunInventory.runOlderCollection_outcome {dir : DiskDirectory} {reg
     have observed := (validateRunCollectionGeneration_ok_iff.mp checked).1
     obtain ⟨older, unheld⟩ := olderUnheld address member
     apply ((⟨manifest, initial⟩ : Image).collectable_iff_generation settled observed).mpr
-    exact ⟨olderThanValidatedGeneration checked older,
+    exact ⟨olderThanInstalledGeneration (validateRunCollectionGeneration_ok_iff.mp checked).2 older,
       by simp [retainRunGeneration_false_iff.mpr ⟨older, unheld⟩]⟩
   have outcome := runUnlinkSchedule_outcome selected before perform reports
   have retries := prior.runSchedule selected coversSelected perform reports

@@ -137,7 +137,7 @@ theorem VersionedRetry.installs_marked {initial published : Image} {before reope
 
 /-- Use concrete locked path reports for the dual-format checkpoint read
 and the same outer lock and marked installer schedule as the native adapter.
-The current native entry point still selects the v1 reader. -/
+The native v2 reader uses the integrity case and the absent-manifest case. -/
 theorem VersionedRetry.installs_marked_locked {initial published : Image} {before reopen : ReopenImage}
     {manifest : Option ByteArray} {history : List WAL.Write}
     (checkpoints : VersionedRetry history.length.toUInt64 (CheckpointRepresentsPrefix history) initial published)

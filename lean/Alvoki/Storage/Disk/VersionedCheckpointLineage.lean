@@ -226,7 +226,7 @@ theorem VersionedCheckpointFileReads.loaded_lineage
       | legacy => rfl
       | integrity manifest =>
         change manifest.validateRuns files = true at validated
-        simp [loadVersionedRunSet, VersionedCheckpoint.header, validated]
+        simp [loadVersionedRunSet, loadIntegrityRunSet, VersionedCheckpoint.header, validated]
     rw [structural] at opened
     cases interpreted : loadRunSet selected.header files with
     | error message => rw [interpreted] at opened; contradiction

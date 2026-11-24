@@ -367,4 +367,14 @@ theorem IntegrityCheckpoint.legacy_reader_rejects (manifest : IntegrityCheckpoin
   rw [legacyTag, integrityTag] at tag
   exact (by decide : (0x31464e4d4f564c41 : UInt64) ≠ integrityMagic) tag
 
+/-- The v2-only decoder rejects every checkpoint emitted by the old writer. -/
+theorem IntegrityCheckpoint.rejectsLegacy (header : Checkpoint) :
+    ∃ cause, IntegrityCheckpoint.decode (Manifest.encode header) = .error cause := by
+  cases decoded : IntegrityCheckpoint.decode (Manifest.encode header) with
+  | error cause => exact ⟨cause, rfl⟩
+  | ok manifest =>
+    have tag := congrArg (fun bytes => word bytes 0) (IntegrityCheckpoint.decode_spec decoded).1
+    rw [integrityTag, legacyTag] at tag
+    exact False.elim ((by decide : integrityMagic ≠ (0x31464e4d4f564c41 : UInt64)) tag)
+
 end Alvoki.Manifest
