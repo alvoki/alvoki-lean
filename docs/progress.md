@@ -1,5 +1,7 @@
 # Current handoff
 
+The first three-scenario baseline against RocksDB 9.10.0 is reproducible. The primary gap is individually durable writes. A separate syscall trace attributes three Alvoki barriers per put to WAL and marker publication. The first candidate is durable batch publication with a matched RocksDB batch and explicit crash semantics. [Native baseline](performance-baseline.md)
+
 The release performance roadmap defines the three-scenario baseline, the comparison target and the measure–diagnose–optimize loop. The first milestone is a comparable baseline and a measured choice of the first optimization. [Release performance](roadmap.md#release-performance)
 
 The writer-session and mixed database traces each derive readiness and acknowledged history in one induction. Full-chain provenance is propagated separately from the shared retained-WAL facts. Packed-table restore, write, flush and compaction share success specifications used by row bounds, logical refinement and checkpoint proofs. [Proof techniques and reuse](proof-index.md)

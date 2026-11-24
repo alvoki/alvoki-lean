@@ -22,6 +22,8 @@ The Linux adapter now calls `fsync` on open descriptors. Evaluate durable batche
 
 ## Release performance
 
+The [first native baseline](performance-baseline.md) identifies durable write publication as the first bottleneck to investigate.
+
 Make Alvoki a verified embedded LSM that is competitive with an established engine on sustained durable workloads with one foreground thread. Start with RocksDB. Fjall or another established engine is acceptable when it supports a simpler, like-for-like comparison. Pin the reference engine and version before collecting the baseline.
 
 The initial target is at least 50% of the reference's durable throughput and at most twice its read and acknowledged-write p99 on the primary workload at a common offered load. Recovery work must be bounded by the selected checkpoint, required WAL suffix, and required repair actions. Check all three scenarios and record resource tradeoffs when judging whether the goal is met.

@@ -1,0 +1,13 @@
+{
+  "cpu": 0,
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "db_root": "/workspace/work/alvoki-performance/db",
+  "operations": 8000,
+  "keys": 256,
+  "interval": 1000,
+  "trials": 5,
+  "seed": 1847,
+  "protocol": "closed-loop; single foreground caller",
+  "rocksdb": "9.10.0",
+  "revision": "e892ac7be985f323255f2d99684a2a184cb35862"
+}
