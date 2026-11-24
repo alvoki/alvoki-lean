@@ -19,6 +19,7 @@ import Alvoki.Storage.Disk.CheckpointFileDispatch
 import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.MarkedOpenControl
 import Alvoki.Storage.Disk.DiskLockLifecycle
+import Alvoki.Storage.Disk.RunGenerationCollection
 import Alvoki.Storage.Disk.LegacyBootstrapRetry
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.LegacyWalRecovery
@@ -127,6 +128,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_retry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.runWithReports_outcome
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.runWithReports_preparationFailure
+#check_axioms Alvoki.Storage.CheckpointPublication.Image.collectable_of_settled
+#check_axioms Alvoki.Storage.CheckpointPublication.RunCollectionRetry.keepsHeld
+#check_axioms Alvoki.Storage.CheckpointPublication.RunCollectionRetry.valid
+#check_axioms Alvoki.Storage.CheckpointPublication.RunCollectionRetry.preservesSelected
+#check_axioms Alvoki.Storage.CheckpointPublication.RunCollectionRetry.replay_eq
 #check_axioms Alvoki.WAL.Boundary.checkpointMarked_reported
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_recoveryInputs
