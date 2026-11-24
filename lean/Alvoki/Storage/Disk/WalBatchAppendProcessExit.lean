@@ -23,19 +23,7 @@ theorem batchProcessExit (cut : FirstAppendCut) {directory writer before}
       .ok before.wal.active.bytes := by
   intro live exited
   have held : live.owners.Owns directory writer := ready.held
-  have admission : TryLockObserves exited.owners directory (.ok true) ↔
-      references.remaining [.exited process] = [] := by
-    change TryLockObserves (references.afterFileDrops [.exited process] directory live).owners directory (.ok true) ↔ _
-    by_cases last : references.remaining [.exited process] = []
-    · rw [references.afterFileDrops_released held last]
-      simp [TryLockObserves, LockOwners.set, last]
-    · rw [references.afterFileDrops_surviving last]
-      constructor
-      · intro reported
-        change live.owners (directory.file .lock) = some writer at held
-        rw [reported rfl] at held
-        contradiction
-      · exact fun gone => False.elim (last gone)
+  have admission := references.afterFileDrops_admits (drops := [.exited process]) held
   obtain ⟨marker, selected⟩ := ready.selectPriorKeeper cut.visibleTail
   have old : BatchRetryTarget before.history batch before.wal.active.first before.target := by
     refine ⟨ready.active, before.history, .inl rfl, marker, ready.resumed.through, ?_⟩

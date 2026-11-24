@@ -81,6 +81,24 @@ theorem HeldLockReferences.afterFileDrops_released {image : Type} {description :
       ⟨before.image, before.owners.set (directory.file .lock) none⟩ := by
   simp [afterFileDrops, ownersAfterDrops, last, LockOwners.release_owned ownership]
 
+/-- A successful acquisition is consistent with the observed file state
+exactly when the last reference to its previous owner has dropped. -/
+theorem HeldLockReferences.afterFileDrops_admits {image : Type} {description : Nat}
+    {directory : DiskDirectory} {before : LockedFileState image} {drops : List LockReferenceDrop}
+    (references : HeldLockReferences description) (ownership : before.owners.Owns directory description) :
+    TryLockObserves (references.afterFileDrops drops directory before).owners directory (.ok true) ↔
+      references.remaining drops = [] := by
+  by_cases last : references.remaining drops = []
+  · rw [references.afterFileDrops_released ownership last]
+    simp [TryLockObserves, LockOwners.set, last]
+  · rw [references.afterFileDrops_surviving last]
+    constructor
+    · intro acquired
+      change before.owners (directory.file .lock) = some description at ownership
+      rw [acquired rfl] at ownership
+      contradiction
+    · exact fun gone => False.elim (last gone)
+
 /-- The shared open schedule reaches neither recovery nor ready installation
 while any observed reference keeps the exclusive lock description live. -/
 theorem runOpenWithInstallation_whileReferenceSurvives {image : Type}
