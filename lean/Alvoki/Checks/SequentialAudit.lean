@@ -838,6 +838,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.keepsPendingCollectionBeforeBarrier
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.openAfterRelease
 #check_axioms Alvoki.Storage.DiskSession.PendingCollectionOpenTrace.keepsNamespace
+#check_axioms Alvoki.Storage.DiskSession.PendingCollectionOpenTrace.keepsVisible
+#check_axioms Alvoki.Storage.DiskSession.PendingCollectionOpenTrace.keepsSettled
+#check_axioms Alvoki.Storage.DiskSession.PendingCollectionOpenTrace.continues
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.Installs.unique
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.Installs.history
@@ -845,6 +848,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CollectionBarrierErrorEffect.reaches
 #check_axioms Alvoki.Storage.DiskSession.CollectionBarrierErrorEffect.keepsVisible
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.errorAtCollectionBarrier
+#check_axioms Alvoki.Storage.DiskSession.PendingCollectionBarrierFailure.returned
+#check_axioms Alvoki.Storage.DiskSession.PendingCollectionBarrierFailure.namespaceState
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.cleanReopenRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.Installs.preservesRetained
