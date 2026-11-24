@@ -85,6 +85,7 @@ lake env leanchecker Alvoki.Storage.Disk.VersionedMarkedRecovery
 lake env leanchecker Alvoki.Storage.Disk.LockedVersionedCheckpointRead
 lake env leanchecker Alvoki.Storage.Disk.VersionedCheckpointReopen
 lake env leanchecker Alvoki.Storage.Disk.FirstVersionedCheckpoint
+lake env leanchecker Alvoki.Storage.Disk.RetainedWalSuffix
 lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapRetry
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery

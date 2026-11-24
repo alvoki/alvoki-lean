@@ -125,6 +125,12 @@ one-based position during the same pass. -/
 def decodeOrdinals (bytes : @& ByteArray) : Except String (List Write) :=
   decodeFrom true bytes 1 0 (bytes.size / frameSize) []
 
+/-- Decode retained WAL bytes using their original absolute frame ordinals.
+Complete frames receive the same format and checksum checks as whole WAL
+decoding. A final incomplete frame is outside the complete frame count. -/
+def decodeOrdinalsFrom (first : Nat) (bytes : @& ByteArray) : Except String (List Write) :=
+  decodeFrom true bytes first 0 (bytes.size / frameSize) []
+
 /-- A contiguous sequence of frame ordinals beginning at `first`. -/
 def OrdinalsFrom : Nat → List Write → Prop
   | _, [] => True
@@ -206,13 +212,46 @@ theorem decode_encode (events : List Write) : decode (encode events) = .ok event
   have h := decode_ignores_incomplete_tail events ByteArray.empty (by decide)
   simpa only [ByteArray.append_empty] using h
 
-theorem decodeOrdinals_encode (events : List Write) (ordered : OrdinalsFrom 1 events) :
-    decodeOrdinals (encode events) = .ok events := by
+theorem decodeOrdinalsFrom_encode (first : Nat) (events : List Write) (ordered : OrdinalsFrom first events) :
+    decodeOrdinalsFrom first (encode events) = .ok events := by
   have count : (encode events).size / frameSize = events.length := by
     rw [encode_size, Nat.mul_div_cancel_left _ (by decide : 0 < frameSize)]
-  have parsed := decodeFrom_append_encoded true events ByteArray.empty 1 0 [] (fun _ => ordered)
-  rw [decodeOrdinals, count]
+  have parsed := decodeFrom_append_encoded true events ByteArray.empty first 0 [] (fun _ => ordered)
+  rw [decodeOrdinalsFrom, count]
   simpa [decodeFrom] using parsed
+
+theorem decodeOrdinals_encode (events : List Write) (ordered : OrdinalsFrom 1 events) :
+    decodeOrdinals (encode events) = .ok events := decodeOrdinalsFrom_encode 1 events ordered
+
+private theorem decodeFrom_appendAccumulator (bytes : ByteArray) (first offset remaining : Nat)
+    (current prior : List Write) :
+    decodeFrom true bytes first offset remaining (current ++ prior) =
+      (decodeFrom true bytes first offset remaining current).map (prior.reverse ++ ·) := by
+  induction remaining generalizing first offset current with
+  | zero => simp [decodeFrom, Except.map, List.reverse_append]
+  | succ remaining ih =>
+    rw [decodeFrom, decodeFrom]
+    split
+    · rfl
+    · split
+      · rfl
+      · simpa only [List.cons_append] using ih _ _ (_ :: current)
+
+/-- Removing a validated, whole prefix leaves the decoder result for the
+same retained bytes. In particular, a malformed complete retained frame
+still reports the same error. -/
+theorem decodeOrdinals_append_encoded (covered : List Write) (retained : ByteArray)
+    (ordered : OrdinalsFrom 1 covered) :
+    decodeOrdinals (encode covered ++ retained) =
+      (decodeOrdinalsFrom (covered.length + 1) retained).map (covered ++ ·) := by
+  have count : (encode covered ++ retained).size / frameSize =
+      covered.length + retained.size / frameSize := by
+    rw [ByteArray.size_append, encode_size, Nat.mul_add_div (by decide : 0 < frameSize)]
+  rw [decodeOrdinals, count, decodeFrom_append_encoded true covered retained 1
+    (retained.size / frameSize) [] (fun _ => ordered)]
+  simpa only [advanceOrdinal, ite_true, List.append_nil, List.nil_append, Nat.add_comm 1,
+    List.reverse_reverse, decodeOrdinalsFrom] using decodeFrom_appendAccumulator retained (covered.length + 1) 0
+      (retained.size / frameSize) [] covered.reverse
 
 private theorem decodeFrom_ordinals (bytes : ByteArray) (ordinal offset remaining : Nat)
     (reversed result : List Write) (decoded : decodeFrom true bytes ordinal offset remaining reversed = .ok result) :
