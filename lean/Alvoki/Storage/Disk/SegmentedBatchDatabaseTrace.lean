@@ -482,4 +482,43 @@ theorem SegmentedBatchDatabaseTrace.reacquireReadsStable
   obtain ⟨ready, _, history, _⟩ := trace.preservesRetained initialReady
   exact initialReady.reacquireReadsStable ready history active retained
 
+/-- In a freshly installed session, reacquiring a still-supported sequence
+issues a local pin whose guarded reads equal the earlier snapshot. The old
+token stays foreign even if the new pin reuses its local handle number. -/
+theorem SegmentedBatchDatabaseTrace.reacquireGuardedReadsStable
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
+    (initialReady : initial.RetainedReady directory initialDescriptor) {oldPin : SnapshotPin}
+    (active : oldPin ∈ initial.installed.table.pins.active)
+    (retained : last.installed.table.pins.floor ≤ oldPin.sequence)
+    {session : SegmentedSession} (readyPhase : session.phase = .ready last.installed)
+    {oldToken : Nat} {liveRefs : List Nat} (oldLive : oldToken ∈ liveRefs)
+    (fresh : session.sessionRef ∉ liveRefs) :
+    ∃ (newPin : SnapshotPin) (pinned : PackedTable) (after : SegmentedSession),
+      SegmentedSession.runAcquireAt oldPin.sequence session = .ok (some (after.sessionRef, newPin)) after ∧
+      after.phase = .ready { last.installed with table := pinned } ∧
+      newPin.sequence = oldPin.sequence ∧ newPin ∈ pinned.pins.active ∧ oldToken ≠ after.sessionRef ∧
+      ∀ localCompared oldCompared : Bool,
+        localCompared = decide (session.sessionRef = after.sessionRef) →
+        oldCompared = decide (oldToken = after.sessionRef) →
+        (∀ key, readWithHandle (.ready pinned) localCompared (fun table => table.lookup newPin.handle key) =
+          readWithHandle (.ready initial.installed.table) true (fun table => table.lookup oldPin.handle key)) ∧
+        (∀ start stop, readWithHandle (.ready pinned) localCompared (fun table => table.range newPin.handle start stop) =
+          readWithHandle (.ready initial.installed.table) true (fun table => table.range oldPin.handle start stop)) ∧
+        (∀ key, readWithHandle (.ready pinned) oldCompared (fun table => table.lookup oldPin.handle key) = .ok none) ∧
+        ∀ start stop, readWithHandle (.ready pinned) oldCompared
+          (fun table => table.range oldPin.handle start stop) = .ok none := by
+  obtain ⟨newPin, pinned, acquired, sequence, lookup, range⟩ := trace.reacquireReadsStable initialReady active retained
+  let after := { session with phase := .ready { last.installed with table := pinned } }
+  have different : oldToken ≠ after.sessionRef := by
+    intro same
+    exact fresh (same ▸ oldLive)
+  refine ⟨newPin, pinned, after, SegmentedSession.runAcquireAt_ready readyPhase acquired,
+    rfl, sequence, (PackedTable.acquireAt_spec acquired).active, different, ?_⟩
+  intro localCompared oldCompared localReport oldReport
+  have localToken : localCompared = true := localReport.trans (decide_eq_true rfl)
+  rw [localToken]
+  exact ⟨fun key => congrArg Except.ok (lookup key), fun start stop => congrArg Except.ok (range start stop),
+    fun key => readWithHandle_foreign pinned _ oldReport different,
+    fun start stop => readWithHandle_foreign pinned _ oldReport different⟩
+
 end Alvoki.Storage.DiskSession

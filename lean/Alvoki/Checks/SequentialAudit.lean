@@ -903,6 +903,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.guardedAcquireReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquireAt_ready
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reacquireReadsStable
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reacquireGuardedReadsStable
 #check_axioms Alvoki.Storage.DiskSession.DatabaseBatchRetention.orderedSubmissions
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.preservesReady
