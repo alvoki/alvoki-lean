@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.AppendCutSession
-import Alvoki.Storage.Disk.SegmentedRetryTrace
+import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
 
 namespace Alvoki.Storage.DiskSession
 
@@ -160,6 +160,34 @@ def appendCutFiles (before : WalSegmentImage) (history : List WAL.Write) (event 
     ((writeFilesAfter (runWriteEffects history event effects (before.directory.staged .walBoundary))).reopenSegment
       before.active.first history before.directory.active.manifest) scratch
 
+/-- The visible marker of the physical append cut determines a checked
+keeper plan. A directory sync on the retained description can authorize
+that plan before any new opener has acquired the writer's lock. -/
+theorem DelayedDirectorySync.retainedAppendCutAfterLastDrop {directory : DiskDirectory}
+    (report : DelayedDirectorySync directory) {owners : LockOwners} {writer : Nat}
+    (references : HeldLockReferences writer) (owned : owners.Owns directory writer)
+    (last : references.remaining report.drops = []) (separate : report.captured.description ≠ writer)
+    {before : WalSegmentImage} {history : List WAL.Write}
+    (layout : before.ReadLayout history) (valid : before.Valid history) {watermark : Nat}
+    (oldRange : before.directory.active.walRange = some ⟨watermark, history.length⟩)
+    (event : WAL.Write) (fits : (WAL.encode (history ++ [event])).size < UInt64.size)
+    (effects : WriteEffects) (scratch : Option (ByteArray × Bool)) :
+    let source := appendCutFiles before history event effects scratch
+    let delayed := report.after ⟨source, owners.set (directory.file .lock) none⟩
+    report.effectTarget.description ≠ writer ∧ delayed.owners (directory.file .lock) = none ∧
+      ReopenLineage source (AppendRetryTarget history event before.active.first) delayed.image := by
+  intro source delayed
+  have initial : ReopenLineage source (AppendRetryTarget history event before.active.first) source :=
+    .before .live
+  obtain ⟨selectedHistory, allowed, _, _, _, _, _, _, _, selected, _, _, first, _, _, prepared, _⟩ :=
+    retainedAppendRetryLayout layout valid oldRange event fits effects (before.directory.staged .walBoundary) initial
+  have admitted : AppendRetryTarget history event before.active.first selected.target :=
+    ⟨first, selectedHistory, allowed, selected.through, first ▸ selected.chain.keeperBytes⟩
+  have continued := report.afterLastWriterDrop (before := ⟨source, owners⟩) references owned last separate initial
+    (fun a b pair => AppendRetryTarget.unique a b pair) admitted prepared
+  simp only [references.afterFileDrops_released (before := ⟨source, owners⟩) owned last] at continued
+  exact continued
+
 /-- The marker selects the acknowledged history or that history with the
 submitted frame. The selected keeper layout supplies the exact installation
 when the bounded reopen reports the required reads and durability effects. -/
@@ -261,6 +289,40 @@ theorem BoundedReopenTrace.installsAfterAppendCut {directory : DiskDirectory} {o
   exact ⟨lineage.keepsSealed, installAppendRetryLayout recovered ready.first ready.ordered extended allFit
     ready.checkpoint ready.generation liveRefs fresh acquisition unlock removeFile write sync renameFile⟩
 
+/-- The selected valid read suffix supplies the canonical keeper and exact
+history after a retained append cut. The lineage may include a directory
+barrier issued on a description retained by an earlier owner. -/
+theorem _root_.Alvoki.Storage.WalSegmentRepair.ReopenLineage.installsAfterRetainedAppendCut {directory : DiskDirectory}
+    {before : WalSegmentImage} {history : List WAL.Write}
+    (layout : before.ReadLayout history) (valid : before.Valid history) {watermark : Nat}
+    (oldRange : before.directory.active.walRange = some ⟨watermark, history.length⟩)
+    (ordered : WAL.OrdinalsFrom 1 history) {published : CheckpointPublication.Image}
+    (checkpoint : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      before.directory.active.manifest)
+    {generation : UInt64}
+    (generationRead : ((before.directory.active.manifest.mapM fun bytes =>
+      (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
+      .ok generation)
+    (event : WAL.Write) (extended : WAL.OrdinalsFrom 1 (history ++ [event]))
+    (allFit : (WAL.encode (history ++ [event])).size < UInt64.size) (effects : WriteEffects)
+    (scratch : Option (ByteArray × Bool)) {retry : LockedFileState FileImage}
+    (lineage : ReopenLineage (appendCutFiles before history event effects scratch)
+      (AppendRetryTarget history event before.active.first) retry.image)
+    {descriptor nextRef : Nat} (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    retry.image.kept = (appendCutFiles before history event effects scratch).kept ∧
+    AppendRetryInstallation directory descriptor nextRef liveRefs before history event
+      WalSegmentImage.Valid published generation before.active.first
+      retry unlock removeFile write sync renameFile := by
+  have recovered := retainedAppendRetryLayout layout valid oldRange event allFit effects
+    (before.directory.staged .walBoundary) lineage
+  exact ⟨lineage.keepsSealed, installAppendRetryLayout recovered rfl ordered extended allFit
+    checkpoint generationRead liveRefs fresh acquisition unlock removeFile write sync renameFile⟩
+
 /-- The same bounded retry and healthy open apply after covered WAL
 collection. The selected valid read suffix supplies the canonical keeper
 and exact history as the actual open installs its next writer. -/
@@ -289,12 +351,10 @@ theorem BoundedReopenTrace.installsAfterRetainedAppendCut {directory : DiskDirec
     retry.image.kept = (appendCutFiles before history event effects scratch).kept ∧
     AppendRetryInstallation directory descriptor nextRef liveRefs before history event
       WalSegmentImage.Valid published generation before.active.first
-      retry unlock removeFile write sync renameFile := by
-  have lineage := attempts.lineage (fun a b pair => AppendRetryTarget.unique a b pair)
-  have recovered := retainedAppendRetryLayout layout valid oldRange event allFit effects
-    (before.directory.staged .walBoundary) lineage
-  exact ⟨lineage.keepsSealed, installAppendRetryLayout recovered rfl ordered extended allFit
-    checkpoint generationRead liveRefs fresh acquisition unlock removeFile write sync renameFile⟩
+      retry unlock removeFile write sync renameFile :=
+  (attempts.lineage (fun a b pair => AppendRetryTarget.unique a b pair)).installsAfterRetainedAppendCut
+    layout valid oldRange ordered checkpoint generationRead event extended allFit effects scratch
+    liveRefs fresh acquisition unlock removeFile write sync renameFile
 
 /-- Start with the exact files left by the reported append error and the
 ownership map after close or the last observed reference drop. A finite

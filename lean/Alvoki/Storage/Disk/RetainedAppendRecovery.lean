@@ -6,16 +6,16 @@ namespace Alvoki.Storage.DiskSession
 open System WalSegmentRepair WalSegmentCommit WAL.Boundary
 open WAL (frameSize)
 
-/-- The exact bounded opener and its primitive observations install the
-retained form of the writer invariant from a physical append cut. The old
-or extended history is chosen by the visible marker. -/
-theorem BoundedReopenTrace.reopensRetainedAppend {directory : DiskDirectory} {before : SegmentedWriterState}
+/-- The exact bounded opener installs the retained form of the writer
+invariant from the admitted lineage. The visible marker chooses the old
+or extended history. -/
+theorem _root_.Alvoki.Storage.WalSegmentRepair.ReopenLineage.reopensRetainedAppend {directory : DiskDirectory} {before : SegmentedWriterState}
     {writer descriptor : Nat} (ready : before.RetainedReady directory writer)
     (event : WAL.Write) (extended : WAL.OrdinalsFrom 1 (before.history ++ [event]))
     (fits : (WAL.encode (before.history ++ [event])).size < UInt64.size) (effects : WriteEffects)
-    {owners : LockOwners} {retry : LockedFileState FileImage}
-    (attempts : BoundedReopenTrace directory (AppendRetryTarget before.history event before.wal.active.first)
-      ⟨appendCutFiles before.wal before.history event effects before.files.keeper.staged, owners⟩ retry)
+    {retry : LockedFileState FileImage}
+    (lineage : ReopenLineage (appendCutFiles before.wal before.history event effects before.files.keeper.staged)
+      (AppendRetryTarget before.history event before.wal.active.first) retry.image)
     (reopen : BoundedReopenAttempt) (descriptorEq : reopen.descriptor = descriptor)
     (acquired : reopen.acquired = .ok true) (acquisition : TryLockObserves retry.owners directory (.ok true))
     (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < reopen.nextRef)
@@ -49,7 +49,7 @@ theorem BoundedReopenTrace.reopensRetainedAppend {directory : DiskDirectory} {be
     rw [ready.walPair]
     exact ready.resumed.generationRead
   obtain ⟨_, history, survived, manifest, marker, wal, walEq, layout, valid, kept, selected, first, keeper, opened⟩ :=
-    attempts.installsAfterRetainedAppendCut (descriptor := descriptor) ready.layout ready.valid range ready.resumed.ordered
+    lineage.installsAfterRetainedAppendCut (descriptor := descriptor) ready.layout ready.valid range ready.resumed.ordered
       accepted generationRead event extended fits effects before.files.keeper.staged liveRefs fresh acquisition
       reopen.unlock reopen.removeFile reopen.write reopen.sync reopen.renameFile
   subst wal
@@ -75,6 +75,60 @@ theorem BoundedReopenTrace.reopensRetainedAppend {directory : DiskDirectory} {be
   rw [target]
   exact first
 
+/-- The exact bounded opener and its primitive observations install the
+retained form of the writer invariant from a physical append cut. The old
+or extended history is chosen by the visible marker. -/
+theorem BoundedReopenTrace.reopensRetainedAppend {directory : DiskDirectory} {before : SegmentedWriterState}
+    {writer descriptor : Nat} (ready : before.RetainedReady directory writer)
+    (event : WAL.Write) (extended : WAL.OrdinalsFrom 1 (before.history ++ [event]))
+    (fits : (WAL.encode (before.history ++ [event])).size < UInt64.size) (effects : WriteEffects)
+    {owners : LockOwners} {retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (AppendRetryTarget before.history event before.wal.active.first)
+      ⟨appendCutFiles before.wal before.history event effects before.files.keeper.staged, owners⟩ retry)
+    (reopen : BoundedReopenAttempt) (descriptorEq : reopen.descriptor = descriptor)
+    (acquired : reopen.acquired = .ok true) (acquisition : TryLockObserves retry.owners directory (.ok true))
+    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < reopen.nextRef)
+    (reads : ∀ history, ∀ layout : CanonicalKeeperLayout retry.image history,
+      (history = before.history ∨ history = before.history ++ [event]) → layout.target.first = before.wal.active.first →
+      let wal := before.wal.appendSelectedView retry.image.directory.active history
+      ∃ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+          wal retry.image.directory.active layout.range.watermark before.published.durable layout.tail,
+        reopen.recover directory = raw.reopen reopen.removeFile reopen.write reopen.sync reopen.renameFile)
+    (settles : reopen.sync #[directory.path] retry.image = .ok () retry.image.syncDirectory)
+    (healthy : ∀ history, ∀ layout : CanonicalKeeperLayout retry.image history,
+      (history = before.history ∨ history = before.history ++ [event]) → layout.target.first = before.wal.active.first →
+      ∀ action prior next,
+        ReachesAction layout.target retry.image.syncDirectory layout.plan.finishActions action prior →
+        prior.effect layout.target action = some next →
+        performPaths directory layout.plan reopen.removeFile throw reopen.write reopen.sync reopen.renameFile action prior =
+          .ok () next) :
+    ∃ after, AppendRetryEndpoint directory before event retry descriptor (reopen.run directory retry) after ∧
+      after.RetainedReady directory descriptor ∧
+      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64) ∧
+      after.checkpoint = before.checkpoint ∧ after.installed.generation = before.installed.generation :=
+  (attempts.lineage (fun a b pair => AppendRetryTarget.unique a b pair)).reopensRetainedAppend
+    ready event extended fits effects reopen descriptorEq acquired acquisition liveRefs fresh reads settles healthy
+
+/-- A reported commit error fixes the physical append cut and bounds
+the possible extended history by the submitted record. -/
+theorem SegmentedAppendFailure.retainedCut {directory : DiskDirectory} {before : SegmentedWriterState}
+    {writer : Nat} (failure : SegmentedAppendFailure directory before) (ready : before.RetainedReady directory writer) :
+    WAL.OrdinalsFrom 1 (before.history ++ [failure.event]) ∧
+      (WAL.encode (before.history ++ [failure.event])).size < UInt64.size ∧
+      appendCutFiles before.wal before.history failure.event failure.effects before.files.keeper.staged =
+        failure.released.image := by
+  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
+  have count : before.history.length = before.installed.table.committed.toNat :=
+    represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
+  obtain ⟨_, _, extended, _, size⟩ := prepareWrite_extends_history ready.resumed.ordered count failure.prepared
+  have byteCount : before.installed.walBytes + frameSize = (WAL.encode (before.history ++ [failure.event])).size := by
+    rw [ready.resumed.bytes, size]
+  have modeled := failure.reports.run byteCount
+  rw [forgetError, failure.ran] at modeled
+  have exactCut : writeFilesAfter (runWriteEffects before.history failure.event failure.effects
+      (before.wal.directory.staged .walBoundary)) = failure.failed := by rw [← modeled]; rfl
+  exact ⟨extended, byteCount ▸ failure.fits, by simp [appendCutFiles, SegmentedAppendFailure.released, exactCut]⟩
+
 namespace SegmentedAppendRecoveryReport
 
 variable {directory : DiskDirectory} {before : SegmentedWriterState} {writer descriptor : Nat}
@@ -89,22 +143,14 @@ theorem installsRetained (report : SegmentedAppendRecoveryReport directory befor
   let proposed : Installed := { before.installed with table := failure.table, walBytes := before.installed.walBytes + frameSize }
   obtain ⟨uncertain, closed, dropped, _⟩ := runPreparedWrite_failure_handoff
     (before := ⟨initial, before.owners⟩) before.installed proposed failure.event.sequence failure.ran ready.held
-  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
-  have count : before.history.length = before.installed.table.committed.toNat :=
-    represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
-  obtain ⟨_, _, extended, _, size⟩ := prepareWrite_extends_history ready.resumed.ordered count failure.prepared
-  have byteCount : before.installed.walBytes + frameSize = (WAL.encode (before.history ++ [failure.event])).size := by
-    rw [ready.resumed.bytes, size]
-  have modeled := failure.reports.run byteCount
-  rw [forgetError, failure.ran] at modeled
-  have exactCut : writeFilesAfter (runWriteEffects before.history failure.event failure.effects
-      (before.wal.directory.staged .walBoundary)) = failure.failed := by rw [← modeled]; rfl
+  obtain ⟨extended, fits, exactCut⟩ := failure.retainedCut ready
   have attempts : BoundedReopenTrace directory (AppendRetryTarget before.history failure.event before.wal.active.first)
       ⟨appendCutFiles before.wal before.history failure.event failure.effects before.files.keeper.staged,
         before.owners.set (directory.file .lock) none⟩ report.retry := by
-    simpa only [appendCutFiles, exactCut, SegmentedAppendFailure.released] using report.attempts
+    rw [exactCut]
+    exact report.attempts
   obtain ⟨after, endpoint, installed, _, _, _⟩ := attempts.reopensRetainedAppend
-    ready failure.event extended (byteCount ▸ failure.fits) failure.effects report.reopen report.descriptorEq
+    ready failure.event extended fits failure.effects report.reopen report.descriptorEq
     report.acquired report.acquisition report.liveRefs report.fresh report.reads report.settles report.healthy
   have release : report.release.Observed (directory := directory) failure.poisoned
       ⟨failure.failed, before.owners.set (directory.file .lock) none⟩ := by
