@@ -1263,6 +1263,16 @@ private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
     (← IO.FS.readBinFile marker) == boundary durable)
     "the later failed append did not leave its full frame outside the active marker"
   expectFixedFiles
+  let (opened, syncs) ← probeDisk bin dir (some dir) (skipFailures := 2) (failureMode := .afterSync)
+  check (!opened && syncs == walReplacementSyncs dir ++ [s!"synced before error: {dir}"])
+    "reopen did not report failure after settling the replacement keeper"
+  expectFiles continued
+  check (!(← (dir / "WAL.next").pathExists)) "settled keeper replacement left its staging file"
+  -- The next opener sees an aligned keeper after the replacement.
+  let (opened, syncs) ← probeDisk bin dir (some keeper) (failureMode := .afterSync)
+  check (!opened && syncs == alignedSyncs ++ [s!"synced before error: {keeper}"])
+    "retry did not take the aligned route and report the completed keeper sync error"
+  expectFiles continued
   let reopened ← DiskTable.open dir
   try
     expectFiles continued
