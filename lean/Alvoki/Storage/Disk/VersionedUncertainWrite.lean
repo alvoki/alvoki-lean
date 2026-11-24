@@ -43,6 +43,17 @@ private theorem MarkedWriterState.selectAfterWriteError {writer : MarkedWriterSt
   · exact ⟨ready.ordered, ready.length ▸ ready.fits⟩
   · exact ⟨orderedNext, extendedFits⟩
 
+/-- The actual failed write image retains a bounded active marker and bounded
+crash choices, as needed to thread marked reopen failures. -/
+theorem MarkedWriterState.markerBoundAfterWriteError {writer : MarkedWriterState}
+    {manifest : Option ByteArray} (ready : writer.ReadyFor manifest)
+    {event : WAL.Write} {effects : WriteEffects} {cut : ReopenImage}
+    (fits : (WAL.encode (writer.history ++ [event])).size < UInt64.size)
+    (failed : runWriteEffectsFrom writer.history event effects writer.image = .error () cut) :
+    MarkerBound cut.directory := by
+  rw [← runWriteEffectsFrom_failed_image ready.settled failed]
+  exact writeEffects_reopenMarkerBound writer.history event effects manifest fits
+
 /-- Write retries leave the predecessor's raw manifest selected. -/
 theorem MarkedWriterState.manifestAfterWriteError {writer : MarkedWriterState}
     {manifest : Option ByteArray} (ready : writer.ReadyFor manifest)
@@ -103,6 +114,7 @@ theorem ObservedMarkedState.VersionedReady.reopenAfterWriteErrorWithLock
       next.writer.image.directory.active.manifest = state.writer.image.directory.active.manifest ∧
       (next.writer.history = state.writer.history ∨ next.writer.history = state.writer.history ++ [event]) ∧
       next.writer.table.pins.active = [] ∧
+      before.directory.active.walBoundary = some (encode (WAL.encode next.writer.history).size.toUInt64) ∧
       (state.HasIntegrityManifest →
         DiskSession.runLockedMarkedOpen directory descriptor (.ok true) unlock cause reopenedIntegrity owners =
           .ok ((next.writer.table, next.generation, next.writer.walBytes), next.writer.image) heldOwners ∧
@@ -205,7 +217,7 @@ theorem ObservedMarkedState.VersionedReady.reopenAfterWriteErrorWithLock
     rfl
   have previous := (DiskSession.runOpen_success acquisition locked).1
   refine ⟨state.withWriter writer, locked, previous, held, MarkedWriterState.observeReopen_ready ready,
-    nextReady, rfl, rfl, nextManifest, retained, freshPins, ?_⟩
+    nextReady, rfl, rfl, nextManifest, retained, freshPins, marker, ?_⟩
   intro integrity
   have strictRead : readIntegrityCheckpoint checkpointReads.readManifest checkpointReads.readRun id =
       checkpointReads.result := checkpointReads.integrityResult_eq manifestObserved

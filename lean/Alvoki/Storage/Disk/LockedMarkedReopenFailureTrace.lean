@@ -251,4 +251,40 @@ theorem LockedMarkedReopenFailureTrace.completesInterruptedCheckpoint {directory
   exact ⟨manifest, orderedRuns, decoded, generation.symm, stored,
     by simpa only [sameDirectory] using observed, checked⟩
 
+/-- The reported write failure supplies the starting file image for repeated
+locked opens. When the final reports are healthy, the observed marker selects
+the prior history or the same history extended by the submitted frame. -/
+theorem LockedMarkedReopenFailureTrace.completesUncertainWrite {directory : DiskDirectory}
+    {state : ObservedMarkedState} (valid : state.VersionedReady) (integrity : state.HasIntegrityManifest)
+    {key : UInt64} {value : Option UInt64} {event : WAL.Write} {preparedTable : PackedTable}
+    (prepared : prepareWrite state.writer.table key value = some (event, preparedTable))
+    (fits : state.writer.walBytes + WAL.frameSize < UInt64.size)
+    {effects : WriteEffects} {cut : ReopenImage}
+    (failed : runWriteEffectsFrom state.writer.history event effects state.writer.image = .error () cut)
+    {initialOwners : LockOwners} {after : LockedReopenState}
+    (retry : LockedMarkedReopenFailureTrace directory state.durable ⟨cut, initialOwners⟩ after)
+    (reports : IntegrityLockedOpenReports after.image state.durable)
+    (sameDirectory : reports.directory = directory) (sameOwners : reports.owners = after.owners)
+    (healthy : reports.Healthy) :
+    ∃ next : ObservedMarkedState,
+      reports.Returned next ∧ after.owners (directory.file .lock) = none ∧
+      reports.toIntegrityOpenPaths.heldOwners.Owns directory reports.descriptor ∧
+      next.VersionedReady ∧ next.HasIntegrityManifest ∧ next.generation = state.generation ∧
+      next.writer.image.directory.active.manifest = state.writer.image.directory.active.manifest ∧
+      (next.writer.history = state.writer.history ∨ next.writer.history = state.writer.history ++ [event]) ∧
+      after.image.directory.active.walBoundary = some (WAL.Boundary.encode next.writer.walBytes.toUInt64) ∧
+      next.writer.walBytes = (WAL.encode next.writer.history).size ∧ next.writer.table.pins.active = [] := by
+  obtain ⟨_, _, _, _, nextSize⟩ := prepareWrite_extends_history valid.ready.ordered valid.ready.count prepared
+  have extendedFits : (WAL.encode (state.writer.history ++ [event])).size < UInt64.size := by
+    rwa [nextSize, ← valid.ready.length]
+  have attempts := retry.toAttempts .start
+    (MarkedWriterState.markerBoundAfterWriteError valid.ready extendedFits failed)
+  obtain ⟨next, result, available, ready, strict, generation, manifest, retained, marker, pins⟩ :=
+    reports.recoversUncertainWrite valid integrity prepared fits failed attempts healthy
+  have terminalOwner : reports.toIntegrityOpenPaths.heldOwners.Owns directory reports.descriptor := by
+    rw [← sameDirectory]
+    exact reports.toIntegrityOpenPaths.held
+  exact ⟨next, result, by simpa only [sameOwners, sameDirectory] using available, terminalOwner, ready, strict,
+    generation, manifest, retained, by rw [ready.ready.length, marker], ready.ready.length, pins⟩
+
 end Alvoki.Storage.DiskSession

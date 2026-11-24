@@ -107,6 +107,33 @@ private theorem IntegrityLockedOpenReports.versionedRunReads {before : ReopenIma
   subst selected
   exact reports.runReads bytes strict visible parsed index within
 
+/-- A healthy strict reopen recovers the one marker-selected write history
+and leaves the checkpoint binding and generation unchanged. -/
+theorem IntegrityLockedOpenReports.recoversUncertainWrite {state : ObservedMarkedState}
+    (valid : state.VersionedReady) (integrity : state.HasIntegrityManifest)
+    {key : UInt64} {value : Option UInt64} {event : WAL.Write} {preparedTable : PackedTable}
+    (prepared : prepareWrite state.writer.table key value = some (event, preparedTable))
+    (fits : state.writer.walBytes + WAL.frameSize < UInt64.size)
+    {effects : WriteEffects} {cut before : ReopenImage}
+    (failed : runWriteEffectsFrom state.writer.history event effects state.writer.image = .error () cut)
+    (attempts : MarkedReopenAttempts cut before)
+    (reports : IntegrityLockedOpenReports before state.durable) (healthy : reports.Healthy) :
+    ∃ next : ObservedMarkedState,
+      reports.Returned next ∧ reports.owners (reports.directory.file .lock) = none ∧
+      next.VersionedReady ∧ next.HasIntegrityManifest ∧ next.generation = state.generation ∧
+      next.writer.image.directory.active.manifest = state.writer.image.directory.active.manifest ∧
+      (next.writer.history = state.writer.history ∨ next.writer.history = state.writer.history ++ [event]) ∧
+      before.directory.active.walBoundary = some (encode (WAL.encode next.writer.history).size.toUInt64) ∧
+      next.writer.table.pins.active = [] := by
+  have manifest := MarkedWriterState.manifestAfterWriteError valid.ready prepared fits failed attempts
+  have runReads := reports.versionedRunReads (fun bytes visible => integrity bytes (manifest.symm.trans visible))
+  obtain ⟨next, _, available, _, observed, ready, generation, files, sameManifest, retained, pins, marker, strict⟩ :=
+    valid.reopenAfterWriteErrorWithLock prepared fits failed attempts
+      reports.acquisition reports.observes reports.manifestRead runReads reports.markerRead reports.walRead
+      reports.repair reports.aligned healthy reports.unlock reports.cause
+  obtain ⟨installed, format⟩ := strict integrity
+  exact ⟨next, ⟨installed, observed, files⟩, available, ready, format, generation, sameManifest, retained, marker, pins⟩
+
 /-- A single run collection pass in the same open session. The writer holds
 the directory lock throughout the manifest read, inventory and same-path
 unlink and sync callbacks. The reports carry their actual filesystem
@@ -244,16 +271,9 @@ theorem IntegrityDatabaseStep.refines {directory : DiskDirectory} {state after :
     rw [returned.unique result]
     exact ⟨[], nextValid, strict, by simpa using history, .inl rfl⟩
   | @uncertainWrite key value event preparedTable prepared fits effects cut before next failed attempts reports _ healthy returned =>
-    have manifest := MarkedWriterState.manifestAfterWriteError valid.ready prepared fits failed attempts
-    have runReads := reports.versionedRunReads (fun bytes visible => integrity bytes (manifest.symm.trans visible))
-    obtain ⟨ready, _, _, _, observed, nextValid, _, exactMap, _, retained, _, strict⟩ :=
-      valid.reopenAfterWriteErrorWithLock prepared fits failed attempts
-        reports.acquisition reports.observes reports.manifestRead runReads reports.markerRead reports.walRead
-        reports.repair reports.aligned healthy reports.unlock reports.cause
-    obtain ⟨installed, format⟩ := strict integrity
-    have result : reports.Returned ready := ⟨installed, observed, exactMap⟩
-    have same := returned.unique result
-    rw [same]
+    obtain ⟨ready, result, _, nextValid, format, _, _, retained, _⟩ :=
+      reports.recoversUncertainWrite valid integrity prepared fits failed attempts healthy
+    rw [returned.unique result]
     rcases retained with old | extended
     · exact ⟨[], nextValid, format, by simpa using old, .inl rfl⟩
     · exact ⟨[event], nextValid, format, extended, .inr ⟨event, rfl, rfl⟩⟩

@@ -405,6 +405,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.markedReopenBound
 #check_axioms Alvoki.WAL.Boundary.CheckpointPreparation.reportedManifestChoices
 #check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.completesInterruptedCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.completesUncertainWrite
+#check_axioms Alvoki.WAL.Boundary.IntegrityLockedOpenReports.recoversUncertainWrite
+#check_axioms Alvoki.WAL.Boundary.MarkedWriterState.markerBoundAfterWriteError
 #check_axioms Alvoki.Storage.CheckpointPublication.runUnlinkSchedule_success
 #check_axioms Alvoki.WAL.Boundary.IntegrityRunCollectionReports.completePass
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_encode

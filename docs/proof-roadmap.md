@@ -142,6 +142,8 @@ The locked marked-open model retains the post-effect recovery image alongside th
 
 The strict trace also gives the canonical point and range result through the shared native session guard. For the final installed ready table, a pin shown to belong to the live session returns the canonical replay result and leaves the lock owners unchanged. Ownership and the reference comparison are observations for that final session. The guard proof separately rejects foreign pins even if a local pin number has been reused. [Guarded strict reads](../lean/Alvoki/Storage/Disk/IntegrityTraceReads.lean) · [Foreign-handle guard](../lean/Alvoki/Storage/Disk/SessionReadGuards.lean)
 
+The same locked retry trace starts from the exact reported cut of an uncertain write. At the first healthy strict reopen, the active marker encodes either the acknowledged history or that history with the submitted frame appended. The locked installer returns the corresponding table with the same checkpoint generation and run map. [Locked uncertain-write recovery](../lean/Alvoki/Storage/Disk/LockedMarkedReopenFailureTrace.lean)
+
 ## End-to-end storage guarantees
 
 The top-level target is **refinement of the executable storage engine to the abstract database across crashes**. For every execution admitted by the filesystem model, there is a legal abstract history that explains its successful reads, acknowledgements, and reopened states. The history includes every acknowledged write in order and may include an unacknowledged write that became durable. Every applied write originates in a submitted operation. Writes that did not survive a crash are dropped from that session's history before considering submissions in the next session.
