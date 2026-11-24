@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
 import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.SegmentedBatchAppend
 import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
+import Alvoki.Storage.Disk.BatchAppendReopenAdmission
 import Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
 import Alvoki.Storage.Disk.WalBatchSession
 
@@ -141,6 +142,12 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (installed : report.reopen.Installs after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.uncertainBatch report.reopen.batch]) descriptor after
+  | batchAppendAdmitted {files : Type} {input : System.FilePath} {retry : LockedFileState FileImage}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (report : BatchAppendInterruption directory before) {stop : report.Stop writer}
+      (installed : report.AdmittedReopen (files := files) stop input retry descriptor after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch report.batch]) descriptor after
 
 private theorem appendUncertainBatch {initial before after batch retained : List WAL.Write}
     {log : List DatabaseSubmissions} (retention : DatabaseBatchRetention log retained)
@@ -186,7 +193,8 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history installed.history⟩
   | batchAppendPowerLoss _ _ _ installed ih
-  | batchAppendProcessExit _ _ _ installed ih =>
+  | batchAppendProcessExit _ _ _ installed ih
+  | batchAppendAdmitted _ _ installed ih =>
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history (.inl installed.history)⟩
 
@@ -336,6 +344,22 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterBatchAppendProcessExit
         (log ++ [.uncertainBatch report.reopen.batch]) descriptor after := by
   obtain ⟨after, installed⟩ := report.installs observed (trace.preservesRetained ready).1
   exact ⟨after, installed, .batchAppendProcessExit trace report observed installed⟩
+
+/-- A first-append interruption and the admitted marked reopen continue
+the mixed trace at the exact returned writer, with no retained frames
+from the uncertain batch. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterBatchAppendWithAdmission {files : Type}
+    {input : System.FilePath} {retry : LockedFileState FileImage}
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (ready : initial.RetainedReady directory initialDescriptor)
+    (report : BatchAppendInterruption directory before) (observed : report.Valid) (stop : report.Stop writer)
+    (attempts : BoundedReopenTrace directory (fun target => target = before.target) stop.origin retry)
+    (reads : BatchAppendInterruption.ReopenObservations directory before files input retry) :
+    ∃ descriptor after, report.AdmittedReopen (files := files) stop input retry descriptor after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch report.batch]) descriptor after := by
+  obtain ⟨descriptor, after, installed⟩ := stop.reopensAdmitted observed (trace.preservesRetained ready).1 attempts reads
+  exact ⟨descriptor, after, installed, .batchAppendAdmitted trace report installed⟩
 
 /-- Reads through active snapshot pins in the current session agree with
 replay of the retained history, including after an uncertain batch. -/

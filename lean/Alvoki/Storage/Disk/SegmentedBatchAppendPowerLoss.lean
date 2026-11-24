@@ -5,16 +5,68 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentCommit WalSegmentRepair WAL.Boundary
 
-/-- The observed interrupted append and the reports for the next healthy
-cached open. The retry origin depends on how the writer stopped. -/
-structure SegmentedBatchAppendReopenReport (directory : DiskDirectory) (before : SegmentedWriterState)
-    (descriptor : Nat) (origin : FirstAppendCut → LockedFileState FileImage) where
+/-- An interruption at the first batch callback, before marker publication.
+The observed invocation records the path and bytes passed to the append. -/
+structure BatchAppendInterruption (directory : DiskDirectory) (before : SegmentedWriterState) where
   rows : List (UInt64 × Option UInt64)
   batch : List WAL.Write
   table : PackedTable
   activeMetadata : FilePath → Except IO.Error IO.FS.Metadata
   appendCall : FilePath × ByteArray
   cut : FirstAppendCut
+
+namespace BatchAppendInterruption
+
+variable {directory : DiskDirectory} {before : SegmentedWriterState} {writer : Nat}
+
+structure Valid (report : BatchAppendInterruption directory before) : Prop where
+  prepared : prepareBatch before.installed.table report.rows = some (report.batch, report.table)
+  nonempty : report.rows ≠ []
+  fits : before.installed.walBytes + WAL.frameSize * report.rows.length < UInt64.size
+  activeGuard : ∃ metadata,
+    report.activeMetadata (directory.file (.walSegment before.installed.activeFirst)) = .ok metadata ∧
+    metadata.type = .file ∧ metadata.numLinks = 1 ∧
+    metadata.byteSize.toNat = before.installed.walBytes - before.installed.activeFirst * WAL.frameSize
+  invoked : report.appendCall = (directory.file (.walSegment before.installed.activeFirst), WAL.encodeBatch report.batch)
+
+/-- The interpreter records the first callback's arguments while the old
+writer holds the lock. Its stop tag leaves later callbacks unexecuted. -/
+def ReachesInterruption (report : BatchAppendInterruption directory before)
+    (writer : Nat) : Prop :=
+    ∀ (stage : FilePath → ByteArray → EStateM (FilePath × ByteArray) WriteFiles Unit)
+      (sync : Array FilePath → EStateM (FilePath × ByteArray) WriteFiles Unit)
+      (rename : FilePath → FilePath → EStateM (FilePath × ByteArray) WriteFiles Unit),
+    let scratch := before.files.directory.staged .walBoundary
+    let count := (WAL.encode (before.history ++ report.batch)).size
+    before.owners.Owns directory writer ∧
+    count = before.installed.walBytes + WAL.frameSize * report.rows.length ∧
+    commitBytesAt directory before.wal.active.first (WAL.encodeBatch report.batch) count
+      (fun path bytes _ => .error (path, bytes) (report.cut.writeFiles before.history scratch))
+      stage sync rename (WriteFiles.initial before.history scratch) =
+    .error report.appendCall
+      (writeFilesAfter (runBatchEffects before.history report.batch report.cut.writeEffects scratch))
+
+/-- The admitted batch reaches exactly the reported append invocation. -/
+theorem Valid.reachesInterruption {report : BatchAppendInterruption directory before}
+    (observed : report.Valid) (ready : before.RetainedReady directory writer) : report.ReachesInterruption writer := by
+  intro stage sync rename
+  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
+  have count : before.history.length = before.installed.table.committed.toNat :=
+    represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
+  have width := (prepareBatch_extends_history ready.resumed.ordered count observed.prepared).2.2.2
+  have first := ready.resumed.keeper.trans ready.active
+  refine ⟨ready.held, width.trans ?_, ?_⟩
+  · rw [ready.resumed.bytes]
+  · rw [observed.invoked, first]
+    exact report.cut.interruptsBatch directory _ _ before.history report.batch _ stage sync rename
+
+end BatchAppendInterruption
+
+/-- The observed interrupted append and the reports for the next healthy
+cached open. The retry origin depends on how the writer stopped. -/
+structure SegmentedBatchAppendReopenReport (directory : DiskDirectory) (before : SegmentedWriterState)
+    (descriptor : Nat) (origin : FirstAppendCut → LockedFileState FileImage) extends
+    BatchAppendInterruption directory before where
   retry : LockedFileState FileImage
   failures : BoundedReopenTrace directory (fun target => target = before.target) (origin cut) retry
   currentTail : ByteArray
@@ -41,15 +93,8 @@ def run (report : SegmentedBatchAppendReopenReport directory before descriptor o
     (report.read.reopenCached report.sizes report.cached report.removeFile report.write report.sync report.renameFile)
     report.retry
 
-structure Valid (report : SegmentedBatchAppendReopenReport directory before descriptor origin) : Prop where
-  prepared : prepareBatch before.installed.table report.rows = some (report.batch, report.table)
-  nonempty : report.rows ≠ []
-  fits : before.installed.walBytes + WAL.frameSize * report.rows.length < UInt64.size
-  activeGuard : ∃ metadata,
-    report.activeMetadata (directory.file (.walSegment before.installed.activeFirst)) = .ok metadata ∧
-    metadata.type = .file ∧ metadata.numLinks = 1 ∧
-    metadata.byteSize.toNat = before.installed.walBytes - before.installed.activeFirst * WAL.frameSize
-  invoked : report.appendCall = (directory.file (.walSegment before.installed.activeFirst), WAL.encodeBatch report.batch)
+structure Valid (report : SegmentedBatchAppendReopenReport directory before descriptor origin) : Prop extends
+    toInterruptionValid : report.toBatchAppendInterruption.Valid where
   keeper : report.retry.image.keeper.active = some (before.wal.active.bytes ++ report.currentTail)
   fresh : ∀ ref ∈ report.liveRefs, ref < report.nextRef
   acquisition : TryLockObserves report.retry.owners directory (.ok true)
@@ -61,36 +106,13 @@ structure Valid (report : SegmentedBatchAppendReopenReport directory before desc
       performPaths directory selected.plan report.removeFile throw report.write report.sync report.renameFile action prior =
         .ok () next
 
-/-- The interpreter records the first callback's arguments while the old
-writer holds the lock. Its stop tag leaves later callbacks unexecuted. -/
-def ReachesInterruption (report : SegmentedBatchAppendReopenReport directory before descriptor origin)
+abbrev ReachesInterruption (report : SegmentedBatchAppendReopenReport directory before descriptor origin)
     (writer : Nat) : Prop :=
-    ∀ (stage : FilePath → ByteArray → EStateM (FilePath × ByteArray) WriteFiles Unit)
-      (sync : Array FilePath → EStateM (FilePath × ByteArray) WriteFiles Unit)
-      (rename : FilePath → FilePath → EStateM (FilePath × ByteArray) WriteFiles Unit),
-    let scratch := before.files.directory.staged .walBoundary
-    let count := (WAL.encode (before.history ++ report.batch)).size
-    before.owners.Owns directory writer ∧
-    count = before.installed.walBytes + WAL.frameSize * report.rows.length ∧
-    commitBytesAt directory before.wal.active.first (WAL.encodeBatch report.batch) count
-      (fun path bytes _ => .error (path, bytes) (report.cut.writeFiles before.history scratch))
-      stage sync rename (WriteFiles.initial before.history scratch) =
-    .error report.appendCall
-      (writeFilesAfter (runBatchEffects before.history report.batch report.cut.writeEffects scratch))
+  report.toBatchAppendInterruption.ReachesInterruption writer
 
-/-- The admitted batch reaches exactly the reported append invocation. -/
 theorem Valid.reachesInterruption {report : SegmentedBatchAppendReopenReport directory before descriptor origin}
-    (observed : report.Valid) (ready : before.RetainedReady directory writer) : report.ReachesInterruption writer := by
-  intro stage sync rename
-  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
-  have count : before.history.length = before.installed.table.committed.toNat :=
-    represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
-  have width := (prepareBatch_extends_history ready.resumed.ordered count observed.prepared).2.2.2
-  have first := ready.resumed.keeper.trans ready.active
-  refine ⟨ready.held, width.trans ?_, ?_⟩
-  · rw [ready.resumed.bytes]
-  · rw [observed.invoked, first]
-    exact report.cut.interruptsBatch directory _ _ before.history report.batch _ stage sync rename
+    (observed : report.Valid) (ready : before.RetainedReady directory writer) : report.ReachesInterruption writer :=
+  observed.toInterruptionValid.reachesInterruption ready
 
 structure Installs (report : SegmentedBatchAppendReopenReport directory before descriptor origin)
     (after : SegmentedWriterState) : Prop where
