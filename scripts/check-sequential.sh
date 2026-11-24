@@ -63,6 +63,7 @@ lake env leanchecker Alvoki.Storage.Disk.LockDescriptionLifetime
 lake env leanchecker Alvoki.Storage.Disk.LockedSegmentReopenEffects
 lake env leanchecker Alvoki.Storage.Disk.SegmentedSessionInstall
 lake env leanchecker Alvoki.Storage.Disk.BoundedSegmentSession
+lake env leanchecker Alvoki.Storage.Disk.RotationSessionHandoff
 lake env leanchecker Alvoki.Storage.Disk.RunGenerationCollection
 lake env leanchecker Alvoki.Storage.Disk.RunFileName
 lake env leanchecker Alvoki.Storage.Disk.RunFileSelection
@@ -156,5 +157,5 @@ lake env lean --run Alvoki/Checks/WalSegmentMarkerReadChecks.lean
 lake exe alvoki-disk-checks
 python3 ../scripts/check-disk-process-death.py .lake/build/bin/alvoki-disk-checks
 lake build alvoki-disk-replay
-python3 ../benchmarks/disk_replay.py --sizes 3 --trials 1 --out "$scratch/replay.csv"
-python3 ../benchmarks/disk_replay.py --sizes 3 --trials 1 --repair-tail --out "$scratch/replay-repair.csv"
+python3 ../benchmarks/disk_replay.py --sizes 3 --segments 1 3 --trials 1 --out "$scratch/replay.csv"
+python3 ../benchmarks/disk_replay.py --sizes 3 --segments 1 3 --trials 1 --repair-tail --out "$scratch/replay-repair.csv"

@@ -67,6 +67,7 @@ import Alvoki.Storage.Disk.WalSegmentAppendRepair
 import Alvoki.Storage.Disk.WalSegmentFirstOpen
 import Alvoki.Storage.Disk.WalSegmentRotationReopen
 import Alvoki.Storage.Disk.BoundedSegmentSession
+import Alvoki.Storage.Disk.RotationSessionHandoff
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
@@ -544,6 +545,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_safe
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithPrefix_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBoundedMarkedWith_reported
+#check_axioms Alvoki.Storage.WalSegmentRepair.prepareMarkedWith_readReports
+#check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithPrefix_from_full
+#check_axioms Alvoki.Storage.WalSegmentRepair.prepareBoundedMarkedWith_from_full
 #check_axioms Alvoki.Storage.WalSegmentRepair.recoverMarkedWalSegments_keeperPrefix
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_eq_full
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWith_eq_full
@@ -555,6 +559,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_ready
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrap
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bounded
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterInterruptedRotation
 #check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.referenceDrops
 #check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenReports.whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.ownerExit_thenChildExec

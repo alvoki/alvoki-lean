@@ -21,8 +21,8 @@ theorem runOpenWithInstallation_bounded {directory : DiskDirectory} {descriptor 
     (readBin : FilePath → Except IO.Error ByteArray)
     (readPrefix : FilePath → Nat → Except IO.Error KeeperPrefix)
     (full : prepareMarkedWith directory readOptional list lstat readBin = .ok (plan, opened))
-    (bounded : prepareBoundedMarkedWith directory readOptional list lstat readBin readPrefix =
-      .ok ({ plan with keeperBytes := plan.keeperBytes.extract 0 plan.keeperSize }, opened, plan.keeperBytes.size))
+    (prefixRead : readPrefix (directory.file (.walSegment plan.keeper)) plan.keeperSize =
+      .ok ⟨plan.keeperBytes.extract 0 plan.keeperSize, plan.keeperBytes.size⟩)
     (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
     (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
     (sync : Array FilePath → EStateM IO.Error FileImage Unit)
@@ -48,6 +48,8 @@ theorem runOpenWithInstallation_bounded {directory : DiskDirectory} {descriptor 
     rfl
   obtain ⟨after, reopened, durable⟩ := reopenMarkedFastWith_completes prepared directory _ _ _ _ removeFile
     write sync renameFile observed settles healthy
+  have bounded := prepareBoundedMarkedWith_from_full directory readOptional list lstat readBin readPrefix
+    prepared.valid full prefixRead
   have transport := reopenMarkedBoundedWith_eq_full directory readOptional list lstat readBin readPrefix
     removeFile write sync renameFile prepared.valid full bounded
   have selected : recover before.image = .ok opened after := by

@@ -7,7 +7,7 @@ namespace Alvoki.Storage.DiskSession
 open System WalSegmentRepair
 
 /-- The visible keeper can still disappear before the directory sync.
-Paired read reports fix the returned replay and its visible keeper. The
+The first preparation and concrete prefix report fix the replay and visible keeper. The
 fixed-keeper durability proof starts only once the first barrier applies. -/
 theorem runOpenWithInstallation_afterInterruptedRotation
     {directory : DiskDirectory} {descriptor nextRef : Nat}
@@ -34,8 +34,8 @@ theorem runOpenWithInstallation_afterInterruptedRotation
       (fun path size => liftExcept (readPrefix path size)) removeFile write sync renameFile
     let installed := runOpenWithInstallation directory descriptor nextRef (.ok true) unlock recover before
     prepareMarkedWith directory readOptional list lstat readBin = .ok (plan, opened) →
-    prepareBoundedMarkedWith directory readOptional list lstat readBin readPrefix =
-      .ok ({ plan with keeperBytes := plan.keeperBytes.extract 0 plan.keeperSize }, opened, plan.keeperBytes.size) →
+    readPrefix (directory.file (.walSegment plan.keeper)) plan.keeperSize =
+      .ok ⟨plan.keeperBytes.extract 0 plan.keeperSize, plan.keeperBytes.size⟩ →
     (match sync #[directory.path] before.image with
       | .ok _ after => after = settled
       | .error _ after => after = before.image ∨ after = settled) →
@@ -53,11 +53,13 @@ theorem runOpenWithInstallation_afterInterruptedRotation
           before.owners (directory.file .lock) = none ∧ after.owners.Owns directory descriptor ∧
           after.image = settled ∧ (before.image.settledReopenImage image).Ready target
       | .error _ after => after.image = before.image ∨ after.image = settled) := by
-  intro active plan opened settled recover installed full bounded directoryReport keeperReport
+  intro active plan opened settled recover installed full prefixRead directoryReport keeperReport
   obtain ⟨target, prepared, firstError, finish⟩ :=
     before.image.finishAfterRotation layout selected atEnd directory removeFile write sync renameFile
       directoryReport keeperReport
   change Prepared (before.image.settledReopenImage image) target plan at prepared
+  have bounded := prepareBoundedMarkedWith_from_full directory readOptional list lstat readBin readPrefix
+    prepared.valid full prefixRead
   have recovered : recover before.image =
       match finishMarkedOpen directory plan removeFile write sync renameFile before.image with
       | .ok _ after => .ok opened after
