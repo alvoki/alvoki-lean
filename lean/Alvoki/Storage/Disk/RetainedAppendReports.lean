@@ -67,18 +67,34 @@ theorem SegmentedAppendReport.preservesRetained {directory descriptor before}
     resumed.ready.keeper.trans (congrArg some bytes),
     resumed.ready.keeperDurable.trans (congrArg (fun payload => [some payload]) bytes)⟩
 
+/-- Append acknowledgments preserve the retained layout and the session.
+If the original inventory contains the full WAL chain, the result does too. -/
+theorem SegmentedAppendTrace.preservesRetainedWithChain {directory descriptor initial events last}
+    (trace : SegmentedAppendTrace directory descriptor initial events last)
+    (initialReady : initial.RetainedReady directory descriptor) :
+    last.RetainedReady directory descriptor ∧ last.history = initial.history ++ events ∧
+      last.owners = initial.owners ∧ last.installed.generation = initial.installed.generation ∧
+      (WalSegment.Chain initial.history 0 initial.wal.segments →
+        WalSegment.Chain last.history 0 last.wal.segments) := by
+  induction trace with
+  | empty => exact ⟨initialReady, by simp, rfl, rfl, id⟩
+  | append _ report selected ih =>
+    obtain ⟨ready, history, owners, generation, chain⟩ := ih
+    obtain ⟨_, target, chosen, next, _⟩ := report.preservesRetained ready
+    cases report.selectsUnique chosen selected
+    refine ⟨next, ?_, owners, generation, ?_⟩
+    · change _ ++ [report.event] = _
+      rw [history, List.append_assoc]
+    · intro initialChain
+      exact (ready.layout.afterAcknowledgedAppend (chain initialChain) report.files.directory.active report.event).2.1
+
 /-- Continue with the existing append trace from a retained writer. All
 acknowledgments in the trace extend the history and preserve readiness. -/
 theorem SegmentedAppendTrace.preservesRetained {directory descriptor initial events last}
     (trace : SegmentedAppendTrace directory descriptor initial events last)
     (initialReady : initial.RetainedReady directory descriptor) :
     last.RetainedReady directory descriptor ∧ last.history = initial.history ++ events := by
-  induction trace with
-  | empty => exact ⟨initialReady, by simp⟩
-  | append _ report selected ih =>
-    obtain ⟨_, target, chosen, next, _⟩ := report.preservesRetained ih.1
-    cases report.selectsUnique chosen selected
-    have history := ih.2
-    exact ⟨next, by change _ ++ [report.event] = _; rw [history, List.append_assoc]⟩
+  obtain ⟨ready, history, _, _, _⟩ := trace.preservesRetainedWithChain initialReady
+  exact ⟨ready, history⟩
 
 end Alvoki.Storage.DiskSession
