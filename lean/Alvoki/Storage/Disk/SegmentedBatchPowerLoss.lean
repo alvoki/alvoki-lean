@@ -56,7 +56,9 @@ def modeled (report : SegmentedBatchMarkerPowerLossReport directory before write
     (cut.reopenSegment before.wal.active.first before.history before.wal.directory.active.manifest)
     before.files.keeper.staged, before.owners⟩
 
-structure Valid (report : SegmentedBatchMarkerPowerLossReport directory before writer) : Prop where
+/-- The operation reached marker publication. Machine power loss adds
+survivor observations, while process exit keeps the live file image. -/
+structure Reached (report : SegmentedBatchMarkerPowerLossReport directory before writer) : Prop where
   prepared : prepareBatch before.installed.table report.rows = some (report.batch, report.table)
   nonempty : report.rows ≠ []
   fits : report.nextBytes < UInt64.size
@@ -69,11 +71,13 @@ structure Valid (report : SegmentedBatchMarkerPowerLossReport directory before w
       ((Publication.steps.take report.cut.index).forM
         (performMarkerAt directory before.installed.activeFirst report.nextBytes report.stage report.sync report.rename))
       (WriteFiles.initial before.history (before.wal.directory.staged .walBoundary)) = .ok () report.reached
+
+structure Valid (report : SegmentedBatchMarkerPowerLossReport directory before writer) : Prop extends Reached report where
   pairSurvives : report.pair ∈ report.physical.directory.crashImages
   keeperSurvives : some report.keeper ∈ report.physical.keeper.crashImages
 
-theorem Valid.preparedHistory {report : SegmentedBatchMarkerPowerLossReport directory before writer}
-    (observed : report.Valid) (ready : before.RetainedReady directory writer) :
+theorem Reached.preparedHistory {report : SegmentedBatchMarkerPowerLossReport directory before writer}
+    (observed : report.Reached) (ready : before.RetainedReady directory writer) :
     (WAL.encode (before.history ++ report.batch)).size = report.nextBytes ∧
       (WAL.encode (before.history ++ report.batch)).size < UInt64.size ∧
       WAL.OrdinalsFrom 1 (before.history ++ report.batch) := by
@@ -84,6 +88,13 @@ theorem Valid.preparedHistory {report : SegmentedBatchMarkerPowerLossReport dire
   have exactSize : (WAL.encode (before.history ++ report.batch)).size = report.nextBytes := by
     rw [size, nextBytes, ready.resumed.bytes]
   exact ⟨exactSize, exactSize.symm ▸ observed.fits, ordinals⟩
+
+theorem Valid.preparedHistory {report : SegmentedBatchMarkerPowerLossReport directory before writer}
+    (observed : report.Valid) (ready : before.RetainedReady directory writer) :
+    (WAL.encode (before.history ++ report.batch)).size = report.nextBytes ∧
+      (WAL.encode (before.history ++ report.batch)).size < UInt64.size ∧
+      WAL.OrdinalsFrom 1 (before.history ++ report.batch) :=
+  observed.toReached.preparedHistory ready
 
 /-- The reported finished callbacks reach the exact keeper path and
 whole-batch byte count while the writer owns the lock. The action at the
