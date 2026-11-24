@@ -96,6 +96,28 @@ theorem readCachedWalPayloads_rejectsSeal {state : Type} (dir : DiskDirectory) (
       .error selectedWalSpanError initial :=
   readCachedWalPayloadsFrom_rejectsSeal dir through readSeal readKeeper first next metadata nextMetadata rest [] initial wrong
 
+private theorem readCachedWalPayloadsFrom_afterSealed {state : Type} (dir : DiskDirectory) (through : Nat)
+    (readSeal : FilePath → Nat → EStateM IO.Error state ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
+    (first next : Nat) (metadata nextMetadata : IO.FS.Metadata) (rest : List (Nat × IO.FS.Metadata))
+    (read : List (Nat × ByteArray)) {initial observed : state} {bytes : ByteArray}
+    (forward : first < next) (extent : metadata.byteSize.toNat = (next - first) * frameSize)
+    (fits : (next - first) * frameSize < USize.size)
+    (reported : readSeal (dir.file (.walSegment first)) ((next - first) * frameSize) initial = .ok bytes observed)
+    (size : bytes.size = (next - first) * frameSize) :
+    readCachedWalPayloadsFrom dir through readSeal readKeeper ((first, metadata) :: (next, nextMetadata) :: rest)
+      read initial = readCachedWalPayloadsFrom dir through readSeal readKeeper ((next, nextMetadata) :: rest)
+        ((first, bytes) :: read) observed := by
+  have admitted := readExactRecoveryFileWith_accepts (dir.file (.walSegment first)) ((next - first) * frameSize)
+    selectedWalSpanError (fun _ => pure metadata.byteSize.toNat) readSeal
+    (initial := initial) (observed := initial) (final := observed)
+    fits (by simp [extent, Pure.pure, EStateM.pure])
+    reported size
+  change readExactRecoveryFileWith (dir.file (.walSegment first)) ((next - first) * frameSize)
+    selectedWalSpanError (fun _ => EStateM.pure metadata.byteSize.toNat) readSeal initial =
+    .ok bytes observed at admitted
+  simp [readCachedWalPayloadsFrom, forward, Bind.bind, EStateM.bind, Pure.pure, admitted]
+
 /-- A reached extent rejection can follow exact, successful reads of earlier seals. -/
 inductive CachedWalExtentFailure {state : Type} (dir : DiskDirectory)
     (readSeal : FilePath → Nat → EStateM IO.Error state ByteArray) :
@@ -127,15 +149,9 @@ theorem readCachedWalPayloads_extentFailure {state : Type} {dir : DiskDirectory}
       exact readCachedWalPayloadsFrom_rejectsSeal dir through readSeal readKeeper _ _ _ _ _ read _ wrong
     | @acceptedPrefix first next metadata nextMetadata rest initial observed reached bytes
         forward extent fits reported size failed ih =>
-      have admitted := readExactRecoveryFileWith_accepts (dir.file (.walSegment first)) ((next - first) * frameSize)
-        selectedWalSpanError (fun _ => pure metadata.byteSize.toNat) readSeal
-        (initial := initial) (observed := initial) (final := observed)
-        fits (by simp [extent, Pure.pure, EStateM.pure])
-        reported size
-      change readExactRecoveryFileWith (dir.file (.walSegment first)) ((next - first) * frameSize)
-        selectedWalSpanError (fun _ => EStateM.pure metadata.byteSize.toNat) readSeal initial =
-        .ok bytes observed at admitted
-      simp [readCachedWalPayloadsFrom, forward, Bind.bind, EStateM.bind, Pure.pure, admitted, ih]
+      rw [readCachedWalPayloadsFrom_afterSealed dir through readSeal readKeeper first next metadata nextMetadata rest
+        read forward extent fits reported size]
+      exact ih _
   exact loop []
 
 /-- Read-only prefix reports preserve the file image from before the first selected seal read. -/
@@ -148,6 +164,56 @@ theorem CachedWalExtentFailure.reached_eq_of_readonly {state : Type} {dir : Disk
   induction failed with
   | rejected => rfl
   | acceptedPrefix _ _ _ reported _ _ ih => exact ih.trans (readOnly _ _ _ _ _ reported)
+
+/-- Exact successful seal reads leading to the final selected keeper. -/
+inductive CachedWalKeeperReached {state : Type} (dir : DiskDirectory)
+    (readSeal : FilePath → Nat → EStateM IO.Error state ByteArray)
+    (keeper : Nat) (keeperMetadata : IO.FS.Metadata) :
+    List (Nat × IO.FS.Metadata) → state → state → Prop where
+  | noSeals {initial : state} : CachedWalKeeperReached dir readSeal keeper keeperMetadata
+      [(keeper, keeperMetadata)] initial initial
+  | sealed {first next : Nat} {metadata nextMetadata : IO.FS.Metadata}
+      {rest : List (Nat × IO.FS.Metadata)} {initial observed reached : state} {bytes : ByteArray}
+      (forward : first < next) (extent : metadata.byteSize.toNat = (next - first) * frameSize)
+      (fits : (next - first) * frameSize < USize.size)
+      (reported : readSeal (dir.file (.walSegment first)) ((next - first) * frameSize) initial = .ok bytes observed)
+      (size : bytes.size = (next - first) * frameSize)
+      (remaining : CachedWalKeeperReached dir readSeal keeper keeperMetadata
+        ((next, nextMetadata) :: rest) observed reached) :
+      CachedWalKeeperReached dir readSeal keeper keeperMetadata
+        ((first, metadata) :: (next, nextMetadata) :: rest) initial reached
+
+/-- The keeper error is returned at its reached state after the earlier seals. -/
+theorem CachedWalKeeperReached.read_error {state : Type} {dir : DiskDirectory} (through : Nat)
+    {readSeal : FilePath → Nat → EStateM IO.Error state ByteArray}
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
+    {keeper : Nat} {metadata : IO.FS.Metadata} {required : List (Nat × IO.FS.Metadata)}
+    {initial reached after : state} {cause : IO.Error}
+    (seals : CachedWalKeeperReached dir readSeal keeper metadata required initial reached)
+    (failed : readKeeper (dir.file (.walSegment keeper)) ((through - keeper) * frameSize)
+      metadata.byteSize.toNat reached = .error cause after) :
+    readCachedWalPayloads dir through readSeal readKeeper required initial = .error cause after := by
+  have loop (read : List (Nat × ByteArray)) :
+      readCachedWalPayloadsFrom dir through readSeal readKeeper required read initial = .error cause after := by
+    induction seals generalizing read with
+    | noSeals => simp [readCachedWalPayloadsFrom, Bind.bind, EStateM.bind, failed]
+    | @sealed first next metadata nextMetadata rest initial observed reached bytes
+        forward extent fits reported size remaining ih =>
+      rw [readCachedWalPayloadsFrom_afterSealed dir through readSeal readKeeper first next metadata nextMetadata rest
+        read forward extent fits reported size]
+      exact ih failed _
+  exact loop []
+
+/-- Read-only seal observations preserve the state until the keeper read. -/
+theorem CachedWalKeeperReached.reached_eq_of_readonly {state : Type} {dir : DiskDirectory}
+    {readSeal : FilePath → Nat → EStateM IO.Error state ByteArray}
+    {keeper : Nat} {metadata : IO.FS.Metadata} {required : List (Nat × IO.FS.Metadata)} {initial reached : state}
+    (seals : CachedWalKeeperReached dir readSeal keeper metadata required initial reached)
+    (readOnly : ∀ path count before bytes after, readSeal path count before = .ok bytes after → after = before) :
+    reached = initial := by
+  induction seals with
+  | noSeals => rfl
+  | sealed _ _ _ reported _ _ ih => exact ih.trans (readOnly _ _ _ _ _ reported)
 
 /-- Exact size and byte observations for the selected stable file bindings. -/
 inductive CachedWalPayloadReports (dir : DiskDirectory) (through : Nat)

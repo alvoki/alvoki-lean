@@ -5,6 +5,26 @@ namespace Alvoki.Storage.WalSegmentRepair
 open System
 open WAL (frameSize)
 
+/-- A payload error after the selected reads returns before replay and repair. -/
+theorem readSelectedWithCachedExtents_payloadError {image : Type} (directory : DiskDirectory)
+    (watermark : Nat) (length : UInt64)
+    (list : FilePath → EStateM IO.Error image (Array IO.FS.DirEntry))
+    (lstat : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata))
+    (readSeal : FilePath → Nat → EStateM IO.Error image ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error image ByteArray)
+    {before listedState scannedState reached : image} {cause : IO.Error}
+    (checked : length.toNat % frameSize = 0 ∧ watermark ≤ length.toNat / frameSize)
+    {entries : Array IO.FS.DirEntry} (listed : list directory.path before = .ok entries listedState)
+    {extents required : List (Nat × IO.FS.Metadata)} {newer : List Nat}
+    (scanned : readWalSegmentExtentsWith (m := EStateM IO.Error image) directory lstat
+      (entries.toList.map (·.fileName)) listedState = .ok extents scannedState)
+    (selected : selectWalExtentsThrough extents watermark (length.toNat / frameSize) = some (required, newer))
+    (payloads : readCachedWalPayloads directory (length.toNat / frameSize) readSeal readKeeper required scannedState =
+      .error cause reached) :
+    readSelectedWithCachedExtents (m := EStateM IO.Error image) directory watermark length list lstat
+      readSeal readKeeper before = .error cause reached := by
+  simp [readSelectedWithCachedExtents, checked, listed, scanned, selected, payloads, Bind.bind, EStateM.bind]
+
 /-- The reported selected paths locate the invalid extent after all canonical
 probes and any successful earlier seal reads. -/
 theorem readSelectedWithCachedExtents_extentFailure {image : Type} (directory : DiskDirectory)
@@ -22,20 +42,18 @@ theorem readSelectedWithCachedExtents_extentFailure {image : Type} (directory : 
     (selected : selectWalExtentsThrough extents watermark (length.toNat / frameSize) = some (required, newer))
     (failed : CachedWalExtentFailure directory readSeal required scannedState reached) :
     readSelectedWithCachedExtents (m := EStateM IO.Error image) directory watermark length list lstat
-      readSeal readKeeper before = .error selectedWalSpanError reached := by
-  have payloads := readCachedWalPayloads_extentFailure (length.toNat / frameSize) readKeeper failed
-  simp [readSelectedWithCachedExtents, checked, listed, scanned, selected, payloads, Bind.bind, EStateM.bind]
+      readSeal readKeeper before = .error selectedWalSpanError reached :=
+  readSelectedWithCachedExtents_payloadError directory watermark length list lstat readSeal readKeeper
+    checked listed scanned selected (readCachedWalPayloads_extentFailure (length.toNat / frameSize) readKeeper failed)
 
-/-- The exact checkpoint, marker, inventory and seal observations reached by
-the cached bounded opener before it rejects a selected extent. -/
-structure CachedWalOpenExtentFailure {image : Type} (directory : DiskDirectory)
+/-- Checkpoint and inventory observations leading to the cached selected payloads. -/
+structure CachedWalOpenSelection {image : Type} (directory : DiskDirectory)
     (readOptional : FilePath → EStateM IO.Error image (Option ByteArray))
     (readRunSize : FilePath → EStateM IO.Error image Nat)
     (readRunPrefix : FilePath → Nat → EStateM IO.Error image ByteArray)
     (list : FilePath → EStateM IO.Error image (Array IO.FS.DirEntry))
     (lstat : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata))
-    (readSeal : FilePath → Nat → EStateM IO.Error image ByteArray)
-    (before reached : image) where
+    (before : image) where
   checkpoint : Option (PackedTable × UInt64)
   afterCheckpoint : image
   checkpointRead : readIntegrityCheckpointSized directory (readOptional (directory.file .manifest))
@@ -57,7 +75,58 @@ structure CachedWalOpenExtentFailure {image : Type} (directory : DiskDirectory)
   newer : List Nat
   selected : selectWalExtentsThrough extents (checkpoint.getD (.empty, 0)).1.committed.toNat
     (length.toNat / frameSize) = some (required, newer)
+
+theorem CachedWalOpenSelection.afterScan_eq_of_readonly {image : Type} {directory : DiskDirectory}
+    {readOptional : FilePath → EStateM IO.Error image (Option ByteArray)}
+    {readRunSize : FilePath → EStateM IO.Error image Nat}
+    {readRunPrefix : FilePath → Nat → EStateM IO.Error image ByteArray}
+    {list : FilePath → EStateM IO.Error image (Array IO.FS.DirEntry)}
+    {lstat : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata)}
+    {before : image}
+    (report : CachedWalOpenSelection directory readOptional readRunSize readRunPrefix list lstat before)
+    (checkpointReadOnly : report.afterCheckpoint = before)
+    (markerReadOnly : report.afterMarker = report.afterCheckpoint)
+    (listReadOnly : report.afterList = report.afterMarker)
+    (scanReadOnly : report.afterScan = report.afterList) :
+    report.afterScan = before :=
+  scanReadOnly.trans (listReadOnly.trans (markerReadOnly.trans checkpointReadOnly))
+
+/-- The exact checkpoint, marker, inventory and seal observations reached by
+the cached bounded opener before it rejects a selected extent. -/
+structure CachedWalOpenExtentFailure {image : Type} (directory : DiskDirectory)
+    (readOptional : FilePath → EStateM IO.Error image (Option ByteArray))
+    (readRunSize : FilePath → EStateM IO.Error image Nat)
+    (readRunPrefix : FilePath → Nat → EStateM IO.Error image ByteArray)
+    (list : FilePath → EStateM IO.Error image (Array IO.FS.DirEntry))
+    (lstat : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata))
+    (readSeal : FilePath → Nat → EStateM IO.Error image ByteArray)
+    (before reached : image) extends
+    CachedWalOpenSelection directory readOptional readRunSize readRunPrefix list lstat before where
   failed : CachedWalExtentFailure directory readSeal required afterScan reached
+
+/-- The cached marked opener returns a selected read error before repair. -/
+theorem CachedWalOpenSelection.reopen_payloadError {image : Type} {directory : DiskDirectory}
+    {readOptional : FilePath → EStateM IO.Error image (Option ByteArray)}
+    {readRunSize : FilePath → EStateM IO.Error image Nat}
+    {readRunPrefix : FilePath → Nat → EStateM IO.Error image ByteArray}
+    {list : FilePath → EStateM IO.Error image (Array IO.FS.DirEntry)}
+    {lstat : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata)}
+    {readSeal : FilePath → Nat → EStateM IO.Error image ByteArray}
+    {before reached : image} {cause : IO.Error}
+    (report : CachedWalOpenSelection directory readOptional readRunSize readRunPrefix list lstat before)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error image ByteArray)
+    (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error image Unit)
+    (sync : Array FilePath → EStateM IO.Error image Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error image Unit)
+    (payloads : readCachedWalPayloads directory (report.length.toNat / frameSize) readSeal readKeeper
+      report.required report.afterScan = .error cause reached) :
+    reopenMarkedBoundedWithCachedExtents directory readOptional readRunSize readRunPrefix list lstat
+      readSeal readKeeper removeFile write sync renameFile before = .error cause reached := by
+  have wal := readSelectedWithCachedExtents_payloadError directory _ report.length list lstat readSeal readKeeper
+    report.checked report.listed report.scanned report.selected payloads
+  simp [reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, report.checkpointRead,
+    report.markerRead, report.decoded, wal, Bind.bind, EStateM.bind, liftExcept, Except.mapError, Pure.pure, EStateM.pure]
 
 /-- The cached native schedule stops at the invalid extent. The actual
 keeper reader, replay and repair callbacks do not enter the outcome. -/
@@ -76,11 +145,9 @@ theorem CachedWalOpenExtentFailure.reopen_error {image : Type} {directory : Disk
     (sync : Array FilePath → EStateM IO.Error image Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error image Unit) :
     reopenMarkedBoundedWithCachedExtents directory readOptional readRunSize readRunPrefix list lstat
-      readSeal readKeeper removeFile write sync renameFile before = .error selectedWalSpanError reached := by
-  have wal := readSelectedWithCachedExtents_extentFailure directory _ report.length list lstat readSeal readKeeper
-    report.checked report.listed report.scanned report.selected report.failed
-  simp [reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, report.checkpointRead,
-    report.markerRead, report.decoded, wal, Bind.bind, EStateM.bind, liftExcept, Except.mapError, Pure.pure, EStateM.pure]
+      readSeal readKeeper removeFile write sync renameFile before = .error selectedWalSpanError reached :=
+  report.toCachedWalOpenSelection.reopen_payloadError readKeeper removeFile write sync renameFile
+    (readCachedWalPayloads_extentFailure (report.length.toNat / frameSize) readKeeper report.failed)
 
 /-- There is no file mutation when the reached preparation observations
 are read-only in the file interpreter. -/
@@ -100,7 +167,7 @@ theorem CachedWalOpenExtentFailure.reached_eq_of_readonly {image : Type} {direct
     (sealReadOnly : ∀ path count first bytes after, readSeal path count first = .ok bytes after → after = first) :
     reached = before :=
   (report.failed.reached_eq_of_readonly sealReadOnly).trans
-    (scanReadOnly.trans (listReadOnly.trans (markerReadOnly.trans checkpointReadOnly)))
+    (report.toCachedWalOpenSelection.afterScan_eq_of_readonly checkpointReadOnly markerReadOnly listReadOnly scanReadOnly)
 
 end Alvoki.Storage.WalSegmentRepair
 
