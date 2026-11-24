@@ -30,7 +30,8 @@ def _root_.Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.openAttempt
   sync := sync
   renameFile := renameFile
 
-private theorem SegmentedWriterState.RetainedReady.cleanFiles {directory : DiskDirectory} {descriptor : Nat}
+/-- The settled writer supplies its exact retained WAL image for reopening. -/
+theorem SegmentedWriterState.RetainedReady.cleanFiles {directory : DiskDirectory} {descriptor : Nat}
     {state : SegmentedWriterState}
     (ready : state.RetainedReady directory descriptor) :
     state.wal.checkpointReopenFiles state.wal.directory state.files.keeper.staged = state.files := by
