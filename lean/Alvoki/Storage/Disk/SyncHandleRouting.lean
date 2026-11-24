@@ -4,6 +4,11 @@ namespace Alvoki.Storage.SyncHandleRouting
 
 open System
 
+/-- A newly captured handle takes precedence over earlier handles for the same path. -/
+@[macro_inline] def pushPending {handle : Type} (path : FilePath) (descriptor : handle)
+    (pending : List (FilePath × handle)) : List (FilePath × handle) :=
+  (path, descriptor) :: pending
+
 /-- Use only the cache fields required by this lookup. A pending match
 removes every entry for the path before the chosen handle is synced. -/
 @[macro_inline] def syncWithHandles [Monad m] [MonadExceptOf IO.Error m] {handle : Type}

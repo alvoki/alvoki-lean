@@ -66,7 +66,7 @@ private def SyncFiles.open (dir : FilePath) : IO SyncFiles := do
 
 private def SyncFiles.remember (files : SyncFiles) (path : FilePath)
     (handle : IO.FS.Handle) : IO Unit :=
-  files.pending.modify ((path, handle) :: ·)
+  files.pending.modify (SyncHandleRouting.pushPending path handle)
 
 private def SyncFiles.stage (files : SyncFiles) (path : FilePath) (bytes : ByteArray) : IO Unit := do
   files.remember path (← writeFreshStagedHandle path bytes)
