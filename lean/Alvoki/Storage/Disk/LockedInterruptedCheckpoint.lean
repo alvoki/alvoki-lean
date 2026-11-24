@@ -8,8 +8,8 @@ open Storage CheckpointPublication
 
 /-- After a reported checkpoint failure and admitted retries, successful
 reads at the canonical paths and a successful aligned sync yield the exact
-inputs to the native ready installer in `DiskTable.open_fileTargets`. The
-same open supplies the next valid mixed-trace state, with the selected
+inputs to the whole-file model's ready installer. The same open supplies
+the next valid mixed-trace state, with the selected
 generation and all prior WAL records. -/
 theorem ObservedMarkedState.Valid.interruptedCheckpointFromLockedOpen
     {state : ObservedMarkedState} (valid : state.Valid) (prepared : CheckpointPreparation state)

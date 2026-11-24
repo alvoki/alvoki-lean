@@ -16,7 +16,7 @@ private def seedCheckpoint (dir : FilePath) (runs rows : Nat) : IO Unit := do
   let mut wal := ByteArray.emptyWithCapacity (total * WAL.frameSize)
   for key in [:total] do
     wal := wal ++ WAL.encodeFrame ⟨(key + 1).toUInt64, key.toUInt64, some key.toUInt64⟩
-  IO.FS.writeBinFile (dir / "WAL") wal
+  IO.FS.writeBinFile (dir / renderWalSegmentName 0) wal
   IO.FS.writeBinFile (dir / "WAL.commit") (WAL.Boundary.encode wal.size.toUInt64)
   let header : Manifest.Checkpoint := ⟨1, total.toUInt64, 0, runs.toUInt64⟩
   IO.FS.writeBinFile (dir / "MANIFEST") (Manifest.IntegrityCheckpoint.fromRuns header files.toList).encode

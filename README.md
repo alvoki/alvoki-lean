@@ -42,4 +42,4 @@ bash scripts/disk-replay.sh --out /tmp/alvoki-replay-after.csv \
   --baseline /tmp/alvoki-replay-before.csv
 ```
 
-The native benchmark measures reopening databases with the same keys inserted in ascending, descending, and seeded shuffled order. It records individual samples and compares medians against a saved run on the same machine. Add `--max-slowdown 1.25` to fail a comparison when any median exceeds 125% of its baseline. [Workload and measurements](docs/benchmarks.md#disk-replay)
+The native benchmark measures reopening databases with the same keys inserted in ascending, descending, and seeded shuffled order. Use `--segments 1 8 32` with a sufficient row count to compare multiple segment layouts, and `--repair-tail` to exercise keeper repair. It records individual samples and compares medians against a saved run on the same machine. Add `--max-slowdown 1.25` to fail a comparison when any median exceeds 125% of its baseline. [Workload and measurements](docs/benchmarks.md#disk-replay)

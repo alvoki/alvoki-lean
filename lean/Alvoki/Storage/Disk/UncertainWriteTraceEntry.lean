@@ -6,8 +6,8 @@ namespace Alvoki.WAL.Boundary
 open Storage
 
 /-- An uncertain submission from a ready state has a healthy retry that
-enters the mixed trace with the exact native installation. The write-effect
-reports describe the callbacks of `commitWalWrite_fileEffects`. Read reports
+enters the whole-file mixed trace with the exact recovered installation.
+The write-effect reports describe the whole-file publication model. Read reports
 must agree with the same directory under its newly acquired lock. A retry
 from a live writer requires the old owner to have released the lock. -/
 theorem ObservedMarkedState.Valid.reopenAfterWriteErrorWithLock {state : ObservedMarkedState}

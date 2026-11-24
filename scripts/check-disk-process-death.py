@@ -104,23 +104,30 @@ def wait_for_sync_success(pid):
     raise RuntimeError("timed out waiting for the released sync")
 
 
-def check_process_death(binary, root, after_rename):
+def check_process_death(binary, root, after_rename, rotated):
     database = root / "db"
     database.mkdir()
-    wal = database / "WAL"
+    segment = f"WAL-segment-{int(rotated)}"
+    wal = database / segment
     marker = database / "WAL.commit"
     status, stderr = run_probe(binary, "--write-once", database)
     require(status == 0, f"could not prepare acknowledged WAL prefix: {stderr}")
+    if rotated:
+        status, stderr = run_probe(binary, "--rotate-wal-once", database)
+        require(status == 0, f"could not rotate the acknowledged WAL prefix: {stderr}")
+        status, stderr = run_probe(binary, "--write-once", database)
+        require(status == 0, f"could not populate the rotated keeper: {stderr}")
     status, stderr = run_probe(binary, "--checkpoint-once", database)
     require(status == 0, f"could not prepare the fixed checkpoint: {stderr}")
     acknowledged = wal.read_bytes()
     boundary = marker.read_bytes()
     checkpoint = {name: (database / name).read_bytes() for name in ("MANIFEST", "run-1-0.v3")}
+    sealed = (database / "WAL-segment-0").read_bytes() if rotated else None
     control = root / "control"
     shutil.copytree(database, control)
     status, stderr = run_probe(binary, "--write-once", control)
     require(status == 0, f"could not prepare exact expected append: {stderr}")
-    appended = (control / "WAL").read_bytes()
+    appended = (control / segment).read_bytes()
     require(acknowledged and len(appended) == 2 * len(acknowledged) and appended.startswith(acknowledged),
             "the acknowledged control write did not extend the WAL by one frame")
     expected_wal = appended if after_rename else acknowledged
@@ -128,14 +135,18 @@ def check_process_death(binary, root, after_rename):
 
     ready = root / "sync.pid"
     release = root / "release-sync"
+    selected_marker = root / "selected-marker"
+    selected_marker.write_bytes(expected_marker)
     real_sync = shutil.which("sync")
     require(real_sync is not None, "could not find the Linux sync utility")
     wrapper = root / "sync"
     wrapper.write_text('''#!/bin/sh
 set -eu
 if [ "$#" -eq "$ALVOKI_CHECK_SYNC_ARITY" ] && [ "$1" = -- ] &&
-   [ "${3:-$2}" = "$ALVOKI_CHECK_HOLD_AT" ]; then
-    # The grouped write sync opens its first target before the repair can replace it.
+   [ "${3:-$2}" = "$ALVOKI_CHECK_HOLD_AT" ] &&
+   { [ "$#" -eq 3 ] || cmp -s "$ALVOKI_CHECK_MARKER" "$ALVOKI_CHECK_SELECTED_MARKER"; }; then
+    # Hold a directory sync only after the submitted marker is visible.
+    # The grouped write sync opens its WAL target before repair can replace it.
     if [ "$#" -eq 3 ]; then exec < "$2"; fi
     printf '%s\\n' "$$" > "$ALVOKI_CHECK_SYNC_PID"
     tries=0
@@ -155,9 +166,10 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
     with native_process(binary, "--write-once", database, sync_pid_file=ready, env={
         **os.environ,
         "PATH": os.pathsep.join([str(root), os.defpath]),
-        # The final directory sync has one target. Opening the database uses a grouped sync.
         "ALVOKI_CHECK_SYNC_ARITY": "2" if after_rename else "3",
         "ALVOKI_CHECK_HOLD_AT": str(database if after_rename else database / "WAL.commit.next"),
+        "ALVOKI_CHECK_MARKER": str(marker),
+        "ALVOKI_CHECK_SELECTED_MARKER": str(selected_marker),
         "ALVOKI_CHECK_SYNC_PID": str(ready),
         "ALVOKI_CHECK_SYNC_RELEASE": str(release),
         "ALVOKI_CHECK_PYTHON": sys.executable,
@@ -196,12 +208,16 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
                 "recovery or delayed sync changed the selected WAL bytes")
         require(all((database / name).read_bytes() == data for name, data in checkpoint.items()),
                 "recovery or delayed sync changed the fixed checkpoint")
+        if sealed is not None:
+            require((database / "WAL-segment-0").read_bytes() == sealed,
+                    "recovery or delayed sync changed the sealed prefix")
 
 
 if __name__ == "__main__":
     adopt_orphans()
     binary = Path(sys.argv[1]).resolve()
-    for after_rename in (False, True):
-        with tempfile.TemporaryDirectory(prefix="alvoki-process-death-") as directory:
-            check_process_death(binary, Path(directory).resolve(), after_rename)
-    print("Reopened after owner death with a delayed WAL descriptor sync or directory sync.")
+    for rotated in (False, True):
+        for after_rename in (False, True):
+            with tempfile.TemporaryDirectory(prefix="alvoki-process-death-") as directory:
+                check_process_death(binary, Path(directory).resolve(), after_rename, rotated)
+    print("Reopened zero and rotated WAL keepers after owner death and delayed sync.")

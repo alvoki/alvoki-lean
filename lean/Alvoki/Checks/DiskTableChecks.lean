@@ -10,6 +10,8 @@ import Alvoki.Storage.Publication.DiskPublicationModel
 
 open System Alvoki Alvoki.Storage
 
+private def firstWalSegment := "WAL-segment-0"
+
 private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
 
@@ -77,18 +79,16 @@ private def checkSegmentedCheckpointOpen (root : FilePath) : IO Unit := do
   let lock ← IO.FS.Handle.mk (dir.file .lock) .append
   check (← lock.tryLock) "could not lock segmented checkpoint fixture"
   try
-    let covered ← IO.FS.readBinFile (dir.file .wal)
     let sealed := dir.file (.walSegment 0)
+    let covered ← IO.FS.readBinFile sealed
     let keeper := dir.file (.walSegment 2)
     let newer := dir.file (.walSegment 4)
     let committed := WAL.encodeFrame ⟨3, 7, some 71⟩
     let extra := WAL.encodeFrame ⟨4, 8, none⟩
     let marker := WAL.Boundary.encode (3 * WAL.frameSize).toUInt64
-    IO.FS.writeBinFile sealed covered
     IO.FS.writeBinFile keeper (committed ++ extra)
     IO.FS.writeBinFile newer (ByteArray.mk #[0xff])
     IO.FS.writeBinFile (dir.file .walBoundary) marker
-    IO.FS.removeFile (dir.file .wal)
     let touched ← IO.mkRef false
     let readOptional := fun path => readOptionalDatabaseFile path.symlinkMetadata.toBaseIO
       (fun _ => IO.FS.readBinFile path) (fun _ => IO.userError "expected a regular fixture file") throw
@@ -97,7 +97,10 @@ private def checkSegmentedCheckpointOpen (root : FilePath) : IO Unit := do
       let result ← IO.Process.output {cmd := "sync", args := #["--"] ++ paths.map FilePath.toString}
       check (result.exitCode == 0) "could not sync segmented checkpoint fixture"
     let openMarked := WalSegmentRepair.reopenMarkedWith dir readOptional FilePath.readDir
-      (fun path => path.symlinkMetadata.toBaseIO) IO.FS.readBinFile
+      (fun path => path.symlinkMetadata.toBaseIO)
+      (fun path => do
+        check (path != sealed && path != newer) "segmented reopen read an unselected WAL payload"
+        IO.FS.readBinFile path)
       (fun path => do touched.set true; (IO.FS.removeFile path).toBaseIO)
       (fun path bytes => do touched.set true; writeFreshStagedFile path bytes) sync
       (fun source target => do touched.set true; IO.FS.rename source target)
@@ -159,7 +162,7 @@ private def checkReopen (dir : FilePath) : IO Unit := do
   check ((← db.write 8 (some 80)) == 6) "post-checkpoint sequence"
   db.close
   rejects (db.acquire) "closed database accepted reads"
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let complete ← IO.FS.readBinFile wal
   let marker := dir / "WAL.commit"
   let boundary ← IO.FS.readBinFile marker
@@ -225,7 +228,7 @@ private def checkMissingAndMalformedFiles (dir : FilePath) : IO Unit := do
   IO.FS.writeBinFile (dir / "MANIFEST") (Manifest.IntegrityCheckpoint.fromRuns ⟨1, 0, 0, 1⟩ [original]).encode
   rejects (DiskTable.open dir) "open accepted a run newer than the checkpoint watermark"
   IO.FS.writeBinFile (dir / "MANIFEST") (Manifest.IntegrityCheckpoint.fromRuns ⟨1, 1, 0, 1⟩ [original]).encode
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let frames ← IO.FS.readBinFile wal
   IO.FS.removeFile wal
   rejects (DiskTable.open dir) "open accepted a checkpoint without its WAL"
@@ -243,7 +246,7 @@ private def checkCoveredWalDuplicate (dir : FilePath) : IO Unit := do
   db.checkpoint
   db.close
   expectManifest dir 1 3 0 1
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let original ← IO.FS.readBinFile wal
   let duplicate := original.extract WAL.frameSize (2 * WAL.frameSize)
   let corrupted := original.extract 0 (2 * WAL.frameSize) ++ duplicate
@@ -259,7 +262,7 @@ private def checkCoveredWalDuplicate (dir : FilePath) : IO Unit := do
   reopened.close
 
 private def checkBoundedRecovery (dir : FilePath) : IO Unit := do
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let marker := dir / "WAL.commit"
   let event : WAL.Write := ⟨1, 3, some 81⟩
   let durable := WAL.encodeFrame event
@@ -312,10 +315,10 @@ private def checkDirectoryIdentity (dir : FilePath) : IO Unit := do
       try
         check ((← a.write 7 (some 42)) == 1) "unexpected write sequence in the first database"
         a.checkpoint
-        check ((← IO.FS.readBinFile (first / "db" / "WAL")).size == WAL.frameSize)
+        check ((← IO.FS.readBinFile (first / "db" / firstWalSegment)).size == WAL.frameSize)
           "relative open lost its WAL after changing the working directory"
         expectManifest (first / "db") 1 1 0 1
-        check ((← IO.FS.readBinFile (second / "db" / "WAL")).isEmpty)
+        check ((← IO.FS.readBinFile (second / "db" / firstWalSegment)).isEmpty)
           "write was redirected to another database after changing the working directory"
         let otherManifest ← (second / "db" / "MANIFEST").pathExists
         check (!otherManifest) "checkpoint was redirected to another database"
@@ -329,13 +332,16 @@ private def checkDirectoryIdentity (dir : FilePath) : IO Unit := do
     finally restored.close
   finally IO.Process.setCurrentDir original
 
+private def makeFixtureLink (target name : FilePath) (symbolic : Bool) : IO Unit := do
+  let flags := if symbolic then #["-s"] else #[]
+  let result ← IO.Process.output {cmd := "ln", args := flags ++ #["--", target.toString, name.toString]}
+  check (result.exitCode == 0) s!"could not create fixture link at {name}"
+
 private def checkDanglingFiles (dir : FilePath) : IO Unit := do
-  for name in ["MANIFEST", "WAL.commit", "WAL"] do
+  for name in ["MANIFEST", "WAL.commit", "WAL", firstWalSegment] do
     let linked := dir / name
     let missing := dir / "missing"
-    let result ← IO.Process.output {
-      cmd := "ln", args := #["-s", "--", missing.toString, linked.toString] }
-    check (result.exitCode == 0) "could not create dangling database file fixture"
+    makeFixtureLink missing linked true
     rejects (DiskTable.open dir) s!"open treated a dangling {name} as absent"
     let targetExists ← missing.pathExists
     check (!targetExists) s!"open created the target of a dangling {name}"
@@ -347,7 +353,7 @@ private def checkStaleWalStaging (dir : FilePath) : IO Unit := do
   try
     check ((← db.write 7 (some 70)) == 1) "unexpected initial staging fixture sequence"
   finally db.close
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let marker := dir / "WAL.commit"
   let staged := dir / "WAL.next"
   let other := dir / "unrelated-file"
@@ -357,11 +363,7 @@ private def checkStaleWalStaging (dir : FilePath) : IO Unit := do
   let unrelated := ByteArray.mk (Array.replicate 100 120)
   IO.FS.writeBinFile wal torn
   IO.FS.writeBinFile other unrelated
-  let link := fun (symbolic : Bool) => do
-    let flags := if symbolic then #["-s"] else #[]
-    let result ← IO.Process.output {cmd := "ln", args := flags ++ #["--", other.toString, staged.toString]}
-    check (result.exitCode == 0) "could not create staging alias fixture"
-  link true
+  makeFixtureLink other staged true
   let .error (.userError cause) ← (DiskTable.open dir).toBaseIO
     | throw (IO.userError "recovery accepted a symlink at the WAL staging path")
   check (cause == s!"expected a regular database staging file: '{staged}'")
@@ -371,7 +373,7 @@ private def checkStaleWalStaging (dir : FilePath) : IO Unit := do
   IO.FS.removeFile staged
 
   -- A stale regular link may share an inode. Detach the inactive name before writing.
-  link false
+  makeFixtureLink other staged false
   let reopened ← DiskTable.open dir
   try
     let pin ← reopened.acquire
@@ -381,6 +383,41 @@ private def checkStaleWalStaging (dir : FilePath) : IO Unit := do
       (← IO.FS.readBinFile other) = unrelated) && !(← staged.pathExists))
       "staging retry reused the stale inode or changed selected files"
   finally reopened.close
+
+private def checkCheckpointRunAliases (root : FilePath) : IO Unit := do
+  let dir := (← DiskDirectory.open root).path
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 4 (some 40)) == 1) "unexpected checkpoint alias fixture sequence"
+    db.checkpoint
+    check ((← db.write 7 (some 70)) == 2) "unexpected checkpoint alias fixture suffix"
+  finally db.close
+  let installed := dir / "run-1-0.v3"
+  let orphan := dir / "run-2-1.v3"
+  let paths := [dir / "MANIFEST", installed, dir / firstWalSegment, dir / "WAL.commit"]
+  let original ← paths.mapM IO.FS.readBinFile
+  for symbolic in [true, false] do
+    let db ← DiskTable.open dir
+    try
+      makeFixtureLink installed orphan symbolic
+      let .error (.userError cause) ← db.checkpoint.toBaseIO
+        | throw (IO.userError "checkpoint accepted an aliased future run target")
+      check (cause == s!"expected a regular database file with one link: '{orphan}'")
+        "checkpoint did not report the orphan run guard"
+      expectRejectedWrite db "publication failed; reopen the database"
+    finally db.close
+    check (decide ((← paths.mapM IO.FS.readBinFile) = original))
+      "checkpoint alias failure changed selected files"
+    IO.FS.removeFile orphan
+  let recovered ← DiskTable.open dir
+  try
+    let pin ← recovered.acquire
+    check (pin.sequence == 2 && (← recovered.lookup pin.handle 4) == some (some 40) &&
+      (← recovered.lookup pin.handle 7) == some (some 70))
+      "checkpoint alias failure changed the recovered table"
+    recovered.checkpoint
+    expectManifest dir 2 2 0 2
+  finally recovered.close
 
 private def checkSnapshotSessions (root : FilePath) : IO Unit := do
   let firstDir := root / "first"
@@ -487,11 +524,17 @@ private def syncFixtureBin (root : FilePath) : IO FilePath := do
   check (chmod.exitCode == 0) "could not make sync fault fixture executable"
   return bin
 
+private def walReplacementSyncs (dir : FilePath) : List String :=
+  [dir.toString, dir.toString, (dir / "WAL.next").toString, dir.toString]
+
+private def alignedWalSyncs (dir active : FilePath) : List String :=
+  [dir.toString, active.toString]
+
 private def checkMarkerlessRefusal (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
   IO.FS.createDir dir
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let manifest := dir / "MANIFEST"
   let marker := dir / "WAL.commit"
   let checkRefusal := do
@@ -768,21 +811,101 @@ private def checkWalSegmentRepair (root : FilePath) : IO Unit := do
         assertLayout expected true
       finally lock.unlock
 
+private def checkProductionWalRotation (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let dir := (← DiskDirectory.open dir).path
+  let first := dir / firstWalSegment
+  let second := dir / "WAL-segment-1"
+  let successor := dir / "WAL-segment-2"
+  let marker := dir / "WAL.commit"
+  let expectFiles := fun (last : ByteArray) (count : Nat) => do
+    check (decide ((← IO.FS.readBinFile first) = WAL.encodeFrame ⟨1, 4, some 40⟩ ∧
+      (← IO.FS.readBinFile second) = WAL.encodeFrame ⟨2, 7, some 70⟩ ∧
+      (← IO.FS.readBinFile successor) = last ∧
+      (← IO.FS.readBinFile marker) = WAL.Boundary.encode (count * WAL.frameSize).toUInt64))
+      "rotation or reopen changed exact segment bytes or the absolute marker"
+
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 4 (some 40)) == 1) "unexpected first rotation fixture sequence"
+    db.checkpoint
+    db.rotateWal
+    check (← (IO.FS.readBinFile second).map ByteArray.isEmpty)
+      "rotation did not install the empty successor"
+    check ((← db.write 7 (some 70)) == 2) "append after rotation changed the absolute sequence"
+  finally db.close
+  expectManifest dir 1 1 0 1
+  check (!(← successor.pathExists) && !(← (dir / "WAL").pathExists))
+    "segmented write created an unexpected WAL binding"
+
+  let (reported, syncs) ← probeDisk bin dir (some successor) (operation := "--check-rotation-outcome")
+    (failureMode := .afterSync)
+  check (reported && syncs == alignedWalSyncs dir second ++
+    [successor.toString, s!"synced before error: {successor}"])
+    "rotation did not report the error after syncing its empty successor"
+  expectFiles ByteArray.empty 2
+
+  let reopened ← DiskTable.open dir
+  try
+    let latest ← reopened.acquire
+    check (latest.sequence == 2 && (← reopened.lookup latest.handle 7) == some (some 70))
+      "reopen did not recover the second segment"
+    check ((← reopened.write 4 (some 41)) == 3) "append after failed rotation used the wrong sequence"
+  finally reopened.close
+  let finalFrame := WAL.encodeFrame ⟨3, 4, some 41⟩
+  expectFiles finalFrame 3
+
+  let bare := dir / "WAL"
+  let other := WAL.encodeFrame ⟨1, 4, some 99⟩
+  IO.FS.writeBinFile bare other
+  let .error (.userError cause) ← (DiskTable.open dir).toBaseIO
+    | throw (IO.userError "open accepted mixed flat and segmented WAL bindings")
+  check (cause == s!"unsupported flat WAL binding: '{bare}'") "open reported the wrong mixed-layout refusal"
+  let (opened, syncs) ← probeDisk bin dir none
+  check (!opened && syncs.isEmpty && decide ((← IO.FS.readBinFile bare) = other))
+    "mixed-layout refusal performed a WAL durability effect"
+  expectFiles finalFrame 3
+  IO.FS.removeFile bare
+  let final ← DiskTable.open dir
+  try
+    let some older ← final.acquireAt 1 | throw (IO.userError "rotation lost the checkpoint snapshot")
+    let latest ← final.acquire
+    let rows := (← final.range latest.handle 0 8).map (List.map fun row => (row.key, row.payload))
+    check ((← final.lookup older.handle 4) == some (some 40) &&
+      latest.sequence == 3 && rows == some [(4, some 41), (7, some 70)])
+      "segmented reopen changed the historical or current table"
+  finally final.close
+  expectFiles finalFrame 3
+
 private def checkRetrySync (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
   IO.FS.createDir dir
-  let wal := dir / "WAL"
-  let expected := [wal.toString, dir.toString]
+  let wal := dir / firstWalSegment
+  let freshSyncs := [wal.toString, dir.toString]
+  let alignedSyncs := alignedWalSyncs dir wal
+  let stagedBoundary := dir / "WAL.commit.next"
+  let publishedBoundary := dir / "WAL.commit"
+  let zero := WAL.Boundary.encode 0
+  IO.FS.writeBinFile stagedBoundary zero
+  let (opened, syncs) ← probeDisk bin dir none
+  check (!opened && syncs.isEmpty && !(← wal.pathExists) && !(← publishedBoundary.pathExists))
+    "bootstrap accepted a staged marker with no empty segment"
+  IO.FS.removeFile stagedBoundary
   for _ in [:2] do
     let (opened, syncs) ← probeDisk bin dir (some dir)
-    check (!opened && syncs == expected) "open accepted a WAL name after failed directory sync"
+    check (!opened && syncs == freshSyncs) "open accepted a WAL name after failed directory sync"
     check (← wal.pathExists) "sync failure did not leave a visible WAL to retry"
-  let stagedBoundary := dir / "WAL.commit.next"
+  let (opened, syncs) ← probeDisk bin dir (some stagedBoundary) (failureMode := .afterSync)
+  check (!opened && syncs == freshSyncs ++ [stagedBoundary.toString, s!"synced before error: {stagedBoundary}"] &&
+    decide ((← IO.FS.readBinFile stagedBoundary) = zero) && !(← publishedBoundary.pathExists))
+    "bootstrap did not stop at the synced staging marker with its zero segment intact"
   let (opened, syncs) ← probeDisk bin dir none
-  check (opened && syncs == expected ++ [stagedBoundary.toString, dir.toString])
+  check (opened && syncs == freshSyncs ++ [stagedBoundary.toString, dir.toString])
     "successful retry did not settle the WAL and its initial boundary"
-  let marker ← IO.FS.readBinFile (dir / "WAL.commit")
+  let marker ← IO.FS.readBinFile publishedBoundary
   let .ok 0 := WAL.Boundary.decode marker | throw (IO.userError "fresh retry did not publish an empty boundary")
   check (← (IO.FS.readBinFile wal).map ByteArray.isEmpty) "fresh retry changed the empty WAL"
   let db ← DiskTable.open dir
@@ -790,17 +913,17 @@ private def checkRetrySync (root : FilePath) : IO Unit := do
   db.close
   let acknowledged ← IO.FS.readBinFile wal
   IO.FS.writeBinFile wal (acknowledged ++ (WAL.encodeFrame ⟨2, 7, some 99⟩).extract 0 11)
-  let (opened, syncs) ← probeDisk bin dir (some dir)
-  check (!opened && syncs == [(dir / "WAL.next").toString, dir.toString])
+  let (opened, syncs) ← probeDisk bin dir (some dir) (skipFailures := 2)
+  check (!opened && syncs == walReplacementSyncs dir)
     "fixture did not interrupt torn-tail repair after rename"
   check (decide ((← IO.FS.readBinFile wal) = acknowledged)) "repair rename did not become visible"
   let (opened, syncs) ← probeDisk bin dir (some dir)
-  check (!opened && syncs == expected) "repair retry skipped sync for an aligned WAL"
+  check (!opened && syncs == [dir.toString]) "repair retry skipped the directory sync for an aligned WAL"
   let (opened, syncs) ← probeDisk bin dir none
-  check (opened && syncs == expected) "successful repair retry skipped the recovery sync"
+  check (opened && syncs == alignedSyncs) "successful repair retry skipped the recovery sync"
   let (written, syncs) ← probeDisk bin dir (some stagedBoundary) (operation := "--write-once")
-  check (!written && syncs == expected ++ [wal.toString, stagedBoundary.toString])
-    "fixture did not fail after WAL sync and before durable boundary publication"
+  check (!written && syncs == alignedSyncs ++ [wal.toString, stagedBoundary.toString])
+    "fixture did not fail at the grouped WAL and staged boundary sync"
   check ((← IO.FS.readBinFile wal).size == acknowledged.size + WAL.frameSize)
     "fixture did not leave a complete unacknowledged WAL frame"
   let recovered ← DiskTable.open dir
@@ -811,7 +934,7 @@ private def checkRetrySync (root : FilePath) : IO Unit := do
     check ((← recovered.write 7 (some 61)) == 2) "append after repair retry used the wrong sequence"
   finally recovered.close
   let (written, syncs) ← probeDisk bin dir (some dir) (operation := "--write-once") (skipFailures := 1)
-  check (!written && syncs == expected ++ [wal.toString, stagedBoundary.toString, dir.toString])
+  check (!written && syncs == alignedSyncs ++ [wal.toString, stagedBoundary.toString, dir.toString])
     "fixture did not fail after the boundary rename"
   let recovered ← DiskTable.open dir
   try
@@ -834,7 +957,7 @@ private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
     check ((← db.write 7 none) == 4) "unexpected tombstone sequence"
     check ((← db.write 6 (some 60)) == 5) "unexpected insertion sequence"
   finally db.close
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let marker := dir / "WAL.commit"
   let staged := dir / "WAL.commit.next"
   let manifest := dir / "MANIFEST"
@@ -866,10 +989,10 @@ private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
   let acknowledged : List WAL.Write := [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩,
     ⟨4, 7, none⟩, ⟨5, 6, some 60⟩]
   expectFiles acknowledged
-  -- The first directory target belongs to the grouped sync during open.
+  -- The first directory sync belongs to open.
   let (classified, syncs) ← probeDisk bin dir (some dir) (operation := "--check-write-outcome")
     (skipFailures := 1) (failureMode := .afterSync)
-  let expectedSyncs := [wal.toString, dir.toString, wal.toString, staged.toString, dir.toString,
+  let expectedSyncs := alignedWalSyncs dir wal ++ [wal.toString, staged.toString, dir.toString,
     s!"synced before error: {dir}"]
   check (classified && syncs == expectedSyncs)
     "write did not report an unknown commit after the final directory sync succeeded"
@@ -877,12 +1000,12 @@ private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
   expectFiles events
   -- These failed reopen processes exercise the visible files around two sync
   -- outcomes. Power-loss choices for unsynced files belong to the model.
-  let alignedSyncs := [wal.toString, dir.toString]
+  let alignedSyncs := alignedWalSyncs dir wal
   let (opened, syncs) ← probeDisk bin dir (some dir)
-  check (!opened && syncs == alignedSyncs) "reopen did not fail before syncing the directory"
+  check (!opened && syncs == [dir.toString]) "reopen did not fail before syncing the directory"
   expectFiles events
-  let (opened, syncs) ← probeDisk bin dir (some dir) (failureMode := .secondOnly)
-  check (!opened && syncs == alignedSyncs ++ [s!"synced second target before error: {dir}"])
+  let (opened, syncs) ← probeDisk bin dir (some dir) (failureMode := .afterSync)
+  check (!opened && syncs == [dir.toString, s!"synced before error: {dir}"])
     "reopen did not fail after syncing only the directory"
   expectFiles events
   let reopened ← DiskTable.open dir
@@ -941,19 +1064,19 @@ private def checkGroupedSyncPartialEffects (root : FilePath) : IO Unit := do
     db.checkpoint
     check ((← db.write 4 (some 41)) == 2) "unexpected acknowledged suffix sequence"
   finally db.close
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let marker := dir / "WAL.commit"
   let staged := dir / "WAL.commit.next"
   let acknowledged := WAL.encode [⟨1, 7, some 70⟩, ⟨2, 4, some 41⟩]
   let oldMarker := WAL.Boundary.encode acknowledged.size.toUInt64
-  let (opened, syncs) ← probeDisk bin dir (some dir) (failureMode := .secondOnly)
-  check (!opened && syncs == [wal.toString, dir.toString, s!"synced second target before error: {dir}"])
+  let (opened, syncs) ← probeDisk bin dir (some dir) (failureMode := .afterSync)
+  check (!opened && syncs == [dir.toString, s!"synced before error: {dir}"])
     "aligned reopen did not fail after syncing only the directory"
   check (decide ((← IO.FS.readBinFile wal) = acknowledged ∧ (← IO.FS.readBinFile marker) = oldMarker))
     "failed aligned reopen changed the acknowledged WAL"
   let (classified, syncs) ← probeDisk bin dir (some staged) (operation := "--check-write-outcome")
     (failureMode := .secondOnly)
-  check (classified && syncs == [wal.toString, dir.toString, wal.toString, staged.toString,
+  check (classified && syncs == alignedWalSyncs dir wal ++ [wal.toString, staged.toString,
     s!"synced second target before error: {staged}"])
     "write did not report an unknown commit after syncing only the staged marker"
   let appended := acknowledged ++ WAL.encodeFrame ⟨3, 7, some 99⟩
@@ -986,7 +1109,7 @@ private def checkCheckpointReadFailureBeforeWalRepair (root : FilePath) : IO Uni
     check ((← db.write 4 (some 41)) == 2) "unexpected acknowledged suffix sequence"
   finally db.close
   let run := dir / "run-1-0.v3"
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let marker := dir / "WAL.commit"
   let manifest := dir / "MANIFEST"
   let stagedWal := dir / "WAL.next"
@@ -1008,8 +1131,8 @@ private def checkCheckpointReadFailureBeforeWalRepair (root : FilePath) : IO Uni
   IO.FS.removeFile run
   IO.FS.createDir run
   match ← (DiskTable.open dir).toBaseIO with
-  | .error (.inappropriateType _ osCode _) =>
-    check (osCode == 21) "installed run directory did not cause Linux EISDIR"
+  | .error (.userError message) =>
+    check (message == s!"expected a regular database file: '{run}'") "installed run directory bypassed the file guard"
   | .error error => throw error
   | .ok opened =>
     opened.close
@@ -1033,7 +1156,7 @@ private def checkCheckpointReadFailureBeforeWalRepair (root : FilePath) : IO Uni
   expectNoWalEffects legacyManifest
   IO.FS.writeBinFile manifest manifestBytes
   let (opened, syncs) ← probeDisk bin dir none
-  check (opened && syncs == [stagedWal.toString, dir.toString])
+  check (opened && syncs == walReplacementSyncs dir)
     "restored checkpoint did not allow the WAL repair syncs"
   check (decide ((← IO.FS.readBinFile wal) = acknowledged ∧ (← IO.FS.readBinFile marker) = markerBytes))
     "retry did not trim exactly the unselected WAL tail"
@@ -1058,7 +1181,7 @@ private def checkFirstCheckpointCuts (root : FilePath) : IO Unit := do
   finally db.close
   let run := dir / "run-1-0.v3"
   let staged := dir / "MANIFEST.next"
-  let beforePublish := [(dir / "WAL").toString, dir.toString, run.toString, dir.toString]
+  let beforePublish := alignedWalSyncs dir (dir / firstWalSegment) ++ [run.toString, dir.toString]
   let (published, syncs) ← probeDisk bin dir (some dir) (operation := "--checkpoint-once") (skipFailures := 1)
   check (!published && syncs == beforePublish) "first checkpoint did not stop at the run directory sync"
   check (!(← (dir / "MANIFEST").pathExists)) "first checkpoint installed a manifest before its runs were synced"
@@ -1087,7 +1210,7 @@ private def checkCheckpointRetryWithFewerRuns (root : FilePath) : IO Unit := do
     let _ ← db.write 4 (some 41)
     let _ ← db.write 7 none
   finally db.close
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let boundary := dir / "WAL.commit"
   let originalWal ← IO.FS.readBinFile wal
   let originalBoundary ← IO.FS.readBinFile boundary
@@ -1098,7 +1221,7 @@ private def checkCheckpointRetryWithFewerRuns (root : FilePath) : IO Unit := do
   let secondRun := Compaction.encodeV3 [⟨7, 2, (0, 70)⟩]
   let suffixRun := Compaction.encodeV3 [⟨4, 3, (0, 41)⟩, ⟨7, 4, (1, 0)⟩]
   let newRuns := [(dir / "run-3-0.v3", firstRun), (dir / "run-3-1.v3", secondRun), (orphan, suffixRun)]
-  let alignedOpen := [wal.toString, dir.toString]
+  let alignedOpen := alignedWalSyncs dir wal
   -- All candidate run contents can be synced while the manifest still names
   -- generation 2. The wrapper completes the last file sync before returning an error.
   let (published, syncs) ← probeDisk bin dir (some orphan) (operation := "--checkpoint-once")
@@ -1165,7 +1288,7 @@ private def checkObsoleteRunCollection (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
   IO.FS.createDir dir
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let manifest := dir / "MANIFEST"
   let retired := dir / "run-1-0.v3"
   let selected := dir / "run-3-0.v3"
@@ -1245,7 +1368,7 @@ private def checkObsoleteRunCollection (root : FilePath) : IO Unit := do
   finally db.close
   -- Fail the first collection barrier after open. The same handle retries the
   -- empty pass, so no reopen sync can hide a missing retry barrier.
-  let expectedSyncs := [wal.toString, dir.toString, dir.toString, dir.toString]
+  let expectedSyncs := alignedWalSyncs dir wal ++ [dir.toString, dir.toString]
   let (retried, syncs) ← probeDisk bin dir (some dir) (operation := "--collect-runs-and-retry")
     (skipFailures := 1) (failureMode := .beforeOnce)
   check (retried && syncs == expectedSyncs) "empty collection retry skipped its directory barrier"
@@ -1272,11 +1395,11 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
     check ((← db.write 4 (some 41)) == 3) "unexpected overwrite sequence"
     check ((← db.write 7 none) == 4) "unexpected tombstone sequence"
   finally db.close
-  let wal := dir / "WAL"
+  let wal := dir / firstWalSegment
   let marker := dir / "WAL.commit"
   let stagedManifest := dir / "MANIFEST.next"
   let stagedMarker := dir / "WAL.commit.next"
-  let alignedOpen := [wal.toString, dir.toString]
+  let alignedOpen := alignedWalSyncs dir wal
   let runSyncs := [dir / "run-2-0.v3", dir / "run-2-1.v3", dir, stagedManifest]
   let (published, syncs) ← probeDisk bin dir (some stagedManifest) (operation := "--checkpoint-once")
   check (!published && syncs == alignedOpen ++ runSyncs.map FilePath.toString)
@@ -1291,12 +1414,12 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
   check (decide ((← IO.FS.readBinFile wal) = acknowledged ++ WAL.encodeFrame ⟨5, 7, some 99⟩))
     "write fixture did not leave the complete unacknowledged append"
   check (decide ((← IO.FS.readBinFile marker) = boundary)) "failed write changed the selected WAL marker"
-  let (opened, syncs) ← probeDisk bin dir (some dir)
-  check (!opened && syncs == [(dir / "WAL.next").toString, dir.toString])
+  let (opened, syncs) ← probeDisk bin dir (some dir) (skipFailures := 2)
+  check (!opened && syncs == walReplacementSyncs dir)
     "reopen did not fail at the directory sync after repairing the WAL"
   check (decide ((← IO.FS.readBinFile wal) = acknowledged)) "WAL repair rename did not trim the rejected append"
   let (opened, syncs) ← probeDisk bin dir (some dir)
-  check (!opened && syncs == alignedOpen) "reopen retry did not sync the directory for the repaired WAL"
+  check (!opened && syncs == [dir.toString]) "reopen retry did not sync the directory for the repaired WAL"
   let recovered ← DiskTable.open dir
   try
     expectManifest dir 1 2 2 1
@@ -1402,6 +1525,20 @@ def main (args : List String) : IO Unit := do
     try
       let _ ← db.write 7 (some 99)
     finally db.close
+  | ["--rotate-wal-once", dir] =>
+    let db ← DiskTable.open ⟨dir⟩
+    try db.rotateWal finally db.close
+  | ["--check-rotation-outcome", dir] =>
+    let some target ← IO.getEnv "ALVOKI_CHECK_SYNC_FAIL"
+      | throw (IO.userError "missing rotation sync fault target")
+    let db ← DiskTable.open ⟨dir⟩
+    try
+      let .error (.userError message) ← db.rotateWal.toBaseIO
+        | throw (IO.userError "rotation did not report its sync error")
+      check (message.startsWith "sync failed for " && message.endsWith s!"injected sync failure: {target}\n")
+        "rotation did not preserve its sync error"
+      expectRejectedWrite db "publication failed; reopen the database"
+    finally db.close
   | ["--check-write-outcome", dir] =>
     let some target ← IO.getEnv "ALVOKI_CHECK_SYNC_FAIL"
       | throw (IO.userError "missing sync fault target")
@@ -1436,11 +1573,13 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkDirectoryIdentity
     IO.FS.withTempDir checkDanglingFiles
     IO.FS.withTempDir checkStaleWalStaging
+    IO.FS.withTempDir checkCheckpointRunAliases
     IO.FS.withTempDir checkSnapshotSessions
     IO.FS.withTempDir checkMarkerlessRefusal
     IO.FS.withTempDir checkWalSegmentRotation
     IO.FS.withTempDir checkWalSegmentReads
     IO.FS.withTempDir checkWalSegmentRepair
+    IO.FS.withTempDir checkProductionWalRotation
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkWritesAcrossReopens
     IO.FS.withTempDir checkGroupedSyncPartialEffects
@@ -1449,5 +1588,5 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkCheckpointRetryWithFewerRuns
     IO.FS.withTempDir checkObsoleteRunCollection
     IO.FS.withTempDir checkRecoveryAfterCheckpointAndWriteFailures
-    IO.println "Passed disk identity, WAL boundaries and ordinals, checkpoint cuts, and sync retry checks."
+    IO.println "Passed disk identity, segmented WAL rotation and replay, checkpoint cuts, and sync retry checks."
   | _ => throw (IO.userError "unexpected disk fixture arguments")

@@ -148,6 +148,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.run_performCheckpointFileStep
 #check_axioms Alvoki.Storage.run_performCheckpointFileStep_io
 #check_axioms Alvoki.Storage.commitWalWrite_fileEffects
+#check_axioms Alvoki.Storage.bootstrapSegmented_fileEffects
+#check_axioms Alvoki.Storage.DiskTable.writeWithOutcome_fileEffects
+#check_axioms Alvoki.Storage.DiskTable.rotateWal_fileEffects
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loads
 #check_axioms Alvoki.Storage.CheckpointForRecovery.recoverSelected_rowBounds
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_flushForCheckpoint
