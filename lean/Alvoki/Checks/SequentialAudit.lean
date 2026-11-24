@@ -155,6 +155,7 @@ import Alvoki.Storage.Disk.DiskBootstrapAdmission
 import Alvoki.Storage.Disk.SegmentedCleanCachedReopen
 import Alvoki.Storage.Disk.CachedWalChunkReports
 import Alvoki.Storage.Disk.AlignedWalChunkSync
+import Alvoki.Storage.Disk.LongWalStagedCustody
 import Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
@@ -1111,6 +1112,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.readWalKeeperWithChunks_finishAligned
 #check_axioms Alvoki.Storage.WalSegmentRepair.alignedWalRepairEffects_directoryError
 #check_axioms Alvoki.Storage.WalSegmentRepair.alignedWalRepairEffects_observedKeeper
+#check_axioms Alvoki.Storage.WalSegmentRepair.readWalKeeperWithChunks_syncStaged
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.ofChunkReads
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.ofChunkReads_readKeeper
 #check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.ofChunkReads
