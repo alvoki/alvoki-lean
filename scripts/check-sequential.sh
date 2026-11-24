@@ -211,6 +211,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 lake env leanchecker Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentReports
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadWork
 lake env leanchecker Alvoki.Storage.Disk.RecoverySizedReads
@@ -220,6 +221,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalGroupSyncSchedule
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleRouting
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleEffects
+lake env leanchecker Alvoki.Storage.Disk.KeeperReadCustody
 lake env leanchecker Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 lake env leanchecker Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
 lake env leanchecker Alvoki.Storage.Disk.SegmentedDelayedAppendReopen

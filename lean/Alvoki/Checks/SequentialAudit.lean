@@ -21,6 +21,7 @@ import Alvoki.Storage.Disk.WalGroupSyncSchedule
 import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.SyncHandleCustody
 import Alvoki.Storage.Disk.SyncHandleEffects
+import Alvoki.Storage.Disk.KeeperReadCustody
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
@@ -124,6 +125,7 @@ import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
+import Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -965,6 +967,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readSelectedCached
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.reopenCached_eq
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.openAfterCollectionPowerLossCached
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.collectionPowerLossCached_eq
+#check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.collectionPowerLossCached
+#check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.reopensRetainedCached
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalPayloadReports.byteCount
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_reported
@@ -994,6 +999,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.sync_observedEffect
 #check_axioms Alvoki.Storage.SyncHandleRouting.FsyncObservation.ofDirectory
 #check_axioms Alvoki.Storage.SyncHandleRouting.FsyncObservation.ofKeeper
+#check_axioms Alvoki.Storage.SyncHandleRouting.readKeeperWith_success
+#check_axioms Alvoki.Storage.SyncHandleRouting.readKeeperWith_readError
+#check_axioms Alvoki.Storage.SyncHandleRouting.Cache.Agrees.captureKeeper
+#check_axioms Alvoki.Storage.SyncHandleRouting.alignedKeeperStep
+#check_axioms Alvoki.Storage.SyncHandleRouting.replacementKeeperBeforeRename
 #check_axioms Alvoki.Storage.DiskTable.retainRunVersions_fileEffects
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.afterRunRetention
 #check_axioms Alvoki.Storage.RepresentsWalHistory.retainRunVersions
