@@ -1,10 +1,10 @@
 import Alvoki.Storage.Disk.IntegrityBootstrap
 import Alvoki.Storage.Disk.StrictCheckpointReopen
 import Alvoki.Storage.Disk.VersionedUncertainWrite
-import Alvoki.Storage.Disk.VersionedReadyMaintenance
+import Alvoki.Storage.Disk.VersionedReadyRunCollection
 
 namespace Alvoki.WAL.Boundary
-open Storage CheckpointPublication Manifest
+open System Storage CheckpointPublication Manifest
 open Sequential (SnapshotHandle SnapshotPin SnapshotTable)
 
 /-- Optional and ordered run lookups refer to the same acquired directory.
@@ -107,8 +107,59 @@ private theorem IntegrityLockedOpenReports.versionedRunReads {before : ReopenIma
   subst selected
   exact reports.runReads bytes strict visible parsed index within
 
+/-- A single run collection pass in the same open session. The writer holds
+the directory lock throughout the manifest read, inventory and same-path
+unlink and sync callbacks. The reports carry their actual filesystem
+effects. A recovery after losing the handle uses a separate open step. -/
+structure IntegrityRunCollectionReports (directory : DiskDirectory) (state : ObservedMarkedState)
+    (before : RunUnlinkImage) where
+  owners : DiskSession.LockOwners
+  descriptor : Nat
+  heldLock : owners.Owns directory descriptor
+  manifest : OptionalPathRead state.writer.image.directory.active.manifest
+  observed : Option ByteArray
+  manifestRead : manifest.result (directory.file .manifest) = .ok observed
+  regularAt : FilePath → Prop
+  inventory : LockedRunInventory directory regularAt
+  known : ∀ generation index bytes, state.durable generation index = some bytes →
+    before.guaranteed generation index = some bytes
+  held : List UInt64
+  removeFile : FilePath → EStateM IO.Error RunUnlinkImage (Except IO.Error Unit)
+  syncDirectory : FilePath → EStateM IO.Error RunUnlinkImage Unit
+  effects : RunUnlinkEffectContract (RunCollection.performPaths removeFile syncDirectory throw
+    (fun address : RunAddress => directory.file (.run address.1 address.2)) directory.path)
+
+def IntegrityRunCollectionReports.perform {directory : DiskDirectory} {state : ObservedMarkedState}
+    {before : RunUnlinkImage} (reports : IntegrityRunCollectionReports directory state before) :
+    RunCollection.Step RunAddress → EStateM IO.Error RunUnlinkImage Unit :=
+  RunCollection.performPaths reports.removeFile reports.syncDirectory throw
+    (fun address => directory.file (.run address.1 address.2)) directory.path
+
+def IntegrityRunCollectionReports.run {directory : DiskDirectory} {state : ObservedMarkedState}
+    {before : RunUnlinkImage} (reports : IntegrityRunCollectionReports directory state before) :
+    EStateM.Result IO.Error RunUnlinkImage Unit :=
+  reports.inventory.runIntegrityCollection state.generation reports.observed reports.held reports.perform before
+
+def IntegrityRunCollectionReports.after {directory : DiskDirectory} {state : ObservedMarkedState}
+    {before : RunUnlinkImage} (reports : IntegrityRunCollectionReports directory state before) : ObservedMarkedState :=
+  match reports.run with
+  | .ok _ after | .error _ after => state.withDurableRuns after.guaranteed
+
+theorem IntegrityRunCollectionReports.refines {directory : DiskDirectory} {state : ObservedMarkedState}
+    {before : RunUnlinkImage} (reports : IntegrityRunCollectionReports directory state before)
+    (valid : state.VersionedReady) (integrity : state.HasIntegrityManifest) :
+    reports.after.VersionedReady ∧ reports.after.HasIntegrityManifest ∧ reports.after.writer = state.writer := by
+  have kept := valid.collectReported integrity reports.inventory reports.known reports.manifest reports.manifestRead
+    reports.held reports.perform reports.effects
+  change (match reports.run with
+    | .ok _ after | .error _ after => (state.withDurableRuns after.guaranteed).VersionedReady ∧
+        (state.withDurableRuns after.guaranteed).HasIntegrityManifest) at kept
+  unfold IntegrityRunCollectionReports.after
+  split at kept <;> exact ⟨kept.1, kept.2, rfl⟩
+
 /-- A strict ready-boundary step records native or shared operation
-outcomes. Error endpoints are the actual locked open's returned state. -/
+outcomes. Collection can return to the same handle. Errors that require
+reopening carry the actual locked open's returned state. -/
 inductive IntegrityDatabaseStep (directory : DiskDirectory) (state : ObservedMarkedState) : MarkedSessionWrites → ObservedMarkedState → Prop where
   | acknowledged {submitted writer} (path : AcknowledgedWrites state.writer submitted writer) :
       IntegrityDatabaseStep directory state ⟨submitted, none⟩ (state.withWriter writer)
@@ -120,6 +171,8 @@ inductive IntegrityDatabaseStep (directory : DiskDirectory) (state : ObservedMar
       IntegrityDatabaseStep directory state ⟨[], none⟩ (state.withTable table)
   | release (handle : SnapshotHandle) :
       IntegrityDatabaseStep directory state ⟨[], none⟩ (state.withTable (state.writer.table.release handle))
+  | collectRuns {before : RunUnlinkImage} (reports : IntegrityRunCollectionReports directory state before) :
+      IntegrityDatabaseStep directory state ⟨[], none⟩ reports.after
   | checkpoint (prepared : CheckpointPreparation state) (fits : ∀ bytes ∈ prepared.runs.files, bytes.size < UInt64.size)
       {report published} (reported : state.publicationInput.runVersionedWithReports (.integrity prepared.runs) report =
         some (.ok () published)) :
@@ -160,6 +213,9 @@ theorem IntegrityDatabaseStep.refines {directory : DiskDirectory} {state after :
   | compact compacted => exact ⟨[], valid.compact compacted, integrity, by simp [ObservedMarkedState.withTable, ObservedMarkedState.withWriter], .inl rfl⟩
   | acquireAt acquired => exact ⟨[], valid.acquireAt acquired, integrity, by simp [ObservedMarkedState.withTable, ObservedMarkedState.withWriter], .inl rfl⟩
   | release handle => exact ⟨[], valid.release handle, integrity, by simp [ObservedMarkedState.withTable, ObservedMarkedState.withWriter], .inl rfl⟩
+  | collectRuns reports =>
+    obtain ⟨ready, strict, sameWriter⟩ := reports.refines valid integrity
+    exact ⟨[], ready, strict, by rw [sameWriter, List.append_nil], .inl rfl⟩
   | checkpoint prepared fits reported =>
     exact ⟨[], prepared.succeededFromVersionedReady valid fits reported,
       prepared.succeededIntegrityManifest valid reported, by simp [CheckpointPreparation.installed], .inl rfl⟩

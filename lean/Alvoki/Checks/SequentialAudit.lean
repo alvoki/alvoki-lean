@@ -44,6 +44,7 @@ import Alvoki.Storage.Disk.VersionedUncertainWrite
 import Alvoki.Storage.Disk.IntegrityBootstrap
 import Alvoki.Storage.Disk.StrictCheckpointReopen
 import Alvoki.Storage.Disk.IntegrityDatabaseTrace
+import Alvoki.Storage.Disk.LockedMarkedReopenEffects
 import Alvoki.Storage.Disk.RetainedWalSuffix
 import Alvoki.Storage.Disk.RetainedWalBoundary
 import Alvoki.Storage.Disk.WalSegmentPathIdentity
@@ -381,6 +382,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.canonicalReadsFromFresh
 #check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.pinnedReadsStable
 #check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.reacquireReadsStable
+#check_axioms Alvoki.Storage.CheckpointPublication.RunUnlinkRetry.keepsKnown
+#check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.VersionedReady.collectionPreflight
+#check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.VersionedReady.afterRunCollection
+#check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.VersionedReady.collectReported
+#check_axioms Alvoki.WAL.Boundary.IntegrityRunCollectionReports.refines
+#check_axioms Alvoki.Storage.DiskSession.runLockedMarkedOpenRetainingImage_project
+#check_axioms Alvoki.Storage.DiskSession.runLockedMarkedOpenRetainingImage_notAcquired
+#check_axioms Alvoki.Storage.DiskSession.runLockedMarkedOpenRetainingImage_recoveryError
+#check_axioms Alvoki.Storage.DiskSession.runLockedStrictMarkedOpenRetainingImage_retry
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_encode
 #check_axioms Alvoki.WAL.decodeOrdinals_append_encoded
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_eq_recoverSelected

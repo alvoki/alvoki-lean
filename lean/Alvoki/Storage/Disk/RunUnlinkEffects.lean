@@ -94,6 +94,46 @@ inductive RunUnlinkRetry (approved : List RunAddress) : RunUnlinkImage → RunUn
   | crash (prior : RunUnlinkRetry approved initial before) (survives : files ∈ before.crashImages) :
       RunUnlinkRetry approved initial (.settled files)
 
+/-- A known binding at an unapproved address survives any retry, even when
+unrelated bindings in the starting namespace are still unsettled. -/
+theorem RunUnlinkRetry.keepsKnown {approved : List RunAddress} {initial after : RunUnlinkImage}
+    (retry : RunUnlinkRetry approved initial after) {name : RunAddress} {bytes : ByteArray}
+    (known : initial.guaranteed name.1 name.2 = some bytes) (unapproved : name ∉ approved) :
+    after.guaranteed name.1 name.2 = some bytes := by
+  have bindings : after.visible name.1 name.2 = some bytes ∧
+      ∀ files ∈ after.crashImages, files name.1 name.2 = some bytes := by
+    induction retry with
+    | start =>
+      unfold RunUnlinkImage.guaranteed at known
+      dsimp only at known
+      split at known
+      · rename_i agreement
+        refine ⟨known, ?_⟩
+        intro files survives
+        exact (of_decide_eq_true (List.all_eq_true.mp agreement files survives)).trans known
+      · contradiction
+    | @unlink before removed _ chosen prior =>
+      have different : (name.1, name.2) ≠ removed := by
+        change name ≠ removed
+        exact fun same => unapproved (same.symm ▸ chosen)
+      refine ⟨?_, ?_⟩
+      · simpa [RunUnlinkImage.unlink, RunFiles.eraseName, different] using prior.1
+      · intro files survives
+        rcases RunUnlinkImage.unlink_crashImages.mp survives with unchanged | ⟨earlier, survived, rfl⟩
+        · exact prior.2 _ unchanged
+        · simpa [RunFiles.eraseName, different] using prior.2 _ survived
+    | sync _ prior =>
+      refine ⟨prior.1, ?_⟩
+      intro files survives
+      obtain rfl := List.mem_singleton.mp survives
+      exact prior.1
+    | crash _ survives prior =>
+      refine ⟨prior.2 _ survives, ?_⟩
+      intro files chosen
+      obtain rfl := List.mem_singleton.mp chosen
+      exact prior.2 _ survives
+  exact RunUnlinkImage.guaranteed_of_same bindings.1 bindings.2
+
 private def RunFiles.RemovesOnly (files base : RunFiles) (approved : List RunAddress) : Prop :=
   ∀ name : RunAddress, files name.1 name.2 = base name.1 name.2 ∨
     (name ∈ approved ∧ files name.1 name.2 = none)
