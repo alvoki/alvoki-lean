@@ -1609,6 +1609,7 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
   let bin ← syncFixtureBin root
   let dir := root / "db"
   IO.FS.createDir dir
+  let dir := (← DiskDirectory.open dir).path
   let db ← DiskTable.open dir
   try
     check ((← db.write 4 (some 40)) == 1) "unexpected initial write sequence"
@@ -1616,50 +1617,66 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
     check (← db.advanceFloor 2) "could not advance the checkpoint floor"
     db.checkpoint
     check ((← db.write 4 (some 41)) == 3) "unexpected overwrite sequence"
+    db.rotateWal
     check ((← db.write 7 none) == 4) "unexpected tombstone sequence"
+    db.rotateWal
   finally db.close
-  let wal := dir / firstWalSegment
+  let keeper := dir / "WAL-segment-4"
   let marker := dir / "WAL.commit"
+  let manifest := dir / "MANIFEST"
   let stagedManifest := dir / "MANIFEST.next"
   let stagedMarker := dir / "WAL.commit.next"
-  let alignedOpen := alignedWalSyncs dir wal
+  let alignedOpen := alignedWalSyncs dir keeper
   let runSyncs := [dir / "run-2-0.v3", dir / "run-2-1.v3", dir, stagedManifest]
+  let expectFiles := fun (files : List (FilePath × ByteArray)) => do
+    for (path, expected) in files do
+      check ((← IO.FS.readBinFile path) == expected) s!"unexpected checkpoint recovery bytes in {path}"
+  let boundary := fun (through : Nat) => WAL.Boundary.encode (through * WAL.frameSize).toUInt64
+  let firstSpan := WAL.encode [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩]
+  let secondSpan := WAL.encodeFrame ⟨4, 7, none⟩
+  let expectWal := fun (events : List WAL.Write) (through : Nat) =>
+    expectFiles [(dir / firstWalSegment, firstSpan), (dir / "WAL-segment-3", secondSpan),
+      (keeper, WAL.encode events), (marker, boundary through)]
+  let firstRun := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩, ⟨7, 2, (0, 70)⟩]
+  let oldBytes := (Manifest.IntegrityCheckpoint.fromRuns ⟨1, 2, 2, 1⟩ [firstRun]).encode
+  let oldRun := (dir / "run-1-0.v3", firstRun)
+  let newRuns := fun secondRun => [(dir / "run-2-0.v3", firstRun), (dir / "run-2-1.v3", secondRun)]
+  let pendingRun := Compaction.encodeV3 [⟨4, 3, (0, 41)⟩, ⟨7, 4, (1, 0)⟩]
+  let pendingBytes := (Manifest.IntegrityCheckpoint.fromRuns ⟨2, 4, 4, 2⟩ [firstRun, pendingRun]).encode
   let (published, syncs) ← probeDisk bin dir (some stagedManifest) (operation := "--checkpoint-once")
+    (extraArgs := #["4"])
   check (!published && syncs == alignedOpen ++ runSyncs.map FilePath.toString)
     "checkpoint fixture did not fail before the new manifest rename"
-  expectManifest dir 1 2 2 1
-  let events : List WAL.Write := [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩, ⟨4, 7, none⟩]
-  let acknowledged := WAL.encode events
-  let boundary := WAL.Boundary.encode acknowledged.size.toUInt64
+  expectFiles ([(manifest, oldBytes), oldRun, (stagedManifest, pendingBytes)] ++ newRuns pendingRun)
+  expectWal [] 4
+  -- The old checkpoint replays both sealed spans and resumes from an empty keeper.
   let (written, syncs) ← probeDisk bin dir (some stagedMarker) (operation := "--write-once")
-  check (!written && syncs == alignedOpen ++ [wal.toString, stagedMarker.toString])
+  check (!written && syncs == alignedOpen ++ [keeper.toString, stagedMarker.toString])
     "write fixture did not fail before the new WAL marker rename"
-  check (decide ((← IO.FS.readBinFile wal) = acknowledged ++ WAL.encodeFrame ⟨5, 7, some 99⟩))
-    "write fixture did not leave the complete unacknowledged append"
-  check (decide ((← IO.FS.readBinFile marker) = boundary)) "failed write changed the selected WAL marker"
+  expectWal [⟨5, 7, some 99⟩] 4
+  expectFiles [(stagedMarker, boundary 5)]
   let (opened, syncs) ← probeDisk bin dir (some dir) (skipFailures := 2)
   check (!opened && syncs == walReplacementSyncs dir)
     "reopen did not fail at the directory sync after repairing the WAL"
-  check (decide ((← IO.FS.readBinFile wal) = acknowledged)) "WAL repair rename did not trim the rejected append"
+  expectWal [] 4
   let (opened, syncs) ← probeDisk bin dir (some dir)
   check (!opened && syncs == [dir.toString]) "reopen retry did not sync the directory for the repaired WAL"
+  let replacement : WAL.Write := ⟨5, 7, some 71⟩
+  let throughFive : List (UInt64 × Option UInt64) := [(4, some 41), (7, some 71)]
   let recovered ← DiskTable.open dir
   try
-    expectManifest dir 1 2 2 1
+    expectFiles ([(manifest, oldBytes), oldRun, (stagedManifest, pendingBytes)] ++ newRuns pendingRun)
     check ((← recovered.acquireAt 1).isNone) "reopen lost the checkpoint floor"
-    let some historical ← recovered.acquireAt 2 | throw (IO.userError "reopen lost the checkpoint snapshot")
-    check ((← recovered.lookup historical.handle 4) == some (some 40) &&
-      (← recovered.lookup historical.handle 7) == some (some 70)) "reopen changed the checkpoint snapshot"
-    let latest ← recovered.acquire
-    check (latest.sequence == 4 && (← recovered.lookup latest.handle 4) == some (some 41) &&
-      (← recovered.lookup latest.handle 7) == some none) "reopen changed the acknowledged WAL suffix"
-    check ((← recovered.write 7 (some 71)) == 5) "reopen did not reuse the discarded write sequence"
+    expectSnapshot recovered 2 [(4, some 40), (7, some 70)]
+    expectSnapshot recovered 3 [(4, some 41), (7, some 70)]
+    expectSnapshot recovered 4 [(4, some 41)]
+    check ((← recovered.write replacement.key replacement.value) == replacement.sequence)
+      "reopen did not reuse the discarded write sequence"
   finally recovered.close
   let final ← DiskTable.open dir
   try
-    let latest ← final.acquire
-    check (latest.sequence == 5 && (← final.lookup latest.handle 7) == some (some 71))
-      "another reopen lost the replacement for the discarded write"
+    expectWal [replacement] 5
+    expectSnapshot final 5 throughFive
   finally final.close
 
   -- The first directory sync belongs to open and the second protects the run
@@ -1669,42 +1686,33 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
   check (!published && syncs == alignedOpen ++ runSyncs.map FilePath.toString ++
     [dir.toString, s!"synced before error: {dir}"])
     "checkpoint did not report failure after syncing the replacement manifest"
-  let firstRun := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩, ⟨7, 2, (0, 70)⟩]
   let secondRun := Compaction.encodeV3 [⟨4, 3, (0, 41)⟩, ⟨7, 5, (0, 71)⟩, ⟨7, 4, (1, 0)⟩]
-  let expectFiles := fun (events : List WAL.Write) => do
-    let walBytes := WAL.encode events
-    check (decide ((← IO.FS.readBinFile wal) = walBytes ∧
-      (← IO.FS.readBinFile marker) = WAL.Boundary.encode walBytes.size.toUInt64))
-      "checkpoint recovery changed the selected WAL bytes"
-    let expected := (Manifest.IntegrityCheckpoint.fromRuns ⟨2, 5, 4, 2⟩ [firstRun, secondRun]).encode
-    check (decide ((← IO.FS.readBinFile (dir / "MANIFEST")) = expected))
-      "checkpoint recovery changed the published manifest"
-    for (path, bytes) in [(dir / "run-1-0.v3", firstRun),
-        (dir / "run-2-0.v3", firstRun), (dir / "run-2-1.v3", secondRun)] do
-      check (decide ((← IO.FS.readBinFile path) = bytes)) s!"unexpected checkpoint bytes in {path}"
-  let throughCheckpoint := events ++ [⟨5, 7, some 71⟩]
-  expectFiles throughCheckpoint
+  let newBytes := (Manifest.IntegrityCheckpoint.fromRuns ⟨2, 5, 4, 2⟩ [firstRun, secondRun]).encode
+  let expectPublished := do
+    expectFiles ([(manifest, newBytes), oldRun] ++ newRuns secondRun)
+    check (!(← stagedManifest.pathExists)) "synced publication left a staged manifest"
+  expectPublished
+  expectWal [replacement] 5
+  let appended : WAL.Write := ⟨6, 6, some 60⟩
   let reopened ← DiskTable.open dir
   try
     check ((← reopened.acquireAt 3).isNone) "reopen used the old manifest floor"
-    let latest ← reopened.acquire
-    check (latest.sequence == 5 && (← reopened.lookup latest.handle 7) == some (some 71))
-      "reopen changed the published checkpoint snapshot"
-    check ((← reopened.write 6 (some 60)) == 6) "write after checkpoint recovery used the wrong sequence"
+    expectSnapshot reopened 4 [(4, some 41)]
+    expectSnapshot reopened 5 throughFive
+    check ((← reopened.write appended.key appended.value) == appended.sequence)
+      "write after checkpoint recovery used the wrong sequence"
   finally reopened.close
   let final ← DiskTable.open dir
   try
-    expectFiles (throughCheckpoint ++ [⟨6, 6, some 60⟩])
+    expectPublished
+    expectWal [replacement, appended] 6
     check ((← final.acquireAt 3).isNone) "later reopen lost the replacement floor"
-    let some historical ← final.acquireAt 4 | throw (IO.userError "reopen lost the snapshot at the new floor")
-    let historicalRows := (← final.range historical.handle 0 8).map (List.map fun row => (row.key, row.payload))
-    check ((← final.lookup historical.handle 7) == some none && historicalRows == some [(4, some 41)])
-      "checkpoint replacement changed the historical tombstone or range"
     let latest ← final.acquire
-    let latestRows := (← final.range latest.handle 0 8).map (List.map fun row => (row.key, row.payload))
-    check (latest.sequence == 6 && (← final.lookup latest.handle 6) == some (some 60) &&
-      latestRows == some [(4, some 41), (6, some 60), (7, some 71)])
-      "later reopen changed the acknowledged write or latest range"
+    check (latest.sequence == appended.sequence) "later reopen installed the wrong latest sequence"
+    final.release latest.handle
+    expectSnapshot final 4 [(4, some 41)]
+    expectSnapshot final 5 throughFive
+    expectSnapshot final 6 [(4, some 41), (6, some 60), (7, some 71)]
   finally final.close
 
 private def checkPublicationCuts : IO Unit := do
