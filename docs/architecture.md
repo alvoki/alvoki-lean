@@ -28,7 +28,7 @@ import Alvoki.Storage.Disk.DiskTable
 | [`Alvoki.Storage.Table.PackedTable`](../lean/Alvoki/Storage/Table/PackedTable.lean) | Sequential table with an ordered memtable and immutable packed v3 runs. | [`CompactionRead`](../lean/Alvoki/Storage/Table/CompactionRead.lean) for validated packed lookup, range folds, flush and compaction. [`SnapshotTable`](../lean/Alvoki/Storage/Table/SnapshotTable.lean) provides the logical API. |
 | [`Alvoki.Storage.Disk.DiskTable`](../lean/Alvoki/Storage/Disk/DiskTable.lean) | File-backed sequential table for Linux with a WAL and atomic checkpoint publication. | [`Recovery`](../lean/Alvoki/Storage/Disk/Recovery.lean), [`WriteAheadLog`](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean), and [`ManifestIntegrity`](../lean/Alvoki/Storage/Disk/ManifestIntegrity.lean) for codecs and replay. |
 
-The ordinary build uses the standard Lean runtime. [`lean/native`](../lean/native) and [`lean/runtime-experiment`](../lean/runtime-experiment) contain separate C and link-time experiments, including fixed-width copies and whole-loop scoped fill. Those experiments target the pinned generated-code ABI. [Lake build targets](../lean/lakefile.toml) · [Scoped runtime contract](scoped-builder.md#contract-and-checks)
+The build uses the standard Lean runtime, with a small C binding for descriptor sync in the disk adapter. The fixed-width copy and scoped fill experiments also keep their C and link-time code in separate targets. Those experiments use the pinned generated-code ABI. [Lake build targets](../lean/lakefile.lean) · [Descriptor sync](../lean/native/fsync.c) · [Scoped runtime contract](scoped-builder.md#contract-and-checks)
 
 ## Sequential storage
 
