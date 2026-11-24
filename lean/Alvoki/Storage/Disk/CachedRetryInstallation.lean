@@ -7,6 +7,49 @@ open System WalSegmentRepair
 open WAL (frameSize)
 open WAL.Boundary (CheckpointRepresentsPrefix)
 
+/-- Run the cached recovery worker with the observed checkpoint and WAL callbacks. -/
+def cachedRetryRecovery {directory : DiskDirectory} {image : FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout image history} (reported : CachedRetryReadReports directory layout)
+    (readRunPrefix : FilePath → Nat → Except IO.Error ByteArray)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) : EStateM IO.Error FileImage Reopened :=
+  reopenMarkedBoundedWithCachedExtents directory
+    (fun path => liftExcept (reported.inventory.reports.readOptional path))
+    (fun path => liftExcept (checkpointRunSizeReport reported.inventory.reports path))
+    (fun path size => liftExcept (readRunPrefix path size))
+    (fun path => liftExcept (reported.list path))
+    (fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _))
+    (fun path size => liftExcept (reported.readSeal path size))
+    (fun path size physical => liftExcept (reported.readKeeper path size physical))
+    removeFile write sync renameFile
+
+/-- The installed result of a cached retry, including the exact repaired
+image, lock description and replay of the selected checkpoint. -/
+def CachedRetryInstalled {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout before.image history} (reported : CachedRetryReadReports directory layout)
+    (descriptors : DescriptorInventory) (slot : DescriptorSlot) (bindings : FilePath → Option Nat)
+    (published : CheckpointPublication.Image) (liveRefs : List Nat)
+    (result : EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession) : Prop :=
+  ∃ (opened : Reopened) (checkpoint : Option (PackedTable × UInt64)) (model : Sequential.SnapshotTable UInt64)
+    (session : SegmentedSession) (final : LockedFileState FileImage),
+    result = .ok session final ∧
+    session.directory = directory ∧ session.descriptor = reported.inventory.descriptor ∧
+    session.phase = .ready opened.installed ∧
+    slot ∈ descriptors.slots ∧
+    bindings (directory.file .lock) = some (descriptors.inode session.descriptor) ∧
+    before.owners (directory.file .lock) = none ∧ final.owners = reported.inventory.owners ∧
+    final.owners.Owns directory session.descriptor ∧
+    session.phaseRef ≠ session.sessionRef ∧ session.phaseRef ∉ liveRefs ∧ session.sessionRef ∉ liveRefs ∧
+    final.image.Ready layout.target ∧ EffectTrace layout.target before.image final.image ∧
+    SelectedIntegrityCheckpoint published.durable before.image.directory.active.manifest checkpoint ∧
+    recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok opened.table ∧
+    opened.generation = (checkpoint.getD (.empty, 0)).2 ∧
+    opened.walBytes.toNat = history.length * frameSize ∧ opened.keeper = layout.keeper.first ∧
+    opened.table.committed.toNat = history.length ∧ opened.table.RowBounds ∧ opened.table.Refines model ∧
+    RepresentsWalHistory history model ∧ opened.table.pins.active = []
+
 /-- Install the exact result of the healthy cached recovery schedule under
 the lock observed for this attempt. The supplied slot is live at acquisition,
 its open description refers to the canonical lock object, and the read
@@ -46,34 +89,10 @@ theorem runOpenWithInstallation_cachedRetryCompletes
       ReachesAction layout.target before.image.syncDirectory layout.plan.finishActions action prior →
       prior.effect layout.target action = some next →
       performPaths directory layout.plan removeFile throw write sync renameFile action prior = .ok () next) :
-    let recover := reopenMarkedBoundedWithCachedExtents directory
-      (fun path => liftExcept (reported.inventory.reports.readOptional path))
-      (fun path => liftExcept (checkpointRunSizeReport reported.inventory.reports path))
-      (fun path size => liftExcept (sizes.readPrefix path size))
-      (fun path => liftExcept (reported.list path))
-      (fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _))
-      (fun path size => liftExcept (reported.readSeal path size))
-      (fun path size physical => liftExcept (reported.readKeeper path size physical))
-      removeFile write sync renameFile
-    ∃ (opened : Reopened) (checkpoint : Option (PackedTable × UInt64)) (model : Sequential.SnapshotTable UInt64)
-      (session : SegmentedSession) (final : LockedFileState FileImage),
-      runOpenWithInstallation directory slot.description nextRef (flock slot) unlock recover before =
-        .ok session final ∧
-      session.directory = directory ∧ session.descriptor = reported.inventory.descriptor ∧
-      session.phase = .ready opened.installed ∧
-      slot ∈ descriptors.slots ∧
-      bindings (directory.file .lock) = some (descriptors.inode session.descriptor) ∧
-      before.owners (directory.file .lock) = none ∧ final.owners = reported.inventory.owners ∧
-      final.owners.Owns directory session.descriptor ∧
-      session.phaseRef ≠ session.sessionRef ∧ session.phaseRef ∉ liveRefs ∧ session.sessionRef ∉ liveRefs ∧
-      final.image.Ready layout.target ∧ EffectTrace layout.target before.image final.image ∧
-      SelectedIntegrityCheckpoint published.durable before.image.directory.active.manifest checkpoint ∧
-      recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok opened.table ∧
-      opened.generation = (checkpoint.getD (.empty, 0)).2 ∧
-      opened.walBytes.toNat = history.length * frameSize ∧ opened.keeper = layout.keeper.first ∧
-      opened.table.committed.toNat = history.length ∧ opened.table.RowBounds ∧ opened.table.Refines model ∧
-      RepresentsWalHistory history model ∧ opened.table.pins.active = [] := by
-  intro recover
+    CachedRetryInstalled (before := before) reported descriptors slot bindings published liveRefs
+      (runOpenWithInstallation directory slot.description nextRef (flock slot) unlock
+        (cachedRetryRecovery reported sizes.readPrefix removeFile write sync renameFile) before) := by
+  let recover := cachedRetryRecovery reported sizes.readPrefix removeFile write sync renameFile
   obtain ⟨opened, image, checkpoint, model, durable, trace, recovered, selected, replay, generation, bytes,
     keeper, committed, bounds, refines, represents, noPins⟩ :=
     reported.completes keeperValid laterValid following accepted ordered sizes manifestRead markerRead
