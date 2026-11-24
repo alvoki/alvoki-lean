@@ -1,69 +1,77 @@
-import Alvoki.Storage.Disk.SegmentedCollectionBarrierError
+import Alvoki.Storage.Disk.SegmentedCollectionKeeperError
 
 namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
-/-- Failed opens keep the exact returned physical namespace and lock.
-A directory barrier may settle the list even if it reports an error. -/
-inductive PendingCollectionOpenTrace (directory : DiskDirectory) (scratch : Option (ByteArray × Bool))
-    (initial : LockedFileState WalSealedUnlinkImage) : LockedFileState WalSealedUnlinkImage → Prop where
-  | start : PendingCollectionOpenTrace directory scratch initial initial
-  | earlyFailure (prior : PendingCollectionOpenTrace directory scratch initial before)
+/-- Failed opens keep the exact returned physical namespace, scratch binding,
+and lock. A directory barrier may settle the list even if it reports an error. -/
+inductive PendingCollectionOpenTrace (directory : DiskDirectory) (initialScratch : Option (ByteArray × Bool))
+    (initial : LockedFileState WalSealedUnlinkImage) :
+    LockedFileState WalSealedUnlinkImage → Option (ByteArray × Bool) → Prop where
+  | start : PendingCollectionOpenTrace directory initialScratch initial initial initialScratch
+  | earlyFailure (prior : PendingCollectionOpenTrace directory initialScratch initial before scratch)
       (attempt : BoundedReopenAttempt) (acquisition : TryLockObserves before.owners directory attempt.acquired)
       (localUnlock : attempt.unlock.LocalFlock)
       (early : attempt.acquired ≠ .ok true ∨ ∃ cause, attempt.prepare directory = .error cause)
       (returned : attempt.run directory (before.collectionReopenFiles scratch) = .error cause result) :
-      PendingCollectionOpenTrace directory scratch initial { before with owners := result.owners }
-  | barrierFailure (prior : PendingCollectionOpenTrace directory scratch initial before)
+      PendingCollectionOpenTrace directory initialScratch initial { before with owners := result.owners } scratch
+  | barrierFailure (prior : PendingCollectionOpenTrace directory initialScratch initial before scratch)
       (report : PendingCollectionBarrierFailure directory scratch before) :
-      PendingCollectionOpenTrace directory scratch initial report.after
-  | referenceDrops (prior : PendingCollectionOpenTrace directory scratch initial before)
+      PendingCollectionOpenTrace directory initialScratch initial report.after scratch
+  | keeperFailure (prior : PendingCollectionOpenTrace directory initialScratch initial before scratch)
+      (report : PendingCollectionKeeperFailure directory scratch before) :
+      PendingCollectionOpenTrace directory initialScratch initial report.after report.nextFiles.keeper.staged
+  | referenceDrops (prior : PendingCollectionOpenTrace directory initialScratch initial before scratch)
       (references : HeldLockReferences description) (drops : List LockReferenceDrop) :
-      PendingCollectionOpenTrace directory scratch initial (references.afterFileDrops drops directory before)
+      PendingCollectionOpenTrace directory initialScratch initial (references.afterFileDrops drops directory before) scratch
+
+private theorem syncPending {initial reached : WalSealedUnlinkImage}
+    (same : reached = initial ∨ reached = initial.syncDirectory) :
+    reached.syncDirectory = initial.syncDirectory := by
+  rcases same with rfl | rfl <;> rfl
 
 /-- Each observed attempt leaves the original namespace or settles its
 exact visible files. Later failures cannot restore alternatives once settled. -/
-theorem PendingCollectionOpenTrace.keepsNamespace {directory scratch initial after}
-    (trace : PendingCollectionOpenTrace directory scratch initial after) :
+theorem PendingCollectionOpenTrace.keepsNamespace {directory initialScratch initial after scratch}
+    (trace : PendingCollectionOpenTrace directory initialScratch initial after scratch) :
     after.image = initial.image ∨ after.image = initial.image.syncDirectory := by
   induction trace with
   | start => exact Or.inl rfl
   | earlyFailure _ attempt _ _ early returned ih =>
-    rw [(attempt.keepsPendingCollectionBeforeBarrier _ scratch early returned).2]
+    rw [(attempt.keepsPendingCollectionBeforeBarrier _ _ early returned).2]
     exact ih
   | barrierFailure _ report ih =>
     rcases report.namespaceState with unchanged | settled
     · rw [unchanged]
       exact ih
-    · rcases ih with earlier | earlier
-      · exact Or.inr (settled.trans (congrArg WalSealedUnlinkImage.syncDirectory earlier))
-      · have twice : initial.image.syncDirectory.syncDirectory = initial.image.syncDirectory := rfl
-        exact Or.inr (settled.trans ((congrArg WalSealedUnlinkImage.syncDirectory earlier).trans twice))
+    · exact Or.inr (settled.trans (syncPending ih))
+  | keeperFailure _ _ ih => exact Or.inr (syncPending ih)
   | referenceDrops _ _ _ ih => exact ih
 
-theorem PendingCollectionOpenTrace.keepsVisible {directory scratch initial after}
-    (trace : PendingCollectionOpenTrace directory scratch initial after)
+theorem PendingCollectionOpenTrace.keepsVisible {directory initialScratch initial after scratch}
+    (trace : PendingCollectionOpenTrace directory initialScratch initial after scratch)
     (metadata : initial.image.visible.directory.crashImages = [initial.image.visible.directory.active]) :
     after.image.visible = initial.image.visible := by
   rcases trace.keepsNamespace with unchanged | settled
   · rw [unchanged]
   · rw [settled]
-    exact (CollectionBarrierErrorEffect.afterEffect (files := (initial.collectionReopenFiles scratch).image)
+    exact (CollectionBarrierErrorEffect.afterEffect (files := (initial.collectionReopenFiles initialScratch).image)
       (pending := initial.image)).keepsVisible metadata
 
-theorem PendingCollectionOpenTrace.keepsSettled {directory scratch initial after}
-    (trace : PendingCollectionOpenTrace directory scratch initial after)
+theorem PendingCollectionOpenTrace.keepsSettled {directory initialScratch initial after scratch}
+    (trace : PendingCollectionOpenTrace directory initialScratch initial after scratch)
     (settled : initial.image.syncDirectory = initial.image) : after.image = initial.image :=
   trace.keepsNamespace.elim id (fun finished => finished.trans settled)
 
-theorem PendingCollectionOpenTrace.continues {directory scratch initial after} {wal : WalSegmentImage}
-    (trace : PendingCollectionOpenTrace directory scratch initial after)
+theorem PendingCollectionOpenTrace.continues {directory initialScratch initial after scratch} {wal : WalSegmentImage}
+    (trace : PendingCollectionOpenTrace directory initialScratch initial after scratch)
     (prior : WalSealedUnlinkTrace wal initial.image) : WalSealedUnlinkTrace wal after.image := by
   induction trace with
   | start => exact prior
   | earlyFailure _ _ _ _ _ _ ih => exact ih
   | barrierFailure _ report ih => exact report.effect.reaches ih
+  | keeperFailure _ _ ih => exact ih.sync
   | referenceDrops _ _ _ ih => exact ih
 
 private def releasedCollection (directory : DiskDirectory) (before : SegmentedWriterState)
@@ -77,8 +85,9 @@ structure SegmentedCollectionReopenReport (directory : DiskDirectory) (before : 
   reached : WalSealedUnlinkImage
   failed : SegmentedCollectionErrors directory before reached
   pending : LockedFileState WalSealedUnlinkImage
+  scratch : Option (ByteArray × Bool)
   attempts : PendingCollectionOpenTrace directory before.files.keeper.staged
-    (releasedCollection directory before reached) pending
+    (releasedCollection directory before reached) pending scratch
   reopen : BoundedReopenAttempt
   raw : HealthyBoundedWalReports directory (pending.owners.set (directory.file .lock) (some reopen.descriptor))
     reopen.descriptor pending.image.visible pending.image.visible.directory.active before.target.range.watermark before.published.durable
@@ -92,7 +101,7 @@ variable {directory : DiskDirectory} {before : SegmentedWriterState} {writer des
 
 def files (report : SegmentedCollectionReopenReport directory before writer descriptor) :
     LockedFileState FileImage :=
-  report.pending.collectionReopenFiles before.files.keeper.staged
+  report.pending.collectionReopenFiles report.scratch
 
 def barrier (report : SegmentedCollectionReopenReport directory before writer descriptor) :
     EStateM.Result IO.Error (FileImage × WalSealedUnlinkImage) Unit :=
@@ -143,7 +152,7 @@ theorem installs (report : SegmentedCollectionReopenReport directory before writ
   have closed := report.failed.close ready (phase := .poisoned) (by simp)
   obtain ⟨_, session, final, after, returned, _, _, phase, nextFiles, nextOwners, _, _, pair, history, checkpoint,
     next, wal, durable⟩ :=
-    report.failed.openAfterRelease ready report.attempts.keepsNamespace report.reopen observed.acquired
+    report.failed.openAfterRelease ready report.attempts.keepsNamespace (scratch := report.scratch) report.reopen observed.acquired
       observed.acquisition report.raw observed.reads report.liveRefs observed.fresh report.syncWithNamespace
       observed.directoryProjection observed.directoryEffect observed.syncKeeper
   have actual : report.reopen.run directory report.files = .ok session final := returned

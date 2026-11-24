@@ -81,7 +81,7 @@ theorem SegmentedCollectionErrors.openAfterRelease {directory before reached des
     (failed : SegmentedCollectionErrors directory before reached)
     (ready : before.RetainedReady directory descriptor)
     {current : WalSealedUnlinkImage} (attempted : current = reached ∨ current = reached.syncDirectory)
-    {owners : LockOwners} (attempt : BoundedReopenAttempt)
+    {owners : LockOwners} {scratch : Option (ByteArray × Bool)} (attempt : BoundedReopenAttempt)
     (acquired : attempt.acquired = .ok true) (acquisition : TryLockObserves owners directory attempt.acquired)
     (raw : HealthyBoundedWalReports directory (owners.set (directory.file .lock) (some attempt.descriptor))
       attempt.descriptor current.visible current.visible.directory.active before.target.range.watermark
@@ -91,7 +91,7 @@ theorem SegmentedCollectionErrors.openAfterRelease {directory before reached des
     (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < attempt.nextRef)
     (syncWithNamespace : Array FilePath → EStateM IO.Error (FileImage × WalSealedUnlinkImage) Unit) :
     let pending : LockedFileState WalSealedUnlinkImage := ⟨current, owners⟩
-    let files := pending.collectionReopenFiles before.files.keeper.staged
+    let files := pending.collectionReopenFiles scratch
     let barrier := syncWithNamespace #[directory.path] (files.image, pending.image)
     attempt.sync #[directory.path] files.image = projectCollectionBarrier barrier →
     barrier = .ok () (files.image.syncDirectory, pending.image.syncDirectory) →
@@ -118,7 +118,7 @@ theorem SegmentedCollectionErrors.openAfterRelease {directory before reached des
     · exact initial.sync
   have retry := (trace.projects ready.layout).1
   obtain ⟨session, final, next, returned, path, descriptor, phase, image, owners, wal, pair, history, _, durable, nextReady⟩ :=
-    ready.openAfterCollection retry raw before.files.keeper.staged liveRefs fresh
+    ready.openAfterCollection retry raw scratch liveRefs fresh
       (acquired ▸ acquisition) attempt.unlock attempt.removeFile attempt.write attempt.sync attempt.renameFile
       syncDirectory syncKeeper
   have actual : attempt.run directory files = .ok session final := by

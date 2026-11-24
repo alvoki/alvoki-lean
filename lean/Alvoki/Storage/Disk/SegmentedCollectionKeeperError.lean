@@ -77,4 +77,58 @@ theorem BoundedReopenAttempt.errorAtCollectionKeeper {directory : DiskDirectory}
     congrArg (fun image : FileImage => image.keeper.active) reached,
     congrArg (fun image : FileImage => image.keeper.crashImages) reached⟩
 
+/-- A keeper error records the successful directory effect and the exact
+file image reported by the subsequent sync. In particular, the scratch
+binding for the next open comes from that image. -/
+structure PendingCollectionKeeperFailure (directory : DiskDirectory) (scratch : Option (ByteArray × Bool))
+    (prior : LockedFileState WalSealedUnlinkImage) where
+  attempt : BoundedReopenAttempt
+  acquired : attempt.acquired = .ok true
+  acquisition : TryLockObserves prior.owners directory attempt.acquired
+  localUnlock : attempt.unlock.LocalFlock
+  plan : Plan
+  reopened : Reopened
+  target : Target
+  prepared : attempt.prepare directory = .ok (plan, reopened, plan.keeperSize)
+  valid : plan.valid = true
+  prefixSize : plan.keeperBytes.size = plan.keeperSize
+  noPrune : plan.newer = []
+  keeper : plan.keeper = prior.image.visible.active.first
+  syncWithNamespace : Array FilePath → EStateM IO.Error (FileImage × WalSealedUnlinkImage) Unit
+  directoryProjection : let files := (prior.collectionReopenFiles scratch).image
+    attempt.sync #[directory.path] files =
+      projectCollectionBarrier (syncWithNamespace #[directory.path] (files, prior.image))
+  directoryEffect : let files := (prior.collectionReopenFiles scratch).image
+    syncWithNamespace #[directory.path] (files, prior.image) =
+      .ok () (files.syncDirectory, prior.image.syncDirectory)
+  cause : IO.Error
+  nextFiles : FileImage
+  keeperError : attempt.sync #[directory.file (.walSegment prior.image.visible.active.first)]
+      (prior.collectionReopenFiles scratch).image.syncDirectory = .error cause nextFiles
+  effects : EffectReports target (prior.collectionReopenFiles scratch).image.syncDirectory [.syncKeeper]
+    (performPaths directory plan attempt.removeFile throw attempt.write attempt.sync attempt.renameFile)
+
+namespace PendingCollectionKeeperFailure
+
+variable {directory : DiskDirectory} {scratch : Option (ByteArray × Bool)} {prior : LockedFileState WalSealedUnlinkImage}
+
+def after (report : PendingCollectionKeeperFailure directory scratch prior) : LockedFileState WalSealedUnlinkImage :=
+  ⟨prior.image.syncDirectory, prior.owners.set (directory.file .lock)
+    (report.attempt.collectionBarrierCleanup report.cause).2⟩
+
+/-- The actual error and cleanup owner determine the next state. Projecting
+that state with the returned scratch binding recovers the full file image. -/
+theorem returned (report : PendingCollectionKeeperFailure directory scratch prior) :
+    report.attempt.run directory (prior.collectionReopenFiles scratch) =
+      .error (report.attempt.collectionBarrierCleanup report.cause).1
+        (report.after.collectionReopenFiles report.nextFiles.keeper.staged) ∧
+    (report.after.collectionReopenFiles report.nextFiles.keeper.staged).image = report.nextFiles := by
+  obtain ⟨_, failed, sameFiles, _⟩ :=
+    report.attempt.errorAtCollectionKeeper prior scratch report.acquired report.acquisition
+      report.prepared report.valid report.prefixSize report.noPrune report.keeper report.syncWithNamespace
+      report.directoryProjection report.directoryEffect report.keeperError report.effects
+  exact ⟨failed, sameFiles⟩
+
+end PendingCollectionKeeperFailure
+
 end Alvoki.Storage.DiskSession
