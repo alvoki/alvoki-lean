@@ -1,5 +1,44 @@
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
 import Alvoki.Storage.Disk.WalSegmentRecoveryWork
+import Alvoki.Storage.Disk.ReadRecoveryPrefix
+
+namespace Alvoki.Storage
+
+open RecoveryRequestCount
+
+/-- Count each call to the bounded prefix reader's primitive callback,
+including a failing read or a rejected chunk. Every recursive call has
+already consumed a nonempty part of the remaining byte budget. -/
+theorem readExactPrefixWith_requestBound (mismatch : IO.Error)
+    (read : USize → EStateM IO.Error Nat ByteArray)
+    (charged : ∀ count calls, reached (read count calls) = calls + 1)
+    (remaining : Nat) (bytes : ByteArray) (before : Nat) :
+    reached (readExactPrefixWith mismatch read remaining bytes before) ≤ before + remaining := by
+  rw [readExactPrefixWith]
+  by_cases finished : remaining = 0
+  · simp [finished, Pure.pure, EStateM.pure, reached]
+  · have one := charged remaining.toUSize before
+    rw [ite_eq_right finished]
+    simp only [Bind.bind, EStateM.bind]
+    cases report : read remaining.toUSize before with
+    | error cause after =>
+      simp only [report, reached] at one
+      simp only [reached]
+      omega
+    | ok chunk after =>
+      simp only [report, reached] at one
+      by_cases valid : 0 < chunk.size ∧ chunk.size ≤ remaining
+      · simp only [valid]
+        have rest := readExactPrefixWith_requestBound mismatch read charged (remaining - chunk.size)
+          (if bytes.isEmpty then chunk else bytes ++ chunk) after
+        have total : after + (remaining - chunk.size) ≤ before + remaining := by omega
+        exact Nat.le_trans rest total
+      · simp only [valid, ↓reduceDIte, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached]
+        omega
+termination_by remaining
+decreasing_by omega
+
+end Alvoki.Storage
 
 namespace Alvoki.Storage.WalSegmentRepair
 
