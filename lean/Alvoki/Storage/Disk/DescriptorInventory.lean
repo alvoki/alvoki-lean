@@ -95,6 +95,78 @@ theorem description_unique {inventory : DescriptorInventory} {left right : Nat}
   obtain ⟨b, hb, rfl, rfl⟩ := inventory.mem_references.mp presentRight
   exact congrArg DescriptorSlot.description (slot_eq ha hb same)
 
+/-- If the original description's final slot is gone, every address
+that belonged to it is free in the reached drop-only table. -/
+theorem addressFreeAfterLastDrop (inventory : DescriptorInventory) (drops : List LockReferenceDrop)
+    {description : Nat} {previous : LockReference} (present : previous ∈ inventory.references description)
+    (ended : (inventory.afterDrops drops).references description = []) :
+    ∀ slot ∈ (inventory.afterDrops drops).slots, slot.address ≠ (previous.process, previous.fd) := by
+  intro slot surviving same
+  obtain ⟨old, wasPresent, previousSlot, oldDescription⟩ := inventory.mem_references.mp present
+  have before : slot ∈ inventory.slots := (List.mem_filter.mp surviving).1
+  have address : slot.address = old.address := by simpa only [DescriptorSlot.address, previousSlot] using same
+  have sameSlot := slot_eq before wasPresent address
+  subst slot
+  have stillPresent := (inventory.afterDrops drops).mem_references.mpr
+    ⟨old, surviving, previousSlot, oldDescription⟩
+  rw [ended] at stillPresent
+  exact List.not_mem_nil stillPresent
+
+/-- Record an observed allocation or duplication into an unused slot.
+The new slot's description and object identity come from that observation.
+A raw slot can be recorded even if wrapping it in a Lean handle failed. -/
+def insert (inventory : DescriptorInventory) (slot : DescriptorSlot)
+    (free : ∀ previous ∈ inventory.slots, previous.address ≠ slot.address) : DescriptorInventory where
+  slots := slot :: inventory.slots
+  distinct := by
+    rw [List.map_cons, List.nodup_cons]
+    exact ⟨fun taken => by
+      obtain ⟨previous, present, same⟩ := List.mem_map.mp taken
+      exact free previous present same, inventory.distinct⟩
+  inode := inventory.inode
+
+theorem references_insert (inventory : DescriptorInventory) (slot : DescriptorSlot)
+    (free : ∀ previous ∈ inventory.slots, previous.address ≠ slot.address) (description : Nat) :
+    (inventory.insert slot free).references description =
+      if slot.description = description then slot.reference :: inventory.references description
+      else inventory.references description := by
+  by_cases same : slot.description = description <;> simp [insert, references, same]
+
+/-- The cooperating opener can receive the old numeric address while
+acquiring and installing the database under a fresh description. The
+successful raw open, lock and recovery reports are explicit hypotheses. -/
+theorem reopenOnReusedSlot (inventory : DescriptorInventory) (drops : List LockReferenceDrop)
+    {image : Type} {directory : DiskDirectory} {before : LockedFileState image}
+    {owner nextRef : Nat} {previous : LockReference} (present : previous ∈ inventory.references owner)
+    (ownership : before.owners.Owns directory owner)
+    (ended : (inventory.afterDrops drops).references owner = [])
+    (openedSlot : DescriptorSlot) (address : openedSlot.address = (previous.process, previous.fd))
+    (fresh : openedSlot.description ≠ owner)
+    (newOpen : (inventory.afterDrops drops).references openedSlot.description = [])
+    (bindings : FilePath → Option Nat)
+    (object : bindings (directory.file .lock) = some (inventory.inode openedSlot.description))
+    (sameLock : inventory.inode openedSlot.description = inventory.inode owner)
+    (unlock : UnlockReport) (recover : EStateM IO.Error image Reopened)
+    {opened : Reopened} {after : image} (recovered : recover before.image = .ok opened after) :
+    let ownerLive := List.ne_nil_of_mem present
+    let free := inventory.addressFreeAfterLastDrop drops present ended
+    let reached := (inventory.afterDrops drops).insert openedSlot (fun _ member => address ▸ free _ member)
+    let released := (inventory.held owner ownerLive).afterFileDrops drops directory before
+    reached.references owner = [] ∧ reached.references openedSlot.description = [openedSlot.reference] ∧
+      bindings (directory.file .lock) = some (inventory.inode owner) ∧
+      TryLockObserves released.owners directory (.ok true) ∧
+      runOpenWithInstallation directory openedSlot.description nextRef (.ok true) unlock recover released =
+        .ok ⟨directory, openedSlot.description, .ready opened.installed, nextRef, nextRef + 1⟩
+          ⟨after, before.owners.set (directory.file .lock) (some openedSlot.description)⟩ := by
+  intro ownerLive free reached released
+  have last : (inventory.held owner ownerLive).remaining drops = [] := by
+    rwa [inventory.held_remaining]
+  obtain ⟨acquires, reopened⟩ := runOpenWithInstallation_afterLastReferenceDrop
+    (inventory.held owner ownerLive) ownership last unlock recovered
+  refine ⟨?_, ?_, sameLock ▸ object, acquires, reopened⟩
+  · simp [reached, references_insert, fresh, ended]
+  · simp [reached, references_insert, newOpen]
+
 /-- Construct the delayed directory observation from the issuing slot in
 the reached table. Its description and object are the ones observed in
 that table rather than independently supplied lifetime witnesses. -/
