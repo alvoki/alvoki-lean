@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
+import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 
 namespace Alvoki.Storage.DiskSession
@@ -79,12 +80,10 @@ private theorem keepsSelectedPair {origin current : FileImage} {admits : Target 
     exact (trace.valid prepared.pair prepared.keeperPrefix prepared.newer).selected.trans
       (prepared.pair.symm.trans (beforeBarrier observed))
 
-/-- Recover through any number of subsequent failed opens. The final
-healthy bounded open loads exactly the surviving checkpoint and the
-unchanged acknowledged history. -/
-theorem installsRetained (report : SegmentedCheckpointPowerLossReport directory before writer descriptor)
+private theorem installsRetained_exact (report : SegmentedCheckpointPowerLossReport directory before writer descriptor)
     (observed : report.Valid) (ready : before.RetainedReady directory writer) :
-    ∃ after, report.Installs after ∧ after.RetainedReady directory descriptor := by
+    ∃ after, report.Installs after ∧ after.RetainedReady directory descriptor ∧
+      recoverSelected (after.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table := by
   obtain ⟨published, projected, layout, valid, inputs, crash⟩ :=
     report.cut.selectsAcknowledgedHistory ready
   have exactPublished : published = report.published := Option.some.inj (projected.symm.trans observed.projected)
@@ -125,9 +124,87 @@ theorem installsRetained (report : SegmentedCheckpointPowerLossReport directory 
         after.target.pair.manifest = some report.cut.checkpoint.manifest) := by
     rw [generation, surviving]
     exact generationChoice
+  obtain ⟨checkpoint, table, _, replaySession, replayFinal, replayResult, selectedRuns, _, replay, _, _, replayPhase,
+    _⟩ := opened.2.2.2.2
+  have sameSession := (EStateM.Result.ok.inj (replayResult.symm.trans returned)).1
+  rw [sameSession] at replayPhase
+  have sameTable : table = after.installed.table :=
+    congrArg Installed.table (Phase.ready.inj (replayPhase.symm.trans phase))
+  have selectedAfter := resumed.resumed.selected
+  rw [durable, target] at selectedAfter
+  have sameCheckpoint := Except.ok.inj ((raw.readCheckpoint selectedRuns).symm.trans (raw.readCheckpoint selectedAfter))
+  have exactReplay : recoverSelected (after.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) =
+      .ok after.installed.table := by
+    rwa [sameCheckpoint, sameTable] at replay
   exact ⟨after, ⟨⟨⟨session, final, returned, path, lock, phase, files, owners⟩,
     history, exactWal, durable, resumed.manifestFiles, targetPair, targetFirst, targetBytes,
-    resumed.resumed.selected⟩, initialLoss, surviving, decided⟩, resumed⟩
+    resumed.resumed.selected⟩, initialLoss, surviving, decided⟩, resumed, exactReplay⟩
+
+/-- Recover through any number of subsequent failed opens. The final
+healthy bounded open loads exactly the surviving checkpoint and the
+unchanged acknowledged history. -/
+theorem installsRetained (report : SegmentedCheckpointPowerLossReport directory before writer descriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory writer) :
+    ∃ after, report.Installs after ∧ after.RetainedReady directory descriptor := by
+  obtain ⟨after, installed, next, _⟩ := report.installsRetained_exact observed ready
+  exact ⟨after, installed, next⟩
+
+/-- Both workers use the held inventory at the reached retry. The cached
+worker reads just the run and WAL prefixes selected by that inventory. -/
+def CachedReads (report : SegmentedCheckpointPowerLossReport directory before writer descriptor)
+    (recover : EStateM IO.Error FileImage Reopened) : Prop :=
+  ∀ selected : CanonicalKeeperLayout report.retry.image before.history,
+    selected.target.first = before.wal.active.first → selected.tail = ByteArray.empty →
+    let wal := report.published.segmentedCheckpointView before.wal
+    ∃ raw : HealthyBoundedWalReports directory (report.retry.owners.set (directory.file .lock) (some descriptor))
+        descriptor wal report.retry.image.directory.active selected.range.watermark report.published.durable selected.tail,
+      ∃ sizes : SizedCheckpointRunReports directory raw.reports report.retry.image.directory.active.manifest
+          report.published.durable,
+        ∃ cached : CachedWalFileReports directory raw.reports wal selected.range.watermark selected.tail,
+          report.reopen.recover directory = raw.reopen report.reopen.removeFile report.reopen.write report.reopen.sync
+            report.reopen.renameFile ∧
+          recover = raw.reopenCached sizes cached report.reopen.removeFile report.reopen.write report.reopen.sync
+            report.reopen.renameFile
+
+/-- Recover through the cached opener from the exact previous or next
+manifest that survived the publication cut. Its durable run files select
+the installed checkpoint, and WAL replay preserves the acknowledged history. -/
+theorem installsRetainedCached (report : SegmentedCheckpointPowerLossReport directory before writer descriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory writer)
+    (recover : EStateM IO.Error FileImage Reopened) (reads : report.CachedReads recover) :
+    ∃ after session final,
+      report.Installs after ∧ after.RetainedReady directory descriptor ∧
+      SelectedIntegrityCheckpoint report.published.durable report.survivingPair.manifest after.checkpoint ∧
+      recoverSelected (after.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table ∧
+      runOpenWithInstallation directory report.reopen.descriptor report.reopen.nextRef report.reopen.acquired
+        report.reopen.unlock recover report.retry = .ok session final ∧
+      session.phase = .ready after.installed ∧ after.files = final.image ∧ after.owners = final.owners := by
+  obtain ⟨published, projected, layout, valid, inputs, crash⟩ := report.cut.selectsAcknowledgedHistory ready
+  have exactPublished : published = report.published := Option.some.inj (projected.symm.trans observed.projected)
+  subst published
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, checkpoint, _, _⟩ := crash observed.survives
+  have failures := report.failures
+  rw [CheckpointPowerCut.physical_eq report.published ready] at failures
+  have lineage := failures.lineage (fun a b pair => CheckpointRetryTarget.unique a b pair)
+  have observedDirectory : (report.published.segmentedCheckpointView before.wal).CheckpointReopenDirectory
+      (.settled report.survivingPair) := .crash observed.survives
+  obtain ⟨selected, chosen, keeper, noTail, _, _, _, _, _⟩ :=
+    report.published.checkpointRetryLayout layout valid observedDirectory inputs lineage
+  obtain ⟨raw, sizes, cached, boundedRead, cachedRead⟩ := reads selected (congrArg WalSegment.first keeper) noTail
+  have surviving : report.retry.image.directory.active = report.survivingPair := keepsSelectedPair rfl lineage
+  rw [← surviving] at checkpoint
+  have sameAction := cachedRead.trans ((raw.reopenCached_eq sizes cached layout valid chosen selected.decoded rfl
+    selected.through checkpoint report.reopen.removeFile report.reopen.write report.reopen.sync
+    report.reopen.renameFile).trans boundedRead.symm)
+  obtain ⟨after, installed, next, replay⟩ := report.installsRetained_exact observed ready
+  obtain ⟨session, final, returned, _, _, phase, files, owners⟩ := installed.reopened
+  have actual : runOpenWithInstallation directory report.reopen.descriptor report.reopen.nextRef report.reopen.acquired
+      report.reopen.unlock recover report.retry = .ok session final := by
+    rw [sameAction]
+    exact returned
+  have selectedCheckpoint := installed.checkpoint
+  rw [installed.durable, installed.surviving] at selectedCheckpoint
+  exact ⟨after, session, final, installed, next, selectedCheckpoint, replay, actual, phase, files, owners⟩
 
 /-- Existing full-history writers retain their stronger chain witness
 across the same crash and recovery. -/
