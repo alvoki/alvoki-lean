@@ -936,23 +936,31 @@ private def checkSealedWalSizeBeforePayload (root : FilePath) : IO Unit := do
   try
     check ((← writer.write 7 (some 40)) == 1) "unexpected first seal write sequence"
     writer.rotateWal
-    check ((← writer.write 7 (some 41)) == 2) "unexpected keeper write sequence"
+    check ((← writer.write 7 (some 41)) == 2) "unexpected second seal write sequence"
+    writer.rotateWal
+    check ((← writer.write 7 (some 42)) == 3) "unexpected keeper write sequence"
   finally writer.close
-  let sealed := dir.file (.walSegment 0)
-  let bytes ← IO.FS.readBinFile sealed
-  let failPayload := #[("ALVOKI_CHECK_READ_OPEN_FAIL", some sealed.toString)]
-  IO.FS.writeBinFile sealed (bytes.push 0)
-  let (rejected, syncs) ← probeDisk bin dir.path none "--check-seal-size-before-payload"
-    (extraArgs := #["oversized"]) (extraEnv := failPayload)
-  check (rejected && syncs.isEmpty) "oversized seal reached payload open or WAL repair"
-  IO.FS.writeBinFile sealed bytes
-  let (hookReached, syncs) ← probeDisk bin dir.path none "--check-seal-size-before-payload"
-    (extraArgs := #["healthy"]) (extraEnv := failPayload)
-  check (hookReached && syncs.isEmpty) "fixture did not stop the healthy seal's payload open"
+  let first := dir.file (.walSegment 0)
+  let second := dir.file (.walSegment 1)
+  let checkPayload (path : FilePath) (mode message : String) : IO Unit := do
+    let failPayload := #[("ALVOKI_CHECK_READ_OPEN_FAIL", some path.toString)]
+    let (reported, syncs) ← probeDisk bin dir.path none "--check-seal-size-before-payload"
+      (extraArgs := #[mode]) (extraEnv := failPayload)
+    check (reported && syncs.isEmpty) message
+  let firstBytes ← IO.FS.readBinFile first
+  IO.FS.writeBinFile first (firstBytes.push 0)
+  checkPayload first "oversized" "oversized first seal reached payload open or WAL repair"
+  IO.FS.writeBinFile first firstBytes
+  let secondBytes ← IO.FS.readBinFile second
+  IO.FS.writeBinFile second (secondBytes.push 0)
+  checkPayload first "healthy" "fixture did not reach the first payload before rejecting the second extent"
+  checkPayload second "oversized" "oversized second seal reached payload open or WAL repair"
+  IO.FS.writeBinFile second secondBytes
+  checkPayload second "healthy" "fixture did not stop the healthy second seal's payload open"
   let reopened ← DiskTable.open dir.path
   try
     let latest ← reopened.acquire
-    check (latest.sequence == 2 && (← reopened.lookup latest.handle 7) == some (some 41))
+    check (latest.sequence == 3 && (← reopened.lookup latest.handle 7) == some (some 42))
       "reopen with bounded sealed reads changed the acknowledged data"
   finally reopened.close
 
