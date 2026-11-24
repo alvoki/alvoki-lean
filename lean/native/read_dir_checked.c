@@ -13,7 +13,8 @@ lean_object *alvoki_read_dir_checked(b_lean_obj_arg path) {
 
     DIR *directory = opendir(name);
     if (directory == NULL)
-        return lean_io_result_mk_error(lean_decode_io_error(errno, path));
+        // Some error classes, including EIO, require a context-free decoder.
+        return lean_io_result_mk_error(lean_decode_io_error(errno, NULL));
 
     lean_object *entries = lean_mk_empty_array();
     int error;

@@ -44,7 +44,7 @@ structure DiskSnapshotPin where
   sequence : UInt64
 
 @[extern "alvoki_fsync"]
-private opaque fsyncHandle : @& IO.FS.Handle → @& String → IO Unit
+private opaque fsyncHandle : @& IO.FS.Handle → IO Unit
 
 /-- A successful directory listing ended at EOF. A readdir error
 discards the partial listing before planning any file mutations. -/
@@ -101,7 +101,7 @@ private def SyncFiles.sync (files : SyncFiles) (path : FilePath) : IO Unit := do
     else if let some (active, handle) ← files.active.get then
       if active == path then pure handle else IO.FS.Handle.mk path .read
     else IO.FS.Handle.mk path .read
-  fsyncHandle file path.toString
+  fsyncHandle file
 
 /-- A failed member of a grouped barrier does not prevent attempts on the
 remaining members. Rename is allowed only if the entire barrier succeeds. -/
