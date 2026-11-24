@@ -735,7 +735,7 @@ private def checkWalCollectionPlan (root : FilePath) : IO Unit := do
     check ((← db.write 5 (some 5)) == 5) "successful collection did not keep the writer ready"
   finally db.close
 
-private def checkWalCollectionBarrierError (root : FilePath) : IO Unit := do
+private def checkWalCollectionBarrierError (root : FilePath) (afterSync : Bool) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
   IO.FS.createDir dir
@@ -750,9 +750,10 @@ private def checkWalCollectionBarrierError (root : FilePath) : IO Unit := do
   finally db.close
 
   let (reported, syncs) ← probeDisk bin dir (some dir) (operation := "--check-wal-collection-outcome")
-    (skipFailures := 1)
+    (skipFailures := 1) (failureMode := if afterSync then .afterSync else .beforeSync)
   let collectionSyncs := alignedWalSyncs dir keeper ++ [dir.toString]
-  check (reported && syncs == collectionSyncs)
+  let failureSyncs := if afterSync then collectionSyncs ++ [s!"synced before error: {dir}"] else collectionSyncs
+  check (reported && syncs == failureSyncs)
     "collection did not report its directory barrier error after unlink"
 
   let (collected, syncs) ← probeDisk bin dir none (operation := "--collect-wal-once")
@@ -1955,7 +1956,8 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkMarkerlessRefusal
     IO.FS.withTempDir checkWalSegmentRotation
     IO.FS.withTempDir checkWalCollectionPlan
-    IO.FS.withTempDir checkWalCollectionBarrierError
+    for afterSync in [false, true] do
+      IO.FS.withTempDir (checkWalCollectionBarrierError · afterSync)
     IO.FS.withTempDir checkWalSegmentReads
     IO.FS.withTempDir checkWalSegmentRepair
     for failDirectory in [false, true] do
