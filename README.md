@@ -1,15 +1,12 @@
 # Alvoki
 
-Alvoki explores formally verified storage primitives in native Lean 4. The experiments cover packed lookup, scans, encoding, and right-biased merge of immutable sorted key–value runs. Lean and Verus proofs cover the search core, and Lean also checks byte-level contracts for packed readers and builders.
+Alvoki is a sequential storage engine in native Lean 4 with versioned packed runs, snapshot reads, a write-ahead log, and atomic checkpoints. Lean proofs connect its executable operations and modeled recovery to a logical database. Separate Lean and Rust experiments compare packed reads, merge, and byte-oriented writers. Verus verifies a sorted-key search core.
 
-- [Performance guide for Lean reads, writes, merge, and code generation](docs/high-performance-lean.md)
-- [Repository review and architectural priorities](docs/repository-review.md)
-- [Binary format and behavior](docs/specifications.md)
-- [Current module and benchmark map](docs/architecture.md)
-- [VM measurements and code generation findings](docs/benchmarks.md)
+- [Engine API and I/O protocol](docs/architecture.md#sequential-storage)
+- [Binary formats and visibility](docs/specifications.md)
 - [Proof coverage and assumptions](docs/verification-status.md)
-- [Proof roadmap from binary codecs to storage guarantees](docs/proof-roadmap.md)
-- [Roadmap](docs/roadmap.md) and [handoff](docs/progress.md)
+- [Roadmap](docs/roadmap.md), [proof roadmap](docs/proof-roadmap.md), and [progress](docs/progress.md)
+- [Performance guide](docs/high-performance-lean.md) and [benchmarks](docs/benchmarks.md)
 
 ## Stock Lean API
 
@@ -24,15 +21,18 @@ Run from the repository root with Bash, curl, tar, unzip, sha256sum, and Python 
 ```sh
 bash scripts/bootstrap.sh
 bash scripts/check.sh
+bash scripts/check-sequential.sh
+
+# Optional runtime prototypes and baseline timings.
 bash scripts/check.sh --runtime
 bash scripts/reproduce.sh --out /tmp/alvoki-trials.csv
 python3 benchmarks/summarize.py /tmp/alvoki-trials.csv
 bash scripts/environment.sh
 ```
 
-The stock check runs the baseline, latest Lean and Verus proof audits, and exact-output fixtures. GitHub Actions runs the same command. The runtime option runs the opt-in C and linkage experiment fixtures. Benchmark drivers require Python assertions to be enabled. [Correctness workflow](.github/workflows/correctness.yml)
+GitHub Actions runs both stock check commands. `check.sh` runs Lean, Rust, and Verus checks for the packed primitives. `check-sequential.sh` runs the storage-engine proofs, transitive axiom audit, differential tests, and native fault fixtures. The runtime option runs the opt-in C and linkage experiment fixtures. Benchmark drivers require Python assertions to be enabled. [Correctness workflow](.github/workflows/correctness.yml)
 
-The default reproduction builds the baseline Lean and Rust executables, checks the original Lean theorems and their axioms, runs Verus, and compares both baseline Lean variants and Rust with the Python reference. The `--out` flag additionally benchmarks all three configurations. Use `--sizes 1000 --trials 3` for a shorter run. The sections below give the build, proof, and fixture commands for the later experiments.
+The default reproduction builds the baseline Lean and Rust executables, checks the original Lean theorems and their axioms, runs Verus, and compares both baseline Lean variants and Rust with the Python reference. The `--out` flag additionally benchmarks all three configurations. Use `--sizes 1000 --trials 3` for a shorter run. The experiment reports give the commands for later workloads. [Experiment index](docs/benchmarks.md#packed-storage-experiments)
 
 ## Storage engine replay benchmark
 
@@ -43,86 +43,3 @@ bash scripts/disk-replay.sh --out /tmp/alvoki-replay-after.csv \
 ```
 
 The native benchmark measures reopening databases with the same keys inserted in ascending, descending, and seeded shuffled order. It records individual samples and compares medians against a saved run on the same machine. Add `--max-slowdown 1.25` to fail a comparison when any median exceeds 125% of its baseline. [Workload and measurements](docs/benchmarks.md#disk-replay)
-
-## Optimization experiments
-
-```sh
-bash scripts/optimize.sh --out /tmp/alvoki-opt-trials.csv --trials 9
-python3 benchmarks/optimize.py --summarize /tmp/alvoki-opt-trials.csv
-```
-
-The suite compares the existing implementations with native Lean specializations and a layout-matched Rust control. See the [optimization report](docs/optimizations.md).
-
-## Packed ownership, merge, and bulk writes
-
-```sh
-bash scripts/packed.sh --out /tmp/alvoki-packed.csv
-python3 benchmarks/packed.py --summarize /tmp/alvoki-packed.csv
-```
-
-The script builds a separate experiment binary with optional C-backed modes. See the [experiment results and C interface contract](docs/packed-experiments.md).
-
-## Native SIMD and merge spans
-
-```sh
-bash scripts/native.sh --out /tmp/alvoki-native.csv
-python3 benchmarks/native.py --summarize /tmp/alvoki-native.csv
-```
-
-This suite compares a compiler-vectorized native Lean scan, Rust scalar and SIMD controls, and native merge and encoding variants. [SIMD results and assembly evidence](docs/native-experiments.md) · [Single-record emission and packed updates](docs/emission-experiments.md)
-
-## Merge selection and output replay
-
-```sh
-bash scripts/merge-phases.sh --out /tmp/alvoki-merge-phases.csv
-python3 benchmarks/merge_phases.py --summarize /tmp/alvoki-merge-phases.csv
-```
-
-[Phase timings and next experiments](docs/merge-phases.md)
-
-## Fixed-width copy specialization
-
-```sh
-bash scripts/fixed-copy.sh --out /tmp/alvoki-fixed-copy.csv
-python3 benchmarks/fixed_copy.py --summarize /tmp/alvoki-fixed-copy.csv
-```
-
-[Copy-width sweep and packed-pipeline results](docs/fixed-copy.md)
-
-## Scoped output builder
-
-```sh
-bash scripts/scoped-builder.sh --out /tmp/alvoki-scoped-builder.csv
-python3 benchmarks/scoped_builder.py --summarize /tmp/alvoki-scoped-builder.csv
-```
-
-[Scoped builder results, Rust controls, and trust assumptions](docs/scoped-builder.md)
-
-## Proved builder on stock Lean
-
-```sh
-bash scripts/stock-builder.sh --out /tmp/alvoki-stock-builder.csv
-python3 benchmarks/stock_builder.py --summarize /tmp/alvoki-stock-builder.csv
-```
-
-[Byte-level contracts, stock benchmarks, and open optimization work](docs/stock-builder.md)
-
-## Fused span emission and direct scans
-
-```sh
-bash scripts/fused-merge.sh --out /tmp/alvoki-fused-merge.csv
-python3 benchmarks/fused_merge.py --summarize /tmp/alvoki-fused-merge.csv
-```
-
-[Stock Lean timings, peak memory, and correctness checks](docs/fused-merge.md)
-
-## Versioned compaction experiment
-
-Compare stock Lean and Rust compaction over versioned runs with tombstones and an oldest retained snapshot. The optional fixed-copy build measures the existing native specialization on the same workload.
-
-```sh
-bash scripts/compaction.sh --fixed-copy --out /tmp/alvoki-compaction.csv
-python3 benchmarks/compaction.py --summarize /tmp/alvoki-compaction.csv
-```
-
-[Compaction semantics and results](docs/compaction.md) · [Write-path performance handoff](docs/compaction.md#resuming-write-path-optimization)

@@ -4,9 +4,7 @@ This experiment merges two immutable runs in memory. A caller supplies the oldes
 
 ## Format and visibility
 
-The experimental format uses little-endian unsigned 64-bit words. Its 16-byte header contains the entry count and version 3. Each 32-byte entry contains key, sequence, kind, and value. Kind 0 is a put. Kind 1 is a tombstone and has a zero value field. Entries sort by key ascending and sequence descending. The parser requires exact length and strict order within that composite key. If both inputs contain the same key and sequence, the right input supplies the entry.
-
-A snapshot sees the highest sequence at or below its sequence for each key. A tombstone at that sequence masks all earlier values of the key. During compaction, retain all versions newer than the floor and the newest version at or below the floor. For any snapshot at or above the floor, the visible version is either above the floor or is that retained boundary version. Retain boundary tombstones so they can mask older runs at other levels. The CLI rejects reads below the floor. A full LSM would choose the floor from its active snapshots and coordinate publication of compacted runs.
+Both benchmark implementations use the engine's v3 run layout and select rows according to the same snapshot and retention rules. The benchmark passes the floor explicitly and rejects reads below it. [Versioned run format and visibility](specifications.md#versioned-runs-version-3)
 
 The independent Python oracle stores the exact versions in a dictionary, applies right-hand precedence, and groups the ordered history by key. Fixtures cover empty runs, sequence and key extrema, older snapshots, tombstones, reinsertion, equal-sequence conflicts, malformed headers and rows, and requests outside the supported snapshot bounds. Each timed dataset is also checked byte for byte for both writers. Snapshot folds are checked against the oracle. [Oracle and fixtures](../benchmarks/compaction.py)
 

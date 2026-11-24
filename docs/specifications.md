@@ -1,4 +1,6 @@
-# Immutable sorted block, version 1
+# Binary formats and behavior
+
+## Immutable sorted block, version 1
 
 Every field is an unsigned 64-bit little-endian integer. The format has no padding and imposes no address alignment requirement.
 
@@ -25,9 +27,22 @@ Given two valid version-1 runs, a materialized merge produces a version-1 block 
 
 The direct merged checksum scan consumes the same logical records without producing a block. It sums each record's key XOR value with wrapping 64-bit addition. The replay benchmark accepts a supplied sequence of cursor moves only when each move matches the ordered, right-biased choice at the two current heads and the moves consume both runs completely. [Verification status](verification-status.md)
 
-## Experimental versioned runs
+## Versioned runs, version 3
 
-The compaction experiment uses version 3, with a sequence and kind field for each entry. The workload specifies tombstone precedence, retention at the oldest snapshot, and visibility for later reads. [Versioned format and visibility](compaction.md#format-and-visibility)
+`PackedTable` uses this layout for its immutable runs. Disk checkpoints write those bytes to `run-<generation>-<index>.v3`. Each field is an unsigned 64-bit little-endian integer.
+
+| Byte offset | Field |
+|---:|---|
+| 0 | Entry count `n` |
+| 8 | Format version, exactly 3 |
+| `16 + 32*i` | Key of entry `i` |
+| `24 + 32*i` | Sequence of entry `i` |
+| `32 + 32*i` | Kind, `0` for put and `1` for tombstone |
+| `40 + 32*i` | Value, exactly zero for a tombstone |
+
+The byte length must be exactly `16 + 32*n` and fit in a machine word. Keys sort in increasing unsigned order. For a given key, sequences sort in strictly decreasing order. A key and sequence pair can appear at most once per run. The run format has no internal checksum. The checkpoint manifest covers each run's complete bytes. [Executable parser](../lean/Compaction.lean) · [Codec proofs](../lean/CompactionCodec.lean)
+
+At a snapshot, the highest sequence at or below the snapshot determines each key's value. A winning tombstone makes the key absent. When merging two runs with the same key and sequence, the right run supplies the entry. Compaction retains every version above the floor and the newest version at or below the floor for each key, including boundary tombstones that can mask older values. The table serves snapshots between its retained floor and committed sequence, inclusive. [Compaction model](../lean/CompactionModel.lean) · [Snapshot table](../lean/Alvoki/Storage/Table/SnapshotTable.lean)
 
 ## WAL and checkpoint manifest
 
@@ -42,12 +57,12 @@ Each WAL frame occupies 48 bytes. A checkpoint manifest has a 48-byte v2 header 
 | 32 | Value, exactly zero for a delete | Run count |
 | 40 | Checksum over the first 40 bytes | Checksum over the first 40 bytes followed by the ordered integrity records |
 
-Starting at offset 48, each manifest record stores a run's file length and checksum over its complete bytes. The records index immutable v3 run files from zero through `runCount - 1`. Open checks the recorded lengths and checksums and structurally validates the same ordered run bytes before using the checkpoint watermark. Changes confined to one payload byte change the checksum. Multiple changes can collide. [Manifest codec](../lean/Alvoki/Storage/Disk/ManifestIntegrity.lean) · [Single-byte detection](../lean/Alvoki/Storage/Disk/ManifestIntegritySingleByte.lean)
+Starting at offset 48, each manifest record stores a run's file length followed by the checksum over its complete bytes. The manifest length is exactly `48 + 16*runCount`. Records describe the v3 files in increasing index order for the named generation. The native reader accepts a v2 manifest or absence. It checks the recorded lengths and checksums and structurally validates the same ordered run bytes, including that row sequences stay at or below the watermark. Changes confined to one byte in a run change its checksum. Multiple changes can collide. [Manifest codec](../lean/Alvoki/Storage/Disk/ManifestIntegrity.lean) · [Single-byte detection](../lean/Alvoki/Storage/Disk/ManifestIntegritySingleByte.lean)
 
-The committed part of the WAL is a concatenation of complete frames. Decode validates every frame passed to it and rejects unknown formats, bad checksums and noncanonical operation fields. Replay rejects gaps, duplicates and reordered writes in the suffix above the checkpoint watermark. [WAL codec](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean) · [Publication protocol](architecture.md#sequential-storage)
+The commit marker selects a prefix of complete WAL frames. Frame decoding checks the format, checksum, and canonical operation fields. Recovery checks consecutive write sequences before replay. [WAL codec](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean) · [Publication protocol](architecture.md#sequential-storage)
 
 ### Durable WAL boundary
 
-`WAL.commit` is a 24-byte file containing three unsigned 64-bit little-endian words. They are the eight ASCII bytes `ALVOCMT1`, the committed WAL byte count, and the 64-bit FNV-1a checksum of the preceding 16 bytes. The count must be a multiple of 48 and at most the WAL file size. Reopen checks the sequence against the one-based position of every selected frame, including those covered by a checkpoint. It skips the covered frames for replay and checks that the total frame count matches the recovered sequence. If any bytes follow the committed prefix, reopen replaces the WAL with that prefix before accepting another write. Errors within the committed prefix fail recovery.
+`WAL.commit` is a 24-byte file containing three unsigned 64-bit little-endian words. They are the eight ASCII bytes `ALVOCMT1`, the committed WAL byte count, and the 64-bit FNV-1a checksum of the preceding 16 bytes. The count must be a multiple of 48 and at most the WAL file size. Reopen checks the sequence against the one-based position of every selected frame, including those covered by a checkpoint. It skips the covered frames for replay and checks that the total frame count matches the recovered sequence. If any bytes follow the committed prefix, reopen replaces the WAL with that prefix before accepting another write. Malformed frames, checksum mismatches, and unexpected sequences within the selected prefix fail recovery.
 
 When `WAL.commit` is absent, bootstrap requires an absent manifest and an absent or empty WAL. Open creates the empty WAL if needed, syncs it and the directory, and publishes a zero boundary. A checkpoint or nonempty WAL without a marker fails before WAL or checkpoint mutation. [Boundary codec and selector](../lean/Alvoki/Storage/Disk/WalBoundary.lean)
