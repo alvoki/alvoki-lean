@@ -86,12 +86,15 @@ structure Installs (report : SegmentedAppendPowerLossReport directory before old
     session.descriptor = nextDescriptor ∧ session.phase = .ready (reopenedWriter before table final).installed ∧
     after = reopenedWriter before table final
 
-theorem installs (report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor)
-    (observed : report.Valid) (ready : before.Ready directory oldDescriptor) :
-    ∃ after, report.Installs after ∧ after.Ready directory nextDescriptor := by
-  obtain ⟨powerLoss, selected, target, reopened⟩ := report.cut.reopens ready observed.survives report.failures
-    (nextDescriptor := nextDescriptor) report.liveRefs observed.fresh observed.acquisition report.unlock
-    report.removeFile report.write report.sync report.renameFile
+private theorem Valid.matchSelected {report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor}
+    (observed : report.Valid) (ready : before.RetainedReady directory oldDescriptor)
+    (selected : CanonicalKeeperLayout report.retry.image before.history) (target : selected.target = before.target) :
+    selected.range.watermark = before.target.range.watermark ∧ selected.tail = report.currentTail ∧
+    ∀ action prior next,
+      ReachesAction selected.target report.retry.image.syncDirectory selected.plan.finishActions action prior →
+      prior.effect selected.target action = some next →
+      performPaths directory selected.plan report.removeFile throw report.write report.sync report.renameFile action prior =
+        .ok () next := by
   have keeperBytes : selected.keeper.bytes = before.wal.active.bytes := by
     change selected.target.trimmed = _
     rw [target, ready.resumed.contents, ready.active, ready.layout.activeBytes]
@@ -115,9 +118,21 @@ theorem installs (report : SegmentedAppendPowerLossReport directory before oldDe
     rw [target, plan]
     exact observed.healthy
   change selected.range.watermark = before.target.range.watermark at watermark
-  rw [watermark, tail] at reopened
-  obtain ⟨session, final, writer, ran, path, owner, phase, files, owners, wal, writerTarget, history,
-    durable, checkpoint, generation, writerReady⟩ := reopened report.read observed.syncDirectory effects
+  exact ⟨watermark, tail, effects⟩
+
+private theorem assembleEndpoint (report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor)
+    (ready : before.RetainedReady directory oldDescriptor)
+    {writer : SegmentedWriterState} (writerReady : writer.RetainedReady directory nextDescriptor)
+    (powerLoss : BoundedReopenTrace directory (fun target => target = before.target)
+      ⟨report.cut.physical before, before.owners⟩ (report.cut.crashed before directory report.survivingTail))
+    {session : SegmentedSession} {final : LockedFileState FileImage}
+    (ran : report.attempt.run directory report.retry = .ok session final)
+    (path : session.directory = directory) (owner : session.descriptor = nextDescriptor)
+    (phase : session.phase = .ready writer.installed) (files : writer.files = final.image)
+    (owners : writer.owners = final.owners) (wal : writer.wal = { before.wal with directory := final.image.directory })
+    (writerTarget : writer.target = before.target) (history : writer.history = before.history)
+    (durable : writer.published.durable = before.published.durable) (checkpoint : writer.checkpoint = before.checkpoint)
+    (generation : writer.installed.generation = before.installed.generation) : report.Installs writer := by
   let next := reopenedWriter before writer.installed.table final
   have count : writer.installed.walBytes = before.installed.walBytes := by
     rw [writerReady.resumed.bytes, history, ready.resumed.bytes]
@@ -142,8 +157,36 @@ theorem installs (report : SegmentedAppendPowerLossReport directory before oldDe
         next.target next.checkpoint next.owners
     rw [SegmentedWriterState.mk.injEq]
     exact ⟨installed, wal, history, files, published, writerTarget, checkpoint, owners⟩
-  exact ⟨next, ⟨powerLoss, session, final, writer.installed.table, ran, path, owner, installed ▸ phase, rfl⟩,
-    exactWriter ▸ writerReady⟩
+  exact ⟨powerLoss, session, final, writer.installed.table, ran, path, owner, installed ▸ phase, exactWriter⟩
+
+theorem installs (report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor)
+    (observed : report.Valid) (ready : before.Ready directory oldDescriptor) :
+    ∃ after, report.Installs after ∧ after.Ready directory nextDescriptor := by
+  obtain ⟨powerLoss, selected, target, reopened⟩ := report.cut.reopens ready observed.survives report.failures
+    (nextDescriptor := nextDescriptor) report.liveRefs observed.fresh observed.acquisition report.unlock
+    report.removeFile report.write report.sync report.renameFile
+  obtain ⟨watermark, tail, effects⟩ := observed.matchSelected ready.toRetained selected target
+  rw [watermark, tail] at reopened
+  obtain ⟨session, final, writer, ran, path, owner, phase, files, owners, wal, writerTarget, history,
+    durable, checkpoint, generation, writerReady⟩ := reopened report.read observed.syncDirectory effects
+  exact ⟨writer, report.assembleEndpoint ready.toRetained writerReady.toRetained powerLoss ran path owner phase
+    files owners wal writerTarget history durable checkpoint generation, writerReady⟩
+
+/-- Recover the exact prior writer after power loss in the first append
+callback with a retained WAL suffix. The attempted frame is outside the
+unchanged marker even if its bytes survived. -/
+theorem installsRetained (report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory oldDescriptor) :
+    ∃ after, report.Installs after ∧ after.RetainedReady directory nextDescriptor := by
+  obtain ⟨powerLoss, selected, target, reopened⟩ := report.cut.reopensRetained ready observed.survives report.failures
+    (nextDescriptor := nextDescriptor) report.liveRefs observed.fresh observed.acquisition report.unlock
+    report.removeFile report.write report.sync report.renameFile
+  obtain ⟨watermark, tail, effects⟩ := observed.matchSelected ready selected target
+  rw [watermark, tail] at reopened
+  obtain ⟨session, final, writer, ran, path, owner, phase, files, owners, wal, writerTarget, history,
+    durable, checkpoint, generation, writerReady⟩ := reopened report.read observed.syncDirectory effects
+  exact ⟨writer, report.assembleEndpoint ready writerReady powerLoss ran path owner phase
+    files owners wal writerTarget history durable checkpoint generation, writerReady⟩
 
 theorem Installs.unique {report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor}
     {left right : SegmentedWriterState} (a : report.Installs left) (b : report.Installs right) : left = right := by
@@ -159,8 +202,19 @@ theorem Installs.preservesReady {report : SegmentedAppendPowerLossReport directo
   obtain ⟨_, exactEndpoint, next⟩ := report.installs observed ready
   exact exactEndpoint.unique endpoint ▸ next
 
+theorem Installs.preservesRetained {report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor}
+    {after : SegmentedWriterState} (endpoint : report.Installs after) (observed : report.Valid)
+    (ready : before.RetainedReady directory oldDescriptor) : after.RetainedReady directory nextDescriptor := by
+  obtain ⟨_, exactEndpoint, next⟩ := report.installsRetained observed ready
+  exact exactEndpoint.unique endpoint ▸ next
+
 theorem Installs.history {report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor}
     {after : SegmentedWriterState} (endpoint : report.Installs after) : after.history = before.history := by
+  obtain ⟨_, _, _, _, _, _, _, rfl⟩ := endpoint.openEffect
+  rfl
+
+theorem Installs.checkpoint {report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor}
+    {after : SegmentedWriterState} (endpoint : report.Installs after) : after.checkpoint = before.checkpoint := by
   obtain ⟨_, _, _, _, _, _, _, rfl⟩ := endpoint.openEffect
   rfl
 
