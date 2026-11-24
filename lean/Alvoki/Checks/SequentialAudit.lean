@@ -38,6 +38,7 @@ import Alvoki.Storage.Disk.VersionedCheckpointRetry
 import Alvoki.Storage.Disk.VersionedMarkedRecovery
 import Alvoki.Storage.Disk.VersionedCheckpointReopen
 import Alvoki.Storage.Disk.FirstVersionedCheckpoint
+import Alvoki.Storage.Disk.VersionedReadyWriter
 import Alvoki.Storage.Disk.RetainedWalSuffix
 import Alvoki.Storage.Disk.RetainedWalBoundary
 import Alvoki.Storage.Disk.LegacyBootstrapRetry
@@ -320,6 +321,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.unreachableVersioned_of_legacy
 #check_axioms Alvoki.WAL.Boundary.CheckpointPreparation.versionedReported
 #check_axioms Alvoki.WAL.Boundary.CheckpointPreparation.reopenAfterFirstVersionedError
+#check_axioms Alvoki.WAL.Boundary.CheckpointPreparation.decodeVersionedManifest
+#check_axioms Alvoki.WAL.Boundary.CheckpointPreparation.versionedAttempt
+#check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.VersionedReady.validPublicationInput
+#check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.VersionedReady.ofCheckpointReopen
+#check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.VersionedReady.acknowledgedWrites
+#check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.VersionedReady.successorUnreachable
+#check_axioms Alvoki.WAL.Boundary.CheckpointPreparation.reportedFromVersionedReady
+#check_axioms Alvoki.WAL.Boundary.CheckpointPreparation.succeededFromVersionedReady
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_encode
 #check_axioms Alvoki.WAL.decodeOrdinals_append_encoded
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_eq_recoverSelected
