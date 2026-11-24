@@ -44,6 +44,7 @@ import Alvoki.Storage.Disk.VersionedUncertainWrite
 import Alvoki.Storage.Disk.IntegrityBootstrap
 import Alvoki.Storage.Disk.StrictCheckpointReopen
 import Alvoki.Storage.Disk.IntegrityDatabaseTrace
+import Alvoki.Storage.Disk.IntegrityTraceReads
 import Alvoki.Storage.Disk.LockedMarkedReopenEffects
 import Alvoki.Storage.Disk.RetainedWalSuffix
 import Alvoki.Storage.Disk.RetainedWalBoundary
@@ -380,6 +381,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.refines
 #check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.canonicalReads
 #check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.canonicalReadsFromFresh
+#check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.guardedReadsFromFresh
 #check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.pinnedReadsStable
 #check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.reacquireReadsStable
 #check_axioms Alvoki.Storage.CheckpointPublication.RunUnlinkRetry.keepsKnown
