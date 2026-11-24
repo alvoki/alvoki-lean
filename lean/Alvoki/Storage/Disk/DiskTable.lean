@@ -353,18 +353,44 @@ def DiskTable.close (db : DiskTable) : IO Unit := do
 private def DiskTable.installed (db : DiskTable) : IO Installed := do
   (← db.phase.get).installed
 
+private def DiskTable.planWalCollectionAt (db : DiskTable) (state : Installed) : IO (List Nat) :=
+  planWalCollectionWith db.dir state.generation state.walBytes state.activeFirst
+    readOptionalFile FilePath.readDir inspectWalSegment
+
 /-- Inspect which sealed WAL segments the current durable checkpoint covers.
 The result describes the inventory observed during this call. -/
 def DiskTable.planWalCollection (db : DiskTable) : IO (List Nat) := do
-  let state ← db.installed
-  planWalCollectionWith db.dir state.generation state.walBytes state.activeFirst
-    readOptionalFile FilePath.readDir inspectWalSegment
+  db.planWalCollectionAt (← db.installed)
 
 theorem DiskTable.planWalCollection_fileEffects (db : DiskTable) :
     db.planWalCollection = (do
       let state ← (← db.phase.get).installed
       planWalCollectionWith db.dir state.generation state.walBytes state.activeFirst
         readOptionalFile FilePath.readDir inspectWalSegment) := rfl
+
+/-- Reclaim sealed WAL segments covered by the current durable checkpoint.
+A failed preflight leaves the writer ready. An unlink or directory sync
+error requires close and reopen before further use. The directory is
+synced on every completed pass, including a pass with no eligible files. -/
+def DiskTable.collectCoveredWal (db : DiskTable) : IO Unit := do
+  let state ← db.installed
+  let selected ← db.planWalCollectionAt state
+  DiskSession.publishPrepared db.phase.set
+    (RunCollection.run selected (RunCollection.performPaths (fun path => (IO.FS.removeFile path).toBaseIO)
+      (fun path => db.files.syncPaths #[path]) throw (fun first => db.dir.file (.walSegment first)) db.dir.path))
+    (db.phase.set (.ready state))
+
+/-- Plan under the held writer before marking it unavailable, then run the
+shared unlink and directory-barrier schedule at the same resolved paths. -/
+theorem DiskTable.collectCoveredWal_fileEffects (db : DiskTable) :
+    db.collectCoveredWal = (do
+      let state ← (← db.phase.get).installed
+      let selected ← planWalCollectionWith db.dir state.generation state.walBytes state.activeFirst
+        readOptionalFile FilePath.readDir inspectWalSegment
+      db.phase.set .poisoned
+      RunCollection.run selected (RunCollection.performPaths (fun path => (IO.FS.removeFile path).toBaseIO)
+        (fun path => db.files.syncPaths #[path]) throw (fun first => db.dir.file (.walSegment first)) db.dir.path)
+      db.phase.set (.ready state)) := rfl
 
 private def checkActiveSegment (dir : DiskDirectory) (state : Installed) : IO Unit := do
   let path := dir.file (.walSegment state.activeFirst)

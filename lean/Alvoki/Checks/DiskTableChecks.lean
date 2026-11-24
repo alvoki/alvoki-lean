@@ -716,7 +716,55 @@ private def checkWalCollectionPlan (root : FilePath) : IO Unit := do
       "the planner selected the keeper or a noncanonical segment, or lost a covered seal"
     check (decide ((← paths.mapM IO.FS.readBinFile) = before))
       "planning WAL collection changed the observed files"
+
+    let pin ← db.acquire
+    let malformed := dir.file (.walSegment 10)
+    IO.FS.createDir malformed
+    rejects db.collectCoveredWal "collection accepted a nonregular canonical segment"
+    check (decide ((← paths.mapM IO.FS.readBinFile) = before) &&
+      (← db.lookup pin.handle 4) == some (some 4))
+      "failed preflight changed files or invalidated the writer"
+    IO.FS.removeDir malformed
+
+    db.collectCoveredWal
+    check (!(← (dir.file (.walSegment 0)).pathExists) && !(← (dir.file (.walSegment 2)).pathExists))
+      "collection left a covered seal"
+    check (decide ((← (paths.drop 2).mapM IO.FS.readBinFile) = before.drop 2) &&
+      (← db.lookup pin.handle 4) == some (some 4))
+      "collection changed the keeper, metadata, an alias, or the pinned snapshot"
+    check ((← db.write 5 (some 5)) == 5) "successful collection did not keep the writer ready"
   finally db.close
+
+private def checkWalCollectionBarrierError (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let dir := (← DiskDirectory.open dir).path
+  let keeper := dir / "WAL-segment-1"
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 4 (some 40)) == 1) "unexpected collection checkpoint sequence"
+    db.rotateWal
+    db.checkpoint
+    check ((← db.write 7 (some 70)) == 2) "unexpected collection keeper sequence"
+  finally db.close
+
+  let (reported, syncs) ← probeDisk bin dir (some dir) (operation := "--check-wal-collection-outcome")
+    (skipFailures := 1)
+  let collectionSyncs := alignedWalSyncs dir keeper ++ [dir.toString]
+  check (reported && syncs == collectionSyncs)
+    "collection did not report its directory barrier error after unlink"
+
+  let (collected, syncs) ← probeDisk bin dir none (operation := "--collect-wal-once")
+  check (collected && syncs == collectionSyncs) "an empty collection skipped its directory barrier"
+  let reopened ← DiskTable.open dir
+  try
+    let latest ← reopened.acquire
+    check (latest.sequence == 2 && (← reopened.lookup latest.handle 4) == some (some 40) &&
+      (← reopened.lookup latest.handle 7) == some (some 70))
+      "reopen after a collection barrier error changed acknowledged data"
+    check ((← reopened.write 7 (some 71)) == 3) "collection recovery did not resume at the next sequence"
+  finally reopened.close
 
 private def checkWalSegmentReads (root : FilePath) : IO Unit := do
   let dir ← DiskDirectory.open root
@@ -1810,6 +1858,20 @@ private def checkRecoveredProbe (path : FilePath) (sequence value : UInt64) (res
 def main (args : List String) : IO Unit := do
   match args with
   | ["--open-once", dir] => (← DiskTable.open ⟨dir⟩).close
+  | ["--collect-wal-once", dir] =>
+    let db ← DiskTable.open ⟨dir⟩
+    try db.collectCoveredWal finally db.close
+  | ["--check-wal-collection-outcome", path] =>
+    let dir : FilePath := ⟨path⟩
+    let db ← DiskTable.open dir
+    try
+      let .error (.userError message) ← db.collectCoveredWal.toBaseIO
+        | throw (IO.userError "WAL collection did not report the directory barrier error")
+      check (message.startsWith s!"sync failed for '{dir}':") "collection changed the directory sync error"
+      check (!(← (dir / firstWalSegment).pathExists)) "collection synced before its covered unlink"
+      expectRejectedWrite db "publication failed; reopen the database"
+      rejects db.collectCoveredWal "a poisoned writer retried WAL collection"
+    finally db.close
   | ["--collect-runs-and-retry", path] =>
     let dir : FilePath := ⟨path⟩
     let db ← DiskTable.open dir
@@ -1893,6 +1955,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkMarkerlessRefusal
     IO.FS.withTempDir checkWalSegmentRotation
     IO.FS.withTempDir checkWalCollectionPlan
+    IO.FS.withTempDir checkWalCollectionBarrierError
     IO.FS.withTempDir checkWalSegmentReads
     IO.FS.withTempDir checkWalSegmentRepair
     for failDirectory in [false, true] do
