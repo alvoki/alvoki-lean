@@ -104,7 +104,8 @@ theorem CheckpointForRecovery.of_flushForCheckpoint
   exact ⟨.written _ _ empty (UInt64.toNat_ofNat_of_lt' fits).symm rfl rfl floor bounded.runs,
     committed, relation⟩
 
-private theorem read_ordered_runs (read : Nat → Option ByteArray) (first : Nat)
+/-- Reading consecutive indices returns the recorded byte list in order. -/
+theorem read_ordered_runs (read : Nat → Option ByteArray) (first : Nat)
     (files : List ByteArray)
     (durable : ∀ index, index < files.length → read (first + index) = files[index]?) :
     (List.range' first files.length).mapM read = some files := by
@@ -200,7 +201,9 @@ theorem readCheckpointRunBytes_eq_mapM [Monad m] [LawfulMonad m]
       (List.range header.runCount.toNat).mapM (read header.generation) := by
   simp [readCheckpointRunBytes, Std.Legacy.Range.size, ← List.range_eq_range']
 
-private theorem observed_ordered_runs {indices : List Nat} {durableFiles files : List ByteArray}
+/-- Successful ordered reads that agree with the durable map return its
+ordered byte list. -/
+theorem observed_ordered_runs {indices : List Nat} {durableFiles files : List ByteArray}
     {durable : Nat → Option ByteArray} {read : Nat → Except String ByteArray}
     (agrees : ∀ index ∈ indices, ∀ bytes expected,
       read index = .ok bytes → durable index = some expected → bytes = expected)
