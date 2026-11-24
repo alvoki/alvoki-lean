@@ -12,9 +12,10 @@ structure RunSet where
 
 abbrev RunFiles := UInt64 → Nat → Option ByteArray
 
-/-- Guaranteed durable run names and bytes in an already durable directory.
-An absent claim means the model makes no assertion about that file. In
-particular, an older orphan with an out-of-range index may remain on disk. -/
+/-- Recoverable manifest choices and their run bindings in a durable directory.
+Validity guarantees exact durable bytes at the indices referenced by those
+manifests. Unreferenced entries can be stale, and a file with no entry may
+exist on disk. The map is not a directory inventory. -/
 structure Image where
   manifest : Publication.Image
   durable : RunFiles
@@ -192,6 +193,63 @@ private theorem run_only_does_not_publish (state : Pending) (next : RunSet) (act
       have ranTail : middle.execute next tail = some after := by
         simpa [Pending.execute, stepped] using ran
       exact (ih middle rest ranTail).trans same
+
+private theorem runReported_failure (next : RunSet) (report : Step → StepReport)
+    (actions : List Step) (state : Pending) {failed : Step} {tookEffect : Bool}
+    (occurs : failed ∈ actions) (reported : report failed = .failure tookEffect) :
+    ∃ after, (actions.forM (performReportedStep next report)) state = .error () after := by
+  induction actions generalizing state with
+  | nil => simp at occurs
+  | cons first rest ih =>
+    simp only [List.forM_eq_forM, List.forM_cons]
+    change ∃ after, EStateM.bind (performReportedStep next report first)
+      (fun _ => rest.forM (performReportedStep next report)) state = .error () after
+    cases step : performReportedStep next report first state with
+    | error message after =>
+      cases message
+      exact ⟨after, by simp [EStateM.bind, step]⟩
+    | ok _ middle =>
+      rcases List.mem_cons.mp occurs with rfl | later
+      · simp [performReportedStep, reported] at step
+      · obtain ⟨after, stopped⟩ := ih middle later
+        exact ⟨after, by simp [EStateM.bind, step, stopped]⟩
+
+/-- A failed run write or run sync stops the checkpoint before the directory
+barrier and any manifest operation, even when the failing call took effect.
+The modeled image stays unchanged. For an unreachable proposed generation,
+this equality makes no claim about the actual orphan files of that generation. -/
+theorem Image.runWithReports_preparationFailure (initial : Image) (next : RunSet)
+    (report : Step → StepReport) {failed : Step} {tookEffect : Bool}
+    (occurs : failed ∈ runSteps next.files.length) (reported : report failed = .failure tookEffect) :
+    initial.runWithReports next report = .error () initial := by
+  let prep := runSteps next.files.length
+  let start : Pending := ⟨initial, 0, false⟩
+  obtain ⟨after, stopped⟩ := runReported_failure next report prep start occurs reported
+  have outcome := Publication.run_effects_outcome (State := Pending) (Action := Step) (Error := Unit)
+    (fun state action => state.step next action) (performReportedStep next report)
+    (by
+      intro action state
+      have effect := performReportedStep_outcome next report action state
+      cases ran : performReportedStep next report action state <;> simpa only [ran] using effect)
+    prep start
+  rw [stopped] at outcome
+  obtain ⟨cut, executed⟩ := outcome
+  have unchanged := run_only_does_not_publish start next (prep.take cut)
+    (fun _ mem => runSteps_only _ (List.mem_of_mem_take mem)) executed
+  change (match ((steps next.files.length).forM (performReportedStep next report)) start with
+    | .ok _ state => EStateM.Result.ok () state.image
+    | .error _ state => EStateM.Result.error () state.image) = EStateM.Result.error () initial
+  have schedule : steps next.files.length = prep ++ (.syncRunsDirectory :: Publication.steps.map Step.manifest) := by
+    simp [steps, prep, List.append_assoc]
+  simp only [schedule, List.forM_eq_forM, List.forM_append]
+  simp only [List.forM_eq_forM] at stopped
+  change (match EStateM.bind (forM prep (performReportedStep next report))
+        (fun _ => forM (.syncRunsDirectory :: Publication.steps.map Step.manifest)
+          (performReportedStep next report)) start with
+    | .ok _ state => EStateM.Result.ok () state.image
+    | .error _ state => EStateM.Result.error () state.image) = EStateM.Result.error () initial
+  simp only [EStateM.bind, stopped, unchanged]
+  rfl
 
 private theorem promote_run_names (initial : Image) (next : RunSet) :
     Pending.execute ⟨initial, 0, false⟩ next (runSteps next.files.length ++ [.syncRunsDirectory]) =

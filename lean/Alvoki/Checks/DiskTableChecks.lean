@@ -665,16 +665,45 @@ private def checkCheckpointRetryWithFewerRuns (root : FilePath) : IO Unit := do
   let boundary := dir / "WAL.commit"
   let originalWal ← IO.FS.readBinFile wal
   let originalBoundary ← IO.FS.readBinFile boundary
-  let paths := [dir / "run-3-0.v3", dir / "run-3-1.v3", dir / "run-3-2.v3", dir, dir / "MANIFEST.next"]
+  let manifest := dir / "MANIFEST"
+  let stagedManifest := dir / "MANIFEST.next"
+  let orphan := dir / "run-3-2.v3"
+  let firstRun := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩]
+  let secondRun := Compaction.encodeV3 [⟨7, 2, (0, 70)⟩]
+  let suffixRun := Compaction.encodeV3 [⟨4, 3, (0, 41)⟩, ⟨7, 4, (1, 0)⟩]
+  let newRuns := [(dir / "run-3-0.v3", firstRun), (dir / "run-3-1.v3", secondRun), (orphan, suffixRun)]
+  let alignedOpen := [wal.toString, dir.toString]
+  -- All candidate run contents can be synced while the manifest still names
+  -- generation 2. The wrapper completes the last file sync before returning an error.
+  let (published, syncs) ← probeDisk bin dir (some orphan) (operation := "--checkpoint-once")
+    (failureMode := .afterSync) (extraArgs := #["3"])
+  let runSyncs := newRuns.map (fun (path, _) => path.toString)
+  check (!published && syncs == alignedOpen ++ runSyncs ++ [s!"synced before error: {orphan}"])
+    "checkpoint continued past a run sync that completed and reported failure"
+  check (!(← stagedManifest.pathExists)) "run sync failure staged a manifest"
+  check (decide ((← IO.FS.readBinFile manifest) = Manifest.encode ⟨2, 2, 0, 2⟩ ∧
+    (← IO.FS.readBinFile wal) = originalWal ∧ (← IO.FS.readBinFile boundary) = originalBoundary))
+    "run sync failure changed selected metadata or WAL bytes"
+  for (path, bytes) in newRuns ++ [(dir / "run-2-0.v3", firstRun), (dir / "run-2-1.v3", secondRun)] do
+    check (decide ((← IO.FS.readBinFile path) = bytes)) s!"unexpected checkpoint bytes in {path}"
+  let recovered ← DiskTable.open dir
+  try
+    let some old ← recovered.acquireAt 2 | throw (IO.userError "run sync failure changed the selected floor")
+    check ((← recovered.lookup old.handle 4) == some (some 40) &&
+      (← recovered.lookup old.handle 7) == some (some 70)) "run sync failure changed the old snapshot"
+    let latest ← recovered.acquire
+    check (latest.sequence == 4 && (← recovered.lookup latest.handle 7) == some none)
+      "reopen after the run sync failure lost the acknowledged WAL suffix"
+  finally recovered.close
+  let paths := newRuns.map Prod.fst ++ [dir, stagedManifest]
   for (target, cut) in paths.zipIdx do
     let skip := if target == dir then 1 else 0
     let (published, syncs) ← probeDisk bin dir (some target) (operation := "--checkpoint-once") (skipFailures := skip)
-    let expected := [wal.toString, dir.toString] ++ (paths.take (cut + 1)).map FilePath.toString
+    let expected := alignedOpen ++ (paths.take (cut + 1)).map FilePath.toString
     check (!published && syncs == expected) s!"checkpoint did not stop at sync for {target}"
     expectManifest dir 2 2 0 2
   check (decide ((← IO.FS.readBinFile wal) = originalWal ∧ (← IO.FS.readBinFile boundary) = originalBoundary))
     "failed checkpoint changed the acknowledged WAL"
-  let orphan := dir / "run-3-2.v3"
   check (← orphan.pathExists) "failed publication did not leave a third run in the orphan generation"
   let reopened ← DiskTable.open dir
   try
@@ -689,6 +718,11 @@ private def checkCheckpointRetryWithFewerRuns (root : FilePath) : IO Unit := do
   IO.FS.writeBinFile orphan ByteArray.empty
   let final ← DiskTable.open dir
   try
+    let merged := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩, ⟨7, 2, (0, 70)⟩]
+    check (decide ((← IO.FS.readBinFile manifest) = Manifest.encode ⟨3, 4, 0, 2⟩ ∧
+      (← IO.FS.readBinFile (dir / "run-3-0.v3")) = merged ∧
+      (← IO.FS.readBinFile (dir / "run-3-1.v3")) = suffixRun))
+      "retry did not select the exact shorter checkpoint"
     let some historical ← final.acquireAt 2 | throw (IO.userError "reopen lost the pre-compaction snapshot")
     check ((← final.lookup historical.handle 4) == some (some 40) &&
       (← final.lookup historical.handle 7) == some (some 70)) "retry changed historical values"

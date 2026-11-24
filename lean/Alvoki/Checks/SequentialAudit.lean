@@ -126,6 +126,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_complete
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_retry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.runWithReports_outcome
+#check_axioms Alvoki.Storage.CheckpointPublication.Image.runWithReports_preparationFailure
 #check_axioms Alvoki.WAL.Boundary.checkpointMarked_reported
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_recoveryInputs

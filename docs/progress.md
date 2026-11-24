@@ -403,3 +403,7 @@ Once the selected files are readable and the required durability operations succ
 ## Healthy reopen after an uncertain marked WAL write
 
 After the write reports an error, its actual publication report and the subsequent modeled reopen attempts determine the visible WAL and checkpoint. Once the selected reads and required durability calls succeed, the shared marked open returns the expected table, generation and byte count. The settled history contains every previously acknowledged frame, optionally followed by the exact frame submitted by the failed call. The selected checkpoint remains fixed across this transition. [Uncertain-write retry](../lean/Alvoki/Storage/Disk/MarkedWriteReopenProgress.lean)
+
+## Run sync errors before checkpoint publication
+
+A reported run write or sync error stops the modeled checkpoint before the run-directory barrier. When the proposed generation is unreachable, the old manifest choices and their referenced runs are unchanged. The unreferenced files from the attempted generation may contain new data. The native fixture successfully syncs the final new run before reporting an error. It observes the old manifest, retention floor and WAL, then checks the exact shorter run set after a successful retry. A syscall trace confirms the file syncs on the failed attempt and the directory barriers and rename on retry. [Preparation failure proof](../lean/Alvoki/Storage/Publication/CheckpointPublicationModel.lean) · [Native fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)
