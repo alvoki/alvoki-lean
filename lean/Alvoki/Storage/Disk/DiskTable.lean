@@ -41,12 +41,78 @@ structure DiskSnapshotPin where
   handle : DiskSnapshotHandle
   sequence : UInt64
 
+@[extern "alvoki_fsync"]
+private opaque fsyncHandle : @& IO.FS.Handle → @& String → IO Unit
+
+/-- Keep the directory and current append handle for the session. A pending
+handle belongs to a file opened by the current publication or recovery step
+and is consumed at its durability barrier, before any rename can rebind it. -/
+private structure SyncFiles where
+  dir : FilePath
+  directory : IO.Ref (Option IO.FS.Handle)
+  active : IO.Ref (Option (FilePath × IO.FS.Handle))
+  pending : IO.Ref (List (FilePath × IO.FS.Handle))
+
+private def SyncFiles.open (dir : FilePath) : IO SyncFiles := do
+  let directory ← IO.FS.Handle.mk dir .read
+  return ⟨dir, ← IO.mkRef (some directory), ← IO.mkRef none, ← IO.mkRef []⟩
+
+private def SyncFiles.remember (files : SyncFiles) (path : FilePath)
+    (handle : IO.FS.Handle) : IO Unit :=
+  files.pending.modify ((path, handle) :: ·)
+
+private def SyncFiles.stage (files : SyncFiles) (path : FilePath) (bytes : ByteArray) : IO Unit := do
+  files.remember path (← writeFreshStagedHandle path bytes)
+
+private def SyncFiles.create (files : SyncFiles) (path : FilePath) : IO Unit := do
+  files.remember path (← IO.FS.Handle.mk path .writeNew)
+
+private def SyncFiles.append (files : SyncFiles) (path : FilePath) (bytes : ByteArray) : IO Unit := do
+  let current ← files.active.get
+  let wal ← match current with
+    | some (active, handle) =>
+      if path == active then pure handle else IO.FS.Handle.mk path .append
+    | none => IO.FS.Handle.mk path .append
+  try
+    wal.write bytes
+    wal.flush
+  catch error =>
+    -- Close a potentially dirty stream while this session still holds the lock.
+    files.active.set none
+    throw error
+  files.active.set (some (path, wal))
+
+private def SyncFiles.sync (files : SyncFiles) (path : FilePath) : IO Unit := do
+  let file ← if path == files.dir then do
+    let some handle ← files.directory.get | throw (IO.userError "database is closed")
+    pure handle
+  else do
+    let pending ← files.pending.get
+    if let some (_, handle) := pending.find? (fun entry => entry.1 == path) then
+      files.pending.set (pending.filter (fun entry => entry.1 != path))
+      pure handle
+    else if let some (active, handle) ← files.active.get then
+      if active == path then pure handle else IO.FS.Handle.mk path .read
+    else IO.FS.Handle.mk path .read
+  fsyncHandle file path.toString
+
+/-- A failed member of a grouped barrier does not prevent attempts on the
+remaining members. Rename is allowed only if the entire barrier succeeds. -/
+private def SyncFiles.syncPaths (files : SyncFiles) (paths : Array FilePath) : IO Unit := do
+  let mut failure := none
+  for path in paths do
+    try files.sync path catch error =>
+      if failure.isNone then
+        failure := some (IO.userError s!"sync failed for '{path}': {error}")
+  if let some error := failure then throw error
+
 /-- Linux adapter for a sequential caller. The lock excludes a second open
 writer. An I/O failure during publication requires reopening the directory. -/
 structure DiskTable where
   private mk ::
   private dir : DiskDirectory
   private lock : IO.FS.Handle
+  private files : SyncFiles
   private phase : IO.Ref Phase
   private session : IO.Ref Unit
 
@@ -54,12 +120,6 @@ private def fromOption (result : Option α) (message : String) : IO α :=
   match result with
   | some value => pure value
   | none => throw (IO.userError message)
-
-private def syncPaths (paths : Array FilePath) : IO Unit := do
-  let arguments := paths.map FilePath.toString
-  let result ← IO.Process.output { cmd := "sync", args := #["--"] ++ arguments }
-  if result.exitCode ≠ 0 then
-    throw (IO.userError s!"sync failed for {arguments}: {result.stderr}")
 
 /-- The manifest fields for the exact run order published by a checkpoint. -/
 def checkpointHeader (table : PackedTable) (generation : UInt64) : Manifest.Checkpoint :=
@@ -132,11 +192,12 @@ private def checkPrivateRegular (path : FilePath) (metadata : IO.FS.Metadata) : 
   unless metadata.type == .file && metadata.numLinks == 1 do
     throw (IO.userError s!"expected a regular database file with one link: '{path}'")
 
-private def writeRunFlushed (path : FilePath) (content : ByteArray) : IO Unit := do
+private def writeRunFlushed (files : SyncFiles) (path : FilePath) (content : ByteArray) : IO Unit := do
   if let some metadata ← optionalMetadata path then checkPrivateRegular path metadata
   let file ← IO.FS.Handle.mk path .write
   file.write content
   file.flush
+  files.remember path file
 
 private def readRequiredFile (path : FilePath) : IO ByteArray := do
   let metadata ← path.symlinkMetadata
@@ -155,13 +216,14 @@ termination_by remaining
 
 /-- Under the held lock, use the stable keeper's no-follow physical size
 only to select repair. Read just the byte interval selected by the marker. -/
-private def readKeeperPrefix (path : FilePath) (count : Nat) : IO WalSegmentRepair.KeeperPrefix := do
+private def readKeeperPrefix (files : SyncFiles) (path : FilePath) (count : Nat) : IO WalSegmentRepair.KeeperPrefix := do
   let metadata ← path.symlinkMetadata
   checkPrivateRegular path metadata
   unless count ≤ metadata.byteSize.toNat ∧ count < USize.size do
     throw (IO.userError s!"WAL keeper does not cover its selected prefix: '{path}'")
   let file ← IO.FS.Handle.mk path .read
   let bytes ← readExactPrefix file count ByteArray.empty
+  if count == metadata.byteSize.toNat then files.remember path file
   return ⟨bytes, metadata.byteSize.toNat⟩
 
 private def inspectWalSegment (path : FilePath) : IO (Except IO.Error IO.FS.Metadata) := do
@@ -209,14 +271,14 @@ private def rejectFlatWal (dir : DiskDirectory) : IO Unit := do
         publishMarker 0
         install .empty 0 0
 
-private def bootstrapSegmented (dir : DiskDirectory) : IO WalSegmentRepair.Reopened :=
+private def bootstrapSegmented (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentRepair.Reopened :=
   WalSegmentRepair.bootstrapSegmentedWith dir FilePath.readDir
     (readEmptyWalSegment · WAL.Boundary.missingOpenMarker) optionalMetadata
-    WalSegmentRotation.createEmptyExclusive writeFreshStagedFile syncPaths IO.FS.rename
+    files.create files.stage files.syncPaths IO.FS.rename
 
 /-- Check the markerless layout before creating or syncing segment zero,
 then publish the zero marker through the staged replacement schedule. -/
-theorem bootstrapSegmented_fileEffects (dir : DiskDirectory) : bootstrapSegmented dir = (do
+theorem bootstrapSegmented_fileEffects (dir : DiskDirectory) : bootstrapSegmented dir files = (do
     let empty ← (do
       let entries ← dir.path.readDir
       if entries.any (fun entry => WalSegmentRepair.conflictsWithBootstrap entry.fileName) then
@@ -227,26 +289,26 @@ theorem bootstrapSegmented_fileEffects (dir : DiskDirectory) : bootstrapSegmente
           throw (IO.userError WAL.Boundary.missingOpenMarker)
       pure empty : IO (Option ByteArray))
     WalSegmentRotation.runAt dir 0 (fun _ => pure empty)
-      WalSegmentRotation.createEmptyExclusive (fun path => syncPaths #[path])
-    Publication.run (Publication.performReplacement (writeFreshStagedFile · (WAL.Boundary.encode 0))
-      syncPaths IO.FS.rename (dir.file .stagedWalBoundary) dir.path (fun _ => dir.file .walBoundary) #[])
+      files.create (fun path => files.syncPaths #[path])
+    Publication.run (Publication.performReplacement (files.stage · (WAL.Boundary.encode 0))
+      files.syncPaths IO.FS.rename (dir.file .stagedWalBoundary) dir.path (fun _ => dir.file .walBoundary) #[])
     return ⟨.empty, 0, 0, 0⟩) := rfl
 
-private def recoverSegmentedWal (dir : DiskDirectory) : IO WalSegmentRepair.Reopened := do
+private def recoverSegmentedWal (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentRepair.Reopened := do
   rejectFlatWal dir
   if (← optionalMetadata (dir.file .walBoundary)).isSome then
     WalSegmentRepair.reopenMarkedBoundedWith dir readOptionalFile FilePath.readDir inspectWalSegment
-      readRequiredFile readKeeperPrefix
-      (fun path => (IO.FS.removeFile path).toBaseIO) writeFreshStagedFile syncPaths IO.FS.rename
+      readRequiredFile (readKeeperPrefix files)
+      (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
   else
-    bootstrapSegmented dir
+    bootstrapSegmented dir files
 
 private def installReopened (dir : DiskDirectory) (lock : IO.FS.Handle)
-    (opened : WalSegmentRepair.Reopened) : IO DiskTable :=
+    (files : SyncFiles) (opened : WalSegmentRepair.Reopened) : IO DiskTable :=
   -- ST.Ref.ptrEq distinguishes allocations. Keeping a separate cell lets a
   -- stale handle retain its identity without retaining the database state.
   DiskSession.installReady opened.installed (fun phase => IO.mkRef phase) (fun _ => IO.mkRef ()) fun phase session =>
-    pure ⟨dir, lock, phase, session⟩
+    pure ⟨dir, lock, files, phase, session⟩
 
 /-- Open a database in an existing directory and replay its durable WAL. -/
 def DiskTable.open (path : FilePath) : IO DiskTable := do
@@ -255,7 +317,9 @@ def DiskTable.open (path : FilePath) : IO DiskTable := do
   if let some metadata ← optionalMetadata (dir.file .lock) then checkPrivateRegular (dir.file .lock) metadata
   let lock ← IO.FS.Handle.mk (dir.file .lock) .append
   DiskSession.openWithLock lock.tryLock (fun _ => IO.userError s!"database already open: {dir.path}")
-    (fun _ => lock.unlock) (fun _ => do installReopened dir lock (← recoverSegmentedWal dir))
+    (fun _ => lock.unlock) fun _ => do
+      let files ← SyncFiles.open dir.path
+      installReopened dir lock files (← recoverSegmentedWal dir files)
 
 /-- The native lock, strict checkpoint, and segment recovery worker use
 the same resolved directory. Reopen installs the returned keeper only
@@ -267,18 +331,23 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
     let lock ← IO.FS.Handle.mk (dir.file .lock) .append
     DiskSession.openWithLock (lock.tryLock (exclusive := true))
       (fun _ => IO.userError s!"database already open: {dir.path}") (fun _ => lock.unlock) fun _ => do
+        let files ← SyncFiles.open dir.path
         let opened ← (do
           rejectFlatWal dir
           if (← optionalMetadata (dir.file .walBoundary)).isSome then
             WalSegmentRepair.reopenMarkedBoundedWith dir readOptionalFile FilePath.readDir inspectWalSegment
-              readRequiredFile readKeeperPrefix
-              (fun path => (IO.FS.removeFile path).toBaseIO) writeFreshStagedFile syncPaths IO.FS.rename
-          else bootstrapSegmented dir : IO WalSegmentRepair.Reopened)
+              readRequiredFile (readKeeperPrefix files)
+              (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
+          else bootstrapSegmented dir files : IO WalSegmentRepair.Reopened)
         DiskSession.installReady opened.installed (fun phase => IO.mkRef phase) (fun _ => IO.mkRef ())
-          fun phase session => pure ⟨dir, lock, phase, session⟩) := rfl
+          fun phase session => pure ⟨dir, lock, files, phase, session⟩) := rfl
 
 def DiskTable.close (db : DiskTable) : IO Unit := do
-  (← db.phase.get).close (fun _ => db.lock.unlock) (fun _ => db.phase.set .closed)
+  (← db.phase.get).close (fun _ => db.lock.unlock) fun _ => do
+    db.files.active.set none
+    db.files.pending.set []
+    db.files.directory.set none
+    db.phase.set .closed
 
 private def DiskTable.installed (db : DiskTable) : IO Installed := do
   (← db.phase.get).installed
@@ -300,8 +369,10 @@ def DiskTable.rotateWal (db : DiskTable) : IO Unit := do
     DiskSession.publishPrepared db.phase.set
       (WalSegmentRotation.runAt db.dir successor
         (fun path => readEmptyWalSegment path "WAL segment successor is not empty")
-        WalSegmentRotation.createEmptyExclusive (fun path => syncPaths #[path]))
-      (db.phase.set (.ready { state with activeFirst := successor }))
+        db.files.create (fun path => db.files.syncPaths #[path]))
+      (do
+        db.files.active.set none
+        db.phase.set (.ready { state with activeFirst := successor }))
 
 /-- The new active start is installed only after the shared empty-segment
 creation and both synchronization steps complete. -/
@@ -313,7 +384,8 @@ theorem DiskTable.rotateWal_fileEffects (db : DiskTable) : db.rotateWal = (do
       db.phase.set .poisoned
       WalSegmentRotation.runAt db.dir successor
         (fun path => readEmptyWalSegment path "WAL segment successor is not empty")
-        WalSegmentRotation.createEmptyExclusive (fun path => syncPaths #[path])
+        db.files.create (fun path => db.files.syncPaths #[path])
+      db.files.active.set none
       db.phase.set (.ready { state with activeFirst := successor })) := rfl
 
 /-- The outcome of a failed write at the WAL mutation boundary. -/
@@ -323,32 +395,25 @@ inductive DiskWriteError where
   /-- WAL mutation was attempted. The write may be recovered after reopening. -/
   | commitUnknown (cause : IO.Error)
 
-private def appendFlushed (path : FilePath) (bytes : ByteArray) : IO Unit := do
-  let wal ← IO.FS.Handle.mk path .append
-  wal.write bytes
-  wal.flush
-
 /-- Commit the prepared frame to the validated active segment and publish
 the new absolute byte count from the locked write path. -/
-@[macro_inline] private def commitWalWrite (dir : DiskDirectory) (activeFirst : Nat) (event : WAL.Write)
+@[macro_inline] private def commitWalWrite (dir : DiskDirectory) (files : SyncFiles) (activeFirst : Nat) (event : WAL.Write)
     (walBytes : Nat) : IO Unit :=
-  WalSegmentCommit.commitAt dir activeFirst event walBytes appendFlushed writeFreshStagedFile syncPaths IO.FS.rename
+  WalSegmentCommit.commitAt dir activeFirst event walBytes files.append files.stage files.syncPaths IO.FS.rename
 
 /-- The native commit uses the same append-first schedule and marker steps as
 the write-effects model. One sync callback covers the active segment and
 the staged marker. Filesystem reports determine which effects persisted. -/
-theorem commitWalWrite_fileEffects (dir : DiskDirectory) (activeFirst : Nat) (event : WAL.Write) (walBytes : Nat) :
-    commitWalWrite dir activeFirst event walBytes =
-    WAL.Boundary.commit (do
-      let wal ← IO.FS.Handle.mk (dir.file (.walSegment activeFirst)) .append
-      wal.write (WAL.encodeFrame event)
-      wal.flush) (do
-      let stagedPath := dir.file .stagedWalBoundary
-      writeFreshStagedFile stagedPath (WAL.Boundary.encode walBytes.toUInt64)
-      syncPaths #[dir.file (.walSegment activeFirst), stagedPath]
-      IO.FS.rename stagedPath (dir.file .walBoundary)
-      syncPaths #[dir.path]
-      pure ()) := rfl
+theorem commitWalWrite_fileEffects (dir : DiskDirectory) (files : SyncFiles) (activeFirst : Nat) (event : WAL.Write) (walBytes : Nat) :
+    commitWalWrite dir files activeFirst event walBytes =
+    WAL.Boundary.commit
+      (files.append (dir.file (.walSegment activeFirst)) (WAL.encodeFrame event)) (do
+        let stagedPath := dir.file .stagedWalBoundary
+        files.stage stagedPath (WAL.Boundary.encode walBytes.toUInt64)
+        files.syncPaths #[dir.file (.walSegment activeFirst), stagedPath]
+        IO.FS.rename stagedPath (dir.file .walBoundary)
+        files.syncPaths #[dir.path]
+        pure ()) := rfl
 
 @[inline] private def DiskTable.writeWith (db : DiskTable) (key : UInt64) (value : Option UInt64)
     (onRejected onCommitUnknown : IO.Error → ε) : EIO ε UInt64 := do
@@ -359,7 +424,7 @@ theorem commitWalWrite_fileEffects (dir : DiskDirectory) (activeFirst : Nat) (ev
   unless walBytes < UInt64.size do throw (onRejected (IO.userError "WAL byte count is too large"))
   (checkActiveSegment db.dir state).adapt onRejected
   DiskSession.publishPreparedWrite { state with table, walBytes } event.sequence db.phase.set
-    ((commitWalWrite db.dir state.activeFirst event walBytes).adapt onCommitUnknown)
+    ((commitWalWrite db.dir db.files state.activeFirst event walBytes).adapt onCommitUnknown)
 
 /-- Acknowledgement follows the WAL sync and durable publication of the byte boundary. -/
 def DiskTable.write (db : DiskTable) (key : UInt64) (value : Option UInt64) : IO UInt64 :=
@@ -383,7 +448,7 @@ theorem DiskTable.writeWithOutcome_fileEffects (db : DiskTable) (key : UInt64) (
         throw (.rejected (IO.userError "WAL byte count is too large"))
       (checkActiveSegment db.dir state).adapt DiskWriteError.rejected
       db.phase.set .poisoned
-      (commitWalWrite db.dir state.activeFirst event walBytes).adapt DiskWriteError.commitUnknown
+      (commitWalWrite db.dir db.files state.activeFirst event walBytes).adapt DiskWriteError.commitUnknown
       db.phase.set (.ready { state with table, walBytes })
       return event.sequence) := rfl
 
@@ -472,7 +537,7 @@ def DiskTable.checkpoint (db : DiskTable) : IO Unit := do
   db.phase.set .poisoned
   CheckpointPublication.run runs.size
     (performCheckpointFileStep db.dir generation runs stagedManifest manifestBytes
-      (fromOption · "checkpoint run index is out of bounds") writeRunFlushed writeFreshStagedFile syncPaths IO.FS.rename)
+      (fromOption · "checkpoint run index is out of bounds") (writeRunFlushed db.files) db.files.stage db.files.syncPaths IO.FS.rename)
   db.phase.set (.ready { state with table, generation })
 
 /-- The native writer publishes the computed v2 manifest and the exact run
@@ -489,7 +554,7 @@ theorem DiskTable.checkpoint_fileEffects (db : DiskTable) : db.checkpoint = (do
       CheckpointPublication.run table.runs.length
         (performCheckpointFileStep db.dir generation table.runs.toArray (db.dir.file .stagedManifest)
           manifestBytes (fromOption · "checkpoint run index is out of bounds")
-          writeRunFlushed writeFreshStagedFile syncPaths IO.FS.rename)
+          (writeRunFlushed db.files) db.files.stage db.files.syncPaths IO.FS.rename)
       db.phase.set (.ready { state with table, generation })) := by
   simp only [checkpoint, List.size_toArray]
 
@@ -518,7 +583,7 @@ def DiskTable.collectObsoleteRuns (db : DiskTable) (heldGenerations : List UInt6
   let selected ← selectRunFilesWith db.dir current (retainRunGeneration state.generation heldGenerations)
     runCollectionKindAt names
   RunCollection.run selected (RunCollection.performPaths (fun path => (IO.FS.removeFile path).toBaseIO)
-    (fun path => syncPaths #[path]) throw (fun (generation, index) => db.dir.file (.run generation index))
+    (fun path => db.files.syncPaths #[path]) throw (fun (generation, index) => db.dir.file (.run generation index))
     db.dir.path)
 
 /-- The native maintenance entry point validates the ready session and its
@@ -540,7 +605,7 @@ theorem DiskTable.collectObsoleteRuns_fileEffects (db : DiskTable) (heldGenerati
           | .error (.noFileOrDirectory _ 2 _) => return .error "run file is absent"
           | .error error => throw error) (entries.toList.map (·.fileName))
       RunCollection.run selected (RunCollection.performPaths (fun path => (IO.FS.removeFile path).toBaseIO)
-        (fun path => syncPaths #[path]) throw (fun (generation, index) => db.dir.file (.run generation index))
+        (fun path => db.files.syncPaths #[path]) throw (fun (generation, index) => db.dir.file (.run generation index))
         db.dir.path)) := rfl
 
 end Alvoki.Storage

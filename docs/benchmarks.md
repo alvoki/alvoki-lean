@@ -194,12 +194,18 @@ In an interleaved native experiment with seven 64-write trials per mode, the old
 
 | Mode | Median write time |
 |---|---:|
-| Current GNU `sync` protocol | 2.58 ms |
+| GNU `sync` reference | 2.58 ms |
 | GNU `sync` with only stderr captured | 2.49 ms |
 | One Rust sync helper per write | 1.79 ms |
 | Persistent Rust sync helper per open | 0.72 ms |
 
 Both helper prototypes leave rename in the Lean process under the database lock, sync the files before rename, and report directory sync success before acknowledgement. Both passed the scratch fixtures for a successful write, file sync failure, directory sync failure, and helper death. The experiment also provides a direct-rename control. That control can outlive the lock holder and is unsuitable for the adapter. These are experimental results on one VM. [Reproduction and raw samples](../benchmarks/wal-sync-experiment)
+
+### Native descriptor sync
+
+The Linux adapter now retains the directory and active append descriptors across writes. In seven alternating pairs of native release runs, `alvoki-disk-write 64 1` measured a median of 2.991 ms per acknowledged write at `810fb81` and 0.728 ms with direct descriptor sync. Each process warmed up before its timed trial. Both builds used Lean 4.36 and CPU 0 on the same x86-64 VM with an AMD EPYC 9V74, Linux 6.18.57, and an OverlayFS temporary directory.
+
+A separate `strace -f -yy -e trace=execve,openat,close,fsync,rename` run of `alvoki-disk-write 4 1` covered two opens and eight writes including warmup. GNU `sync` execs fell from 24 to zero, successful WAL segment opens from 20 to four, and successful temporary marker opens from 20 to ten. Both builds issued 32 `fsync` calls. [Native adapter](../lean/Alvoki/Storage/Disk/DiskTable.lean)
 
 ### Exclusive staging creation
 

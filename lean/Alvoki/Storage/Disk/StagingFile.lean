@@ -19,7 +19,7 @@ caller's directory lock. A stale regular binding is detached before
 writing, so even a hard link leaves its other names unchanged. A failed
 attempt can leave absent or partial scratch contents for the next retry.
 The caller syncs the file and publishes it with the separate schedule. -/
-def writeFreshStagedFile (path : FilePath) (bytes : ByteArray) : IO Unit := do
+def writeFreshStagedHandle (path : FilePath) (bytes : ByteArray) : IO IO.FS.Handle := do
   let file ← match ← (IO.FS.Handle.mk path .writeNew).toBaseIO with
     | .ok file => pure file
     | .error (.alreadyExists _ 17 _) => do
@@ -28,5 +28,10 @@ def writeFreshStagedFile (path : FilePath) (bytes : ByteArray) : IO Unit := do
     | .error error => throw error
   file.write bytes
   file.flush
+  return file
+
+def writeFreshStagedFile (path : FilePath) (bytes : ByteArray) : IO Unit := do
+  let _ ← writeFreshStagedHandle path bytes
+  pure ()
 
 end Alvoki.Storage

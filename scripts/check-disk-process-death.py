@@ -104,12 +104,13 @@ def wait_for_sync_success(pid):
     raise RuntimeError("timed out waiting for the released sync")
 
 
-def check_process_death(binary, root, after_rename, rotated):
+def check_process_death(binary, shim, root, after_rename, rotated, detached):
     database = root / "db"
     database.mkdir()
     segment = f"WAL-segment-{int(rotated)}"
     wal = database / segment
     marker = database / "WAL.commit"
+    staged_marker = database / "WAL.commit.next"
     status, stderr = run_probe(binary, "--write-once", database)
     require(status == 0, f"could not prepare acknowledged WAL prefix: {stderr}")
     if rotated:
@@ -139,7 +140,8 @@ def check_process_death(binary, root, after_rename, rotated):
     require(acknowledged and len(appended) == 2 * len(acknowledged) and appended.startswith(acknowledged),
             "the acknowledged control write did not extend the WAL by one frame")
     expected_wal = appended if after_rename else acknowledged
-    expected_marker = (control / "WAL.commit").read_bytes() if after_rename else boundary
+    submitted_marker = (control / "WAL.commit").read_bytes()
+    expected_marker = submitted_marker if after_rename else boundary
     expected_sequence = 1 + int(rotated) + int(after_rename)
     recovery_args = (str(expected_sequence), submitted_value if after_rename else "99")
     resume_control = control
@@ -155,64 +157,25 @@ def check_process_death(binary, root, after_rename, rotated):
 
     ready = root / "sync.pid"
     release = root / "release-sync"
-    selected_marker = root / "selected-marker"
-    selected_marker.write_bytes(expected_marker)
-    real_sync = shutil.which("sync")
-    require(real_sync is not None, "could not find the Linux sync utility")
-    wrapper = root / "sync"
-    wrapper.write_text('''#!/bin/sh
-set -eu
-if [ "$#" -eq 2 ] && [ "$1" = -- ] && [ "$2" = "$ALVOKI_CHECK_REOPEN_FAIL_AT" ]; then
-    if [ "$ALVOKI_CHECK_REOPEN_FAIL_PHASE" = after ]; then
-        "$ALVOKI_CHECK_REAL_SYNC" "$@"
-    fi
-    printf 'injected reopen %s-sync failure: %s\\n' "$ALVOKI_CHECK_REOPEN_FAIL_PHASE" "$2" >&2
-    exit 1
-fi
-if [ "$#" -eq "$ALVOKI_CHECK_SYNC_ARITY" ] && [ "$1" = -- ] &&
-   [ "${3:-$2}" = "$ALVOKI_CHECK_HOLD_AT" ] &&
-   { [ "$#" -eq 3 ] || cmp -s "$ALVOKI_CHECK_MARKER" "$ALVOKI_CHECK_SELECTED_MARKER"; }; then
-    # Hold a directory sync only after the submitted marker is visible.
-    # The grouped write sync opens its WAL target before repair can replace it.
-    if [ "$#" -eq 3 ]; then exec < "$2"; fi
-    printf '%s\\n' "$$" > "$ALVOKI_CHECK_SYNC_PID"
-    tries=0
-    until [ -e "$ALVOKI_CHECK_SYNC_RELEASE" ]; do
-        [ "$tries" -lt 600 ] || exit 1
-        tries=$((tries + 1))
-        sleep 0.05
-    done
-    # Finish just the in-flight WAL fsync through the descriptor, without reopening the path.
-    if [ "$#" -eq 3 ]; then
-        exec "$ALVOKI_CHECK_PYTHON" -c 'import os; os.fsync(0)'
-    fi
-fi
-exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
-''')
-    wrapper.chmod(0o700)
-    sync_env = {
-        **os.environ,
-        "PATH": os.pathsep.join([str(root), os.defpath]),
-        "ALVOKI_CHECK_REAL_SYNC": str(Path(real_sync).resolve()),
-        "ALVOKI_CHECK_REOPEN_FAIL_AT": "",
-        "ALVOKI_CHECK_SYNC_ARITY": "0",
-    }
+    sync_env = {**os.environ, "LD_PRELOAD": str(shim)}
     with native_process(binary, "--write-once", database, submitted_value, sync_pid_file=ready, env={
         **sync_env,
-        "ALVOKI_CHECK_SYNC_ARITY": "2" if after_rename else "3",
-        "ALVOKI_CHECK_HOLD_AT": str(database if after_rename else database / "WAL.commit.next"),
-        "ALVOKI_CHECK_MARKER": str(marker),
-        "ALVOKI_CHECK_SELECTED_MARKER": str(selected_marker),
+        "ALVOKI_CHECK_SYNC_HOLD": str(database if after_rename else wal),
+        "ALVOKI_CHECK_SYNC_HOLD_MODE": "detached" if detached else "owner",
         "ALVOKI_CHECK_SYNC_PID": str(ready),
         "ALVOKI_CHECK_SYNC_RELEASE": str(release),
-        "ALVOKI_CHECK_PYTHON": sys.executable,
     }) as owner:
         sync_pid = wait_for_sync(owner, ready)
-        require(os.getpgid(sync_pid) == owner.pid, "sync child escaped the fixture process group")
+        require((sync_pid != owner.pid) == detached, "sync paused in the wrong process")
+        require(os.getpgid(sync_pid) == owner.pid, "sync escaped the fixture process group")
         require(wal.read_bytes() == appended, "paused write did not leave the exact submitted frame")
         require(marker.read_bytes() == expected_marker, "paused write selected the wrong WAL marker")
+        if after_rename:
+            require(not staged_marker.exists(), "paused write had not renamed the staged marker")
+        else:
+            require(staged_marker.read_bytes() == submitted_marker, "paused write had not staged the submitted marker")
         original_wal = wal.stat()
-        if not after_rename:
+        if detached and not after_rename:
             held_wal = Path(f"/proc/{sync_pid}/fd/0")
             require(os.path.samestat(held_wal.stat(), original_wal),
                     "sync child did not open the original WAL")
@@ -222,19 +185,21 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
 
         owner.kill()
         require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "fixture owner was not killed")
-        require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child did not outlive its owner")
-        # The old sync stays blocked across a directory failure and a retry
-        # whose file sync succeeds before the subprocess reports failure.
+        if detached:
+            require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child did not outlive its owner")
+        # A detached old sync stays blocked across a directory failure and a
+        # retry whose file sync succeeds before fsync reports failure.
         file_sync = wal if after_rename else database / "WAL.next"
         for target, phase in ((database, "before"), (file_sync, "after")):
             status, stderr = run_probe(binary, "--open-once", database, env={
                 **sync_env,
-                "ALVOKI_CHECK_REOPEN_FAIL_AT": str(target),
-                "ALVOKI_CHECK_REOPEN_FAIL_PHASE": phase,
+                "ALVOKI_CHECK_SYNC_FAIL": str(target),
+                "ALVOKI_CHECK_SYNC_FAIL_MODE": phase,
             })
-            require(status != 0 and f"injected reopen {phase}-sync failure: {target}\n" in stderr,
+            require(status != 0 and f"sync failed for '{target}':" in stderr,
                     f"reopen did not report the injected failure: {stderr}")
-            require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during failed reopen")
+            if detached:
+                require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during failed reopen")
             require(os.path.samestat(wal.stat(), original_wal) and wal.read_bytes() == appended
                     and marker.read_bytes() == expected_marker, "failed reopen changed the WAL or its marker")
             check_fixed_files()
@@ -242,17 +207,20 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
             require(file_sync.read_bytes() == acknowledged, "failed repair did not stage the exact prefix")
         status, stderr = run_probe(binary, "--check-recovered-table", database, *recovery_args)
         require(status == 0, f"reopen after owner death returned the wrong table: {stderr}")
-        require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during recovery")
+        if detached:
+            require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during recovery")
         recovered_wal = wal.stat()
         if not after_rename:
-            require(os.path.samestat(held_wal.stat(), original_wal), "held WAL descriptor changed inode")
             require(not os.path.samestat(recovered_wal, original_wal), "repair did not replace the WAL inode")
-            require(held_wal.read_bytes() == appended and wal.read_bytes() == acknowledged,
-                    "repair did not separate the old append from the selected WAL bytes")
-        # Resume the old sync only after the successor's recovery has finished.
-        release.touch()
-        wait_for_sync_success(sync_pid)
-        require(os.path.samestat(wal.stat(), recovered_wal), "delayed sync changed the recovered WAL binding")
+            if detached:
+                require(os.path.samestat(held_wal.stat(), original_wal), "held WAL descriptor changed inode")
+                require(held_wal.read_bytes() == appended and wal.read_bytes() == acknowledged,
+                        "repair did not separate the old append from the selected WAL bytes")
+        if detached:
+            # Resume the old sync only after the successor's recovery has finished.
+            release.touch()
+            wait_for_sync_success(sync_pid)
+            require(os.path.samestat(wal.stat(), recovered_wal), "delayed sync changed the recovered WAL binding")
         require(wal.read_bytes() == expected_wal and marker.read_bytes() == expected_marker,
                 "recovery or delayed sync changed the selected WAL bytes")
         check_fixed_files()
@@ -267,8 +235,18 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
 if __name__ == "__main__":
     adopt_orphans()
     binary = Path(sys.argv[1]).resolve()
-    for rotated in (False, True):
-        for after_rename in (False, True):
-            with tempfile.TemporaryDirectory(prefix="alvoki-process-death-") as directory:
-                check_process_death(binary, Path(directory).resolve(), after_rename, rotated)
-    print("Recovered and extended zero and rotated WAL keepers after owner death, failed opens, and delayed sync.")
+    with tempfile.TemporaryDirectory(prefix="alvoki-process-death-") as directory:
+        root = Path(directory).resolve()
+        shim = root / "disk-sync-fixture.so"
+        source = Path(__file__).with_name("disk-sync-fixture.c").resolve()
+        subprocess.run(
+            ["cc", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", source, "-o", shim, "-ldl"],
+            check=True,
+        )
+        for rotated in (False, True):
+            for after_rename in (False, True):
+                for detached in (False, True):
+                    case = root / f"{int(rotated)}-{int(after_rename)}-{int(detached)}"
+                    case.mkdir()
+                    check_process_death(binary, shim, case, after_rename, rotated, detached)
+    print("Recovered and extended zero and rotated WAL keepers after native sync cuts and delayed sync.")

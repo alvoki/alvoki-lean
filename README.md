@@ -16,7 +16,7 @@ Import `Alvoki.Storage.Table.PackedTable` for a sequential snapshot table over p
 
 ## Reproduce on Linux x86-64
 
-Run from the repository root with Bash, curl, tar, unzip, sha256sum, and Python 3 available. The bootstrap script installs pinned tools in `../work/toolchains`. Set `ALVOKI_TOOLCHAINS` and pass the same directory to bootstrap to use a different location.
+Run from the repository root with Bash, curl, tar, unzip, sha256sum, Python 3, and a C compiler available as `cc`. The bootstrap script installs pinned tools in `../work/toolchains`. Set `ALVOKI_TOOLCHAINS` and pass the same directory to bootstrap to use a different location.
 
 ```sh
 bash scripts/bootstrap.sh

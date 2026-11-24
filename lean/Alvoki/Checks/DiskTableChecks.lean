@@ -531,37 +531,23 @@ private def checkSnapshotSessions (root : FilePath) : IO Unit := do
     finally second.close
   finally first.close
 
-private def syncFixture : String := r#"#!/bin/sh
-set -eu
-mode=${ALVOKI_CHECK_SYNC_FAIL_MODE-before}
-if [ "$mode" = second-only ] && [ "$#" -eq 3 ] && [ "$1" = -- ] &&
-   [ "$3" = "${ALVOKI_CHECK_SYNC_FAIL-}" ]; then
-  printf '%s\n' "$2" "$3" >> "$ALVOKI_CHECK_SYNC_LOG"
-  command -p sync -- "$3"
-  printf 'synced second target before error: %s\n' "$3" >> "$ALVOKI_CHECK_SYNC_LOG"
-  printf 'injected sync failure: %s\n' "$3" >&2
-  exit 1
-fi
-for path do
-  [ "$path" = -- ] && continue
-  printf '%s\n' "$path" >> "$ALVOKI_CHECK_SYNC_LOG"
-  if [ "$mode" != second-only ] && [ "$path" = "${ALVOKI_CHECK_SYNC_FAIL-}" ]; then
-    seen=$(grep -Fxc -- "$path" "$ALVOKI_CHECK_SYNC_LOG")
-    skip=${ALVOKI_CHECK_SYNC_SKIP-0}
-    if [ "$seen" -gt "$skip" ] && { [ "$mode" != before-once ] || [ "$seen" -eq "$((skip + 1))" ]; }; then
-      if [ "$mode" = after ]; then
-        [ "$#" -eq 2 ]
-        [ "$1" = -- ]
-        command -p sync -- "$path"
-        printf 'synced before error: %s\n' "$path" >> "$ALVOKI_CHECK_SYNC_LOG"
-      fi
-      printf 'injected sync failure: %s\n' "$path" >&2
-      exit 1
-    fi
-  fi
-  command -p sync -- "$path"
-done
-"#
+private def syncFixtureSource : String :=
+  include_str ".." / ".." / ".." / "scripts" / "disk-sync-fixture.c"
+
+private initialize syncFixtureLibrary : IO.Ref (Option FilePath) ← IO.mkRef none
+
+private def withSyncFixture (action : IO Unit) : IO Unit :=
+  IO.FS.withTempDir fun dir => do
+    let source := dir / "disk-sync-fixture.c"
+    let library := dir / "disk-sync-fixture.so"
+    IO.FS.writeFile source syncFixtureSource
+    let result ← IO.Process.output {
+      cmd := "cc"
+      args := #["-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", source.toString,
+        "-o", library.toString, "-ldl"] }
+    check (result.exitCode == 0) s!"could not compile sync fault fixture: {result.stderr}"
+    syncFixtureLibrary.set (some library)
+    try action finally syncFixtureLibrary.set none
 
 private inductive SyncFailureMode where
   | beforeSync
@@ -575,7 +561,8 @@ private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation
     IO (Bool × List String) := do
   let log := bin / "sync.log"
   IO.FS.writeFile log ""
-  let path := (← IO.getEnv "PATH").getD "/usr/bin:/bin"
+  let some library ← syncFixtureLibrary.get
+    | throw (IO.userError "missing compiled sync fault fixture")
   let executable ← IO.appPath
   let mode := match failureMode with
     | .beforeSync => "before"
@@ -585,7 +572,7 @@ private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation
   let result ← IO.Process.output {
     cmd := executable.toString
     args := #[operation, dir.toString] ++ extraArgs
-    env := #[("PATH", some (bin.toString ++ ":" ++ path)),
+    env := #[("LD_PRELOAD", some library.toString),
       ("ALVOKI_CHECK_SYNC_LOG", some log.toString),
       ("ALVOKI_CHECK_SYNC_FAIL", failAt.map FilePath.toString),
       ("ALVOKI_CHECK_SYNC_SKIP", some (toString skipFailures)),
@@ -596,10 +583,6 @@ private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation
 private def syncFixtureBin (root : FilePath) : IO FilePath := do
   let bin := root / "bin"
   IO.FS.createDir bin
-  let wrapper := bin / "sync"
-  IO.FS.writeFile wrapper syncFixture
-  let chmod ← IO.Process.output { cmd := "chmod", args := #["+x", "--", wrapper.toString] }
-  check (chmod.exitCode == 0) "could not make sync fault fixture executable"
   return bin
 
 private def walReplacementSyncs (dir : FilePath) : List String :=
@@ -1303,7 +1286,7 @@ private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
     expectSnapshot reopened 9 [(5, some 50), (6, some 60)]
   finally reopened.close
 
-private def checkGroupedSyncPartialEffects (root : FilePath) : IO Unit := do
+private def checkGroupedSyncPartialEffects (root : FilePath) (failWal : Bool) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
   IO.FS.createDir dir
@@ -1324,11 +1307,17 @@ private def checkGroupedSyncPartialEffects (root : FilePath) : IO Unit := do
     "aligned reopen did not fail after syncing only the directory"
   check (decide ((← IO.FS.readBinFile wal) = acknowledged ∧ (← IO.FS.readBinFile marker) = oldMarker))
     "failed aligned reopen changed the acknowledged WAL"
-  let (classified, syncs) ← probeDisk bin dir (some staged) (operation := "--check-write-outcome")
-    (failureMode := .secondOnly)
-  check (classified && syncs == alignedWalSyncs dir wal ++ [wal.toString, staged.toString,
-    s!"synced second target before error: {staged}"])
-    "write did not report an unknown commit after syncing only the staged marker"
+  let bothTargets := alignedWalSyncs dir wal ++ [wal.toString, staged.toString]
+  if failWal then
+    let (classified, syncs) ← probeDisk bin dir (some wal) (operation := "--check-write-outcome")
+      (skipFailures := 1)
+    check (classified && syncs == bothTargets)
+      "the grouped barrier skipped the staged marker after the WAL sync failed"
+  else
+    let (classified, syncs) ← probeDisk bin dir (some staged) (operation := "--check-write-outcome")
+      (failureMode := .secondOnly)
+    check (classified && syncs == bothTargets ++ [s!"synced second target before error: {staged}"])
+      "write did not report an unknown commit after syncing only the staged marker"
   let appended := acknowledged ++ WAL.encodeFrame ⟨3, 7, some 99⟩
   check (decide ((← IO.FS.readBinFile wal) = appended ∧
     (← IO.FS.readBinFile staged) = WAL.Boundary.encode appended.size.toUInt64))
@@ -1473,7 +1462,7 @@ private def checkCheckpointRetryWithFewerRuns (root : FilePath) : IO Unit := do
   let newRuns := [(dir / "run-3-0.v3", firstRun), (dir / "run-3-1.v3", secondRun), (orphan, suffixRun)]
   let alignedOpen := alignedWalSyncs dir wal
   -- All candidate run contents can be synced while the manifest still names
-  -- generation 2. The wrapper completes the last file sync before returning an error.
+  -- generation 2. The fixture completes the last file sync before returning an error.
   let (published, syncs) ← probeDisk bin dir (some orphan) (operation := "--checkpoint-once")
     (failureMode := .afterSync) (extraArgs := #["3"])
   let runSyncs := newRuns.map (fun (path, _) => path.toString)
@@ -1805,7 +1794,7 @@ def main (args : List String) : IO Unit := do
       let latest ← db.acquire
       let .error (.userError message) ← (db.collectObsoleteRuns []).toBaseIO
         | throw (IO.userError "collection did not report its final sync error")
-      check (message.startsWith "sync failed for " && message.endsWith s!"injected sync failure: {dir}\n")
+      check (message.startsWith s!"sync failed for '{dir}':")
         "collection did not preserve its sync error"
       for name in ["run-2-0.v3", "run-2-1.v3"] do
         check (!(← (dir / name).pathExists)) "collection sync did not follow the obsolete unlinks"
@@ -1836,7 +1825,7 @@ def main (args : List String) : IO Unit := do
     try
       let .error (.userError message) ← db.rotateWal.toBaseIO
         | throw (IO.userError "rotation did not report its sync error")
-      check (message.startsWith "sync failed for " && message.endsWith s!"injected sync failure: {target}\n")
+      check (message.startsWith s!"sync failed for '{target}':")
         "rotation did not preserve its sync error"
       expectRejectedWrite db "publication failed; reopen the database"
     finally db.close
@@ -1847,7 +1836,7 @@ def main (args : List String) : IO Unit := do
     try
       let .error (.commitUnknown (.userError message)) ← (db.writeWithOutcome 7 (some 99)).toBaseIO
         | throw (IO.userError "sync error did not report an unknown commit outcome")
-      check (message.startsWith "sync failed for " && message.endsWith s!"injected sync failure: {target}\n")
+      check (message.startsWith s!"sync failed for '{target}':")
         "unknown commit outcome changed the sync error"
       expectRejectedWrite db "publication failed; reopen the database"
     finally db.close
@@ -1862,7 +1851,7 @@ def main (args : List String) : IO Unit := do
       | _ => throw (IO.userError "unexpected checkpoint fixture arguments")
       db.checkpoint
     finally db.close
-  | [] =>
+  | [] => withSyncFixture do
     checkCodecs
     checkPublicationCuts
     IO.FS.withTempDir checkSegmentedCheckpointOpen
@@ -1888,7 +1877,8 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkFirstBoundedCheckpointOpen
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkWritesAcrossReopens
-    IO.FS.withTempDir checkGroupedSyncPartialEffects
+    for failWal in [false, true] do
+      IO.FS.withTempDir (checkGroupedSyncPartialEffects · failWal)
     IO.FS.withTempDir checkCheckpointReadFailureBeforeWalRepair
     IO.FS.withTempDir checkFirstCheckpointCuts
     IO.FS.withTempDir checkCheckpointRetryWithFewerRuns
