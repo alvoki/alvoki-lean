@@ -183,6 +183,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentRotationReopen
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentBootstrapEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentBoundedOpenEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRecoveryWork
+lake env leanchecker Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointPublication
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointReopen
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointRetryLayout

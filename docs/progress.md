@@ -36,6 +36,8 @@ Writer stretches include snapshot acquisition, guarded release, floor advancemen
 
 The observed append schedule now preserves retained WAL validity, keeper bytes, sealed inventory, held lock, and strict checkpoint provenance without requiring a physical chain from zero. These are the pieces needed to continue from a recovered suffix after eligible deletion. [Retained append reports](../lean/Alvoki/Storage/Disk/RetainedAppendReports.lean)
 
+After the repaired keeper name is durable, an observed sync on its predecessor's retained inode leaves the segmented retry image and its owner map intact. The proof uses distinct inode identities and the effect-time observation of the old description. [Delayed keeper sync](../lean/Alvoki/Storage/Disk/SegmentedKeeperDescriptor.lean)
+
 The serial replay theorem now proves equality of tables and decoder or replay diagnostics for checked aligned spans and an exact keeper prefix. The next performance proof connects this fold to ordered I/O and global malformed-span checks. [Serial replay](../lean/Alvoki/Storage/Disk/WalSegmentSerialReplay.lean)
 
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
