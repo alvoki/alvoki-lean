@@ -38,6 +38,8 @@ import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
 import Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
 import Alvoki.Storage.Disk.RetainedCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskTable
+import Alvoki.Storage.Disk.ReadRecoveryPrefix
+import Alvoki.Storage.Disk.UncheckpointedCachedReopen
 import Alvoki.Storage.Disk.FullWatermarkReopen
 import Alvoki.Storage.Disk.WalWritePublicationModel
 import Alvoki.Storage.Disk.DiskRecoveryModel
@@ -1038,6 +1040,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.readIntegrityRunBytesSized_prefix_of_reports
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofCheckpointRunExtent
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofCheckpointRunDigest
+#check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofMarkerReadError
+#check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofMarkerPayloadReadError
+#check_axioms Alvoki.Storage.readExactPrefixWith_readError
+#check_axioms Alvoki.Storage.readExactPrefixWith_badChunk
+#check_axioms Alvoki.Storage.readExactPrefixWith_success
+#check_axioms Alvoki.Storage.readExactPrefixWith_completes
+#check_axioms Alvoki.Storage.readExactPrefixWith_completesAtStart
+#check_axioms Alvoki.Storage.readExactPrefixWith_completesFile
+#check_axioms Alvoki.Storage.DiskSession.UncheckpointedCachedReadReports.reopens
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.run_error
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.immediateReacquire
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.afterCachedLastDrop

@@ -74,6 +74,7 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedBatchAppend
 lake env leanchecker Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 lake env leanchecker Alvoki.Storage.Disk.SegmentedAppendRecovery
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCleanReopen
+lake env leanchecker Alvoki.Storage.Disk.UncheckpointedCachedReopen
 lake env leanchecker Alvoki.Storage.Disk.SegmentedReadyPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.SegmentedFailureRelease
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionReadPlan
@@ -233,6 +234,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadWork
 lake env leanchecker Alvoki.Storage.Disk.RecoverySizedReads
+lake env leanchecker Alvoki.Storage.Disk.ReadRecoveryPrefix
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentSizedOpen
 lake env leanchecker Alvoki.Storage.Disk.IntegrityCheckpointSizedRead
 lake env leanchecker Alvoki.Storage.Disk.WalGroupSyncSchedule

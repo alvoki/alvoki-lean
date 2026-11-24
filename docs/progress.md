@@ -172,4 +172,8 @@ A reported bad checkpoint run extent now enters the same cached rejection trace 
 
 The private fork proof follows the copied slots and flags through parent exit and successful child exec. It derives a refused open while a child alias survives and the exact subsequent installation after the last drop given a healthy recovery report. [Fork and exec](../lean/Alvoki/Storage/Disk/DescriptorFork.lean)
 
+The three native bounded payload readers now share a proved loop. Its completion theorem derives exact bytes from positive short reads, including complete run and seal files and an exact keeper prefix. The same loop propagates a read error with the reported cursor. Pinned Lean 4.36 generated equivalent C for the loop and the three callers after normalizing symbol names, local names and static argument order. The proof takes truthful chunk reports from the same stable file description. [Prefix read proof](../lean/Alvoki/Storage/Disk/ReadRecoveryPrefix.lean)
+
+Before the first checkpoint, a clean close and healthy cached reopen derive the exact installed table and retain the settled WAL from the reported marker, directory inventory, metadata, bounded payloads and directory and keeper syncs. A read error on the selected WAL marker instead returns before decode and repair and uses the common cleanup and retry contract. [Clean WAL reopen](../lean/Alvoki/Storage/Disk/UncheckpointedCachedReopen.lean) · [Marker read failure](../lean/Alvoki/Storage/Disk/CachedWalMarkerOpenFailure.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
