@@ -1,5 +1,7 @@
 # Current handoff
 
+Append retries share an installation contract for full-chain and retained-WAL recovery. The aligned collection and power-loss routes share the keeper-sync proof. Packed and sequential range proofs use one interval-local congruence lemma, and the tree memtable derives its upper bound from its lower bound. [Proof techniques and reuse](proof-index.md)
+
 Checkpoint retries after a reported publication error or power loss share a named installation contract for the selected manifest generation, keeper layout and healthy bounded-open reports. [Checkpoint retry](../lean/Alvoki/Storage/Disk/CheckpointRetrySession.lean)
 
 Append, checkpoint and rotation failure proofs now share the lock handoff for their reached file images. Collection uses the same successful-close lemma. [Proof techniques and reuse](proof-index.md)

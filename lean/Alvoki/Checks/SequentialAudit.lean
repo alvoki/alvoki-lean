@@ -156,6 +156,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.MemTableTree.backend
 #check_axioms Alvoki.Storage.PackedTable.emptyWithMemTable_refines
 #check_axioms Alvoki.Storage.PackedTable.lookupAt_eq
+#check_axioms Alvoki.Sequential.Table.range_congr
 #check_axioms Alvoki.Storage.PackedTable.rangeAt_eq
 #check_axioms Alvoki.Storage.PackedTable.write_refines
 #check_axioms Alvoki.Storage.PackedTable.acquireAt_spec
