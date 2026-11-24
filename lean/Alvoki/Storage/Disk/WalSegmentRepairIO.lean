@@ -53,6 +53,14 @@ def performPaths [Monad m] (dir : DiskDirectory) (plan : Plan)
     (dir.file .stagedWal) dir.path (fun _ => dir.file (.walSegment plan.keeper)) #[] step
   | .syncKeeper => sync #[dir.file (.walSegment plan.keeper)]
 
+/-- Execute the ordered repair of a validated plan. The caller decides
+whether the observed physical keeper extends past its selected prefix. -/
+def runRepairPlan [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory) (plan : Plan)
+    (replaceKeeper : Bool) (removeFile : FilePath → m (Except IO.Error Unit)) (write : FilePath → ByteArray → m Unit)
+    (sync : Array FilePath → m Unit) (renameFile : FilePath → FilePath → m Unit) : m Unit := do
+  sync #[dir.path]
+  (steps plan.newer replaceKeeper).forM (performPaths dir plan removeFile throw write sync renameFile)
+
 /-- Prepare under the held database lock, then settle the prepared visible
 marker before pruning. Preparation checks the exact selected data and
 returns fresh observations on each retry. The caller owns the stable
@@ -62,9 +70,7 @@ def runAt [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory) (prepare : 
     (sync : Array FilePath → m Unit) (renameFile : FilePath → FilePath → m Unit) : m Unit := do
   let plan ← prepare
   if plan.valid then
-    sync #[dir.path]
-    (steps plan.newer (decide (plan.keeperSize < plan.keeperBytes.size))).forM
-      (performPaths dir plan removeFile throw write sync renameFile)
+    runRepairPlan dir plan (decide (plan.keeperSize < plan.keeperBytes.size)) removeFile write sync renameFile
   else throw (IO.userError "invalid WAL segment repair plan")
 
 theorem runAt_fileEffects [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory) (prepare : m Plan)
@@ -87,7 +93,7 @@ theorem runAt_fileEffects [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirect
           | .replace .syncDirectory => sync #[dir.path]
           | .syncKeeper => sync #[dir.file (.walSegment plan.keeper)]
       else throw (IO.userError "invalid WAL segment repair plan")) := by
-  unfold runAt
+  unfold runAt runRepairPlan
   congr 1
   funext plan
   split

@@ -7,7 +7,7 @@ import Alvoki.Storage.Disk.RunFileSelection
 import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Disk.WalSegmentCommit
 import Alvoki.Storage.Disk.WalSegmentBootstrapIO
-import Alvoki.Storage.Disk.WalSegmentOpenFast
+import Alvoki.Storage.Disk.WalSegmentBoundedOpen
 import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Publication.CheckpointPublication
 import Alvoki.Storage.Publication.RunCollection
@@ -144,6 +144,27 @@ private def readRequiredFile (path : FilePath) : IO ByteArray := do
     throw (IO.userError s!"expected a regular database file: '{path}'")
   IO.FS.readBinFile path
 
+private def readExactPrefix (file : IO.FS.Handle) (remaining : Nat) (bytes : ByteArray) : IO ByteArray := do
+  if remaining = 0 then return bytes
+  let chunk ← file.read remaining.toUSize
+  if _valid : 0 < chunk.size ∧ chunk.size ≤ remaining then
+    let bytes := if bytes.isEmpty then chunk else bytes ++ chunk
+    readExactPrefix file (remaining - chunk.size) bytes
+  else throw (IO.userError "short or oversized WAL keeper read")
+termination_by remaining
+
+/-- Under the held lock, use the stable keeper's no-follow physical size
+only to select repair. Read just the byte interval selected by the marker. -/
+private def readKeeperPrefix (path : FilePath) (count : Nat) : IO WalSegmentRepair.KeeperPrefix := do
+  let metadata ← path.symlinkMetadata
+  checkPrivateRegular path metadata
+  unless count ≤ metadata.byteSize.toNat ∧ count < USize.size do
+    throw (IO.userError s!"WAL keeper does not cover its selected prefix: '{path}'")
+  let bytes ← if count = 0 then pure ByteArray.empty else do
+    let file ← IO.FS.Handle.mk path .read
+    readExactPrefix file count ByteArray.empty
+  return ⟨bytes, metadata.byteSize.toNat⟩
+
 private def inspectWalSegment (path : FilePath) : IO (Except IO.Error IO.FS.Metadata) := do
   let report ← path.symlinkMetadata.toBaseIO
   if let .ok metadata := report then checkPrivateRegular path metadata
@@ -224,7 +245,8 @@ theorem bootstrapSegmented_fileEffects (dir : DiskDirectory) : bootstrapSegmente
 private def recoverSegmentedWal (dir : DiskDirectory) : IO WalSegmentRepair.Reopened := do
   rejectFlatWal dir
   if (← optionalMetadata (dir.file .walBoundary)).isSome then
-    WalSegmentRepair.reopenMarkedFastWith dir readOptionalFile FilePath.readDir inspectWalSegment readRequiredFile
+    WalSegmentRepair.reopenMarkedBoundedWith dir readOptionalFile FilePath.readDir inspectWalSegment
+      readRequiredFile readKeeperPrefix
       (fun path => (IO.FS.removeFile path).toBaseIO) writeFreshStagedFile syncPaths IO.FS.rename
   else
     bootstrapSegmented dir
@@ -258,7 +280,8 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
         let opened ← (do
           rejectFlatWal dir
           if (← optionalMetadata (dir.file .walBoundary)).isSome then
-            WalSegmentRepair.reopenMarkedFastWith dir readOptionalFile FilePath.readDir inspectWalSegment readRequiredFile
+            WalSegmentRepair.reopenMarkedBoundedWith dir readOptionalFile FilePath.readDir inspectWalSegment
+              readRequiredFile readKeeperPrefix
               (fun path => (IO.FS.removeFile path).toBaseIO) writeFreshStagedFile syncPaths IO.FS.rename
           else bootstrapSegmented dir : IO WalSegmentRepair.Reopened)
         DiskSession.installReady opened.installed (fun phase => IO.mkRef phase) (fun _ => IO.mkRef ())
