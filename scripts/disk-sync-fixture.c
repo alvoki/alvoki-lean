@@ -160,6 +160,40 @@ static void wait_for_release(const char *ready, const char *release, const char 
     _exit(125);
 }
 
+static void hold_owner(const char *ready, const char *release) {
+    char pid[32];
+    int length = snprintf(pid, sizeof(pid), "%ld\n", (long)getpid());
+    if (length < 0 || (size_t)length >= sizeof(pid)) _exit(125);
+    wait_for_release(ready, release, pid, (size_t)length);
+}
+
+size_t fwrite(const void *buffer, size_t size, size_t count, FILE *stream) {
+    size_t (*real_write)(const void *, size_t, size_t, FILE *) = dlsym(RTLD_NEXT, "fwrite");
+    if (real_write == NULL) {
+        errno = EIO;
+        return 0;
+    }
+    const char *target = getenv("ALVOKI_CHECK_APPEND_HOLD");
+    struct stat wanted, opened;
+    if (target == NULL || stat(target, &wanted) < 0 || fstat(fileno(stream), &opened) < 0 ||
+        opened.st_dev != wanted.st_dev || opened.st_ino != wanted.st_ino)
+        return real_write(buffer, size, count, stream);
+
+    const char *prefix = getenv("ALVOKI_CHECK_APPEND_PREFIX");
+    const char *ready = getenv("ALVOKI_CHECK_APPEND_PID");
+    const char *release = getenv("ALVOKI_CHECK_APPEND_RELEASE");
+    if (prefix == NULL || ready == NULL || release == NULL || size != 1) _exit(125);
+    char *end;
+    errno = 0;
+    unsigned long long bytes = strtoull(prefix, &end, 10);
+    if (errno != 0 || *end != '\0' || bytes == 0 || bytes >= count) _exit(125);
+
+    // Make a strict prefix visible before the native append callback returns.
+    if (real_write(buffer, 1, (size_t)bytes, stream) != bytes || fflush(stream) != 0) _exit(125);
+    hold_owner(ready, release);
+    _exit(125);
+}
+
 static _Noreturn void detached_sync(SyncFn real_sync, int fd, const char *identity) {
     struct stat status;
     if ((identity != NULL && fstat(fd, &status) < 0) || real_sync(fd) < 0) _exit(125);
@@ -179,9 +213,7 @@ static int hold_sync(SyncFn real_sync, int fd) {
     if (ready == NULL || release == NULL) return fail_sync();
 
     if (!same(getenv("ALVOKI_CHECK_SYNC_HOLD_MODE"), "detached")) {
-        char pid[32];
-        int length = snprintf(pid, sizeof(pid), "%ld\n", (long)getpid());
-        wait_for_release(ready, release, pid, (size_t)length);
+        hold_owner(ready, release);
         return real_sync(fd);
     }
 

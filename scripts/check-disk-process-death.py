@@ -90,14 +90,14 @@ def run_probe(binary, operation, database, *args, env=None):
         return process.returncode, stderr
 
 
-def wait_for_sync(owner, ready):
+def wait_for_cut(owner, ready, cut):
     deadline = time.monotonic() + TIMEOUT
     while time.monotonic() < deadline:
-        require(owner.poll() is None, "fixture owner exited before reaching WAL sync")
+        require(owner.poll() is None, f"fixture owner exited before reaching {cut}")
         with suppress(FileNotFoundError, ValueError):
             return int(ready.read_text())
         time.sleep(0.01)
-    raise RuntimeError("timed out waiting for the WAL sync child")
+    raise RuntimeError(f"timed out waiting for {cut}")
 
 
 def wait_for_child_success(pid, stage):
@@ -155,6 +155,69 @@ def check_fork_exec_lock(binary, shim, database):
         require(os.path.samestat(lock.stat(), original), "reopening changed the LOCK inode")
         owner.stdin.close()
         wait_for_child_success(child, "exec child")
+
+
+def check_batch_append_cut(binary, shim, root):
+    database = root / "db"
+    database.mkdir(parents=True)
+    for operation in ("--write-once", "--rotate-wal-once", "--write-once", "--checkpoint-once"):
+        status, stderr = run_probe(binary, operation, database)
+        require(status == 0, f"could not prepare batch append cut with {operation}: {stderr}")
+
+    wal = database / "WAL-segment-1"
+    marker = database / "WAL.commit"
+    staged_marker = database / "WAL.commit.next"
+    acknowledged = wal.read_bytes()
+    boundary = marker.read_bytes()
+    fixed_files = {database / name: (database / name).read_bytes()
+                   for name in ("MANIFEST", "run-1-0.v3", "WAL-segment-0")}
+
+    control = root / "control"
+    shutil.copytree(database, control)
+    status, stderr = run_probe(binary, "--batch-write-once", control)
+    require(status == 0, f"could not prepare exact batch append: {stderr}")
+    appended = (control / wal.name).read_bytes()
+    require(len(acknowledged) > 7 and len(appended) == 5 * len(acknowledged)
+            and appended.startswith(acknowledged), "the control did not append four frames")
+    prefix = len(acknowledged) + 7  # One complete frame and part of the next.
+    partial = appended[:len(acknowledged) + prefix]
+
+    ready = root / "append.pid"
+    with native_process(binary, "--batch-write-once", database, env={
+        **os.environ,
+        "LD_PRELOAD": str(shim),
+        "ALVOKI_CHECK_APPEND_HOLD": str(wal),
+        "ALVOKI_CHECK_APPEND_PREFIX": str(prefix),
+        "ALVOKI_CHECK_APPEND_PID": str(ready),
+        "ALVOKI_CHECK_APPEND_RELEASE": str(root / "release-append"),
+    }) as owner:
+        require(wait_for_cut(owner, ready, "the partial WAL append") == owner.pid,
+                "partial append paused in the wrong process")
+        require(wal.read_bytes() == partial, "paused append did not leave the exact partial batch")
+        require(marker.read_bytes() == boundary and not staged_marker.exists(),
+                "partial append reached marker publication")
+        status, stderr = run_probe(binary, "--open-once", database)
+        require(status != 0 and f"database already open: {database}" in stderr,
+                f"open did not report the live append owner's lock: {stderr}")
+        owner.kill()
+        require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "append owner was not killed")
+
+    require(wal.read_bytes() == partial and marker.read_bytes() == boundary and not staged_marker.exists(),
+            "owner exit changed the live append cut")
+    status, stderr = run_probe(binary, "--check-recovered-batch", database, "2", "old")
+    require(status == 0, f"open after the partial append changed the prior table: {stderr}")
+    require(wal.read_bytes() == acknowledged and marker.read_bytes() == boundary and not staged_marker.exists(),
+            "reopen did not discard the entire partial batch")
+    require(all(path.read_bytes() == data for path, data in fixed_files.items()),
+            "partial append recovery changed the checkpoint or sealed prefix")
+    status, stderr = run_probe(binary, "--batch-write-once", database)
+    require(status == 0, f"could not append a fresh batch after recovery: {stderr}")
+    status, stderr = run_probe(binary, "--check-recovered-batch", database, "2", "new")
+    require(status == 0, f"reopen did not recover the fresh batch: {stderr}")
+    require(wal.read_bytes() == appended and marker.read_bytes() == (control / marker.name).read_bytes(),
+            "the fresh batch did not extend the recovered keeper and marker exactly")
+    require(all(path.read_bytes() == data for path, data in fixed_files.items()),
+            "the fresh batch changed the checkpoint or sealed prefix")
 
 
 def check_process_death(binary, shim, root, after_rename, rotated, detached, batch):
@@ -231,7 +294,7 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached, bat
         "ALVOKI_CHECK_SYNC_RELEASE": str(release),
         "ALVOKI_CHECK_SYNC_OBJECT": str(identity),
     }) as owner:
-        sync_pid = wait_for_sync(owner, ready)
+        sync_pid = wait_for_cut(owner, ready, "WAL sync")
         require((sync_pid != owner.pid) == detached, "sync paused in the wrong process")
         require(os.getpgid(sync_pid) == owner.pid, "sync escaped the fixture process group")
         require(wal.read_bytes() == appended, "paused write did not leave the exact submitted WAL bytes")
@@ -314,6 +377,7 @@ if __name__ == "__main__":
             check=True,
         )
         check_fork_exec_lock(binary, shim, root / "fork-exec")
+        check_batch_append_cut(binary, shim, root / "batch-append-cut")
         for batch in (False, True):
             for rotated in (False, True):
                 for after_rename in (False, True):
@@ -322,4 +386,5 @@ if __name__ == "__main__":
                         case.mkdir()
                         check_process_death(binary, shim, case, after_rename, rotated, detached, batch)
     print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
+    print("Recovered the exact prior table after writer exit during a partial native batch append.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")
