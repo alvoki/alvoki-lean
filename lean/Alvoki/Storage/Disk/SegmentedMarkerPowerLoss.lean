@@ -32,15 +32,6 @@ private theorem markerCutChoices (cut : MarkerInterruption) (before : SegmentedW
   exact ⟨congrArg (List.map (DirectoryPublication.Bindings.mk before.wal.directory.active.manifest)) markers,
     congrArg (List.map (fun tail => some (WAL.encode (before.history.drop before.wal.active.first) ++ tail))) tails⟩
 
-private theorem joinAttempts {directory admits initial middle after}
-    (earlier : BoundedReopenTrace directory admits initial middle)
-    (rest : BoundedReopenTrace directory admits middle after) : BoundedReopenTrace directory admits initial after := by
-  induction rest with
-  | empty => exact earlier
-  | failed _ attempt acquisition unlock reports ran ih => exact .failed ih attempt acquisition unlock reports ran
-  | referenceDrops _ references drops ih => exact .referenceDrops ih references drops
-  | powerLoss _ metadata keeper later ih => exact .powerLoss ih metadata keeper later
-
 private theorem fixedAppendPair {directory : DiskDirectory} {before retry : LockedFileState FileImage}
     {history : List WAL.Write} {event : WAL.Write} {first : Nat}
     (attempts : BoundedReopenTrace directory (AppendRetryTarget history event first) before retry)
@@ -160,7 +151,7 @@ private theorem Valid.modeledRetries {report : SegmentedMarkerPowerLossReport di
   have first : BoundedReopenTrace directory (AppendRetryTarget before.history report.event before.wal.active.first)
       ⟨modeled, before.owners⟩ report.crashed :=
     .powerLoss .empty (markers ▸ observed.metadata) (keepers ▸ observed.payload) (List.mem_singleton_self _)
-  exact joinAttempts first report.attempts
+  exact first.trans report.attempts
 
 /-- Recover from the actual physical power-loss cut, then run the healthy
 bounded open on the exact surviving files. The marker chooses the old

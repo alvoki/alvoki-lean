@@ -939,6 +939,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.reopensRetainedAppendError
 #check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.atBoundedReplacementBarrier
 #check_axioms Alvoki.Storage.DiskSession.DelayedKeeperReplacementPowerLoss.reopensRetainedCached
+#check_axioms Alvoki.Storage.DiskSession.DelayedKeeperReplacementPowerLoss.reopensRetainedCachedAfter
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.trans
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.continuesLineage
 #check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_crashImages_subset
 #check_axioms Alvoki.Storage.WalSegmentRepair.Prepared.allowVisibleKeeper

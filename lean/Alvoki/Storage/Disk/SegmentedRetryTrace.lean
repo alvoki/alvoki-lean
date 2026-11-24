@@ -201,6 +201,16 @@ inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Pr
       BoundedReopenTrace directory admits initial
         ⟨before.image.crash pair bytes names, before.owners.set (directory.file .lock) none⟩
 
+/-- The reached state of one retry trace is the starting state of the next. -/
+theorem BoundedReopenTrace.trans {directory admits initial middle after}
+    (earlier : BoundedReopenTrace directory admits initial middle)
+    (later : BoundedReopenTrace directory admits middle after) : BoundedReopenTrace directory admits initial after := by
+  induction later with
+  | empty => exact earlier
+  | failed _ attempt acquisition unlock reports ran ih => exact .failed ih attempt acquisition unlock reports ran
+  | referenceDrops _ references drops ih => exact .referenceDrops ih references drops
+  | powerLoss _ metadata keeper names ih => exact .powerLoss ih metadata keeper names
+
 /-- Continue the lineage after an observed effect before the next open. -/
 theorem BoundedReopenTrace.continuesLineage {directory : DiskDirectory} {admits : Target → Prop}
     {initial after : LockedFileState FileImage} {source : FileImage}

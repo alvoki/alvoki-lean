@@ -71,17 +71,6 @@ private theorem reachesSurvivors (cut : DelayedKeeperReplacementPowerLoss direct
     .powerLoss .empty pair keeper later, target, full, admitted, prepared,
     physicalCover.crash trace pair keeper later⟩
 
-private theorem followedBy {initial middle final : LockedFileState FileImage}
-    (earlier : BoundedReopenTrace directory admits initial middle)
-    (later : BoundedReopenTrace directory admits middle final) :
-    BoundedReopenTrace directory admits initial final := by
-  induction later with
-  | empty => exact earlier
-  | failed _ attempt acquisition localUnlock reports ran ih =>
-    exact .failed ih attempt acquisition localUnlock reports ran
-  | referenceDrops _ references drops ih => exact .referenceDrops ih references drops
-  | powerLoss _ metadata keeper names ih => exact .powerLoss ih metadata keeper names
-
 private theorem continuesAuthorized {initial final : LockedFileState FileImage} {source : FileImage}
     {target : Target} {plan : Plan}
     (attempts : BoundedReopenTrace directory admits initial final)
@@ -223,7 +212,7 @@ theorem reopensRetainedCachedAfter {before : SegmentedWriterState} {writer nextD
     exact offsets
   have retained : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept := retainedSeals
   have active : wal.directory.active = selected.target.pair := rfl
-  refine ⟨followedBy poweredOff attempts, exactPair, history, allowed, selected, ?_⟩
+  refine ⟨poweredOff.trans attempts, exactPair, history, allowed, selected, ?_⟩
   intro reportedWal raw sizes cached settles healthy
   have opened := runOpenWithInstallation_appendLayout readLayout ordered selected keeperEq selectedDescriptors
     selectedOffsets (same.symm ▸ retryPrepared) laterEmpty accepted generation raw liveRefs fresh acquisition unlock
