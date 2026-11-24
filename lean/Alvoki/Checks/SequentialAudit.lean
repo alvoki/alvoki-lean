@@ -58,6 +58,7 @@ import Alvoki.Storage.Disk.WalSegmentRepairOpen
 import Alvoki.Storage.Disk.WalSegmentReopenEffects
 import Alvoki.Storage.Disk.WalSegmentReplayStability
 import Alvoki.Storage.Disk.WalSegmentRetryReads
+import Alvoki.Storage.Disk.WalSegmentRetryReadEffects
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
@@ -502,6 +503,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.OpenPathReadReports.readIntegrityCheckpoint_exact
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.watermark
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.prepareObservedRetry
+#check_axioms Alvoki.Storage.WalSegmentRepair.prepareMarkedWith_liftReports
+#check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.completesObservedRetry
 #check_axioms Alvoki.Storage.OpenPathReadReports.readWalSegmentsWith_reports
 #check_axioms Alvoki.Storage.concatenateReadWalSegmentPayloads
 #check_axioms Alvoki.Storage.WalSegmentRecovery.recoversReadBytes
