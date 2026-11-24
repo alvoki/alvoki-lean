@@ -79,7 +79,7 @@ theorem runOpenWithInstallation_appendLayout {directory : DiskDirectory} {owners
       write sync renameFile files = .ok () after := by
     rw [selected.boundedPlan_eq_extract, finishBoundedMarkedOpen_eq_full directory selected.plan prepared.valid, finished]
   have installed : raw.reopen removeFile write sync renameFile files = .ok opened after := by
-    dsimp only [HealthyBoundedWalReports.reopen, reopenMarkedBoundedWith]
+    dsimp only [HealthyBoundedWalReports.reopen, HealthyBoundedWalReports.reopenWithState, reopenMarkedBoundedWith]
     rw [prepareBoundedMarkedWith_liftReports, bounded]
     simp only [liftExcept, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, finish, opened]
   obtain ⟨session, final, result, path, lock, ready, image, _, held, separate, phaseFresh, sessionFresh⟩ :=

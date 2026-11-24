@@ -115,7 +115,8 @@ theorem runOpenWithInstallation_checkpointCut {directory : DiskDirectory} {owner
       Bool.and_self, ite_true, plan, List.isEmpty_nil, Bind.bind, EStateM.bind, syncDirectory, syncKeeper]
   have installed : recoverCheckpointCut raw removeFile write sync renameFile files =
       .ok opened files.syncDirectory.syncKeeper := by
-    dsimp only [recoverCheckpointCut, HealthyBoundedWalReports.reopen, reopenMarkedBoundedWith]
+    dsimp only [recoverCheckpointCut, HealthyBoundedWalReports.reopen, HealthyBoundedWalReports.reopenWithState,
+      reopenMarkedBoundedWith]
     rw [prepareBoundedMarkedWith_liftReports, exactBounded]
     simp only [liftExcept, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, finish]
   obtain ⟨session, final, result, path, lock, phase, image, _, held, distinct, phaseFresh, sessionFresh⟩ :=
