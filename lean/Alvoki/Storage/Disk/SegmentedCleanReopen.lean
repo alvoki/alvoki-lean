@@ -72,7 +72,6 @@ the new description, reloads its exact checkpoint and WAL, and allocates
 fresh references for the new session. -/
 theorem SegmentedWriterState.Ready.cleanReopen {directory : DiskDirectory} {descriptor nextDescriptor nextRef : Nat}
     {state : SegmentedWriterState} (ready : state.Ready directory descriptor)
-    (freshDescriptor : nextDescriptor ≠ descriptor)
     (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef) (unlock : UnlockReport)
     (raw : HealthyCheckpointCutReports directory
       ((state.owners.set (directory.file .lock) none).set (directory.file .lock) (some nextDescriptor))
@@ -91,8 +90,7 @@ theorem SegmentedWriterState.Ready.cleanReopen {directory : DiskDirectory} {desc
       let next := { state with installed := { state.installed with table }, owners := final.owners }
       attempt.run directory released = .ok session final ∧
       final.image = state.files ∧ final.owners = released.owners.set (directory.file .lock) (some nextDescriptor) ∧
-      session.directory = directory ∧ session.descriptor = nextDescriptor ∧
-      session.descriptor ≠ descriptor ∧ session.phase = .ready next.installed ∧
+      session.directory = directory ∧ session.descriptor = nextDescriptor ∧ session.phase = .ready next.installed ∧
       session.phaseRef = nextRef ∧ session.sessionRef = nextRef + 1 ∧
       session.phaseRef ≠ session.sessionRef ∧ session.phaseRef ∉ liveRefs ∧ session.sessionRef ∉ liveRefs ∧
       table.pins.active = [] ∧ next.Ready directory nextDescriptor := by
@@ -147,7 +145,87 @@ theorem SegmentedWriterState.Ready.cleanReopen {directory : DiskDirectory} {desc
       ready.resumed.generation, ready.resumed.selected, ready.resumed.accepted, ready.resumed.ordered,
       bounds, ⟨model, refines, history⟩⟩, ready.layout, ready.chain, ready.directoryFiles, ready.sealedFiles, ready.active,
       ready.manifestFiles, held⟩
-  exact ⟨closed, session, final, table, reopened, filesAfter, identities.1, path, lock, lock ▸ freshDescriptor,
+  exact ⟨closed, session, final, table, reopened, filesAfter, identities.1, path, lock,
     installed, identities.2.1, identities.2.2, separate, freshPhase, freshSession, pins, nextReady⟩
+
+/-- The read and effect reports used to reopen a settled writer after its
+explicit close. A new allocation supplies the session reference identities. -/
+structure SegmentedCleanReopenReport (directory : DiskDirectory) (before : SegmentedWriterState)
+    (oldDescriptor nextDescriptor : Nat) where
+  nextRef : Nat
+  liveRefs : List Nat
+  unlock : UnlockReport
+  raw : HealthyCheckpointCutReports directory
+    ((before.owners.set (directory.file .lock) none).set (directory.file .lock) (some nextDescriptor))
+    nextDescriptor before.wal before.wal.directory.active before.target.range.watermark before.published.durable
+  removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit)
+  write : FilePath → ByteArray → EStateM IO.Error FileImage Unit
+  sync : Array FilePath → EStateM IO.Error FileImage Unit
+  renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit
+
+namespace SegmentedCleanReopenReport
+
+variable {directory : DiskDirectory} {before : SegmentedWriterState} {oldDescriptor nextDescriptor : Nat}
+
+def released (directory : DiskDirectory) (before : SegmentedWriterState) : LockedFileState FileImage :=
+  ⟨before.files, before.owners.set (directory.file .lock) none⟩
+
+def attempt (report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor) : BoundedReopenAttempt :=
+  report.raw.openAttempt report.nextRef report.unlock report.removeFile report.write report.sync report.renameFile
+
+structure Valid (report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor) : Prop where
+  fresh : ∀ ref ∈ report.liveRefs, ref < report.nextRef
+  syncDirectory : report.sync #[directory.path] before.files = .ok () before.files
+  syncKeeper : report.sync #[directory.file (.walSegment before.wal.active.first)] before.files = .ok () before.files
+
+private def reopenedWriter (before : SegmentedWriterState) (table : PackedTable) (owners : LockOwners) :
+    SegmentedWriterState :=
+  { before with installed := { before.installed with table }, owners }
+
+/-- The exact return from the shared close and subsequent bounded attempt.
+A reused numeric descriptor still receives fresh session references. -/
+structure Installs (report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor)
+    (after : SegmentedWriterState) : Prop where
+  closeEffect : runCloseWithFiles directory oldDescriptor .success (.ready before.installed, ⟨before.files, before.owners⟩) =
+    .ok () (.closed, released directory before)
+  openEffect : ∃ session final table,
+    report.attempt.run directory (released directory before) = .ok session final ∧
+    final.image = before.files ∧ session.phase = .ready (reopenedWriter before table final.owners).installed ∧
+    after = reopenedWriter before table final.owners
+
+theorem installs (report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor)
+    (observed : report.Valid) (ready : before.Ready directory oldDescriptor) :
+    ∃ after, report.Installs after ∧ after.Ready directory nextDescriptor := by
+  obtain ⟨closed, session, final, table, opened, files, _, _, _, phase, _, _, _, _, _, _, next⟩ :=
+    ready.cleanReopen report.liveRefs observed.fresh report.unlock report.raw report.removeFile report.write
+      report.sync report.renameFile observed.syncDirectory observed.syncKeeper
+  exact ⟨reopenedWriter before table final.owners, ⟨closed, session, final, table, opened, files, phase, rfl⟩, next⟩
+
+theorem Installs.unique {report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor}
+    {left right : SegmentedWriterState} (a : report.Installs left) (b : report.Installs right) : left = right := by
+  obtain ⟨_, _, leftTable, leftOpen, _, leftPhase, rfl⟩ := a.openEffect
+  obtain ⟨_, _, rightTable, rightOpen, _, rightPhase, rfl⟩ := b.openEffect
+  obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj (leftOpen.symm.trans rightOpen)
+  have same : leftTable = rightTable := congrArg Installed.table (Phase.ready.inj (leftPhase.symm.trans rightPhase))
+  rw [same]
+
+theorem Installs.preservesReady {report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor}
+    {after : SegmentedWriterState} (endpoint : report.Installs after) (observed : report.Valid)
+    (ready : before.Ready directory oldDescriptor) : after.Ready directory nextDescriptor := by
+  obtain ⟨_, exactEndpoint, next⟩ := report.installs observed ready
+  exact exactEndpoint.unique endpoint ▸ next
+
+theorem Installs.history {report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor}
+    {after : SegmentedWriterState} (endpoint : report.Installs after) : after.history = before.history := by
+  obtain ⟨_, _, _, _, _, _, rfl⟩ := endpoint.openEffect
+  rfl
+
+theorem Installs.generation {report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor}
+    {after : SegmentedWriterState} (endpoint : report.Installs after) :
+    after.installed.generation = before.installed.generation := by
+  obtain ⟨_, _, _, _, _, _, rfl⟩ := endpoint.openEffect
+  rfl
+
+end SegmentedCleanReopenReport
 
 end Alvoki.Storage.DiskSession
