@@ -443,3 +443,7 @@ A delayed directory sync settles the manifest and marker visible when it takes e
 ## Legacy recovery can start a mixed database trace
 
 When the existing checkpoint represents its covered prefix of the validated legacy WAL, the exact result of recovery is a ready mixed-trace state with fresh pins, preserved run bindings and that full canonical WAL history. This holds whether the first marker survived the earlier adoption attempt or needed to be published on retry. [Legacy trace entry](../lean/Alvoki/Storage/Disk/LegacyTraceEntry.lean)
+
+## Exact recovery completion through the shared lock schedule
+
+All five admitted recovery boundaries identify their concrete evaluator. Under the acquired lock, the evaluator's successful result supplies the exact installation and file image to the outer native open schedule. The returned table, generation, WAL byte count and committed count match the settled selected history and the handle owns the lock. The boundary's file reports refer to the same directory under the existing locked namespace contract. [Locked recovery completion](../lean/Alvoki/Storage/Disk/LockedRecoveryCompletion.lean)

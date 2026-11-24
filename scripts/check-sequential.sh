@@ -63,6 +63,7 @@ lake env leanchecker Alvoki.Storage.Disk.LockedOpenFileReads
 lake env leanchecker Alvoki.Storage.Disk.LockedMarkedRead
 lake env leanchecker Alvoki.Storage.Disk.LockedRecoveryReads
 lake env leanchecker Alvoki.Storage.Disk.LegacyTraceEntry
+lake env leanchecker Alvoki.Storage.Disk.LockedRecoveryCompletion
 lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapRetry
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery
