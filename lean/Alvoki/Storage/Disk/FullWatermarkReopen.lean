@@ -5,25 +5,6 @@ namespace Alvoki.Storage
 open Alvoki.Compaction (CheckedRun)
 open Alvoki.Sequential (SnapshotTable)
 
-private theorem loadRunSet_clearsPins {header : Manifest.Checkpoint} {files : List ByteArray}
-    {table : PackedTable} (loaded : loadRunSet header files = .ok table) :
-    table.pins.active = [] := by
-  unfold loadRunSet at loaded
-  split at loaded
-  · contradiction
-  · cases decoded : files.mapM CheckedRun.openBytes with
-    | error => rw [decoded] at loaded; contradiction
-    | ok runs =>
-      rw [decoded] at loaded
-      change (match PackedTable.restore runs header.committed header.floor with
-        | none => Except.error _
-        | some restored => Except.ok restored) = Except.ok table at loaded
-      split at loaded
-      · contradiction
-      · rename_i restored restoredEq
-        cases loaded
-        exact (PackedTable.restore_spec restoredEq).2.2.2.2
-
 /-- The exact manifest and runs prepared from a refined table can reopen with
 its entire committed WAL still present. Every selected frame is validated, but
 the full checkpoint watermark leaves nothing to replay. Old snapshot pins

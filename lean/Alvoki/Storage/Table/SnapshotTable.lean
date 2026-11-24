@@ -35,6 +35,14 @@ structure SnapshotTable (α : Type) where
 def SnapshotTable.empty : SnapshotTable α :=
   ⟨⟨[], .empty⟩, 0, .empty, UInt64.le_refl _, by simp [SnapshotPins.empty]⟩
 
+/-- A session's pin registry can be attached to the same abstract data and retention floor. -/
+theorem SnapshotTable.exists_reboundPins (state : SnapshotTable α) (pins : SnapshotPins)
+    (floor : pins.floor = state.pins.floor)
+    (committed : ∀ pin ∈ pins.active, pin.sequence ≤ state.committed) :
+    ∃ rebound : SnapshotTable α, rebound.table = state.table ∧
+      rebound.committed = state.committed ∧ rebound.pins = pins :=
+  ⟨⟨state.table, state.committed, pins, floor.symm ▸ state.floor_committed, committed⟩, rfl, rfl, rfl⟩
+
 def SnapshotTable.acquireAt (state : SnapshotTable α) (snapshot : UInt64) :
     Option (SnapshotPin × SnapshotTable α) :=
   match h : state.pins.acquire state.committed snapshot with

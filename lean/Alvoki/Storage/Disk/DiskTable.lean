@@ -136,6 +136,25 @@ def loadRunSet (header : Manifest.Checkpoint) (files : List ByteArray) : Except 
   let runs ← files.mapM CheckedRun.openBytes
   installRuns runs header
 
+/-- A loaded checkpoint starts a new session with no active snapshot pins. -/
+theorem loadRunSet_clearsPins {header : Manifest.Checkpoint} {files : List ByteArray}
+    {table : PackedTable} (loaded : loadRunSet header files = .ok table) :
+    table.pins.active = [] := by
+  unfold loadRunSet at loaded
+  split at loaded
+  · contradiction
+  · cases decoded : files.mapM CheckedRun.openBytes with
+    | error => rw [decoded] at loaded; contradiction
+    | ok runs =>
+      rw [decoded] at loaded
+      change installRuns runs header = Except.ok table at loaded
+      unfold installRuns at loaded
+      split at loaded
+      · contradiction
+      · rename_i restored restoredEq
+        cases loaded
+        exact (PackedTable.restore_spec restoredEq).2.2.2.2
+
 private theorem readWrittenRuns (runs : List CheckedRun) :
     (runs.map (·.run.bytes)).mapM CheckedRun.openBytes = Except.ok runs := by
   induction runs with

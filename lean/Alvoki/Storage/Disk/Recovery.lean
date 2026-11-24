@@ -120,6 +120,27 @@ theorem replay_committed_count {state result : PackedTable} (events : List Write
       simp only [ih applied, replayWrite_advances step, List.length_cons]
       omega
 
+/-- WAL replay issues no snapshot handles and preserves the whole registry. -/
+theorem replay_pins {state result : PackedTable} {events : List Write}
+    (applied : replay state events = .ok result) : result.pins = state.pins := by
+  induction events generalizing state with
+  | nil => exact congrArg PackedTable.pins (Except.ok.inj applied).symm
+  | cons event rest ih =>
+    unfold replay at applied
+    rw [List.foldlM_cons] at applied
+    cases step : replayWrite state event with
+    | error => rw [step] at applied; contradiction
+    | ok next =>
+      rw [step] at applied
+      have samePins : next.pins = state.pins := by
+        have written := (replayWrite_spec step).1
+        unfold PackedTable.write at written
+        split at written
+        · cases written
+          rfl
+        · contradiction
+      exact (ih (state := next) applied).trans samePins
+
 /-- Each correctly numbered event supplies a representable next sequence, so
 replaying a contiguous suffix cannot hit the write path's exhaustion guard. -/
 theorem replay_ordinals_complete (state : PackedTable) (events : List Write)

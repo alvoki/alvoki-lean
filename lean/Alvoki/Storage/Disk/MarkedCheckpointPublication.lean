@@ -169,6 +169,128 @@ theorem checkpointMarkedRetry_recoveryInputs {initial published : Image}
     contents, written, property, durable, watermark, Option.some.inj (presentMarker.symm.trans boundary),
     presentMarker, presentWal, selected⟩
 
+private theorem replay_keeps_pins {before after : Sequential.SnapshotTable UInt64}
+    {events : List WAL.Write} (replayed : SnapshotWalReplay before events after) :
+    after.pins = before.pins := by
+  induction replayed with
+  | nil => rfl
+  | cons written _ _ ih => exact ih.trans (Sequential.SnapshotTable.write_spec written).2.1
+
+/-- After checkpoint cuts and reopen retries, the successful shared reopen
+loads the exact ordered files named by the visible manifest and replays the
+remaining part of the same WAL. The checkpoint witness relates its model to
+the covered prefix. Fresh pins read that model's replay at the selected floor. -/
+theorem checkpointMarkedRetry_reopen_refines {initial published : Image}
+    {before reopenStart after : ReopenImage} {manifest : Option ByteArray}
+    {history : List WAL.Write} {table : PackedTable}
+    {expected : Manifest.Checkpoint → List ByteArray → Prop}
+    {representsPrefix : List WAL.Write → Sequential.SnapshotTable UInt64 → Prop}
+    (settled : before.SettledFor manifest history)
+    (projects : initial.manifest = before.directory.project .manifest)
+    (fits : (WAL.encode history).size < UInt64.size) (ordered : WAL.OrdinalsFrom 1 history)
+    (initialValid : initial.Valid history.length.toUInt64 expected)
+    (emptyValid : representsPrefix [] .empty)
+    (witness : ∀ header files, expected header files →
+      ∃ checkpoint model, CheckpointForRecovery (some (Manifest.encode header)) files checkpoint ∧
+        checkpoint.Refines model ∧ representsPrefix (history.take checkpoint.committed.toNat) model)
+    (checkpoints : Retry history.length.toUInt64 expected initial published)
+    (attempts : MarkedReopenAttempts (published.markedReopenImage before) reopenStart)
+    (checkpointReads : CheckpointReadObservations published reopenStart.directory.active.manifest)
+    (walReads : MarkedWalReads reopenStart)
+    {report : Publication.Step → RepairReport} {aligned : AlignedSyncReport}
+    (opened : runMarkedReopen
+      (MarkedReopenReads.mk walReads
+        (checkpointReads.result.map fun loaded => (loaded.getD (.empty, 0)).1)).preflight
+      report false aligned reopenStart = .ok table after) :
+    after.SettledFor reopenStart.directory.active.manifest history ∧
+    published.Accepts history.length.toUInt64 expected reopenStart.directory.active.manifest ∧
+    table.committed.toNat = history.length ∧
+    ∃ files checkpoint base model abstract,
+      CheckpointForRecovery reopenStart.directory.active.manifest files checkpoint ∧
+      published.readDurableCheckpointRuns reopenStart.directory.active.manifest = some files ∧
+      (match reopenStart.directory.active.manifest with
+      | none => Except.ok PackedTable.empty
+      | some bytes => do
+        let header ← Manifest.decode bytes
+        loadRunSet header files) = .ok base ∧
+      base.SameData checkpoint ∧
+      recoverSelected base (WAL.encode history) = .ok table ∧
+      replay base (history.drop checkpoint.committed.toNat) = .ok table ∧
+      checkpoint.Refines model ∧ representsPrefix (history.take checkpoint.committed.toNat) model ∧
+      SnapshotWalReplay model (history.drop checkpoint.committed.toNat) abstract ∧
+      abstract.committed.toNat = history.length ∧ abstract.pins.floor = checkpoint.pins.floor ∧
+      ∀ snapshot : UInt64, checkpoint.pins.floor ≤ snapshot → snapshot.toNat ≤ history.length →
+        ∃ pin pinned, table.acquireAt snapshot = some (pin, pinned) ∧
+          (∀ key, pinned.lookup pin.handle key = some (abstract.table.lookup key snapshot)) ∧
+          (∀ start stop, pinned.range pin.handle start stop =
+            some (abstract.table.range start stop snapshot)) := by
+  have emptyCheckpoint : ∃ model, PackedTable.empty.Refines model ∧
+      representsPrefix (history.take PackedTable.empty.committed.toNat) model :=
+    ⟨.empty, PackedTable.empty_refines, by simpa [PackedTable.empty] using emptyValid⟩
+  obtain ⟨_, accepted, files, checkpoint, selectedMarker, selectedContents, written,
+    ⟨model, represents, prefixMatches⟩, durable, coveredLength, markerExact, markerAs, walAs, selects⟩ :=
+    checkpointMarkedRetry_recoveryInputs
+      (invariant := fun checkpoint => ∃ model, checkpoint.Refines model ∧
+        representsPrefix (history.take checkpoint.committed.toNat) model)
+      settled projects fits initialValid emptyCheckpoint
+      (fun header files valid => by
+        obtain ⟨checkpoint, model, written, represents, samePrefix⟩ := witness header files valid
+        exact ⟨checkpoint, written, model, represents, samePrefix⟩)
+      checkpoints attempts (List.mem_cons_self ..) (List.mem_cons_self ..)
+  have bound := published.markedReopenImage_markerBound settled (checkpoint_retry_valid initialValid checkpoints)
+  obtain ⟨base, marker, contents, selected, length, checkpointOpened, markerVisible,
+    walVisible, decoded, selectedResult, replayed, directory, walActive, walChoices⟩ :=
+    MarkedReopenReads.success _ ((attempts.toRetry bound).markerBound bound) opened
+  have sameMarker := Option.some.inj (markerAs.symm.trans markerVisible)
+  have sameContents := Option.some.inj (walAs.symm.trans walVisible)
+  rw [sameMarker, sameContents, decoded] at selects
+  have selectedEq := Except.ok.inj (selectedResult.symm.trans selects)
+  subst selected
+  change checkpointReads.result.map (fun loaded => (loaded.getD (.empty, 0)).1) = .ok base
+    at checkpointOpened
+  obtain ⟨loaded, loadResult, sameLoaded⟩ : ∃ loaded, checkpointReads.result = .ok loaded ∧
+      (loaded.getD (.empty, 0)).1 = base := by
+    cases loadResult : checkpointReads.result with
+    | error => rw [loadResult] at checkpointOpened; contradiction
+    | ok result =>
+      rw [loadResult] at checkpointOpened
+      exact ⟨result, rfl, Except.ok.inj checkpointOpened⟩
+  have actualBase := checkpointReads.loaded_table durable loadResult
+  rw [sameLoaded] at actualBase
+  obtain ⟨referenceBase, expectedLoad, same⟩ := written.loads
+  have sameBase := Except.ok.inj (actualBase.symm.trans expectedLoad)
+  subst referenceBase
+  let covered := history.take checkpoint.committed.toNat
+  let suffix := history.drop checkpoint.committed.toNat
+  have splitHistory : covered ++ suffix = history := List.take_append_drop ..
+  have count : covered.length = base.committed.toNat := by
+    simp [covered, List.length_take, Nat.min_eq_left coveredLength, same.committed]
+  have played : replay base suffix = .ok table :=
+    (recoverSelected_encoded base covered suffix (splitHistory.symm ▸ ordered) count).symm.trans
+      (splitHistory.symm ▸ replayed)
+  have committed : table.committed.toNat = history.length := by
+    rw [replay_committed_count suffix played, ← count, ← List.length_append, splitHistory]
+  obtain ⟨reference, replay, agrees⟩ := replay_sameData same.symm suffix played
+  obtain ⟨abstract, modeled, refined⟩ := replay_refines represents replay
+  have keepsFloor : abstract.pins.floor = checkpoint.pins.floor := by
+    rw [replay_keeps_pins modeled, represents.pins]
+  refine ⟨⟨?_, ?_, walActive, walActive.symm ▸ walChoices⟩, accepted, committed,
+    files, checkpoint, base, model, abstract, written, durable, actualBase, same, replayed, played,
+    represents, prefixMatches, modeled, ?_, keepsFloor, ?_⟩
+  · rw [directory]
+    change (⟨reopenStart.directory.active.manifest, reopenStart.directory.active.walBoundary⟩ :
+      DirectoryPublication.Bindings) = ⟨_, _⟩
+    rw [markerAs, markerExact]
+  · rw [directory]
+    rfl
+  · rw [← refined.committed, agrees.committed, committed]
+  · intro snapshot retained within
+    have floor : reference.pins.floor ≤ snapshot := by
+      simpa only [refined.pins, keepsFloor] using retained
+    have upper : snapshot ≤ reference.committed := UInt64.le_iff_toNat_le.mpr (by
+      simpa only [agrees.committed, committed] using within)
+    simpa only [refined.table] using agrees.symm.acquireAt_reads floor upper
+
 /-- The full checkpoint schedule settles the new manifest with the same WAL
 and installs the exact run bytes for the new generation. -/
 theorem checkpointMarked_complete {initial : Image} {before : ReopenImage}

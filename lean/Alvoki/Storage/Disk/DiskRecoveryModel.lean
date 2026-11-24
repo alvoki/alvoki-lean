@@ -268,6 +268,23 @@ private theorem CheckpointForRecovery.ordered_durable_runs {image : CheckpointPu
     subst stored
     exact read_durable_runs decoded count durable
 
+/-- Project the native checkpoint read to its replay base, using the exact
+ordered run bytes from durability. An absent manifest supplies the empty table. -/
+theorem CheckpointReadObservations.loaded_table {image : CheckpointPublication.Image}
+    {manifest : Option ByteArray} {files : List ByteArray} {loaded : Option (PackedTable × UInt64)}
+    (reads : CheckpointReadObservations image manifest)
+    (durable : image.readDurableCheckpointRuns manifest = some files)
+    (opened : reads.result = .ok loaded) :
+    (match manifest with
+    | none => Except.ok PackedTable.empty
+    | some bytes => do
+      let header ← Manifest.decode bytes
+      loadRunSet header files) = .ok (loaded.getD (.empty, 0)).1 := by
+  have exactLoaded := reads.loaded durable opened
+  have table := congrArg (fun (result : Except String (Option (PackedTable × UInt64))) =>
+    (fun checkpoint => (checkpoint.getD (.empty, 0)).1) <$> result) exactLoaded
+  cases manifest <;> simp [← bind_pure_comp, bind_assoc] at table <;> exact table
+
 /-- Connecting the successful native read protocol to recovery's loading
 equation identifies the exact base table supplied to WAL replay. -/
 theorem CheckpointForRecovery.loaded_observation {image : CheckpointPublication.Image}
@@ -283,10 +300,7 @@ theorem CheckpointForRecovery.loaded_observation {image : CheckpointPublication.
     | some bytes => do
       let header ← Manifest.decode bytes
       loadRunSet header files) = .ok (loaded.getD (.empty, 0)).1 := by
-  have exactLoaded := reads.loaded (written.ordered_durable_runs accepted) opened
-  have table := congrArg (fun (result : Except String (Option (PackedTable × UInt64))) =>
-    (fun checkpoint => (checkpoint.getD (.empty, 0)).1) <$> result) exactLoaded
-  cases manifest <;> simp [← bind_pure_comp, bind_assoc] at table <;> exact table
+  exact reads.loaded_table (written.ordered_durable_runs accepted) opened
 
 /-- The session uses generation zero for an absent manifest and the decoded
 generation for a successfully loaded manifest. -/
@@ -369,7 +383,7 @@ private theorem ordinals_prefix {first : Nat} {initial suffix : List WAL.Write}
   | nil => trivial
   | cons event rest ih => exact ⟨ordered.1, ih ordered.2⟩
 
-private theorem PackedTable.SameData.symm {left right : PackedTable} (same : left.SameData right) :
+theorem PackedTable.SameData.symm {left right : PackedTable} (same : left.SameData right) :
     right.SameData left :=
   ⟨same.runs.symm, same.memory.symm, same.committed.symm, same.floor.symm⟩
 

@@ -8,6 +8,7 @@ import Alvoki.Storage.Disk.MarkedReopenStability
 import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Disk.MarkedCheckpointPublication
 import Alvoki.Storage.Disk.MarkedCheckpointReady
+import Alvoki.Storage.Disk.RecoveredPinRefinement
 import Alvoki.Storage.Publication.DiskPublicationModel
 import Alvoki.Storage.Disk.WalBoundaryModel
 import Alvoki.Storage.Disk.MarkedWalReopenModel
@@ -66,6 +67,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskDirectory.paths_independent_of_cwd
 #check_axioms Alvoki.Storage.loadRunSet_written
 #check_axioms Alvoki.Storage.reopenFullWatermarkCheckpoint_refines
+#check_axioms Alvoki.Storage.recoverSelectedCheckpoint_refines_recoveredPins
 #check_axioms Alvoki.Storage.recoverRunSet_written
 #check_axioms Alvoki.Storage.replay_committed_count
 #check_axioms Alvoki.Storage.replay_ordinals_complete
@@ -79,6 +81,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest_with
 #check_axioms Alvoki.Storage.readCheckpointRunBytes_eq_mapM
 #check_axioms Alvoki.Storage.CheckpointReadObservations.loaded
+#check_axioms Alvoki.Storage.CheckpointReadObservations.loaded_table
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loaded_observation
 #check_axioms Alvoki.Storage.recoverWriteCutSelectedPair
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_cut_valid
@@ -86,6 +89,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_retry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_recoveryInputs
+#check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_reopen_refines
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarked_complete
 #check_axioms Alvoki.WAL.Boundary.checkpointMarked_ready
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.unreachable_after_reopen
