@@ -58,6 +58,11 @@ lake env leanchecker Alvoki.Storage.Disk.SessionReadGuards
 lake env leanchecker Alvoki.Storage.Disk.MarkedOpenControl
 lake env leanchecker Alvoki.Storage.Disk.DiskLockLifecycle
 lake env leanchecker Alvoki.Storage.Disk.RunGenerationCollection
+lake env leanchecker Alvoki.Storage.Disk.RunFileName
+lake env leanchecker Alvoki.Storage.Disk.RunFileInventory
+lake env leanchecker Alvoki.Storage.Disk.RunUnlinkEffects
+lake env leanchecker Alvoki.Storage.Publication.RunCollection
+lake env leanchecker Alvoki.Storage.Disk.RunUnlinkSchedule
 lake env leanchecker Alvoki.Storage.Disk.RecoveryProgress
 lake env leanchecker Alvoki.Storage.Disk.LockedOpenFileReads
 lake env leanchecker Alvoki.Storage.Disk.LockedMarkedRead
