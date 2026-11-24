@@ -5,8 +5,10 @@ import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.SegmentedCleanReopen
 import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
 import Alvoki.Storage.Disk.SegmentedRotationRecovery
+import Alvoki.Storage.Disk.SegmentedRotationPowerLoss
 import Alvoki.Storage.Disk.SegmentedRotationStep
 import Alvoki.Storage.Disk.SegmentedWriterTrace
+import Alvoki.Storage.Disk.SessionReadGuards
 
 namespace Alvoki.Storage.DiskSession
 
@@ -59,6 +61,11 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (observed : release.Observed (directory := directory) report.failure.poisoned report.failure.released)
       (endpoint : SegmentedRotationReopened directory descriptor before after report.run) :
       SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
+  | rotationPowerLoss {log writer descriptor before after}
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (report : SegmentedRotationPowerLossReport directory before descriptor)
+      (endpoint : report.Installs after) :
+      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
 
 theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initial log descriptor last}
     (trace : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor last)
@@ -95,6 +102,9 @@ theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initi
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
   | rotationError _ _ _ _ endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
+  | rotationPowerLoss _ _ endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
 
@@ -164,6 +174,29 @@ theorem SegmentedDatabaseTrace.pinnedReads {directory initialDescriptor initial 
   obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
   obtain ⟨reference, replayed⟩ := SnapshotWalReplay.fromEmpty last.history ready.resumed.ordered
   exact ⟨reference, replayed, fun _ active => represented.packedPinnedReads refined replayed active⟩
+
+/-- Interpret the adapter's reported session comparison on the installed
+writer. A foreign token yields no result even if its handle number is in use. -/
+theorem SegmentedDatabaseTrace.guardedPinnedReads {directory initialDescriptor initial log descriptor last}
+    (trace : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor last)
+    (initialReady : initial.Ready directory initialDescriptor) {sameSession : Bool} {issuer current : Nat}
+    (compared : sameSession = decide (issuer = current)) :
+    ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty last.history reference ∧
+      ∀ pin ∈ last.installed.table.pins.active,
+        (∀ key, readWithHandle (.ready last.installed.table) sameSession (·.lookup pin.handle key) =
+          .ok (if issuer = current then some (reference.table.lookup key pin.sequence) else none)) ∧
+        ∀ start stop, readWithHandle (.ready last.installed.table) sameSession (·.range pin.handle start stop) =
+          .ok (if issuer = current then some (reference.table.range start stop pin.sequence) else none) := by
+  obtain ⟨reference, replayed, pinned⟩ := trace.pinnedReads initialReady
+  refine ⟨reference, replayed, ?_⟩
+  intro pin active
+  by_cases localHandle : issuer = current
+  · simp only [compared.trans (decide_eq_true localHandle), ite_eq_left localHandle]
+    obtain ⟨lookup, range⟩ := pinned pin active
+    exact ⟨fun key => congrArg Except.ok (lookup key), fun start stop => congrArg Except.ok (range start stop)⟩
+  · simp only [ite_eq_right localHandle]
+    exact ⟨fun key => readWithHandle_foreign _ (·.lookup pin.handle key) compared localHandle,
+      fun start stop => readWithHandle_foreign _ (·.range pin.handle start stop) compared localHandle⟩
 
 /-- After any covered reopen, every supported sequence can be acquired
 against the returned table and reads the same snapshot as abstract replay. -/

@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.SegmentedAppendTrace
 import Alvoki.Storage.Disk.SegmentedCheckpointStep
 import Alvoki.Storage.Disk.SegmentedWriterEntry
+import Alvoki.Storage.Disk.SegmentedWriterMaintenance
 
 namespace Alvoki.Storage.DiskSession
 
@@ -19,6 +20,10 @@ inductive SegmentedWriterTrace (directory : DiskDirectory) (descriptor : Nat) (i
       (prior : SegmentedWriterTrace directory descriptor initial writes checkpoints before)
       (report : SegmentedCheckpointReport directory before) (observed : report.Valid)
       (installed : report.Installs after) : SegmentedWriterTrace directory descriptor initial writes (checkpoints + 1) after
+  | table {writes checkpoints before table}
+      (prior : SegmentedWriterTrace directory descriptor initial writes checkpoints before)
+      (step : SegmentedTableStep before.installed.table table) :
+      SegmentedWriterTrace directory descriptor initial writes checkpoints (before.withTable table)
 
 theorem SegmentedWriterTrace.preservesReady {directory descriptor initial writes checkpoints last}
     (trace : SegmentedWriterTrace directory descriptor initial writes checkpoints last)
@@ -38,6 +43,9 @@ theorem SegmentedWriterTrace.preservesReady {directory descriptor initial writes
     rw [installed.installed]
     change (SegmentedCheckpointReport.generation _).toNat = _
     rw [SegmentedCheckpointReport.generation, UInt64.toNat_ofNat_of_lt' observed.generationFits, generation, Nat.add_assoc]
+  | table _ step ih =>
+    obtain ⟨valid, history, owners, generation⟩ := ih
+    exact ⟨step.preservesReady valid, history, owners, generation⟩
 
 /-- Starting from the observed first open, the final live table represents
 the exact submitted writes, with one generation advance per publication. -/

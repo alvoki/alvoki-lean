@@ -625,6 +625,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RotationReopenFailures.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationFailure.handoff
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationRecoveryReport.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReopenReport.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReopenEndpoint.unique
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRotationPowerLossReport.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRotationPowerLossReport.Installs.preservesReady
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRotationPowerLossReport.Installs.history
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReopened.unique
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReopened.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.acknowledges
@@ -710,6 +715,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendTrace.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterTrace.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterTrace.fromBootstrap
+#check_axioms Alvoki.Storage.DiskSession.SegmentedTableStep.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendRecoveryReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendRecoveryReport.Installs.unique
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendRecoveryReport.Installs.preservesReady
@@ -724,6 +730,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromBootstrap
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromBootstrapRun
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.pinnedReads
+#check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.guardedPinnedReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.acquireReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.reacquireReadsStable
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.readLayout
