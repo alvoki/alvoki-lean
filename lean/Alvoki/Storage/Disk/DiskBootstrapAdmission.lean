@@ -32,7 +32,8 @@ structure BootstrapOpenReports (files : Type) (directory : DiskDirectory)
   initialized : openFiles directory.path before.image = .ok cache before.image
   lookup : FilePath → Except IO.Error IO.FS.Metadata
   flatAbsent : ∃ name message, lookup (directory.file .wal) = .error (.noFileOrDirectory name 2 message)
-  markerAbsent : ∃ name message, lookup (directory.file .walBoundary) = .error (.noFileOrDirectory name 2 message)
+  markerAbsent : before.image.metadata.active.walBoundary = none ∧
+    ∃ name message, lookup (directory.file .walBoundary) = .error (.noFileOrDirectory name 2 message)
   marked : DiskDirectory → files → EStateM IO.Error WalSegmentRotation.State Reopened
   list : FilePath → Except IO.Error (Array IO.FS.DirEntry)
   entries : Array IO.FS.DirEntry
@@ -41,7 +42,8 @@ structure BootstrapOpenReports (files : Type) (directory : DiskDirectory)
   readEmpty : FilePath → Except IO.Error (Option ByteArray)
   zeroRead : readEmpty (directory.file (.walSegment 0)) = .ok before.image.observeSuccessor
   stage : Option IO.FS.Metadata
-  staged : bootstrapMetadata lookup (directory.file .stagedWalBoundary) = .ok stage
+  staged : bootstrapMetadata lookup (directory.file .stagedWalBoundary) = .ok stage ∧
+    stage.isSome = (before.image.metadata.staged .walBoundary).isSome
   allowed : ∀ metadata, stage = some metadata → metadata.type = .file ∧ before.image.observeSuccessor.isSome = true
   createEmpty : files → FilePath → EStateM IO.Error WalSegmentRotation.State Unit
   write : files → FilePath → ByteArray → EStateM IO.Error WalSegmentRotation.State Unit
@@ -102,14 +104,14 @@ theorem SegmentedBatchDatabaseTrace.fromObservedBootstrap {files : Type} {input 
         observed.nextRef, observed.nextRef + 1⟩ after ∧
       observed.slot ∈ observed.descriptors.slots ∧
       observed.bindings (directory.file .lock) = some (observed.descriptors.inode observed.slot.description) ∧
-      before.owners (directory.file .lock) = none ∧
+      before.image.metadata.active.walBoundary = none ∧ before.owners (directory.file .lock) = none ∧
       after.owners = before.owners.set (directory.file .lock) (some observed.slot.description) ∧
       writer.RetainedReady directory observed.slot.description ∧
       SegmentedBatchDatabaseTrace directory observed.slot.description writer allowCollection [] observed.slot.description writer := by
   have acquisition : TryLockObserves before.owners directory (.ok true) := by
     simpa only [observed.acquired] using observed.acquisition
   obtain ⟨flatName, flatMessage, flat⟩ := observed.flatAbsent
-  obtain ⟨markerName, markerMessage, marker⟩ := observed.markerAbsent
+  obtain ⟨visibleAbsent, markerName, markerMessage, marker⟩ := observed.markerAbsent
   have branch := runOpenWithInstallation_markerlessBranch directory observed.slot.description observed.nextRef before
     observed.unlock (observed.openFiles directory.path) (fun path => pure (observed.lookup path))
     (observed.marked directory) (observed.bootstrapAt directory) observed.cache observed.initialized
@@ -118,10 +120,10 @@ theorem SegmentedBatchDatabaseTrace.fromObservedBootstrap {files : Type} {input 
   obtain ⟨after, bootstrap, returned, vacant, held, ready, _⟩ :=
     SegmentedDatabaseTrace.fromHealthyBootstrap directory observed.slot.description observed.nextRef before valid
       acquisition observed.unlock observed.list observed.readEmpty (bootstrapMetadata observed.lookup)
-      observed.listed observed.clear observed.zeroRead observed.staged observed.allowed
+      observed.listed observed.clear observed.zeroRead observed.staged.1 observed.allowed
       (observed.createEmpty observed.cache) (observed.write observed.cache) (observed.sync observed.cache)
       observed.renameFile allowCollection observed.rotation observed.marker
-  refine ⟨after, bootstrap, ?_, observed.live, observed.lockObject, vacant, held, ready, .start⟩
+  refine ⟨after, bootstrap, ?_, observed.live, observed.lockObject, visibleAbsent, vacant, held, ready, .start⟩
   rw [BootstrapOpenReports.run, admission.admits, BootstrapOpenReports.runAt, observed.acquired,
     BootstrapOpenReports.recoverAt, branch]
   exact returned
