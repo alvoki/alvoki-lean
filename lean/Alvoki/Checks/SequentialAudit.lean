@@ -10,6 +10,7 @@ import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.SegmentedCheckpointPowerLoss
 import Alvoki.Storage.Disk.RetainedAppendReports
 import Alvoki.Storage.Disk.SegmentedKeeperDescriptor
+import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
@@ -102,6 +103,7 @@ import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.SegmentedCollectionInventory
 import Alvoki.Storage.Disk.SegmentedRetainedWriter
 import Alvoki.Storage.Disk.WalSegmentRecoveryWork
+import Alvoki.Storage.Disk.WalSegmentReadWork
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -851,6 +853,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_rejectsLiveToken
 #check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.unchangedProjection
 #check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.preservesSettledReplacement
+#check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.keepsFiles
+#check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.after_effective
+#check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.selectsCrashNames
+#check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.continuesLineage
+#check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.afterLastWriterDrop
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.continuesLineage
+#check_axioms Alvoki.Storage.WalSegmentRepair.recordWalReadCalls_exact
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop

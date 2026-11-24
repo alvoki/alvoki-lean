@@ -201,15 +201,24 @@ inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Pr
       BoundedReopenTrace directory admits initial
         ⟨before.image.crash pair bytes names, before.owners.set (directory.file .lock) none⟩
 
-theorem BoundedReopenTrace.lineage {directory : DiskDirectory} {admits : Target → Prop}
-    {initial after : LockedFileState FileImage} (ran : BoundedReopenTrace directory admits initial after)
+/-- Continue the lineage after an observed effect before the next open. -/
+theorem BoundedReopenTrace.continuesLineage {directory : DiskDirectory} {admits : Target → Prop}
+    {initial after : LockedFileState FileImage} {source : FileImage}
+    (ran : BoundedReopenTrace directory admits initial after)
+    (prior : ReopenLineage source admits initial.image)
     (unique : ∀ {left right}, admits left → admits right → left.pair = right.pair → left = right) :
-    ReopenLineage initial.image admits after.image := by
+    ReopenLineage source admits after.image := by
   induction ran with
-  | empty => exact .before .live
+  | empty => exact prior
   | failed _ attempt acquisition _ reports ran ih =>
     exact ih.afterFailure unique (attempt.errorFiles acquisition reports ran)
   | referenceDrops _ _ _ ih => exact ih
   | powerLoss _ metadata keeper later ih => exact ih.afterPowerLoss metadata keeper later
+
+theorem BoundedReopenTrace.lineage {directory : DiskDirectory} {admits : Target → Prop}
+    {initial after : LockedFileState FileImage} (ran : BoundedReopenTrace directory admits initial after)
+    (unique : ∀ {left right}, admits left → admits right → left.pair = right.pair → left = right) :
+    ReopenLineage initial.image admits after.image :=
+  ran.continuesLineage (.before .live) unique
 
 end Alvoki.Storage.DiskSession

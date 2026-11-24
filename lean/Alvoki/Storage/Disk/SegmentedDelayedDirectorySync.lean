@@ -113,19 +113,4 @@ theorem DelayedDirectorySync.afterLastWriterDrop {directory : DiskDirectory} (re
   · simpa only [after, (report.keepsFiles released).1] using noOwner
   · exact report.continuesLineage (before := released) prior unique admitted prepared
 
-/-- Resume ordinary bounded retries after an independently observed
-filesystem effect has already established the corresponding lineage. -/
-theorem BoundedReopenTrace.continuesLineage {directory : DiskDirectory} {admits : Target → Prop}
-    {start final : LockedFileState FileImage} {source : FileImage}
-    (ran : BoundedReopenTrace directory admits start final)
-    (prior : ReopenLineage source admits start.image)
-    (unique : ∀ {left right}, admits left → admits right → left.pair = right.pair → left = right) :
-    ReopenLineage source admits final.image := by
-  induction ran with
-  | empty => exact prior
-  | failed _ attempt acquisition _ reports ran earlier =>
-    exact earlier.afterFailure unique (attempt.errorFiles acquisition reports ran)
-  | referenceDrops _ _ _ earlier => exact earlier
-  | powerLoss _ metadata keeper later earlier => exact earlier.afterPowerLoss metadata keeper later
-
 end Alvoki.Storage.DiskSession

@@ -52,6 +52,10 @@ A healthy pass over a complete held inventory removes exactly the eligible seale
 
 After the repaired keeper name is durable, an observed sync on its predecessor's retained inode leaves the segmented retry image and its owner map intact. The proof uses distinct inode identities and the effect-time observation of the old description. [Delayed keeper sync](../lean/Alvoki/Storage/Disk/SegmentedKeeperDescriptor.lean)
 
+A directory sync on a retained description can fix the visible marker and later names even after the writer's last lock reference drops. Under the checked effect-time directory identity and prepared recovery target, subsequent bounded retries continue from that state while keeping the original sealed and keeper bytes. The native adapter's description lifecycle and the effects of syncing an old keeper before replacement settlement still need refinement. [Delayed directory sync](../lean/Alvoki/Storage/Disk/SegmentedDelayedDirectorySync.lean)
+
+On a successful marked WAL acquisition over `n` listed entries, the shared reader uses at most `2n + 1` callbacks. It asks for one keeper prefix of at most the absolute marker length. This bounds the acquisition schedule and the requested keeper bytes. Whole-file reads and the work within a callback have separate bounds. [Acquisition work](../lean/Alvoki/Storage/Disk/WalSegmentReadWork.lean)
+
 The serial replay theorem now proves equality of tables and decoder or replay diagnostics for checked aligned spans and an exact keeper prefix. The next performance proof connects this fold to ordered I/O and global malformed-span checks. [Serial replay](../lean/Alvoki/Storage/Disk/WalSegmentSerialReplay.lean)
 
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
