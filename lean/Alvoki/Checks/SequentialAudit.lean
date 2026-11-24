@@ -73,6 +73,7 @@ import Alvoki.Storage.Disk.RotationSessionHandoff
 import Alvoki.Storage.Disk.BootstrapAdmissionEffects
 import Alvoki.Storage.Disk.FirstMarkedSession
 import Alvoki.Storage.Disk.WalSegmentCheckpointPublication
+import Alvoki.Storage.Disk.WalSegmentCheckpointRetryLayout
 import Alvoki.Storage.Disk.WalSegmentSerialReplay
 import Alvoki.Storage.Disk.CheckpointCutSession
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -552,6 +553,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentImage.CheckpointReopenDirectory.selectsActive
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.checkpointReopenLayout
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.checkpointReopenInputs
+#check_axioms Alvoki.Storage.DiskSession.CheckpointRetryTarget.unique
+#check_axioms Alvoki.Storage.CheckpointPublication.Image.checkpointRetryLayout
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyCheckpointCutReports.scan
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyCheckpointCutReports.readCheckpoint
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyCheckpointCutReports.readSelectedBounded
