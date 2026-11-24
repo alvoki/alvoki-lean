@@ -88,6 +88,10 @@ lake env leanchecker Alvoki.Storage.Disk.FirstVersionedCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.VersionedReadyWriter
 lake env leanchecker Alvoki.Storage.Disk.RetainedWalSuffix
 lake env leanchecker Alvoki.Storage.Disk.RetainedWalBoundary
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentFileName
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentPathIdentity
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollection
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentRecovery
 lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapRetry
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery
