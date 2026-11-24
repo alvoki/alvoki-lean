@@ -44,6 +44,12 @@ Use native release builds on the same Linux machine and storage. Match input, op
 
 [YCSB](https://github.com/brianfrankcooper/YCSB) · [RocksDB](https://github.com/facebook/rocksdb) · [Fjall](https://github.com/fjall-rs/fjall) · [Benchmark method](high-performance-lean.md#reproduce-before-generalizing) · [Proof and runtime performance requirements](proof-roadmap.md#performance-requirements-for-verified-paths)
 
+### Workload coverage and toolchain experiments
+
+Use the baseline as the starting point for a performance map of Alvoki. Keep the three core scenarios stable for release comparisons. Add representative points as a use case or bottleneck calls for them. Vary read/write mix, uniform versus Zipfian access, working-set size, key and value size, batch size, snapshot lifetime, cache state and maintenance pressure. When diagnosing a difference, vary one dimension at a time. Retain an established-engine control where semantics match, and keep Alvoki's absolute timings and resource use for cases with a different contract.
+
+Profile the native engine before choosing a toolchain change. When the evidence points to a compiler or runtime limitation, compare the latest released Lean with the same revision plus one pinned patch, using identical Alvoki source, flags, inputs and release builds. Include the best available source-level alternative and inspect generated code to explain the difference. For a patch that introduces a new primitive, measure adoption separately from the toolchain upgrade. Use both the affected kernel and the end-to-end workload. Record patch provenance, correctness and proof checks, support cost and a route back to an upstream release before adopting a patched toolchain. [Existing Lean experiments](high-performance-lean.md#reproduce-before-generalizing)
+
 ## Repository review follow-ups
 
 The 24 November 2026 review covered the source, proof and fixture paths, the benchmark drivers and all 21 documents at `ddf033b`. The segmented follow-up reviewed `a8a32a6..9ec816c`.

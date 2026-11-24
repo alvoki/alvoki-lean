@@ -37,6 +37,20 @@ Start with a durable batch experiment that writes consecutive frames and publish
 
 [Raw workload samples and run metadata](../benchmarks/results/disk/engine-baseline) · [Roadmap target](roadmap.md#release-performance)
 
+## Durable batch experiment
+
+Five paired trials appended 4,096 ordered distinct keys to fresh databases on CPU 0. Each engine acknowledged one whole batch per call. Reported latency is per batch, and throughput counts logical rows. Both runners verified the exact committed data after reopen. The size-one cell uses the same batch API as the larger cells.
+
+| Rows per batch | Alvoki rows/s | RocksDB rows/s | Alvoki batch p99 | RocksDB batch p99 |
+|---:|---:|---:|---:|---:|
+| 1 | 1,060 | 4,241 | 3.142 ms | 0.679 ms |
+| 8 | 10,273 | 36,035 | 1.509 ms | 0.506 ms |
+| 32 | 36,536 | 114,969 | 1.579 ms | 0.521 ms |
+
+With 64 rows across fresh open, write and validation reopen, the Alvoki trace counted 198 fsyncs at size one, 30 at size eight, and 12 at size 32. Six calls were from opening the database and reopening for validation. The write phase kept all three barriers per batch. At size 32 the pilot reached 32% of RocksDB's matched batch throughput. This write-only, closed-loop experiment leaves the mixed-workload target and p99 at a common offered load open.
+
+Build `alvoki-disk-batch` with Lake and compile `benchmarks/rocksdb_batch.cc` as C++17 against the same pinned RocksDB library as below. Run `python3 benchmarks/engine_batch.py --rocks-bin /tmp/rocksdb-batch --rows 4096 --batch-sizes 1 8 32 --trials 5 --cpu 0 --out /tmp/durable-batch.csv`. [Raw batch samples](../benchmarks/results/disk/durable-batch) · [Batch contract](specifications.md#durable-write-batches)
+
 ## Reproduce
 
 Use the pinned Lean toolchain from the repository, a C++17 compiler, and matching RocksDB 9.10.0 development headers and shared library. With a default system library installation:
