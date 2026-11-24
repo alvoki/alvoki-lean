@@ -117,3 +117,9 @@ lean_exe «alvoki-wide-accessors» where
   root := `WideAccessorBench
   srcDir := "runtime-experiment/wide-accessors"
   moreLeancArgs := #["-include", "runtime-experiment/wide-accessors/accessors.h"]
+
+lean_exe «alvoki-disk-workload» where
+  root := `DiskWorkloadBench
+
+lean_exe «alvoki-disk-crash» where
+  root := `DiskCrashBench
