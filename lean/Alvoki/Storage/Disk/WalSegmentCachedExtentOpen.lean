@@ -356,4 +356,216 @@ theorem reopenMarkedBoundedWithCachedExtents_eq_of_wal [Monad m] [MonadExceptOf 
   unfold reopenMarkedBoundedWithCachedExtents reopenMarkedBoundedWithSizedCheckpoint prepareBoundedMarkedFromCheckpoint
   rw [funext (fun watermark => funext (wal watermark))]
 
+private def counted {α : Type} (report : Except IO.Error α) : EStateM IO.Error Nat α :=
+  fun count => match report with
+    | .ok value => .ok value (count + 1)
+    | .error cause => .error cause (count + 1)
+
+private def callsAfter {α : Type} : EStateM.Result IO.Error Nat α → Nat
+  | .ok _ count | .error _ count => count
+
+private theorem countedExtent (dir : DiskDirectory) (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata))
+    (name : String) (before : Nat) :
+    let observed := readWalSegmentExtentWith dir (fun path => counted (lstat path)) name before
+    let budget := ([name].filterMap parseWalSegmentName).length
+    callsAfter observed ≤ before + budget ∧
+      ∀ extent reached, observed = .ok (some extent) reached → 1 ≤ budget := by
+  dsimp only
+  cases parsed : parseWalSegmentName name with
+  | none =>
+    simp [readWalSegmentExtentWith, parsed, Pure.pure, EStateM.pure, callsAfter]
+  | some first =>
+    cases measured : lstat (dir.file (.walSegment first)) with
+    | error cause =>
+      simp [readWalSegmentExtentWith, parsed, counted, measured, Bind.bind, EStateM.bind, callsAfter]
+    | ok report =>
+      cases classified : classifyWalSegmentLookup (dir.file (.walSegment first)) first report with
+      | error =>
+        simp [readWalSegmentExtentWith, parsed, counted, measured, classified, Bind.bind, EStateM.bind,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter]
+      | ok found =>
+        cases found <;> simp [readWalSegmentExtentWith, parsed, counted, measured, classified, Bind.bind, EStateM.bind,
+          Pure.pure, EStateM.pure, callsAfter]
+
+private theorem countedExtentFilter (dir : DiskDirectory)
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (names : List String) (before : Nat) :
+    let observed := (names.filterMapM (readWalSegmentExtentWith dir (fun path => counted (lstat path)))) before
+    let budget := (names.filterMap parseWalSegmentName).length
+    callsAfter observed ≤ before + budget ∧
+      ∀ extents reached, observed = .ok extents reached → extents.length ≤ budget := by
+  induction names generalizing before with
+  | nil => simp [List.filterMapM_nil, Pure.pure, EStateM.pure, callsAfter]
+  | cons name names ih =>
+    dsimp only
+    let step := readWalSegmentExtentWith dir (fun path => counted (lstat path))
+    have budgets : ((name :: names).filterMap parseWalSegmentName).length =
+        ([name].filterMap parseWalSegmentName).length + (names.filterMap parseWalSegmentName).length := by
+      rw [show name :: names = [name] ++ names from rfl, List.filterMap_append, List.length_append]
+    have stepBudget := countedExtent dir lstat name before
+    rw [budgets]
+    simp only [List.filterMapM_cons, Bind.bind, EStateM.bind, ← show
+      step = readWalSegmentExtentWith dir (fun path => counted (lstat path)) from rfl]
+    cases head : step name before with
+    | error cause reached =>
+      have spent : reached ≤ before + ([name].filterMap parseWalSegmentName).length :=
+        by simpa [step, head, callsAfter] using stepBudget.1
+      simp only [callsAfter]
+      exact ⟨by omega, by simp⟩
+    | ok found reached =>
+      have spent : reached ≤ before + ([name].filterMap parseWalSegmentName).length :=
+        by simpa [step, head, callsAfter] using stepBudget.1
+      have rest := ih reached
+      change callsAfter _ ≤ _ ∧ _
+      cases found with
+      | none =>
+        exact ⟨Nat.le_trans rest.1 (by omega), fun _ _ observed =>
+          Nat.le_trans (rest.2 _ _ observed) (Nat.le_add_left _ _)⟩
+      | some found =>
+        have requested : 1 ≤ ([name].filterMap parseWalSegmentName).length :=
+          stepBudget.2 found reached head
+        cases tail : (names.filterMapM step) reached with
+        | error cause final =>
+          have total : final ≤ reached + (names.filterMap parseWalSegmentName).length := by
+            simpa [step, tail, callsAfter] using rest.1
+          simp only [EStateM.bind, tail, callsAfter]
+          exact ⟨by omega, by simp⟩
+        | ok extents final =>
+          have total : final ≤ reached + (names.filterMap parseWalSegmentName).length := by
+            simpa [step, tail, callsAfter] using rest.1
+          have retained := rest.2 extents final tail
+          simp only [EStateM.bind, tail, Pure.pure, EStateM.pure, callsAfter, EStateM.Result.ok.injEq]
+          exact ⟨by omega, by rintro _ _ ⟨rfl, rfl⟩; simp; omega⟩
+
+private theorem countedExtentScan (dir : DiskDirectory)
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (names : List String) (before : Nat) :
+    let observed := readWalSegmentExtentsWith dir (fun path => counted (lstat path)) names before
+    let budget := (names.filterMap parseWalSegmentName).length
+    callsAfter observed ≤ before + budget ∧
+      ∀ extents reached, observed = .ok extents reached → extents.length ≤ budget := by
+  dsimp only
+  unfold readWalSegmentExtentsWith
+  simp only [Bind.bind, EStateM.bind]
+  have count := countedExtentFilter dir lstat names before
+  cases result : (names.filterMapM (readWalSegmentExtentWith dir (fun path => counted (lstat path)))) before with
+  | error cause reached =>
+    rw [result] at count
+    exact ⟨count.1, by simp⟩
+  | ok extents reached =>
+    have length := count.2 extents reached result
+    rw [result] at count
+    refine ⟨count.1, ?_⟩
+    intro result _ exactResult
+    simp only [Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at exactResult
+    rw [← exactResult.1, List.length_mergeSort]
+    exact length
+
+private theorem countedCachedWalPayloads (dir : DiskDirectory) (through : Nat)
+    (readSeal : FilePath → Nat → Except IO.Error ByteArray)
+    (readKeeper : FilePath → Nat → Nat → Except IO.Error ByteArray)
+    (required : List (Nat × IO.FS.Metadata)) (read : List (Nat × ByteArray)) (before : Nat) :
+    callsAfter (readCachedWalPayloadsFrom dir through (fun path count => counted (readSeal path count))
+      (fun path count size => counted (readKeeper path count size)) required read before) ≤ before + required.length := by
+  induction required generalizing read before with
+  | nil =>
+    simp [readCachedWalPayloadsFrom, throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter]
+  | cons item rest ih =>
+    obtain ⟨first, metadata⟩ := item
+    cases rest with
+    | nil =>
+      cases h : readKeeper (dir.file (.walSegment first)) ((through - first) * frameSize) metadata.byteSize.toNat with
+      | error =>
+        simp [readCachedWalPayloadsFrom, h, counted, Bind.bind, EStateM.bind, Pure.pure, callsAfter]
+      | ok bytes =>
+        by_cases size : bytes.size = (through - first) * frameSize ∧ (through - first) * frameSize ≤ metadata.byteSize.toNat <;>
+          simp [readCachedWalPayloadsFrom, h, size, counted, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+            throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter]
+    | cons item rest =>
+      obtain ⟨next, nextMetadata⟩ := item
+      by_cases forward : first < next
+      · by_cases extent : metadata.byteSize.toNat = (next - first) * frameSize ∧ (next - first) * frameSize < USize.size
+        · cases observed : readSeal (dir.file (.walSegment first)) ((next - first) * frameSize) with
+          | error =>
+            simp [readCachedWalPayloadsFrom, forward, readExactRecoveryFileWith, extent, observed, counted,
+              Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, callsAfter]
+          | ok bytes =>
+            by_cases size : bytes.size = (next - first) * frameSize
+            · simpa [readCachedWalPayloadsFrom, forward, readExactRecoveryFileWith, extent, observed, counted, size,
+                Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm]
+                using ih ((first, bytes) :: read) (before + 1)
+            · simp [readCachedWalPayloadsFrom, forward, readExactRecoveryFileWith, extent, observed, counted, size,
+                Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+                callsAfter]
+        · simp [readCachedWalPayloadsFrom, forward, readExactRecoveryFileWith, extent, Bind.bind, EStateM.bind,
+            Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter]
+      · simp [readCachedWalPayloadsFrom, forward, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw,
+          EStateM.throw, callsAfter]
+
+/-- Count the cached WAL reader's directory, metadata, and payload requests.
+Each request is counted when issued, including those that return an error. -/
+noncomputable def countCachedWalReadCalls (dir : DiskDirectory) (watermark : Nat) (length : UInt64)
+    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata))
+    (readSeal : FilePath → Nat → Except IO.Error ByteArray)
+    (readKeeper : FilePath → Nat → Nat → Except IO.Error ByteArray) : Nat :=
+  callsAfter (readSelectedWithCachedExtents dir watermark length
+    (fun path => counted (list path)) (fun path => counted (lstat path))
+    (fun path count => counted (readSeal path count))
+    (fun path count size => counted (readKeeper path count size)) 0)
+
+/-- The cached WAL reader issues at most one directory listing, one metadata probe
+per canonical name, and one payload request per selected segment. Both the successful
+result and error exits satisfy this combined bound on requests to the filesystem adapter. -/
+theorem countCachedWalReadCalls_bound (dir : DiskDirectory) (watermark : Nat) (length : UInt64)
+    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata))
+    (readSeal : FilePath → Nat → Except IO.Error ByteArray)
+    (readKeeper : FilePath → Nat → Nat → Except IO.Error ByteArray) :
+    countCachedWalReadCalls dir watermark length list lstat readSeal readKeeper ≤
+      1 + 2 * (match list dir.path with
+        | .ok entries => ((entries.toList.map (·.fileName)).filterMap parseWalSegmentName).length
+        | .error _ => 0) := by
+  unfold countCachedWalReadCalls readSelectedWithCachedExtents
+  by_cases valid : length.toNat % frameSize = 0 ∧ watermark ≤ length.toNat / frameSize
+  · cases listed : list dir.path with
+    | error cause =>
+      simp [valid, listed, counted, Bind.bind, EStateM.bind, callsAfter]
+    | ok entries =>
+      let names := entries.toList.map IO.FS.DirEntry.fileName
+      let scan := readWalSegmentExtentsWith dir (fun path => counted (lstat path)) names
+      have measured := countedExtentScan dir lstat names 1
+      simp only [ite_eq_left valid, Bind.bind, EStateM.bind, Pure.pure, counted, listed, Nat.zero_add]
+      rw [show readWalSegmentExtentsWith dir (fun path => counted (lstat path)) names 1 = scan 1 from rfl]
+      change _ ≤ 1 + 2 * (names.filterMap parseWalSegmentName).length
+      cases scanned : scan 1 with
+      | error cause reached =>
+        have spent : reached ≤ 1 + (names.filterMap parseWalSegmentName).length := by
+          simpa [scan, scanned, callsAfter] using measured.1
+        simp only [callsAfter]
+        omega
+      | ok extents reached =>
+        have spent : reached ≤ 1 + (names.filterMap parseWalSegmentName).length := by
+          simpa [scan, scanned, callsAfter] using measured.1
+        have size := measured.2 extents reached scanned
+        cases selected : selectWalExtentsThrough extents watermark (length.toNat / frameSize) with
+        | none =>
+          simp only [selected, throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter]
+          omega
+        | some selection =>
+          obtain ⟨required, newer⟩ := selection
+          have selectedCount : required.length ≤ extents.length := by
+            unfold selectWalExtentsThrough at selected
+            cases found : ((extents.map Prod.fst).filter (fun offset => decide (offset ≤ watermark))).max? with
+            | none => simp [found, Bind.bind, Option.bind] at selected
+            | some first =>
+              simp only [found, Bind.bind, Option.bind, Pure.pure, Option.some.injEq, Prod.mk.injEq] at selected
+              rw [← selected.1]
+              exact Nat.le_trans (List.takeWhile_sublist _).length_le List.filter_sublist.length_le
+          have payloads := countedCachedWalPayloads dir (length.toNat / frameSize) readSeal readKeeper required [] reached
+          simp only [selected, readCachedWalPayloads, EStateM.bind]
+          cases payload : readCachedWalPayloadsFrom dir (length.toNat / frameSize)
+              (fun path count => counted (readSeal path count))
+              (fun path count size => counted (readKeeper path count size)) required [] reached <;>
+            rw [payload] at payloads <;> simp only [EStateM.pure, callsAfter] at payloads ⊢ <;> omega
+  · simp [valid, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter]
+
 end Alvoki.Storage.WalSegmentRepair
