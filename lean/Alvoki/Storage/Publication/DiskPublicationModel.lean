@@ -3,6 +3,50 @@ import Alvoki.Storage.Disk.Recovery
 
 namespace Alvoki.Storage.Publication
 
+/-- Run the entire sequence on success. On error the returned image is
+that of a prefix, possibly including the operation that reported the error. -/
+theorem run_effects_outcome {State Action Error : Type}
+    (step : State → Action → Option State) (perform : Action → EStateM Error State Unit)
+    (outcome : ∀ action state, match perform action state with
+      | .ok _ after => step state action = some after
+      | .error _ after => after = state ∨ step state action = some after)
+    (actions : List Action) (state : State) :
+    match (actions.forM perform) state with
+    | .ok _ after => actions.foldlM step state = some after
+    | .error _ after => ∃ cut, (actions.take cut).foldlM step state = some after := by
+  induction actions generalizing state with
+  | nil => rfl
+  | cons action rest ih =>
+    have effect := outcome action state
+    change (match EStateM.bind (perform action) (fun _ => rest.forM perform) state with
+      | .ok _ after => (action :: rest).foldlM step state = some after
+      | .error _ after => ∃ cut, ((action :: rest).take cut).foldlM step state = some after)
+    unfold EStateM.bind
+    cases ran : perform action state with
+    | error _ after =>
+      rw [ran] at effect
+      change ∃ cut, ((action :: rest).take cut).foldlM step state = some after
+      rcases effect with rfl | stepped
+      · exact ⟨0, rfl⟩
+      · exact ⟨1, by simp [List.foldlM_cons, stepped]⟩
+    | ok _ next =>
+      rw [ran] at effect
+      have tail := ih next
+      change (match (rest.forM perform) next with
+        | .ok _ after => (action :: rest).foldlM step state = some after
+        | .error _ after => ∃ cut, ((action :: rest).take cut).foldlM step state = some after)
+      cases remaining : (rest.forM perform) next with
+      | ok _ after =>
+        rw [remaining] at tail
+        rw [List.foldlM_cons, effect]
+        exact tail
+      | error _ after =>
+        rw [remaining] at tail
+        obtain ⟨cut, prefixRun⟩ := tail
+        refine ⟨cut + 1, ?_⟩
+        rw [List.take_succ_cons, List.foldlM_cons, effect]
+        exact prefixRun
+
 /-- One active name and a protocol-owned temporary name in a fixed directory.
 The active contents survive a crash according to the separate directory outcomes.
 An outstanding staged file can be overwritten on the next attempt. -/

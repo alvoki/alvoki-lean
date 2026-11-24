@@ -8,7 +8,9 @@ open WAL.Boundary
 /-- After a checkpoint cut, the actual successful reopen determines both the
 next writer and its checkpoint. The selected manifest is now settled, with
 the same durable run map as the checkpoint cut. The returned table refines
-a model with a fresh pin registry and represents the same whole WAL. -/
+a model with a fresh pin registry and represents the same whole WAL. The
+checkpoint observation also supplies the installed generation, and the
+selected WAL length supplies the next writer's byte count. -/
 theorem checkpointMarkedRetry_reopen_ready {initial published : Image}
     {before reopenStart after : ReopenImage} {manifest : Option ByteArray}
     {history : List WAL.Write} {table : PackedTable}
@@ -39,7 +41,11 @@ theorem checkpointMarkedRetry_reopen_ready {initial published : Image}
       RepresentsWalHistory fixed.covered fixed.model ∧
       MarkedWriterState.observeReopen table after = some next ∧
       next.ReadyFor fixed.manifest ∧ next.table.Refines model ∧
-      RepresentsWalHistory next.history model ∧ model.pins.active = [] := by
+      RepresentsWalHistory next.history model ∧ model.pins.active = [] ∧
+      ∃ loaded selected, checkpointReads.result = .ok loaded ∧
+        ((fixed.manifest.mapM fun bytes => (Manifest.decode bytes).map (·.generation)).map
+          (·.getD 0) : Except String UInt64) = .ok (loaded.getD (.empty, 0)).2 ∧
+        after.wal.active = some selected ∧ selected.size = next.walBytes := by
   obtain ⟨settledAfter, accepted, count, files, checkpoint, base, checkpointModel, _, written, durable,
     loaded, same, recovered, played, refined, represents, _, _⟩ :=
     checkpointMarkedRetry_reopen_refines settled projects fits ordered initialValid
@@ -66,6 +72,7 @@ theorem checkpointMarkedRetry_reopen_ready {initial published : Image}
     exact represents.append replayed
   have historyModel := historyAbstract.preserve clock (UInt64.le_of_eq floor.symm)
     (refines.rowsBounded bounded) (fun _ _ _ => by rw [data])
+  have exactAccepted := written.accepts_exact_durable accepted durable
   let fixed : FixedMarkedCheckpoint := {
     manifest := reopenStart.directory.active.manifest
     files := files
@@ -75,7 +82,7 @@ theorem checkpointMarkedRetry_reopen_ready {initial published : Image}
     model := checkpointModel
     covered := covered
     written := written
-    accepted := written.accepts_exact_durable accepted durable
+    accepted := exactAccepted
     represents := refined
     watermark := watermark
   }
@@ -83,7 +90,14 @@ theorem checkpointMarkedRetry_reopen_ready {initial published : Image}
       some ⟨table, (WAL.encode history).size, after, history⟩ := by
     simp [MarkedWriterState.observeReopen, settledAfter.2.2.1, WAL.decodeOrdinals_encode _ ordered,
       Except.toOption]
+  have cutBound :=
+    published.markedReopenImage_markerBound settled (checkpoint_retry_valid initialValid checkpoints)
+  have reopenBound := (attempts.toRetry cutBound).markerBound cutBound
+  obtain ⟨observedCheckpoint, _, _, selected, checkpointResult, generation, _, _, selectedWal, _⟩ :=
+    written.marked_reopen_metadata exactAccepted checkpointReads walReads reopenBound opened
+  have exactWal := Option.some.inj (selectedWal.symm.trans settledAfter.2.2.1)
   exact ⟨fixed, model, rfl, rfl, rfl, rfl, durable, represents, observed,
-    ⟨settledAfter, ordered, count.symm, rfl, fits, bounded⟩, refines, historyModel, pins⟩
+    ⟨settledAfter, ordered, count.symm, rfl, fits, bounded⟩, refines, historyModel, pins,
+    observedCheckpoint, selected, checkpointResult, generation, selectedWal, congrArg ByteArray.size exactWal⟩
 
 end Alvoki.Storage.CheckpointPublication

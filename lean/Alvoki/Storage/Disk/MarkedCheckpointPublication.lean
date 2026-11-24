@@ -77,7 +77,9 @@ theorem Image.markedReopenImage_valid (image : Image) {before : ReopenImage}
   rw [walChoices] at survives
   exact accepts _ ((List.mem_singleton.mp survives).trans walActive)
 
-private theorem Image.markedReopenImage_markerBound (image : Image) {before : ReopenImage}
+/-- Every manifest choice at a checkpoint cut shares the same decoded marker.
+This is the marker bound needed by each later observed reopen attempt. -/
+theorem Image.markedReopenImage_markerBound (image : Image) {before : ReopenImage}
     {manifest : Option ByteArray} {history : List WAL.Write}
     {expected : Manifest.Checkpoint → List ByteArray → Prop}
     (settled : before.SettledFor manifest history)

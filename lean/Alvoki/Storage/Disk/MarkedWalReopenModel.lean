@@ -381,41 +381,15 @@ private theorem repairSchedule_outcome (report : Publication.Step → RepairRepo
     match (actions.forM (performRepair report trimmed)) image with
     | .ok _ after => image.repairSteps trimmed actions = some after
     | .error _ after => ∃ cut, image.repairSteps trimmed (actions.take cut) = some after := by
-  induction actions generalizing image with
-  | nil => rfl
-  | cons action rest ih =>
-    have effect := performRepair_outcome report trimmed action image
-    change (match EStateM.bind (performRepair report trimmed action)
-        (fun _ => rest.forM (performRepair report trimmed)) image with
-      | .ok _ after => image.repairSteps trimmed (action :: rest) = some after
-      | .error _ after => ∃ cut, image.repairSteps trimmed ((action :: rest).take cut) = some after)
-    unfold EStateM.bind
-    cases ran : performRepair report trimmed action image with
-    | error message after =>
-      rw [ran] at effect
-      change ∃ cut, image.repairSteps trimmed ((action :: rest).take cut) = some after
-      rcases effect with rfl | stepped
-      · exact ⟨0, rfl⟩
-      · exact ⟨1, by simp [ReopenImage.repairSteps, List.foldlM_cons, stepped]⟩
-    | ok result next =>
-      rw [ran] at effect
-      have tail := ih next
-      change (match (rest.forM (performRepair report trimmed)) next with
-        | .ok _ after => image.repairSteps trimmed (action :: rest) = some after
-        | .error _ after => ∃ cut, image.repairSteps trimmed ((action :: rest).take cut) = some after)
-      cases remaining : (rest.forM (performRepair report trimmed)) next with
-      | ok result after =>
-        rw [remaining] at tail
-        change image.repairSteps trimmed (action :: rest) = some after
-        simp only [ReopenImage.repairSteps, List.foldlM_cons, effect]
-        exact tail
-      | error message after =>
-        rw [remaining] at tail
-        obtain ⟨cut, prefixRun⟩ := tail
-        change ∃ cut, image.repairSteps trimmed ((action :: rest).take cut) = some after
-        refine ⟨cut + 1, ?_⟩
-        simp only [ReopenImage.repairSteps, List.take_succ_cons, List.foldlM_cons, effect]
-        exact prefixRun
+  have outcome := Publication.run_effects_outcome
+    (State := ReopenImage) (Action := Publication.Step) (Error := String)
+    (fun state action => state.repairStep trimmed action) (performRepair report trimmed)
+    (by
+      intro action state
+      have effect := performRepair_outcome report trimmed action state
+      cases ran : performRepair report trimmed action state <;> simpa only [ran] using effect) actions image
+  cases ran : (actions.forM (performRepair report trimmed)) image <;>
+    simpa only [ran, ReopenImage.repairSteps] using outcome
 
 /-- The aligned path asks for both the WAL file and the directory sync.
 A reported failure may follow completion of any subset of those requests. -/

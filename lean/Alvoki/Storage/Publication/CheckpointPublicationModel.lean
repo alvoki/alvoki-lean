@@ -66,6 +66,64 @@ can be overwritten in the next attempt. -/
 def Image.execute (initial : Image) (next : RunSet) (actions : List Step) : Option Image :=
   (Pending.execute ⟨initial, 0, false⟩ next actions).map Pending.image
 
+/-- Whether an operation reports success, or reports an error before or
+after having the modeled effect. A partial write to an unreachable run or
+staged manifest has no effect on current recoverable file bindings. -/
+inductive StepReport where
+  | success
+  | failure (tookEffect : Bool)
+
+private def performReportedStep (next : RunSet) (report : Step → StepReport)
+    (action : Step) : EStateM Unit Pending Unit := fun state =>
+  match report action with
+  | .success =>
+    match state.step next action with
+    | some after => .ok () after
+    | none => .error () state
+  | .failure tookEffect =>
+    .error () (if tookEffect then (state.step next action).getD state else state)
+
+private theorem performReportedStep_outcome (next : RunSet) (report : Step → StepReport)
+    (action : Step) (state : Pending) :
+    match performReportedStep next report action state with
+    | .ok _ after => state.step next action = some after
+    | .error _ after => after = state ∨ state.step next action = some after := by
+  cases reported : report action with
+  | success => cases applied : state.step next action <;> simp [performReportedStep, reported, applied]
+  | failure tookEffect =>
+    cases tookEffect
+    · simp [performReportedStep, reported]
+    · cases applied : state.step next action <;> simp [performReportedStep, reported, applied]
+
+/-- Interpret the same checkpoint schedule as the native adapter, with file
+effects specified by the reports and a file image retained even on error. -/
+def Image.runWithReports (initial : Image) (next : RunSet) (report : Step → StepReport) :
+    EStateM.Result Unit Image Unit :=
+  match run next.files.length (performReportedStep next report) ⟨initial, 0, false⟩ with
+  | .ok _ state => .ok () state.image
+  | .error _ state => .error () state.image
+
+theorem Image.runWithReports_outcome (initial : Image) (next : RunSet) (report : Step → StepReport) :
+    match initial.runWithReports next report with
+    | .ok _ after => initial.execute next (steps next.files.length) = some after
+    | .error _ after => ∃ cut, initial.execute next ((steps next.files.length).take cut) = some after := by
+  have outcome := Publication.run_effects_outcome (State := Pending) (Action := Step) (Error := Unit)
+    (fun state action => state.step next action) (performReportedStep next report)
+    (by
+      intro action state
+      have effect := performReportedStep_outcome next report action state
+      cases ran : performReportedStep next report action state <;> simpa only [ran] using effect)
+    (steps next.files.length) ⟨initial, 0, false⟩
+  unfold runWithReports run
+  cases ran : ((steps next.files.length).forM (performReportedStep next report)) ⟨initial, 0, false⟩ with
+  | ok value after =>
+    rw [ran] at outcome
+    simp [Image.execute, Pending.execute, outcome]
+  | error message after =>
+    rw [ran] at outcome
+    obtain ⟨cut, executed⟩ := outcome
+    exact ⟨cut, by simp [Image.execute, Pending.execute, executed]⟩
+
 /-- The new generation may contain orphan files. It must be unreachable both
 from the live manifest and from every manifest that could survive a crash. -/
 def Image.Unreachable (image : Image) (generation : UInt64) : Prop :=
