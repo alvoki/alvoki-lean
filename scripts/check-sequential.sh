@@ -223,6 +223,7 @@ lake env leanchecker Alvoki.Storage.Disk.SyncHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleEffects
 lake env leanchecker Alvoki.Storage.Disk.KeeperReadCustody
 lake env leanchecker Alvoki.Storage.Disk.WriteGroupFsync
+lake env leanchecker Alvoki.Storage.Disk.AppendGroupedReports
 lake env leanchecker Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 lake env leanchecker Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
 lake env leanchecker Alvoki.Storage.Disk.SegmentedDelayedAppendReopen

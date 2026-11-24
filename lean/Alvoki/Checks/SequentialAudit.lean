@@ -24,6 +24,7 @@ import Alvoki.Storage.Disk.SyncHandleCustody
 import Alvoki.Storage.Disk.SyncHandleEffects
 import Alvoki.Storage.Disk.KeeperReadCustody
 import Alvoki.Storage.Disk.WriteGroupFsync
+import Alvoki.Storage.Disk.AppendGroupedReports
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
@@ -974,6 +975,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.collectionPowerLossCached_eq
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.collectionPowerLossCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.appendPowerLossCached
+#check_axioms Alvoki.Storage.WalSegmentRepair.ReopenLineage.reopensRetainedAppendWith
+#check_axioms Alvoki.Storage.WalSegmentRepair.ReopenLineage.reopensRetainedAppend
+#check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.installsRetainedCached
+#check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.markerPowerLossCached
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.reopensRetainedCached
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalPayloadReports.byteCount
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reported
@@ -1012,6 +1017,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.WriteEffects.markerStep_syncStaged_success
 #check_axioms Alvoki.WAL.Boundary.WriteEffects.reachedWriteGroup
 #check_axioms Alvoki.Storage.SyncHandleRouting.groupedWrite_effects
+#check_axioms Alvoki.Storage.DiskSession.ReachedWriteGroup.marker
+#check_axioms Alvoki.Storage.DiskSession.AppendCommitReports.ofReachedWriteGroup
 #check_axioms Alvoki.Storage.DiskTable.retainRunVersions_fileEffects
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.afterRunRetention
 #check_axioms Alvoki.Storage.RepresentsWalHistory.retainRunVersions
