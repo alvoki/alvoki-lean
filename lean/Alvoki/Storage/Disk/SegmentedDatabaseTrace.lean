@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Disk.SegmentedCollectionPowerLoss
 import Alvoki.Storage.Disk.SegmentedCollectionRetry
+import Alvoki.Storage.Disk.SegmentedCollectionLiveReopen
 import Alvoki.Storage.Disk.SegmentedAppendRecovery
 import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
@@ -99,6 +100,12 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (report : SegmentedCollectionReport directory before) (returned : report.runFrom reached = .ok () remaining) :
       SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor
         (before.afterWalCollection remaining)
+  | collectionReopen {log writer descriptor before after}
+      (enabled : allowCollection = true)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (report : SegmentedCollectionReopenReport directory before writer descriptor)
+      (observed : report.Valid) (endpoint : report.Installs after) :
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
 
 private theorem retainsInterruptedAppend {initial before after : List WAL.Write} {log retained event}
     (history : before = initial ++ retained) (submitted : MarkedSessionRetention log retained)
@@ -153,6 +160,7 @@ theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initi
   | collectionPowerLoss enabled => cases enabled
   | collection enabled => cases enabled
   | collectionRetry enabled => cases enabled
+  | collectionReopen enabled => cases enabled
 
 theorem SegmentedDatabaseTrace.preservesRetained {directory initialDescriptor initial allowCollection log descriptor last}
     (trace : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
@@ -204,6 +212,9 @@ theorem SegmentedDatabaseTrace.preservesRetained {directory initialDescriptor in
   | collectionRetry _ _ failed report returned ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨(failed.settles before report returned).2, retained, history, submitted⟩
+  | collectionReopen _ _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
 
 /-- A history from the first installed empty writer retains all
 acknowledgements in order. It may retain the uncertain append at a

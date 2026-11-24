@@ -107,6 +107,7 @@ import Alvoki.Storage.Disk.SegmentedRetainedWriter
 import Alvoki.Storage.Disk.WalSegmentRecoveryWork
 import Alvoki.Storage.Disk.WalSegmentReadWork
 import Alvoki.Storage.Disk.RecoverySizedReads
+import Alvoki.Storage.Disk.WalSegmentSizedOpen
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -829,6 +830,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.close
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.keepsPendingCollectionBeforeBarrier
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.openAfterRelease
+#check_axioms Alvoki.Storage.DiskSession.PendingCollectionOpenTrace.keepsNamespace
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.Installs.unique
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.Installs.history
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.Installs.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.cleanReopenRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.Installs.preservesRetained
@@ -882,6 +888,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.readExactRecoveryFileWith_accepts
 #check_axioms Alvoki.Storage.walRecoveryReadPlan_bytes
 #check_axioms Alvoki.Storage.walRecoveryReadPlan_ofCheckedSpans
+#check_axioms Alvoki.Storage.WalSegmentRepair.readSizedWalSeals_rejectsExtent
+#check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithSizedSeals_sealedFailure
+#check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithSizedSeals_compatible
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop
