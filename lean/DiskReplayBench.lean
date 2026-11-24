@@ -14,12 +14,31 @@ private def checkContents (db : DiskTable) (handle : DiskSnapshotHandle)
   unless expected == size do
     throw (IO.userError s!"recovered {expected} rows, expected {size}")
 
+/-- Report the native process high-water mark immediately after a single
+open. No warmup or keeper-fixture reads run before this measurement. -/
+private def measureRss (dir : System.FilePath) (size : UInt64) : IO Unit := do
+  let db ← DiskTable.open dir
+  try
+    let status ← IO.FS.readFile "/proc/self/status"
+    let some rss := (status.splitOn "\n").find? (·.startsWith "VmHWM:")
+      | throw (IO.userError "missing VmHWM")
+    let pin ← db.acquire
+    unless pin.sequence == size do throw (IO.userError "unexpected recovered watermark")
+    checkContents db pin.handle size
+    IO.println rss
+  finally db.close
+
 def main (args : List String) : IO Unit := do
+  if let [dir, sizeArg, "--rss-once"] := args then
+    let some size := sizeArg.toNat? | throw (IO.userError "invalid record count")
+    unless 0 < size ∧ size < UInt64.size do
+      throw (IO.userError "expected a positive UInt64 record count")
+    return ← measureRss ⟨dir⟩ size.toUInt64
   let (dir, sizeArg, trialsArg, keeperArg) ← match args with
     | [dir, size, trials] => pure (dir, size, trials, none)
     | [dir, size, trials, "--repair-tail"] => pure (dir, size, trials, some "0")
     | [dir, size, trials, "--repair-tail", keeper] => pure (dir, size, trials, some keeper)
-    | _ => throw (IO.userError "usage: alvoki-disk-replay DIR RECORDS TRIALS [--repair-tail [KEEPER]]")
+    | _ => throw (IO.userError "usage: alvoki-disk-replay DIR RECORDS (TRIALS [--repair-tail [KEEPER]] | --rss-once)")
   let some size := sizeArg.toNat? | throw (IO.userError "invalid record count")
   let some trials := trialsArg.toNat? | throw (IO.userError "invalid trial count")
   unless size > 0 && size < UInt64.size && trials > 0 do

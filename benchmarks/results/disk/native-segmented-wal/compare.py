@@ -49,6 +49,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True, type=Path)
     parser.add_argument("--candidate", required=True, type=Path)
+    parser.add_argument("--base-layout", choices=("single", "segmented"), default="single")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--pairs", type=int, default=12)
     parser.add_argument("--trials", type=int, default=2)
@@ -72,7 +73,7 @@ def main():
         cases.append(write)
         controls.append(write)
     groups = [
-        ("baseline", case, [(before, "single", case), (after, "segmented", case)])
+        ("baseline", case, [(before, args.base_layout, case), (after, "segmented", case)])
         for case in cases
     ]
     for case in controls:

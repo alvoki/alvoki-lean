@@ -102,6 +102,18 @@ Ascending insertion traverses the sorted memtable on every replayed record, so d
 
 Use `--segments 1 8 32` to compare segment layouts with the same frame stream. The paired release comparison against the earlier single-file adapter measured a 32-frame aligned reopen at 1.169 ms and 2.227 ms. Torn-tail reopen at that size took 2.868 ms and 5.112 ms. Acknowledged writes stayed near 3 ms per write. The segmented protocol keeps separate directory and keeper barriers for aligned open and additional barriers for repair. The measured startup cost is the tradeoff for adopting that crash-safe schedule while the full segmented trace and its durability optimizations are developed. [Raw samples, controls and reproduction](../benchmarks/results/disk/native-segmented-wal)
 
+### WAL reopen memory and bytes read
+
+Build the native `alvoki-disk-replay` executable with the resource probe in each segmented checkout. The Python driver measures Linux process peak RSS immediately after one open and uses a second open under `strace` to sum bytes returned by reads of WAL segment paths. Each open starts from a fresh copy of the same marked fixture and validates the recovered rows. Read counts include userspace buffering and describe bytes returned by the kernel to the process. Use the timed replay command separately for latency. [Resource driver](../benchmarks/disk_replay_resources.py) · [Native probe](../lean/DiskReplayBench.lean)
+
+```sh
+python3 benchmarks/disk_replay_resources.py \
+  --base /path/to/before/lean/.lake/build/bin/alvoki-disk-replay \
+  --candidate /path/to/after/lean/.lake/build/bin/alvoki-disk-replay \
+  --segments 1 8 32 --tail-bytes 0 11 8388608 33554432 \
+  --out /tmp/alvoki-replay-resources.csv
+```
+
 ### Canonical database path at open
 
 We measured the directory-identity change on the same Linux VM using seven release trials for each of 100, 5,000, and 10,000 records in all three replay orders. The median ratios after the change ranged from 0.84× to 1.08× at 5,000 and 10,000 records. At 100 records the shuffled median rose from 39.6 to 48.0 microseconds and the other two medians moved by less than one microsecond. The comparison uses one run per build. Native code performs `realpath` and the absolute-path check once on open, and the path proof is erased. [Before samples](../benchmarks/results/disk/disk-identity-before.csv) · [After samples](../benchmarks/results/disk/disk-identity-after.csv) · [Environment and command](../benchmarks/results/disk/disk-identity-environment.txt)
