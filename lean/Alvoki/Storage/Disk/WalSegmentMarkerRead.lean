@@ -74,6 +74,32 @@ theorem selectWalSegmentReadsThrough_exact {offsets : List Nat} {watermark throu
   simp [selectWalSegmentReadsThrough, selected, List.takeWhile_map, List.dropWhile_map, Function.comp_def,
     bind, Option.bind, pure]
 
+/-- The marker-limited native route interpreted by the same primitive
+listing, metadata and binary read reports as the complete reader. -/
+theorem OpenPathReadReports.readWalSegmentsThroughWith_reports (reports : OpenPathReadReports)
+    (directory : DiskDirectory) (watermark : Nat) (length : UInt64)
+    (listing : Except IO.Error (Array IO.FS.DirEntry)) :
+    readWalSegmentsThroughWith directory watermark length (fun _ => listing)
+        (fun path => pure (reports.lstat path)) reports.readBin =
+      (do
+        let through := length.toNat / frameSize
+        if length.toNat % frameSize = 0 ∧ watermark ≤ through then
+          let entries ← listing
+          let offsets ← reports.walSegmentOffsets directory (entries.toList.map (·.fileName))
+          let some (required, newer) := selectWalSegmentReadsThrough offsets watermark through
+            | throw (IO.userError "no WAL segment covers the checkpoint watermark")
+          let payloads ← reports.readWalSegmentPayloads directory required
+          pure ⟨required.zip payloads, newer⟩
+        else throw (IO.userError "invalid absolute WAL segment marker")) := by
+  have probe : probeWalSegmentWith directory (fun path => pure (reports.lstat path)) =
+      reports.probeWalSegment directory := by
+    funext first
+    simp only [probeWalSegmentWith, OpenPathReadReports.probeWalSegment, pure, Except.pure, bind, Except.bind]
+    cases classifyWalSegmentLookup (directory.file (.walSegment first)) first
+      (reports.lstat (directory.file (.walSegment first))) <;> rfl
+  simp only [readWalSegmentsThroughWith, probe, walSegmentOffsets, readWalSegmentPayloads]
+  rfl
+
 private theorem WalSegmentSpans.takeThrough {through : Nat} {files : List (Nat × ByteArray)}
     (spans : WalSegmentSpans through files) (starts : (files.head?.any fun file => decide (file.1 ≤ through)) = true) :
     WalSegmentSpans through (files.takeWhile fun file => decide (file.1 ≤ through)) := by

@@ -115,6 +115,8 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadIO
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentMarkerRead
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairIO
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairOpen
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairEffects
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentReopenEffects
 lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapRetry
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery
@@ -138,5 +140,6 @@ lake env lean --run Alvoki/Checks/SequentialChecks.lean
 lake env lean --run Alvoki/Checks/PackedTableChecks.lean
 lake env lean --run Alvoki/Checks/ManifestIntegrityChecks.lean
 lake env lean --run Alvoki/Checks/VersionedCheckpointReadChecks.lean
+lake env lean --run Alvoki/Checks/WalSegmentMarkerReadChecks.lean
 lake exe alvoki-disk-checks
 python3 ../scripts/check-disk-process-death.py .lake/build/bin/alvoki-disk-checks

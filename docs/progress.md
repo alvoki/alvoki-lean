@@ -581,3 +581,9 @@ The repair schedule validates preparation before any durability operation. It se
 ## Repeated locked retries after an uncertain write
 
 Reported locked-open failures thread the actual write cut and owner map. The healthy strict reopen returns the exact installed state with fresh pins. Its observed marker encodes the selected old or one-frame-extended history, with the same checkpoint binding, run map and generation. [Locked completion](../lean/Alvoki/Storage/Disk/LockedMarkedReopenFailureTrace.lean)
+
+## Crash model for the native segmented repair schedule
+
+The repair safety theorem uses the same dispatcher as the native fault fixture. Its effect contract follows only reached schedule prefixes and admits a failure before or after an operation's public effect. Failed scratch writes may leave arbitrary staging contents. The directory and keeper images conservatively represent the possible survivors. The initial metadata barrier must settle the marker before an unlink, and the prune directory barrier must settle suffix absence before keeper replacement. Any admitted crash or failed callback preserves the marker-selected keeper prefix and the previous sealed bytes. A fresh plan can retry from the retained effects. [Repair effects](../lean/Alvoki/Storage/Disk/WalSegmentRepairEffects.lean)
+
+The effectful reopen interpreter returns the table prepared from the selected v2 run files and marker-limited WAL once those effects settle. If repair fails, it returns the error and the actual modeled file image for retry. These statements rely on prepared read observations, stable owned paths under the lock, and the stated Linux primitive effect contract. The native fault fixture checks process-visible operations. The proof also covers power-loss choices admitted by the model. [Reopen effects](../lean/Alvoki/Storage/Disk/WalSegmentReopenEffects.lean) · [Native fault fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)

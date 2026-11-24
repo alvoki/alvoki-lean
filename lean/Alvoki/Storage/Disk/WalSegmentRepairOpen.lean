@@ -88,4 +88,29 @@ theorem reopenMarkedWith_reported [Monad m] [LawfulMonad m] [MonadExceptOf IO.Er
       pure reopened := by
   simp [reopenMarkedWith, prepared, settled]
 
+/-- A fault interpreter can retain actual read and repair effects. The
+worker returns the same prepared table and the state left by the repair,
+or propagates the error and post-effect state of the failed repair. -/
+theorem reopenMarkedWith_afterPreparation {state : Type} (directory : DiskDirectory)
+    (readOptional : FilePath → EStateM IO.Error state (Option ByteArray))
+    (list : FilePath → EStateM IO.Error state (Array IO.FS.DirEntry))
+    (lstat : FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata))
+    (readBin : FilePath → EStateM IO.Error state ByteArray)
+    (removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error state Unit)
+    (sync : Array FilePath → EStateM IO.Error state Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error state Unit)
+    {initial afterReads : state} {plan : Plan} {reopened : Reopened}
+    (prepared : prepareMarkedWith directory readOptional list lstat readBin initial =
+      .ok (plan, reopened) afterReads) :
+    reopenMarkedWith directory readOptional list lstat readBin removeFile write sync renameFile initial =
+      match runAt directory (pure plan) removeFile write sync renameFile afterReads with
+      | .ok () after => .ok reopened after
+      | .error error after => .error error after := by
+  unfold reopenMarkedWith
+  simp only [Bind.bind, EStateM.bind, prepared]
+  cases outcome : runAt directory (pure plan) removeFile write sync renameFile afterReads with
+  | ok value after => cases value; rfl
+  | error error after => rfl
+
 end Alvoki.Storage.WalSegmentRepair
