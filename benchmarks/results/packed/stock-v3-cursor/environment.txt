@@ -1,0 +1,20 @@
+Baseline source d29eb1ab05f4e2923f91a278a1909a9f13144442, cursor source in the commit containing this archive
+Linux 6.18.57 x86_64, KVM AMD EPYC 9V74, CPU affinity 2
+Lean 4.36.0 (611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)
+Lean native driver clang 23.1.1 (6dfe1677ab8dffbc6ec13d53a1e0215d75147689), Lake default -O3
+Rust 1.100.0 (0ef1bc386), Cargo default release profile
+Python 3.12.14
+
+Reproduction from the repository root with the installed pinned toolchains:
+  ALVOKI_TOOLCHAINS=/workspace/work/toolchains taskset -c 2 bash scripts/stock-v3-cursor.sh --out /tmp/stock-v3-cursor.csv
+  python3 benchmarks/stock_v3_cursor.py --summarize /tmp/stock-v3-cursor.csv
+  ALVOKI_TOOLCHAINS=/workspace/work/toolchains taskset -c 2 bash scripts/stock-v3-cursor.sh --list-input --out /tmp/stock-v3-cursor-list.csv
+  python3 benchmarks/stock_v3_cursor.py --summarize /tmp/stock-v3-cursor-list.csv
+  objdump -d --disassemble=lp_alvoki___private_CompactionCursorMain_0__writeFrom___redArg \
+    lean/.lake/build/bin/alvoki-compaction-cursor
+  ALVOKI_TOOLCHAINS=/workspace/work/toolchains bash scripts/reproduce.sh
+  ALVOKI_TOOLCHAINS=/workspace/work/toolchains bash scripts/compaction.sh
+
+One warm-up and three timed trials per process, across three deterministically
+shuffled batches per workload and size. The CSV retains each sample in
+execution order. Ratios in the report compare median times.

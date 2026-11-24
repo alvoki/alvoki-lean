@@ -113,7 +113,8 @@ decreasing_by
     try dsimp [skip]
     first | omega | (split <;> omega)
 
-@[inline] private def visit (left right : @& Run) (floor : UInt64) (init : α)
+/-- Fold retained rows, supplying each winner's source, row index, key, and sequence. -/
+@[inline] def visit (left right : @& Run) (floor : UInt64) (init : α)
     (emit : α → Bool → USize → UInt64 → UInt64 → α) : α :=
   visitFrom left right floor emit 0 0 0 false init
 

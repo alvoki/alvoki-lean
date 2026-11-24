@@ -279,3 +279,7 @@ Native `markLinear` checks completed 75 exact workload and mode combinations acr
 ## Scoped v3 compaction
 
 The opt-in whole-loop lowering selects and copies retained 32-byte rows into a single private buffer. The branching row writer was faster than the existing Rust writer on the five comparison profiles. Row and span pipelines include output validation and a snapshot scan. Both selector variants passed exact byte and snapshot checks, and the build verifies the generated ABI and its borrowed inputs. [Results and trust boundary](compaction.md#whole-loop-v3-writer)
+
+## Stock Lean exact-size encoding
+
+Pre-extending a destination and writing through a cursor sped up encoding of owned v3 rows by 4.59–5.27× from an array and 3.36–3.71× from a prebuilt list compared with append on stock Lean. For packed compaction, counting the retained rows and initializing the exact output size cost more than one-pass append or span coalescing. A mixed-order rerun confirmed the advantage of the scoped row writer across four v3 profiles. [Exact-size cursor](../benchmarks/results/packed/stock-v3-cursor) · [Mixed-order comparison](../benchmarks/results/packed/v3-writer-comparison)

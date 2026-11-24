@@ -124,6 +124,18 @@ fn scan(left: Run<'_>, right: Run<'_>, snapshot: u64) -> u64 {
     sum
 }
 
+fn encode(rows: &[[u64; 4]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(HEADER + rows.len() * WIDTH);
+    out.extend_from_slice(&(rows.len() as u64).to_le_bytes());
+    out.extend_from_slice(&3u64.to_le_bytes());
+    for row in rows {
+        for &value in row {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    out
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args().skip(1).collect();
     let [mode, left, right, floor, snapshot, output, trials] = args.as_slice() else {
@@ -138,12 +150,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let right = fs::read(right)?;
     let left = Run::parse(&left)?;
     let right = Run::parse(&right)?;
+    let records = if matches!(mode.as_str(), "encode" | "check-encode") {
+        left.0
+            .chunks_exact(WIDTH)
+            .map(|row| std::array::from_fn(|i| word(row, 8 * i)))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     for _ in 0..trials.parse()? {
         let (a, b, floor, snapshot) = black_box((left, right, floor, snapshot));
         let start = Instant::now();
         let (bytes, sum) = match mode.as_str() {
             "rows" | "check-rows" => (compact::<false>(a, b, floor), 0),
             "spans" | "check-spans" => (compact::<true>(a, b, floor), 0),
+            "encode" | "check-encode" => (encode(black_box(&records)), 0),
             "direct" => (Vec::new(), scan(a, b, snapshot)),
             "pipeline" => {
                 let output = compact::<true>(a, b, floor);

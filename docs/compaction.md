@@ -52,6 +52,14 @@ The opt-in v3 lowering borrows the validated runs and reserves one private desti
 
 The stock Lean writer and scan theorems give the byte and snapshot contract. Exact fixtures exercise matching run order, equal-sequence ties, tombstones, floors and malformed inputs. The native implementation relies on the checked generated ABI, validated input extents, and correct native selection and copy behavior. A formal refinement of that implementation remains open. [Lean reference proofs](../lean/CompactionProofs.lean) · [ABI check](../lean/runtime-experiment/check-compaction-abi.py)
 
+## Stock exact-size cursor
+
+Encoding 666,666 owned records into an initialized destination on stock Lean took 8.33–8.59 ms across the four datasets. The append codec took 38.51–45.26 ms and the Rust control 1.85–3.02 ms. The cursor carries bounds proofs for all 32 stores per row. It still pays for per-byte stores and dynamic ownership checks. [Exact-size encoder](../benchmarks/results/packed/stock-v3-cursor)
+
+Using a prebuilt `List` of rows, like the list traversed during flush, the cursor took 9.52–10.34 ms versus 34.71–35.40 ms for append. Both timers include counting the list and building the bytes. This isolates encoding from the other work in a table flush. An executable refinement to the existing codec and a native flush benchmark would establish whether the win carries to the engine. [List comparison](../benchmarks/results/packed/stock-v3-cursor#fresh-encoding-from-a-list)
+
+An exact-size cursor was slower for compaction. Counting retained rows requires a second traversal, and copying from an existing packed run requires initializing the destination before overwriting it. In the mixed-order comparison, the cursor copy took 14.85–25.51 ms at one million inputs, the best one-pass stock writer took 6.03–11.90 ms, and the scoped row writer took 1.98–4.78 ms. The scoped row pipeline also beat the existing Rust row pipeline in all four profiles in that run. [Mixed-order comparison](../benchmarks/results/packed/v3-writer-comparison)
+
 ## Resuming write-path optimization
 
 Keep stock Lean's row and span writers as materialization controls and use the direct fold when a consumer can work over both inputs. The v1 phase study put selection with a checksum within 18% of Rust while replaying the same winners into bytes took 4.2–4.6× Rust time. The separate v1 scoped writer was at most 8% slower than the fastest matched Rust control across its measured workloads. The v3 result adds a whole-loop control for 32-byte versioned rows. [Phase isolation](merge-phases.md) · [V1 scoped results](scoped-builder.md) · [Stock builder](stock-builder.md)

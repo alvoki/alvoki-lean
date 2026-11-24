@@ -96,6 +96,11 @@ private theorem machineExtent (bytes : ByteArray) (offset extra : USize)
   let b7 := storeLane b6 offset 6 value (laneBound 6 (by decide))
   storeLane b7 offset 7 value (laneBound 7 (by decide))
 
+/-- Overwrite one little-endian word inside a caller-validated destination. -/
+@[inline] def storeWordAt (bytes : ByteArray) (offset : USize) (value : UInt64)
+    (extent : offset.toNat + 7 < bytes.size) : { out : ByteArray // out.size = bytes.size } :=
+  storeWordIn ⟨bytes, rfl⟩ offset value extent
+
 @[inline] def storeWord (bytes : ByteArray) (offset : USize) (value : UInt64) : ByteArray :=
   if h : 7 < bytes.usize && offset < bytes.usize - 7 then
     have extent := machineExtent bytes offset 7 h

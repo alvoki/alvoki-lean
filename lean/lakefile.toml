@@ -82,6 +82,10 @@ name = "Compaction"
 name = "alvoki-compaction"
 root = "CompactionMain"
 
+[[lean_exe]]
+name = "alvoki-compaction-cursor"
+root = "CompactionCursorMain"
+
 [[lean_lib]]
 name = "SpanMerge"
 
