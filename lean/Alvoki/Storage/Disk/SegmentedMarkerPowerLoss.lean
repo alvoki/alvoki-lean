@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedAppendRecovery
+import Alvoki.Storage.Disk.RetainedAppendRecovery
 import Alvoki.Storage.Disk.WalSegmentMarkerPowerLoss
 
 namespace Alvoki.Storage.DiskSession
@@ -119,7 +119,7 @@ theorem Valid.powerLoss {report : SegmentedMarkerPowerLossReport directory befor
   .powerLoss .empty observed.metadata observed.payload (List.mem_singleton_self _)
 
 private theorem Valid.preparedHistory {report : SegmentedMarkerPowerLossReport directory before writer descriptor}
-    (observed : report.Valid) (ready : before.Ready directory writer) :
+    (observed : report.Valid) (ready : before.RetainedReady directory writer) :
     report.event.sequence.toNat = before.history.length + 1 ∧
     WAL.OrdinalsFrom 1 (before.history ++ [report.event]) ∧
     (WAL.encode (before.history ++ [report.event])).size < UInt64.size := by
@@ -135,7 +135,7 @@ private theorem Valid.preparedHistory {report : SegmentedMarkerPowerLossReport d
 theorem Valid.submittedSequence {report : SegmentedMarkerPowerLossReport directory before writer descriptor}
     (observed : report.Valid) (ready : before.Ready directory writer) :
     report.event.sequence.toNat = before.history.length + 1 :=
-  (observed.preparedHistory ready).1
+  (observed.preparedHistory ready.toRetained).1
 
 structure Installs (report : SegmentedMarkerPowerLossReport directory before writer descriptor)
     (after : SegmentedWriterState) : Prop extends
@@ -147,6 +147,20 @@ structure Installs (report : SegmentedMarkerPowerLossReport directory before wri
   priorCheckpoint : after.checkpoint = before.checkpoint
   generation : after.installed.generation = before.installed.generation
 
+private theorem Valid.modeledRetries {report : SegmentedMarkerPowerLossReport directory before writer descriptor}
+    (observed : report.Valid) :
+    let effects := report.cut.writeEffects report.appendCrashTails (before.wal.directory.staged .walBoundary)
+    BoundedReopenTrace directory (AppendRetryTarget before.history report.event before.wal.active.first)
+      ⟨appendCutFiles before.wal before.history report.event effects before.files.keeper.staged, before.owners⟩
+      report.retry := by
+  let effects := report.cut.writeEffects report.appendCrashTails (before.wal.directory.staged .walBoundary)
+  let modeled := appendCutFiles before.wal before.history report.event effects before.files.keeper.staged
+  obtain ⟨markers, keepers⟩ := markerCutChoices report.cut before report.event report.appendCrashTails
+  have first : BoundedReopenTrace directory (AppendRetryTarget before.history report.event before.wal.active.first)
+      ⟨modeled, before.owners⟩ report.crashed :=
+    .powerLoss .empty (markers ▸ observed.metadata) (keepers ▸ observed.payload) (List.mem_singleton_self _)
+  exact joinAttempts first report.attempts
+
 /-- Recover from the actual physical power-loss cut, then run the healthy
 bounded open on the exact surviving files. The marker chooses the old
 history or that history plus the one submitted frame. -/
@@ -154,13 +168,8 @@ theorem installs (report : SegmentedMarkerPowerLossReport directory before write
     (observed : report.Valid) (ready : before.Ready directory writer) :
     ∃ after, report.Installs after ∧ after.Ready directory descriptor := by
   let effects := report.cut.writeEffects report.appendCrashTails (before.wal.directory.staged .walBoundary)
-  let modeled := appendCutFiles before.wal before.history report.event effects before.files.keeper.staged
-  obtain ⟨markers, keepers⟩ := markerCutChoices report.cut before report.event report.appendCrashTails
-  have first : BoundedReopenTrace directory (AppendRetryTarget before.history report.event before.wal.active.first)
-      ⟨modeled, before.owners⟩ report.crashed :=
-    .powerLoss .empty (markers ▸ observed.metadata) (keepers ▸ observed.payload) (List.mem_singleton_self _)
-  have attempts := joinAttempts first report.attempts
-  have ⟨_, extended, fits⟩ := observed.preparedHistory ready
+  have attempts := observed.modeledRetries
+  have ⟨_, extended, fits⟩ := observed.preparedHistory ready.toRetained
   obtain ⟨_, history, survived, manifest, marker, wal, walEq, layout, chain, kept, selected, _, keeper, opened⟩ :=
     attempts.installsAfterAppendCut (descriptor := descriptor) ready.appendInput report.event extended fits effects
       before.files.keeper.staged report.liveRefs report.fresh report.acquisition report.reopen.unlock
@@ -195,6 +204,20 @@ theorem installs (report : SegmentedMarkerPowerLossReport directory before write
     afterWal, target ▸ rfl, by rw [target, keeper]; rfl, next.resumed.through, next.resumed.contents, durable,
     next.manifestFiles, next.resumed.selected⟩, observed.powerLoss, exactMarker, priorCheckpoint, generation⟩, next⟩
 
+/-- After covered WAL deletion, the same physical power-loss cut leaves
+one selected marker and the retained suffix needed by the original checkpoint. -/
+theorem installsRetained (report : SegmentedMarkerPowerLossReport directory before writer descriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory writer) :
+    ∃ after, report.Installs after ∧ after.RetainedReady directory descriptor := by
+  let effects := report.cut.writeEffects report.appendCrashTails (before.wal.directory.staged .walBoundary)
+  have ⟨_, extended, fits⟩ := observed.preparedHistory ready
+  obtain ⟨after, endpoint, next, marker, checkpoint, generation⟩ := observed.modeledRetries.reopensRetainedAppend
+    ready report.event extended fits effects report.reopen report.descriptorEq report.acquired report.acquisition
+    report.liveRefs report.fresh report.reads report.settles report.healthy
+  have samePair : report.retry.image.directory.active = report.pair := fixedAppendPair report.attempts rfl
+  have exactMarker := (congrArg DirectoryPublication.Bindings.walBoundary samePair).symm.trans marker
+  exact ⟨after, ⟨endpoint, observed.powerLoss, exactMarker, checkpoint, generation⟩, next⟩
+
 theorem Installs.unique {report : SegmentedMarkerPowerLossReport directory before writer descriptor}
     {left right : SegmentedWriterState} (a : report.Installs left) (b : report.Installs right) : left = right :=
   a.toAppendRetryEndpoint.unique b.toAppendRetryEndpoint
@@ -203,6 +226,12 @@ theorem Installs.preservesReady {report : SegmentedMarkerPowerLossReport directo
     {after : SegmentedWriterState} (endpoint : report.Installs after) (observed : report.Valid)
     (ready : before.Ready directory writer) : after.Ready directory descriptor := by
   obtain ⟨_, installed, next⟩ := report.installs observed ready
+  exact installed.unique endpoint ▸ next
+
+theorem Installs.preservesRetained {report : SegmentedMarkerPowerLossReport directory before writer descriptor}
+    {after : SegmentedWriterState} (endpoint : report.Installs after) (observed : report.Valid)
+    (ready : before.RetainedReady directory writer) : after.RetainedReady directory descriptor := by
+  obtain ⟨_, installed, next⟩ := report.installsRetained observed ready
   exact installed.unique endpoint ▸ next
 
 end SegmentedMarkerPowerLossReport
