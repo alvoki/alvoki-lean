@@ -147,6 +147,7 @@ import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
 import Alvoki.Storage.Disk.CheckpointRunChunkReports
 import Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 import Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
+import Alvoki.Storage.Disk.WalSegmentRepairCheckpointBytes
 import Alvoki.Storage.Disk.CachedRetryInstallation
 import Alvoki.Storage.Disk.CachedMarkedRetryInstallation
 import Alvoki.Storage.Disk.SegmentedCleanCachedReopen
@@ -667,6 +668,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendProcessExitReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchAppendProcessExit
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.processExit
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.ProcessExitCachedReopenReports.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchMarkerProcessExit
 #check_axioms Alvoki.Storage.WalSegmentRepair.boundedBatchRetry_selection
 #check_axioms Alvoki.Storage.replayPreparedBatchSelection
 #check_axioms Alvoki.Storage.prepareBatch_spec
@@ -1095,10 +1098,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.readWalKeeperWithChunks_syncAligned
 #check_axioms Alvoki.Storage.WalSegmentRepair.readWalKeeperWithChunks_syncCapturedDirectory
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.ofChunkReads
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.ofChunkReads_readKeeper
 #check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.ofChunkReads
 #check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.readExact
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.readSelected
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.completes
+#check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_preservesCheckpointBytes
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedRetryCompletes
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_markedRetryFromChunks
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.uniqueResult
