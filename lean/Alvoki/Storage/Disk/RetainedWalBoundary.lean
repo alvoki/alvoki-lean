@@ -1,16 +1,7 @@
-import Alvoki.Storage.Disk.WalBoundary
+import Alvoki.Storage.Disk.RetainedWalReplay
 import Alvoki.Storage.Disk.RetainedWalSuffix
 
 namespace Alvoki.WAL.Boundary
-
-/-- Interpret the unchanged absolute byte marker against bytes starting
-after a known number of removed complete frames. The result contains only
-bytes after that offset. -/
-def selectRetained (removedThrough : Nat) (length : UInt64) (retained : ByteArray) :
-    Except String ByteArray :=
-  let removedBytes := removedThrough * frameSize
-  if length.toNat < removedBytes then .error "WAL boundary precedes its retained data"
-  else select (length.toNat - removedBytes).toUInt64 retained
 
 private theorem retainedCountToNat (length : UInt64) (removedThrough : Nat) :
     (length.toNat - removedThrough * frameSize).toUInt64.toNat =
@@ -81,14 +72,6 @@ theorem selectRetained_shorter_after_trim {removedThrough : Nat} {shorter length
     apply select_shorter_after_trim trim
     rw [retainedCountToNat, retainedCountToNat]
     exact Nat.sub_le_sub_right bounded _
-
-/-- The marked recovery candidate uses the absolute marker for selection
-and then validates and replays the retained bytes at their real ordinals. -/
-def recoverRetainedMarked (base : Storage.PackedTable) (removedThrough : Nat) (length : UInt64)
-    (retained : ByteArray) : Except String (ByteArray × Storage.PackedTable) := do
-  let selected ← selectRetained removedThrough length retained
-  let table ← Storage.recoverRetainedFrom base removedThrough selected
-  return (selected, table)
 
 /-- With a known validated removed prefix, the retained recovery worker
 makes the same selection and table decision as the full marked worker.

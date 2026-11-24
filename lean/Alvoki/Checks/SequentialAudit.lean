@@ -57,6 +57,7 @@ import Alvoki.Storage.Disk.WalSegmentReadPlan
 import Alvoki.Storage.Disk.WalSegmentMarkerRead
 import Alvoki.Storage.Disk.WalSegmentRepairOpen
 import Alvoki.Storage.Disk.WalSegmentReopenEffects
+import Alvoki.Storage.Disk.WalSegmentReplayStability
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.LegacyBootstrapRetry
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
@@ -499,10 +500,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.runAt_safe
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedWith_safe
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedWith_completes
+#check_axioms Alvoki.Storage.recoverMarkedWalSegments_removeKeeperTail
+#check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.replayUnchanged
 #check_axioms Alvoki.Storage.OpenPathReadReports.readWalSegmentsWith_reports
 #check_axioms Alvoki.Storage.concatenateReadWalSegmentPayloads
 #check_axioms Alvoki.Storage.WalSegmentRecovery.recoversReadBytes
 #check_axioms Alvoki.Storage.checkWalSegmentSpans_iff
+#check_axioms Alvoki.Storage.recoverMarkedWalSegments_eq_extract
 #check_axioms Alvoki.Storage.WalSegment.Chain.checkReadSpans
 #check_axioms Alvoki.Storage.planWalSegmentRepair_beforeStart
 #check_axioms Alvoki.Storage.WalSegment.Chain.plansRepair

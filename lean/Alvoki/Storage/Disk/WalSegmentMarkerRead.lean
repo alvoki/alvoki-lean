@@ -3,68 +3,6 @@ import Alvoki.Storage.Disk.WalSegmentRepair
 namespace Alvoki.Storage
 open WAL (frameSize)
 
-/-- The marker-limited vector has no later starts. Each required sealed
-file must fill its exact span, and the keeper must reach the marker. -/
-def checkSelectedWalSegmentSpans (through : Nat) (files : List (Nat × ByteArray)) : Bool :=
-  files.all (fun file => decide (file.1 ≤ through)) && checkWalSegmentSpans through files
-
-def walSegmentPayloadBytes (files : List (Nat × ByteArray)) : ByteArray :=
-  files.foldr (fun file later => file.2 ++ later) ByteArray.empty
-
-private def copyWalSegmentPrefix (buffer : ByteArray) (remaining : Nat) : List (Nat × ByteArray) → ByteArray
-  | [] => buffer
-  | (_, bytes) :: rest =>
-    if remaining = 0 then
-      buffer
-    else
-      copyWalSegmentPrefix (bytes.copySlice 0 buffer buffer.size remaining) (remaining - bytes.size) rest
-
-private theorem copyWalSegmentPrefix_eq (buffer : ByteArray) (remaining : Nat) (files : List (Nat × ByteArray)) :
-    copyWalSegmentPrefix buffer remaining files = buffer ++ (walSegmentPayloadBytes files).extract 0 remaining := by
-  induction files generalizing buffer remaining with
-  | nil =>
-    have noBytes : ByteArray.empty.extract 0 remaining = ByteArray.empty := by
-      apply ByteArray.ext
-      simp
-    simp [copyWalSegmentPrefix, walSegmentPayloadBytes, noBytes]
-  | cons file rest ih =>
-    obtain ⟨offset, bytes⟩ := file
-    by_cases empty : remaining = 0
-    · simp [copyWalSegmentPrefix, empty]
-    · have copy : bytes.copySlice 0 buffer buffer.size remaining = buffer ++ bytes.extract 0 remaining := by
-        rw [ByteArray.copySlice_eq_append, ByteArray.extract_zero_size]
-        simp
-      rw [copyWalSegmentPrefix, ite_eq_right empty, ih, copy]
-      change _ = buffer ++ (bytes ++ walSegmentPayloadBytes rest).extract 0 remaining
-      rw [ByteArray.extract_append, Nat.zero_sub, ByteArray.append_assoc]
-
-/-- Copy each required payload slice once into a single owned buffer.
-An exactly sized sole segment can be used directly. -/
-private def walSegmentPrefixBytes (count : Nat) (files : List (Nat × ByteArray)) : ByteArray :=
-  match files with
-  | [(_, bytes)] => if count = bytes.size then bytes else bytes.extract 0 count
-  | _ => copyWalSegmentPrefix (ByteArray.emptyWithCapacity count) count files
-
-private theorem walSegmentPrefixBytes_eq (count : Nat) (files : List (Nat × ByteArray)) :
-    walSegmentPrefixBytes count files = (walSegmentPayloadBytes files).extract 0 count := by
-  unfold walSegmentPrefixBytes
-  split
-  · next offset bytes =>
-      by_cases exactSize : count = bytes.size <;> simp [walSegmentPayloadBytes, exactSize]
-  · simp [copyWalSegmentPrefix_eq, show ByteArray.emptyWithCapacity count = ByteArray.empty from rfl]
-
-/-- Validate file boundaries before passing the selected bytes to the
-ordinary retained decoder. The keeper can contain an unselected tail. -/
-def recoverMarkedWalSegments (base : PackedTable) (length : UInt64) (files : List (Nat × ByteArray)) :
-    Except String (ByteArray × PackedTable) :=
-  match files with
-  | [] => .error "invalid selected WAL segment spans"
-  | (first, _) :: _ =>
-    if checkSelectedWalSegmentSpans (length.toNat / frameSize) files then
-      let count := length.toNat - first * frameSize
-      WAL.Boundary.recoverRetainedMarked base first length (walSegmentPrefixBytes count files)
-    else .error "invalid selected WAL segment spans"
-
 theorem selectWalSegmentReadsThrough_exact {offsets : List Nat} {watermark through first : Nat}
     {files : List (Nat × ByteArray)}
     (selected : selectWalSegmentReads offsets watermark = some (first, files.map (·.1))) :
@@ -211,7 +149,7 @@ theorem recoverMarkedWalSegments_eq_retained (base : PackedTable) (length : UInt
   have enoughBytes : length.toNat - first * frameSize ≤ (walSegmentPayloadBytes ((first, bytes) :: rest)).size := by
     rw [← exactMarker, ← Nat.sub_mul]
     exact enough
-  simp only [recoverMarkedWalSegments, checked, ↓reduceIte, walSegmentPrefixBytes_eq]
+  rw [recoverMarkedWalSegments_eq_extract base length first bytes rest checked]
   rw [recoverRetainedMarked_extract_covered _ _ _ _ enoughBytes]
   exact (recoverRetainedMarked_append_covered base first length _ later enoughBytes).symm
 

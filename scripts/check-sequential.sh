@@ -101,6 +101,7 @@ lake env leanchecker Alvoki.Storage.Disk.LockedMarkedReopenEffects
 lake env leanchecker Alvoki.Storage.Disk.LockedMarkedReopenFailureTrace
 lake env leanchecker Alvoki.Storage.Disk.IntegrityRunCollectionProgress
 lake env leanchecker Alvoki.Storage.Disk.RetainedWalSuffix
+lake env leanchecker Alvoki.Storage.Disk.RetainedWalReplay
 lake env leanchecker Alvoki.Storage.Disk.RetainedWalBoundary
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentFileName
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentPathIdentity
@@ -112,11 +113,13 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentInventory
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadPlan
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepair
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadIO
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentReplay
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentMarkerRead
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairIO
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairOpen
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReopenEffects
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentReplayStability
 lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapRetry
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery

@@ -1,25 +1,10 @@
+import Alvoki.Storage.Disk.RetainedWalReplay
 import Alvoki.Storage.Disk.CheckpointHistory
 
 namespace Alvoki.Storage
 
 open Sequential (SnapshotTable)
 open WAL (Write frameSize)
-
-/-- Recover after physically removing `removedThrough` frames. Validate the
-retained frames at their original positions before dropping frames already
-represented by the checkpoint. The caller supplies a selected byte range
-and a cutoff at or below the loaded checkpoint's watermark. -/
-def recoverRetainedFrom (base : PackedTable) (removedThrough : Nat) (retained : ByteArray) :
-    Except String PackedTable := do
-  let events ← WAL.decodeOrdinalsFrom (removedThrough + 1) retained
-  let table ← replay base (events.drop (base.committed.toNat - removedThrough))
-  if table.committed.toNat == removedThrough + retained.size / frameSize then .ok table
-  else .error "selected WAL frame count disagrees with the recovered sequence"
-
-/-- Recover when every frame in the retained bytes is above the checkpoint
-watermark. -/
-def recoverRetainedSuffix (base : PackedTable) (retained : ByteArray) : Except String PackedTable :=
-  recoverRetainedFrom base base.committed.toNat retained
 
 /-- The physical and logical replay offsets can differ. With validated,
 frame-aligned removed bytes, the original and retained workers return the

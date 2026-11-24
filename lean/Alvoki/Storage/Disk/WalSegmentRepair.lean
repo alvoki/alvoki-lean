@@ -1,54 +1,10 @@
+import Alvoki.Storage.Disk.WalSegmentReplay
 import Alvoki.Storage.Disk.WalSegmentPathIdentity
 import Alvoki.Storage.Disk.WalSegmentReadPlan
 
 namespace Alvoki.Storage
 
 open WAL (Write frameSize)
-
-private def checkWalSegmentSizes (through : Nat) : List (Nat × ByteArray) → Bool
-  | [] => false
-  | [(first, bytes)] => decide ((through - first) * frameSize ≤ bytes.size)
-  | (first, bytes) :: (next, rest) :: remaining =>
-    decide (first < next ∧ bytes.size = (next - first) * frameSize) &&
-      checkWalSegmentSizes through ((next, rest) :: remaining)
-
-/-- Check physical file boundaries separately from aggregate WAL decoding.
-The first selected start is at or before the marker, and each sealed file
-fills its claimed range exactly. If newer files follow the marker, the
-original final file supplies zero required bytes and repair chooses an
-earlier keeper. -/
-def checkWalSegmentSpans (through : Nat) (files : List (Nat × ByteArray)) : Bool :=
-  (files.head?.any fun file => decide (file.1 ≤ through)) && checkWalSegmentSizes through files
-
-inductive WalSegmentSpans (through : Nat) : List (Nat × ByteArray) → Prop where
-  | active (covered : (through - first) * frameSize ≤ bytes.size) : WalSegmentSpans through [(first, bytes)]
-  | sealed (forward : first < next) (size : bytes.size = (next - first) * frameSize)
-      (rest : WalSegmentSpans through ((next, nextBytes) :: remaining)) :
-      WalSegmentSpans through ((first, bytes) :: (next, nextBytes) :: remaining)
-
-private theorem checkWalSegmentSizes_iff (through : Nat) (files : List (Nat × ByteArray)) :
-    checkWalSegmentSizes through files = true ↔ WalSegmentSpans through files := by
-  induction files with
-  | nil => simp [checkWalSegmentSizes]; intro accepted; cases accepted
-  | cons file remaining ih =>
-    obtain ⟨first, bytes⟩ := file
-    cases remaining with
-    | nil =>
-      simp only [checkWalSegmentSizes, decide_eq_true_eq]
-      exact ⟨.active, fun accepted => by cases accepted; assumption⟩
-    | cons next rest =>
-      obtain ⟨next, nextBytes⟩ := next
-      simp only [checkWalSegmentSizes, Bool.and_eq_true, decide_eq_true_eq, ih]
-      exact ⟨fun ⟨⟨forward, size⟩, accepted⟩ => .sealed forward size accepted,
-        fun accepted => by cases accepted; exact ⟨⟨‹first < next›, ‹_›⟩, ‹_›⟩⟩
-
-theorem checkWalSegmentSpans_iff (through : Nat) (files : List (Nat × ByteArray)) :
-    checkWalSegmentSpans through files = true ↔
-      (∃ first rest, files = first :: rest ∧ first.1 ≤ through) ∧ WalSegmentSpans through files := by
-  rw [checkWalSegmentSpans, Bool.and_eq_true, checkWalSegmentSizes_iff]
-  cases files with
-  | nil => simp
-  | cons file rest => simp
 
 private theorem chain_start_le {history : List Write} {start : Nat} {segments : List WalSegment}
     (chain : WalSegment.Chain history start segments) : start ≤ history.length := by
