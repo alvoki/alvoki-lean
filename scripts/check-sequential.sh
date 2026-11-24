@@ -65,6 +65,11 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedWriterState
 lake env leanchecker Alvoki.Storage.Disk.SegmentedWriterEntry
 lake env leanchecker Alvoki.Storage.Disk.SegmentedAppendTrace
 lake env leanchecker Alvoki.Storage.Disk.SegmentedWriterTrace
+lake env leanchecker Alvoki.Storage.Disk.SegmentedDatabaseTrace
+lake env leanchecker Alvoki.Storage.Disk.SegmentedAppendRecovery
+lake env leanchecker Alvoki.Storage.Disk.SegmentedCleanReopen
+lake env leanchecker Alvoki.Storage.Disk.SegmentedFailureRelease
+lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 lake env leanchecker Alvoki.Storage.Disk.AppendLockHandoff
 lake env leanchecker Alvoki.Storage.Disk.AppendCutSession
 lake env leanchecker Alvoki.Storage.Disk.ReopenedSegmentAppend

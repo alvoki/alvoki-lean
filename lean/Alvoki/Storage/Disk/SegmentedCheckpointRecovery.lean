@@ -1,22 +1,11 @@
 import Alvoki.Storage.Disk.CheckpointRetrySession
 import Alvoki.Storage.Disk.SegmentedCheckpointStep
 
+import Alvoki.Storage.Disk.SegmentedFailureRelease
+
 namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
-
-/-- The reported end of the poisoned writer's local lock lifetime. -/
-inductive CheckpointFailureRelease (writer : Nat) where
-  | closed
-  | references (held : HeldLockReferences writer) (drops : List LockReferenceDrop)
-      (last : held.remaining drops = [])
-
-def CheckpointFailureRelease.Observed {directory : DiskDirectory} {writer : Nat}
-    (release : CheckpointFailureRelease writer) (poisoned : Phase Installed × LockedFileState Nat)
-    (released : LockedFileState Nat) : Prop :=
-  match release with
-  | .closed => runCloseWithFiles directory writer .success poisoned = .ok () (.closed, released)
-  | .references held drops _ => held.afterFileDrops drops directory poisoned.2 = released
 
 /-- One actual checkpoint dispatch failure, the release of its writer lock,
 and the reached bounded reopen attempts. The final attempt supplies its
@@ -35,7 +24,7 @@ structure SegmentedCheckpointFailure (directory : DiskDirectory) (before : Segme
   failed : CheckpointPublication.run checkpoint.table.runs.length checkpoint.perform 0 = .error cause checkpoint.cut
   published : CheckpointPublication.Image
   projected : before.published.executeVersioned checkpoint.plan checkpoint.cut = some published
-  release : CheckpointFailureRelease writer
+  release : SegmentedFailureRelease writer
   retry : LockedFileState FileImage
   attempts :
     let wal := published.segmentedCheckpointView before.wal
@@ -66,7 +55,7 @@ namespace SegmentedCheckpointFailure
 
 variable {directory : DiskDirectory} {before : SegmentedWriterState} {writer descriptor : Nat}
 
-/-- The concrete rejected checkpoint and installed endpoint of the final
+/-- The reached checkpoint publication error and installed endpoint of the final
 bounded open. The endpoint records the manifest and ordered checkpoint
 binding that the actual file reports select. -/
 structure Installs (failure : SegmentedCheckpointFailure directory before writer descriptor)
