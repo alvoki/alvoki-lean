@@ -13,6 +13,8 @@ import Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
 import Alvoki.Storage.Disk.SegmentedKeeperSyncBeforeBarrier
 import Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
+import Alvoki.Storage.Disk.SegmentedCollectionBarrierError
+import Alvoki.Storage.Disk.WalGroupSyncSchedule
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
@@ -108,6 +110,7 @@ import Alvoki.Storage.Disk.WalSegmentRecoveryWork
 import Alvoki.Storage.Disk.WalSegmentReadWork
 import Alvoki.Storage.Disk.RecoverySizedReads
 import Alvoki.Storage.Disk.WalSegmentSizedOpen
+import Alvoki.Storage.Disk.IntegrityCheckpointSizedRead
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -839,6 +842,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.Installs.unique
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.Installs.history
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.Installs.preservesRetained
+#check_axioms Alvoki.Storage.DiskSession.CollectionBarrierErrorEffect.reaches
+#check_axioms Alvoki.Storage.DiskSession.CollectionBarrierErrorEffect.keepsVisible
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.errorAtCollectionBarrier
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.cleanReopenRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.Installs.preservesRetained
@@ -895,6 +901,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSizedWalSeals_rejectsExtent
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithSizedSeals_sealedFailure
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithSizedSeals_compatible
+#check_axioms Alvoki.Storage.readIntegrityRunBytesSized_compatible
+#check_axioms Alvoki.Storage.readIntegrityCheckpointSized_compatible
+#check_axioms Alvoki.Storage.countCheckpointRunBytes_bound
+#check_axioms Alvoki.Storage.SyncPathGroup.run_pair
+#check_axioms Alvoki.Storage.SyncPathGroup.failedWalPublication
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop

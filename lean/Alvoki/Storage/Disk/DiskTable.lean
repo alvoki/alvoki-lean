@@ -6,6 +6,7 @@ import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.RunFileSelection
 import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Disk.WalSegmentCommit
+import Alvoki.Storage.Disk.WalGroupSyncSchedule
 import Alvoki.Storage.Disk.WalSegmentBootstrapIO
 import Alvoki.Storage.Disk.WalSegmentBoundedOpen
 import Alvoki.Storage.Disk.WalSegmentCollectionPlan
@@ -99,13 +100,8 @@ private def SyncFiles.sync (files : SyncFiles) (path : FilePath) : IO Unit := do
 
 /-- A failed member of a grouped barrier does not prevent attempts on the
 remaining members. Rename is allowed only if the entire barrier succeeds. -/
-private def SyncFiles.syncPaths (files : SyncFiles) (paths : Array FilePath) : IO Unit := do
-  let mut failure := none
-  for path in paths do
-    try files.sync path catch error =>
-      if failure.isNone then
-        failure := some (IO.userError s!"sync failed for '{path}': {error}")
-  if let some error := failure then throw error
+private def SyncFiles.syncPaths (files : SyncFiles) (paths : Array FilePath) : IO Unit :=
+  SyncPathGroup.run files.sync paths
 
 /-- Linux adapter for a sequential caller. The lock excludes a second open
 writer. An I/O failure during publication requires reopening the directory. -/
