@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedBatchAppend
+import Alvoki.Storage.Disk.SegmentedBatchAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
 import Alvoki.Storage.Disk.WalBatchSession
 
@@ -90,6 +91,12 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (report : cut.CachedReopenReports descriptor) (installed : report.Installs after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.uncertainBatch cut.batch]) descriptor after
+  | batchAppendPowerLoss
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (report : SegmentedBatchAppendPowerLossReport directory before descriptor) (observed : report.Valid)
+      (installed : report.Installs after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch report.batch]) descriptor after
 
 private theorem appendUncertainBatch {initial before after batch retained : List WAL.Write}
     {log : List DatabaseSubmissions} (retention : DatabaseBatchRetention log retained)
@@ -126,6 +133,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | batchPowerLoss _ _ _ _ installed ih =>
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history installed.history⟩
+  | batchAppendPowerLoss _ _ _ installed ih =>
+    obtain ⟨_, _, history, retention⟩ := ih
+    exact ⟨installed.retained, appendUncertainBatch retention history (.inl installed.history)⟩
 
 /-- Extend the trace using the actual failed commit, lock release and
 bounded reopen reports. Retained readiness is derived from the prior trace. -/
@@ -152,6 +162,19 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterBatchPowerLoss
         (log ++ [.uncertainBatch cut.batch]) descriptor after := by
   obtain ⟨after, installed⟩ := report.installs observed (trace.preservesRetained ready).1
   exact ⟨after, installed, .batchPowerLoss trace cut observed report installed⟩
+
+/-- A batch interrupted before marker publication contributes one uncertain
+submission and no retained frames. The next cached open installs the old
+history and supports the same remaining trace operations. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterBatchAppendPowerLoss
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (ready : initial.RetainedReady directory initialDescriptor)
+    (report : SegmentedBatchAppendPowerLossReport directory before descriptor) (observed : report.Valid) :
+    ∃ after, report.Installs after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch report.batch]) descriptor after := by
+  obtain ⟨after, installed⟩ := report.installs observed (trace.preservesRetained ready).1
+  exact ⟨after, installed, .batchAppendPowerLoss trace report observed installed⟩
 
 /-- Reads through active snapshot pins in the current session agree with
 replay of the retained history, including after an uncertain batch. -/
