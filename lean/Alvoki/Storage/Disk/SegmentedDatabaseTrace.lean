@@ -572,6 +572,32 @@ theorem SegmentedDatabaseTrace.acquireReads {directory initialDescriptor initial
         ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) :=
   (trace.preservesRetained initialReady).1.acquireReads retained committed
 
+/-- One abstract history explains both durability and every supported
+snapshot of the last installed writer in an admitted trace from bootstrap. -/
+theorem SegmentedDatabaseTrace.keyValueRefinement
+    {directory initialDescriptor allowCollection log descriptor last}
+    {first : LockedFileState WalSegmentRotation.State} (bootstrap : BootstrapReady first.image)
+    (held : first.owners.Owns directory initialDescriptor)
+    (trace : SegmentedDatabaseTrace directory initialDescriptor (bootstrap.writerState first.owners)
+      allowCollection log descriptor last) :
+    ∃ reference : SnapshotTable UInt64,
+      SnapshotWalReplay .empty last.history reference ∧
+      MarkedSessionRetention log last.history ∧
+      log.flatMap MarkedSessionWrites.acknowledged <+ last.history ∧
+      last.history <+ log.flatMap MarkedSessionWrites.submitted ∧
+      ∀ snapshot, last.installed.table.pins.floor ≤ snapshot → snapshot ≤ last.installed.table.committed →
+        ∃ pin pinned, last.installed.table.acquireAt snapshot = some (pin, pinned) ∧
+          (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+          ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) := by
+  obtain ⟨ready, retained, acknowledgements, submissions⟩ := trace.fromBootstrap bootstrap held
+  obtain ⟨reference, replayed⟩ := SnapshotWalReplay.fromEmpty last.history ready.resumed.ordered
+  refine ⟨reference, replayed, retained, acknowledgements, submissions, ?_⟩
+  intro snapshot floor committed
+  obtain ⟨other, sameReplay, pin, pinned, acquired, lookup, range⟩ := ready.acquireReads floor committed
+  have same := replayed.deterministic sameReplay
+  cases same
+  exact ⟨pin, pinned, acquired, lookup, range⟩
+
 /-- An earlier pin's sequence reads the same values after reacquiring it
 in the final session, provided the final writer still retains it. -/
 theorem SegmentedDatabaseTrace.reacquireReadsStable {directory initialDescriptor initial allowCollection log descriptor last}
