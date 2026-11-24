@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.MarkedDatabaseTrace
+import Alvoki.Storage.Disk.SegmentedSessionInstall
 
 namespace Alvoki.Storage.DiskSession
 
@@ -30,6 +31,28 @@ theorem readWithHandle_foreign (table : PackedTable) (read : PackedTable → Opt
   have different : sameSession = false := compared.trans (decide_eq_false foreign)
   rw [different]
   rfl
+
+/-- Each token still held from an earlier session is foreign to the
+installed result of the shared open. The allocation report covers all live
+tokens, and the comparison report interprets the native pointer check. -/
+theorem runOpenWithInstallation_rejectsLiveToken {image : Type} {directory descriptor nextRef acquired unlock}
+    {recover : EStateM IO.Error image WalSegmentRepair.Reopened} {before final : LockedFileState image}
+    {session : SegmentedSession}
+    (opened : runOpenWithInstallation directory descriptor nextRef acquired unlock recover before = .ok session final)
+    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef) {issuer : Nat}
+    (oldToken : issuer ∈ liveRefs) {sameSession : Bool}
+    (compared : sameSession = decide (issuer = session.sessionRef)) (read : PackedTable → Option α) :
+    ∃ installed, session.phase = .ready installed ∧
+      readWithHandle (.ready installed.table) sameSession read = .ok none := by
+  rw [runOpenWithInstallation_outcome] at opened
+  cases result : runOpenWithImage directory descriptor acquired unlock recover before with
+  | error cause after => simp [result] at opened
+  | ok recovered after =>
+    rw [result] at opened
+    obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj opened
+    have old := fresh issuer oldToken
+    have distinct : issuer ≠ nextRef + 1 := by omega
+    exact ⟨recovered.installed, rfl, readWithHandle_foreign _ read compared distinct⟩
 
 /-- The foreign release branch does not invoke the local state update. -/
 theorem release_foreign {sameSession : Bool} {issuer current : Nat}

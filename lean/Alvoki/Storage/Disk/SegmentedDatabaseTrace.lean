@@ -2,7 +2,9 @@ import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Disk.SegmentedAppendRecovery
 import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
+import Alvoki.Storage.Disk.SegmentedCheckpointPowerLoss
 import Alvoki.Storage.Disk.SegmentedCleanReopen
+import Alvoki.Storage.Disk.SegmentedMarkerPowerLoss
 import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
 import Alvoki.Storage.Disk.SegmentedRotationRecovery
 import Alvoki.Storage.Disk.SegmentedRotationPowerLoss
@@ -49,10 +51,20 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (report : SegmentedAppendPowerLossReport directory before writer descriptor)
       (observed : report.Valid) (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial (log ++ [⟨[], some report.event⟩]) descriptor after
+  | markerPowerLoss {log writer descriptor before after}
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (report : SegmentedMarkerPowerLossReport directory before writer descriptor)
+      (observed : report.Valid) (endpoint : report.Installs after) :
+      SegmentedDatabaseTrace directory initialDescriptor initial (log ++ [⟨[], some report.event⟩]) descriptor after
   | checkpointError {log writer descriptor before after}
       (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
       (report : SegmentedCheckpointFailure directory before writer descriptor)
       (endpoint : report.Installs after) :
+      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
+  | checkpointPowerLoss {log writer descriptor before after}
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (report : SegmentedCheckpointPowerLossReport directory before writer descriptor)
+      (observed : report.Valid) (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
   | rotationError {log writer descriptor before after}
       (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
@@ -66,6 +78,15 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (report : SegmentedRotationPowerLossReport directory before descriptor)
       (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
+
+private theorem retainsInterruptedAppend {initial before after : List WAL.Write} {log retained event}
+    (history : before = initial ++ retained) (submitted : MarkedSessionRetention log retained)
+    (survived : after = before ∨ after = before ++ [event]) :
+    ∃ suffix, after = initial ++ suffix ∧ MarkedSessionRetention (log ++ [⟨[], some event⟩]) suffix := by
+  rcases survived with lost | kept
+  · exact ⟨retained ++ [], by simpa using lost.trans history, submitted.append (Or.inl rfl)⟩
+  · refine ⟨retained ++ [event], by rw [kept, history, List.append_assoc], ?_⟩
+    exact submitted.append (Or.inr ⟨event, rfl, rfl⟩)
 
 theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initial log descriptor last}
     (trace : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor last)
@@ -87,20 +108,21 @@ theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initi
   | powerLoss _ _ observed endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesReady observed before, retained, endpoint.history.trans history, submitted⟩
-  | appendError _ report endpoint ih =>
+  | appendError _ _ endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
-    refine ⟨endpoint.preservesReady before, ?_⟩
-    rcases endpoint.history with lost | kept
-    · exact ⟨retained ++ [], by simpa using lost.trans history, submitted.append (Or.inl rfl)⟩
-    · refine ⟨retained ++ [report.failure.event], by rw [kept, history, List.append_assoc], ?_⟩
-      exact submitted.append (Or.inr ⟨report.failure.event, rfl, rfl⟩)
+    exact ⟨endpoint.preservesReady before, retainsInterruptedAppend history submitted endpoint.history⟩
   | appendPowerLoss _ _ observed endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesReady observed before, retained ++ [], by simpa using endpoint.history.trans history,
-      submitted.append (Or.inl rfl)⟩
+    exact ⟨endpoint.preservesReady observed before, retainsInterruptedAppend history submitted (.inl endpoint.history)⟩
+  | markerPowerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesReady observed before, retainsInterruptedAppend history submitted endpoint.history⟩
   | checkpointError _ _ endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
+  | checkpointPowerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesReady observed before, retained, endpoint.history.trans history, submitted⟩
   | rotationError _ _ _ _ endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
