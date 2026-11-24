@@ -65,6 +65,16 @@ theorem BoundedReopenAttempt.keepsPendingCollectionBeforeBarrier {directory : Di
             exact (congrArg LockedFileState.image (EStateM.Result.error.inj observed).2 : _)
   exact ⟨by cases after; simp_all [next, before, LockedFileState.collectionReopenFiles], rfl⟩
 
+/-- The bounded worker's projection of the observed full barrier result.
+The full callback also records the sealed namespace, even when the
+directory sync leaves the worker's file-image projection equal. -/
+def projectCollectionBarrier
+    (result : EStateM.Result IO.Error (FileImage × WalSealedUnlinkImage) Unit) :
+    EStateM.Result IO.Error FileImage Unit :=
+  match result with
+  | .ok () (files, _) => .ok () files
+  | .error cause (files, _) => .error cause files
+
 /-- After close, or after an early failed open, the actual bounded worker
 uses the still-visible sealed files. Its successful directory barrier
 makes that exact list durable before the keeper barrier and installation. -/
@@ -78,10 +88,13 @@ theorem SegmentedCollectionErrors.openAfterRelease {directory before reached des
       before.published.durable ByteArray.empty)
     (exactReads : attempt.recover directory =
       raw.reopen attempt.removeFile attempt.write attempt.sync attempt.renameFile)
-    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < attempt.nextRef) :
+    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < attempt.nextRef)
+    (syncWithNamespace : Array FilePath → EStateM IO.Error (FileImage × WalSealedUnlinkImage) Unit) :
     let pending : LockedFileState WalSealedUnlinkImage := ⟨reached, owners⟩
     let files := pending.collectionReopenFiles before.files.keeper.staged
-    attempt.sync #[directory.path] files.image = .ok () files.image.syncDirectory →
+    let barrier := syncWithNamespace #[directory.path] (files.image, pending.image)
+    attempt.sync #[directory.path] files.image = projectCollectionBarrier barrier →
+    barrier = .ok () (files.image.syncDirectory, pending.image.syncDirectory) →
     attempt.sync #[directory.file (.walSegment reached.visible.active.first)] files.image.syncDirectory =
       .ok () files.image.syncDirectory.syncKeeper →
     WalSealedUnlinkTrace before.wal pending.image.syncDirectory ∧
@@ -93,7 +106,9 @@ theorem SegmentedCollectionErrors.openAfterRelease {directory before reached des
       pending.image.syncDirectory.crashSealed = [next.wal.sealed] ∧
       next.target.pair = before.target.pair ∧ next.history = before.history ∧ next.checkpoint = before.checkpoint ∧
       next.RetainedReady directory attempt.descriptor := by
-  intro pending files syncDirectory syncKeeper
+  intro pending files barrier sameBarrier observedBarrier syncKeeper
+  have syncDirectory : attempt.sync #[directory.path] files.image = .ok () files.image.syncDirectory :=
+    sameBarrier.trans (congrArg projectCollectionBarrier observedBarrier)
   obtain ⟨trace, sameDirectory⟩ := failed.keepsNamespace ready
   have retry := (trace.projects ready.layout).1
   obtain ⟨session, final, next, returned, path, descriptor, phase, image, owners, wal, pair, history, _, durable, nextReady⟩ :=
