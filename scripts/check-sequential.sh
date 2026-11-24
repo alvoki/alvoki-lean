@@ -112,6 +112,9 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentInventory
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadPlan
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepair
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadIO
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentMarkerRead
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairIO
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairOpen
 lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapRetry
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery

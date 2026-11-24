@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.WalSegmentFileName
+import Alvoki.Storage.Disk.WriteAheadLog
 
 namespace Alvoki.Storage
 open System
@@ -73,5 +74,53 @@ theorem readWalSegments_fileEffects (directory : DiskDirectory) (watermark : Nat
         | throw (IO.userError "no WAL segment covers the checkpoint watermark")
       let payloads ← selected.mapM (fun offset => IO.FS.readBinFile (directory.file (.walSegment offset)))
       pure (first, selected, payloads)) := rfl
+
+/-- Split the ordered suffix after the last start at or before the marker.
+Later addresses are needed only as names for a possible repair. -/
+def selectWalSegmentReadsThrough (offsets : List Nat) (watermark through : Nat) :
+    Option (List Nat × List Nat) := do
+  let (_, selected) ← selectWalSegmentReads offsets watermark
+  let needed := fun start => decide (start ≤ through)
+  pure (selected.takeWhile needed, selected.dropWhile needed)
+
+structure WalSegmentMarkerReads where
+  files : List (Nat × ByteArray)
+  newer : List Nat
+
+/-- Validate the marker's absolute byte count before listing. Check the
+later names by metadata too, but read only payloads through the marker. -/
+def readWalSegmentsThroughWith [Monad m] [MonadExceptOf IO.Error m] (directory : DiskDirectory)
+    (watermark : Nat) (length : UInt64) (list : FilePath → m (Array IO.FS.DirEntry))
+    (lstat : FilePath → m (Except IO.Error IO.FS.Metadata)) (readBin : FilePath → m ByteArray) :
+    m WalSegmentMarkerReads := do
+  let through := length.toNat / WAL.frameSize
+  if length.toNat % WAL.frameSize = 0 ∧ watermark ≤ through then
+    let entries ← list directory.path
+    let offsets ← scanWalSegmentOffsets (probeWalSegmentWith directory lstat) (entries.toList.map (·.fileName))
+    let some (required, newer) := selectWalSegmentReadsThrough offsets watermark through
+      | throw (IO.userError "no WAL segment covers the checkpoint watermark")
+    let payloads ← readWalSegmentPayloadsWith directory readBin required
+    pure ⟨required.zip payloads, newer⟩
+  else throw (IO.userError "invalid absolute WAL segment marker")
+
+/-- The caller holds the directory lock from the checkpoint and marker
+reads through use of this inventory. The byte count came from `WAL.commit`. -/
+def readWalSegmentsThrough (directory : DiskDirectory) (watermark : Nat) (length : UInt64) :
+    IO WalSegmentMarkerReads :=
+  readWalSegmentsThroughWith directory watermark length FilePath.readDir
+    (fun path => path.symlinkMetadata.toBaseIO) IO.FS.readBinFile
+
+theorem readWalSegmentsThrough_fileEffects (directory : DiskDirectory) (watermark : Nat) (length : UInt64) :
+    readWalSegmentsThrough directory watermark length = (do
+      let through := length.toNat / WAL.frameSize
+      if length.toNat % WAL.frameSize = 0 ∧ watermark ≤ through then
+        let entries ← directory.path.readDir
+        let offsets ← scanWalSegmentOffsets
+          (probeWalSegmentWith directory fun path => path.symlinkMetadata.toBaseIO) (entries.toList.map (·.fileName))
+        let some (required, newer) := selectWalSegmentReadsThrough offsets watermark through
+          | throw (IO.userError "no WAL segment covers the checkpoint watermark")
+        let payloads ← required.mapM (fun offset => IO.FS.readBinFile (directory.file (.walSegment offset)))
+        pure ⟨required.zip payloads, newer⟩
+      else throw (IO.userError "invalid absolute WAL segment marker")) := rfl
 
 end Alvoki.Storage

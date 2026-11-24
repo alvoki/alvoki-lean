@@ -1,5 +1,8 @@
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.WalSegmentReadIO
+import Alvoki.Storage.Disk.WalSegmentRepair
+import Alvoki.Storage.Disk.WalSegmentRepairIO
+import Alvoki.Storage.Disk.WalSegmentRepairOpen
 import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Disk.LegacyManifest
 import Alvoki.Storage.Publication.DiskPublicationModel
@@ -59,6 +62,74 @@ private def checkCodecs : IO Unit := do
   let invalidFloor := (Manifest.IntegrityCheckpoint.fromRuns ⟨5, 3, 4, 4⟩ files).encode
   check (failed (Manifest.IntegrityCheckpoint.decode invalidFloor))
     "manifest accepted a floor above its watermark"
+
+/-- Use a v2 checkpoint published by the current adapter to exercise the
+segmented reopen worker with real files and the same exclusive lock. -/
+private def checkSegmentedCheckpointOpen (root : FilePath) : IO Unit := do
+  let db ← DiskTable.open root
+  try
+    let _ ← db.write 7 (some 70)
+    let _ ← db.write 8 (some 80)
+    db.checkpoint
+  finally db.close
+  let dir ← DiskDirectory.open root
+  let lock ← IO.FS.Handle.mk (dir.file .lock) .append
+  check (← lock.tryLock) "could not lock segmented checkpoint fixture"
+  try
+    let covered ← IO.FS.readBinFile (dir.file .wal)
+    let sealed := dir.file (.walSegment 0)
+    let keeper := dir.file (.walSegment 2)
+    let newer := dir.file (.walSegment 4)
+    let committed := WAL.encodeFrame ⟨3, 7, some 71⟩
+    let extra := WAL.encodeFrame ⟨4, 8, none⟩
+    let marker := WAL.Boundary.encode (3 * WAL.frameSize).toUInt64
+    IO.FS.writeBinFile sealed covered
+    IO.FS.writeBinFile keeper (committed ++ extra)
+    IO.FS.writeBinFile newer (ByteArray.mk #[0xff])
+    IO.FS.writeBinFile (dir.file .walBoundary) marker
+    IO.FS.removeFile (dir.file .wal)
+    let touched ← IO.mkRef false
+    let readOptional := fun path => readOptionalDatabaseFile path.symlinkMetadata.toBaseIO
+      (fun _ => IO.FS.readBinFile path) (fun _ => IO.userError "expected a regular fixture file") throw
+    let sync := fun paths => do
+      touched.set true
+      let result ← IO.Process.output {cmd := "sync", args := #["--"] ++ paths.map FilePath.toString}
+      check (result.exitCode == 0) "could not sync segmented checkpoint fixture"
+    let openMarked := WalSegmentRepair.reopenMarkedWith dir readOptional FilePath.readDir
+      (fun path => path.symlinkMetadata.toBaseIO) IO.FS.readBinFile
+      (fun path => do touched.set true; (IO.FS.removeFile path).toBaseIO)
+      (fun path bytes => do touched.set true; IO.FS.writeBinFile path bytes) sync
+      (fun source target => do touched.set true; IO.FS.rename source target)
+    let runFile := dir.file (.run 1 0)
+    let runBytes ← IO.FS.readBinFile runFile
+    IO.FS.writeBinFile runFile (runBytes.set! 0 (runBytes[0]! ^^^ 1))
+    let .error (.userError cause) ← openMarked.toBaseIO
+      | throw (IO.userError "segmented open did not reject the wrong checkpoint bytes")
+    check (cause == checkpointIntegrityMismatch) "segmented open skipped v2 checkpoint integrity"
+    check (!(← touched.get) && (← newer.pathExists))
+      "segmented open performed repair effects before checkpoint validation"
+    IO.FS.writeBinFile runFile runBytes
+    IO.FS.writeBinFile keeper (committed.set! 0 (committed[0]! ^^^ 1) ++ extra)
+    rejects openMarked "segmented open accepted the wrong selected WAL bytes"
+    check (!(← touched.get) && (← newer.pathExists))
+      "segmented open performed repair effects before replay validation"
+    IO.FS.writeBinFile keeper (committed ++ extra)
+    sync #[runFile, sealed, keeper, newer, dir.file .walBoundary, dir.path]
+    let first ← openMarked
+    let again ← openMarked
+    for opened in [first, again] do
+      check (opened.generation == 1 && opened.keeper == 2 && opened.table.committed == 3 &&
+        opened.walBytes == (3 * WAL.frameSize).toUInt64) "segmented reopen returned the wrong installation"
+      let some (pin, table) := opened.table.acquireAt 3
+        | throw (IO.userError "segmented reopen could not acquire its committed snapshot")
+      check (table.lookup pin.handle 7 == some (some 71) && table.lookup pin.handle 8 == some (some 80))
+        "segmented reopen failed to replay exactly to the marker"
+    check (decide ((← IO.FS.readBinFile sealed) = covered) &&
+      decide ((← IO.FS.readBinFile keeper) = committed) && !(← newer.pathExists) &&
+      !(← (dir.file .stagedWal).pathExists) &&
+      decide ((← IO.FS.readBinFile (dir.file .walBoundary)) = marker))
+      "segmented reopen settled the wrong WAL files"
+  finally lock.unlock
 
 private def checkReopen (dir : FilePath) : IO Unit := do
   let maxKey := UInt64.ofNat (UInt64.size - 1)
@@ -532,6 +603,128 @@ private def checkWalSegmentReads (root : FilePath) : IO Unit := do
     IO.FS.createDir unexpected
     rejectKind
   finally lock.unlock
+
+private inductive WalRepairFixtureCall where
+  | prepare
+  | remove (path : FilePath)
+  | write (path : FilePath)
+  | sync (paths : Array FilePath)
+  | rename (source target : FilePath)
+  deriving BEq
+
+/-- Inspect process-visible effects of each reported callback cut, then
+rebuild the plan from the same marker and the remaining canonical files. -/
+private def checkWalSegmentRepair (root : FilePath) : IO Unit := do
+  let history : List WAL.Write := (List.range 7).map fun n =>
+    ⟨(n + 1).toUInt64, n.toUInt64, some (n + 10).toUInt64⟩
+  let frame := fun n => WAL.encode ((history.drop n).take 1)
+  let keptBytes := WAL.encode (history.take 2)
+  let keeperBytes := frame 2 ++ frame 3
+  let replacement := frame 2
+  let newer := [(4, frame 4), (5, frame 5), (6, frame 6 ++ ByteArray.mk #[1, 2, 3])]
+  let markerBytes := WAL.Boundary.encode (3 * WAL.frameSize).toUInt64
+  let syncPaths := fun (paths : Array FilePath) => do
+    let result ← IO.Process.output {cmd := "sync", args := #["--"] ++ paths.map FilePath.toString}
+    check (result.exitCode == 0) s!"WAL repair fixture sync failed: {result.stderr}"
+  let schedule := fun (dir : DiskDirectory) =>
+    let staged := dir.file .stagedWal
+    [WalRepairFixtureCall.prepare, .sync #[dir.path]] ++
+      newer.map (fun file => .remove (dir.file (.walSegment file.1))) ++
+      [.sync #[dir.path], .write staged, .sync #[staged], .rename staged (dir.file (.walSegment 2)), .sync #[dir.path]]
+  let base ← DiskDirectory.open root
+  for cut in [1:(schedule base).length] do
+    for afterEffect in [false, true] do
+      let path := root / s!"repair-{cut}-{afterEffect}"
+      IO.FS.createDir path
+      let dir ← DiskDirectory.open path
+      let lock ← IO.FS.Handle.mk (dir.file .lock) .append
+      check (← lock.tryLock) "could not lock WAL repair fixture"
+      try
+        let kept := dir.file (.walSegment 0)
+        let keeper := dir.file (.walSegment 2)
+        let staged := dir.file .stagedWal
+        let marker := dir.file .walBoundary
+        IO.FS.writeBinFile kept keptBytes
+        IO.FS.writeBinFile keeper keeperBytes
+        IO.FS.writeBinFile marker markerBytes
+        for (first, bytes) in newer do
+          IO.FS.writeBinFile (dir.file (.walSegment first)) bytes
+        syncPaths #[kept, keeper, marker]
+
+        let seen ← IO.mkRef ([] : List WalRepairFixtureCall)
+        let record := fun (operation : WalRepairFixtureCall) => do
+          let calls ← seen.get
+          seen.set (calls ++ [operation])
+          pure calls.length
+        let prepare : IO WalSegmentRepair.Plan := do
+          let _ ← record .prepare
+          let .ok length := WAL.Boundary.decode (← IO.FS.readBinFile marker)
+            | throw (IO.userError "WAL repair fixture lost the marker")
+          let through := length.toNat / WAL.frameSize
+          let observed ← readWalSegmentsThrough dir 0 length
+          check (checkWalSegmentSpans through observed.files) "WAL repair observed invalid selected spans"
+          let [(0, priorBytes), (2, active)] := observed.files
+            | throw (IO.userError "WAL repair selected the wrong files")
+          let retained := (priorBytes ++ active).extract 0 length.toNat
+          check (decide (retained = keptBytes ++ replacement)) "WAL repair read the wrong retained history"
+          let existing ← newer.filterM fun file => (dir.file (.walSegment file.1)).pathExists
+          check (observed.newer == existing.map Prod.fst) "WAL repair omitted surviving discardable files"
+          pure ⟨through, 2, observed.newer, active⟩
+        let injected := s!"injected WAL repair failure at callback {cut} after effect {afterEffect}"
+        let attempt := fun (plan : IO WalSegmentRepair.Plan) (fail : Bool) => do
+          let report : {α : Type} → WalRepairFixtureCall → IO α → IO α → IO α := fun operation effect failure => do
+            let index ← record operation
+            if fail && index == cut && !afterEffect then failure
+            else
+              let value ← effect
+              if fail && index == cut && afterEffect then failure else pure value
+          let run := fun operation (effect : IO Unit) => report operation effect (throw (IO.userError injected))
+          WalSegmentRepair.runAt dir plan
+            (fun file => report (.remove file) (IO.FS.removeFile file).toBaseIO (pure (.error (IO.userError injected))))
+            (fun file bytes => run (.write file) do
+              check (decide (bytes = replacement)) "WAL repair staged the wrong prefix"
+              IO.FS.writeBinFile file bytes)
+            (fun paths => run (.sync paths) (syncPaths paths))
+            (fun source target => run (.rename source target) (IO.FS.rename source target))
+
+        if cut == 1 && !afterEffect then
+          rejects (attempt (pure ⟨3, 2, [2], keeperBytes⟩) false) "WAL repair accepted an invalid prune plan"
+          check ((← seen.get).isEmpty) "invalid WAL repair preparation reached effect callbacks"
+        match ← (attempt prepare true).toBaseIO with
+        | .ok _ => throw (IO.userError "WAL repair ignored the injected callback error")
+        | .error (.userError message) => check (message == injected) message
+        | .error error => throw error
+        let expected := schedule dir
+        check ((← seen.get) == expected.take (cut + 1)) "WAL repair did not stop at its reported cut"
+        let completed := expected.take (if afterEffect then cut + 1 else cut)
+        let renamed := completed.contains (.rename staged keeper)
+        let assertLayout := fun (calls : List WalRepairFixtureCall) (replaced : Bool) => do
+          check (decide ((← IO.FS.readBinFile kept) = keptBytes)) "WAL repair changed an earlier segment"
+          check (decide ((← IO.FS.readBinFile keeper) = (if replaced then replacement else keeperBytes)))
+            "WAL repair left the wrong keeper bytes"
+          check (decide ((← IO.FS.readBinFile marker) = markerBytes)) "WAL repair changed the marker"
+          let stagedPresent := calls.contains (.write staged) && !replaced
+          check ((← staged.pathExists) == stagedPresent) "WAL repair exposed the wrong staging binding"
+          if stagedPresent then
+            check (decide ((← IO.FS.readBinFile staged) = replacement)) "WAL repair changed the staged prefix"
+          for (first, bytes) in newer do
+            let file := dir.file (.walSegment first)
+            let removed := calls.contains (.remove file)
+            check ((← file.pathExists) == !removed) s!"WAL repair exposed the wrong binding at {first}"
+            unless removed do
+              check (decide ((← IO.FS.readBinFile file) = bytes)) s!"WAL repair changed newer bytes at {first}"
+        assertLayout completed renamed
+
+        seen.set []
+        attempt prepare false
+        let pending := newer.filter fun file => !completed.contains (.remove (dir.file (.walSegment file.1)))
+        let expectedRetry := [WalRepairFixtureCall.prepare, .sync #[dir.path]] ++
+          pending.map (fun file => .remove (dir.file (.walSegment file.1))) ++ [.sync #[dir.path]] ++
+          (if renamed then [.sync #[keeper]]
+            else [.write staged, .sync #[staged], .rename staged keeper, .sync #[dir.path]])
+        check ((← seen.get) == expectedRetry) "WAL repair retry used stale addresses or skipped a durability barrier"
+        assertLayout expected true
+      finally lock.unlock
 
 private def checkRetrySync (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
@@ -1192,6 +1385,7 @@ def main (args : List String) : IO Unit := do
   | [] =>
     checkCodecs
     checkPublicationCuts
+    IO.FS.withTempDir checkSegmentedCheckpointOpen
     IO.FS.withTempDir checkReopen
     IO.FS.withTempDir checkInterruptedPublication
     IO.FS.withTempDir checkMissingAndMalformedFiles
@@ -1203,6 +1397,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkMarkerlessRefusal
     IO.FS.withTempDir checkWalSegmentRotation
     IO.FS.withTempDir checkWalSegmentReads
+    IO.FS.withTempDir checkWalSegmentRepair
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkWritesAcrossReopens
     IO.FS.withTempDir checkGroupedSyncPartialEffects
