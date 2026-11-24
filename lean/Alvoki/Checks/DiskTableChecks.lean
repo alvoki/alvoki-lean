@@ -1652,6 +1652,15 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
   let expectWal := fun (events : List WAL.Write) (through : Nat) =>
     expectFiles [(dir / firstWalSegment, firstSpan), (dir / "WAL-segment-3", secondSpan),
       (keeper, WAL.encode events), (marker, boundary through)]
+  let expectFailedAlignedOpens := fun (expectUnchanged : IO Unit) => do
+    let (opened, syncs) ← probeDisk bin dir (some dir)
+    check (!opened && syncs == [dir.toString])
+      "checkpoint-cut reopen did not stop before its first directory sync"
+    expectUnchanged
+    let (opened, syncs) ← probeDisk bin dir (some keeper) (failureMode := .afterSync)
+    check (!opened && syncs == alignedOpen ++ [s!"synced before error: {keeper}"])
+      "checkpoint-cut reopen did not report the error after syncing the aligned keeper"
+    expectUnchanged
   let firstRun := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩, ⟨7, 2, (0, 70)⟩]
   let oldBytes := (Manifest.IntegrityCheckpoint.fromRuns ⟨1, 2, 2, 1⟩ [firstRun]).encode
   let oldRun := (dir / "run-1-0.v3", firstRun)
@@ -1662,8 +1671,13 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
     (extraArgs := #["4"])
   check (!published && syncs == alignedOpen ++ runSyncs.map FilePath.toString)
     "checkpoint fixture did not fail before the new manifest rename"
-  expectFiles ([(manifest, oldBytes), oldRun, (stagedManifest, pendingBytes)] ++ newRuns pendingRun)
+  let expectUnpublished :=
+    expectFiles ([(manifest, oldBytes), oldRun, (stagedManifest, pendingBytes)] ++ newRuns pendingRun)
+  expectUnpublished
   expectWal [] 4
+  expectFailedAlignedOpens do
+    expectUnpublished
+    expectWal [] 4
   -- The old checkpoint replays both sealed spans and resumes from an empty keeper.
   let (written, syncs) ← probeDisk bin dir (some stagedMarker) (operation := "--write-once")
   check (!written && syncs == alignedOpen ++ [keeper.toString, stagedMarker.toString])
@@ -1680,7 +1694,7 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
   let throughFive : List (UInt64 × Option UInt64) := [(4, some 41), (7, some 71)]
   let recovered ← DiskTable.open dir
   try
-    expectFiles ([(manifest, oldBytes), oldRun, (stagedManifest, pendingBytes)] ++ newRuns pendingRun)
+    expectUnpublished
     check ((← recovered.acquireAt 1).isNone) "reopen lost the checkpoint floor"
     expectSnapshot recovered 2 [(4, some 40), (7, some 70)]
     expectSnapshot recovered 3 [(4, some 41), (7, some 70)]
@@ -1708,6 +1722,9 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
     check (!(← stagedManifest.pathExists)) "synced publication left a staged manifest"
   expectPublished
   expectWal [replacement] 5
+  expectFailedAlignedOpens do
+    expectPublished
+    expectWal [replacement] 5
   let appended : WAL.Write := ⟨6, 6, some 60⟩
   let reopened ← DiskTable.open dir
   try
