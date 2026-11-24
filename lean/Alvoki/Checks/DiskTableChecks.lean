@@ -531,6 +531,49 @@ private def checkSnapshotSessions (root : FilePath) : IO Unit := do
     finally second.close
   finally first.close
 
+private def checkRunVersionRetention (dir : FilePath) : IO Unit := do
+  let older := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩, ⟨7, 2, (0, 70)⟩]
+  let original := Compaction.encodeV3 [⟨4, 6, (0, 43)⟩, ⟨4, 4, (0, 42)⟩, ⟨4, 3, (0, 41)⟩, ⟨7, 5, (1, 0)⟩]
+  let retained := Compaction.encodeV3 [⟨4, 6, (0, 43)⟩, ⟨4, 4, (0, 42)⟩, ⟨7, 5, (1, 0)⟩]
+  let db ← DiskTable.open dir
+  try
+    let _ ← db.write 4 (some 40)
+    let _ ← db.write 7 (some 70)
+    db.checkpoint
+    let _ ← db.write 4 (some 41)
+    let _ ← db.write 4 (some 42)
+    let _ ← db.write 7 none
+    let _ ← db.write 4 (some 43)
+    db.checkpoint
+    expectManifest dir 2 6 0 2
+    check (decide ((← IO.FS.readBinFile (dir / "run-2-1.v3")) = original)) "unexpected pre-retention run"
+    let _ ← db.write 6 (some 60)
+    let some pin ← db.acquireAt 5 | throw (IO.userError "could not pin retention floor")
+    check (← db.advanceFloor 5) "could not advance to the pinned floor"
+    let paths := [dir / firstWalSegment, dir / "WAL.commit", dir / "MANIFEST", dir / "run-2-1.v3"]
+    let before ← paths.mapM IO.FS.readBinFile
+    let rows ← db.range pin.handle 0 8
+    check (!(← db.retainRunVersions 2)) "retention accepted an out-of-bounds index"
+    check (← db.retainRunVersions 1) "retention rejected the second run"
+    check (decide ((← paths.mapM IO.FS.readBinFile) = before)) "retention changed durable files before checkpoint"
+    check ((← db.lookup pin.handle 4) == some (some 42) && (← db.lookup pin.handle 7) == some none &&
+      (← db.range pin.handle 0 8) == rows) "retention changed reads through the held pin"
+    db.checkpoint
+    expectManifest dir 3 7 5 3
+    let files ← (List.range 3).mapM fun index => IO.FS.readBinFile (dir / s!"run-3-{index}.v3")
+    check (decide (files = [older, retained, Compaction.encodeV3 [⟨6, 7, (0, 60)⟩]]))
+      "checkpoint did not publish the exact retained run, unchanged older run and flushed memtable"
+    db.collectObsoleteRuns
+    check (!(← (dir / "run-2-1.v3").pathExists)) "collection kept the superseded run"
+  finally db.close
+  let reopened ← DiskTable.open dir
+  try
+    check ((← reopened.acquireAt 4).isNone) "reopen lost the published retention floor"
+    expectSnapshot reopened 5 [(4, some 42)]
+    expectSnapshot reopened 6 [(4, some 43)]
+    expectSnapshot reopened 7 [(4, some 43), (6, some 60)]
+  finally reopened.close
+
 private def syncFixtureSource : String :=
   include_str ".." / ".." / ".." / "scripts" / "disk-sync-fixture.c"
 
@@ -2051,6 +2094,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkActiveWalGuard
     IO.FS.withTempDir checkCheckpointRunAliases
     IO.FS.withTempDir checkSnapshotSessions
+    IO.FS.withTempDir checkRunVersionRetention
     IO.FS.withTempDir checkDirectoryReadError
     IO.FS.withTempDir checkMarkerlessRefusal
     IO.FS.withTempDir checkWalSegmentRotation

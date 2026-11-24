@@ -536,6 +536,22 @@ def DiskTable.compact (db : DiskTable) (index : Nat) : IO Bool := do
   db.phase.set (.ready { state with table })
   return true
 
+/-- Rewrite one run at the current snapshot floor. Call `checkpoint`
+to publish the rewritten run, then collect the superseded generation. -/
+def DiskTable.retainRunVersions (db : DiskTable) (index : Nat) : IO Bool := do
+  let state ← db.installed
+  let some table := state.table.retainRunVersions index | return false
+  db.phase.set (.ready { state with table })
+  return true
+
+/-- Only a successful packed rewrite changes the installed table. -/
+theorem DiskTable.retainRunVersions_fileEffects (db : DiskTable) (index : Nat) :
+    db.retainRunVersions index = (do
+      let state ← (← db.phase.get).installed
+      let some table := state.table.retainRunVersions index | return false
+      db.phase.set (.ready { state with table })
+      return true) := rfl
+
 /-- Dispatch the checkpoint schedule to the exact run and manifest file
 operations. The native caller caches the run array and encoded manifest. -/
 @[macro_inline] def performCheckpointFileStep [Monad m] (dir : DiskDirectory)

@@ -26,6 +26,49 @@ inductive SegmentedWriterTrace (directory : DiskDirectory) (descriptor : Nat) (i
       (step : SegmentedTableStep before.installed.table table) :
       SegmentedWriterTrace directory descriptor initial writes checkpoints (before.withTable table)
 
+private theorem flushForCheckpoint_runAt {before checkpoint : PackedTable} {index : Nat}
+    {run : Compaction.CheckedRun}
+    (flushed : (flushForCheckpoint before id : Except String PackedTable) = .ok checkpoint)
+    (atIndex : before.runs[index]? = some run) :
+    checkpoint.runs[index]? = some run := by
+  unfold flushForCheckpoint at flushed
+  split at flushed
+  · exact Except.ok.inj flushed ▸ atIndex
+  · unfold PackedTable.flush at flushed
+    cases encoded : Compaction.CheckedRun.ofHistory before.memory with
+    | error message => simp [encoded] at flushed
+    | ok appended =>
+      rw [encoded] at flushed
+      obtain rfl := Except.ok.inj flushed
+      exact (List.getElem?_append_left (List.getElem?_eq_some_iff.mp atIndex).1).trans atIndex
+
+/-- The normal checkpoint publishes the exact single-run retention result
+at its original index, even if flushing appends a newer run. -/
+theorem SegmentedCheckpointReport.Installs.afterRunRetention {directory descriptor}
+    {before after : SegmentedWriterState} {table : PackedTable} {index : Nat}
+    (retained : before.installed.table.retainRunVersions index = some table)
+    (ready : before.RetainedReady directory descriptor)
+    {attempt : SegmentedCheckpointReport directory (before.withTable table)}
+    (observed : attempt.Valid) (endpoint : attempt.Installs after) :
+    after.RetainedReady directory descriptor ∧ after.history = before.history ∧
+    ∃ source output : Compaction.CheckedRun, before.installed.table.runs[index]? = some source ∧
+      output.history = source.history.retain before.installed.table.pins.floor ∧
+      after.published.durable (SegmentedCheckpointReport.generation before) index = some output.run.bytes := by
+  obtain ⟨_, _, _, older, source, output, newer, length, original, updated, _, history⟩ :=
+    PackedTable.retainRunVersions_spec retained
+  have sourceAt : before.installed.table.runs[index]? = some source := by
+    rw [original, List.getElem?_append_right (by omega), ← length, Nat.sub_self, List.getElem?_cons_zero]
+  have outputAt : table.runs[index]? = some output := by
+    rw [updated, List.getElem?_append_right (by omega), ← length, Nat.sub_self, List.getElem?_cons_zero]
+  have readyAfterRetention := (SegmentedTableStep.retainRunVersions retained).preservesRetained ready
+  refine ⟨(endpoint.preservesRetained observed readyAfterRetention).1, endpoint.history, source, output,
+    sourceAt, history, ?_⟩
+  have written := endpoint.runs index
+  change after.published.durable (SegmentedCheckpointReport.generation before) index =
+    (attempt.table.runs.map (·.run.bytes))[index]? at written
+  rw [written, List.getElem?_map, flushForCheckpoint_runAt observed.flushed outputAt]
+  rfl
+
 theorem SegmentedWriterTrace.preservesReady {directory descriptor initial writes checkpoints last}
     (trace : SegmentedWriterTrace directory descriptor initial writes checkpoints last)
     (ready : initial.Ready directory descriptor) :
