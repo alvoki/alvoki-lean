@@ -78,4 +78,62 @@ def reopenMarkedBoundedWith [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDire
   finishBoundedMarkedOpen dir plan keeperFileSize removeFile write sync renameFile
   return reopened
 
+/-- The bounded reader takes earlier payloads from the same selected path
+order and requests exactly the marker-selected bytes at the keeper path. -/
+theorem readSelectedWithPrefix_reported (dir : DiskDirectory) (watermark : Nat) (length : UInt64)
+    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata))
+    (readBin : FilePath → Except IO.Error ByteArray)
+    (readPrefix : FilePath → Nat → Except IO.Error KeeperPrefix)
+    (checked : length.toNat % frameSize = 0 ∧ watermark ≤ length.toNat / frameSize)
+    {entries : Array IO.FS.DirEntry} (listed : list dir.path = .ok entries)
+    {offsets sealed newer : List Nat} {keeper : Nat}
+    (scanned : scanWalSegmentOffsets (probeWalSegmentWith dir lstat) (entries.toList.map (·.fileName)) =
+      .ok offsets)
+    (addresses : selectWalSegmentReadsThrough offsets watermark (length.toNat / frameSize) =
+      some (sealed ++ [keeper], newer))
+    {files : List ByteArray} (payloads : readWalSegmentPayloadsWith dir readBin sealed = .ok files)
+    {kept : KeeperPrefix} (read : readPrefix (dir.file (.walSegment keeper))
+      ((length.toNat / frameSize - keeper) * frameSize) = .ok kept)
+    (size : kept.bytes.size = (length.toNat / frameSize - keeper) * frameSize)
+    (covers : (length.toNat / frameSize - keeper) * frameSize ≤ kept.fileSize) :
+    readSelectedWithPrefix dir watermark length list lstat readBin readPrefix =
+      .ok (⟨sealed.zip files ++ [(keeper, kept.bytes)], newer⟩, kept.fileSize) := by
+  simp [readSelectedWithPrefix, checked, listed, scanned, addresses, payloads, read, size, covers,
+    Bind.bind, Except.bind, Pure.pure, Except.pure]
+
+/-- Successful strict checkpoint, marker and bounded payload reports feed
+the same selected replay result and carry the keeper's physical size. -/
+theorem prepareBoundedMarkedWith_reported (dir : DiskDirectory)
+    (readOptional : FilePath → Except IO.Error (Option ByteArray))
+    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata))
+    (readBin : FilePath → Except IO.Error ByteArray)
+    (readPrefix : FilePath → Nat → Except IO.Error KeeperPrefix)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (checkpointRead : readIntegrityCheckpoint (readOptional (dir.file .manifest))
+      (fun generation index => readBin (dir.file (.run generation index)))
+      (fun report => report.mapError IO.userError) = .ok checkpoint)
+    {marker : ByteArray} {length : UInt64}
+    (markerRead : readOptional (dir.file .walBoundary) = .ok (some marker))
+    (decoded : WAL.Boundary.decode marker = .ok length)
+    {reads : WalSegmentMarkerReads} {fileSize : Nat}
+    (walRead : readSelectedWithPrefix dir (checkpoint.getD (.empty, 0)).1.committed.toNat length list lstat
+      readBin readPrefix = .ok (reads, fileSize))
+    {selected : ByteArray} {table : PackedTable} {keeper : Nat} {bytes : ByteArray}
+    (replayed : recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1 length reads.files = .ok (selected, table))
+    (keeperRead : reads.files.getLast? = some (keeper, bytes)) :
+    prepareBoundedMarkedWith dir readOptional list lstat readBin readPrefix =
+      .ok (⟨length.toNat / frameSize, keeper, reads.newer, bytes⟩,
+        ⟨table, (checkpoint.getD (.empty, 0)).2, length, keeper⟩, fileSize) := by
+  have validation : (fun {α : Type} (report : Except String α) =>
+      (liftExcept (report.mapError IO.userError) : Except IO.Error α)) =
+      (fun {α : Type} report => report.mapError IO.userError) := by
+    funext α report
+    cases report <;> rfl
+  unfold prepareBoundedMarkedWith
+  rw [validation, checkpointRead]
+  simp [markerRead, decoded, walRead, replayed, keeperRead, liftExcept, Bind.bind, Except.bind,
+    Pure.pure, Except.pure, Except.mapError]
+
 end Alvoki.Storage.WalSegmentRepair
