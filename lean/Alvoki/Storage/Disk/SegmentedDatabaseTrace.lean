@@ -540,6 +540,27 @@ theorem SegmentedDatabaseTrace.markerPowerLossCached {directory initialDescripto
     simpa only [BoundedReopenAttempt.run, sameAttempt] using endpoint
   exact ⟨after, .markerPowerLoss prior report observed installed, endpoint, marker, checkpoint⟩
 
+/-- Include the exact cached installation after a reported checkpoint
+error in the mixed trace. The selected runs still come from the manifest
+at the reached retry, and a checkpoint error adds no WAL submission. -/
+theorem SegmentedDatabaseTrace.checkpointErrorCached
+    {directory initialDescriptor initial allowCollection log writer descriptor before}
+    (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (failure : SegmentedCheckpointFailure directory before writer descriptor)
+    (recover : EStateM IO.Error FileImage Reopened) (reads : failure.CachedReads recover) :
+    ∃ after session final,
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after ∧
+      SelectedIntegrityCheckpoint failure.published.durable failure.retry.image.directory.active.manifest after.checkpoint ∧
+      recoverSelected (after.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table ∧
+      runOpenWithInstallation directory failure.reopen.descriptor failure.reopen.nextRef failure.reopen.acquired
+        failure.reopen.unlock recover failure.retry = .ok session final ∧
+      session.phase = .ready after.installed ∧ after.files = final.image ∧ after.owners = final.owners := by
+  have ready := (prior.preservesRetained initialReady).1
+  obtain ⟨after, session, final, installed, _, selected, replay, ran, phase, files, owners⟩ :=
+    failure.installsRetainedCached ready recover reads
+  exact ⟨after, session, final, .checkpointError prior failure installed, selected, replay, ran, phase, files, owners⟩
+
 /-- Extend the trace with the installed table from the exact durable runs
 of the surviving checkpoint and replay of the unchanged WAL history. -/
 theorem SegmentedDatabaseTrace.checkpointPowerLossCached
