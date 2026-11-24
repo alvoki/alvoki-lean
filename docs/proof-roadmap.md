@@ -1,5 +1,7 @@
 # Proof roadmap
 
+Use the [proof index](proof-index.md) to find shared techniques and concrete reuse candidates.
+
 The active milestones connect the production sequential storage path to its crash and snapshot guarantees, then extend those guarantees to segmented WAL and reclamation. The stock v1 run API and the v3 engine already have executable codec, merge, and read refinements. [Current proof inventory](verification-status.md) · [Engine roadmap](roadmap.md)
 
 ## Codec guarantees we already have

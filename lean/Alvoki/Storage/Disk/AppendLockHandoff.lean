@@ -35,14 +35,9 @@ theorem runPreparedWrite_failure_handoff {image : Type} {directory : DiskDirecto
         references.remaining drops = [] → references.afterFileDrops drops directory poisoned.2 = released) ∧
       TryLockObserves released.owners directory (.ok true) := by
   dsimp only
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, runCloseWithFiles_handoff (by simp) ownership⟩
   · simp only [runPreparedWrite, publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind,
       modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet, failed]
-  · exact runCloseWithFiles_poisoned (before := ⟨after, before.owners⟩)
-      (unlock := .success) ownership trivial
-  · intro references drops last
-    exact references.afterFileDrops_released ownership last
-  · simp [TryLockObserves, LockOwners.set]
 
 /-- The actual callbacks on the reached append and marker steps, with the
 original IO error retained by the writer and erased for cut accounting. -/

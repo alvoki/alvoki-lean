@@ -666,6 +666,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.selectedReady
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_firstMarked
+#check_axioms Alvoki.Storage.DiskSession.runCloseWithFiles_success
+#check_axioms Alvoki.Storage.DiskSession.runCloseWithFiles_handoff
 #check_axioms Alvoki.Storage.DiskSession.runCloseWithFiles_poisoned
 #check_axioms Alvoki.Storage.DiskSession.runPreparedCheckpoint_failure_handoff
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_checkpointCut

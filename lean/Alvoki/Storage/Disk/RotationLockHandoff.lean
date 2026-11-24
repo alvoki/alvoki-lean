@@ -86,11 +86,10 @@ theorem runPreparedRotation_failure_handoff {directory : DiskDirectory} {descrip
   have observed := trace.afterRunAt directory read create sync lookup reports
   change runAt directory successor read create sync before.image = _ at failed
   rw [← start, failed] at observed
-  refine ⟨start, installedStart.symm ▸ start.symm ▸ rotation.nonempty, observed, ?_, ?_, ?_⟩
+  obtain ⟨closed, dropped, _⟩ := runCloseWithFiles_handoff
+    (phase := (.poisoned : Phase Installed)) (before := ⟨after, before.owners⟩) (by simp) ownership
+  refine ⟨start, installedStart.symm ▸ start.symm ▸ rotation.nonempty, observed, ?_, closed, dropped⟩
   · simp only [runPreparedRotation, publishPrepared, Bind.bind, EStateM.bind,
       modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet, failed, poisoned]
-  · exact runCloseWithFiles_poisoned (before := ⟨after, before.owners⟩) (unlock := .success) ownership trivial
-  · intro references drops last
-    exact references.afterFileDrops_released ownership last
 
 end Alvoki.Storage.DiskSession

@@ -1,5 +1,7 @@
 # Current handoff
 
+Append, checkpoint and rotation failure proofs now share the lock handoff for their reached file images. Collection uses the same successful-close lemma. [Proof techniques and reuse](proof-index.md)
+
 The packed table uses a shared memtable contract over the existing ordered history. The reference list and the ordered tree implement the same insert, snapshot lookup, range, and flush guarantees. Disk replay uses the tree, and differential traces exercise both backends. [Memtable contract](../lean/Alvoki/Storage/Table/MemTableContract.lean)
 
 The Linux adapter synchronizes open descriptors directly. It retains the directory and active WAL append handles, and carries newly written handles through their publication barriers. The write protocol still syncs both files before marker rename and the directory before acknowledgement. Native fault fixtures interpose on `fsync`, covering failures before and after its effect and owner death at the publication barriers. [Storage protocol](architecture.md#sequential-storage)

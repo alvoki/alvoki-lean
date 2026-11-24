@@ -20,9 +20,8 @@ theorem SegmentedCollectionErrors.close {directory before reached descriptor}
     (ready : before.RetainedReady directory descriptor)
     {phase : Phase Installed} (live : phase ≠ .closed) :
     runCloseWithFiles directory descriptor .success (phase, ⟨reached, before.owners⟩) =
-      .ok () (.closed, ⟨reached, before.owners.set (directory.file .lock) none⟩) := by
-  dsimp only [runCloseWithFiles]
-  rw [runClose_open live, LockOwners.release_owned ready.held]
+      .ok () (.closed, ⟨reached, before.owners.set (directory.file .lock) none⟩) :=
+  runCloseWithFiles_success live ready.held
 
 /-- A denied lock acquisition or read-only preparation error leaves the
 pending namespace intact. The returned ownership map includes the actual

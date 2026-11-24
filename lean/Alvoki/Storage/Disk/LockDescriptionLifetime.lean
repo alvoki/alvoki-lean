@@ -201,4 +201,55 @@ theorem LockedMarkedReopenFailureTrace.ownerExit_thenChildExec
   obtain ⟨retry, available, _⟩ := trace.referenceDrops ownership references [.exited owner, .executed child]
   exact ⟨staysOwned (List.ne_nil_of_mem survives), retry, available.mpr allClosed⟩
 
+/-- The shared close procedure changes the phase and lock ownership.
+It carries the file image unchanged in either result. -/
+def runCloseWithFiles {α image : Type} (directory : DiskDirectory) (descriptor : Nat)
+    (unlock : UnlockReport) : EStateM IO.Error (Phase α × LockedFileState image) Unit :=
+  fun (phase, files) => match runClose directory descriptor unlock ⟨phase, files.owners⟩ with
+    | .ok _ after => .ok () (after.phase, { files with owners := after.owners })
+    | .error cause after => .error cause (after.phase, { files with owners := after.owners })
+
+/-- A successful close of an owned live session preserves the reached file image. -/
+theorem runCloseWithFiles_success {α image : Type} {directory : DiskDirectory}
+    {descriptor : Nat} {phase : Phase α} {before : LockedFileState image}
+    (live : phase ≠ .closed) (ownership : before.owners.Owns directory descriptor) :
+    runCloseWithFiles directory descriptor .success (phase, before) =
+      .ok () (.closed, ⟨before.image, before.owners.set (directory.file .lock) none⟩) := by
+  dsimp only [runCloseWithFiles]
+  rw [runClose_open live, LockOwners.release_owned ownership]
+
+theorem runCloseWithFiles_poisoned {α image : Type} {directory : DiskDirectory}
+    {descriptor : Nat} {before : LockedFileState image}
+    (ownership : before.owners.Owns directory descriptor) {unlock : UnlockReport}
+    (localUnlock : unlock.LocalFlock) :
+    runCloseWithFiles directory descriptor unlock ((.poisoned : Phase α), before) =
+      match unlock with
+      | .success => .ok () (.closed, ⟨before.image, before.owners.set (directory.file .lock) none⟩)
+      | .failure cause _ => .error cause (.poisoned, before) := by
+  dsimp only [runCloseWithFiles]
+  rw [runClose_open (by simp) unlock, LockOwners.release_owned ownership]
+  cases unlock with
+  | success => rfl
+  | failure cause released =>
+    change released = false at localUnlock
+    subst released
+    rfl
+
+/-- An explicit close and an observed final reference drop expose the
+same reached file image to the next cooperating lock acquisition. -/
+theorem runCloseWithFiles_handoff {α image : Type} {directory : DiskDirectory}
+    {descriptor : Nat} {phase : Phase α} {before : LockedFileState image}
+    (live : phase ≠ .closed) (ownership : before.owners.Owns directory descriptor) :
+    let released : LockedFileState image :=
+      ⟨before.image, before.owners.set (directory.file .lock) none⟩
+    runCloseWithFiles directory descriptor .success (phase, before) = .ok () (.closed, released) ∧
+      (∀ (references : HeldLockReferences descriptor) (drops : List LockReferenceDrop),
+        references.remaining drops = [] → references.afterFileDrops drops directory before = released) ∧
+      TryLockObserves released.owners directory (.ok true) := by
+  dsimp only
+  refine ⟨runCloseWithFiles_success live ownership, ?_, ?_⟩
+  · intro references drops last
+    exact references.afterFileDrops_released ownership last
+  · simp [TryLockObserves, LockOwners.set]
+
 end Alvoki.Storage.DiskSession

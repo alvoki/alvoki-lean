@@ -14,31 +14,6 @@ def runPreparedCheckpoint {image : Type} (prepared : Installed)
     | .ok _ after => .ok () (.ready prepared, { before.2 with image := after })
     | .error cause after => .error cause (before.1, { before.2 with image := after })
 
-/-- The shared close procedure changes the phase and lock ownership.
-It carries the file image unchanged in either result. -/
-def runCloseWithFiles {α image : Type} (directory : DiskDirectory) (descriptor : Nat)
-    (unlock : UnlockReport) : EStateM IO.Error (Phase α × LockedFileState image) Unit :=
-  fun (phase, files) => match runClose directory descriptor unlock ⟨phase, files.owners⟩ with
-    | .ok _ after => .ok () (after.phase, { files with owners := after.owners })
-    | .error cause after => .error cause (after.phase, { files with owners := after.owners })
-
-theorem runCloseWithFiles_poisoned {α image : Type} {directory : DiskDirectory}
-    {descriptor : Nat} {before : LockedFileState image}
-    (ownership : before.owners.Owns directory descriptor) {unlock : UnlockReport}
-    (localUnlock : unlock.LocalFlock) :
-    runCloseWithFiles directory descriptor unlock ((.poisoned : Phase α), before) =
-      match unlock with
-      | .success => .ok () (.closed, ⟨before.image, before.owners.set (directory.file .lock) none⟩)
-      | .failure cause _ => .error cause (.poisoned, before) := by
-  dsimp only [runCloseWithFiles]
-  rw [runClose_open (by simp) unlock, LockOwners.release_owned ownership]
-  cases unlock with
-  | success => rfl
-  | failure cause released =>
-    change released = false at localUnlock
-    subst released
-    rfl
-
 /-- An error from the admitted publication tail leaves its exact file
 effects under the original lock. Successful explicit close and an
 observed final reference drop both leave those files available for a
@@ -58,16 +33,11 @@ theorem runPreparedCheckpoint_failure_handoff {image : Type} {directory : DiskDi
         references.remaining drops = [] → references.afterFileDrops drops directory poisoned.2 = released) ∧
       TryLockObserves released.owners directory (.ok true) := by
   dsimp only
-  refine ⟨?_, ?_, ?_, ?_⟩
+  refine ⟨?_, runCloseWithFiles_handoff (by simp) ownership⟩
   · change (match CheckpointPublication.run prepared.table.runs.length perform before.image with
       | .ok _ after => EStateM.Result.ok () (Phase.ready prepared, LockedFileState.mk after before.owners)
       | .error cause after => EStateM.Result.error cause
           ((.poisoned : Phase Installed), LockedFileState.mk after before.owners)) = _
     rw [publication]
-  · exact runCloseWithFiles_poisoned (before := ⟨checkpointImage, before.owners⟩)
-      (unlock := .success) ownership trivial
-  · intro references drops last
-    exact references.afterFileDrops_released ownership last
-  · simp [TryLockObserves, LockOwners.set]
 
 end Alvoki.Storage.DiskSession
