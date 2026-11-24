@@ -1,45 +1,46 @@
+import Alvoki.Checks.AxiomPolicy
 import RunMergeProofs
 import CodecVariants
 import CompactionProofs
 
-#print axioms Alvoki.Packed.parseRun_iff
-#print axioms Alvoki.Packed.encodeV1_injective
-#print axioms Alvoki.Packed.Run.lookup_some_iff
-#print axioms Alvoki.Packed.Run.lookup_none_iff
-#print axioms Alvoki.Packed.Run.rangeChecksum_eq
-#print axioms Alvoki.Packed.mergedKeys_unique
-#print axioms Alvoki.Packed.merge_roundtrip
-#print axioms Alvoki.Packed.merge_lookup
-#print axioms Alvoki.encode_eq_v1
-#print axioms Alvoki.Block.decode_eq_v1
-#print axioms Alvoki.Opt.encodeScalar_eq_v1
-#print axioms Alvoki.Opt.decodeScalar_eq_v1
-#print axioms Alvoki.Opt.decodeFold_eq_v1
-#print axioms Alvoki.Opt.View.decode_eq_v1
-#print axioms Alvoki.Opt.storeWord_size
-#print axioms Alvoki.Opt.storeWord_byte
-#print axioms Alvoki.Opt.storeWord_fallback
-#print axioms Alvoki.Opt.encodeIndexed_eq_v1
-#print axioms Alvoki.Compaction.Model.winner_latest
-#print axioms Alvoki.Compaction.Model.winner_union
-#print axioms Alvoki.Compaction.Model.retain_key
-#print axioms Alvoki.Compaction.Model.versions_unique
-#print axioms Alvoki.Compaction.Model.winner_retain_in_context
-#print axioms Alvoki.Compaction.Model.winner_advanceFloor
-#print axioms Alvoki.Compaction.parse_iff
-#print axioms Alvoki.Compaction.encodeV3_roundtrip
-#print axioms Alvoki.Compaction.decodeV3_reencode
-#print axioms Alvoki.Compaction.compact_eq_encode
-#print axioms Alvoki.Compaction.compactSpans_eq_encode
-#print axioms Alvoki.Compaction.compact_roundtrip
-#print axioms Alvoki.Compaction.scan_refines
-#print axioms Alvoki.Compaction.compact_visibleRows_eq
-#print axioms Alvoki.Compaction.compact_scan_eq
-#print axioms Alvoki.Compaction.compact_history
-#print axioms Alvoki.Sequential.Table.range_exact
-#print axioms Alvoki.Sequential.Table.flush_lookup
-#print axioms Alvoki.Sequential.Table.flush_range
-#print axioms Alvoki.Sequential.Table.compact_range
-#print axioms Alvoki.Sequential.SnapshotPins.advance_spec
-#print axioms Alvoki.Sequential.SnapshotPins.active_compaction
-#print axioms Alvoki.Sequential.History.purgeTombstone_preserves
+#check_axioms Alvoki.Packed.parseRun_iff
+#check_axioms Alvoki.Packed.encodeV1_injective
+#check_axioms Alvoki.Packed.Run.lookup_some_iff
+#check_axioms Alvoki.Packed.Run.lookup_none_iff
+#check_axioms Alvoki.Packed.Run.rangeChecksum_eq
+#check_axioms Alvoki.Packed.mergedKeys_unique
+#check_axioms Alvoki.Packed.merge_roundtrip
+#check_axioms Alvoki.Packed.merge_lookup
+#check_axioms Alvoki.encode_eq_v1
+#check_axioms Alvoki.Block.decode_eq_v1
+#check_axioms Alvoki.Opt.encodeScalar_eq_v1
+#check_axioms Alvoki.Opt.decodeScalar_eq_v1
+#check_axioms Alvoki.Opt.decodeFold_eq_v1
+#check_axioms Alvoki.Opt.View.decode_eq_v1
+#check_axioms Alvoki.Opt.storeWord_size
+#check_axioms Alvoki.Opt.storeWord_byte
+#check_axioms Alvoki.Opt.storeWord_fallback
+#check_axioms Alvoki.Opt.encodeIndexed_eq_v1
+#check_axioms Alvoki.Compaction.Model.winner_latest
+#check_axioms Alvoki.Compaction.Model.winner_union
+#check_axioms Alvoki.Compaction.Model.retain_key
+#check_axioms Alvoki.Compaction.Model.versions_unique
+#check_axioms Alvoki.Compaction.Model.winner_retain_in_context
+#check_axioms Alvoki.Compaction.Model.winner_advanceFloor
+#check_axioms Alvoki.Compaction.parse_iff
+#check_axioms Alvoki.Compaction.encodeV3_roundtrip
+#check_axioms Alvoki.Compaction.decodeV3_reencode
+#check_axioms Alvoki.Compaction.compact_eq_encode
+#check_axioms Alvoki.Compaction.compactSpans_eq_encode
+#check_axioms Alvoki.Compaction.compact_roundtrip
+#check_axioms Alvoki.Compaction.scan_refines
+#check_axioms Alvoki.Compaction.compact_visibleRows_eq
+#check_axioms Alvoki.Compaction.compact_scan_eq
+#check_axioms Alvoki.Compaction.compact_history
+#check_axioms Alvoki.Sequential.Table.range_exact
+#check_axioms Alvoki.Sequential.Table.flush_lookup
+#check_axioms Alvoki.Sequential.Table.flush_range
+#check_axioms Alvoki.Sequential.Table.compact_range
+#check_axioms Alvoki.Sequential.SnapshotPins.advance_spec
+#check_axioms Alvoki.Sequential.SnapshotPins.active_compaction
+#check_axioms Alvoki.Sequential.History.purgeTombstone_preserves

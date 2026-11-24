@@ -9,11 +9,7 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 cd lean
 lake build Alvoki.Checks.AxiomPolicy RunMergeProofs CodecVariants Alvoki.Storage
-{
-  printf 'import Alvoki.Checks.AxiomPolicy\n'
-  sed 's/^#print axioms /#check_axioms /' Alvoki/Checks/ProofRoadmapAudit.lean
-} > "$scratch/Audit.lean"
-lake env lean "$scratch/Audit.lean"
+lake env lean Alvoki/Checks/ProofRoadmapAudit.lean
 lake env lean Alvoki/Checks/SequentialAudit.lean
 
 # This standard declaration serves as a negative control outside the allowlist.
@@ -141,3 +137,6 @@ lake env lean --run Alvoki/Checks/VersionedCheckpointReadChecks.lean
 lake env lean --run Alvoki/Checks/WalSegmentMarkerReadChecks.lean
 lake exe alvoki-disk-checks
 python3 ../scripts/check-disk-process-death.py .lake/build/bin/alvoki-disk-checks
+lake build alvoki-disk-replay
+python3 ../benchmarks/disk_replay.py --sizes 3 --trials 1 --out "$scratch/replay.csv"
+python3 ../benchmarks/disk_replay.py --sizes 3 --trials 1 --repair-tail --out "$scratch/replay-repair.csv"

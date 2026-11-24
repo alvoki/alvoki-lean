@@ -16,8 +16,16 @@ from support import MASK, ROOT, WORD_MASK
 
 BINARY = ROOT / "lean/.lake/build/bin/alvoki-disk-replay"
 FIELDS = Struct("<5Q")
+MARKER_FIELDS = Struct("<2Q")
 CHECKSUM = Struct("<Q")
 WORKLOADS = ("ascending", "descending", "shuffled")
+
+
+def with_checksum(fields):
+    checksum = 14695981039346656037
+    for byte in fields:
+        checksum = ((checksum ^ byte) * 1099511628211) & WORD_MASK
+    return fields + CHECKSUM.pack(checksum)
 
 
 def write_wal(path, records, workload):
@@ -30,10 +38,7 @@ def write_wal(path, records, workload):
     with path.open("wb") as wal:
         for sequence, key in enumerate(keys, 1):
             fields = FIELDS.pack(0x314C41574F564C41, sequence, key, 0, key ^ MASK)
-            checksum = 14695981039346656037
-            for byte in fields:
-                checksum = ((checksum ^ byte) * 1099511628211) & WORD_MASK
-            wal.write(fields + CHECKSUM.pack(checksum))
+            wal.write(with_checksum(fields))
 
 
 def load_baseline(path):
@@ -62,6 +67,9 @@ def run(out, cases, trials, repair_tail):
             database.mkdir()
             wal_path = database / "WAL"
             write_wal(wal_path, records, workload.removesuffix("-repair"))
+            # The marker covers complete frames before any repair tail is added.
+            marker = MARKER_FIELDS.pack(0x31544D434F564C41, wal_path.stat().st_size)
+            (database / "WAL.commit").write_bytes(with_checksum(marker))
             command = [BINARY, database, str(records), str(trials)]
             if repair_tail:
                 with wal_path.open("ab") as wal:

@@ -13,7 +13,7 @@ case "${1:-}" in
     (cd rust && cargo test --release --lib)
     (
       cd lean
-      lake build MergeProofs RunMergeProofs CodecVariants CompactionProofs
+      lake build Alvoki.Checks.AxiomPolicy MergeProofs RunMergeProofs CodecVariants CompactionProofs
       for module in PackedViewProofs MergeProofs BlockCodec RunProofs RunMergeProofs CodecVariants \
         CompactionModel Compaction CompactionCodec CompactionProofs Alvoki.Storage.Table.SequentialModel; do
         lake env leanchecker "$module"
