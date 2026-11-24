@@ -489,6 +489,27 @@ def runMarkedReopen (preflight : Except String MarkedPreflight)
       (fun _ => Publication.run (performRepair report validated.selected))
       (fun _ => performAlignedSync walAlreadySynced aligned) validated.table
 
+/-- The successful durability phase only needs the validated contents and
+selection. The repair branch replaces the WAL and settles its name, while
+the aligned branch settles the WAL already visible to the caller. -/
+theorem runMarkedReopen_durability_success (validated : MarkedPreflight)
+    (report : Publication.Step → RepairReport) (aligned : AlignedSyncReport) (before : ReopenImage)
+    (repaired : validated.selected.size < validated.contents.size →
+      ∀ step, report step = .success)
+    (synced : ¬ validated.selected.size < validated.contents.size → aligned = .success) :
+    runMarkedReopen (.ok validated) report false aligned before =
+      .ok validated.table (if validated.selected.size < validated.contents.size then
+        ⟨before.directory.syncDirectory, .settled (some validated.selected)⟩
+        else before.syncDirectory) := by
+  by_cases shorter : validated.selected.size < validated.contents.size
+  · have reports : report = fun _ => .success := funext (repaired shorter)
+    rw [ite_eq_left shorter, runMarkedReopen, Publication.finishReopen,
+      Publication.runReopen_repair _ _ shorter, reports]
+    rfl
+  · rw [ite_eq_right shorter, runMarkedReopen, Publication.finishReopen,
+      Publication.runReopen_aligned _ _ shorter, synced shorter]
+    rfl
+
 theorem runMarkedReopen_preflight_error {checkpoint : Except String PackedTable}
     {marker wal : Except String (Option ByteArray)} {message : String}
     (failed : markedReopenPreflight checkpoint marker wal = .error message)

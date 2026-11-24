@@ -311,6 +311,56 @@ private theorem CheckpointForRecovery.ordered_durable_runs {image : CheckpointPu
     subst stored
     exact read_durable_runs decoded count durable
 
+private theorem readList_succeeds {indices : List Nat} {read : Nat → Except String ByteArray}
+    (success : ∀ index ∈ indices, ∃ bytes, read index = .ok bytes) :
+    ∃ files, indices.mapM read = .ok files := by
+  induction indices with
+  | nil => exact ⟨[], rfl⟩
+  | cons index rest ih =>
+    obtain ⟨head, headRead⟩ := success index (List.mem_cons_self ..)
+    obtain ⟨tail, tailRead⟩ := ih (fun i mem => success i (List.mem_cons_of_mem _ mem))
+    exact ⟨head :: tail, by simp [List.mapM_cons, headRead, tailRead, bind, Except.bind, pure, Except.pure]⟩
+
+/-- Successful primitive reads of the selected manifest and its run indices
+suffice to run the shared checkpoint loader on the exact durable bytes.
+A successful lookup of an absent manifest needs no run reads. -/
+theorem CheckpointReadObservations.completes {image : CheckpointPublication.Image}
+    {manifest : Option ByteArray} {files : List ByteArray} {base : PackedTable}
+    (reads : CheckpointReadObservations image manifest)
+    (manifestRead : reads.readManifest = .ok manifest)
+    (runReads : ∀ bytes header, manifest = some bytes → Manifest.decode bytes = .ok header →
+      ∀ index, index < header.runCount.toNat →
+        ∃ payload, reads.readRun header.generation index = .ok payload)
+    (durable : image.readDurableCheckpointRuns manifest = some files)
+    (loaded : (match manifest with
+      | none => Except.ok PackedTable.empty
+      | some bytes => do
+        let header ← Manifest.decode bytes
+        loadRunSet header files) = .ok base) :
+    ∃ result, reads.result = .ok result ∧ (result.getD (.empty, 0)).1 = base := by
+  cases manifest with
+  | none =>
+    exact ⟨none, by
+      simp [CheckpointFileReads.result, readCheckpoint, manifestRead, bind, Except.bind, pure, Except.pure],
+      Except.ok.inj loaded⟩
+  | some bytes =>
+    change (Manifest.decode bytes >>= fun header => loadRunSet header files) = .ok base at loaded
+    cases decoded : Manifest.decode bytes with
+    | error => rw [decoded] at loaded; contradiction
+    | ok header =>
+      rw [decoded] at loaded
+      simp only [CheckpointPublication.Image.readDurableCheckpointRuns, decoded, Except.toOption] at durable
+      obtain ⟨readFiles, observed⟩ := readList_succeeds (indices := List.range header.runCount.toNat)
+        (fun index present => runReads bytes header rfl decoded index (List.mem_range.mp present))
+      have same := observed_ordered_runs (reads.runDurable header.generation) durable observed
+      subst readFiles
+      have readRuns : readCheckpointRunBytes reads.readRun header = .ok files := by
+        rwa [readCheckpointRunBytes_eq_mapM]
+      refine ⟨some (base, header.generation), ?_, rfl⟩
+      change loadRunSet header files = .ok base at loaded
+      simp [CheckpointFileReads.result, readCheckpoint, manifestRead, decoded, readRuns, loaded,
+        bind, Except.bind, pure, Except.pure]
+
 /-- Project the native checkpoint read to its replay base, using the exact
 ordered run bytes from durability. An absent manifest supplies the empty table. -/
 theorem CheckpointReadObservations.loaded_table {image : CheckpointPublication.Image}

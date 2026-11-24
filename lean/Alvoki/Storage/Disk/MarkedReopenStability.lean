@@ -39,21 +39,50 @@ private theorem ExactHistory.markerBound {image : ReopenImage} {manifest : Optio
   exact ⟨encode length, length, congrArg DirectoryPublication.Bindings.walBoundary exactPair,
     decode_encode length, Nat.le_refl _⟩
 
-private theorem ExactHistory.noRepair {image : ReopenImage} {manifest : Option ByteArray}
-    {events : List WAL.Write} (history : ExactHistory image manifest events)
+private theorem ReopenImage.noRepair_of_exactWal {image : ReopenImage}
+    {events : List WAL.Write}
+    (markerAt : image.directory.active.walBoundary = some (encode (WAL.encode events).size.toUInt64))
+    (walActive : image.wal.active = some (WAL.encode events))
     (fits : (WAL.encode events).size < UInt64.size) {length : UInt64} {trimmed : ByteArray}
     (choice : image.RepairsTo length trimmed) : False := by
   obtain ⟨marker, present, decoded⟩ := choice.visibleMarker
   obtain ⟨contents, visible, selected, shorter⟩ := choice.selected
-  have markerAt := congrArg DirectoryPublication.Bindings.walBoundary history.1.activeValid
   have markerEq : marker = encode (WAL.encode events).size.toUInt64 :=
     Option.some.inj (present.symm.trans markerAt)
   subst marker
   have lengthEq := Except.ok.inj ((decode_encode _).symm.trans decoded)
   have sizeEq := select_size selected
-  have contentsEq := Option.some.inj (visible.symm.trans history.2.activeValid)
+  have contentsEq := Option.some.inj (visible.symm.trans walActive)
   rw [contentsEq, sizeEq, ← lengthEq, UInt64.toNat_ofNat_of_lt' fits] at shorter
   exact (Nat.lt_irrefl _) shorter
+
+/-- When the WAL and every candidate marker already describe the same exact
+history, retry effects keep the WAL bytes. A checkpoint cut can give those
+markers different associated manifests. -/
+theorem ReopenRetry.preserves_exactWal {initial after : ReopenImage} {events : List WAL.Write}
+    (path : ReopenRetry initial after)
+    (markers : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
+      pair.walBoundary = some (encode (WAL.encode events).size.toUInt64))
+    (exactWal : initial.wal.Valid (· = some (WAL.encode events)))
+    (fits : (WAL.encode events).size < UInt64.size) :
+    after.wal.Valid (· = some (WAL.encode events)) := by
+  induction path with
+  | start => exact exactWal
+  | repair prior chosen _ earlier =>
+    have marker := markers _ (prior.chosen_pair_from_initial (List.mem_cons_self ..))
+    exact (ReopenImage.noRepair_of_exactWal marker earlier.activeValid fits chosen).elim
+  | syncDirectory _ earlier =>
+    exact ⟨by simp [ReopenImage.syncDirectory], earlier.activeValid,
+      fun candidate survives => (List.mem_singleton.mp survives).trans earlier.activeValid⟩
+  | syncMetadata _ earlier => exact earlier
+  | allowVisibleWal _ earlier =>
+    refine ⟨by simp [ReopenImage.allowVisibleWal], earlier.activeValid, ?_⟩
+    intro candidate survives
+    rcases List.mem_cons.mp survives with rfl | prior
+    · exact earlier.activeValid
+    · exact earlier.crashValid candidate prior
+  | crash _ _ walSurvives earlier =>
+    exact Publication.Image.settled_valid (earlier.crashValid _ walSurvives)
 
 private theorem ExactHistory.retry {initial after : ReopenImage} {manifest : Option ByteArray}
     {events : List WAL.Write} (history : ExactHistory initial manifest events)
@@ -61,7 +90,9 @@ private theorem ExactHistory.retry {initial after : ReopenImage} {manifest : Opt
     ExactHistory after manifest events := by
   induction path with
   | start => exact history
-  | repair _ chosen _ earlier => exact (earlier.noRepair fits chosen).elim
+  | repair _ chosen _ earlier =>
+    have marker := congrArg DirectoryPublication.Bindings.walBoundary earlier.1.activeValid
+    exact (ReopenImage.noRepair_of_exactWal marker earlier.2.activeValid fits chosen).elim
   | syncDirectory _ earlier =>
     exact ⟨earlier.1.syncDirectory, ⟨by simp [ReopenImage.syncDirectory], earlier.2.activeValid,
       fun candidate survives => (List.mem_singleton.mp survives).trans earlier.2.activeValid⟩⟩
@@ -239,6 +270,43 @@ theorem reopenAfterSettledWrites_refines {initial writer : MarkedWriterState}
     by simpa only [List.append_assoc] using abstractCount,
     by simpa only [List.append_assoc] using reads⟩
 
+/-- Reading the exact encoded WAL and its marker leaves no repair to do.
+The shared open takes the aligned sync path and installs the replayed table. -/
+theorem MarkedReopenReads.completes_exactWal {before : ReopenImage}
+    (reads : MarkedReopenReads before) {covered pending : List WAL.Write} {base : PackedTable}
+    (checkpointRead : reads.checkpoint = .ok base)
+    (markerRead : reads.marker = .ok (some (encode (WAL.encode (covered ++ pending)).size.toUInt64)))
+    (walRead : reads.wal = .ok (some (WAL.encode (covered ++ pending))))
+    (fits : (WAL.encode (covered ++ pending)).size < UInt64.size)
+    (watermark : covered.length = base.committed.toNat)
+    (ordered : WAL.OrdinalsFrom 1 (covered ++ pending))
+    (report : Publication.Step → RepairReport) :
+    ∃ table, runMarkedReopen reads.preflight report false .success before =
+      .ok table before.syncDirectory ∧ table.committed.toNat = (covered ++ pending).length := by
+  let bytes := WAL.encode (covered ++ pending)
+  have selected : select bytes.size.toUInt64 bytes = .ok bytes := by
+    simpa [bytes] using select_encoded (covered ++ pending) ByteArray.empty fits
+  obtain ⟨table, replayed, count⟩ := recoverSelected_encoded_complete base covered pending ordered watermark
+  have recovered : recoverMarked base bytes.size.toUInt64 bytes = .ok (bytes, table) := by
+    unfold recoverMarked
+    rw [selected]
+    change (recoverSelected base bytes >>= fun loaded => Except.ok (bytes, loaded)) = _
+    rw [replayed]
+    rfl
+  have preflight : reads.preflight = .ok ⟨bytes, bytes, table⟩ := by
+    unfold MarkedReopenReads.preflight markedReopenPreflight
+    rw [checkpointRead]
+    change (withOpenWal reads.marker reads.wal id _ _) = _
+    rw [markerRead, withOpenWal_marked, decode_encode, walRead]
+    change (recoverMarked base bytes.size.toUInt64 bytes >>= fun (selected, loaded) =>
+      Except.ok (⟨bytes, selected, loaded⟩ : MarkedPreflight)) = _
+    rw [recovered]
+    rfl
+  refine ⟨table, ?_, by simpa only [List.length_append] using count⟩
+  rw [preflight]
+  simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen, Nat.lt_irrefl, ↓reduceIte]
+  rfl
+
 /-- Once the checkpoint loader and file reads succeed, an exact settled
 history replays successfully and takes the aligned durability path. This
 states progress under a successful sync report. -/
@@ -263,28 +331,8 @@ theorem reopenSettledHistory_completes {initial before : ReopenImage}
   have contentsEq : contents = WAL.encode (covered ++ pending) :=
     Option.some.inj ((reads.walVisible _ walRead).symm.trans exactHistory.2.activeValid)
   subst marker contents
-  let bytes := WAL.encode (covered ++ pending)
-  have selected : select bytes.size.toUInt64 bytes = .ok bytes := by
-    simpa [bytes] using select_encoded (covered ++ pending) ByteArray.empty fits
-  obtain ⟨table, replayed, _⟩ := recoverSelected_encoded_complete base covered pending ordered watermark
-  have recovered : recoverMarked base bytes.size.toUInt64 bytes = .ok (bytes, table) := by
-    unfold recoverMarked
-    rw [selected]
-    change (recoverSelected base bytes >>= fun loaded => Except.ok (bytes, loaded)) = _
-    rw [replayed]
-    rfl
-  have preflight : reads.preflight = .ok ⟨bytes, bytes, table⟩ := by
-    unfold MarkedReopenReads.preflight markedReopenPreflight
-    rw [checkpointRead]
-    change (withOpenWal reads.marker reads.wal id _ _) = _
-    rw [markerRead, withOpenWal_marked, decode_encode, walRead]
-    change (recoverMarked base bytes.size.toUInt64 bytes >>= fun (selected, loaded) =>
-      Except.ok (⟨bytes, selected, loaded⟩ : MarkedPreflight)) = _
-    rw [recovered]
-    rfl
-  refine ⟨table, ?_⟩
-  rw [preflight]
-  simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen, Nat.lt_irrefl, ↓reduceIte]
-  rfl
+  obtain ⟨table, completed, _⟩ :=
+    reads.completes_exactWal checkpointRead markerRead walRead fits watermark ordered report
+  exact ⟨table, completed⟩
 
 end Alvoki.WAL.Boundary
