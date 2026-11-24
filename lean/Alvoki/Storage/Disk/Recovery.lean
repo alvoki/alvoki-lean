@@ -49,6 +49,24 @@ private theorem replayWrite_spec {state result : PackedTable} {event : Write}
       exact ⟨rfl, sequence⟩
     · contradiction
 
+theorem replay_rowBounds {state result : PackedTable} {events : List Write}
+    (bounded : state.RowBounds) (applied : replay state events = .ok result) : result.RowBounds := by
+  induction events generalizing state with
+  | nil =>
+    change Except.ok state = .ok result at applied
+    cases applied
+    exact bounded
+  | cons event rest ih =>
+    unfold replay at applied
+    rw [List.foldlM_cons] at applied
+    cases step : replayWrite state event with
+    | error message =>
+      rw [step] at applied
+      contradiction
+    | ok next =>
+      rw [step] at applied
+      exact ih (bounded.write (replayWrite_spec step).1) applied
+
 private theorem replayWrite_advances {state result : PackedTable} {event : Write}
     (applied : replayWrite state event = .ok result) :
     result.committed.toNat = state.committed.toNat + 1 := by
@@ -267,6 +285,28 @@ def recoverSelected (state : PackedTable) (bytes : ByteArray) : Except String Pa
   let table ← replay state (events.drop state.committed.toNat)
   if table.committed.toNat == bytes.size / frameSize then .ok table
   else .error "selected WAL frame count disagrees with the recovered sequence"
+
+theorem recoverSelected_rowBounds {state result : PackedTable} {bytes : ByteArray}
+    (bounded : state.RowBounds) (recovered : recoverSelected state bytes = .ok result) : result.RowBounds := by
+  unfold recoverSelected at recovered
+  cases decoded : WAL.decodeOrdinals bytes with
+  | error message => rw [decoded] at recovered; contradiction
+  | ok events =>
+    rw [decoded] at recovered
+    change (do
+      let table ← replay state (events.drop state.committed.toNat)
+      if table.committed.toNat == bytes.size / frameSize then Except.ok table else Except.error _) =
+      Except.ok result at recovered
+    cases applied : replay state (events.drop state.committed.toNat) with
+    | error message => rw [applied] at recovered; contradiction
+    | ok table =>
+      rw [applied] at recovered
+      change (if table.committed.toNat == bytes.size / frameSize then Except.ok table
+        else Except.error _) = Except.ok result at recovered
+      split at recovered
+      · cases recovered
+        exact replay_rowBounds bounded applied
+      · contradiction
 
 theorem recoverCheckpoint_repair (state : PackedTable) (bytes : ByteArray) :
     recoverCheckpoint state ((WAL.repairPrefix bytes).getD bytes) = recoverCheckpoint state bytes := by

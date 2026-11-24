@@ -18,6 +18,7 @@ structure MarkedWriterState.ReadyFor (state : MarkedWriterState)
   count : state.history.length = state.table.committed.toNat
   length : state.walBytes = (WAL.encode state.history).size
   fits : state.walBytes < UInt64.size
+  rowBounds : state.table.RowBounds
 
 /-- A sequence of reported successes in one ready session. Every operation
 receives the physical output and the prepared in-memory table of the
@@ -48,11 +49,14 @@ theorem AcknowledgedWrites.refines {initial after : MarkedWriterState}
   | @write submitted before key value event table effects image path prepared fits acknowledged ih =>
     obtain ⟨prior, history, replayed⟩ := ih
     obtain ⟨_, count, ordered, _, length⟩ := prepareWrite_extends_history prior.ordered prior.count prepared
-    refine ⟨⟨runWriteEffectsFrom_success prior.settled acknowledged, ordered, ?_, ?_, fits⟩, ?_, ?_⟩
+    have replayOne : replay before.table [event] = .ok table := by
+      simp [replay, replay_prepared prepared]
+    refine ⟨⟨runWriteEffectsFrom_success prior.settled acknowledged, ordered, ?_, ?_, fits,
+      replay_rowBounds prior.rowBounds replayOne⟩, ?_, ?_⟩
     · simp [count]
     · simp [length, prior.length]
     · simp [history, List.append_assoc]
     · rw [replay_append replayed]
-      simp [replay, replay_prepared prepared]
+      exact replayOne
 
 end Alvoki.WAL.Boundary

@@ -48,6 +48,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.PackedTable.SameData.acquireAt_reads
 #check_axioms Alvoki.Storage.PackedTable.flush_refines
 #check_axioms Alvoki.Storage.PackedTable.compact_refines
+#check_axioms Alvoki.Storage.PackedTable.restore_rowBounds
+#check_axioms Alvoki.Storage.PackedTable.RowBounds.write
+#check_axioms Alvoki.Storage.PackedTable.RowBounds.acquireAt
+#check_axioms Alvoki.Storage.PackedTable.RowBounds.release
+#check_axioms Alvoki.Storage.PackedTable.RowBounds.advanceFloor
+#check_axioms Alvoki.Storage.PackedTable.RowBounds.flush
+#check_axioms Alvoki.Storage.PackedTable.RowBounds.compact
 #check_axioms Alvoki.WAL.decodeFrame_encode
 #check_axioms Alvoki.WAL.decodeFrame_reencode
 #check_axioms Alvoki.WAL.decode_ignores_incomplete_tail
@@ -72,10 +79,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.replay_committed_count
 #check_axioms Alvoki.Storage.replay_ordinals_complete
 #check_axioms Alvoki.Storage.replay_refines
+#check_axioms Alvoki.Storage.replay_rowBounds
 #check_axioms Alvoki.Storage.recoverSelected_encoded
 #check_axioms Alvoki.Storage.recoverSelected_encoded_complete
 #check_axioms Alvoki.Storage.recoverRunSet_committedBoundary
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loads
+#check_axioms Alvoki.Storage.CheckpointForRecovery.recoverSelected_rowBounds
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_flushForCheckpoint
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest_with

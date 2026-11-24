@@ -175,7 +175,7 @@ def replaceSuffix (replace : List β → Option (List β)) :
   | _ + 1, [] => none
   | n + 1, head :: rows => (replaceSuffix replace n rows).map (head :: ·)
 
-private theorem replaceSuffix_spec {replace : List β → Option (List β)}
+theorem replaceSuffix_spec {replace : List β → Option (List β)}
     {index : Nat} {rows result : List β} (changed : replaceSuffix replace index rows = some result) :
     ∃ prefixRows suffix replacement, rows = prefixRows ++ suffix ∧
       result = prefixRows ++ replacement ∧ replace suffix = some replacement := by

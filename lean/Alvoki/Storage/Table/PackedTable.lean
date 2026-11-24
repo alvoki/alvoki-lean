@@ -16,6 +16,14 @@ structure PackedTable where
 
 def PackedTable.empty : PackedTable := ⟨[], .empty, 0, .empty⟩
 
+/-- Every stored row belongs at or below the table's committed sequence. -/
+structure PackedTable.RowBounds (state : PackedTable) : Prop where
+  runs : ∀ run ∈ state.runs, ∀ row ∈ run.history.rows, row.sequence ≤ state.committed
+  memory : ∀ row ∈ state.memory.rows, row.sequence ≤ state.committed
+
+theorem PackedTable.empty_rowBounds : PackedTable.empty.RowBounds := by
+  constructor <;> simp [PackedTable.empty, History.empty]
+
 /-- Open a checkpoint with a fresh pin registry. All loaded versions must be
 at or below the checkpoint watermark. -/
 def PackedTable.restore (runs : List CheckedRun) (committed floor : UInt64) :
@@ -34,6 +42,17 @@ theorem PackedTable.restore_spec {runs : List CheckedRun} {committed floor : UIn
   · obtain ⟨pins, advanced, rfl⟩ := Option.map_eq_some_iff.mp opened
     have spec := SnapshotPins.advance_spec advanced
     exact ⟨rfl, rfl, rfl, spec.2.1, spec.2.2.1⟩
+  · contradiction
+
+theorem PackedTable.restore_rowBounds {runs : List CheckedRun} {committed floor : UInt64}
+    {state : PackedTable} (opened : restore runs committed floor = some state) : state.RowBounds := by
+  unfold restore at opened
+  split at opened
+  · rename_i accepted
+    obtain ⟨pins, _, rfl⟩ := Option.map_eq_some_iff.mp opened
+    have bounded := (Bool.and_eq_true_iff.mp accepted).2
+    exact ⟨fun run mem row inside => of_decide_eq_true
+      (List.all_eq_true.mp (List.all_eq_true.mp bounded run mem) row inside), by simp [History.empty]⟩
   · contradiction
 
 theorem PackedTable.restore_complete (runs : List CheckedRun) (committed floor : UInt64)
@@ -66,6 +85,14 @@ theorem PackedTable.SameData.describe {left right : PackedTable} (same : left.Sa
     left.describe = right.describe := by
   simp only [PackedTable.describe, same.runs, same.memory]
 
+theorem PackedTable.SameData.rowBounds {left right : PackedTable} (same : left.SameData right)
+    (bounded : right.RowBounds) : left.RowBounds := by
+  constructor
+  · rw [same.runs, same.committed]
+    exact bounded.runs
+  · rw [same.memory, same.committed]
+    exact bounded.memory
+
 theorem PackedTable.restore_sameData {state restored : PackedTable}
     (flushed : state.memory = History.empty)
     (opened : restore state.runs state.committed state.pins.floor = some restored) :
@@ -87,6 +114,24 @@ def PackedTable.write (state : PackedTable) (key : UInt64) (value : Option UInt6
     some { state with committed := sequence, memory := state.memory.union (.singleton ⟨key, sequence, value⟩) }
   else none
 
+theorem PackedTable.RowBounds.write {state next : PackedTable} {key : UInt64} {value : Option UInt64}
+    (bounded : state.RowBounds) (written : state.write key value = some next) : next.RowBounds := by
+  unfold PackedTable.write at written
+  split at written
+  · rename_i fits
+    cases written
+    have grows : state.committed ≤ UInt64.ofNat (state.committed.toNat + 1) := by
+      rw [UInt64.le_iff_toNat_le, UInt64.toNat_ofNat_of_lt' fits]
+      exact Nat.le_add_right _ _
+    refine ⟨fun run mem row inside => UInt64.le_trans (bounded.runs run mem row inside) grows, ?_⟩
+    intro row inside
+    change row ∈ union state.memory.rows (History.singleton _).rows at inside
+    rcases mem_union inside with old | added
+    · exact UInt64.le_trans (bounded.memory row old) grows
+    · cases List.mem_singleton.mp added
+      exact UInt64.le_refl _
+  · contradiction
+
 theorem PackedTable.SameData.write {left right next : PackedTable} (same : left.SameData right)
     {key : UInt64} {value : Option UInt64} (written : right.write key value = some next) :
     ∃ result, left.write key value = some result ∧ result.SameData next := by
@@ -104,20 +149,55 @@ def PackedTable.acquireAt (state : PackedTable) (snapshot : UInt64) :
     Option (SnapshotPin × PackedTable) :=
   (state.pins.acquire state.committed snapshot).map fun (pin, pins) => (pin, { state with pins })
 
+theorem PackedTable.RowBounds.acquireAt {state after : PackedTable} {snapshot : UInt64}
+    {pin : SnapshotPin} (bounded : state.RowBounds) (acquired : state.acquireAt snapshot = some (pin, after)) :
+    after.RowBounds := by
+  obtain ⟨⟨_, _⟩, _, same⟩ := Option.map_eq_some_iff.mp acquired
+  cases same
+  exact ⟨bounded.runs, bounded.memory⟩
+
 def PackedTable.acquire (state : PackedTable) : Option (SnapshotPin × PackedTable) :=
   state.acquireAt state.committed
 
 def PackedTable.release (state : PackedTable) (handle : SnapshotHandle) : PackedTable :=
   { state with pins := state.pins.release handle }
 
+theorem PackedTable.RowBounds.release {state : PackedTable} (bounded : state.RowBounds)
+    (handle : SnapshotHandle) : (state.release handle).RowBounds :=
+  ⟨bounded.runs, bounded.memory⟩
+
 def PackedTable.advanceFloor (state : PackedTable) (floor : UInt64) : Option PackedTable :=
   if floor ≤ state.committed then (state.pins.advance floor).map fun pins => { state with pins }
   else none
+
+theorem PackedTable.RowBounds.advanceFloor {state after : PackedTable} {floor : UInt64}
+    (bounded : state.RowBounds) (advanced : state.advanceFloor floor = some after) : after.RowBounds := by
+  unfold PackedTable.advanceFloor at advanced
+  split at advanced
+  · obtain ⟨_, _, rfl⟩ := Option.map_eq_some_iff.mp advanced
+    exact ⟨bounded.runs, bounded.memory⟩
+  · contradiction
 
 def PackedTable.flush (state : PackedTable) : Except String PackedTable :=
   match CheckedRun.ofHistory state.memory with
   | .ok run => .ok { state with runs := state.runs ++ [run], memory := .empty }
   | .error message => .error message
+
+theorem PackedTable.RowBounds.flush {state after : PackedTable}
+    (bounded : state.RowBounds) (flushed : state.flush = .ok after) : after.RowBounds := by
+  unfold PackedTable.flush at flushed
+  cases encoded : CheckedRun.ofHistory state.memory with
+  | error message => simp [encoded] at flushed
+  | ok run =>
+    rw [encoded] at flushed
+    cases flushed
+    refine ⟨?_, by simp [History.empty]⟩
+    intro source member row inside
+    rcases List.mem_append.mp member with old | added
+    · exact bounded.runs source old row inside
+    · obtain rfl := List.mem_singleton.mp added
+      rw [CheckedRun.ofHistory_spec encoded] at inside
+      exact bounded.memory row inside
 
 private def compactSuffix (floor : UInt64) : List CheckedRun → Option (List CheckedRun)
   | left :: right :: tail =>
@@ -129,6 +209,29 @@ private def compactSuffix (floor : UInt64) : List CheckedRun → Option (List Ch
 def PackedTable.compact (state : PackedTable) (index : Nat) : Option PackedTable :=
   (Sequential.replaceSuffix (compactSuffix state.pins.floor) index state.runs).map fun runs =>
     { state with runs }
+
+theorem PackedTable.RowBounds.compact {state after : PackedTable} {index : Nat}
+    (bounded : state.RowBounds) (compacted : state.compact index = some after) : after.RowBounds := by
+  unfold PackedTable.compact at compacted
+  obtain ⟨runs, accepted, rfl⟩ := Option.map_eq_some_iff.mp compacted
+  obtain ⟨older, suffix, replacement, original, updated, valid⟩ := Sequential.replaceSuffix_spec accepted
+  refine ⟨?_, bounded.memory⟩
+  rcases suffix with _ | ⟨left, _ | ⟨right, tail⟩⟩ <;> simp [compactSuffix] at valid
+  cases merged : left.compact right state.pins.floor with
+  | error message => simp [merged] at valid
+  | ok run =>
+    have replacements : run :: tail = replacement := by simpa [merged] using valid
+    intro source member row inside
+    rw [updated, ← replacements] at member
+    rcases List.mem_append.mp member with old | rest
+    · exact bounded.runs source (by rw [original]; exact List.mem_append_left _ old) row inside
+    · rcases List.mem_cons.mp rest with rfl | other
+      · rw [CheckedRun.compact_spec merged] at inside
+        change row ∈ retain (union left.history.rows right.history.rows) state.pins.floor at inside
+        rcases mem_union ((retainFrom_sublist _ _ _ _).subset inside) with inLeft | inRight
+        · exact bounded.runs left (by simp [original]) row inLeft
+        · exact bounded.runs right (by simp [original]) row inRight
+      · exact bounded.runs source (by simp [original, other]) row inside
 
 private def winnerAcross (key snapshot : UInt64) (memory : History UInt64) :
     List CheckedRun → Option (Entry (Option UInt64))

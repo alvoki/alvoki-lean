@@ -19,6 +19,15 @@ inductive CheckpointForRecovery : Option ByteArray → List ByteArray → Packed
       CheckpointForRecovery (some (Manifest.encode header))
         (checkpoint.runs.map (·.run.bytes)) checkpoint
 
+theorem CheckpointForRecovery.rowBounds {manifest : Option ByteArray} {files : List ByteArray}
+    {checkpoint : PackedTable} (written : CheckpointForRecovery manifest files checkpoint) :
+    checkpoint.RowBounds := by
+  cases written with
+  | absent => exact PackedTable.empty_rowBounds
+  | written _ _ flushed _ watermark _ _ bounded =>
+    exact ⟨fun run mem row inside => watermark ▸ bounded run mem row inside,
+      by simp [flushed, Alvoki.Sequential.History.empty]⟩
+
 theorem CheckpointForRecovery.loads {manifest : Option ByteArray} {files : List ByteArray}
     {checkpoint : PackedTable} (written : CheckpointForRecovery manifest files checkpoint) :
     ∃ base, (match manifest with
@@ -38,6 +47,19 @@ theorem CheckpointForRecovery.loads {manifest : Option ByteArray} {files : List 
     rw [Manifest.decode_encode header validFloor]
     exact loaded
 
+theorem CheckpointForRecovery.recoverSelected_rowBounds {manifest : Option ByteArray}
+    {bytes : ByteArray} {runs : List ByteArray} {checkpoint result : PackedTable}
+    (written : CheckpointForRecovery manifest runs checkpoint)
+    (recovered : (manifest.elim (Except.ok PackedTable.empty)
+      (fun header => Manifest.decode header >>= fun decoded => loadRunSet decoded runs) >>= fun base =>
+        recoverSelected base bytes) = .ok result) : result.RowBounds := by
+  obtain ⟨base, loaded, same⟩ := written.loads
+  have load : manifest.elim (Except.ok PackedTable.empty)
+      (fun header => Manifest.decode header >>= fun decoded => loadRunSet decoded runs) = .ok base := by
+    cases manifest <;> exact loaded
+  rw [load] at recovered
+  exact Alvoki.Storage.recoverSelected_rowBounds (same.rowBounds written.rowBounds) recovered
+
 /-- The native checkpoint's prepared table and exact run bytes witness
 recovery. The input rows must already be covered by the committed watermark.
 The abstract table takes the same flush decision as the adapter. -/
@@ -55,36 +77,31 @@ theorem CheckpointForRecovery.of_flushForCheckpoint
   obtain ⟨empty, committed, bounded, relation⟩ :
       checkpoint.memory = Alvoki.Sequential.History.empty ∧
       checkpoint.committed = before.committed ∧
-      (∀ run ∈ checkpoint.runs, ∀ row ∈ run.history.rows, row.sequence ≤ checkpoint.committed) ∧
+      checkpoint.RowBounds ∧
       checkpoint.Refines (if before.memory.rows.isEmpty then model else model.flush) := by
     unfold flushForCheckpoint at prepared
     split at prepared
     · rename_i emptyRows
       change Except.ok before = .ok checkpoint at prepared
       cases Except.ok.inj prepared
-      refine ⟨Alvoki.Sequential.History.ext_rows ?_, rfl, runBound, ?_⟩
+      refine ⟨Alvoki.Sequential.History.ext_rows ?_, rfl, ⟨runBound, memoryBound⟩, ?_⟩
       · exact List.isEmpty_iff.mp emptyRows
       · simpa only [emptyRows, ↓reduceIte] using refines
     · rename_i nonempty
       change before.flush = .ok checkpoint at prepared
       have refined := PackedTable.flush_refines refines prepared
+      have bounded := (⟨runBound, memoryBound⟩ : before.RowBounds).flush prepared
       unfold PackedTable.flush at prepared
       cases encoded : CheckedRun.ofHistory before.memory with
       | error message => simp [encoded] at prepared
       | ok run =>
         rw [encoded] at prepared
         cases prepared
-        refine ⟨rfl, rfl, ?_, by simpa [nonempty] using refined⟩
-        intro source member row inside
-        rcases List.mem_append.mp member with prior | added
-        · exact runBound source prior row inside
-        · obtain rfl := List.mem_singleton.mp added
-          rw [CheckedRun.ofHistory_spec encoded] at inside
-          exact memoryBound row inside
+        exact ⟨rfl, rfl, bounded, by simpa [nonempty] using refined⟩
   have floor : checkpoint.pins.floor ≤ checkpoint.committed := by
     rw [relation.pins, relation.committed]
     exact (if before.memory.rows.isEmpty then model else model.flush).floor_committed
-  exact ⟨.written _ _ empty (UInt64.toNat_ofNat_of_lt' fits).symm rfl rfl floor bounded,
+  exact ⟨.written _ _ empty (UInt64.toNat_ofNat_of_lt' fits).symm rfl rfl floor bounded.runs,
     committed, relation⟩
 
 private theorem read_ordered_runs (read : Nat → Option ByteArray) (first : Nat)

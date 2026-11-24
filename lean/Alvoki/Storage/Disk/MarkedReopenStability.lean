@@ -225,12 +225,12 @@ theorem reopenAfterSettledWrites_refines {initial writer : MarkedWriterState}
   have fits : (WAL.encode (covered ++ (pending ++ submitted))).size < UInt64.size := by
     rw [← old, ← current.length]
     exact current.fits
-  obtain ⟨settledAfter, _, count, abstract, replayed, abstractCount, reads⟩ :=
+  obtain ⟨settledAfter, recovered, count, abstract, replayed, abstractCount, reads⟩ :=
     reopenSettledHistory_refines settled fits attempts accepted checkpointReads walReads opened
       written represents watermark ordered
   have readyAfter : (⟨table, (WAL.encode (covered ++ (pending ++ submitted))).size, after,
       covered ++ (pending ++ submitted)⟩ : MarkedWriterState).ReadyFor manifest :=
-    ⟨settledAfter, ordered, count.symm, rfl, fits⟩
+    ⟨settledAfter, ordered, count.symm, rfl, fits, written.recoverSelected_rowBounds recovered⟩
   exact ⟨abstract, by simpa only [List.append_assoc] using readyAfter, replayed,
     by simpa only [List.append_assoc] using abstractCount,
     by simpa only [List.append_assoc] using reads⟩

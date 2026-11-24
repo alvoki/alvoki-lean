@@ -18,10 +18,7 @@ theorem checkpointMarked_ready {writer : MarkedWriterState} {manifest : Option B
       (·.getD 0) : Except String UInt64) = .ok installedGeneration)
     (generationFits : installedGeneration.toNat + 1 < UInt64.size)
     (prepared : (flushForCheckpoint writer.table id : Except String PackedTable) = .ok checkpoint)
-    (refines : writer.table.Refines model) (runCountFits : checkpoint.runs.length < UInt64.size)
-    (runBound : ∀ run ∈ writer.table.runs,
-      ∀ row ∈ run.history.rows, row.sequence ≤ writer.table.committed)
-    (memoryBound : ∀ row ∈ writer.table.memory.rows, row.sequence ≤ writer.table.committed) :
+    (refines : writer.table.Refines model) (runCountFits : checkpoint.runs.length < UInt64.size) :
     let next : CheckpointPublication.RunSet :=
       ⟨checkpointHeader checkpoint (UInt64.ofNat (installedGeneration.toNat + 1)),
         checkpoint.runs.map (·.run.bytes)⟩
@@ -57,7 +54,7 @@ theorem checkpointMarked_ready {writer : MarkedWriterState} {manifest : Option B
     rw [oldGeneration, UInt64.toNat_ofNat_of_lt' generationFits] at sequence
     omega
   obtain ⟨written, committed, relation⟩ := CheckpointForRecovery.of_flushForCheckpoint
-    prepared refines runCountFits runBound memoryBound next.header.generation
+    prepared refines runCountFits ready.rowBounds.runs ready.rowBounds.memory next.header.generation
   obtain ⟨_, after, completed, settled, durable⟩ :=
     CheckpointPublication.checkpointMarked_complete next ready.settled projects
   have same := Option.some.inj (completed.symm.trans ran)
@@ -92,6 +89,6 @@ theorem checkpointMarked_ready {writer : MarkedWriterState} {manifest : Option B
     watermark := watermark
   }
   exact ⟨fresh, fixed, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-    ⟨settled, ready.ordered, watermark, ready.length, ready.fits⟩⟩
+    ⟨settled, ready.ordered, watermark, ready.length, ready.fits, written.rowBounds⟩⟩
 
 end Alvoki.WAL.Boundary
