@@ -34,13 +34,10 @@ private theorem flushForCheckpoint_runAt {before checkpoint : PackedTable} {inde
   unfold flushForCheckpoint at flushed
   split at flushed
   · exact Except.ok.inj flushed ▸ atIndex
-  · unfold PackedTable.flush at flushed
-    cases encoded : Compaction.CheckedRun.ofHistory before.memory with
-    | error message => simp [encoded] at flushed
-    | ok appended =>
-      rw [encoded] at flushed
-      obtain rfl := Except.ok.inj flushed
-      exact (List.getElem?_append_left (List.getElem?_eq_some_iff.mp atIndex).1).trans atIndex
+  · change before.flush = .ok checkpoint at flushed
+    obtain ⟨_, _, _, appended, runs, _⟩ := PackedTable.flush_spec flushed
+    rw [runs]
+    exact (List.getElem?_append_left (List.getElem?_eq_some_iff.mp atIndex).1).trans atIndex
 
 /-- The normal checkpoint publishes the exact single-run retention result
 at its original index, even if flushing appends a newer run. -/
