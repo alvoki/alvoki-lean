@@ -7,6 +7,7 @@ import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.SegmentedCheckpointPowerLoss
 import Alvoki.Storage.Disk.SegmentedCleanReopen
+import Alvoki.Storage.Disk.SegmentedDelayedKeeperPowerLoss
 import Alvoki.Storage.Disk.SegmentedMarkerPowerLoss
 import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
 import Alvoki.Storage.Disk.SegmentedRotationRecovery
@@ -51,6 +52,35 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (report : SegmentedAppendRecoveryReport directory before writer descriptor)
       (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial allowCollection (log ++ [⟨[], some report.failure.event⟩]) descriptor after
+  | delayedKeeperPowerLoss {log writer descriptor before after}
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (failure : SegmentedAppendFailure directory before) (release : SegmentedFailureRelease writer)
+      (released : release.Observed (directory := directory) failure.poisoned
+        ⟨failure.failed, before.owners.set (directory.file .lock) none⟩)
+      (cut : DelayedKeeperReplacementPowerLoss directory failure.released
+        (AppendRetryTarget before.history failure.event before.wal.active.first))
+      {retry : LockedFileState FileImage}
+      (attempts : BoundedReopenTrace directory (AppendRetryTarget before.history failure.event before.wal.active.first)
+        cut.crashed retry)
+      (pair : retry.image.directory.active = cut.pair)
+      {nextRef : Nat} {unlock : UnlockReport}
+      {removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit)}
+      {write : FilePath → ByteArray → EStateM IO.Error FileImage Unit}
+      {sync : Array FilePath → EStateM IO.Error FileImage Unit}
+      {renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit}
+      {history : List WAL.Write} {selected : CanonicalKeeperLayout retry.image history}
+      {raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+        (before.wal.appendSelectedView retry.image.directory.active history) retry.image.directory.active
+        selected.range.watermark before.published.durable selected.tail}
+      {sizes : SizedCheckpointRunReports directory raw.reports retry.image.directory.active.manifest before.published.durable}
+      {cached : CachedWalFileReports directory raw.reports (before.wal.appendSelectedView retry.image.directory.active history)
+        selected.range.watermark selected.tail}
+      (endpoint : AppendRetryEndpoint directory before failure.event retry descriptor
+        (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+          (raw.reopenCached sizes cached removeFile write sync renameFile) retry) after)
+      (selectedHistory : after.history = history)
+      (ready : after.RetainedReady directory descriptor) :
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection (log ++ [⟨[], some failure.event⟩]) descriptor after
   | appendPowerLoss {log writer descriptor before after}
       (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedAppendPowerLossReport directory before writer descriptor)
@@ -117,6 +147,21 @@ private theorem retainsInterruptedAppend {initial before after : List WAL.Write}
   · refine ⟨retained ++ [event], by rw [kept, history, List.append_assoc], ?_⟩
     exact submitted.append (Or.inr ⟨event, rfl, rfl⟩)
 
+private theorem AppendRetryEndpoint.preservesChain {directory before event retry descriptor result after}
+    (endpoint : AppendRetryEndpoint directory before event retry descriptor result after)
+    (layout : before.wal.ReadLayout before.history) (chain : WalSegment.Chain before.history 0 before.wal.segments) :
+    WalSegment.Chain after.history 0 after.wal.segments := by
+  rw [endpoint.wal]
+  change WalSegment.Chain after.history 0 (before.wal.appendSelectedView retry.image.directory.active after.history).segments
+  rcases endpoint.history with unchanged | extended
+  · rw [unchanged]
+    change WalSegment.Chain before.history 0 (before.wal.sealed ++
+      [⟨before.wal.active.first, before.history.length, WAL.encode (before.history.drop before.wal.active.first)⟩])
+    rw [← layout.activeEnd, ← layout.activeBytes]
+    exact chain
+  · rw [extended]
+    exact (layout.afterAcknowledgedAppend chain retry.image.directory.active event).2.1
+
 /-- Thread readiness and acknowledged history once. When collection is
 disabled, the same steps also propagate evidence for the full chain. -/
 private theorem SegmentedDatabaseTrace.preservesReadiness {directory initialDescriptor initial allowCollection log descriptor last}
@@ -155,6 +200,10 @@ private theorem SegmentedDatabaseTrace.preservesReadiness {directory initialDesc
     intro disabled initialChain
     have full := before.withChain (fullChain disabled initialChain)
     exact (endpoint.preservesReady full).chain
+  | delayedKeeperPowerLoss _ _ _ _ _ _ _ endpoint _ next ih =>
+    obtain ⟨before, fullChain, _, history, submitted⟩ := ih
+    exact ⟨next, fun disabled initialChain => endpoint.preservesChain before.layout (fullChain disabled initialChain),
+      retainsInterruptedAppend history submitted endpoint.history⟩
   | appendPowerLoss _ _ observed endpoint ih =>
     obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
     refine ⟨endpoint.preservesRetained observed before, ?_, retainsInterruptedAppend history submitted (.inl endpoint.history)⟩
@@ -281,6 +330,60 @@ theorem SegmentedDatabaseTrace.appendPowerLossCached {directory initialDescripto
   obtain ⟨after, installed, session, final, ran, phase, image, owners⟩ :=
     report.installsRetainedCached observed ready sizes cached
   exact ⟨after, session, final, .appendPowerLoss prior report observed installed, ran, phase, image, owners⟩
+
+/-- Carry the cached writer returned after the delayed old keeper's effect,
+power loss and retries into the mixed history. Only the interrupted append
+adds a write submission to the trace. -/
+theorem SegmentedDatabaseTrace.delayedKeeperPowerLossCached
+    {directory initialDescriptor initial allowCollection log writer descriptor nextRef before}
+    (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (failure : SegmentedAppendFailure directory before) (release : SegmentedFailureRelease writer)
+    (released : release.Observed (directory := directory) failure.poisoned
+      ⟨failure.failed, before.owners.set (directory.file .lock) none⟩)
+    (cut : DelayedKeeperReplacementPowerLoss directory failure.released
+      (AppendRetryTarget before.history failure.event before.wal.active.first))
+    {retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (AppendRetryTarget before.history failure.event before.wal.active.first)
+      cut.crashed retry)
+    (acquisition : TryLockObserves retry.owners directory (.ok true))
+    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    BoundedReopenTrace directory (AppendRetryTarget before.history failure.event before.wal.active.first)
+      cut.during retry ∧
+    ∃ history, (history = before.history ∨ history = before.history ++ [failure.event]) ∧
+      ∃ selected : CanonicalKeeperLayout retry.image history,
+        let wal := before.wal.appendSelectedView retry.image.directory.active history
+        ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor))
+            descriptor wal retry.image.directory.active selected.range.watermark before.published.durable selected.tail,
+          ∀ sizes : SizedCheckpointRunReports directory raw.reports retry.image.directory.active.manifest before.published.durable,
+            ∀ cached : CachedWalFileReports directory raw.reports wal selected.range.watermark selected.tail,
+              sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
+              (∀ action prior next,
+                ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+                prior.effect selected.target action = some next →
+                performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
+              ∃ after,
+                SegmentedDatabaseTrace directory initialDescriptor initial allowCollection
+                  (log ++ [⟨[], some failure.event⟩]) descriptor after ∧
+                AppendRetryEndpoint directory before failure.event retry descriptor
+                  (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+                    (raw.reopenCached sizes cached removeFile write sync renameFile) retry) after ∧
+                after.target.pair = cut.pair ∧ after.checkpoint = before.checkpoint ∧
+                after.installed.generation = before.installed.generation := by
+  have ready := (prior.preservesRetained initialReady).1
+  obtain ⟨timeline, pair, history, permitted, selected, install⟩ :=
+    cut.reopensRetainedCachedAfter (nextDescriptor := descriptor) ready failure attempts acquisition
+      liveRefs fresh unlock removeFile write sync renameFile
+  refine ⟨timeline, history, permitted, selected, ?_⟩
+  intro _ raw sizes cached settles healthy
+  obtain ⟨after, endpoint, selectedHistory, retained, checkpoint, generation⟩ := install raw sizes cached settles healthy
+  exact ⟨after, .delayedKeeperPowerLoss prior failure release released cut attempts pair
+    (selected := selected) (raw := raw) (sizes := sizes) (cached := cached) endpoint selectedHistory retained,
+    endpoint, endpoint.pair.trans pair, checkpoint, generation⟩
 
 /-- Start the mixed history from the actual shared bootstrap attempt and
 its returned session, using only the reached native callback reports. -/
