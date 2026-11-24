@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.CheckpointLockHandoff
-import Alvoki.Storage.Disk.WalSegmentCheckpointPublication
+import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.ReopenedSegmentAppend
 
 namespace Alvoki.Storage.DiskSession
@@ -11,12 +11,12 @@ open WAL.Boundary (CheckpointRepresentsPrefix)
 
 /-- The actual checkpoint file dispatch, when all reported operations
 succeed, installs the flushed table and publishes the exact strict manifest
-and durable run map for the new generation. Its full segmented WAL and
-lock ownership survive publication unchanged. The durable map represents
-run bindings used by recovery. -/
+and durable run map for the new generation. Its available segments and
+lock ownership survive publication unchanged. The new checkpoint covers
+the history even when earlier covered segments have been collected. -/
 theorem runPreparedCheckpoint_segmentedSuccess {directory : DiskDirectory} {owners : LockOwners}
     {before : WalSegmentImage} {history : List WAL.Write}
-    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
+    (layout : before.ReadLayout history)
     (marker : before.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
     (walFits : (WAL.encode history).size < UInt64.size)
     (initial : CheckpointPublication.Image) {installed : Installed} {checkpoint : PackedTable}
@@ -59,7 +59,7 @@ theorem runPreparedCheckpoint_segmentedSuccess {directory : DiskDirectory} {owne
       published.manifest = wal.directory.project .manifest ∧
       wal.directory.active.walRange = some ⟨history.length, history.length⟩ ∧
       wal.sealed = before.sealed ∧ wal.active = before.active ∧
-      wal.ReadLayout history ∧ WalSegment.Chain history 0 wal.segments ∧ wal.Valid history ∧
+      wal.ReadLayout history ∧ wal.Valid history ∧ wal.readDescriptors history.length = [before.active] ∧
       published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
         wal.directory.active.manifest ∧
       SelectedIntegrityCheckpoint published.durable wal.directory.active.manifest (some (base, generation)) ∧
@@ -108,8 +108,8 @@ theorem runPreparedCheckpoint_segmentedSuccess {directory : DiskDirectory} {owne
   have settled : published.manifest = .settled (some manifest) := by
     change published.manifest = .settled (some metadata.encode) at settled
     simpa only [exactManifest] using settled
-  obtain ⟨active, crashes, projected, range, layout, valid⟩ :=
-    published.segmentedCheckpointView_settled layout chain marker walFits settled decoded watermark
+  obtain ⟨active, crashes, projected, range, layout, valid, keeperRead⟩ :=
+    published.segmentedCheckpointView_settledRetained layout marker walFits settled decoded watermark
   have acceptedRuns : AcceptsRunSet published.durable history.length.toUInt64
       (fun candidate files => CheckpointRepresentsPrefix history candidate files ∧ metadata.validateRuns files = true)
       metadata.header runs :=
@@ -122,7 +122,7 @@ theorem runPreparedCheckpoint_segmentedSuccess {directory : DiskDirectory} {owne
   have selected : SelectedIntegrityCheckpoint published.durable (some manifest) (some (base, generation)) :=
     .present decoded acceptedRuns.ordered loadedStrict
   refine ⟨ready, UInt64.toNat_ofNat_of_lt' generationFits, exactManifest, decoded, published, base, actual, settled,
-    durable, preserved, active, crashes, projected, range, rfl, rfl, layout, chain, valid, ?_, ?_, sameData,
+    durable, preserved, active, crashes, projected, range, rfl, rfl, layout, valid, keeperRead, ?_, ?_, sameData,
     acknowledged, written.rowBounds, afterModel, refined, ?_⟩
   · rw [active]
     exact accepted

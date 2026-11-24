@@ -69,16 +69,33 @@ structure Installs (attempt : SegmentedCheckpointReport directory before) (after
   checkpoint : SelectedIntegrityCheckpoint after.published.durable after.wal.directory.active.manifest after.checkpoint
   owners : after.owners = before.owners
 
-/-- Successful checkpointing gives the next mixed-trace ready writer
-without a reopen. The exact WAL bytes, held lock, and prior generation
-bindings are inherited from the previous writer. -/
-theorem installs (attempt : SegmentedCheckpointReport directory before) (observed : attempt.Valid)
-    (ready : before.Ready directory descriptor) :
-    ∃ after, attempt.Installs after ∧ after.Ready directory descriptor := by
-  obtain ⟨model, refines, represents⟩ := ready.resumed.canonical
-  obtain ⟨_, _, _, count, _, _, counted⟩ := DirectoryPublication.Bindings.walRange_accounting ready.appendInput.range
+/-- Successful checkpointing keeps the available WAL inventory and its
+held lock. Its exact new manifest covers the full history, making the
+installed active segment the sole WAL read on recovery. -/
+theorem installsRetained (attempt : SegmentedCheckpointReport directory before) (observed : attempt.Valid)
+    (ready : ResumedAppendReady before.installed before.files before.target before.history
+      before.published before.checkpoint)
+    (layout : before.wal.ReadLayout before.history)
+    (directoryFiles : before.files.directory = before.wal.directory)
+    (sealedFiles : before.files.kept = (before.wal.checkpointReopenFiles before.wal.directory none).kept)
+    (active : before.target.first = before.wal.active.first)
+    (held : before.owners.Owns directory descriptor) :
+    ∃ after, attempt.Installs after ∧
+      ResumedAppendReady after.installed after.files after.target after.history after.published after.checkpoint ∧
+      after.wal.ReadLayout after.history ∧ after.wal.Valid after.history ∧
+      after.files.directory = after.wal.directory ∧
+      after.files.kept = (after.wal.checkpointReopenFiles after.wal.directory none).kept ∧
+      after.target.first = after.wal.active.first ∧
+      after.published.manifest = after.files.directory.project .manifest ∧
+      after.owners.Owns directory descriptor ∧ after.wal.readDescriptors after.history.length = [after.wal.active] := by
+  obtain ⟨model, refines, represents⟩ := ready.canonical
+  obtain ⟨_, _, _, count, _, _, counted⟩ := DirectoryPublication.Bindings.walRange_accounting before.target.decoded
   have bytes : (WAL.encode before.history).size = count.toNat := by
-    rw [counted, WAL.encode_size, Nat.mul_comm]
+    rw [counted, ready.through, WAL.encode_size, Nat.mul_comm]
+  have marker := congrArg Publication.Image.active ready.markerImage
+  change before.files.directory.active.walBoundary =
+    some (WAL.Boundary.encode (WAL.encode before.history).size.toUInt64) at marker
+  rw [directoryFiles] at marker
   have walFits : (WAL.encode before.history).size < UInt64.size := bytes.symm ▸ count.toNat_lt_size
   have runBytesFit : ∀ bytes ∈ attempt.table.runs.map (·.run.bytes), bytes.size < UInt64.size := by
     by_cases bounded : (attempt.table.runs.map (·.run.bytes)).all
@@ -89,14 +106,14 @@ theorem installs (attempt : SegmentedCheckpointReport directory before) (observe
   have complete : CheckpointPublication.run attempt.table.runs.toArray.size attempt.perform 0 = .ok () attempt.cut := by
     simpa only [List.size_toArray] using observed.succeeded
   obtain ⟨readyEffect, _, _, _, published, base, publication, settled, runs, others,
-    _, crashes, projected, range, _, _, layout, chain, _, accepted, selected, _, _, bounds, canonical⟩ :=
+    _, crashes, projected, range, _, _, nextLayout, valid, keeperRead, accepted, selected, _, _, bounds, canonical⟩ :=
     runPreparedCheckpoint_segmentedSuccess (directory := directory) (owners := before.owners)
-      ready.layout ready.chain ready.appendInput.marker walFits before.published refines represents ready.resumed.bounds
+      layout marker walFits before.published refines represents ready.bounds
       observed.flushed observed.generationFits observed.runCountFits runBytesFit
       attempt.writeRun attempt.writeStage attempt.sync attempt.renameFile attempt.report
       observed.encoded observed.reached complete
   let wal := published.segmentedCheckpointView before.wal
-  obtain ⟨target, keeper, resumed⟩ := ready.resumed.afterCheckpointPublication crashes range selected accepted bounds canonical
+  obtain ⟨target, keeper, resumed⟩ := ready.afterCheckpointPublication crashes range selected accepted bounds canonical
   let after : SegmentedWriterState := {
     installed := attempt.prepared
     wal := wal
@@ -108,10 +125,23 @@ theorem installs (attempt : SegmentedCheckpointReport directory before) (observe
     owners := before.owners
   }
   have exactKeeper : target.trimmed = before.target.trimmed := by
-    rw [resumed.contents, keeper, ready.resumed.contents]
+    rw [resumed.contents, keeper, ready.contents]
   refine ⟨after, ⟨readyEffect, publication, settled, runs, others, rfl, rfl, rfl, rfl,
     resumed.ready.selected.symm, keeper, exactKeeper, selected, rfl⟩,
-    ⟨resumed, layout, chain, rfl, ready.sealedFiles, keeper.trans ready.active, projected, ready.held⟩⟩
+    resumed, nextLayout, valid, rfl, sealedFiles, keeper.trans active, projected, held, keeperRead⟩
+
+/-- The existing full-history writer retains its stronger inventory
+witness across the same successful checkpoint. -/
+theorem installs (attempt : SegmentedCheckpointReport directory before) (observed : attempt.Valid)
+    (ready : before.Ready directory descriptor) :
+    ∃ after, attempt.Installs after ∧ after.Ready directory descriptor := by
+  obtain ⟨after, installed, resumed, layout, _, files, sealed, active, manifest, held, _⟩ :=
+    attempt.installsRetained observed ready.resumed ready.layout ready.directoryFiles ready.sealedFiles
+      ready.active ready.held
+  have chain : WalSegment.Chain after.history 0 after.wal.segments := by
+    rw [installed.history, installed.wal]
+    exact ready.chain
+  exact ⟨after, installed, ⟨resumed, layout, chain, files, sealed, active, manifest, held⟩⟩
 
 private theorem sameTarget {left right : Target} (pair : left.pair = right.pair) (first : left.first = right.first)
     (bytes : left.trimmed = right.trimmed) : left = right := by
