@@ -71,6 +71,23 @@ theorem finishBoundedMarkedOpen_eq_full [Monad m] [LawfulMonad m] [MonadExceptOf
   · rfl
   · simp only [runAt, pure_bind, valid, ite_true, runRepairPlan, samePaths, names]
 
+/-- Both repair routes stop at a reported error from the first directory
+barrier and keep its exact reached state. -/
+theorem finishBoundedMarkedOpen_authorizationError {state : Type} (directory : DiskDirectory) (full : Plan)
+    (valid : full.valid = true)
+    (removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error state Unit)
+    (sync : Array FilePath → EStateM IO.Error state Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error state Unit)
+    {initial after : state} {cause : IO.Error} (failed : sync #[directory.path] initial = .error cause after) :
+    finishBoundedMarkedOpen directory { full with keeperBytes := full.keeperBytes.extract 0 full.keeperSize }
+      full.keeperBytes.size removeFile write sync renameFile initial = .error cause after := by
+  rw [finishBoundedMarkedOpen_eq_full _ _ valid]
+  by_cases aligned : full.alignedWithoutPrune = true
+  · simp only [finishMarkedOpen, aligned, ite_true, Bind.bind, EStateM.bind, failed]
+  · simp only [finishMarkedOpen, ite_eq_right aligned, runAt, runRepairPlan, Bind.bind, EStateM.bind, Pure.pure,
+      EStateM.pure, valid, ite_true, failed]
+
 theorem readSelectedWithPrefix_liftReports {state : Type} (dir : DiskDirectory)
     (watermark : Nat) (length : UInt64) (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
     (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (readBin : FilePath → Except IO.Error ByteArray)

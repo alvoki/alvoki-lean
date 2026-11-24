@@ -459,11 +459,8 @@ theorem CachedRetryReadReports.checkpointAfterAuthorizationError
     simp [CanonicalKeeperLayout.plan, ByteArray.size_append]
   have stopped : finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size
       effects.removeFile effects.write effects.sync effects.renameFile initial = .error cause after := by
-    rw [layout.boundedPlan_eq_extract, finishBoundedMarkedOpen_eq_full _ _ valid]
-    by_cases aligned : layout.plan.alignedWithoutPrune = true
-    · simp only [finishMarkedOpen, aligned, ite_true, Bind.bind, EStateM.bind, failed]
-    · simp only [finishMarkedOpen, ite_eq_right aligned, runAt, runRepairPlan, Bind.bind, EStateM.bind, Pure.pure,
-        EStateM.pure, valid, ite_true, failed]
+    rw [layout.boundedPlan_eq_extract]
+    exact finishBoundedMarkedOpen_authorizationError directory layout.plan valid _ _ _ _ failed
   have outcome : effects.reopen reported sizes.readPrefix initial = .error cause after := by
     change EStateM.bind (reported.prepare sizes.readPrefix)
       (fun (plan, prepared, size) => do
@@ -500,5 +497,58 @@ theorem CachedRetryReadReports.checkpointAfterAuthorizationError
     (fun first before => (effects.rename first before).2) (fun paths before => (effects.syncs paths before).2)
     initial after (.inr ⟨cause, stopped⟩) initialCheckpoint
   exact ⟨recovered, durable.2 _ runsSurvive, matching⟩
+
+/-- The same canonical cached reads and callbacks supply an authorization
+failure certificate for the locked retry trace. The explicit metadata
+report describes the effect on the entire reached file image. -/
+theorem CachedRetryReadReports.certifiesAuthorizationFailure
+    {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout before.image history}
+    (reported : CachedRetryReadReports directory layout) (effects : CachedCheckpointRepairEffects FileImage directory)
+    (nextRef : Nat) (acquisition : TryLockObserves before.owners directory (.ok true))
+    (unlock : UnlockReport) (localUnlock : unlock.LocalFlock)
+    (keeperValid : before.image.keeper.Valid layout.target.Accepts)
+    (laterValid : before.image.later.Beyond layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : (⟨before.image.directory.project .manifest, (effects.runs before.image).guaranteed⟩ : Image).AcceptsVersioned
+      history.length.toUInt64 (CheckpointRepresentsPrefix history) before.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    (sizes : SizedCheckpointRunReports directory reported.inventory.reports before.image.directory.active.manifest
+      (effects.runs before.image).guaranteed)
+    (manifestRead : reported.inventory.reports.readOptional (directory.file .manifest) =
+      .ok before.image.directory.active.manifest)
+    (markerRead : reported.inventory.reports.readOptional (directory.file .walBoundary) =
+      .ok before.image.directory.active.walBoundary)
+    {cause : IO.Error} {reached : FileImage} (failed : effects.sync #[directory.path] before.image = .error cause reached)
+    (metadata : MetadataReport before.image (effects.sync #[directory.path])) :
+    ∃ failure : CachedOpenAuthorizationFailure directory before,
+      failure.target = layout.target ∧ failure.attempt.descriptor = reported.inventory.descriptor ∧
+      failure.attempt.unlock = unlock ∧ failure.cause = cause ∧ failure.reached = reached ∧
+      failure.attempt.recover = effects.reopen reported sizes.readPrefix := by
+  let attempt : CachedOpenAttempt directory before :=
+    { descriptor := reported.inventory.descriptor
+      nextRef := nextRef
+      acquisition := acquisition
+      unlock := unlock
+      localUnlock := localUnlock
+      readOptional := fun path => liftExcept (reported.inventory.reports.readOptional path)
+      readRunSize := fun path => liftExcept (checkpointRunSizeReport reported.inventory.reports path)
+      readRunPrefix := fun path size => liftExcept (sizes.readPrefix path size)
+      list := fun path => liftExcept (reported.list path)
+      lstat := fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _)
+      readSeal := fun path size => liftExcept (reported.readSeal path size)
+      readKeeper := fun path size physical => liftExcept (reported.readKeeper path size physical)
+      removeFile := effects.removeFile
+      write := effects.write
+      sync := effects.sync
+      renameFile := effects.renameFile }
+  obtain ⟨opened, _, _, read, _⟩ :=
+    reported.prepares before.image laterValid following accepted ordered sizes manifestRead markerRead
+  rw [layout.boundedPlan_eq_extract] at read
+  have prepared : Prepared before.image layout.target layout.plan :=
+    ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
+  exact ⟨⟨attempt, layout.target, layout.plan, opened, prepared, read, cause, reached, failed, metadata⟩,
+    rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 end Alvoki.Storage.WalSegmentRepair

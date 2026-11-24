@@ -195,6 +195,9 @@ inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Pr
   | cachedRejected {before} (prior : BoundedReopenTrace directory admits initial before)
       (rejection : CachedOpenRejection directory before) :
       BoundedReopenTrace directory admits initial rejection.after
+  | cachedAuthorizationFailed {before} (prior : BoundedReopenTrace directory admits initial before)
+      (failure : CachedOpenAuthorizationFailure directory before) (admitted : admits failure.target) :
+      BoundedReopenTrace directory admits initial failure.after
   | referenceDrops {before description} (prior : BoundedReopenTrace directory admits initial before)
       (references : HeldLockReferences description) (drops : List LockReferenceDrop) :
       BoundedReopenTrace directory admits initial (references.afterFileDrops drops directory before)
@@ -216,7 +219,7 @@ theorem BoundedReopenTrace.afterCachedLastDrop {directory admits initial before}
     BoundedReopenTrace directory admits initial released ∧ TryLockObserves released.owners directory (.ok true) := by
   dsimp only
   have held : rejection.after.owners.Owns directory rejection.attempt.descriptor := by
-    simp [CachedOpenRejection.after, cleanup, LockOwners.Owns, LockOwners.set]
+    simp [CachedOpenRejection.after, CachedOpenAttempt.cleanupError, cleanup, LockOwners.Owns, LockOwners.set]
   refine ⟨.referenceDrops (.cachedRejected prior rejection) references drops, ?_⟩
   rw [references.afterFileDrops_released held last]
   simp [TryLockObserves, LockOwners.set]
@@ -238,6 +241,23 @@ theorem BoundedReopenTrace.afterCachedMarkerLastDrop {directory admits initial b
     BoundedReopenTrace directory admits initial released ∧ TryLockObserves released.owners directory (.ok true) :=
   prior.afterCachedLastDrop rejection.certified cleanup references drops last
 
+/-- After a failed authorization and failed local cleanup, the retry
+retains the reached file image and releases the owner only on its last
+observed reference drop. -/
+theorem BoundedReopenTrace.afterCachedAuthorizationLastDrop {directory admits initial before}
+    (prior : BoundedReopenTrace directory admits initial before) (failure : CachedOpenAuthorizationFailure directory before)
+    (admitted : admits failure.target) {cause : IO.Error} (cleanup : failure.attempt.unlock = .failure cause false)
+    (references : HeldLockReferences failure.attempt.descriptor) (drops : List LockReferenceDrop)
+    (last : references.remaining drops = []) :
+    let released := references.afterFileDrops drops directory failure.after
+    BoundedReopenTrace directory admits initial released ∧ TryLockObserves released.owners directory (.ok true) := by
+  dsimp only
+  have held : failure.after.owners.Owns directory failure.attempt.descriptor := by
+    simp [CachedOpenAuthorizationFailure.after, CachedOpenAttempt.cleanupError, cleanup, LockOwners.Owns, LockOwners.set]
+  refine ⟨.referenceDrops (.cachedAuthorizationFailed prior failure admitted) references drops, ?_⟩
+  rw [references.afterFileDrops_released held last]
+  simp [TryLockObserves, LockOwners.set]
+
 /-- The reached state of one retry trace is the starting state of the next. -/
 theorem BoundedReopenTrace.trans {directory admits initial middle after}
     (earlier : BoundedReopenTrace directory admits initial middle)
@@ -246,6 +266,7 @@ theorem BoundedReopenTrace.trans {directory admits initial middle after}
   | empty => exact earlier
   | failed _ attempt acquisition unlock reports ran ih => exact .failed ih attempt acquisition unlock reports ran
   | cachedRejected _ rejection ih => exact .cachedRejected ih rejection
+  | cachedAuthorizationFailed _ failure admitted ih => exact .cachedAuthorizationFailed ih failure admitted
   | referenceDrops _ references drops ih => exact .referenceDrops ih references drops
   | powerLoss _ metadata keeper names ih => exact .powerLoss ih metadata keeper names
 
@@ -261,6 +282,7 @@ theorem BoundedReopenTrace.continuesLineage {directory : DiskDirectory} {admits 
   | failed _ attempt acquisition _ reports ran ih =>
     exact ih.afterFailure unique (attempt.errorFiles acquisition reports ran)
   | cachedRejected _ _ ih => exact ih
+  | cachedAuthorizationFailed _ failure admitted ih => exact ih.afterFailure unique (failure.errorFiles admitted)
   | referenceDrops _ _ _ ih => exact ih
   | powerLoss _ metadata keeper later ih => exact ih.afterPowerLoss metadata keeper later
 

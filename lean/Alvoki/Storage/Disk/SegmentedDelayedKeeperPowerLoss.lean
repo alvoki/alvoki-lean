@@ -78,16 +78,21 @@ private theorem continuesAuthorized {initial final : LockedFileState FileImage} 
     (trace : EffectTrace target source initial.image)
     (unique : ∀ {left right}, admits left → admits right → left.pair = right.pair → left = right) :
     EffectTrace target source final.image := by
+  have continueFailure {before after : FileImage} (earlier : EffectTrace target source before)
+      (effects : after = before ∨ ∃ next plan, admits next ∧ Prepared before next plan ∧ EffectTrace next before after) :
+      EffectTrace target source after := by
+    obtain unchanged | ⟨next, _, admittedNext, preparedNext, applied⟩ := effects
+    · simpa only [unchanged] using earlier
+    have valid := earlier.valid prepared.pair prepared.keeperPrefix prepared.newer
+    have same := unique admitted admittedNext (valid.selected.symm.trans preparedNext.pair)
+    subst next
+    exact earlier.trans applied
   induction attempts with
   | empty => exact trace
   | failed _ attempt acquisition _ reports ran ih =>
-    obtain unchanged | ⟨next, _, admittedNext, preparedNext, applied⟩ := attempt.errorFiles acquisition reports ran
-    · simpa only [unchanged] using ih
-    have valid := ih.valid prepared.pair prepared.keeperPrefix prepared.newer
-    have same := unique admitted admittedNext (valid.selected.symm.trans preparedNext.pair)
-    subst next
-    exact ih.trans applied
+    exact continueFailure ih (attempt.errorFiles acquisition reports ran)
   | cachedRejected _ _ ih => exact ih
+  | cachedAuthorizationFailed _ failure admitted ih => exact continueFailure ih (failure.errorFiles admitted)
   | referenceDrops _ _ _ ih => exact ih
   | powerLoss _ metadata keeper later ih => exact .crash ih metadata keeper later
 
