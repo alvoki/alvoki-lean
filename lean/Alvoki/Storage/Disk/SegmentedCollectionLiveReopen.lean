@@ -31,8 +31,8 @@ private def releasedCollection (directory : DiskDirectory) (before : SegmentedWr
     (reached : WalSealedUnlinkImage) : LockedFileState WalSealedUnlinkImage :=
   ⟨reached, before.owners.set (directory.file .lock) none⟩
 
-/-- A live close after an unlink error, followed by the exact early attempts
-and a healthy bounded reopen on their returned ownership map. -/
+/-- Close the poisoned handle after a collection error, then use the
+bounded opener with the exact ownership map left by earlier attempts. -/
 structure SegmentedCollectionReopenReport (directory : DiskDirectory) (before : SegmentedWriterState)
     (writer descriptor : Nat) where
   reached : WalSealedUnlinkImage
@@ -79,7 +79,7 @@ private def reopenedWriter (report : SegmentedCollectionReopenReport directory b
 
 structure Installs (report : SegmentedCollectionReopenReport directory before writer descriptor)
     (after : SegmentedWriterState) : Prop where
-  closed : runCloseWithFiles directory writer .success (.ready before.installed, ⟨report.reached, before.owners⟩) =
+  closed : runCloseWithFiles directory writer .success ((.poisoned : Phase Installed), ⟨report.reached, before.owners⟩) =
     .ok () (.closed, releasedCollection directory before report.reached)
   opened : ∃ session final installed,
     report.reopen.run directory report.files = .ok session final ∧ session.phase = .ready installed ∧
@@ -101,7 +101,7 @@ Every earlier failure uses the exact owners left by its predecessor. -/
 theorem installs (report : SegmentedCollectionReopenReport directory before writer descriptor)
     (observed : report.Valid) (ready : before.RetainedReady directory writer) :
     ∃ after, report.Installs after ∧ after.RetainedReady directory descriptor := by
-  have closed := report.failed.close ready (phase := .ready before.installed) (by simp)
+  have closed := report.failed.close ready (phase := .poisoned) (by simp)
   have namespaceEq : report.pending.image = report.reached := report.attempts.keepsNamespace
   have filesEq : report.files =
       (⟨report.reached, report.pending.owners⟩ : LockedFileState WalSealedUnlinkImage).collectionReopenFiles
