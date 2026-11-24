@@ -151,6 +151,37 @@ theorem SegmentedBatchDatabaseTrace.acquireReads
         ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) :=
   (trace.preservesRetained ready).1.acquireReads retained committed
 
+/-- From the installed empty writer, one abstract replay explains the retained
+history and every supported snapshot. Each acknowledged batch is retained in
+full, and each uncertain batch contributes all its frames or none. -/
+theorem SegmentedBatchDatabaseTrace.keyValueRefinement
+    {directory initialDescriptor allowCollection log descriptor last}
+    {first : LockedFileState WalSegmentRotation.State} (bootstrap : BootstrapReady first.image)
+    (held : first.owners.Owns directory initialDescriptor)
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor (bootstrap.writerState first.owners)
+      allowCollection log descriptor last) :
+    ∃ reference : SnapshotTable UInt64,
+      SnapshotWalReplay .empty last.history reference ∧
+      DatabaseBatchRetention log last.history ∧
+      log.flatMap DatabaseSubmissions.acknowledged <+ last.history ∧
+      last.history <+ log.flatMap DatabaseSubmissions.submitted ∧
+      ∀ snapshot, last.installed.table.pins.floor ≤ snapshot → snapshot ≤ last.installed.table.committed →
+        ∃ pin pinned, last.installed.table.acquireAt snapshot = some (pin, pinned) ∧
+          (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+          ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) := by
+  obtain ⟨ready, retained, history, retention⟩ := trace.preservesRetained (bootstrap.writerReady held).toRetained
+  change last.history = [] ++ retained at history
+  simp only [List.nil_append] at history
+  subst retained
+  obtain ⟨acknowledged, submitted⟩ := retention.orderedSubmissions
+  obtain ⟨reference, replayed⟩ := SnapshotWalReplay.fromEmpty last.history ready.resumed.ordered
+  refine ⟨reference, replayed, retention, acknowledged, submitted, ?_⟩
+  intro snapshot floor committed
+  obtain ⟨other, sameReplay, pin, pinned, acquired, lookup, range⟩ := ready.acquireReads floor committed
+  have same := replayed.deterministic sameReplay
+  cases same
+  exact ⟨pin, pinned, acquired, lookup, range⟩
+
 /-- Reacquiring an earlier pin's sequence preserves its reads while the
 final writer still retains that sequence. -/
 theorem SegmentedBatchDatabaseTrace.reacquireReadsStable
