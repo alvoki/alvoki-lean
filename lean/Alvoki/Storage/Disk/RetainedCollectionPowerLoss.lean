@@ -23,7 +23,8 @@ WAL target, history and strict checkpoint from those surviving files. -/
 theorem SegmentedWriterState.RetainedReady.openAfterCollectionPowerLoss {directory descriptor state}
     (ready : SegmentedWriterState.RetainedReady directory descriptor state)
     {cut : WalSealedUnlinkImage} {pair : DirectoryPublication.Bindings} {sealed : List WalSegment}
-    (trace : WalSealedUnlinkTrace state.wal (cut.crash pair sealed))
+    (trace : WalSealedUnlinkTrace state.wal cut)
+    (pairSurvives : pair ∈ cut.visible.directory.crashImages) (sealedSurvives : sealed ∈ cut.crashSealed)
     {nextDescriptor nextRef : Nat} (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
     (raw : HealthyBoundedWalReports directory
       ((state.owners.release (directory.file .lock) descriptor).set (directory.file .lock) (some nextDescriptor))
@@ -55,7 +56,7 @@ theorem SegmentedWriterState.RetainedReady.openAfterCollectionPowerLoss {directo
   have released : owners (directory.file .lock) = none := by
     simp [owners, LockOwners.release_owned ready.held, LockOwners.set]
   have acquired : TryLockObserves owners directory (.ok true) := fun _ => released
-  have retry := (trace.projects ready.layout).1
+  have retry := ((trace.powerLoss pairSurvives sealedSurvives).projects ready.layout).1
   obtain ⟨session, final, next, returned, path, descriptor, phase, nextFiles, nextOwners, wal,
     pairEq, history, generation, durable, nextReady⟩ :=
     ready.openAfterCollection retry raw none liveRefs fresh acquired unlock removeFile write sync renameFile

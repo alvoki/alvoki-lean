@@ -278,6 +278,30 @@ theorem WalSealedUnlinkTrace.runPaths {initial : WalSegmentImage} {before : WalS
     obtain ⟨cut, rfl⟩ := outcomes
     exact ⟨cut, rfl, trace.steps _ (fun _ member => approvedScheduleStep approved (List.mem_of_mem_take member))⟩
 
+/-- Locate the namespace at an interruption before the next callback
+returns. Only that callback can add an effect to the successful prefix. -/
+theorem WalSealedUnlinkTrace.inFlightCut {initial : WalSegmentImage} {before : WalSealedUnlinkImage}
+    (trace : WalSealedUnlinkTrace initial before) (directory : DiskDirectory) (offsets : List Nat)
+    (approved : ∀ first ∈ offsets, first ∈ initial.collectionOffsets)
+    (removeFile : System.FilePath → EStateM IO.Error WalSealedUnlinkImage (Except IO.Error Unit))
+    (syncDirectory : System.FilePath → EStateM IO.Error WalSealedUnlinkImage Unit)
+    (reports : WalSealedUnlinkReports directory removeFile syncDirectory)
+    (completed : Fin ((RunCollection.steps offsets).length + 1)) {reached cut : WalSealedUnlinkImage}
+    (returned : ((RunCollection.steps offsets).take completed.val).forM
+      (WalSealedUnlinkImage.performPaths directory removeFile syncDirectory) before = .ok () reached)
+    (effect : cut = reached ∨ ∃ action, (RunCollection.steps offsets)[completed.val]? = some action ∧
+      cut = reached.applyCollectionStep action) :
+    WalSealedUnlinkTrace initial cut := by
+  have prefixRan := reports.outcome ((RunCollection.steps offsets).take completed.val) before
+  rw [returned] at prefixRan
+  have ran : WalSealedUnlinkTrace initial reached := prefixRan ▸ trace.steps _
+    (fun _ member => approvedScheduleStep approved (List.mem_of_mem_take member))
+  rcases effect with rfl | ⟨action, index, rfl⟩
+  · exact ran
+  · cases action with
+    | unlink first => exact .unlink ran (approvedScheduleStep approved (List.mem_of_getElem? index))
+    | syncDirectory => exact .sync ran
+
 /-- A direct power loss may happen before the next callback returns. Only
 that callback's physical effect is optional after the observed successful
 prefix. The crash then chooses admitted metadata and sealed survivors. -/
@@ -294,17 +318,8 @@ theorem WalSealedUnlinkTrace.inFlightPowerLoss {initial : WalSegmentImage} {befo
       cut = reached.applyCollectionStep action)
     {pair : DirectoryPublication.Bindings} {sealed : List WalSegment}
     (pairSurvives : pair ∈ cut.visible.directory.crashImages) (sealedSurvives : sealed ∈ cut.crashSealed) :
-    WalSealedUnlinkTrace initial (cut.crash pair sealed) := by
-  have prefixRan := reports.outcome ((RunCollection.steps offsets).take completed.val) before
-  rw [returned] at prefixRan
-  have ran : WalSealedUnlinkTrace initial reached := prefixRan ▸ trace.steps _
-    (fun _ member => approvedScheduleStep approved (List.mem_of_mem_take member))
-  have beforeLoss : WalSealedUnlinkTrace initial cut := by
-    rcases effect with rfl | ⟨action, index, rfl⟩
-    · exact ran
-    · cases action with
-      | unlink first => exact .unlink ran (approvedScheduleStep approved (List.mem_of_getElem? index))
-      | syncDirectory => exact .sync ran
-  exact beforeLoss.powerLoss pairSurvives sealedSurvives
+    WalSealedUnlinkTrace initial (cut.crash pair sealed) :=
+  (trace.inFlightCut directory offsets approved removeFile syncDirectory reports completed returned effect).powerLoss
+    pairSurvives sealedSurvives
 
 end Alvoki.Storage
