@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.WalSegmentAppendRepair
 import Alvoki.Storage.Disk.WalSegmentCheckpointReopen
+import Alvoki.Storage.Disk.ReopenedSegmentAppend
 
 namespace Alvoki.Storage
 
@@ -87,6 +88,91 @@ private theorem WalSegmentImage.ReadLayout.atSelectedHistory {before : WalSegmen
     · obtain rfl := List.mem_singleton.mp keeper
       exact starts
 
+private theorem WalSegmentImage.ReadLayout.sealedEndsBeforeHistory
+    {before : WalSegmentImage} {history : List WAL.Write} (layout : before.ReadLayout history)
+    (starts : before.active.first ≤ history.length) : ∀ segment ∈ before.sealed, segment.last ≤ history.length := by
+  intro segment member
+  exact Nat.le_trans ((List.pairwise_append.mp layout.ordered).2.2 segment member before.active
+    (List.mem_singleton_self _)).2 starts
+
+/-- An acknowledged append extends the active segment by one canonical
+frame. All sealed descriptors and the active file's start stay exact. -/
+theorem WalSegmentImage.ReadLayout.afterAcknowledgedAppend
+    {before : WalSegmentImage} {history : List WAL.Write} (layout : before.ReadLayout history)
+    (chain : WalSegment.Chain history 0 before.segments) (pair : DirectoryPublication.Bindings) (event : WAL.Write) :
+    let selected := history ++ [event]
+    let wal := before.appendSelectedView pair selected
+    wal.ReadLayout selected ∧ WalSegment.Chain selected 0 wal.segments ∧ wal.sealed = before.sealed ∧
+      wal.active = ⟨before.active.first, selected.length, before.active.bytes ++ WAL.encodeFrame event⟩ := by
+  intro selected wal
+  have starts := chain.startsWithin before.active (List.mem_append_right _ (List.mem_singleton_self _))
+  have wider : before.active.first ≤ selected.length := Nat.le_trans starts (by simp [selected])
+  refine ⟨layout.atSelectedHistory pair selected wider, chainAppend chain (layout.sealedEndsBeforeHistory starts)
+    [event], rfl, ?_⟩
+  change (⟨before.active.first, selected.length,
+    WAL.encode ((history ++ [event]).drop before.active.first)⟩ : WalSegment) =
+    ⟨before.active.first, selected.length, before.active.bytes ++ WAL.encodeFrame event⟩
+  rw [List.drop_append_of_le_length starts, WAL.encode_append, layout.activeBytes]
+  simp [WAL.encode]
+
+/-- Use the exact directory left by a successful publication, including its
+staging bindings. Its new absolute marker covers the extended history and
+the old checkpoint. The sealed lookup map still names the same bytes. -/
+theorem WalSegmentImage.ReadLayout.afterSuccessfulAppend
+    {before : WalSegmentImage} {history : List WAL.Write} (layout : before.ReadLayout history)
+    (chain : WalSegment.Chain history 0 before.segments) {image : FileImage}
+    (kept : image.kept = (before.checkpointReopenFiles before.directory none).kept)
+    {watermark : Nat} (oldRange : image.directory.active.walRange = some ⟨watermark, history.length⟩)
+    {event : WAL.Write} (fits : (WAL.encode (history ++ [event])).size < UInt64.size)
+    {effects : WriteEffects} {written : WriteFiles}
+    (ran : runWriteEffects history event effects (image.directory.staged .walBoundary) = .ok () written) :
+    let selected := history ++ [event]
+    let after := resumedAppendFiles image history before.active.first written
+    let wal := { before.appendSelectedView after.directory.active selected with directory := after.directory }
+    wal.ReadLayout selected ∧ WalSegment.Chain selected 0 wal.segments ∧ wal.Valid selected ∧
+      wal.sealed = before.sealed ∧
+      wal.active = ⟨before.active.first, selected.length, before.active.bytes ++ WAL.encodeFrame event⟩ ∧
+      after.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
+      wal.directory.active.manifest = image.directory.active.manifest ∧
+      wal.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selected).size.toUInt64) ∧
+      wal.directory.active.walRange = some ⟨watermark, selected.length⟩ ∧
+      wal.directory.crashImages = [wal.directory.active] ∧
+      after.keeper.active = some wal.active.bytes ∧ after.keeper.crashImages = [some wal.active.bytes] := by
+  intro selected after wal
+  obtain ⟨nextLayout, nextChain, sealed, nextActive⟩ := layout.afterAcknowledgedAppend chain after.directory.active event
+  have starts := chain.startsWithin before.active (List.mem_append_right _ (List.mem_singleton_self _))
+  obtain ⟨exactPair, markerDurable, keeperExact, keeperDurable⟩ :=
+    WalSegmentCommit.settledSegment_ofSuccess starts ran image.directory.active.manifest
+  have sameManifest : wal.directory.active.manifest = image.directory.active.manifest := by
+    have exactManifest := congrArg DirectoryPublication.Bindings.manifest exactPair
+    exact exactManifest
+  have marker : wal.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selected).size.toUInt64) := by
+    have exactMarker := congrArg DirectoryPublication.Bindings.walBoundary exactPair
+    exact exactMarker
+  have old := DirectoryPublication.Bindings.walRange_accounting oldRange
+  have checkpoint : selectedCheckpointWatermark wal.directory.active.manifest = some watermark := by
+    rw [sameManifest]
+    exact old.1
+  have covered : watermark ≤ selected.length := Nat.le_trans old.2.1 (by simp [selected])
+  have count : (WAL.encode selected).size.toUInt64.toNat = selected.length * WAL.frameSize := by
+    rw [UInt64.toNat_ofNat_of_lt' fits, WAL.encode_size, Nat.mul_comm]
+  have range : wal.directory.active.walRange = some ⟨watermark, selected.length⟩ :=
+    DirectoryPublication.Bindings.walRange_of_counts checkpoint marker (WAL.Boundary.decode_encode _) count covered
+  have durable : wal.directory.crashImages = [wal.directory.active] := markerDurable
+  have valid : wal.Valid selected := WalSegmentImage.Valid.of_chain nextChain (by
+    intro pair chosen
+    have same : pair = wal.directory.active := by
+      simpa [WalSegmentImage.Selects, durable] using chosen
+    rw [same]
+    exact ⟨_, range, Nat.zero_le _, Nat.le_refl _⟩)
+  have exactKeeper : after.keeper.active = some wal.active.bytes := keeperExact
+  have retained : after.kept = (wal.checkpointReopenFiles wal.directory none).kept :=
+    (resumedAppendFiles_retains image history before.active.first written).1.trans kept
+  refine ⟨⟨nextLayout.ordered, nextLayout.forward, nextLayout.activeEnd, nextLayout.activeBytes⟩,
+    nextChain, valid, sealed, nextActive, retained, sameManifest, marker, range, durable, exactKeeper, ?_⟩
+  rw [← exactKeeper]
+  exact keeperDurable
+
 /-- A write cut selects the acknowledged history or exactly one additional
 frame. Every sealed segment still describes its original slice, while the
 keeper's selected prefix and any physical tail come from the actual cut.
@@ -130,10 +216,7 @@ theorem WalSegmentImage.ReadLayout.afterAppendCut
     prepareAfterAppendCut starts covered event fits effects manifest markerScratch checkpoint files visible possible
       (by exact ⟨rfl, rfl⟩) chosen survivors
   let wal := before.appendSelectedView observed.directory.active selectedHistory
-  have sealedEnd : ∀ segment ∈ before.sealed, segment.last ≤ history.length := by
-    intro segment member
-    exact Nat.le_trans ((List.pairwise_append.mp layout.ordered).2.2 segment member before.active
-      (List.mem_singleton_self _)).2 starts
+  have sealedEnd := layout.sealedEndsBeforeHistory starts
   have canonical : WalSegment.Chain selectedHistory 0 wal.segments := by
     rcases allowed with old | appended
     · simpa only [wal, WalSegmentImage.appendSelectedView, WalSegmentImage.segments, old, List.append_nil]

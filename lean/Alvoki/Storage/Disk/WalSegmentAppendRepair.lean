@@ -34,7 +34,8 @@ private theorem Target.accepts_of_selected {target : Target} {count : UInt64} {b
     obtain ⟨tail, exactBytes⟩ := select_prefix accepted
     exact ⟨tail, congrArg some exactBytes⟩
 
-private theorem range_of_counts {pair : DirectoryPublication.Bindings} {marker : ByteArray}
+theorem _root_.Alvoki.Storage.DirectoryPublication.Bindings.walRange_of_counts
+    {pair : DirectoryPublication.Bindings} {marker : ByteArray}
     {count : UInt64} {watermark through : Nat}
     (checkpoint : selectedCheckpointWatermark pair.manifest = some watermark)
     (visible : pair.walBoundary = some marker) (decoded : decode marker = .ok count)
@@ -88,7 +89,8 @@ theorem prepareAfterAppendCut {before : List WAL.Write} {first watermark : Nat}
     rw [UInt64.toNat_ofNat_of_lt' historyFits, WAL.encode_size, Nat.mul_comm]
   have covers : watermark ≤ history.length := Nat.le_trans covered lengthMonotone
   have decoded : image.directory.active.walRange = some ⟨watermark, history.length⟩ := by
-    exact range_of_counts (sameManifest ▸ checkpoint) rawMarker (decode_encode _) count covers
+    exact DirectoryPublication.Bindings.walRange_of_counts
+      (sameManifest ▸ checkpoint) rawMarker (decode_encode _) count covers
   let target : Target :=
     ⟨image.directory.active, ⟨watermark, history.length⟩, decoded, first, Nat.le_trans starts lengthMonotone,
       WAL.encode (history.drop first), by rw [WAL.encode_size, List.length_drop, Nat.mul_comm]⟩
