@@ -8,11 +8,11 @@ open System Manifest DiskSession
 
 /-- Observations for checkpoint run acquisition. A stat pairs the native
 metadata with its observed object identity. A successful open reports its
-live slot and initial cursor. Reads follow the open description. -/
+reached inventory, slot and initial cursor. Separate opens can reuse a
+numeric slot with a different description. -/
 structure CheckpointRunChunkReads where
-  inventory : DescriptorInventory
   stat : FilePath → Except IO.Error (IO.FS.Metadata × Nat)
-  openRead : FilePath → Except IO.Error (DescriptorSlot × Nat)
+  openRead : FilePath → Except IO.Error (DescriptorInventory × DescriptorSlot × Nat)
   objectBytes : Nat → Option ByteArray
   readChunk : Nat → USize → EStateM IO.Error Nat ByteArray
 
@@ -20,7 +20,7 @@ structure CheckpointRunChunkReads where
 the cursor after reading, while the primitive model retains it on errors. -/
 def CheckpointRunChunkReads.readPrefix (reads : CheckpointRunChunkReads) (path : FilePath)
     (count : Nat) : Except IO.Error ByteArray := do
-  let (slot, offset) ← reads.openRead path
+  let (_, slot, offset) ← reads.openRead path
   match readExactPrefixWith (IO.userError checkpointIntegrityMismatch)
     (reads.readChunk slot.description) count ByteArray.empty offset with
   | .ok bytes _ => return bytes
@@ -28,29 +28,31 @@ def CheckpointRunChunkReads.readPrefix (reads : CheckpointRunChunkReads) (path :
 
 /-- At one immutable run path, validate the connection to the known
 published bytes. Successful stat and open observations share an object
-identity. The read laws apply to that description and its actual bytes. -/
+identity. The observed fresh open supplies offset zero. The chunk reports
+interpret the same description as live at each reached read. -/
 structure CheckpointRunChunkReads.ObservesFile (reads : CheckpointRunChunkReads)
     (path : FilePath) (payload : ByteArray) where
   metadata : IO.FS.Metadata
   object : Nat
+  inventory : DescriptorInventory
   slot : DescriptorSlot
   stat : reads.stat path = .ok (metadata, object)
   regular : metadata.type = .file
   extent : metadata.byteSize.toNat = payload.size
-  opened : reads.openRead path = .ok (slot, 0)
-  live : slot ∈ reads.inventory.slots
-  sameObject : reads.inventory.inode slot.description = object
+  opened : reads.openRead path = .ok (inventory, slot, 0)
+  live : slot ∈ inventory.slots
+  sameObject : inventory.inode slot.description = object
   contents : reads.objectBytes object = some payload
-  observes : ∀ source, reads.objectBytes (reads.inventory.inode slot.description) = some source →
+  observes : ∀ source, reads.objectBytes (inventory.inode slot.description) = some source →
     PrefixChunkObserves source (reads.readChunk slot.description)
-  healthy : ∀ source, reads.objectBytes (reads.inventory.inode slot.description) = some source →
+  healthy : ∀ source, reads.objectBytes (inventory.inode slot.description) = some source →
     PrefixChunksAvailable source (reads.readChunk slot.description)
 
 theorem CheckpointRunChunkReads.ObservesFile.readExact
     {reads : CheckpointRunChunkReads} {path : FilePath} {payload : ByteArray}
     (seen : reads.ObservesFile path payload) (fits : payload.size < USize.size) :
     reads.readPrefix path payload.size = .ok payload := by
-  have source : reads.objectBytes (reads.inventory.inode seen.slot.description) = some payload := by
+  have source : reads.objectBytes (seen.inventory.inode seen.slot.description) = some payload := by
     rw [seen.sameObject, seen.contents]
   have read := readExactPrefixWith_completesFile (IO.userError checkpointIntegrityMismatch)
     (seen.observes payload source) (seen.healthy payload source) fits
