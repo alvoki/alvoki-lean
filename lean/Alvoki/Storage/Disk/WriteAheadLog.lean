@@ -240,6 +240,39 @@ theorem decodeOrdinals_sound {bytes : ByteArray} {events : List Write}
   obtain ⟨suffix, ordered, reconstructed⟩ := decodeFrom_ordinals bytes 1 0 (bytes.size / frameSize) [] events decoded
   simpa using reconstructed.symm ▸ ordered
 
+private theorem decodeFrom_reencode (bytes : ByteArray) (ordinal offset remaining : Nat)
+    (reversed result : List Write)
+    (decoded : decodeFrom true bytes ordinal offset remaining reversed = .ok result) :
+    ∃ suffix, result = reversed.reverse ++ suffix ∧
+      encode suffix = bytes.extract offset (offset + remaining * frameSize) := by
+  induction remaining generalizing ordinal offset reversed with
+  | zero =>
+    cases decoded
+    exact ⟨[], by simp, by simp [encode]⟩
+  | succ remaining ih =>
+    rw [decodeFrom] at decoded
+    split at decoded
+    · contradiction
+    · rename_i event frame
+      split at decoded
+      · contradiction
+      · obtain ⟨suffix, reconstructed, encoded⟩ :=
+          ih (advanceOrdinal true ordinal 1) (offset + frameSize) (event :: reversed) decoded
+        refine ⟨event :: suffix, by simpa [List.reverse_cons, List.append_assoc] using reconstructed, ?_⟩
+        rw [encode, decodeFrame_reencode frame, encoded]
+        exact (ByteArray.extract_eq_extract_append_extract (offset + frameSize)
+          (by omega) (by omega)).symm.trans
+          (congrArg (bytes.extract offset) (by rw [Nat.succ_mul]; omega))
+
+/-- The checked decoder identifies the exact bytes of every complete frame.
+Any short tail is outside the reproduced prefix. -/
+theorem decodeOrdinals_reencode {bytes : ByteArray} {events : List Write}
+    (decoded : decodeOrdinals bytes = .ok events) :
+    encode events = bytes.extract 0 (bytes.size / frameSize * frameSize) := by
+  obtain ⟨suffix, result, encoded⟩ := decodeFrom_reencode bytes 1 0 (bytes.size / frameSize) [] events decoded
+  simp only [List.reverse_nil, List.nil_append] at result
+  simpa only [result, Nat.zero_add] using encoded
+
 /-- A complete, malformed last frame cannot be treated as a short tear by the
 current decoder. A durable replay boundary must come from outside this codec. -/
 theorem decode_bad_final_frame (events : List Write) {last : ByteArray} {message : String}
@@ -259,6 +292,17 @@ def repairPrefix (bytes : ByteArray) : Option ByteArray :=
   let complete := bytes.size / frameSize * frameSize
   if complete < bytes.size then some (bytes.extract 0 complete) else none
 
+theorem repairPrefix_getD_eq_extract (bytes : ByteArray) :
+    (repairPrefix bytes).getD bytes = bytes.extract 0 (bytes.size / frameSize * frameSize) := by
+  unfold repairPrefix
+  dsimp only
+  split
+  · rfl
+  · have size : bytes.size / frameSize * frameSize = bytes.size :=
+      Nat.le_antisymm (Nat.div_mul_le_self ..) (by omega)
+    rw [size, ByteArray.extract_zero_size]
+    rfl
+
 theorem repairPrefix_encode (events : List Write) (tail : ByteArray) (incomplete : tail.size < frameSize) :
     repairPrefix (encode events ++ tail) = if tail.size = 0 then none else some (encode events) := by
   have length : (encode events ++ tail).size / frameSize * frameSize = (encode events).size := by
@@ -271,10 +315,10 @@ theorem repairPrefix_encode (events : List Write) (tail : ByteArray) (incomplete
   rw [length, ByteArray.extract_append_eq_left rfl, ByteArray.size_append]
   split <;> split <;> simp_all <;> omega
 
-private theorem decodeFrom_prefix (bytes : ByteArray) (limit ordinal offset remaining : Nat)
+private theorem decodeFrom_prefix (checkOrdinals : Bool) (bytes : ByteArray) (limit ordinal offset remaining : Nat)
     (reversed : List Write) (fits : offset + remaining * frameSize ≤ limit) :
-    decodeFrom false (bytes.extract 0 limit) ordinal offset remaining reversed =
-      decodeFrom false bytes ordinal offset remaining reversed := by
+    decodeFrom checkOrdinals (bytes.extract 0 limit) ordinal offset remaining reversed =
+      decodeFrom checkOrdinals bytes ordinal offset remaining reversed := by
   induction remaining generalizing ordinal offset reversed with
   | zero => rfl
   | succ remaining ih =>
@@ -284,25 +328,28 @@ private theorem decodeFrom_prefix (bytes : ByteArray) (limit ordinal offset rema
       Nat.min_eq_left frameFits]
     split
     · rfl
-    · exact ih _ _ _ (by omega)
+    · split
+      · rfl
+      · exact ih _ _ _ (by omega)
+
+private theorem decodeFrom_repairPrefix (checkOrdinals : Bool) (bytes : ByteArray) :
+    let selected := (repairPrefix bytes).getD bytes
+    decodeFrom checkOrdinals selected 1 0 (selected.size / frameSize) [] =
+      decodeFrom checkOrdinals bytes 1 0 (bytes.size / frameSize) [] := by
+  simp only [repairPrefix_getD_eq_extract, ByteArray.size_extract,
+    Nat.min_eq_left (Nat.div_mul_le_self bytes.size frameSize), Nat.sub_zero]
+  rw [Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
+  exact decodeFrom_prefix checkOrdinals bytes _ 1 0 _ [] (by simp)
 
 /-- Trimming a short tail preserves the entire decoder result, including errors
 in any complete frame. Replay uses this same decoder before publishing repair. -/
 theorem decode_repairPrefix (bytes : ByteArray) :
-    decode ((repairPrefix bytes).getD bytes) = decode bytes := by
-  let count := bytes.size / frameSize
-  let complete := count * frameSize
-  change decode ((if complete < bytes.size then some (bytes.extract 0 complete) else none).getD bytes) = _
-  split
-  · have within : complete ≤ bytes.size := Nat.div_mul_le_self ..
-    have size : (bytes.extract 0 complete).size = complete := by simp [Nat.min_eq_left within]
-    have frames : (bytes.extract 0 complete).size / frameSize = count := by
-      rw [size]
-      change count * 48 / 48 = count
-      omega
-    change decode (bytes.extract 0 complete) = decode bytes
-    rw [decode, decode, frames]
-    exact decodeFrom_prefix bytes complete 1 0 count [] (by simp [complete])
-  · rfl
+    decode ((repairPrefix bytes).getD bytes) = decode bytes :=
+  decodeFrom_repairPrefix false bytes
+
+/-- Short-tail repair also preserves ordinal checks used by legacy open. -/
+theorem decodeOrdinals_repairPrefix (bytes : ByteArray) :
+    decodeOrdinals ((repairPrefix bytes).getD bytes) = decodeOrdinals bytes :=
+  decodeFrom_repairPrefix true bytes
 
 end Alvoki.WAL

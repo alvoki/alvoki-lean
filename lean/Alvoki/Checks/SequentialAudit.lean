@@ -12,6 +12,7 @@ import Alvoki.Storage.Disk.MarkedCheckpointReopenReady
 import Alvoki.Storage.Disk.MarkedSessionHistory
 import Alvoki.Storage.Disk.MarkedDatabaseState
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
+import Alvoki.Storage.Disk.LegacyWalRecovery
 import Alvoki.Storage.Disk.RecoveredPinRefinement
 import Alvoki.Storage.Disk.CheckpointHistory
 import Alvoki.Storage.Publication.DiskPublicationModel
@@ -66,6 +67,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.decode_bad_final_frame
 #check_axioms Alvoki.WAL.decodeOrdinals_encode
 #check_axioms Alvoki.WAL.decodeOrdinals_sound
+#check_axioms Alvoki.WAL.decodeOrdinals_reencode
+#check_axioms Alvoki.WAL.decodeOrdinals_repairPrefix
+#check_axioms Alvoki.Storage.recoverLegacy_exact
+#check_axioms Alvoki.Storage.recoverLegacy_decode_error
+#check_axioms Alvoki.Storage.recoverLegacy_marked
+#check_axioms Alvoki.Storage.CheckpointForRecovery.recoverLegacy_refines
 #check_axioms Alvoki.WAL.repairPrefix_encode
 #check_axioms Alvoki.WAL.decode_repairPrefix
 #check_axioms Alvoki.Manifest.decode_encode

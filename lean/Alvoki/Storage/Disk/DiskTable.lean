@@ -297,10 +297,7 @@ private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTabl
       pure ByteArray.empty) fun boundary bytes => do
     let (selected, table) ← IO.ofExcept <| match boundary with
       | some count => WAL.Boundary.recoverMarked checkpointTable count bytes
-      | none => do
-        let selected := (WAL.repairPrefix bytes).getD bytes
-        let table ← recoverSelected checkpointTable selected
-        return (selected, table)
+      | none => recoverLegacy checkpointTable bytes
     -- Both paths sync the directory to settle the visible checkpoint and WAL marker,
     -- including any rename reached by a prior process before its directory sync.
     let table ← Publication.finishReopen bytes.size selected.size

@@ -1,0 +1,13 @@
+--- a/lean/DiskReplayBench.lean
++++ b/lean/DiskReplayBench.lean
+@@ -24,8 +24,10 @@
+   unless size > 0 && size < UInt64.size && trials > 0 do
+     throw (IO.userError "expected positive trial count and positive UInt64 record count")
+   let wal : System.FilePath := (⟨dir⟩ : System.FilePath) / "WAL"
++  let marker : System.FilePath := (⟨dir⟩ : System.FilePath) / "WAL.commit"
+   let fixture ← if repair then some <$> IO.FS.readBinFile wal else pure none
+   for trial in [:trials + 1] do
++    if ← marker.pathExists then IO.FS.removeFile marker
+     if let some bytes := fixture then IO.FS.writeBinFile wal bytes
+     let start ← IO.monoNanosNow
+     let db ← DiskTable.open ⟨dir⟩
