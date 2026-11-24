@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedBatchAppend
+import Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
 import Alvoki.Storage.Disk.WalBatchSession
 
 namespace Alvoki.Storage.DiskSession
@@ -83,6 +84,20 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (installed : report.Installs after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.uncertainBatch report.failure.batch]) descriptor after
+  | batchPowerLoss
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (cut : SegmentedBatchMarkerPowerLossReport directory before writer) (observed : cut.Valid)
+      (report : cut.CachedReopenReports descriptor) (installed : report.Installs after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch cut.batch]) descriptor after
+
+private theorem appendUncertainBatch {initial before after batch retained : List WAL.Write}
+    {log : List DatabaseSubmissions} (retention : DatabaseBatchRetention log retained)
+    (history : before = initial ++ retained) (selected : after = before ∨ after = before ++ batch) :
+    ∃ suffix, after = initial ++ suffix ∧ DatabaseBatchRetention (log ++ [.uncertainBatch batch]) suffix := by
+  rcases selected with lost | kept
+  · exact ⟨retained ++ [], by simpa using lost.trans history, .append retention (.inl rfl)⟩
+  · exact ⟨retained ++ batch, by rw [kept, history, List.append_assoc], .append retention (.inr rfl)⟩
 
 theorem SegmentedBatchDatabaseTrace.preservesRetained
     (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
@@ -107,13 +122,10 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     refine ⟨afterReady, _, ?_, .append retention rfl⟩
     change _ ++ _ = _
     rw [beforeHistory, List.append_assoc]
-  | batchError _ report installed ih =>
-    obtain ⟨_, retained, beforeHistory, retention⟩ := ih
-    refine ⟨installed.retained, ?_⟩
-    rcases installed.history with lost | kept
-    · exact ⟨retained ++ [], by simpa using lost.trans beforeHistory, .append retention (.inl rfl)⟩
-    · exact ⟨retained ++ report.failure.batch, by rw [kept, beforeHistory, List.append_assoc],
-        .append retention (.inr rfl)⟩
+  | batchError _ _ installed ih
+  | batchPowerLoss _ _ _ _ installed ih =>
+    obtain ⟨_, _, history, retention⟩ := ih
+    exact ⟨installed.retained, appendUncertainBatch retention history installed.history⟩
 
 /-- Extend the trace using the actual failed commit, lock release and
 bounded reopen reports. Retained readiness is derived from the prior trace. -/
@@ -126,6 +138,20 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterBatchError
         (log ++ [.uncertainBatch report.failure.batch]) descriptor after := by
   obtain ⟨after, installed, _⟩ := report.installsRetained (trace.preservesRetained ready).1
   exact ⟨after, installed, .batchError trace report installed⟩
+
+/-- Extend the mixed trace through a batch interrupted by machine power
+loss and the next healthy cached installation. The batch contributes one
+uncertain submission even when none of its frames survive selection. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterBatchPowerLoss
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (ready : initial.RetainedReady directory initialDescriptor)
+    (cut : SegmentedBatchMarkerPowerLossReport directory before writer) (observed : cut.Valid)
+    (report : cut.CachedReopenReports descriptor) :
+    ∃ after, report.Installs after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch cut.batch]) descriptor after := by
+  obtain ⟨after, installed⟩ := report.installs observed (trace.preservesRetained ready).1
+  exact ⟨after, installed, .batchPowerLoss trace cut observed report installed⟩
 
 /-- Reads through active snapshot pins in the current session agree with
 replay of the retained history, including after an uncertain batch. -/

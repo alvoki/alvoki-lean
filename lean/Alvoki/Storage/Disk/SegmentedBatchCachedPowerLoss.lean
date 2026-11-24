@@ -1,0 +1,135 @@
+import Alvoki.Storage.Disk.SegmentedBatchPowerLoss
+import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
+
+namespace Alvoki.Storage.DiskSession
+
+open System WalSegmentCommit WalSegmentRepair WAL.Boundary
+
+namespace SegmentedBatchMarkerPowerLossReport
+
+variable {directory : DiskDirectory} {before : SegmentedWriterState} {writer descriptor : Nat}
+  {cut : SegmentedBatchMarkerPowerLossReport directory before writer}
+
+/-- The first machine power loss settles the selected pair. Its bounded
+retry lineage keeps that pair, including across later crashes. -/
+private theorem retryPair {retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (BatchRetryTarget before.history cut.batch before.wal.active.first)
+      cut.crashed retry) :
+    retry.image.directory.active = cut.pair := by
+  have selected {current : FileImage} (origin : BeforeReopenBarrier cut.crashed.image current) :
+      current.directory.active = cut.pair := by
+    cases origin with
+    | live => rfl
+    | crash pair _ _ survived _ _ => exact List.mem_singleton.mp survived
+  cases attempts.lineage (fun left right pair => BatchRetryTarget.unique left right pair) with
+  | before origin => exact selected origin
+  | repairing origin _ prepared trace =>
+    exact (trace.valid prepared.pair prepared.keeperPrefix prepared.newer).selected.trans
+      (prepared.pair.symm.trans (selected origin))
+
+/-- Reports of admitted retries and the healthy cached worker at the
+reached image. The selected layout determines which observations the
+final lock holder must supply. -/
+structure CachedReopenReports (cut : SegmentedBatchMarkerPowerLossReport directory before writer)
+    (descriptor : Nat) where
+  retry : LockedFileState FileImage
+  attempts : BoundedReopenTrace directory (BatchRetryTarget before.history cut.batch before.wal.active.first)
+    cut.crashed retry
+  nextRef : Nat
+  liveRefs : List Nat
+  fresh : ∀ ref ∈ liveRefs, ref < nextRef
+  acquisition : TryLockObserves retry.owners directory (.ok true)
+  unlock : UnlockReport
+  recover : EStateM IO.Error FileImage Reopened
+  removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit)
+  write : FilePath → ByteArray → EStateM IO.Error FileImage Unit
+  sync : Array FilePath → EStateM IO.Error FileImage Unit
+  renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit
+  reads : ∀ history, ∀ selected : CanonicalKeeperLayout retry.image history,
+    (history = before.history ∨ history = before.history ++ cut.batch) → selected.target.first = before.wal.active.first →
+    let wal := before.wal.appendSelectedView retry.image.directory.active history
+    ∃ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+        wal retry.image.directory.active selected.range.watermark before.published.durable selected.tail,
+      ∃ sizes : SizedCheckpointRunReports directory raw.reports retry.image.directory.active.manifest before.published.durable,
+        ∃ cached : CachedWalFileReports directory raw.reports wal selected.range.watermark selected.tail,
+          recover = raw.reopenCached sizes cached removeFile write sync renameFile
+  settles : sync #[directory.path] retry.image = .ok () retry.image.syncDirectory
+  healthy : ∀ history, ∀ selected : CanonicalKeeperLayout retry.image history,
+    (history = before.history ∨ history = before.history ++ cut.batch) → selected.target.first = before.wal.active.first →
+    ∀ action prior next,
+      ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+      prior.effect selected.target action = some next →
+      performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next
+
+namespace CachedReopenReports
+
+def run (report : CachedReopenReports cut descriptor) :
+    EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession :=
+  runOpenWithInstallation directory descriptor report.nextRef (.ok true) report.unlock report.recover report.retry
+
+structure Installs (report : CachedReopenReports cut descriptor) (after : SegmentedWriterState) : Prop where
+  retries : BoundedReopenTrace directory (BatchRetryTarget before.history cut.batch before.wal.active.first)
+    cut.inFlight report.retry
+  reopened : ∃ session final, report.run = .ok session final ∧
+    session.directory = directory ∧ session.descriptor = descriptor ∧ session.phase = .ready after.installed ∧
+    after.files = final.image ∧ after.owners = final.owners
+  history : after.history = before.history ∨ after.history = before.history ++ cut.batch
+  pair : after.target.pair = cut.pair
+  marker : cut.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64)
+  checkpoint : after.checkpoint = before.checkpoint
+  generation : after.installed.generation = before.installed.generation
+  durable : after.published.durable = before.published.durable
+  retained : after.RetainedReady directory descriptor
+
+/-- The actual cached worker installs the prior history or the entire
+batch from the machine crash's surviving pair. The exact selected
+checkpoint and its durable run bytes carry forward unchanged. -/
+theorem installs (report : CachedReopenReports cut descriptor)
+    (observed : cut.Valid) (ready : before.RetainedReady directory writer) :
+    ∃ after, report.Installs after := by
+  let effects := cut.cut.writeEffects cut.appendCrashTails (before.wal.directory.staged .walBoundary)
+  have attempts := observed.modeledRetries report.attempts
+  have oldRange : before.wal.directory.active.walRange = some ⟨before.target.range.watermark, before.history.length⟩ := by
+    rw [ready.walPair, ← ready.resumed.through]
+    exact before.target.decoded
+  have accepted := (congrArg DirectoryPublication.Bindings.manifest ready.walPair).symm ▸ ready.resumed.accepted
+  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
+  have count : before.history.length = before.installed.table.committed.toNat :=
+    represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
+  obtain ⟨kept, manifest, history, allowed, marker, layout, valid, selected, _, first, generation, _, installs⟩ :=
+    BoundedReopenTrace.installsAfterBatchCut ready.layout ready.valid oldRange ready.resumed.ordered count
+      observed.prepared (observed.preparedHistory ready).2.1 accepted effects before.files.keeper.staged
+      attempts report.liveRefs report.fresh report.acquisition report.unlock report.removeFile report.write
+      report.sync report.renameFile
+  let wal := before.wal.appendSelectedView report.retry.image.directory.active history
+  obtain ⟨raw, sizes, cached, observedRead⟩ := report.reads history selected allowed first
+  have selectedManifest := manifest.trans (congrArg DirectoryPublication.Bindings.manifest ready.walPair)
+  have oldCheckpoint : SelectedIntegrityCheckpoint before.published.durable report.retry.image.directory.active.manifest
+      before.checkpoint := selectedManifest.symm ▸ ready.resumed.selected
+  have cachedEq := raw.reopenCached_eq sizes cached layout valid (List.mem_cons_self ..) selected.decoded rfl
+    selected.through oldCheckpoint report.removeFile report.write report.sync report.renameFile
+  have sealed : report.retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept := kept
+  have spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize := ready.spans
+  obtain ⟨session, final, after, returned, path, slot, phase, files, owners, _, target, exactHistory, _, durable, next⟩ :=
+    (installs raw report.settles (report.healthy history selected allowed first)).writerRetained layout valid spans
+      rfl first sealed
+  have ran : report.run = .ok session final := by
+    unfold run
+    rw [observedRead, cachedEq]
+    exact returned
+  have loaded := next.resumed.selected
+  rw [durable, target] at loaded
+  have checkpoint := Except.ok.inj ((raw.readCheckpoint loaded).symm.trans (raw.readCheckpoint oldCheckpoint))
+  have generation : after.installed.generation = before.installed.generation := by
+    rw [next.resumed.generation, checkpoint, ← ready.resumed.generation]
+  have survivor := retryPair report.attempts
+  have survives : after.target.pair = cut.pair := target ▸ survivor
+  have boundary : cut.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64) := by
+    rw [← survivor, exactHistory]
+    exact marker
+  exact ⟨after, ⟨observed.powerLoss.trans report.attempts, ⟨session, final, ran, path, slot, phase, files, owners⟩,
+    exactHistory ▸ allowed, survives, boundary, checkpoint, generation, durable, next⟩⟩
+
+end CachedReopenReports
+end SegmentedBatchMarkerPowerLossReport
+end Alvoki.Storage.DiskSession

@@ -449,7 +449,9 @@ theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
     (sync : Array FilePath → EStateM IO.Error FileImage Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
     retry.image.kept = (oldWal.checkpointReopenFiles oldWal.directory none).kept ∧
+    retry.image.directory.active.manifest = oldWal.directory.active.manifest ∧
     ∃ history, (history = before ∨ history = before ++ batch) ∧
+      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) ∧
       let wal := oldWal.appendSelectedView retry.image.directory.active history
       wal.ReadLayout history ∧ wal.Valid history ∧
       ∃ selected : CanonicalKeeperLayout retry.image history,
@@ -543,7 +545,8 @@ theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
       obtain ⟨parsed, parsedOk, _⟩ := selectedCheckpointWatermark_present_iff.mp selectedWatermark
       exact ⟨parsed.header.generation, by rw [Option.mapM, parsedOk]; rfl⟩
   obtain ⟨generation, generationRead⟩ := generationRead
-  refine ⟨sealed, history, allowed, layoutValid.1, layoutValid.2, selected, congrArg MarkedWalRange.watermark range,
+  refine ⟨sealed, pair ▸ sameManifest, history, allowed, selectedMarker, layoutValid.1, layoutValid.2, selected,
+    congrArg MarkedWalRange.watermark range,
     selectedFirst, generation, generationRead, ?_⟩
   intro raw settles healthy
   have exactDescriptors : selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark := by

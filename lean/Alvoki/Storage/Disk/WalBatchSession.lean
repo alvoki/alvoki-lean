@@ -153,7 +153,7 @@ theorem installsRetained (report : SegmentedBatchRecoveryReport directory before
   obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
   have count : before.history.length = before.installed.table.committed.toNat :=
     represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
-  obtain ⟨kept, history, allowed, layout, valid, selected, _, first, generation, _, installs⟩ :=
+  obtain ⟨kept, _, history, allowed, _, layout, valid, selected, _, first, generation, _, installs⟩ :=
     attempts.installsAfterBatchCut ready.layout ready.valid oldRange ready.resumed.ordered count failure.prepared
       fits accepted failure.effects before.files.keeper.staged report.liveRefs report.fresh report.acquisition
       report.reopen.unlock report.reopen.removeFile report.reopen.write report.reopen.sync report.reopen.renameFile
