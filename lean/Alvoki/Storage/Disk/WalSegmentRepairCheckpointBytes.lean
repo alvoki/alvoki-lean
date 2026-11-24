@@ -412,4 +412,93 @@ theorem CachedRetryReadReports.checkpointSurvivesRepair {state : Type} {director
   have samePair := List.mem_singleton.mp metadataSurvives
   exact ⟨samePair, samePair.symm ▸ durable.2 _ runSurvives⟩
 
+/-- A failed first directory barrier ends the cached worker before it
+can prune or replace anything. Before the effect, a crash can still
+select any original pair. After the effect, it can select only the pair
+used by preparation. The run and metadata observations are from the
+same crash state. Each originally selectable pair needs its own durable
+checkpoint witness. -/
+theorem CachedRetryReadReports.checkpointAfterAuthorizationError
+    {state : Type} {directory : DiskDirectory} {image : FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout image history}
+    (reported : CachedRetryReadReports directory layout) (effects : CachedCheckpointRepairEffects state directory)
+    {initial after : state} (observedDirectory : effects.metadata initial = image.directory)
+    (laterValid : image.later.Beyond layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : (⟨image.directory.project .manifest, (effects.runs initial).guaranteed⟩ : Image).AcceptsVersioned
+      history.length.toUInt64 (CheckpointRepresentsPrefix history) image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    (sizes : SizedCheckpointRunReports directory reported.inventory.reports image.directory.active.manifest
+      (effects.runs initial).guaranteed)
+    (manifestRead : reported.inventory.reports.readOptional (directory.file .manifest) = .ok image.directory.active.manifest)
+    (markerRead : reported.inventory.reports.readOptional (directory.file .walBoundary) = .ok image.directory.active.walBoundary)
+    (previous : ∀ pair ∈ image.directory.crashImages, ∃ checkpoint,
+      SelectedIntegrityCheckpoint (effects.runs initial).guaranteed pair.manifest checkpoint)
+    {cause : IO.Error} (failed : effects.sync #[directory.path] initial = .error cause after) :
+    (effects.reopen reported sizes.readPrefix initial = .error cause after) ∧
+    (effects.metadata after = image.directory ∨ effects.metadata after = image.directory.syncDirectory) ∧
+    ∃ opened checkpoint,
+      reported.prepare sizes.readPrefix initial = .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) initial ∧
+      SelectedIntegrityCheckpoint (effects.runs initial).guaranteed image.directory.active.manifest checkpoint ∧
+      recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok opened.table ∧
+      opened.generation = (checkpoint.getD (.empty, 0)).2 ∧
+      opened.walBytes.toNat = history.length * WAL.frameSize ∧ opened.keeper = layout.keeper.first ∧
+      ∀ crashed : state,
+        (effects.metadata crashed).active ∈ (effects.metadata after).crashImages →
+        (effects.runs crashed).visible ∈ (effects.runs after).crashImages →
+        ∃ recovered,
+          SelectedIntegrityCheckpoint (effects.runs crashed).visible (effects.metadata crashed).active.manifest recovered ∧
+          ((effects.metadata crashed).active.manifest = image.directory.active.manifest → recovered = checkpoint) := by
+  obtain ⟨opened, checkpoint, _, prepared, selected, replay, generation, bytes, keeper, _⟩ :=
+    reported.prepares initial laterValid following accepted ordered sizes manifestRead markerRead
+  have size : layout.plan.keeperSize = layout.keeper.bytes.size := layout.target.trimmedSize.symm
+  have valid : layout.plan.valid = true := by
+    refine (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, ?_, laterValid _ List.mem_cons_self⟩
+    rw [size]
+    simp [CanonicalKeeperLayout.plan, ByteArray.size_append]
+  have stopped : finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size
+      effects.removeFile effects.write effects.sync effects.renameFile initial = .error cause after := by
+    rw [layout.boundedPlan_eq_extract, finishBoundedMarkedOpen_eq_full _ _ valid]
+    by_cases aligned : layout.plan.alignedWithoutPrune = true
+    · simp only [finishMarkedOpen, aligned, ite_true, Bind.bind, EStateM.bind, failed]
+    · simp only [finishMarkedOpen, ite_eq_right aligned, runAt, runRepairPlan, Bind.bind, EStateM.bind, Pure.pure,
+        EStateM.pure, valid, ite_true, failed]
+  have outcome : effects.reopen reported sizes.readPrefix initial = .error cause after := by
+    change EStateM.bind (reported.prepare sizes.readPrefix)
+      (fun (plan, prepared, size) => do
+        finishBoundedMarkedOpen directory plan size effects.removeFile effects.write effects.sync effects.renameFile
+        return prepared) initial = _
+    simp only [EStateM.bind, prepared, Bind.bind, stopped]
+  have metadata := (effects.syncs #[directory.path] initial).1
+  rw [failed] at metadata
+  change effects.metadata after = effects.metadata initial ∨
+    directory.path ∈ (#[directory.path] : Array FilePath).toList ∧
+      effects.metadata after = (effects.metadata initial).syncDirectory at metadata
+  have directories : effects.metadata after = image.directory ∨ effects.metadata after = image.directory.syncDirectory :=
+    metadata.elim (fun unchanged => .inl (unchanged.trans observedDirectory))
+      (fun settled => .inr (settled.2.trans (congrArg DirectoryPublication.Image.syncDirectory observedDirectory)))
+  refine ⟨outcome, directories, opened, checkpoint, prepared, selected, replay, generation, bytes, keeper, ?_⟩
+  intro crashed metadataSurvives runsSurvive
+  have choice : ∃ recovered,
+      SelectedIntegrityCheckpoint (effects.runs initial).guaranteed (effects.metadata crashed).active.manifest recovered ∧
+      ((effects.metadata crashed).active.manifest = image.directory.active.manifest → recovered = checkpoint) := by
+    by_cases sameManifest : (effects.metadata crashed).active.manifest = image.directory.active.manifest
+    · exact ⟨checkpoint, sameManifest.symm ▸ selected, fun _ => rfl⟩
+    rcases directories with unchanged | synced
+    · rw [unchanged] at metadataSurvives
+      obtain ⟨recovered, priorCheckpoint⟩ := previous _ metadataSurvives
+      exact ⟨recovered, priorCheckpoint, fun same => (sameManifest same).elim⟩
+    · rw [synced] at metadataSurvives
+      have pair := (DirectoryPublication.Image.survives_syncDirectory_iff _ _).mp metadataSurvives
+      exact (sameManifest (congrArg DirectoryPublication.Bindings.manifest pair)).elim
+  obtain ⟨recovered, initialCheckpoint, matching⟩ := choice
+  have durable := finishBoundedMarkedOpen_preservesDurableCheckpoint
+    directory layout.boundedPlan layout.plan.keeperBytes.size effects.runs
+    effects.removeFile effects.write effects.sync effects.renameFile
+    (fun first before => (effects.unlink first before).2) (fun bytes before => (effects.stage bytes before).2)
+    (fun first before => (effects.rename first before).2) (fun paths before => (effects.syncs paths before).2)
+    initial after (.inr ⟨cause, stopped⟩) initialCheckpoint
+  exact ⟨recovered, durable.2 _ runsSurvive, matching⟩
+
 end Alvoki.Storage.WalSegmentRepair
