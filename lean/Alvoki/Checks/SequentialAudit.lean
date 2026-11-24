@@ -14,6 +14,7 @@ import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
 import Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
+import Alvoki.Storage.Disk.RetainedCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.FullWatermarkReopen
 import Alvoki.Storage.Disk.WalWritePublicationModel
@@ -695,6 +696,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.Installs.unique
 #check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.Installs.preservesReady
+#check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.installsRetained
+#check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.Installs.preservesRetained
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.reopensRetainedAppend
+#check_axioms Alvoki.Storage.DiskSession.SegmentedAppendRecoveryReport.installsRetained
+#check_axioms Alvoki.Storage.DiskSession.SegmentedAppendRecoveryReport.Installs.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.Valid.submittedSequence
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.Installs.unique
@@ -783,6 +789,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.toRetained
 #check_axioms Alvoki.Storage.DiskSession.AppendCutReady.writerRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.openAfterCollection
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.openAfterCollectionPowerLoss
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.preservesRetainedReady
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.selectedRetainedReady
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.retainedIdentities
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetained
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.Installs.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.collectionOffsets_exact
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.pinnedReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.acquireReads
@@ -799,6 +811,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSealedUnlinkTrace.powerLossReads
 #check_axioms Alvoki.Storage.WalSealedUnlinkTrace.runPaths
 #check_axioms Alvoki.Storage.WalSealedUnlinkTrace.inFlightPowerLoss
+#check_axioms Alvoki.Storage.WalSealedUnlinkTrace.inFlightCut
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_rejectsLiveToken
 #check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.unchangedProjection
 #check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.preservesSettledReplacement

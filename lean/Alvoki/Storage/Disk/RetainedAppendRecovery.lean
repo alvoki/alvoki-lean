@@ -6,15 +6,6 @@ namespace Alvoki.Storage.DiskSession
 open System WalSegmentRepair WalSegmentCommit WAL.Boundary
 open WAL (frameSize)
 
-private theorem retainedGeneration {durable binding checkpoint}
-    (selected : SelectedIntegrityCheckpoint durable binding checkpoint) :
-    ((binding.mapM fun bytes =>
-      (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
-      .ok (checkpoint.getD (.empty, 0)).2 := by
-  cases selected with
-  | absent => rfl
-  | present decoded _ _ => rw [Option.mapM, decoded]; rfl
-
 /-- The exact bounded opener and its primitive observations install the
 retained form of the writer invariant from a physical append cut. The old
 or extended history is chosen by the visible marker. -/
@@ -55,8 +46,8 @@ theorem BoundedReopenTrace.reopensRetainedAppend {directory : DiskDirectory} {be
   have generationRead : ((before.wal.directory.active.manifest.mapM fun bytes =>
       (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
       .ok before.installed.generation := by
-    rw [ready.walPair, ready.resumed.generation]
-    exact retainedGeneration ready.resumed.selected
+    rw [ready.walPair]
+    exact ready.resumed.generationRead
   obtain ⟨_, history, survived, manifest, marker, wal, walEq, layout, valid, kept, selected, first, keeper, opened⟩ :=
     attempts.installsAfterRetainedAppendCut (descriptor := descriptor) ready.layout ready.valid range ready.resumed.ordered
       accepted generationRead event extended fits effects before.files.keeper.staged liveRefs fresh acquisition
