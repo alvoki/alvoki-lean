@@ -1,4 +1,5 @@
 import Alvoki.Checks.AxiomPolicy
+import Alvoki.Storage.Disk.WalBatchRecovery
 import Alvoki.Storage.Disk.AppendCutContinuation
 import Alvoki.Storage.Disk.AppendRetrySession
 import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
@@ -616,6 +617,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishMarkedOpen_safe
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishMarkedOpen_completes
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedFastWith_completes
+#check_axioms Alvoki.Storage.WalSegmentCommit.commitBytesAt_fileEffects
+#check_axioms Alvoki.Storage.WalSegmentCommit.forgetError_commitBytesAt
+#check_axioms Alvoki.Storage.WalSegmentCommit.batch_reports
+#check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atReportedBatchCut
+#check_axioms Alvoki.Storage.WalSegmentCommit.settledSegment_ofBatchSuccess
+#check_axioms Alvoki.Storage.WalSegmentRepair.BatchRetryTarget.unique
+#check_axioms Alvoki.Storage.WalSegmentRepair.prepareAfterBatchCut
+#check_axioms Alvoki.Storage.WalSegmentRepair.boundedBatchRetry_selection
+#check_axioms Alvoki.Storage.replayPreparedBatchSelection
 #check_axioms Alvoki.Storage.prepareBatch_spec
 #check_axioms Alvoki.Storage.prepareBatch_extends_history
 #check_axioms Alvoki.Storage.prepareBatch_refines

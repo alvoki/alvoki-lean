@@ -1,5 +1,7 @@
 # Current handoff
 
+The durable batch candidate uses the single-write publication schedule once for a list of consecutive frames. Lean connects the prepared table and bytes to replay, checks old-or-complete selection through reported batch cuts and repeated bounded retries, and checks replay against the selected history. Native checks cover failed and interrupted batch publication. [Batch contract](specifications.md#durable-write-batches) · [Batch pilot](performance-baseline.md#durable-batch-experiment)
+
 The first three-scenario baseline against RocksDB 9.10.0 is reproducible. The primary gap is individually durable writes. A separate syscall trace attributes three Alvoki barriers per put to WAL and marker publication. The first candidate is durable batch publication with a matched RocksDB batch and explicit crash semantics. [Native baseline](performance-baseline.md)
 
 The release performance roadmap defines the three-scenario baseline, the comparison target and the measure–diagnose–optimize loop. The first milestone is a comparable baseline and a measured choice of the first optimization. [Release performance](roadmap.md#release-performance)

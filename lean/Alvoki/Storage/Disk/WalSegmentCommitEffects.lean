@@ -20,6 +20,18 @@ private theorem forgetError_bind {ε σ α β : Type} (run : EStateM ε σ α)
   simp only [forgetError, Bind.bind, EStateM.bind]
   cases run state <;> rfl
 
+theorem forgetError_commitBytesAt {ε : Type} (dir : DiskDirectory) (first : Nat) (bytes : ByteArray)
+    (newBytes : Nat) (append write : FilePath → ByteArray → EStateM ε WriteFiles Unit)
+    (sync : Array FilePath → EStateM ε WriteFiles Unit)
+    (rename : FilePath → FilePath → EStateM ε WriteFiles Unit) :
+    forgetError (commitBytesAt dir first bytes newBytes append write sync rename) =
+      commitBytesAt dir first bytes newBytes (fun path bytes => forgetError (append path bytes))
+        (fun path bytes => forgetError (write path bytes)) (fun paths => forgetError (sync paths))
+        (fun source target => forgetError (rename source target)) := by
+  rw [commitBytesAt_fileEffects, commitBytesAt_fileEffects]
+  simp only [WAL.Boundary.commit, forgetError_bind]
+  rfl
+
 theorem forgetError_commitAt {ε : Type} (dir : DiskDirectory) (first : Nat) (event : WAL.Write)
     (newBytes : Nat) (append write : FilePath → ByteArray → EStateM ε WriteFiles Unit)
     (sync : Array FilePath → EStateM ε WriteFiles Unit)
@@ -27,10 +39,8 @@ theorem forgetError_commitAt {ε : Type} (dir : DiskDirectory) (first : Nat) (ev
     forgetError (commitAt dir first event newBytes append write sync rename) =
       commitAt dir first event newBytes (fun path bytes => forgetError (append path bytes))
         (fun path bytes => forgetError (write path bytes)) (fun paths => forgetError (sync paths))
-        (fun source target => forgetError (rename source target)) := by
-  rw [commitAt_fileEffects, commitAt_fileEffects]
-  simp only [WAL.Boundary.commit, forgetError_bind]
-  rfl
+        (fun source target => forgetError (rename source target)) :=
+  forgetError_commitBytesAt dir first (WAL.encodeFrame event) newBytes append write sync rename
 
 /-- Equality of the reached callbacks suffices for equality of the marker schedules. -/
 theorem markerSteps_agree

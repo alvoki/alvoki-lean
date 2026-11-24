@@ -193,6 +193,9 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentRetryReads
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRetryReadEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentOpenFast
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentOpenFastEffects
+lake env leanchecker Alvoki.Storage.Disk.WalBatch
+lake env leanchecker Alvoki.Storage.Disk.WalBatchCommitEffects
+lake env leanchecker Alvoki.Storage.Disk.WalBatchRecovery
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCommit
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCommitEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentAppendRepair

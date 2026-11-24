@@ -32,6 +32,20 @@ distinct staging path and creates a fresh staged marker. -/
 
 /-- Use the existing append-first schedule and one grouped sync for the
 active segment and the staged absolute marker. -/
+theorem commitBytesAt_fileEffects [Monad m] (dir : DiskDirectory) (activeFirst : Nat)
+    (bytes : ByteArray) (newBytes : Nat) (append write : FilePath → ByteArray → m Unit)
+    (sync : Array FilePath → m Unit) (rename : FilePath → FilePath → m Unit) :
+    commitBytesAt dir activeFirst bytes newBytes append write sync rename =
+      WAL.Boundary.commit (append (dir.file (.walSegment activeFirst)) bytes) (do
+        let staged := dir.file .stagedWalBoundary
+        write staged (WAL.Boundary.encode newBytes.toUInt64)
+        sync #[dir.file (.walSegment activeFirst), staged]
+        rename staged (dir.file .walBoundary)
+        sync #[dir.path]
+        pure ()) := rfl
+
+/-- Use the existing append-first schedule and one grouped sync for the
+active segment and the staged absolute marker. -/
 theorem commitAt_fileEffects [Monad m] (dir : DiskDirectory) (activeFirst : Nat)
     (event : WAL.Write) (newBytes : Nat) (append write : FilePath → ByteArray → m Unit)
     (sync : Array FilePath → m Unit) (rename : FilePath → FilePath → m Unit) :

@@ -1,5 +1,9 @@
 # Verification status
 
+## Durable batch candidate
+
+The batch API's schedule theorem reduces a submission to the shared append and marker publication, with one append and the same two file barriers before rename and directory barrier after rename. The preparation proof identifies the exact consecutive WAL frames and refines the resulting table by sequential replay. Under the same durable-prefix and exact callback-report assumptions, the batch cut and bounded retry theorems select the old or whole new history and keep a compatible exact keeper. Given exact selected segment spans, the executable WAL replay produces a table with the corresponding data. Native error and process-death fixtures exercise the Linux adapter. The mixed database trace still needs a batch operation step that composes the observed native lifecycle reports all the way through session installation. [Native schedule](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Batch cut and retry](../lean/Alvoki/Storage/Disk/WalBatchCommitEffects.lean) · [Exact replay](../lean/Alvoki/Storage/Disk/WalBatchRecovery.lean)
+
 Lean checks source-level guarantees for the packed table and modeled disk protocol. The proof roadmap tracks the remaining work. [Proof roadmap](proof-roadmap.md)
 
 | Property | Lean 4 | Verus |
