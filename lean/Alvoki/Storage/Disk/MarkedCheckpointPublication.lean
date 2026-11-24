@@ -110,13 +110,10 @@ theorem checkpointMarkedRetry_valid {initial after : Image} {before : ReopenImag
     after.markedReopenImage_valid settled fits valid,
     fun _ chosen => after.markedReopenImage_selectable settled valid chosen⟩
 
-/-- The checkpoint loader has a witness for exactly these ordered run bytes. -/
-def RecoverableRuns (header : Manifest.Checkpoint) (files : List ByteArray) : Prop :=
-  ∃ checkpoint, CheckpointForRecovery (some (Manifest.encode header)) files checkpoint
-
 private theorem checkpointWatermark {image : Image} {sequence : UInt64}
     {manifest : Option ByteArray} {files : List ByteArray} {checkpoint : PackedTable}
-    (accepted : image.Accepts sequence RecoverableRuns manifest)
+    {expected : Manifest.Checkpoint → List ByteArray → Prop}
+    (accepted : image.Accepts sequence expected manifest)
     (written : CheckpointForRecovery manifest files checkpoint) : checkpoint.committed ≤ sequence := by
   cases written with
   | absent => simp [PackedTable.empty]
@@ -125,25 +122,30 @@ private theorem checkpointWatermark {image : Image} {sequence : UInt64}
     have same := Except.ok.inj (decode.symm.trans (Manifest.decode_encode header floor))
     simpa only [same, watermark] using covered
 
-/-- Once the checkpoint attempts have finished, subsequent marked reopen
-attempts preserve selection of that same WAL. Every selected metadata pair
-still supplies an exact ordered checkpoint covering a prefix of the WAL
-by watermark. The checkpoint's logical relation to that prefix is a
-separate invariant. -/
+/-- Checkpoint cuts followed by marked reopen attempts select the same WAL
+and exact ordered checkpoint files. The selected checkpoint is covered by
+the WAL watermark, and both the manifest acceptance and the checkpoint
+invariant hold for the selected inputs. -/
 theorem checkpointMarkedRetry_recoveryInputs {initial published : Image}
     {before after : ReopenImage} {manifest : Option ByteArray} {history : List WAL.Write}
+    {expected : Manifest.Checkpoint → List ByteArray → Prop} {invariant : PackedTable → Prop}
     (settled : before.SettledFor manifest history)
     (projects : initial.manifest = before.directory.project .manifest)
     (fits : (WAL.encode history).size < UInt64.size)
-    (initialValid : initial.Valid history.length.toUInt64 RecoverableRuns)
-    (checkpoints : Retry history.length.toUInt64 RecoverableRuns initial published)
+    (initialValid : initial.Valid history.length.toUInt64 expected)
+    (emptyValid : invariant .empty)
+    (witness : ∀ header files, expected header files →
+      ∃ checkpoint, CheckpointForRecovery (some (Manifest.encode header)) files checkpoint ∧
+        invariant checkpoint)
+    (checkpoints : Retry history.length.toUInt64 expected initial published)
     (attempts : MarkedReopenAttempts (published.markedReopenImage before) after)
     {pair : DirectoryPublication.Bindings} {wal : Option ByteArray}
     (metadataChosen : pair ∈ after.directory.active :: after.directory.crashImages)
     (walChosen : wal ∈ after.wal.active :: after.wal.crashImages) :
     initial.markedReopenImage before = before ∧
+    published.Accepts history.length.toUInt64 expected pair.manifest ∧
     ∃ files checkpoint marker contents,
-      CheckpointForRecovery pair.manifest files checkpoint ∧
+      CheckpointForRecovery pair.manifest files checkpoint ∧ invariant checkpoint ∧
       published.readDurableCheckpointRuns pair.manifest = some files ∧
       checkpoint.committed.toNat ≤ history.length ∧
       marker = WAL.Boundary.encode (WAL.encode history).size.toUInt64 ∧
@@ -153,7 +155,8 @@ theorem checkpointMarkedRetry_recoveryInputs {initial published : Image}
   have path := attempts.toRetry (published.markedReopenImage_markerBound settled valid)
   obtain ⟨boundary, accepted⟩ := published.markedReopenImage_selectable settled valid
     (path.chosen_pair_from_initial metadataChosen)
-  obtain ⟨files, checkpoint, written, durable⟩ := CheckpointForRecovery.of_durable_manifest accepted
+  obtain ⟨files, checkpoint, written, durable, property⟩ :=
+    CheckpointForRecovery.of_durable_manifest_with accepted emptyValid witness
   obtain ⟨marker, contents, presentMarker, presentWal, selected⟩ := ReopenImage.select_chosen
     (reopenRetry_valid (published.markedReopenImage_valid settled fits valid) path)
     metadataChosen walChosen
@@ -162,8 +165,8 @@ theorem checkpointMarkedRetry_recoveryInputs {initial published : Image}
     simp only [WAL.encode_size, WAL.frameSize] at fits
     omega
   rw [UInt64.toNat_ofNat_of_lt' lengthFits] at watermark
-  exact ⟨initial.markedReopenImage_start settled projects, files, checkpoint, marker, contents,
-    written, durable, watermark, Option.some.inj (presentMarker.symm.trans boundary),
+  exact ⟨initial.markedReopenImage_start settled projects, accepted, files, checkpoint, marker,
+    contents, written, property, durable, watermark, Option.some.inj (presentMarker.symm.trans boundary),
     presentMarker, presentWal, selected⟩
 
 /-- The full checkpoint schedule settles the new manifest with the same WAL

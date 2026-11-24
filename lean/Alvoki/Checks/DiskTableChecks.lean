@@ -331,7 +331,8 @@ private inductive SyncFailureMode where
   | secondOnly
 
 private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation := "--open-once")
-    (skipFailures : Nat := 0) (failureMode : SyncFailureMode := .beforeSync) :
+    (skipFailures : Nat := 0) (failureMode : SyncFailureMode := .beforeSync)
+    (extraArgs : Array String := #[]) :
     IO (Bool × List String) := do
   let log := bin / "sync.log"
   IO.FS.writeFile log ""
@@ -343,7 +344,7 @@ private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation
     | .secondOnly => "second-only"
   let result ← IO.Process.output {
     cmd := executable.toString
-    args := #[operation, dir.toString]
+    args := #[operation, dir.toString] ++ extraArgs
     env := #[("PATH", some (bin.toString ++ ":" ++ path)),
       ("ALVOKI_CHECK_SYNC_LOG", some log.toString),
       ("ALVOKI_CHECK_SYNC_FAIL", failAt.map FilePath.toString),
@@ -755,6 +756,50 @@ private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO 
       "another reopen lost the replacement for the discarded write"
   finally final.close
 
+  -- The first directory sync belongs to open and the second protects the run
+  -- entries. The third settles the replacement manifest before reporting error.
+  let (published, syncs) ← probeDisk bin dir (some dir) (operation := "--checkpoint-once")
+    (skipFailures := 2) (failureMode := .afterSync) (extraArgs := #["4"])
+  check (!published && syncs == alignedOpen ++ runSyncs.map FilePath.toString ++
+    [dir.toString, s!"synced before error: {dir}"])
+    "checkpoint did not report failure after syncing the replacement manifest"
+  let firstRun := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩, ⟨7, 2, (0, 70)⟩]
+  let secondRun := Compaction.encodeV3 [⟨4, 3, (0, 41)⟩, ⟨7, 5, (0, 71)⟩, ⟨7, 4, (1, 0)⟩]
+  let expectFiles := fun (events : List WAL.Write) => do
+    let walBytes := WAL.encode events
+    check (decide ((← IO.FS.readBinFile wal) = walBytes ∧
+      (← IO.FS.readBinFile marker) = WAL.Boundary.encode walBytes.size.toUInt64))
+      "checkpoint recovery changed the selected WAL bytes"
+    check (decide ((← IO.FS.readBinFile (dir / "MANIFEST")) = Manifest.encode ⟨2, 5, 4, 2⟩))
+      "checkpoint recovery changed the published manifest"
+    for (path, bytes) in [(dir / "run-1-0.v3", firstRun),
+        (dir / "run-2-0.v3", firstRun), (dir / "run-2-1.v3", secondRun)] do
+      check (decide ((← IO.FS.readBinFile path) = bytes)) s!"unexpected checkpoint bytes in {path}"
+  let throughCheckpoint := events ++ [⟨5, 7, some 71⟩]
+  expectFiles throughCheckpoint
+  let reopened ← DiskTable.open dir
+  try
+    check ((← reopened.acquireAt 3).isNone) "reopen used the old manifest floor"
+    let latest ← reopened.acquire
+    check (latest.sequence == 5 && (← reopened.lookup latest.handle 7) == some (some 71))
+      "reopen changed the published checkpoint snapshot"
+    check ((← reopened.write 6 (some 60)) == 6) "write after checkpoint recovery used the wrong sequence"
+  finally reopened.close
+  let final ← DiskTable.open dir
+  try
+    expectFiles (throughCheckpoint ++ [⟨6, 6, some 60⟩])
+    check ((← final.acquireAt 3).isNone) "later reopen lost the replacement floor"
+    let some historical ← final.acquireAt 4 | throw (IO.userError "reopen lost the snapshot at the new floor")
+    let historicalRows := (← final.range historical.handle 0 8).map (List.map fun row => (row.key, row.payload))
+    check ((← final.lookup historical.handle 7) == some none && historicalRows == some [(4, some 41)])
+      "checkpoint replacement changed the historical tombstone or range"
+    let latest ← final.acquire
+    let latestRows := (← final.range latest.handle 0 8).map (List.map fun row => (row.key, row.payload))
+    check (latest.sequence == 6 && (← final.lookup latest.handle 6) == some (some 60) &&
+      latestRows == some [(4, some 41), (6, some 60), (7, some 71)])
+      "later reopen changed the acknowledged write or latest range"
+  finally final.close
+
 private def checkPublicationCuts : IO Unit := do
   let events : List WAL.Write := [⟨1, 7, some 60⟩]
   let complete := WAL.encode events
@@ -792,9 +837,17 @@ def main (args : List String) : IO Unit := do
         "unknown commit outcome changed the sync error"
       expectRejectedWrite db "publication failed; reopen the database"
     finally db.close
-  | ["--checkpoint-once", dir] =>
+  | "--checkpoint-once" :: dir :: floorArg =>
     let db ← DiskTable.open ⟨dir⟩
-    try db.checkpoint finally db.close
+    try
+      match floorArg with
+      | [] => pure ()
+      | [arg] =>
+        let some floor := arg.toNat? | throw (IO.userError "invalid fixture floor")
+        check (floor < UInt64.size && (← db.advanceFloor floor.toUInt64)) "could not set fixture floor"
+      | _ => throw (IO.userError "unexpected checkpoint fixture arguments")
+      db.checkpoint
+    finally db.close
   | [] =>
     checkCodecs
     checkPublicationCuts

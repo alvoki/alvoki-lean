@@ -1,11 +1,13 @@
 import Alvoki.Checks.AxiomPolicy
 import Alvoki.Storage.Disk.DiskTable
+import Alvoki.Storage.Disk.FullWatermarkReopen
 import Alvoki.Storage.Disk.WalWritePublicationModel
 import Alvoki.Storage.Disk.DiskRecoveryModel
 import Alvoki.Storage.Disk.MarkedAdapterRefinement
 import Alvoki.Storage.Disk.MarkedReopenStability
 import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Disk.MarkedCheckpointPublication
+import Alvoki.Storage.Disk.MarkedCheckpointReady
 import Alvoki.Storage.Publication.DiskPublicationModel
 import Alvoki.Storage.Disk.WalBoundaryModel
 import Alvoki.Storage.Disk.MarkedWalReopenModel
@@ -63,6 +65,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.recoverPublished
 #check_axioms Alvoki.Storage.DiskDirectory.paths_independent_of_cwd
 #check_axioms Alvoki.Storage.loadRunSet_written
+#check_axioms Alvoki.Storage.reopenFullWatermarkCheckpoint_refines
 #check_axioms Alvoki.Storage.recoverRunSet_written
 #check_axioms Alvoki.Storage.replay_committed_count
 #check_axioms Alvoki.Storage.replay_ordinals_complete
@@ -73,6 +76,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loads
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_flushForCheckpoint
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest
+#check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest_with
 #check_axioms Alvoki.Storage.readCheckpointRunBytes_eq_mapM
 #check_axioms Alvoki.Storage.CheckpointReadObservations.loaded
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loaded_observation
@@ -83,6 +87,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_recoveryInputs
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarked_complete
+#check_axioms Alvoki.WAL.Boundary.checkpointMarked_ready
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.unreachable_after_reopen
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.next_generation_unreachable_after_reopen
 #check_axioms Alvoki.Storage.Publication.run_model_success

@@ -120,21 +120,39 @@ private theorem read_durable_runs {image : CheckpointPublication.Image} {bytes :
   rw [count, List.range_eq_range']
   exact read_ordered_runs _ 0 files (by simpa using durable)
 
-/-- A manifest admitted by the publication model supplies the exact ordered
-run bytes for recovery, provided its published content has a checkpoint
-witness. The absent manifest uses the empty checkpoint. -/
+/-- A manifest accepted by the publication model supplies exact ordered run
+bytes and a loader witness with the caller's checkpoint invariant. An absent
+manifest uses the empty checkpoint. -/
+theorem CheckpointForRecovery.of_durable_manifest_with {image : CheckpointPublication.Image}
+    {walSequence : UInt64} {manifest : Option ByteArray}
+    {expected : Manifest.Checkpoint → List ByteArray → Prop} {invariant : PackedTable → Prop}
+    (accepted : image.Accepts walSequence expected manifest)
+    (emptyValid : invariant .empty)
+    (witness : ∀ header files, expected header files →
+      ∃ checkpoint, CheckpointForRecovery (some (Manifest.encode header)) files checkpoint ∧
+        invariant checkpoint) :
+    ∃ files checkpoint, CheckpointForRecovery manifest files checkpoint ∧
+      image.readDurableCheckpointRuns manifest = some files ∧ invariant checkpoint := by
+  cases manifest with
+  | none => exact ⟨[], .empty, .absent, rfl, emptyValid⟩
+  | some bytes =>
+    obtain ⟨header, files, decoded, valid, _, count, durable⟩ := accepted
+    obtain ⟨checkpoint, written, property⟩ := witness header files valid
+    refine ⟨files, checkpoint, ?_, read_durable_runs decoded count durable, property⟩
+    simpa only [Manifest.decode_reencode decoded] using written
+
+/-- The physical loader witness for a manifest whose published exact run bytes
+come with a checkpoint witness. -/
 theorem CheckpointForRecovery.of_durable_manifest {image : CheckpointPublication.Image}
     {walSequence : UInt64} {manifest : Option ByteArray}
     (accepted : image.Accepts walSequence (fun header files =>
       ∃ checkpoint, CheckpointForRecovery (some (Manifest.encode header)) files checkpoint) manifest) :
     ∃ files checkpoint, CheckpointForRecovery manifest files checkpoint ∧
       image.readDurableCheckpointRuns manifest = some files := by
-  cases manifest with
-  | none => exact ⟨[], .empty, .absent, rfl⟩
-  | some bytes =>
-    obtain ⟨header, files, decoded, ⟨checkpoint, witness⟩, _, count, durable⟩ := accepted
-    refine ⟨files, checkpoint, ?_, read_durable_runs decoded count durable⟩
-    simpa only [Manifest.decode_reencode decoded] using witness
+  obtain ⟨files, checkpoint, written, durable, _⟩ :=
+    of_durable_manifest_with (invariant := fun _ => True) accepted trivial
+      (fun _ _ ⟨checkpoint, loader⟩ => ⟨checkpoint, loader, trivial⟩)
+  exact ⟨files, checkpoint, written, durable⟩
 
 /-- The executable loop reads exactly the manifest's run indices in order. -/
 theorem readCheckpointRunBytes_eq_mapM [Monad m] [LawfulMonad m]
