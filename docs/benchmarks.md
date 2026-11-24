@@ -98,6 +98,18 @@ bash scripts/disk-replay.sh --out /tmp/alvoki-replay-after.csv \
 
 Ascending insertion traverses the sorted memtable on every replayed record, so doubling the row count roughly quadruples time. Descending insertion adds each key at the front and takes roughly linear time. These timings establish the baseline for replacing the memtable. [Current insertion](../lean/Alvoki/Storage/Table/PackedTable.lean)
 
+### Verified tree memtable
+
+On the same x86-64 VM with Lean 4.36, Linux 6.18.57 and an AMD EPYC 9V74, five warm-cache trials of `scripts/disk-replay.sh --sizes 5000 10000 20000 --segments 1 --trials 5 --out /tmp/replay.csv` measured these 20,000-record reopen medians. The list build was `b7b901c`. The fixture and durability protocol were identical.
+
+| WAL key order | List | Tree |
+|---|---:|---:|
+| Ascending | 1,352.29 ms | 7.90 ms |
+| Descending | 5.04 ms | 8.10 ms |
+| Shuffled | 904.30 ms | 10.13 ms |
+
+Descending distinct keys use the list's constant-time prepend path. The tree uses the same ordered insert for every input order. [Tree backend](../lean/Alvoki/Storage/Table/MemTableTree.lean)
+
 ### Native segmented WAL
 
 Use `--segments 1 8 32` to compare segment layouts with the same frame stream. The paired release comparison against the earlier single-file adapter measured a 32-frame aligned reopen at 1.169 ms and 2.227 ms. Torn-tail reopen at that size took 2.868 ms and 5.112 ms. Acknowledged writes stayed near 3 ms per write. The segmented protocol keeps separate directory and keeper barriers for aligned open and additional barriers for repair. The measured startup cost is the tradeoff for adopting that crash-safe schedule while the full segmented trace and its durability optimizations are developed. [Raw samples, controls and reproduction](../benchmarks/results/disk/native-segmented-wal)

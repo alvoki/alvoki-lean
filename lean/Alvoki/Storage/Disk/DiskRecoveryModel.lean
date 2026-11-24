@@ -164,6 +164,7 @@ theorem WrittenCheckpoint.of_flushForCheckpoint
       checkpoint.RowBounds ∧
       checkpoint.Refines (if before.memory.rows.isEmpty then model else model.flush) := by
     unfold flushForCheckpoint at prepared
+    rw [PackedTable.memoryIsEmpty_spec] at prepared
     split at prepared
     · rename_i emptyRows
       change Except.ok before = .ok checkpoint at prepared
@@ -175,13 +176,14 @@ theorem WrittenCheckpoint.of_flushForCheckpoint
       change before.flush = .ok checkpoint at prepared
       have refined := PackedTable.flush_refines refines prepared
       have bounded := (⟨runBound, memoryBound⟩ : before.RowBounds).flush prepared
+      have cleared := PackedTable.flush_memory_empty prepared
       unfold PackedTable.flush at prepared
       cases encoded : CheckedRun.ofHistory before.memory with
       | error message => simp [encoded] at prepared
       | ok run =>
         rw [encoded] at prepared
         cases prepared
-        exact ⟨rfl, rfl, bounded, by simpa [nonempty] using refined⟩
+        exact ⟨cleared, rfl, bounded, by simpa [nonempty] using refined⟩
   have floor : checkpoint.pins.floor ≤ checkpoint.committed := by
     rw [relation.pins, relation.committed]
     exact (if before.memory.rows.isEmpty then model else model.flush).floor_committed

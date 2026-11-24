@@ -73,8 +73,8 @@ private def Trace.check (t : Trace) : IO Unit := do
       expect (decide (t.packed.range p start stop = t.model.range m start stop))
         s!"range disagreed for handle {p.id}, [{start}, {stop})"
 
-private def run (ops : List Operation) : IO Trace := do
-  let mut state : Trace := {}
+private def run (kind : MemTable.Kind) (ops : List Operation) : IO Trace := do
+  let mut state : Trace := { packed := PackedTable.emptyWithMemTable kind }
   for (op, index) in ops.zipIdx do
     try
       state ← state.step op
@@ -106,8 +106,8 @@ private def mixed (seed : UInt64) : List Operation := Id.run do
     out := op :: out
   return out.reverse
 
-def main : IO Unit := do
-  let t ← run fixture
+private def checkBackend (kind : MemTable.Kind) : IO Unit := do
+  let t ← run kind fixture
   let some (old, _) := t.handles[0]? | throw (IO.userError "missing original handle")
   let some (current, _) := t.handles[1]? | throw (IO.userError "missing current handle")
   expect (decide (t.packed.lookup old 4 = some (some 40) ∧ t.packed.lookup old 7 = some (some 70)))
@@ -117,5 +117,8 @@ def main : IO Unit := do
   expect (decide (t.packed.lookup current maxKey = some (some 99)))
     "the maximum key was lost during a packed read"
   for seed in [7, 23, 271, 20261123] do
-    let _ ← run (mixed seed)
-  IO.println "Packed v3 table agrees with SnapshotTable on the fixed trace and 512 generated operations."
+    let _ ← run kind (mixed seed)
+def main : IO Unit := do
+  checkBackend .list
+  checkBackend .tree
+  IO.println "Both memtables agree with SnapshotTable on the packed-table fixture and 512 generated operations."

@@ -130,7 +130,7 @@ def checkpointHeader (table : PackedTable) (generation : UInt64) : Manifest.Chec
 flushed table's run order and avoiding an extra empty run. -/
 @[macro_inline] def flushForCheckpoint [Monad m] (table : PackedTable)
     (validate : Except String PackedTable → m PackedTable) : m PackedTable :=
-  if table.memory.rows.isEmpty then pure table else validate table.flush
+  if table.memoryIsEmpty then pure table else validate table.flush
 
 /-- The exact checkpoint and durable WAL bytes pass the native loader and
 frame-count guard. Bytes beyond the durable marker do not affect either. -/

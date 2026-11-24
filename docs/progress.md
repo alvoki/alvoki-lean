@@ -1,5 +1,7 @@
 # Current handoff
 
+The packed table uses a shared memtable contract over the existing ordered history. The reference list and the ordered tree implement the same insert, snapshot lookup, range, and flush guarantees. Disk replay uses the tree, and differential traces exercise both backends. [Memtable contract](../lean/Alvoki/Storage/Table/MemTableContract.lean)
+
 The Linux adapter synchronizes open descriptors directly. It retains the directory and active WAL append handles, and carries newly written handles through their publication barriers. The write protocol still syncs both files before marker rename and the directory before acknowledgement. Native fault fixtures interpose on `fsync`, covering failures before and after its effect and owner death at the publication barriers. [Storage protocol](architecture.md#sequential-storage)
 
 The Linux adapter uses numbered WAL segments, an absolute durable commit marker and strict v2 checkpoint manifests over immutable v3 runs. The public `DiskTable` API supports sequential writes, explicit rotation, snapshots, compaction, checkpoints, reopen and opt-in collection of obsolete run generations and covered WAL segments. [Active storage protocol](architecture.md#sequential-storage)

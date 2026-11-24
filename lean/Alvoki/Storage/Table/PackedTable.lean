@@ -1,4 +1,5 @@
 import Alvoki.Storage.Table.CompactionRead
+import Alvoki.Storage.Table.MemTable
 import Alvoki.Storage.Table.SnapshotTable
 
 namespace Alvoki.Storage
@@ -10,11 +11,25 @@ open Alvoki.Sequential (History SnapshotHandle SnapshotPin SnapshotPins Snapshot
 structure PackedTable where
   private mk ::
   runs : List CheckedRun
-  memory : History UInt64
+  private memtable : MemTable
   committed : UInt64
   pins : SnapshotPins
 
+/-- The logical pending history. Native point and range reads use the
+memtable's own operations. -/
+def PackedTable.memory (state : PackedTable) : History UInt64 := state.memtable.history
+
+def PackedTable.memoryIsEmpty (state : @& PackedTable) : Bool := state.memtable.isEmpty
+
+theorem PackedTable.memoryIsEmpty_spec (state : PackedTable) :
+    state.memoryIsEmpty = state.memory.rows.isEmpty :=
+  state.memtable.isEmpty_spec
+
+def PackedTable.emptyWithMemTable (kind : MemTable.Kind) : PackedTable :=
+  ⟨[], MemTable.emptyWith kind, 0, .empty⟩
+
 def PackedTable.empty : PackedTable := ⟨[], .empty, 0, .empty⟩
+
 
 /-- Every stored row belongs at or below the table's committed sequence. -/
 structure PackedTable.RowBounds (state : PackedTable) : Prop where
@@ -22,7 +37,7 @@ structure PackedTable.RowBounds (state : PackedTable) : Prop where
   memory : ∀ row ∈ state.memory.rows, row.sequence ≤ state.committed
 
 theorem PackedTable.empty_rowBounds : PackedTable.empty.RowBounds := by
-  constructor <;> simp [PackedTable.empty, History.empty]
+  constructor <;> simp [PackedTable.empty, PackedTable.memory, History.empty]
 
 /-- Open a checkpoint with a fresh pin registry. All loaded versions must be
 at or below the checkpoint watermark. -/
@@ -52,7 +67,7 @@ theorem PackedTable.restore_rowBounds {runs : List CheckedRun} {committed floor 
     obtain ⟨pins, _, rfl⟩ := Option.map_eq_some_iff.mp opened
     have bounded := (Bool.and_eq_true_iff.mp accepted).2
     exact ⟨fun run mem row inside => of_decide_eq_true
-      (List.all_eq_true.mp (List.all_eq_true.mp bounded run mem) row inside), by simp [History.empty]⟩
+      (List.all_eq_true.mp (List.all_eq_true.mp bounded run mem) row inside), by simp [PackedTable.memory, History.empty]⟩
   · contradiction
 
 theorem PackedTable.restore_complete (runs : List CheckedRun) (committed floor : UInt64)
@@ -105,13 +120,19 @@ structure PackedTable.Refines (state : PackedTable) (model : SnapshotTable UInt6
   committed : state.committed = model.committed
   pins : state.pins = model.pins
 
+theorem PackedTable.emptyWithMemTable_refines (kind : MemTable.Kind) :
+    (PackedTable.emptyWithMemTable kind).Refines (SnapshotTable.empty : SnapshotTable UInt64) := by
+  refine ⟨?_, rfl, rfl⟩
+  simp [PackedTable.emptyWithMemTable, PackedTable.describe, PackedTable.memory,
+    SnapshotTable.empty]
+
 theorem PackedTable.empty_refines : PackedTable.empty.Refines (SnapshotTable.empty : SnapshotTable UInt64) :=
   ⟨rfl, rfl, rfl⟩
 
 def PackedTable.write (state : PackedTable) (key : UInt64) (value : Option UInt64) : Option PackedTable :=
   if state.committed.toNat + 1 < UInt64.size then
     let sequence := UInt64.ofNat (state.committed.toNat + 1)
-    some { state with committed := sequence, memory := state.memory.union (.singleton ⟨key, sequence, value⟩) }
+    some { state with committed := sequence, memtable := state.memtable.insert ⟨key, sequence, value⟩ }
   else none
 
 theorem PackedTable.RowBounds.write {state next : PackedTable} {key : UInt64} {value : Option UInt64}
@@ -125,6 +146,7 @@ theorem PackedTable.RowBounds.write {state next : PackedTable} {key : UInt64} {v
       exact Nat.le_add_right _ _
     refine ⟨fun run mem row inside => UInt64.le_trans (bounded.runs run mem row inside) grows, ?_⟩
     intro row inside
+    simp only [PackedTable.memory, MemTable.history_insert] at inside
     change row ∈ union state.memory.rows (History.singleton _).rows at inside
     rcases mem_union inside with old | added
     · exact UInt64.le_trans (bounded.memory row old) grows
@@ -142,7 +164,8 @@ theorem PackedTable.SameData.write {left right next : PackedTable} (same : left.
     rw [ite_eq_left fits]
     cases written
     refine ⟨_, rfl, ⟨same.runs, ?_, rfl, same.floor⟩⟩
-    simp only [same.memory]
+    simp only [PackedTable.memory, MemTable.history_insert]
+    rw [← PackedTable.memory, ← PackedTable.memory, same.memory]
   · contradiction
 
 def PackedTable.acquireAt (state : PackedTable) (snapshot : UInt64) :
@@ -193,8 +216,15 @@ theorem PackedTable.RowBounds.advanceFloor {state after : PackedTable} {floor : 
 
 def PackedTable.flush (state : PackedTable) : Except String PackedTable :=
   match CheckedRun.ofHistory state.memory with
-  | .ok run => .ok { state with runs := state.runs ++ [run], memory := .empty }
+  | .ok run => .ok { state with runs := state.runs ++ [run], memtable := state.memtable.clear }
   | .error message => .error message
+
+theorem PackedTable.flush_memory_empty {state after : PackedTable}
+    (flushed : state.flush = .ok after) : after.memory = History.empty := by
+  unfold PackedTable.flush at flushed
+  cases encoded : CheckedRun.ofHistory state.memory <;> simp [encoded] at flushed
+  subst after
+  exact state.memtable.history_clear
 
 theorem PackedTable.RowBounds.flush {state after : PackedTable}
     (bounded : state.RowBounds) (flushed : state.flush = .ok after) : after.RowBounds := by
@@ -204,7 +234,7 @@ theorem PackedTable.RowBounds.flush {state after : PackedTable}
   | ok run =>
     rw [encoded] at flushed
     cases flushed
-    refine ⟨?_, by simp [History.empty]⟩
+    refine ⟨?_, by simp [PackedTable.memory, History.empty]⟩
     intro source member row inside
     rcases List.mem_append.mp member with old | added
     · exact bounded.runs source old row inside
@@ -246,24 +276,24 @@ theorem PackedTable.RowBounds.compact {state after : PackedTable} {index : Nat}
         · exact bounded.runs right (by simp [original]) row inRight
       · exact bounded.runs source (by simp [original, other]) row inside
 
-private def winnerAcross (key snapshot : UInt64) (memory : History UInt64) :
+private def winnerAcross (key snapshot : UInt64) (memory : MemTable) :
     List CheckedRun → Option (Entry (Option UInt64))
-  | [] => winner memory.rows key snapshot
+  | [] => memory.lookup key snapshot
   | run :: tail => newest (run.lookupEntry key snapshot) (winnerAcross key snapshot memory tail)
 
-private theorem winnerAcross_eq (key snapshot : UInt64) (memory : History UInt64)
+private theorem winnerAcross_eq (key snapshot : UInt64) (memory : MemTable)
     (runs : List CheckedRun) :
     winnerAcross key snapshot memory runs =
-      Sequential.across key snapshot (runs.map CheckedRun.history ++ [memory]) := by
+      Sequential.across key snapshot (runs.map CheckedRun.history ++ [memory.history]) := by
   induction runs with
   | nil =>
-    simp only [winnerAcross, List.map_nil, List.nil_append, Sequential.across]
-    cases winner memory.rows key snapshot <;> rfl
+    simp only [winnerAcross, List.map_nil, List.nil_append, Sequential.across, MemTable.lookup_spec]
+    cases winner memory.history.rows key snapshot <;> rfl
   | cons run rest ih =>
     simp only [winnerAcross, List.map_cons, List.cons_append, Sequential.across, ih, run.lookupEntry_eq]
 
 def PackedTable.lookupAt (state : @& PackedTable) (key snapshot : UInt64) : Option UInt64 :=
-  (winnerAcross key snapshot state.memory state.runs).bind Entry.payload
+  (winnerAcross key snapshot state.memtable state.runs).bind Entry.payload
 
 theorem PackedTable.lookupAt_eq (state : PackedTable) (key snapshot : UInt64) :
     state.lookupAt key snapshot = state.describe.lookup key snapshot := by
@@ -281,13 +311,13 @@ theorem PackedTable.lookup_refines {state : PackedTable} {model : SnapshotTable 
   simp only [PackedTable.lookup, SnapshotTable.lookup, refinement.pins,
     PackedTable.lookupAt_eq, refinement.table]
 
-private def clip (history : History UInt64) (start stop : UInt64) : History UInt64 :=
-  ⟨history.rows.filter (inRange start stop), history.ordered.filter _⟩
+private abbrev clip := MemTableContract.clip
 
 private theorem winner_clip (history : History UInt64) (start stop key snapshot : UInt64)
     (within : start ≤ key ∧ key < stop) :
     winner (clip history start stop).rows key snapshot = winner history.rows key snapshot := by
-  unfold clip winner
+  change (history.rows.filter (inRange start stop)).find? (eligible key snapshot) = _
+  unfold winner
   simp only [List.find?_filter]
   have agrees : (fun row : Entry (Option UInt64) =>
       decide (inRange start stop row ∧ eligible key snapshot row)) = eligible key snapshot := by
@@ -329,7 +359,7 @@ private theorem range_eq_of_winner {before after : Sequential.Table UInt64} (sta
   exact perm.eq_of_pairwise (fun a _ _ _ lt gt => (UInt64.lt_irrefl a.key (UInt64.lt_trans lt gt)).elim) lo ro
 
 private def rangeSources (state : PackedTable) (start stop : UInt64) : Sequential.Table UInt64 :=
-  ⟨state.runs.map (fun run => run.rangeHistory start stop), clip state.memory start stop⟩
+  ⟨state.runs.map (fun run => run.rangeHistory start stop), state.memtable.range start stop⟩
 
 /-- Merge only the requested key interval from each source and return its visible puts. -/
 def PackedTable.rangeAt (state : @& PackedTable) (start stop snapshot : UInt64) :
@@ -347,7 +377,7 @@ theorem PackedTable.rangeAt_eq (state : PackedTable) (start stop snapshot : UInt
   have sources : (rangeSources state start stop).histories =
       (state.describe.histories.map fun run => clip run start stop) := by
     unfold rangeSources PackedTable.describe Sequential.Table.histories
-    simp only [List.map_append, List.map_map, List.map_cons, List.map_nil]
+    simp only [List.map_append, List.map_map, List.map_cons, List.map_nil, MemTable.range_spec, PackedTable.memory]
     rw [List.map_congr_left]
     intro run _
     exact hist run
@@ -414,7 +444,7 @@ theorem PackedTable.write_refines {before after : PackedTable} {model : Snapshot
         rw [UInt64.toNat_ofNat_of_lt' fits, sequence, same.committed]
       refine ⟨result, rfl, ⟨?_, clock, same.pins.trans pins.symm⟩⟩
       rw [table, ← same.table]
-      simp only [PackedTable.describe, Sequential.Table.write, clock]
+      simp only [PackedTable.describe, Sequential.Table.write, clock, PackedTable.memory, MemTable.history_insert]
   · contradiction
 
 theorem PackedTable.release_refines {state : PackedTable} {model : SnapshotTable UInt64}
@@ -475,7 +505,8 @@ theorem PackedTable.flush_refines {before after : PackedTable} {model : Snapshot
     have hist := CheckedRun.ofHistory_spec h
     refine ⟨?_, same.committed, same.pins⟩
     simp only [PackedTable.describe, SnapshotTable.flush, Sequential.Table.flush, ← same.table,
-      Sequential.Table.histories, List.map_append, List.map_cons, List.map_nil, hist]
+      Sequential.Table.histories, List.map_append, List.map_cons, List.map_nil, hist,
+      PackedTable.memory, MemTable.history_clear]
 
 private theorem compactSuffix_refines (floor : UInt64) (input output : List CheckedRun)
     (success : compactSuffix floor input = some output) :
@@ -503,6 +534,7 @@ theorem PackedTable.compact_refines {before after : PackedTable} {model : Snapsh
   rw [modelResult]
   have memory : before.memory = model.table.memory := congrArg Sequential.Table.memory same.table
   refine ⟨_, rfl, ⟨?_, same.committed, same.pins⟩⟩
-  simp [PackedTable.describe, memory]
+  change Sequential.Table.mk (runs.map CheckedRun.history) before.memory = _
+  exact congrArg (Sequential.Table.mk (runs.map CheckedRun.history)) memory
 
 end Alvoki.Storage
