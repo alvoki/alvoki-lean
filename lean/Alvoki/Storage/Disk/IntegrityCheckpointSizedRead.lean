@@ -35,7 +35,7 @@ def readIntegrityCheckpointSized [Monad m] [MonadExceptOf IO.Error m] (dir : Dis
   let table ← liftExcept ((loadIntegrityRunSet manifest files).mapError IO.userError)
   return some (table, manifest.header.generation)
 
-private theorem mapM_eq_of_mem {α β : Type} {left right : α → Except IO.Error β}
+private theorem mapM_eq_of_mem [Monad m] [LawfulMonad m] {α β : Type} {left right : α → m β}
     (indices : List α) (equivalent : ∀ index ∈ indices, left index = right index) :
     indices.mapM left = indices.mapM right := by
   induction indices with
@@ -47,6 +47,26 @@ private theorem mapM_eq_of_mem {α β : Type} {left right : α → Except IO.Err
 /-- Healthy exact observations read exactly the old bytes at every
 selected generation/index, in the same order. The checkpoint loader
 therefore sees the same checksums, structure and restore input. -/
+private theorem readIntegrityRunBytesSized_eq_of_reports [Monad m] [LawfulMonad m] [MonadExceptOf IO.Error m]
+    (dir : DiskDirectory) {manifest : IntegrityCheckpoint}
+    (count : manifest.runs.length = manifest.header.runCount.toNat)
+    (readSize : FilePath → m Nat) (readPrefix : FilePath → Nat → m ByteArray)
+    (readRun : UInt64 → Nat → m ByteArray)
+    (reported : ∀ index stamp, manifest.runs[index]? = some stamp → ∃ payload,
+      stamp.byteCount.toNat < USize.size ∧ payload.size = stamp.byteCount.toNat ∧
+      readSize (dir.file (.run manifest.header.generation index)) = pure stamp.byteCount.toNat ∧
+      readPrefix (dir.file (.run manifest.header.generation index)) stamp.byteCount.toNat = pure payload ∧
+      readRun manifest.header.generation index = pure payload) :
+    readIntegrityRunBytesSized dir manifest readSize readPrefix = readCheckpointRunBytes readRun manifest.header := by
+  rw [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, readCheckpointRunBytes_eq_mapM]
+  apply mapM_eq_of_mem
+  intro index member
+  have within : index < manifest.runs.length := count.symm ▸ List.mem_range.mp member
+  let stamp := manifest.runs[index]'within
+  have atIndex : manifest.runs[index]? = some stamp := List.getElem?_eq_getElem within
+  obtain ⟨payload, fits, exactSize, size, payloadRead, old⟩ := reported index stamp atIndex
+  simp [readStampedRun, atIndex, readExactRecoveryFileWith, size, fits, payloadRead, exactSize, old]
+
 theorem readIntegrityRunBytesSized_compatible (dir : DiskDirectory) {manifest : IntegrityCheckpoint}
     (count : manifest.runs.length = manifest.header.runCount.toNat)
     (readSize : FilePath → Except IO.Error Nat) (readPrefix : FilePath → Nat → Except IO.Error ByteArray)
@@ -56,16 +76,28 @@ theorem readIntegrityRunBytesSized_compatible (dir : DiskDirectory) {manifest : 
       readSize (dir.file (.run manifest.header.generation index)) = .ok stamp.byteCount.toNat ∧
       readPrefix (dir.file (.run manifest.header.generation index)) stamp.byteCount.toNat = .ok payload ∧
       readRun manifest.header.generation index = .ok payload) :
-    readIntegrityRunBytesSized dir manifest readSize readPrefix = readCheckpointRunBytes readRun manifest.header := by
-  rw [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, readCheckpointRunBytes_eq_mapM]
-  apply mapM_eq_of_mem
-  intro index member
-  have within : index < manifest.runs.length := count.symm ▸ List.mem_range.mp member
-  let stamp := manifest.runs[index]'within
-  have atIndex : manifest.runs[index]? = some stamp := List.getElem?_eq_getElem within
-  obtain ⟨payload, fits, exactSize, size, payloadRead, old⟩ := reported index stamp atIndex
-  simp [readStampedRun, atIndex, readExactRecoveryFileWith, size, fits, payloadRead, exactSize, old,
-    Bind.bind, Except.bind, Pure.pure, Except.pure]
+    readIntegrityRunBytesSized dir manifest readSize readPrefix = readCheckpointRunBytes readRun manifest.header :=
+  readIntegrityRunBytesSized_eq_of_reports dir count readSize readPrefix readRun reported
+
+/-- Successful reads can be interpreted in a stateful monad. The manifest
+and every selected run callback preserve the state on their reported success. -/
+theorem readIntegrityCheckpointSized_eq_of_reports [Monad m] [LawfulMonad m] [MonadExceptOf IO.Error m]
+    (dir : DiskDirectory) (readManifest : m (Option ByteArray))
+    (readSize : FilePath → m Nat) (readPrefix : FilePath → Nat → m ByteArray)
+    (readRun : UInt64 → Nat → m ByteArray)
+    {bytes : ByteArray} (manifestRead : readManifest = pure (some bytes)) {manifest : IntegrityCheckpoint}
+    (decoded : IntegrityCheckpoint.decode bytes = .ok manifest)
+    (reported : ∀ index stamp, manifest.runs[index]? = some stamp → ∃ payload,
+      stamp.byteCount.toNat < USize.size ∧ payload.size = stamp.byteCount.toNat ∧
+      readSize (dir.file (.run manifest.header.generation index)) = pure stamp.byteCount.toNat ∧
+      readPrefix (dir.file (.run manifest.header.generation index)) stamp.byteCount.toNat = pure payload ∧
+      readRun manifest.header.generation index = pure payload) :
+    readIntegrityCheckpointSized dir readManifest readSize readPrefix =
+      readIntegrityCheckpoint readManifest readRun (fun report => liftExcept (report.mapError IO.userError)) := by
+  have same := readIntegrityRunBytesSized_eq_of_reports dir (IntegrityCheckpoint.decode_spec decoded).2.2
+    readSize readPrefix readRun reported
+  simp [readIntegrityCheckpointSized, readIntegrityCheckpoint, manifestRead, decoded, same,
+    liftExcept, Except.mapError]
 
 theorem readIntegrityCheckpointSized_compatible (dir : DiskDirectory)
     (readManifest : Except IO.Error (Option ByteArray))
@@ -79,11 +111,8 @@ theorem readIntegrityCheckpointSized_compatible (dir : DiskDirectory)
       readPrefix (dir.file (.run manifest.header.generation index)) stamp.byteCount.toNat = .ok payload ∧
       readRun manifest.header.generation index = .ok payload) :
     readIntegrityCheckpointSized dir readManifest readSize readPrefix =
-      readIntegrityCheckpoint readManifest readRun (fun report => liftExcept (report.mapError IO.userError)) := by
-  have same := readIntegrityRunBytesSized_compatible dir (IntegrityCheckpoint.decode_spec decoded).2.2
-    readSize readPrefix readRun reported
-  simp [readIntegrityCheckpointSized, readIntegrityCheckpoint, manifestRead, decoded, same,
-    Bind.bind, Except.bind, liftExcept, Except.mapError, Pure.pure, Except.pure]
+      readIntegrityCheckpoint readManifest readRun (fun report => liftExcept (report.mapError IO.userError)) :=
+  readIntegrityCheckpointSized_eq_of_reports dir readManifest readSize readPrefix readRun manifestRead decoded reported
 
 private def requestedBytes {α : Type} : EStateM.Result IO.Error Nat α → Nat
   | .ok _ bytes | .error _ bytes => bytes
