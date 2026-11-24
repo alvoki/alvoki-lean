@@ -410,7 +410,7 @@ private def checkRetrySync (root : FilePath) : IO Unit := do
       "reopen did not settle the visible boundary after failed directory sync"
   finally recovered.close
 
-private def checkWriteSyncErrorAfterEffect (root : FilePath) : IO Unit := do
+private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
   IO.FS.createDir dir
@@ -432,13 +432,15 @@ private def checkWriteSyncErrorAfterEffect (root : FilePath) : IO Unit := do
   expectManifest dir 1 2 2 1
   let manifestBytes ← IO.FS.readBinFile manifest
   let runBytes ← IO.FS.readBinFile run
+  let expectCheckpoint := do
+    check (decide ((← IO.FS.readBinFile manifest) = manifestBytes ∧ (← IO.FS.readBinFile run) = runBytes))
+      "write and reopen trace changed the fixed checkpoint"
   let expectFiles := fun (events : List WAL.Write) => do
     let encoded := WAL.encode events
     check (decide ((← IO.FS.readBinFile wal) = encoded ∧
       (← IO.FS.readBinFile marker) = WAL.Boundary.encode encoded.size.toUInt64))
       "write and reopen trace changed the selected WAL history"
-    check (decide ((← IO.FS.readBinFile manifest) = manifestBytes ∧ (← IO.FS.readBinFile run) = runBytes))
-      "write and reopen trace changed the fixed checkpoint"
+    expectCheckpoint
   let expectSnapshot := fun (db : DiskTable) (sequence : UInt64)
       (expected : List (UInt64 × Option UInt64)) => do
     let some pin ← db.acquireAt sequence
@@ -482,17 +484,40 @@ private def checkWriteSyncErrorAfterEffect (root : FilePath) : IO Unit := do
     expectSnapshot reopened 6 [(4, some 41), (6, some 60), (7, some 99)]
     expectFiles events
     check ((← reopened.write 4 none) == 7) "append reused the surviving write's sequence"
-    check ((← reopened.write 5 (some 50)) == 8) "second append did not continue the selected history"
+    check ((← reopened.write 7 none) == 8) "second append did not continue the selected history"
   finally reopened.close
-  let finalEvents := events ++ [⟨7, 4, none⟩, ⟨8, 5, some 50⟩]
-  expectFiles finalEvents
+  let continued := events ++ [⟨7, 4, none⟩, ⟨8, 7, none⟩]
+  expectFiles continued
+  -- This writer has reopened the same checkpoint. Its append would revive
+  -- key 7, but the grouped sync fails before the staged marker is renamed.
+  let (classified, syncs) ← probeDisk bin dir (some staged) (operation := "--check-write-outcome")
+    (failureMode := .secondOnly)
+  check (classified && syncs == alignedSyncs ++ [wal.toString, staged.toString,
+    s!"synced second target before error: {staged}"])
+    "the later session did not report an unknown commit before publishing its marker"
+  let durable := WAL.encode continued
+  let appended := durable ++ WAL.encodeFrame ⟨9, 7, some 99⟩
+  check (decide ((← IO.FS.readBinFile wal) = appended ∧
+    (← IO.FS.readBinFile staged) = WAL.Boundary.encode appended.size.toUInt64 ∧
+    (← IO.FS.readBinFile marker) = WAL.Boundary.encode durable.size.toUInt64))
+    "the later failed append did not leave its full frame outside the active marker"
+  expectCheckpoint
   let reopened ← DiskTable.open dir
   try
-    check ((← reopened.acquire).sequence == 8) "second reopen lost an acknowledged append"
-    expectSnapshot reopened 4 [(4, some 41)]
+    expectFiles continued
+    check ((← reopened.acquire).sequence == 8) "later reopen selected the failed append"
     expectSnapshot reopened 6 [(4, some 41), (6, some 60), (7, some 99)]
-    expectSnapshot reopened 8 [(5, some 50), (6, some 60), (7, some 99)]
+    expectSnapshot reopened 8 [(6, some 60)]
+    check ((← reopened.write 5 (some 50)) == 9) "reopen did not reuse the discarded write sequence"
+  finally reopened.close
+  let finalEvents := continued ++ [⟨9, 5, some 50⟩]
+  let reopened ← DiskTable.open dir
+  try
     expectFiles finalEvents
+    check ((← reopened.acquire).sequence == 9) "final reopen lost the replacement append"
+    expectSnapshot reopened 6 [(4, some 41), (6, some 60), (7, some 99)]
+    expectSnapshot reopened 8 [(6, some 60)]
+    expectSnapshot reopened 9 [(5, some 50), (6, some 60)]
   finally reopened.close
 
 private def checkGroupedSyncPartialEffects (root : FilePath) : IO Unit := do
@@ -782,7 +807,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkDanglingFiles
     IO.FS.withTempDir checkSnapshotSessions
     IO.FS.withTempDir checkRetrySync
-    IO.FS.withTempDir checkWriteSyncErrorAfterEffect
+    IO.FS.withTempDir checkWritesAcrossReopens
     IO.FS.withTempDir checkGroupedSyncPartialEffects
     IO.FS.withTempDir checkCheckpointReadFailureBeforeWalRepair
     IO.FS.withTempDir checkFirstCheckpointCuts

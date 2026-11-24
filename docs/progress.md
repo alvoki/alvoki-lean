@@ -299,3 +299,7 @@ The acknowledged-write trace carries the actual modeled file image between write
 ## Shared optional WAL reads and conditional reopen progress
 
 The native and modeled adapters share the marker read, marker decode and WAL read order. The read contract distinguishes missing files from read failures. The audited metadata proof identifies the generation and WAL byte count of a successfully loaded session. The completion proof starts with a settled, correctly numbered WAL within the byte bound and a checkpoint whose watermark matches its covered prefix. Replay and reopen succeed when checkpoint loading, locked file reads and aligned sync succeed. Pooled paired median times were 0.953× to 1.014× baseline across the six native reopen workloads. [Read and recovery proof](proof-roadmap.md#disk-guarantees-to-prove) · [Raw measurements](../benchmarks/results/disk/shared-open-wal-reads)
+
+## Clean session closure and opposite write outcomes
+
+A session with only acknowledged writes can close or crash and recover to another ready session with the exact durable history and abstract snapshot reads. The native regression now exercises opposite unknown write outcomes in consecutive sessions. It checks the original checkpoint and exact WAL bytes, discards a complete frame outside the active marker, and writes a different key at the reused ordinal. [Clean recovery proof](../lean/Alvoki/Storage/Disk/MarkedReopenStability.lean) · [Native fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)

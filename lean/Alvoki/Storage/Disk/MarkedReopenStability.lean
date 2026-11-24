@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.DiskRecoveryModel
-import Alvoki.Storage.Disk.WalWritePublicationModel
+import Alvoki.Storage.Disk.MarkedWriteTrace
 
 namespace Alvoki.WAL.Boundary
 open Storage
@@ -183,6 +183,57 @@ theorem reopenSettledHistory_refines {initial before after : ReopenImage}
     have upper : snapshot ≤ reference.committed := UInt64.le_iff_toNat_le.mpr (by
       simpa only [agrees.committed, committed] using within)
     simpa only [refined.table] using agreesSymm.acquireAt_reads floor upper
+
+/-- When all writes in a session are acknowledged, closing or crashing the
+session and successfully reopening it preserves the exact extended history.
+The recovered table and durable files satisfy the next session's invariant. -/
+theorem reopenAfterSettledWrites_refines {initial writer : MarkedWriterState}
+    {submitted covered pending : List WAL.Write} {manifest : Option ByteArray}
+    (ready : initial.ReadyFor manifest) (start : initial.history = covered ++ pending)
+    (path : AcknowledgedWrites initial submitted writer)
+    {before after : ReopenImage} (attempts : MarkedReopenAttempts writer.image before)
+    {checkpointImage : CheckpointPublication.Image} {walSequence : UInt64}
+    {checkpoint table : PackedTable} {files : List ByteArray} {model : Sequential.SnapshotTable UInt64}
+    (accepted : checkpointImage.Accepts walSequence (fun header bytes =>
+      CheckpointForRecovery (some (Manifest.encode header)) bytes checkpoint) manifest)
+    (checkpointReads : CheckpointReadObservations checkpointImage before.directory.active.manifest)
+    (walReads : MarkedWalReads before)
+    {report : Publication.Step → RepairReport} {aligned : AlignedSyncReport}
+    (opened : runMarkedReopen
+      (MarkedReopenReads.mk walReads
+        (checkpointReads.result.map fun loaded => (loaded.getD (.empty, 0)).1)).preflight
+      report false aligned before = .ok table after)
+    (written : CheckpointForRecovery manifest files checkpoint)
+    (represents : checkpoint.Refines model)
+    (watermark : covered.length = checkpoint.committed.toNat) :
+    ∃ abstract,
+      (⟨table, (WAL.encode (covered ++ pending ++ submitted)).size, after,
+        covered ++ pending ++ submitted⟩ : MarkedWriterState).ReadyFor manifest ∧
+      SnapshotWalReplay model (pending ++ submitted) abstract ∧
+      abstract.committed.toNat = (covered ++ pending ++ submitted).length ∧
+      ∀ snapshot : UInt64, abstract.pins.floor ≤ snapshot →
+        snapshot.toNat ≤ (covered ++ pending ++ submitted).length →
+        ∃ pin pinned, table.acquireAt snapshot = some (pin, pinned) ∧
+          (∀ key, pinned.lookup pin.handle key = some (abstract.table.lookup key snapshot)) ∧
+          (∀ lo hi, pinned.range pin.handle lo hi = some (abstract.table.range lo hi snapshot)) := by
+  obtain ⟨current, history, _⟩ := path.refines ready
+  have old : writer.history = covered ++ (pending ++ submitted) := by
+    rw [history, start, List.append_assoc]
+  have settled : writer.image.SettledFor manifest (covered ++ (pending ++ submitted)) :=
+    old ▸ current.settled
+  have ordered : WAL.OrdinalsFrom 1 (covered ++ (pending ++ submitted)) := old ▸ current.ordered
+  have fits : (WAL.encode (covered ++ (pending ++ submitted))).size < UInt64.size := by
+    rw [← old, ← current.length]
+    exact current.fits
+  obtain ⟨settledAfter, _, count, abstract, replayed, abstractCount, reads⟩ :=
+    reopenSettledHistory_refines settled fits attempts accepted checkpointReads walReads opened
+      written represents watermark ordered
+  have readyAfter : (⟨table, (WAL.encode (covered ++ (pending ++ submitted))).size, after,
+      covered ++ (pending ++ submitted)⟩ : MarkedWriterState).ReadyFor manifest :=
+    ⟨settledAfter, ordered, count.symm, rfl, fits⟩
+  exact ⟨abstract, by simpa only [List.append_assoc] using readyAfter, replayed,
+    by simpa only [List.append_assoc] using abstractCount,
+    by simpa only [List.append_assoc] using reads⟩
 
 /-- Once the checkpoint loader and file reads succeed, an exact settled
 history replays successfully and takes the aligned durability path. This
