@@ -71,21 +71,44 @@ private theorem reachesSurvivors (cut : DelayedKeeperReplacementPowerLoss direct
     .powerLoss .empty pair keeper later, target, full, admitted, prepared,
     physicalCover.crash trace pair keeper later⟩
 
-/-- A healthy cached open after the reached old-keeper sync and actual
-survivor selection installs the strict checkpoint with exactly the WAL
-history authorized by the append's marker. The survivors determine the
-remaining keeper tail and the actual next repair. -/
-theorem reopensRetainedCached {before : SegmentedWriterState} {writer nextDescriptor nextRef : Nat}
-    (ready : before.RetainedReady directory writer) (failure : SegmentedAppendFailure directory before)
-    (cut : DelayedKeeperReplacementPowerLoss directory failure.released
-      (AppendRetryTarget before.history failure.event before.wal.active.first))
-    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef) (unlock : UnlockReport)
+private theorem followedBy {initial middle final : LockedFileState FileImage}
+    (earlier : BoundedReopenTrace directory admits initial middle)
+    (later : BoundedReopenTrace directory admits middle final) :
+    BoundedReopenTrace directory admits initial final := by
+  induction later with
+  | empty => exact earlier
+  | failed _ attempt acquisition localUnlock reports ran ih =>
+    exact .failed ih attempt acquisition localUnlock reports ran
+  | referenceDrops _ references drops ih => exact .referenceDrops ih references drops
+  | powerLoss _ metadata keeper names ih => exact .powerLoss ih metadata keeper names
+
+private theorem continuesAuthorized {initial final : LockedFileState FileImage} {source : FileImage}
+    {target : Target} {plan : Plan}
+    (attempts : BoundedReopenTrace directory admits initial final)
+    (admitted : admits target) (prepared : Prepared source target plan)
+    (trace : EffectTrace target source initial.image)
+    (unique : ∀ {left right}, admits left → admits right → left.pair = right.pair → left = right) :
+    EffectTrace target source final.image := by
+  induction attempts with
+  | empty => exact trace
+  | failed _ attempt acquisition _ reports ran ih =>
+    obtain unchanged | ⟨next, _, admittedNext, preparedNext, applied⟩ := attempt.errorFiles acquisition reports ran
+    · simpa only [unchanged] using ih
+    have valid := ih.valid prepared.pair prepared.keeperPrefix prepared.newer
+    have same := unique admitted admittedNext (valid.selected.symm.trans preparedNext.pair)
+    subst next
+    exact ih.trans applied
+  | referenceDrops _ _ _ ih => exact ih
+  | powerLoss _ metadata keeper later ih => exact .crash ih metadata keeper later
+
+/-- A selected keeper layout supplies the raw read and effect reports for
+the cached installation from the last observed retry image. -/
+abbrev CachedInstallation {before : SegmentedWriterState} (failure : SegmentedAppendFailure directory before)
+    (retry : LockedFileState FileImage) (nextDescriptor nextRef : Nat) (unlock : UnlockReport)
     (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
     (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
     (sync : Array FilePath → EStateM IO.Error FileImage Unit)
-    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
-    let retry := cut.crashed
-    BoundedReopenTrace directory (AppendRetryTarget before.history failure.event before.wal.active.first) cut.during retry ∧
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) : Prop :=
     ∃ history, (history = before.history ∨ history = before.history ++ [failure.event]) ∧
       ∃ selected : CanonicalKeeperLayout retry.image history,
         let wal := before.wal.appendSelectedView retry.image.directory.active history
@@ -102,9 +125,34 @@ theorem reopensRetainedCached {before : SegmentedWriterState} {writer nextDescri
                 (runOpenWithInstallation directory nextDescriptor nextRef (.ok true) unlock
                   (raw.reopenCached sizes cached removeFile write sync renameFile) retry) after ∧
                 after.history = history ∧ after.RetainedReady directory nextDescriptor ∧
-                after.checkpoint = before.checkpoint ∧ after.installed.generation = before.installed.generation := by
-  intro retry
-  obtain ⟨_, _, poweredOff, target, _, admitted, prepared, trace⟩ := cut.reachesSurvivors
+                after.checkpoint = before.checkpoint ∧ after.installed.generation = before.installed.generation
+
+/-- Failed bounded opens, lock reference drops and further power losses
+preserve the history authorized before the replacement-name barrier.
+Healthy cached recovery uses the file image and lock ownership reached
+by the entire retry prefix. -/
+theorem reopensRetainedCachedAfter {before : SegmentedWriterState} {writer nextDescriptor nextRef : Nat}
+    (ready : before.RetainedReady directory writer) (failure : SegmentedAppendFailure directory before)
+    (cut : DelayedKeeperReplacementPowerLoss directory failure.released
+      (AppendRetryTarget before.history failure.event before.wal.active.first))
+    {retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (AppendRetryTarget before.history failure.event before.wal.active.first)
+      cut.crashed retry)
+    (acquisition : TryLockObserves retry.owners directory (.ok true))
+    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    BoundedReopenTrace directory (AppendRetryTarget before.history failure.event before.wal.active.first)
+      cut.during retry ∧
+    retry.image.directory.active = cut.pair ∧
+    CachedInstallation failure retry nextDescriptor nextRef unlock removeFile write sync renameFile := by
+  obtain ⟨_, _, poweredOff, target, _, admitted, prepared, firstCrash⟩ := cut.reachesSurvivors
+  have trace := continuesAuthorized attempts admitted prepared firstCrash (fun a b pair => AppendRetryTarget.unique a b pair)
+  have exactPair : retry.image.directory.active = cut.pair :=
+    (trace.valid prepared.pair prepared.keeperPrefix prepared.newer).selected.trans
+      (firstCrash.valid prepared.pair prepared.keeperPrefix prepared.newer).selected.symm
   obtain ⟨extended, fits, exactCut⟩ := failure.retainedCut ready
   let observed := (writeFilesAfter (runWriteEffects before.history failure.event failure.effects
     (before.wal.directory.staged .walBoundary))).reopenSegment before.wal.active.first before.history
@@ -160,8 +208,6 @@ theorem reopensRetainedCached {before : SegmentedWriterState} {writer nextDescri
     · exact ready.resumed.ordered
     · exact extended
   have laterEmpty : retry.image.later.visible = [] := widenedTrace.emptyLater rfl
-  have acquisition : TryLockObserves retry.owners directory (.ok true) := by
-    simp [TryLockObserves, retry, crashed, LockOwners.set]
   have water : selected.range.watermark = before.target.range.watermark := by
     have exactRange : selected.range = ⟨before.target.range.watermark, history.length⟩ := sameRange.trans range
     have sameWatermark := congrArg MarkedWalRange.watermark exactRange
@@ -177,7 +223,7 @@ theorem reopensRetainedCached {before : SegmentedWriterState} {writer nextDescri
     exact offsets
   have retained : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept := retainedSeals
   have active : wal.directory.active = selected.target.pair := rfl
-  refine ⟨poweredOff, history, allowed, selected, ?_⟩
+  refine ⟨followedBy poweredOff attempts, exactPair, history, allowed, selected, ?_⟩
   intro reportedWal raw sizes cached settles healthy
   have opened := runOpenWithInstallation_appendLayout readLayout ordered selected keeperEq selectedDescriptors
     selectedOffsets (same.symm ▸ retryPrepared) laterEmpty accepted generation raw liveRefs fresh acquisition unlock
@@ -198,6 +244,28 @@ theorem reopensRetainedCached {before : SegmentedWriterState} {writer nextDescri
     exactHistory, next, exactCheckpoint, gen⟩
   rw [target, same]
   exact start
+
+/-- A healthy cached open immediately after the reached old-keeper sync
+and survivor selection installs the strict checkpoint and the history
+authorized by the append's marker. -/
+theorem reopensRetainedCached {before : SegmentedWriterState} {writer nextDescriptor nextRef : Nat}
+    (ready : before.RetainedReady directory writer) (failure : SegmentedAppendFailure directory before)
+    (cut : DelayedKeeperReplacementPowerLoss directory failure.released
+      (AppendRetryTarget before.history failure.event before.wal.active.first))
+    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    let retry := cut.crashed
+    BoundedReopenTrace directory (AppendRetryTarget before.history failure.event before.wal.active.first)
+      cut.during retry ∧
+    CachedInstallation failure retry nextDescriptor nextRef unlock removeFile write sync renameFile := by
+  have acquisition : TryLockObserves cut.crashed.owners directory (.ok true) := by
+    simp [TryLockObserves, crashed, LockOwners.set]
+  obtain ⟨crash, _, installed⟩ :=
+    reopensRetainedCachedAfter ready failure cut .empty acquisition liveRefs fresh unlock removeFile write sync renameFile
+  exact ⟨crash, installed⟩
 
 end DelayedKeeperReplacementPowerLoss
 
