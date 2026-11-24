@@ -2,6 +2,7 @@ import Alvoki.Checks.AxiomPolicy
 import Alvoki.Storage.Disk.AppendCutContinuation
 import Alvoki.Storage.Disk.AppendRetrySession
 import Alvoki.Storage.Disk.CheckpointRetrySession
+import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.FullWatermarkReopen
 import Alvoki.Storage.Disk.WalWritePublicationModel
@@ -650,6 +651,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_appendLayout
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterAppendError
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterCheckpointError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.Installs.unique
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.Installs.preservesReady
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterAcknowledgedAppend
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterSuccessfulAppend
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_noConflicts

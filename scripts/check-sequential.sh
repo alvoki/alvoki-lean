@@ -71,6 +71,7 @@ lake env leanchecker Alvoki.Storage.Disk.ReopenedSegmentAppend
 lake env leanchecker Alvoki.Storage.Disk.AppendCutContinuation
 lake env leanchecker Alvoki.Storage.Disk.AppendRetrySession
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRetrySession
+lake env leanchecker Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRetryTrace
 lake env leanchecker Alvoki.Storage.Disk.BoundedOpenReadFailure
 lake env leanchecker Alvoki.Storage.Disk.BoundedReopenFailure
