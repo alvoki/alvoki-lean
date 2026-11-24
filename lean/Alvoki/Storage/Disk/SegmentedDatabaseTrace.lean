@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Disk.SegmentedCollectionPowerLoss
 import Alvoki.Storage.Disk.SegmentedCollectionRetry
 import Alvoki.Storage.Disk.SegmentedCollectionLiveReopen
+import Alvoki.Storage.Disk.SegmentedCollectionCachedReopen
 import Alvoki.Storage.Disk.SegmentedAppendRecovery
 import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
@@ -328,6 +329,31 @@ theorem SegmentedDatabaseTrace.collectionPowerLossCached {directory initialDescr
   have observed : report.Valid := ⟨descriptorEq, acquired, reads.trans sameAction, fresh, syncDirectory, syncKeeper⟩
   obtain ⟨after, installed, _⟩ := report.installs observed ready
   exact ⟨after, installed, .collectionPowerLoss rfl prior report observed installed⟩
+
+/-- After reported WAL collection failures, use the cached session and
+the namespace settled by its reached directory barrier in the mixed trace. -/
+theorem SegmentedDatabaseTrace.collectionReopenCachedWithNamespace
+    {directory initialDescriptor initial log writer descriptor before}
+    (prior : SegmentedDatabaseTrace directory initialDescriptor initial true log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (report : SegmentedCollectionReopenReport directory before writer descriptor) (observed : report.Valid)
+    (sizes : SizedCheckpointRunReports directory report.raw.reports
+      report.pending.image.visible.directory.active.manifest before.published.durable)
+    (cached : CachedWalFileReports directory report.raw.reports report.pending.image.visible
+      before.target.range.watermark ByteArray.empty) :
+    ∃ after session final,
+      SegmentedDatabaseTrace directory initialDescriptor initial true log descriptor after ∧
+      runOpenWithInstallation directory report.reopen.descriptor report.reopen.nextRef report.reopen.acquired
+        report.reopen.unlock (report.reopenCachedWithNamespace sizes cached)
+        ⟨(report.files.image, report.pending.image), report.pending.owners⟩ = .ok session final ∧
+      session.phase = .ready after.installed ∧ final.image.1 = after.files ∧ final.owners = after.owners ∧
+      final.image.2.crashSealed = [after.wal.sealed] ∧
+      after.history = before.history ∧ after.checkpoint = before.checkpoint := by
+  have ready := (prior.preservesRetained initialReady).1
+  obtain ⟨_, after, session, final, installed, ran, phase, files, owners, _, seals, _, _, history, _, checkpoint, _, _⟩ :=
+    report.installsCachedWithNamespace observed ready sizes cached
+  exact ⟨after, session, final, .collectionReopen rfl prior report observed installed,
+    ran, phase, files, owners, seals, history, checkpoint⟩
 
 /-- Use the actual cached session after a successful close in the mixed trace. -/
 theorem SegmentedDatabaseTrace.closeCached {directory initialDescriptor initial allowCollection log writer descriptor before}
