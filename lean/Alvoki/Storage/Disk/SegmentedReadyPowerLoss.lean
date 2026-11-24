@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.RotationAuthorityRetry
 import Alvoki.Storage.Disk.SegmentedCleanReopen
+import Alvoki.Storage.Disk.RetainedWriterReopen
 
 namespace Alvoki.Storage.DiskSession
 
@@ -13,13 +14,18 @@ def SegmentedWriterState.powerLossFiles (state : SegmentedWriterState) (director
   ⟨state.files.crash state.target.pair (some state.target.trimmed) [],
     state.owners.set (directory.file .lock) none⟩
 
-theorem SegmentedWriterState.Ready.powerLossTrace {directory : DiskDirectory} {descriptor : Nat}
-    {state : SegmentedWriterState} (ready : state.Ready directory descriptor) (admits : Target → Prop) :
+theorem SegmentedWriterState.RetainedReady.powerLossTrace {directory : DiskDirectory} {descriptor : Nat}
+    {state : SegmentedWriterState} (ready : state.RetainedReady directory descriptor) (admits : Target → Prop) :
     BoundedReopenTrace directory admits ⟨state.files, state.owners⟩ (state.powerLossFiles directory) :=
   .powerLoss .empty
     (ready.resumed.ready.settled ▸ List.mem_singleton_self _)
     (ready.resumed.ready.keeperDurable ▸ List.mem_singleton_self _)
     (ready.resumed.ready.pruned.2 ▸ List.mem_singleton_self _)
+
+theorem SegmentedWriterState.Ready.powerLossTrace {directory : DiskDirectory} {descriptor : Nat}
+    {state : SegmentedWriterState} (ready : state.Ready directory descriptor) (admits : Target → Prop) :
+    BoundedReopenTrace directory admits ⟨state.files, state.owners⟩ (state.powerLossFiles directory) :=
+  ready.toRetained.powerLossTrace admits
 
 private theorem Target.eq_of_fields {left right : Target} (pair : left.pair = right.pair)
     (range : left.range = right.range) (first : left.first = right.first) (trimmed : left.trimmed = right.trimmed) :
@@ -32,8 +38,8 @@ private theorem Target.eq_of_fields {left right : Target} (pair : left.pair = ri
   cases trimmed
   rfl
 
-private theorem SegmentedWriterState.Ready.powerLossLayout {directory : DiskDirectory} {descriptor : Nat}
-    {state : SegmentedWriterState} (ready : state.Ready directory descriptor) :
+private theorem SegmentedWriterState.RetainedReady.powerLossLayout {directory : DiskDirectory} {descriptor : Nat}
+    {state : SegmentedWriterState} (ready : state.RetainedReady directory descriptor) :
     let files := (state.powerLossFiles directory).image
     ∃ selected : CanonicalKeeperLayout files state.history,
       selected.target = state.target ∧ selected.keeper = state.wal.active ∧
@@ -53,7 +59,7 @@ private theorem SegmentedWriterState.Ready.powerLossLayout {directory : DiskDire
   have decoded : (DirectoryPublication.Image.settled state.target.pair).active.walRange =
       some state.target.range := state.target.decoded
   obtain ⟨selected, range, keeper, _, descriptors, offsets, _, choices, prefixes, names⟩ :=
-    ready.layout.checkpointReopenLayout ready.walValid (.crash durable) decoded ready.resumed.through none
+    ready.layout.checkpointReopenLayout ready.valid (.crash durable) decoded ready.resumed.through none
   have target : selected.target = state.target := Target.eq_of_fields rfl range
     ((congrArg WalSegment.first keeper).trans ready.active.symm)
     ((congrArg WalSegment.bytes keeper).trans bytes.symm)
@@ -124,9 +130,9 @@ structure Installs (report : SegmentedReadyPowerLossReport directory before oldD
     report.attempt.run directory report.retry = .ok session final ∧
     session.phase = .ready (reopenedWriter before table final).installed ∧ after = reopenedWriter before table final
 
-theorem installs (report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor)
-    (observed : report.Valid) (ready : before.Ready directory oldDescriptor) :
-    ∃ after, report.Installs after ∧ after.Ready directory nextDescriptor := by
+theorem installsRetained (report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory oldDescriptor) :
+    ∃ after, report.Installs after ∧ after.RetainedReady directory nextDescriptor := by
   obtain ⟨source, sourceTarget, sourceKeeper, sourceDescriptors, sourceOffsets, sourcePrepared⟩ :=
     ready.powerLossLayout
   have trace := report.failures.effectsAfterFixedAuthority (by rfl)
@@ -193,37 +199,59 @@ theorem installs (report : SegmentedReadyPowerLossReport directory before oldDes
       keeper := by simpa only [tailExact] using report.raw.keeper }
   have installed := runOpenWithInstallation_appendLayout (owners := report.retry.owners)
     ready.layout ready.resumed.ordered selected keeperExact descriptors offsets currentPrepared empty
-    (by rw [selectedPair]; exact ready.resumed.accepted) (by rw [selectedPair]; exact ready.generationRead)
+    (by rw [selectedPair]; exact ready.resumed.accepted) (by rw [selectedPair]; exact ready.resumed.generationRead)
     raw report.liveRefs observed.fresh observed.acquisition report.unlock report.removeFile report.write report.sync
     report.renameFile observed.syncDirectory healthy
-  obtain ⟨_, _, _, _, checkpoint, table, model, session, final, ran, loaded, _, _, _, _, phase,
-    durable, kept, owned, _, bounds, refines, represents, _, _, _, _⟩ := installed
+  have availableSeals := trace.keepsSealed.trans ready.sealedFiles
+  rw [exactTarget] at installed
+  obtain ⟨session, final, writer, ran, _, _, phase, files, owners, wal, target, history, generation, durable, nextReady⟩ :=
+    installed.writerRetained ready.layout ready.valid ready.spans ready.walPair ready.active availableSeals
   have loadedNow : SelectedIntegrityCheckpoint before.published.durable report.retry.image.directory.active.manifest
-      checkpoint := by
-    rw [selectedPair]
-    exact exactTarget ▸ loaded
+      writer.checkpoint := by
+    rw [selectedPair, ← target, ← durable]
+    exact nextReady.resumed.selected
   have loadedOld : SelectedIntegrityCheckpoint before.published.durable report.retry.image.directory.active.manifest
       before.checkpoint := by
     rw [selectedPair]
     exact ready.resumed.selected
-  have sameCheckpoint : checkpoint = before.checkpoint :=
+  have sameCheckpoint : writer.checkpoint = before.checkpoint :=
     Except.ok.inj ((report.raw.readCheckpoint loadedNow).symm.trans (report.raw.readCheckpoint loadedOld))
-  let next := reopenedWriter before table final
-  have phaseExact : session.phase = .ready next.installed := by
-    simpa only [next, reopenedWriter, SegmentedWriterState.ofReopen, exactTarget,
-      ← ready.resumed.bytes, ← ready.resumed.keeper] using phase
-  have reopened : report.attempt.run directory report.retry = .ok session final := ran
-  have keptExact : final.image.kept = before.files.kept := kept.trans trace.keepsSealed
-  have nextReady : next.Ready directory nextDescriptor := by
-    refine ⟨⟨exactTarget ▸ durable, ready.resumed.through, ready.resumed.keeper, ready.resumed.bytes,
-      ready.resumed.contents, ready.resumed.generation, ?_, ready.resumed.accepted, ready.resumed.ordered,
-      bounds, ⟨model, refines, represents⟩⟩, ?_, ready.chain, rfl, keptExact.trans ready.sealedFiles,
-      ready.active, rfl, owned⟩
-    · change SelectedIntegrityCheckpoint before.published.durable before.target.pair.manifest before.checkpoint
-      rw [← sameCheckpoint, ← exactTarget]
-      exact loaded
-    · exact ⟨ready.layout.ordered, ready.layout.forward, ready.layout.activeEnd, ready.layout.activeBytes⟩
-  exact ⟨next, ⟨ready.powerLossTrace _, session, final, table, reopened, phaseExact, rfl⟩, nextReady⟩
+  let next := reopenedWriter before writer.installed.table final
+  have count : writer.installed.walBytes = before.installed.walBytes := by
+    rw [nextReady.resumed.bytes, history, ready.resumed.bytes]
+  have active : writer.installed.activeFirst = before.installed.activeFirst := by
+    rw [nextReady.resumed.keeper, target, ← ready.resumed.keeper]
+  have installedExact : writer.installed = next.installed := by
+    change Installed.mk writer.installed.table writer.installed.generation writer.installed.walBytes
+        writer.installed.activeFirst = Installed.mk writer.installed.table before.installed.generation
+        before.installed.walBytes before.installed.activeFirst
+    rw [Installed.mk.injEq]
+    exact ⟨rfl, generation, count, active⟩
+  have published : writer.published = next.published := by
+    change CheckpointPublication.Image.mk writer.published.manifest writer.published.durable =
+      CheckpointPublication.Image.mk (final.image.directory.project .manifest) before.published.durable
+    rw [CheckpointPublication.Image.mk.injEq]
+    exact ⟨nextReady.manifestFiles.trans (congrArg (fun files : FileImage => files.directory.project .manifest) files),
+      durable⟩
+  have exactWriter : writer = next := by
+    change SegmentedWriterState.mk writer.installed writer.wal writer.history writer.files writer.published
+        writer.target writer.checkpoint writer.owners =
+      SegmentedWriterState.mk next.installed next.wal next.history next.files next.published
+        next.target next.checkpoint next.owners
+    rw [SegmentedWriterState.mk.injEq]
+    exact ⟨installedExact, wal, history, files, published, target, sameCheckpoint, owners⟩
+  exact ⟨next, ⟨ready.powerLossTrace _, session, final, writer.installed.table, ran, installedExact ▸ phase, rfl⟩,
+    exactWriter ▸ nextReady⟩
+
+theorem installs (report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor)
+    (observed : report.Valid) (ready : before.Ready directory oldDescriptor) :
+    ∃ after, report.Installs after ∧ after.Ready directory nextDescriptor := by
+  obtain ⟨after, endpoint, next⟩ := report.installsRetained observed ready.toRetained
+  have chain : WalSegment.Chain after.history 0 after.wal.segments := by
+    obtain ⟨_, _, _, _, _, rfl⟩ := endpoint.openEffect
+    exact ready.chain
+  exact ⟨after, endpoint, ⟨next.resumed, next.layout, chain, next.directoryFiles, next.sealedFiles,
+    next.active, next.manifestFiles, next.held⟩⟩
 
 theorem Installs.unique {report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor}
     {left right : SegmentedWriterState} (a : report.Installs left) (b : report.Installs right) : left = right := by
@@ -237,6 +265,12 @@ theorem Installs.preservesReady {report : SegmentedReadyPowerLossReport director
     {after : SegmentedWriterState} (endpoint : report.Installs after) (observed : report.Valid)
     (ready : before.Ready directory oldDescriptor) : after.Ready directory nextDescriptor := by
   obtain ⟨_, exactEndpoint, next⟩ := report.installs observed ready
+  exact exactEndpoint.unique endpoint ▸ next
+
+theorem Installs.preservesRetained {report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor}
+    {after : SegmentedWriterState} (endpoint : report.Installs after) (observed : report.Valid)
+    (ready : before.RetainedReady directory oldDescriptor) : after.RetainedReady directory nextDescriptor := by
+  obtain ⟨_, exactEndpoint, next⟩ := report.installsRetained observed ready
   exact exactEndpoint.unique endpoint ▸ next
 
 theorem Installs.history {report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor}
