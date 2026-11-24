@@ -55,14 +55,21 @@ def writeEffects (cut : MarkerInterruption) (appendCrashTails : List ByteArray)
   | .rename applied => { completed with rename := stopAfter applied }
   | .directorySync applied => { completed with directorySync := stopAfter applied }
 
-/-- The full append and the actual marker primitives preceding the
+/-- Interpret the completed append and the marker steps before the
+interrupted callback. Single writes and batches share this prefix. -/
+def reachedWith (cut : MarkerInterruption) (history : List WAL.Write) (marker : ByteArray)
+    (appendCrashTails : List ByteArray) (scratch : Option (ByteArray × Bool))
+    (append : WriteEffects → EStateM Unit WriteFiles Unit) : WriteFiles :=
+  let completed := completedEffects appendCrashTails
+  writeFilesAfter (commit (append completed)
+    ((Publication.steps.take cut.index).forM (completed.markerStep marker)) (WriteFiles.initial history scratch))
+
+/-- The single-frame append and the marker primitives preceding the
 interrupted callback have taken effect. -/
 def reached (cut : MarkerInterruption) (history : List WAL.Write) (event : WAL.Write)
     (appendCrashTails : List ByteArray) (scratch : Option (ByteArray × Bool)) : WriteFiles :=
   let marker := encode (WAL.encode (history ++ [event])).size.toUInt64
-  let completed := completedEffects appendCrashTails
-  writeFilesAfter (commit (completed.appendFrame event)
-    ((Publication.steps.take cut.index).forM (completed.markerStep marker)) (WriteFiles.initial history scratch))
+  cut.reachedWith history marker appendCrashTails scratch (·.appendFrame event)
 
 /-- Apply the possible physical effect of the reached callback. The
 unchanged stage case keeps any existing scratch bytes and their sync bit. -/
