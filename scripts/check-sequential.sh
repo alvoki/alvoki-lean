@@ -80,3 +80,4 @@ lake env leanchecker Alvoki.Storage.Publication.DirectoryPublicationModel
 lake env lean --run Alvoki/Checks/SequentialChecks.lean
 lake env lean --run Alvoki/Checks/PackedTableChecks.lean
 lake exe alvoki-disk-checks
+python3 ../scripts/check-disk-process-death.py .lake/build/bin/alvoki-disk-checks
