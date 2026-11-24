@@ -1418,8 +1418,8 @@ private def checkWriteBatch (dir : FilePath) : IO Unit := do
   let wal := dir / firstWalSegment
   let marker := dir / "WAL.commit"
   let staged := dir / "WAL.commit.next"
-  let prefix := WAL.encodeFrame ⟨1, 7, some 99⟩
-  let before := WAL.Boundary.encode prefix.size.toUInt64
+  let acknowledged := WAL.encodeFrame ⟨1, 7, some 99⟩
+  let before := WAL.Boundary.encode acknowledged.size.toUInt64
   let batch := batchFramesAfter 1
   let db ← DiskTable.open dir
   try
@@ -1427,7 +1427,7 @@ private def checkWriteBatch (dir : FilePath) : IO Unit := do
     let old ← db.acquire
     try
       check ((← db.writeBatch []) == 1) "empty batch advanced the sequence"
-      check ((← IO.FS.readBinFile wal) == prefix && (← IO.FS.readBinFile marker) == before &&
+      check ((← IO.FS.readBinFile wal) == acknowledged && (← IO.FS.readBinFile marker) == before &&
         !(← staged.pathExists)) "empty batch changed the durable files"
       -- A malformed active size rejects before a staging file is created.
       IO.FS.writeBinFile wal ByteArray.empty
@@ -1437,7 +1437,7 @@ private def checkWriteBatch (dir : FilePath) : IO Unit := do
         "batch preflight did not preserve the keeper size error"
       check ((← IO.FS.readBinFile wal).isEmpty && (← IO.FS.readBinFile marker) == before &&
         !(← staged.pathExists)) "rejected batch changed the WAL or marker"
-      IO.FS.writeBinFile wal prefix
+      IO.FS.writeBinFile wal acknowledged
       db.rotateWal
       let .ok last ← (db.writeBatchWithOutcome batchRows).toBaseIO
         | throw (IO.userError "valid write batch was not acknowledged")
@@ -1445,9 +1445,9 @@ private def checkWriteBatch (dir : FilePath) : IO Unit := do
       check ((← db.lookup old.handle 7) == some (some 99))
         "write batch changed the pinned pre-batch snapshot"
       expectBatchHistory db 1 true
-      check ((← IO.FS.readBinFile wal) == prefix &&
+      check ((← IO.FS.readBinFile wal) == acknowledged &&
         (← IO.FS.readBinFile (dir / "WAL-segment-1")) == batch &&
-        (← IO.FS.readBinFile marker) == WAL.Boundary.encode (prefix.size + batch.size).toUInt64 &&
+        (← IO.FS.readBinFile marker) == WAL.Boundary.encode (acknowledged.size + batch.size).toUInt64 &&
         !(← staged.pathExists)) "write batch published the wrong frames or absolute marker"
     finally db.release old.handle
   finally db.close
@@ -1471,9 +1471,9 @@ private def checkBatchSyncFailure (root : FilePath) (publishMarker : Bool) : IO 
     check ((← db.write 7 (some 99)) == 1) "unexpected sequence before batch fault"
     db.checkpoint
   finally db.close
-  let prefix := WAL.encodeFrame ⟨1, 7, some 99⟩
-  let submitted := prefix ++ batchFramesAfter 1
-  let oldMarker := WAL.Boundary.encode prefix.size.toUInt64
+  let acknowledged := WAL.encodeFrame ⟨1, 7, some 99⟩
+  let submitted := acknowledged ++ batchFramesAfter 1
+  let oldMarker := WAL.Boundary.encode acknowledged.size.toUInt64
   let newMarker := WAL.Boundary.encode submitted.size.toUInt64
   let (emptyAccepted, emptySyncs) ← probeDisk bin dir none "--empty-batch-once"
   check (emptyAccepted && emptySyncs == alignedWalSyncs dir wal)
@@ -1497,7 +1497,7 @@ private def checkBatchSyncFailure (root : FilePath) (publishMarker : Bool) : IO 
   try
     expectManifest dir 1 1 0 1
     expectBatchHistory reopened 1 publishMarker
-    let expected := if publishMarker then submitted else prefix
+    let expected := if publishMarker then submitted else acknowledged
     check ((← IO.FS.readBinFile wal) == expected &&
       (← IO.FS.readBinFile marker) == WAL.Boundary.encode expected.size.toUInt64)
       "batch recovery did not select the old or complete new WAL"
@@ -1512,14 +1512,14 @@ private def checkPartialBatchTail (dir : FilePath) : IO Unit := do
   finally db.close
   let wal := dir / firstWalSegment
   let marker := dir / "WAL.commit"
-  let prefix := WAL.encodeFrame ⟨1, 7, some 99⟩
+  let acknowledged := WAL.encodeFrame ⟨1, 7, some 99⟩
   let partialBatch := (batchFramesAfter 1).extract 0 (2 * WAL.frameSize + 11)
-  IO.FS.writeBinFile wal (prefix ++ partialBatch)
+  IO.FS.writeBinFile wal (acknowledged ++ partialBatch)
   let reopened ← DiskTable.open dir
   try
     expectBatchHistory reopened 1 false
-    check ((← IO.FS.readBinFile wal) == prefix &&
-      (← IO.FS.readBinFile marker) == WAL.Boundary.encode prefix.size.toUInt64)
+    check ((← IO.FS.readBinFile wal) == acknowledged &&
+      (← IO.FS.readBinFile marker) == WAL.Boundary.encode acknowledged.size.toUInt64)
       "reopen kept a complete frame from the partial batch tail"
     check ((← reopened.writeBatch batchRows) == 5) "repaired WAL did not accept a fresh batch"
     expectBatchHistory reopened 1 true
