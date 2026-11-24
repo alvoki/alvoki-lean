@@ -45,26 +45,53 @@ structure SegmentedCollectionReport (directory : DiskDirectory) (before : Segmen
   syncDirectory : FilePath → EStateM IO.Error WalSealedUnlinkImage Unit
   effects : WalSealedUnlinkReports directory removeFile syncDirectory
 
-namespace SegmentedCollectionReport
-
-variable {directory : DiskDirectory} {before : SegmentedWriterState}
-
-def run (report : SegmentedCollectionReport directory before) :
-    EStateM.Result IO.Error WalSealedUnlinkImage Unit :=
-  RunCollection.run report.offsets (WalSealedUnlinkImage.performPaths directory report.removeFile report.syncDirectory)
-    (.start before.wal)
-
-private def afterCollection (before : SegmentedWriterState) (remaining : WalSealedUnlinkImage) :
+/-- Update only the sealed inventory in the installed writer. The
+dispatcher and its final directory barrier justify this projection. -/
+def SegmentedWriterState.afterWalCollection (before : SegmentedWriterState) (remaining : WalSealedUnlinkImage) :
     SegmentedWriterState :=
   { before with
     wal := remaining.visible
     files := { before.files with
       kept := (remaining.visible.checkpointReopenFiles remaining.visible.directory none).kept } }
 
+theorem SegmentedWriterState.RetainedReady.afterWalCollection {directory descriptor}
+    {before : SegmentedWriterState} {remaining : WalSealedUnlinkImage}
+    (ready : before.RetainedReady directory descriptor) (trace : WalSealedUnlinkTrace before.wal remaining)
+    (sameDirectory : remaining.visible.directory = before.wal.directory)
+    (settled : remaining.crashSealed = [remaining.visible.sealed]) :
+    (before.afterWalCollection remaining).RetainedReady directory descriptor := by
+  have survives : remaining.visible.sealed ∈ remaining.crashSealed := by rw [settled]; exact List.mem_cons_self ..
+  have retry : WalSegmentCollectionRetry before.wal remaining.visible :=
+    (trace.projects ready.layout).2 remaining.visible.sealed survives
+  exact ⟨{ ready.resumed with ready := {
+      selected := ready.resumed.ready.selected
+      settled := ready.resumed.ready.settled
+      keeper := ready.resumed.ready.keeper
+      keeperDurable := ready.resumed.ready.keeperDurable
+      pruned := ready.resumed.ready.pruned } },
+    retry.readLayout ready.layout, retry.valid ready.valid,
+    fun segment member => ready.spans segment (retry.sealedSublist.subset member),
+    ready.directoryFiles.trans sameDirectory.symm, rfl,
+    ready.active.trans (congrArg WalSegment.first retry.keepsActive).symm, ready.manifestFiles, ready.held⟩
+
+namespace SegmentedCollectionReport
+
+variable {directory : DiskDirectory} {before : SegmentedWriterState}
+
+/-- Retry from the prior callback's physical image. Its visible names
+and its admitted crash survivors can differ until a directory barrier. -/
+def runFrom (report : SegmentedCollectionReport directory before) (reached : WalSealedUnlinkImage) :
+    EStateM.Result IO.Error WalSealedUnlinkImage Unit :=
+  RunCollection.run report.offsets (WalSealedUnlinkImage.performPaths directory report.removeFile report.syncDirectory) reached
+
+def run (report : SegmentedCollectionReport directory before) :
+    EStateM.Result IO.Error WalSealedUnlinkImage Unit :=
+  report.runFrom (.start before.wal)
+
 /-- A successful call installs the exact remaining sealed inventory in the
 same writer. The in-memory table and held owner come from the prior state. -/
 def Installs (report : SegmentedCollectionReport directory before) (after : SegmentedWriterState) : Prop :=
-  ∃ remaining, report.run = .ok () remaining ∧ after = afterCollection before remaining
+  ∃ remaining, report.run = .ok () remaining ∧ after = before.afterWalCollection remaining
 
 theorem Installs.unique {report : SegmentedCollectionReport directory before} {left right : SegmentedWriterState}
     (a : report.Installs left) (b : report.Installs right) : left = right := by
@@ -92,23 +119,14 @@ theorem Installs.outcome {report : SegmentedCollectionReport directory before} {
     report.approved report.removeFile report.syncDirectory report.effects
   dsimp only at reached
   have dispatch := ran
-  unfold SegmentedCollectionReport.run at dispatch
+  unfold SegmentedCollectionReport.run runFrom at dispatch
   rw [dispatch] at reached
   obtain ⟨complete, trace⟩ := reached
   have retry := (trace.projects ready.layout).1
   have ⟨sameDirectory, settled⟩ := complete ▸
     completedCollection report.offsets (.start before.wal) ready.walDirectorySettled
-  refine ⟨?_, sameDirectory, retry.keepsActive, rfl, rfl, rfl, rfl, remaining, ran, rfl, settled⟩
-  exact ⟨{ ready.resumed with ready := {
-      selected := ready.resumed.ready.selected
-      settled := ready.resumed.ready.settled
-      keeper := ready.resumed.ready.keeper
-      keeperDurable := ready.resumed.ready.keeperDurable
-      pruned := ready.resumed.ready.pruned } },
-    retry.readLayout ready.layout, retry.valid ready.valid,
-    fun segment member => ready.spans segment (retry.sealedSublist.subset member),
-    ready.directoryFiles.trans sameDirectory.symm, rfl,
-    ready.active.trans (congrArg WalSegment.first retry.keepsActive).symm, ready.manifestFiles, ready.held⟩
+  exact ⟨ready.afterWalCollection trace sameDirectory settled, sameDirectory, retry.keepsActive,
+    rfl, rfl, rfl, rfl, remaining, ran, rfl, settled⟩
 
 theorem Installs.preservesRetained {report : SegmentedCollectionReport directory before} {after : SegmentedWriterState}
     (installed : report.Installs after) {descriptor : Nat} (ready : before.RetainedReady directory descriptor) :
@@ -127,7 +145,7 @@ theorem Installs.reclaimsPlan {report : SegmentedCollectionReport directory befo
     report.approved report.removeFile report.syncDirectory report.effects
   dsimp only at reached
   have dispatched := ran
-  unfold SegmentedCollectionReport.run at dispatched
+  unfold SegmentedCollectionReport.run runFrom at dispatched
   rw [dispatched] at reached
   have ⟨visible, durable⟩ := reached.1 ▸
     (WalSealedUnlinkImage.start before.wal).completeSealed report.offsets

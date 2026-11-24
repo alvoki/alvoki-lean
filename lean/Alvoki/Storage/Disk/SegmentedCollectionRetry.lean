@@ -4,14 +4,6 @@ namespace Alvoki.Storage.DiskSession
 
 open WalSegmentRepair
 
-/-- A retry executes against the exact namespace returned by the prior
-attempt, including the sealed lists still admitted after power loss. -/
-def SegmentedCollectionReport.runFrom {directory : DiskDirectory} {before : SegmentedWriterState}
-    (report : SegmentedCollectionReport directory before) (reached : WalSealedUnlinkImage) :
-    EStateM.Result IO.Error WalSealedUnlinkImage Unit :=
-  RunCollection.run report.offsets (WalSealedUnlinkImage.performPaths directory report.removeFile report.syncDirectory)
-    reached
-
 /-- A failed pass leaves the writer in a collection-only stretch. Keep the
 original writer for the logical state and the last callback result for the
 physical namespace. Repeated errors never start from a fresh durable list. -/
@@ -100,10 +92,7 @@ theorem settles (failed : SegmentedCollectionErrors directory before reached)
     (ready : before.RetainedReady directory descriptor) (report : SegmentedCollectionReport directory before)
     {remaining : WalSealedUnlinkImage} (returned : report.runFrom reached = .ok () remaining) :
     remaining.crashSealed = [remaining.visible.sealed] ∧
-    ∃ next : SegmentedWriterState,
-      next.wal = remaining.visible ∧ next.history = before.history ∧ next.installed = before.installed ∧
-      next.target = before.target ∧ next.checkpoint = before.checkpoint ∧ next.owners = before.owners ∧
-      next.RetainedReady directory descriptor := by
+      (before.afterWalCollection remaining).RetainedReady directory descriptor := by
   obtain ⟨trace, sameDir⟩ := failed.keepsNamespace ready
   have executed := trace.runPaths directory report.offsets report.approved report.removeFile report.syncDirectory report.effects
   dsimp only at executed
@@ -116,21 +105,7 @@ theorem settles (failed : SegmentedCollectionErrors directory before reached)
   have durable : remaining.crashSealed = [remaining.visible.sealed] := by
     rw [complete, RunCollection.steps, List.foldl_append]
     rfl
-  have retry := (finalTrace.projects ready.layout).1
-  let next := { before with
-    wal := remaining.visible
-    files := { before.files with kept := (remaining.visible.checkpointReopenFiles remaining.visible.directory none).kept } }
-  refine ⟨durable, next, rfl, rfl, rfl, rfl, rfl, rfl, ?_⟩
-  exact ⟨{ ready.resumed with ready := {
-      selected := ready.resumed.ready.selected
-      settled := ready.resumed.ready.settled
-      keeper := ready.resumed.ready.keeper
-      keeperDurable := ready.resumed.ready.keeperDurable
-      pruned := ready.resumed.ready.pruned } },
-    retry.readLayout ready.layout, retry.valid ready.valid,
-    fun segment member => ready.spans segment (retry.sealedSublist.subset member),
-    ready.directoryFiles.trans directoryFixed.symm, rfl,
-    ready.active.trans (congrArg WalSegment.first retry.keepsActive).symm, ready.manifestFiles, ready.held⟩
+  exact ⟨durable, ready.afterWalCollection finalTrace directoryFixed durable⟩
 
 end SegmentedCollectionErrors
 end Alvoki.Storage.DiskSession

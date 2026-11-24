@@ -817,6 +817,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSealedUnlinkImage.completeSealed
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.reclaimsPlan
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.reclaimsObserved
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.afterWalCollection
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.keepsNamespace
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.keepsReadDescriptors
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.settles
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.cleanReopenRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.Installs.preservesRetained

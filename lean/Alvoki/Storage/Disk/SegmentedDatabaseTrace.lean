@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Disk.SegmentedCollectionPowerLoss
-import Alvoki.Storage.Disk.SegmentedCollectionStep
+import Alvoki.Storage.Disk.SegmentedCollectionRetry
 import Alvoki.Storage.Disk.SegmentedAppendRecovery
 import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
@@ -81,7 +81,6 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (report : SegmentedRotationPowerLossReport directory before descriptor)
       (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
-
   | collectionPowerLoss {log writer descriptor before after}
       (enabled : allowCollection = true)
       (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
@@ -93,6 +92,13 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor before)
       (report : SegmentedCollectionReport directory before) (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
+  | collectionRetry {log descriptor before reached remaining}
+      (enabled : allowCollection = true)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor before)
+      (failed : SegmentedCollectionErrors directory before reached)
+      (report : SegmentedCollectionReport directory before) (returned : report.runFrom reached = .ok () remaining) :
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor
+        (before.afterWalCollection remaining)
 
 private theorem retainsInterruptedAppend {initial before after : List WAL.Write} {log retained event}
     (history : before = initial ++ retained) (submitted : MarkedSessionRetention log retained)
@@ -146,6 +152,7 @@ theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initi
     exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
   | collectionPowerLoss enabled => cases enabled
   | collection enabled => cases enabled
+  | collectionRetry enabled => cases enabled
 
 theorem SegmentedDatabaseTrace.preservesRetained {directory initialDescriptor initial allowCollection log descriptor last}
     (trace : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
@@ -194,6 +201,9 @@ theorem SegmentedDatabaseTrace.preservesRetained {directory initialDescriptor in
   | collection _ _ _ endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesRetained before, retained, endpoint.history.trans history, submitted⟩
+  | collectionRetry _ _ failed report returned ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨(failed.settles before report returned).2, retained, history, submitted⟩
 
 /-- A history from the first installed empty writer retains all
 acknowledgements in order. It may retain the uncertain append at a
