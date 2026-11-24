@@ -237,6 +237,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionSpace
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
+lake env leanchecker Alvoki.Storage.Disk.CachedRetryInstallation
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadWork

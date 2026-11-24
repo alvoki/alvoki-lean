@@ -141,6 +141,7 @@ import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
 import Alvoki.Storage.Disk.CheckpointRunChunkReports
 import Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 import Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
+import Alvoki.Storage.Disk.CachedRetryInstallation
 import Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
@@ -688,6 +689,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_completes
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromHealthyBootstrap
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_markerlessBranch
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_recoveryBranch
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_readEmpty
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_liftReports
 #check_axioms Alvoki.Storage.replay_drop_append
@@ -1071,6 +1073,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.readExact
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.readSelected
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.completes
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedRetryCompletes
 #check_axioms Alvoki.Storage.DiskSession.UncheckpointedCachedReadReports.reopens
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.run_error
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.immediateReacquire
