@@ -2,7 +2,7 @@ import Alvoki.Storage.Disk.VersionedCheckpointRetry
 import Alvoki.Storage.Disk.VersionedMarkedRecovery
 import Alvoki.Storage.Disk.MarkedReopenStability
 import Alvoki.Storage.Disk.LockedMarkedRead
-import Alvoki.Storage.Disk.LockedRecoveryReads
+import Alvoki.Storage.Disk.LockedOpenFileReads
 import Alvoki.Storage.Disk.LockedVersionedCheckpointRead
 
 namespace Alvoki.Storage.CheckpointPublication

@@ -27,7 +27,6 @@ import Alvoki.Storage.Disk.RecoveryProgress
 import Alvoki.Storage.Disk.LockedOpenFileReads
 import Alvoki.Storage.Disk.LockedMarkedRead
 import Alvoki.Storage.Disk.LockedRecoveryReads
-import Alvoki.Storage.Disk.LegacyTraceEntry
 import Alvoki.Storage.Disk.LockedRecoveryCompletion
 import Alvoki.Storage.Disk.UncertainWriteTraceEntry
 import Alvoki.Storage.Disk.LockedInterruptedCheckpoint
@@ -59,11 +58,7 @@ import Alvoki.Storage.Disk.WalSegmentRepairOpen
 import Alvoki.Storage.Disk.WalSegmentReopenEffects
 import Alvoki.Storage.Disk.WalSegmentReplayStability
 import Alvoki.Storage.Disk.WalSegmentRepair
-import Alvoki.Storage.Disk.LegacyBootstrapRetry
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
-import Alvoki.Storage.Disk.LegacyWalRecovery
-import Alvoki.Storage.Disk.LegacyMarkedBootstrap
-import Alvoki.Storage.Disk.LegacyBootstrapCuts
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
 import Alvoki.Storage.Disk.RecoveredPinRefinement
 import Alvoki.Storage.Disk.CheckpointHistory
@@ -122,10 +117,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.decodeOrdinals_sound
 #check_axioms Alvoki.WAL.decodeOrdinals_reencode
 #check_axioms Alvoki.WAL.decodeOrdinals_repairPrefix
-#check_axioms Alvoki.Storage.recoverLegacy_exact
-#check_axioms Alvoki.Storage.recoverLegacy_decode_error
-#check_axioms Alvoki.Storage.recoverLegacy_marked
-#check_axioms Alvoki.Storage.CheckpointForRecovery.recoverLegacy_refines
 #check_axioms Alvoki.WAL.repairPrefix_encode
 #check_axioms Alvoki.WAL.decode_repairPrefix
 #check_axioms Alvoki.Manifest.decode_encode
@@ -303,7 +294,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.open_fileTargets
 #check_axioms Alvoki.Storage.OpenPathReadReports.checkpointCompletes
 #check_axioms Alvoki.WAL.Boundary.RecoveryReads.ofLockedPaths
-#check_axioms Alvoki.WAL.Boundary.legacyBootstrapRetry_observedReady
 #check_axioms Alvoki.WAL.Boundary.RecoveryBoundary.exposesExecution
 #check_axioms Alvoki.WAL.Boundary.RecoveryBoundary.completesWithLock
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.reopenAfterWriteErrorWithLock
@@ -540,9 +530,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.freshMarkedOpen_ready
 #check_axioms Alvoki.WAL.Boundary.emptyBootstrapOpen_ready
 #check_axioms Alvoki.WAL.Boundary.withRecoveredOpen_markerless_rejects
-#check_axioms Alvoki.WAL.Boundary.legacyMarkedOpen_ready
-#check_axioms Alvoki.WAL.Boundary.legacyBootstrapRetry_completes
-#check_axioms Alvoki.WAL.Boundary.runLegacyMarkedOpen_eq_shared
 #check_axioms Alvoki.WAL.Boundary.runSharedMarkedOpen_eq
 #check_axioms Alvoki.WAL.Boundary.MarkedWalReads.runSharedMarkedOpen_eq
 #check_axioms Alvoki.WAL.Boundary.MarkedWalReads.runSharedMarkedOpen_success
@@ -550,9 +537,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.MarkedWalReads.runSharedMarkedOpen_installedWal
 #check_axioms Alvoki.WAL.Boundary.MarkedSessionOpen.ofSharedOpen
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseStep.interruptedCheckpointFromOpen
-#check_axioms Alvoki.WAL.Boundary.ReopenImage.LegacyBootstrapValid.adoptReport
-#check_axioms Alvoki.WAL.Boundary.ReopenImage.LegacyBootstrapValid.crash
-#check_axioms Alvoki.WAL.Boundary.ReopenImage.LegacyBootstrapValid.replay
 #check_axioms Alvoki.WAL.Boundary.runMarkedReopen_repair_outcome
 #check_axioms Alvoki.WAL.Boundary.runMarkedReopen_durability_success
 #check_axioms Alvoki.WAL.Boundary.EmptyBootstrapAttempts.valid

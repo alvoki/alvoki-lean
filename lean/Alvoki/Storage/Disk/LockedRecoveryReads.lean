@@ -5,14 +5,6 @@ namespace Alvoki.WAL.Boundary
 
 open Storage
 
-theorem observedOptional_success {read : Except IO.Error (Option ByteArray)}
-    {expected : Option ByteArray} (reported : ∃ value, read = .ok value)
-    (agrees : ∀ value, read.mapError toString = .ok value → value = expected) :
-    read.mapError toString = .ok expected := by
-  obtain ⟨value, observed⟩ := reported
-  have accepted : read.mapError toString = .ok value := by rw [observed]; rfl
-  rw [accepted, agrees value accepted]
-
 /-- Successful callback reports at the acquired directory's actual names
 supply the read premises for every admitted recovery boundary. A successful
 optional read can report absence. Run reads cover only the indices issued

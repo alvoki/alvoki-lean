@@ -75,7 +75,6 @@ lake env leanchecker Alvoki.Storage.Disk.RecoveryProgress
 lake env leanchecker Alvoki.Storage.Disk.LockedOpenFileReads
 lake env leanchecker Alvoki.Storage.Disk.LockedMarkedRead
 lake env leanchecker Alvoki.Storage.Disk.LockedRecoveryReads
-lake env leanchecker Alvoki.Storage.Disk.LegacyTraceEntry
 lake env leanchecker Alvoki.Storage.Disk.LockedRecoveryCompletion
 lake env leanchecker Alvoki.Storage.Disk.UncertainWriteTraceEntry
 lake env leanchecker Alvoki.Storage.Disk.LockedInterruptedCheckpoint
@@ -120,11 +119,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairOpen
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReopenEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReplayStability
-lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapRetry
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
-lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery
-lake env leanchecker Alvoki.Storage.Disk.LegacyMarkedBootstrap
-lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapCuts
 lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
 lake env leanchecker Alvoki.Storage.Disk.RecoveredPinRefinement
 lake env leanchecker Alvoki.Storage.Disk.WalReplayAgreement

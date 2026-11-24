@@ -4,13 +4,11 @@ namespace Alvoki.WAL.Boundary
 
 open Storage
 
-/-- The concrete inputs to the three shared native recovery interpreters.
+/-- The concrete inputs to the empty and marked recovery interpreters.
 The marked interpreter covers settled, checkpoint-cut and write-cut recovery. -/
 inductive RecoveryExecution where
   | empty (checkpoint : Except String (Option (PackedTable × UInt64)))
       (marker wal : Except String (Option ByteArray)) (reports : FreshOpenReports) (before : ReopenImage)
-  | legacy (checkpoint : Option (PackedTable × UInt64)) (marker : Option ByteArray)
-      (wal : ByteArray) (reports : LegacyOpenReports) (before : ReopenImage)
   | marked (checkpoint : Except String (Option (PackedTable × UInt64)))
       (marker wal : Except String (Option ByteArray)) (repair : Publication.Step → RepairReport)
       (aligned : AlignedSyncReport) (before : ReopenImage)
@@ -26,8 +24,6 @@ success, or the recovery error. The recovery interpreters retain their own
 file-effect contracts on failure. -/
 def RecoveryExecution.run : RecoveryExecution → Except String ((PackedTable × UInt64 × Nat) × ReopenImage)
   | .empty checkpoint marker wal reports before => (runFreshMarkedOpen checkpoint marker wal reports).run before
-  | .legacy checkpoint marker wal reports before =>
-    returnedOpen (runLegacyRetryOpen checkpoint marker wal reports before)
   | .marked checkpoint marker wal repair aligned before =>
     returnedOpen (runSharedMarkedOpen checkpoint marker wal repair aligned before)
 
@@ -37,7 +33,7 @@ private theorem returnedOpen_ok {result : EStateM.Result String ReopenImage (Pac
   cases result <;> simp [returnedOpen]
 
 /-- Each admitted boundary identifies one concrete evaluator and the same
-successful result. Legacy inputs come from the actual reported reads. -/
+successful result. -/
 theorem RecoveryBoundary.exposesExecution
     {opened : (PackedTable × UInt64 × Nat) → ReopenImage → Prop} {manifest : Option ByteArray}
     {allowsHistory : List WAL.Write → Prop} (boundary : RecoveryBoundary opened manifest allowsHistory) :
@@ -46,20 +42,6 @@ theorem RecoveryBoundary.exposesExecution
   cases boundary with
   | empty reads _ reports _ _ _ =>
     exact ⟨.empty reads.checkpointReads.result reads.walReads.marker reads.walReads.wal reports _, fun _ _ => Iff.rfl⟩
-  | @legacy before events fixed reads valid covered fits reports success =>
-    obtain ⟨_, _, _, _, opened, _, _, _⟩ := (RecoveryBoundary.legacy fixed reads valid covered fits reports success).completes
-    obtain ⟨loaded, marker, wal, checkpointRead, markerRead, walRead, _⟩ := opened
-    refine ⟨.legacy loaded marker wal reports before, ?_⟩
-    intro installed after
-    constructor
-    · intro ran
-      exact ⟨loaded, marker, wal, checkpointRead, markerRead, walRead, returnedOpen_ok.mp ran⟩
-    · rintro ⟨actualCheckpoint, actualMarker, actualWal, actualCheckpointRead, actualMarkerRead, actualWalRead, ran⟩
-      have sameCheckpoint := Except.ok.inj (checkpointRead.symm.trans actualCheckpointRead)
-      have sameMarker := Except.ok.inj (markerRead.symm.trans actualMarkerRead)
-      have sameWal := Option.some.inj (Except.ok.inj (walRead.symm.trans actualWalRead))
-      subst actualCheckpoint actualMarker actualWal
-      exact returnedOpen_ok.mpr ran
   | settled _ reads _ _ _ _ report =>
     exact ⟨.marked reads.checkpointReads.result reads.walReads.marker reads.walReads.wal report .success _,
       fun _ _ => returnedOpen_ok⟩

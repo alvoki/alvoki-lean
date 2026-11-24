@@ -1,5 +1,4 @@
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
-import Alvoki.Storage.Disk.LegacyBootstrapRetry
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
 import Alvoki.Storage.Disk.MarkedWriteReopenProgress
 
@@ -35,19 +34,6 @@ inductive RecoveryBoundary :
         (fun installed after =>
           (runFreshMarkedOpen reads.checkpointReads.result reads.walReads.marker reads.walReads.wal reports).run before =
             .ok (installed, after)) none (· = [])
-  | legacy {before : ReopenImage} {events : List WAL.Write} (fixed : FixedMarkedCheckpoint)
-      (reads : RecoveryReads fixed.image before fixed.manifest)
-      (valid : before.LegacyBootstrapValid fixed.manifest events)
-      (covered : fixed.table.committed.toNat ≤ events.length)
-      (fits : (WAL.encode events).size < UInt64.size) (reports : LegacyOpenReports)
-      (success : match before.directory.active.walBoundary with
-        | none => ∀ bytes, before.wal.active = some bytes → reports.Succeeds bytes.size (WAL.encode events).size
-        | some _ => reports.aligned = .success) :
-      RecoveryBoundary
-        (fun installed after => ∃ loaded marker contents, reads.checkpointReads.result = .ok loaded ∧
-          reads.walReads.marker = .ok marker ∧ reads.walReads.wal = .ok (some contents) ∧
-          runLegacyRetryOpen loaded marker contents reports before = .ok installed after)
-        fixed.manifest (· = events)
   | settled {initial before : ReopenImage} {pending : List WAL.Write} (fixed : FixedMarkedCheckpoint)
       (reads : RecoveryReads fixed.image before before.directory.active.manifest)
       (settled : initial.SettledFor fixed.manifest (fixed.covered ++ pending))
@@ -180,12 +166,6 @@ theorem RecoveryBoundary.completes
     obtain ⟨after, fixed, opened, ready, absent, _⟩ := emptyBootstrapOpen_ready valid
       reads.checkpointReads reads.walReads reads.readManifest reads.readMarker reads.readWal reports created synced published
     exact ⟨.empty, 0, after, [], opened, absent ▸ ready.settled, rfl, rfl⟩
-  | legacy fixed reads valid covered fits reports success =>
-    obtain ⟨loaded, marker, contents, table, after, checkpointRead, markerRead, walRead,
-      opened, _, ready, _⟩ := legacyBootstrapRetry_completes fixed valid covered fits
-        reads.checkpointReads reads.readManifest reads.readRuns reads.walReads reads.readMarker reads.readWal reports success
-    exact ⟨table, (loaded.getD (.empty, 0)).2, after, _,
-      ⟨loaded, marker, contents, checkpointRead, markerRead, walRead, opened⟩, ready.settled, rfl, ready.count.symm⟩
   | settled fixed reads settled fits ordered attempts report =>
     obtain ⟨table, generation, opened, settled, count⟩ :=
       reads.complete_settled fixed settled fits ordered attempts report

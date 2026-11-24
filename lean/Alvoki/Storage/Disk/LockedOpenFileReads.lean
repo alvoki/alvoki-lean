@@ -6,6 +6,14 @@ namespace Alvoki.Storage
 open System
 open WAL.Boundary (MarkedWalReads ReopenImage)
 
+theorem _root_.Alvoki.WAL.Boundary.observedOptional_success {read : Except IO.Error (Option ByteArray)}
+    {expected : Option ByteArray} (reported : ∃ value, read = .ok value)
+    (agrees : ∀ value, read.mapError toString = .ok value → value = expected) :
+    read.mapError toString = .ok expected := by
+  obtain ⟨value, observed⟩ := reported
+  have accepted : read.mapError toString = .ok value := by rw [observed]; rfl
+  rw [accepted, agrees value accepted]
+
 /-- The primitive reports are keyed by the same full paths used by the
 native adapter, including the run names chosen after manifest decoding. -/
 structure OpenPathReadReports where
