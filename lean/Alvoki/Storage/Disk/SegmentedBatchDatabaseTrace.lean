@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
+import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.SegmentedBatchAppend
 import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
 import Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
@@ -320,6 +321,42 @@ theorem SegmentedBatchDatabaseTrace.keyValueRefinement
   have same := replayed.deterministic sameReplay
   cases same
   exact ⟨pin, pinned, acquired, lookup, range⟩
+
+/-- The final writer uses the same snapshot guard as the adapter. The
+observed session comparison determines whether the newly acquired pin
+can read its exact abstract snapshot through that guard. -/
+theorem SegmentedBatchDatabaseTrace.guardedKeyValueRefinement
+    {directory initialDescriptor allowCollection log descriptor last}
+    {first : LockedFileState WalSegmentRotation.State} (bootstrap : BootstrapReady first.image)
+    (held : first.owners.Owns directory initialDescriptor)
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor (bootstrap.writerState first.owners)
+      allowCollection log descriptor last) :
+    ∃ reference : SnapshotTable UInt64,
+      SnapshotWalReplay .empty last.history reference ∧
+      DatabaseBatchRetention log last.history ∧
+      log.flatMap DatabaseSubmissions.acknowledged <+ last.history ∧
+      last.history <+ log.flatMap DatabaseSubmissions.submitted ∧
+      ∀ snapshot, last.installed.table.pins.floor ≤ snapshot → snapshot ≤ last.installed.table.committed →
+        ∃ pin pinned, last.installed.table.acquireAt snapshot = some (pin, pinned) ∧
+          ∀ (sameSession : Bool) (issuer current : Nat), sameSession = decide (issuer = current) →
+            (∀ key, readWithHandle (.ready pinned) sameSession (fun table => table.lookup pin.handle key) =
+              .ok (if issuer = current then some (reference.table.lookup key snapshot) else none)) ∧
+            ∀ start stop, readWithHandle (.ready pinned) sameSession (fun table => table.range pin.handle start stop) =
+              .ok (if issuer = current then some (reference.table.range start stop snapshot) else none) := by
+  obtain ⟨reference, replayed, retained, acknowledged, submitted, reads⟩ :=
+    trace.keyValueRefinement bootstrap held
+  refine ⟨reference, replayed, retained, acknowledged, submitted, ?_⟩
+  intro snapshot floor committed
+  obtain ⟨pin, pinned, acquired, lookup, range⟩ := reads snapshot floor committed
+  refine ⟨pin, pinned, acquired, ?_⟩
+  intro sameSession issuer current compared
+  by_cases localToken : issuer = current
+  · rw [compared.trans (decide_eq_true localToken)]
+    simp only [localToken, ↓reduceIte]
+    exact ⟨fun key => congrArg Except.ok (lookup key), fun start stop => congrArg Except.ok (range start stop)⟩
+  · simp only [localToken, ↓reduceIte]
+    exact ⟨fun key => readWithHandle_foreign pinned _ compared localToken,
+      fun start stop => readWithHandle_foreign pinned _ compared localToken⟩
 
 /-- Reacquiring an earlier pin's sequence preserves its reads while the
 final writer still retains that sequence. -/
