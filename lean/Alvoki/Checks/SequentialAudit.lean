@@ -44,6 +44,7 @@ import Alvoki.Storage.Disk.VersionedReadyMaintenance
 import Alvoki.Storage.Disk.VersionedUncertainWrite
 import Alvoki.Storage.Disk.IntegrityBootstrap
 import Alvoki.Storage.Disk.StrictCheckpointReopen
+import Alvoki.Storage.Disk.IntegrityDatabaseTrace
 import Alvoki.Storage.Disk.RetainedWalSuffix
 import Alvoki.Storage.Disk.RetainedWalBoundary
 import Alvoki.Storage.Disk.WalSegmentPathIdentity
@@ -373,6 +374,16 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.VersionedReady.acquireAt
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.VersionedReady.release
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.VersionedReady.pinnedReads
+#check_axioms Alvoki.Storage.RepresentsWalHistory.packedPinnedReadsAfterAppend
+#check_axioms Alvoki.WAL.Boundary.MarkedWriterState.manifestAfterWriteError
+#check_axioms Alvoki.WAL.Boundary.IntegrityOpenPaths.held
+#check_axioms Alvoki.WAL.Boundary.IntegrityLockedOpenReports.Returned.unique
+#check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseStep.refines
+#check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.refines
+#check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.canonicalReads
+#check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.canonicalReadsFromFresh
+#check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.pinnedReadsStable
+#check_axioms Alvoki.WAL.Boundary.IntegrityDatabaseTrace.reacquireReadsStable
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_encode
 #check_axioms Alvoki.WAL.decodeOrdinals_append_encoded
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_eq_recoverSelected

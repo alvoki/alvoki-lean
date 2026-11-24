@@ -43,6 +43,18 @@ private theorem MarkedWriterState.selectAfterWriteError {writer : MarkedWriterSt
   · exact ⟨ready.ordered, ready.length ▸ ready.fits⟩
   · exact ⟨orderedNext, extendedFits⟩
 
+/-- Write retries leave the predecessor's raw manifest selected. -/
+theorem MarkedWriterState.manifestAfterWriteError {writer : MarkedWriterState}
+    {manifest : Option ByteArray} (ready : writer.ReadyFor manifest)
+    {key : UInt64} {value : Option UInt64} {event : WAL.Write} {preparedTable : PackedTable}
+    (prepared : prepareWrite writer.table key value = some (event, preparedTable))
+    (fits : writer.walBytes + WAL.frameSize < UInt64.size)
+    {effects : WriteEffects} {cut before : ReopenImage}
+    (failed : runWriteEffectsFrom writer.history event effects writer.image = .error () cut)
+    (attempts : MarkedReopenAttempts cut before) : before.directory.active.manifest = manifest := by
+  obtain ⟨_, _, selected, _⟩ := MarkedWriterState.selectAfterWriteError ready prepared fits failed attempts
+  exact selected
+
 /-- A ready v1 or v2 writer can recover after an uncertain WAL submission.
 The same held lock supplies the exact versioned checkpoint bytes and WAL
 observations. The required repair or aligned sync completes as reported,

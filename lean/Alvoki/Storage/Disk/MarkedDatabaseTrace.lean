@@ -260,26 +260,14 @@ theorem MarkedDatabaseTrace.pinnedReadsStable {initial after : ObservedMarkedSta
     (newActive : newPin ∈ after.writer.table.pins.active) (sameSequence : newPin.sequence = oldPin.sequence) :
     (∀ key, after.writer.table.lookup newPin.handle key = initial.writer.table.lookup oldPin.handle key) ∧
     ∀ start stop, after.writer.table.range newPin.handle start stop = initial.writer.table.range oldPin.handle start stop := by
-  obtain ⟨_, history, _, _, _, replayed, reads⟩ := path.canonicalReads valid
-  rw [history] at replayed
-  obtain ⟨base, original, continued⟩ := replayed.split
-  obtain ⟨oldLookup, oldRange⟩ := valid.pinnedReads original oldActive
-  obtain ⟨_, _, initialValid⟩ := valid
-  obtain ⟨model, refined, represented⟩ := initialValid.live
-  have clock : model.committed = base.committed := by
-    apply UInt64.toNat_inj.mp
-    rw [represented.committed_count, original.committed_count]
-    exact (Nat.zero_add _).symm
-  have supported : oldPin.sequence ≤ base.committed :=
-    clock ▸ model.pins_committed oldPin (refined.pins ▸ oldActive)
-  have visible := continued.visibleEntry_before_suffix supported
-  obtain ⟨newLookup, newRange⟩ := reads newPin newActive
-  refine ⟨?_, ?_⟩
-  · intro key
-    rw [oldLookup, newLookup, sameSequence, Sequential.Table.lookup_eq_visibleEntry,
-      Sequential.Table.lookup_eq_visibleEntry, visible key]
-  · intro start stop
-    rw [oldRange, newRange, sameSequence, Sequential.Table.range_of_visibleEntry_eq start stop _ visible]
+  obtain ⟨_, history, _, ready, _, replayed, _⟩ := path.canonicalReads valid
+  obtain ⟨_, _, before⟩ := valid
+  obtain ⟨_, oldRefines, oldHistory⟩ := before.live
+  obtain ⟨_, _, afterValid⟩ := ready
+  obtain ⟨_, newRefines, newHistory⟩ := afterValid.live
+  rw [history] at replayed newHistory
+  exact oldHistory.packedPinnedReadsAfterAppend newHistory oldRefines newRefines replayed oldActive newActive
+    sameSequence
 
 /-- A previously active sequence at or above the final floor can be
 acquired again. The resulting pin returns the original point and range reads. -/

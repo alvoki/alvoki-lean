@@ -106,6 +106,35 @@ theorem RepresentsWalHistory.packedPinnedReads {table : PackedTable} {model refe
   exact ⟨fun key => by rw [PackedTable.lookup_refines refines, model.lookup_pinned member, lookup],
     fun start stop => by rw [PackedTable.range_refines refines, model.range_pinned member, range]⟩
 
+/-- Canonical replay of a WAL extension preserves reads at every sequence
+already pinned by the preceding table, when the later table supports it. -/
+theorem RepresentsWalHistory.packedPinnedReadsAfterAppend {before after : PackedTable}
+    {beforeModel afterModel reference : SnapshotTable UInt64} {history suffix : List WAL.Write}
+    (previous : RepresentsWalHistory history beforeModel)
+    (next : RepresentsWalHistory (history ++ suffix) afterModel)
+    (beforeRefines : before.Refines beforeModel) (afterRefines : after.Refines afterModel)
+    (replayed : SnapshotWalReplay .empty (history ++ suffix) reference) {oldPin newPin : SnapshotPin}
+    (oldActive : oldPin ∈ before.pins.active) (newActive : newPin ∈ after.pins.active)
+    (sameSequence : newPin.sequence = oldPin.sequence) :
+    (∀ key, after.lookup newPin.handle key = before.lookup oldPin.handle key) ∧
+    ∀ start stop, after.range newPin.handle start stop = before.range oldPin.handle start stop := by
+  obtain ⟨base, original, continued⟩ := replayed.split
+  obtain ⟨oldLookup, oldRange⟩ := previous.packedPinnedReads beforeRefines original oldActive
+  obtain ⟨newLookup, newRange⟩ := next.packedPinnedReads afterRefines replayed newActive
+  have clock : beforeModel.committed = base.committed := by
+    apply UInt64.toNat_inj.mp
+    rw [previous.committed_count, original.committed_count]
+    exact (Nat.zero_add _).symm
+  have supported : oldPin.sequence ≤ base.committed :=
+    clock ▸ beforeModel.pins_committed oldPin (beforeRefines.pins ▸ oldActive)
+  have visible := continued.visibleEntry_before_suffix supported
+  refine ⟨?_, ?_⟩
+  · intro key
+    rw [oldLookup, newLookup, sameSequence, Table.lookup_eq_visibleEntry,
+      Table.lookup_eq_visibleEntry, visible key]
+  · intro start stop
+    rw [oldRange, newRange, sameSequence, Table.range_of_visibleEntry_eq start stop _ visible]
+
 /-- Pins change the registry while preserving the represented table history. -/
 theorem RepresentsWalHistory.acquireAt {before after : PackedTable} {model : SnapshotTable UInt64}
     {history : List WAL.Write} {snapshot : UInt64} {pin : SnapshotPin}

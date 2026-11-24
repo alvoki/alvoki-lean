@@ -531,3 +531,7 @@ For admitted empty, settled, checkpoint-error and write-error reopen boundaries,
 ## Native checkpoint dependencies contain only v2
 
 The native adapter imports the common checkpoint header and structural loader, plus the v2 codec and strict reader. Earlier readers and the v1 and dual-format codecs now live in verification modules for existing proofs and rejection fixtures. The native generated instructions and relocations for open, checkpoint, writes, collection and the v2 codec match the preceding build. [Strict reader](../lean/Alvoki/Storage/Disk/IntegrityCheckpointRead.lean) · [Legacy codec model](../lean/Alvoki/Storage/Disk/LegacyManifest.lean) · [Versioned codec model](../lean/Alvoki/Storage/Disk/VersionedManifest.lean)
+
+## Finite strict v2 database trace from fresh open
+
+The trace starts with the actual strict bootstrap installer and takes the exact reported result at locked reopen steps in the same canonical directory. It composes acknowledged writes, successful and interrupted checkpoints, uncertain writes, clean restart, floor changes, compaction and local pins. Lean derives the final ready state and the history of retained frames, preserving all acknowledgements and accepting only frames from submissions. The packed table agrees with canonical point and range reads through active local pins. A fresh pin at any still-supported earlier sequence preserves its results. The remaining native boundaries are primitive reports and identity lifetimes. [Strict mixed trace](../lean/Alvoki/Storage/Disk/IntegrityDatabaseTrace.lean)

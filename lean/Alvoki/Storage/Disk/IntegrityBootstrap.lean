@@ -36,7 +36,8 @@ theorem ObservedMarkedState.VersionedReady.bootstrapWithLock
       owners (directory.file .lock) = none ∧ heldOwners.Owns directory descriptor ∧
       MarkedWriterState.observeReopen state.writer.table state.writer.image = some state.writer ∧
       state.VersionedReady ∧ state.HasIntegrityManifest ∧
-      state.writer.history = [] ∧ state.writer.table = .empty ∧ state.generation = 0 := by
+      state.writer.history = [] ∧ state.writer.table = .empty ∧ state.generation = 0 ∧
+      state.durable = durable := by
   intro heldOwners held reads walReads checkpoint reopened
   have valid := attempts.valid fresh
   have missing : before.directory.active.manifest = none := valid.metadata.activeValid.1
@@ -75,7 +76,7 @@ theorem ObservedMarkedState.VersionedReady.bootstrapWithLock
     change MarkedWriterState.observeReopen .empty after = some state.writer
     rw [MarkedWriterState.observeReopen, contents]
     rfl
-  refine ⟨state, installed, available, held, observed, ?_, ?_, rfl, rfl, rfl⟩
+  refine ⟨state, installed, available, held, observed, ?_, ?_, rfl, rfl, rfl, rfl⟩
   · refine ⟨selected ▸ (absent ▸ ready), ⟨_, refined, represented⟩, ?_, ?_⟩
     · rw [selected]
       trivial
