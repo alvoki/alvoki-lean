@@ -365,6 +365,42 @@ def performRepair (report : Publication.Step → RepairReport) (trimmed : ByteAr
   | .failure message tookEffect =>
     .error message (if tookEffect then (image.repairStep trimmed action).getD image else image)
 
+private def settleMetadataResult :
+    EStateM.Result String ReopenImage α → EStateM.Result String ReopenImage α
+  | .ok value image => .ok value image.syncMetadata
+  | .error message image => .error message image.syncMetadata
+
+private theorem ReopenImage.repairStep_syncMetadata (image : ReopenImage)
+    (trimmed : ByteArray) (step : Publication.Step) :
+    image.syncMetadata.repairStep trimmed step =
+      (image.repairStep trimmed step).map ReopenImage.syncMetadata := by
+  unfold repairStep
+  change (image.wal.step trimmed step).map _ = ((image.wal.step trimmed step).map _).map _
+  cases image.wal.step trimmed step <;> cases step <;> rfl
+
+private theorem performRepair_syncMetadata (report : Publication.Step → RepairReport)
+    (trimmed : ByteArray) (step : Publication.Step) (image : ReopenImage) :
+    performRepair report trimmed step image.syncMetadata =
+      settleMetadataResult (performRepair report trimmed step image) := by
+  unfold performRepair
+  rw [image.repairStep_syncMetadata]
+  cases report step with
+  | success => cases image.repairStep trimmed step <;> rfl
+  | failure _ tookEffect => cases tookEffect <;> cases image.repairStep trimmed step <;> rfl
+
+private theorem repairSchedule_syncMetadata (report : Publication.Step → RepairReport)
+    (trimmed : ByteArray) (actions : List Publication.Step) (image : ReopenImage) :
+    (actions.forM (performRepair report trimmed)) image.syncMetadata =
+      settleMetadataResult ((actions.forM (performRepair report trimmed)) image) := by
+  induction actions generalizing image with
+  | nil => rfl
+  | cons step rest ih =>
+    simp only [List.forM_eq_forM, List.forM_cons, Bind.bind, EStateM.bind]
+    rw [performRepair_syncMetadata]
+    cases performRepair report trimmed step image with
+    | ok _ next => exact ih next
+    | error _ _ => rfl
+
 private theorem performRepair_outcome (report : Publication.Step → RepairReport) (trimmed : ByteArray)
     (action : Publication.Step) (image : ReopenImage) :
     match performRepair report trimmed action image with
@@ -407,6 +443,15 @@ def performAlignedSync (walAlreadySynced : Bool) (report : AlignedSyncReport) :
     .error message (if directorySynced then
       if walAlreadySynced || walSynced then image.syncDirectory else image.syncMetadata.allowVisibleWal
     else if walSynced then image.allowVisibleWal else image)
+
+private theorem performAlignedSync_syncMetadata (walAlreadySynced : Bool)
+    (report : AlignedSyncReport) (image : ReopenImage) :
+    performAlignedSync walAlreadySynced report image.syncMetadata =
+      settleMetadataResult (performAlignedSync walAlreadySynced report image) := by
+  cases report with
+  | success => rfl
+  | failure _ walSynced directorySynced =>
+    cases directorySynced <;> cases walSynced <;> cases walAlreadySynced <;> rfl
 
 /-- The validated WAL and the table computed before any reopen effects. -/
 structure MarkedPreflight where
@@ -489,6 +534,34 @@ def runMarkedReopen (preflight : Except String MarkedPreflight)
     Publication.finishReopen validated.contents.size validated.selected.size
       (fun _ => Publication.run (performRepair report validated.selected))
       (fun _ => performAlignedSync walAlreadySynced aligned) validated.table
+
+/-- A late fsync of the same database directory commutes with the reported
+marked reopen. It settles the metadata that is visible when it runs. The
+preflight bytes, return value or error, and WAL effects stay the same.
+The model gives this extra event only directory effects. -/
+theorem runMarkedReopen_syncMetadata (preflight : Except String MarkedPreflight)
+    (report : Publication.Step → RepairReport) (walAlreadySynced : Bool)
+    (aligned : AlignedSyncReport) (image : ReopenImage) :
+    runMarkedReopen preflight report walAlreadySynced aligned image.syncMetadata =
+      match runMarkedReopen preflight report walAlreadySynced aligned image with
+      | .ok table after => .ok table after.syncMetadata
+      | .error message after => .error message after.syncMetadata := by
+  have asSettled (result : EStateM.Result String ReopenImage PackedTable) :
+      (match result with
+      | .ok table after => EStateM.Result.ok table after.syncMetadata
+      | .error message after => EStateM.Result.error message after.syncMetadata) =
+        settleMetadataResult result := by cases result <;> rfl
+  rw [asSettled]
+  cases preflight with
+  | error => rfl
+  | ok validated =>
+    by_cases shorter : validated.selected.size < validated.contents.size
+    · simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen_repair _ _ shorter,
+        Bind.bind, EStateM.bind, Publication.run, repairSchedule_syncMetadata]
+      cases (Publication.steps.forM (performRepair report validated.selected)) image <;> rfl
+    · simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen_aligned _ _ shorter,
+        Bind.bind, EStateM.bind, performAlignedSync_syncMetadata]
+      cases performAlignedSync walAlreadySynced aligned image <;> rfl
 
 /-- The successful durability phase only needs the validated contents and
 selection. The repair branch replaces the WAL and settles its name, while
@@ -638,6 +711,12 @@ theorem MarkedReopenReads.preflight_succeeds {before : ReopenImage}
   rw [recovered]
   rfl
 
+/-- A read observation still describes the same live files after an extra
+directory sync. Only the crash choices of the metadata have changed. -/
+def MarkedReopenReads.afterDirectorySync {before : ReopenImage} (reads : MarkedReopenReads before) :
+    MarkedReopenReads before.syncMetadata :=
+  ⟨⟨reads.marker, reads.wal, reads.markerVisible, reads.walVisible⟩, reads.checkpoint⟩
+
 private theorem MarkedReopenReads.repair {before : ReopenImage}
     (reads : MarkedReopenReads before) (bound : MarkerBound before.directory)
     {validated : MarkedPreflight} (ready : reads.preflight = .ok validated)
@@ -743,8 +822,26 @@ theorem MarkedReopenReads.success {before after : ReopenImage}
     checkpoint, reads.markerVisible _ markerRead, contents, decoded, selected, replayed,
     directory, settled, walChoices.trans (congrArg List.singleton settled)⟩
 
-/-- A finite sequence of observed marked reopen attempts and crashes. The
-aligned model treats earlier WAL sync knowledge conservatively. -/
+/-- A successful marked reopen has the exact same output when an
+outstanding directory sync also completes before its observed operations.
+The completed reopen already settles the resulting metadata. -/
+theorem MarkedReopenReads.success_afterDirectorySync {before after : ReopenImage}
+    (reads : MarkedReopenReads before) (bound : MarkerBound before.directory)
+    {report : Publication.Step → RepairReport} {aligned : AlignedSyncReport} {table : PackedTable}
+    (opened : runMarkedReopen reads.preflight report false aligned before = .ok table after) :
+    runMarkedReopen reads.afterDirectorySync.preflight report false aligned before.syncMetadata =
+      .ok table after := by
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, directory, _⟩ := reads.success bound opened
+  change runMarkedReopen reads.preflight report false aligned before.syncMetadata = _
+  rw [runMarkedReopen_syncMetadata, opened]
+  have settled : after.directory.syncDirectory = after.directory := by rw [directory]; rfl
+  simp [ReopenImage.syncMetadata, settled]
+
+/-- A finite sequence of observed marked reopen attempts and crashes.
+An extra fsync of the stable database directory can take effect between
+attempts, including a request made by an earlier process. It settles the
+current metadata pair. Staging and WAL crash choices remain as modeled by
+their own effects. -/
 inductive MarkedReopenAttempts (initial : ReopenImage) : ReopenImage → Prop where
   | start : MarkedReopenAttempts initial initial
   | success (path : MarkedReopenAttempts initial before) (reads : MarkedReopenReads before)
@@ -758,6 +855,8 @@ inductive MarkedReopenAttempts (initial : ReopenImage) : ReopenImage → Prop wh
   | crash (path : MarkedReopenAttempts initial before)
       (pairSurvives : pair ∈ before.directory.crashImages) (walSurvives : wal ∈ before.wal.crashImages) :
       MarkedReopenAttempts initial (.crash pair wal)
+  | delayedDirectorySync (path : MarkedReopenAttempts initial before) :
+      MarkedReopenAttempts initial before.syncMetadata
 
 /-- The initial marker bound suffices for the whole trace. Each short branch
 derives its repair choice from the actual preflight bytes and current bound. -/
@@ -773,5 +872,6 @@ theorem MarkedReopenAttempts.toRetry {initial after : ReopenImage}
     have effect := reads.retry_effect earlier (earlier.markerBound bound) report aligned
     rwa [ran] at effect
   | crash _ pairSurvives walSurvives earlier => exact .crash earlier pairSurvives walSurvives
+  | delayedDirectorySync _ earlier => exact .syncMetadata earlier
 
 end Alvoki.WAL.Boundary

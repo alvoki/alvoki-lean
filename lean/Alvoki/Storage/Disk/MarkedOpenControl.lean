@@ -63,6 +63,22 @@ theorem runSharedMarkedOpen_eq (checkpoint : Except String (Option (PackedTable 
             simp [recovered, EStateM.bind, EStateM.pure, observe, Except.toOption]
             split <;> simp_all
 
+/-- The shared native continuation installs the same table, generation and
+byte count when an extra sync of the stable directory completes. On either
+outcome, that extra effect only settles the resulting metadata choices. -/
+theorem runSharedMarkedOpen_syncMetadata (checkpoint : Except String (Option (PackedTable × UInt64)))
+    (marker wal : Except String (Option ByteArray)) (notAbsent : marker ≠ .ok none)
+    (repair : Publication.Step → RepairReport) (aligned : AlignedSyncReport) (before : ReopenImage) :
+    runSharedMarkedOpen checkpoint marker wal repair aligned before.syncMetadata =
+      match runSharedMarkedOpen checkpoint marker wal repair aligned before with
+      | .ok installed after => .ok installed after.syncMetadata
+      | .error message after => .error message after.syncMetadata := by
+  rw [runSharedMarkedOpen_eq checkpoint marker wal notAbsent repair aligned before.syncMetadata,
+    runSharedMarkedOpen_eq checkpoint marker wal notAbsent repair aligned before]
+  let preflight := markedReopenPreflight (checkpoint.map fun loaded => (loaded.getD (.empty, 0)).1) marker wal
+  rw [runMarkedReopen_syncMetadata]
+  cases runMarkedReopen preflight repair false aligned before <;> rfl
+
 /-- The locked visible marker contract supplies the branch condition. The
 checkpoint result comes from the shared manifest and ordered-run loader. -/
 theorem MarkedWalReads.runSharedMarkedOpen_eq {before : ReopenImage} (reads : MarkedWalReads before)

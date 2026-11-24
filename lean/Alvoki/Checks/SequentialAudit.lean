@@ -191,6 +191,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.ReopenRetry.markerBound
 #check_axioms Alvoki.WAL.Boundary.MarkedReopenReads.success
 #check_axioms Alvoki.WAL.Boundary.MarkedReopenAttempts.toRetry
+#check_axioms Alvoki.WAL.Boundary.runMarkedReopen_syncMetadata
+#check_axioms Alvoki.WAL.Boundary.MarkedReopenReads.success_afterDirectorySync
+#check_axioms Alvoki.WAL.Boundary.runSharedMarkedOpen_syncMetadata
 #check_axioms Alvoki.WAL.Boundary.recoverWriteCutAfterReopenRetry
 #check_axioms Alvoki.WAL.Boundary.WriteFiles.reopenImage_crashWal_nonempty
 #check_axioms Alvoki.WAL.Boundary.WriteFiles.reopenImage_manifest_eq

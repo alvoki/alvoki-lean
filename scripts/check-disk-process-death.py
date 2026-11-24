@@ -93,25 +93,55 @@ def wait_for_sync(owner, ready):
     raise RuntimeError("timed out waiting for the WAL sync child")
 
 
-def check_process_death(binary, root):
+def wait_for_sync_success(pid):
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
+        exited, status = os.waitpid(pid, os.WNOHANG)
+        if exited:
+            require(os.waitstatus_to_exitcode(status) == 0, "released directory sync failed")
+            return
+        time.sleep(0.01)
+    raise RuntimeError("timed out waiting for the released directory sync")
+
+
+def check_process_death(binary, root, after_rename):
     database = root / "db"
     database.mkdir()
     wal = database / "WAL"
     marker = database / "WAL.commit"
     status, stderr = run_probe(binary, "--write-once", database)
     require(status == 0, f"could not prepare acknowledged WAL prefix: {stderr}")
+    status, stderr = run_probe(binary, "--checkpoint-once", database)
+    require(status == 0, f"could not prepare the fixed checkpoint: {stderr}")
     acknowledged = wal.read_bytes()
     boundary = marker.read_bytes()
+    checkpoint = {name: (database / name).read_bytes() for name in ("MANIFEST", "run-1-0.v3")}
+    control = root / "control"
+    shutil.copytree(database, control)
+    status, stderr = run_probe(binary, "--write-once", control)
+    require(status == 0, f"could not prepare exact expected append: {stderr}")
+    appended = (control / "WAL").read_bytes()
+    require(acknowledged and len(appended) == 2 * len(acknowledged) and appended.startswith(acknowledged),
+            "the acknowledged control write did not extend the WAL by one frame")
+    expected_wal = appended if after_rename else acknowledged
+    expected_marker = (control / "WAL.commit").read_bytes() if after_rename else boundary
 
     ready = root / "sync.pid"
+    release = root / "release-sync"
     real_sync = shutil.which("sync")
     require(real_sync is not None, "could not find the Linux sync utility")
     wrapper = root / "sync"
     wrapper.write_text('''#!/bin/sh
 set -eu
-if [ "$#" -eq 3 ] && [ "$3" = "$ALVOKI_CHECK_HOLD_AT" ]; then
+if [ "$#" -eq "$ALVOKI_CHECK_SYNC_ARITY" ] && [ "$1" = -- ] &&
+   [ "${3:-$2}" = "$ALVOKI_CHECK_HOLD_AT" ]; then
     printf '%s\\n' "$$" > "$ALVOKI_CHECK_SYNC_PID"
-    exec sleep 30
+    tries=0
+    until [ -e "$ALVOKI_CHECK_SYNC_RELEASE" ]; do
+        [ "$tries" -lt 600 ] || exit 1
+        tries=$((tries + 1))
+        sleep 0.05
+    done
 fi
 exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
 ''')
@@ -119,17 +149,17 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
     with native_process(binary, "--write-once", database, sync_pid_file=ready, env={
         **os.environ,
         "PATH": os.pathsep.join([str(root), os.defpath]),
-        "ALVOKI_CHECK_HOLD_AT": str(database / "WAL.commit.next"),
+        # The final directory sync has one target. Opening the database uses a grouped sync.
+        "ALVOKI_CHECK_SYNC_ARITY": "2" if after_rename else "3",
+        "ALVOKI_CHECK_HOLD_AT": str(database if after_rename else database / "WAL.commit.next"),
         "ALVOKI_CHECK_SYNC_PID": str(ready),
+        "ALVOKI_CHECK_SYNC_RELEASE": str(release),
         "ALVOKI_CHECK_REAL_SYNC": str(Path(real_sync).resolve()),
     }) as owner:
         sync_pid = wait_for_sync(owner, ready)
         require(os.getpgid(sync_pid) == owner.pid, "sync child escaped the fixture process group")
-        interrupted = wal.read_bytes()
-        require(acknowledged and len(interrupted) == 2 * len(acknowledged)
-                and interrupted.startswith(acknowledged),
-                "paused write did not leave a complete append after the acknowledged prefix")
-        require(marker.read_bytes() == boundary, "paused write published its staged marker")
+        require(wal.read_bytes() == appended, "paused write did not leave the exact submitted frame")
+        require(marker.read_bytes() == expected_marker, "paused write selected the wrong WAL marker")
         status, stderr = run_probe(binary, "--open-once", database)
         require(status != 0 and f"database already open: {database}" in stderr,
                 f"open did not report the live owner's lock: {stderr}")
@@ -140,12 +170,20 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
         status, stderr = run_probe(binary, "--open-once", database)
         require(status == 0, f"could not reopen after owner death: {stderr}")
         require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during recovery")
-        require(wal.read_bytes() == acknowledged and marker.read_bytes() == boundary,
-                "reopen did not restore the exact acknowledged WAL prefix")
+        if after_rename:
+            # The old child execs the original directory sync only after the new opener succeeds.
+            release.touch()
+            wait_for_sync_success(sync_pid)
+        require(wal.read_bytes() == expected_wal and marker.read_bytes() == expected_marker,
+                "recovery or delayed sync changed the selected WAL bytes")
+        require(all((database / name).read_bytes() == data for name, data in checkpoint.items()),
+                "recovery or delayed sync changed the fixed checkpoint")
 
 
 if __name__ == "__main__":
     adopt_orphans()
-    with tempfile.TemporaryDirectory(prefix="alvoki-process-death-") as directory:
-        check_process_death(Path(sys.argv[1]).resolve(), Path(directory).resolve())
-    print("Reopened and repaired the WAL after owner death while its sync child remained alive.")
+    binary = Path(sys.argv[1]).resolve()
+    for after_rename in (False, True):
+        with tempfile.TemporaryDirectory(prefix="alvoki-process-death-") as directory:
+            check_process_death(binary, Path(directory).resolve(), after_rename)
+    print("Reopened after owner death both before the marker rename and with a delayed directory sync.")
