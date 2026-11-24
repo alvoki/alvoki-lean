@@ -1182,6 +1182,7 @@ private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
   IO.FS.createDir dir
+  let dir := (← DiskDirectory.open dir).path
   let db ← DiskTable.open dir
   try
     check ((← db.write 4 (some 40)) == 1) "unexpected initial write sequence"
@@ -1189,41 +1190,46 @@ private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
     check (← db.advanceFloor 2) "could not advance the checkpoint floor"
     db.checkpoint
     check ((← db.write 4 (some 41)) == 3) "unexpected overwrite sequence"
+    db.rotateWal
     check ((← db.write 7 none) == 4) "unexpected tombstone sequence"
+    db.rotateWal
     check ((← db.write 6 (some 60)) == 5) "unexpected insertion sequence"
   finally db.close
-  let wal := dir / firstWalSegment
+  let keeper := dir / "WAL-segment-4"
   let marker := dir / "WAL.commit"
   let staged := dir / "WAL.commit.next"
   let manifest := dir / "MANIFEST"
   let run := dir / "run-1-0.v3"
-  expectManifest dir 1 2 2 1
-  let manifestBytes ← IO.FS.readBinFile manifest
-  let runBytes ← IO.FS.readBinFile run
-  let expectCheckpoint := do
-    check (decide ((← IO.FS.readBinFile manifest) = manifestBytes ∧ (← IO.FS.readBinFile run) = runBytes))
-      "write and reopen trace changed the fixed checkpoint"
+  let runBytes := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩, ⟨7, 2, (0, 70)⟩]
+  let manifestBytes := (Manifest.IntegrityCheckpoint.fromRuns ⟨1, 2, 2, 1⟩ [runBytes]).encode
+  let firstSpan := WAL.encode [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩]
+  let secondSpan := WAL.encodeFrame ⟨4, 7, none⟩
+  let boundary := fun (active : ByteArray) =>
+    WAL.Boundary.encode (firstSpan.size + secondSpan.size + active.size).toUInt64
+  let expectFixedFiles := do
+    for (path, bytes) in [(manifest, manifestBytes), (run, runBytes),
+        (dir / firstWalSegment, firstSpan), (dir / "WAL-segment-3", secondSpan)] do
+      check ((← IO.FS.readBinFile path) == bytes) s!"write and reopen trace changed {path}"
   let expectFiles := fun (events : List WAL.Write) => do
     let encoded := WAL.encode events
-    check (decide ((← IO.FS.readBinFile wal) = encoded ∧
-      (← IO.FS.readBinFile marker) = WAL.Boundary.encode encoded.size.toUInt64))
-      "write and reopen trace changed the selected WAL history"
-    expectCheckpoint
-  let acknowledged : List WAL.Write := [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩,
-    ⟨4, 7, none⟩, ⟨5, 6, some 60⟩]
+    check ((← IO.FS.readBinFile keeper) == encoded && (← IO.FS.readBinFile marker) == boundary encoded)
+      "write and reopen trace changed the keeper or absolute WAL marker"
+    expectFixedFiles
+  let acknowledged : List WAL.Write := [⟨5, 6, some 60⟩]
   expectFiles acknowledged
   -- The first directory sync belongs to open.
   let (classified, syncs) ← probeDisk bin dir (some dir) (operation := "--check-write-outcome")
     (skipFailures := 1) (failureMode := .afterSync)
-  let expectedSyncs := alignedWalSyncs dir wal ++ [wal.toString, staged.toString, dir.toString,
+  let alignedSyncs := alignedWalSyncs dir keeper
+  let expectedSyncs := alignedSyncs ++ [keeper.toString, staged.toString, dir.toString,
     s!"synced before error: {dir}"]
   check (classified && syncs == expectedSyncs)
     "write did not report an unknown commit after the final directory sync succeeded"
   let events := acknowledged ++ [⟨6, 7, some 99⟩]
   expectFiles events
+  check (!(← staged.pathExists)) "durable append left a staged marker"
   -- These failed reopen processes exercise the visible files around two sync
   -- outcomes. Power-loss choices for unsynced files belong to the model.
-  let alignedSyncs := alignedWalSyncs dir wal
   let (opened, syncs) ← probeDisk bin dir (some dir)
   check (!opened && syncs == [dir.toString]) "reopen did not fail before syncing the directory"
   expectFiles events
@@ -1248,16 +1254,15 @@ private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
   -- key 7, but the grouped sync fails before the staged marker is renamed.
   let (classified, syncs) ← probeDisk bin dir (some staged) (operation := "--check-write-outcome")
     (failureMode := .secondOnly)
-  check (classified && syncs == alignedSyncs ++ [wal.toString, staged.toString,
+  check (classified && syncs == alignedSyncs ++ [keeper.toString, staged.toString,
     s!"synced second target before error: {staged}"])
     "the later session did not report an unknown commit before publishing its marker"
   let durable := WAL.encode continued
   let appended := durable ++ WAL.encodeFrame ⟨9, 7, some 99⟩
-  check (decide ((← IO.FS.readBinFile wal) = appended ∧
-    (← IO.FS.readBinFile staged) = WAL.Boundary.encode appended.size.toUInt64 ∧
-    (← IO.FS.readBinFile marker) = WAL.Boundary.encode durable.size.toUInt64))
+  check ((← IO.FS.readBinFile keeper) == appended && (← IO.FS.readBinFile staged) == boundary appended &&
+    (← IO.FS.readBinFile marker) == boundary durable)
     "the later failed append did not leave its full frame outside the active marker"
-  expectCheckpoint
+  expectFixedFiles
   let reopened ← DiskTable.open dir
   try
     expectFiles continued
