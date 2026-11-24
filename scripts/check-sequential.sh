@@ -125,6 +125,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentOpenFast
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentOpenFastEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCommit
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCommitEffects
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentAppendRepair
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
 lake env leanchecker Alvoki.Storage.Disk.RecoveredPinRefinement

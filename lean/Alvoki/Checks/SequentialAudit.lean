@@ -63,6 +63,7 @@ import Alvoki.Storage.Disk.WalSegmentReplayStability
 import Alvoki.Storage.Disk.WalSegmentRetryReads
 import Alvoki.Storage.Disk.WalSegmentRetryReadEffects
 import Alvoki.Storage.Disk.WalSegmentCommitEffects
+import Alvoki.Storage.Disk.WalSegmentAppendRepair
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
@@ -238,6 +239,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.withOpenWal_marked
 #check_axioms Alvoki.WAL.Boundary.select_encoded
 #check_axioms Alvoki.WAL.Boundary.select_size
+#check_axioms Alvoki.WAL.Boundary.select_prefix
 #check_axioms Alvoki.WAL.Boundary.select_shorter_after_trim
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.repairCut_valid
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.repairsTo_of_write_cut
@@ -527,6 +529,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_reports
 #check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atReportedCut
 #check_axioms Alvoki.Storage.WalSegmentCommit.settledSegment_ofSuccess
+#check_axioms Alvoki.Storage.WalSegmentRepair.prepareAfterAppendCut
 #check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.mem_remaining
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_notAcquired
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_acquired

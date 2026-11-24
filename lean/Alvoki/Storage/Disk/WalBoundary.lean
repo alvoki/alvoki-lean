@@ -125,6 +125,13 @@ theorem select_size {length : UInt64} {wal selected : ByteArray}
   obtain ⟨_, fits, rfl⟩ := select_eq_ok_iff.mp accepted
   simp [Nat.min_eq_left fits]
 
+/-- A successful selection is a prefix of the physical file. -/
+theorem select_prefix {length : UInt64} {wal selected : ByteArray}
+    (accepted : select length wal = .ok selected) : ∃ tail, wal = selected ++ tail := by
+  obtain ⟨_, fits, rfl⟩ := select_eq_ok_iff.mp accepted
+  refine ⟨wal.extract length.toNat wal.size, ?_⟩
+  simp [ByteArray.extract_append_extract, Nat.max_eq_right fits]
+
 /-- Trimming to the currently visible marker preserves selection at any still
 possible marker whose length is at most the visible length. -/
 theorem select_shorter_after_trim {shorter length : UInt64} {wal trimmed : ByteArray}
