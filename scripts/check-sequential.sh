@@ -247,6 +247,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairCheckpointBytes
 lake env leanchecker Alvoki.Storage.Disk.CachedRetryInstallation
 lake env leanchecker Alvoki.Storage.Disk.CachedMarkedRetryInstallation
 lake env leanchecker Alvoki.Storage.Disk.DiskOpenAdmission
+lake env leanchecker Alvoki.Storage.Disk.DiskBootstrapAdmission
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCleanCachedReopen
 lake env leanchecker Alvoki.Storage.Disk.CachedWalChunkReports
 lake env leanchecker Alvoki.Storage.Disk.AlignedWalChunkSync
