@@ -7,6 +7,70 @@ namespace Alvoki.Storage.DiskSession
 open System WalSegmentRepair
 open WAL.Boundary (CheckpointRepresentsPrefix)
 
+/-- Recover from the observed checkpoint directory, whether it is the
+live publication cut or the image that survived a machine power loss. -/
+theorem BoundedReopenTrace.installsFromCheckpointCut {directory : DiskDirectory}
+    {published : CheckpointPublication.Image} {before : WalSegmentImage} {history : List WAL.Write}
+    (layout : (published.segmentedCheckpointView before).ReadLayout history)
+    (valid : (published.segmentedCheckpointView before).Valid history) (ordered : WAL.OrdinalsFrom 1 history)
+    {observedDirectory : DirectoryPublication.Image}
+    (observed : (published.segmentedCheckpointView before).CheckpointReopenDirectory observedDirectory)
+    (inputs : ∀ pair, (published.segmentedCheckpointView before).Selects pair →
+      published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history) pair.manifest ∧
+      ∃ range, pair.walRange = some range ∧ range.through = history.length)
+    {owners : LockOwners} {scratch : Option (ByteArray × Bool)} {retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (CheckpointRetryTarget history before.active.first)
+      ⟨(published.segmentedCheckpointView before).checkpointReopenFiles observedDirectory scratch, owners⟩ retry)
+    {descriptor nextRef : Nat} (liveRefs : List Nat) (freshRefs : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    let wal := published.segmentedCheckpointView before
+    retry.image.kept = (wal.checkpointReopenFiles observedDirectory scratch).kept ∧
+      wal.Selects retry.image.directory.active ∧
+      ∃ selected : CanonicalKeeperLayout retry.image history,
+        selected.target.first = before.active.first ∧ selected.tail = ByteArray.empty ∧
+        ∃ selectedGeneration : UInt64,
+          ((retry.image.directory.active.manifest.mapM fun bytes =>
+            (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) :
+              Except String UInt64) = .ok selectedGeneration ∧
+          ∀ raw : HealthyBoundedWalReports directory
+              (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+              wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
+            sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
+            (∀ action prior next,
+              ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+              prior.effect selected.target action = some next →
+              performPaths directory selected.plan removeFile throw write sync renameFile action prior =
+                .ok () next) →
+            AppendCutReady directory descriptor liveRefs history published retry.image selected.target
+              selectedGeneration (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+                (raw.reopen removeFile write sync renameFile) retry) := by
+  intro wal
+  have lineage := attempts.lineage (fun a b pair => CheckpointRetryTarget.unique a b pair)
+  obtain ⟨selected, chosen, keeper, noTail, descriptors, offsets, prepared, emptyLater, accepted⟩ :=
+    published.checkpointRetryLayout layout valid observed inputs lineage
+  have generationRead : ∃ selectedGeneration : UInt64,
+      ((retry.image.directory.active.manifest.mapM fun bytes =>
+        (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
+      .ok selectedGeneration := by
+    cases visible : retry.image.directory.active.manifest with
+    | none => exact ⟨0, rfl⟩
+    | some bytes =>
+      have watermark := (DirectoryPublication.Bindings.walRange_accounting selected.decoded).1
+      rw [visible] at watermark
+      obtain ⟨parsed, decoded, _⟩ := selectedCheckpointWatermark_present_iff.mp watermark
+      exact ⟨parsed.header.generation, by rw [Option.mapM, decoded]; rfl⟩
+  obtain ⟨selectedGeneration, exactSelectedGeneration⟩ := generationRead
+  refine ⟨lineage.keepsSealed, chosen, selected, congrArg WalSegment.first keeper, noTail,
+    selectedGeneration, exactSelectedGeneration, ?_⟩
+  intro raw settles healthy
+  exact runOpenWithInstallation_appendLayout layout ordered selected keeper descriptors offsets prepared emptyLater
+    accepted exactSelectedGeneration raw liveRefs freshRefs acquisition unlock removeFile write sync renameFile
+    settles healthy
+
 /-- Start from the reported checkpoint file cut after releasing the writer
 lock, then run any finite trace of bounded reopen errors, lock reference
 drops, and power losses. The next healthy bounded open installs the table
@@ -105,30 +169,12 @@ theorem BoundedReopenTrace.installsAfterCheckpointError {directory : DiskDirecto
       freshGeneration encoded reported failed
   refine ⟨exactGeneration, exactManifest, poison, close, drops, published, projectedCut, ?_⟩
   intro wal files retry attempts acquisition
-  have lineage := attempts.lineage (fun a b pair => CheckpointRetryTarget.unique a b pair)
-  obtain ⟨selected, chosen, keeper, noTail, descriptors, offsets, prepared, emptyLater, accepted⟩ :=
-    published.checkpointRetryLayout layout valid .visible
-      (fun pair selects => (inputs pair selects).2.2) lineage
+  obtain ⟨kept, chosen, selected, keeper, noTail, selectedGeneration, exactGeneration, bounded⟩ :=
+    attempts.installsFromCheckpointCut (descriptor := descriptor) layout valid ordered .visible
+      (fun pair selects => (inputs pair selects).2.2) liveRefs freshRefs acquisition unlock removeFile write sync
+      renameFile
   obtain ⟨sameMarker, sameManifest, _⟩ := inputs retry.image.directory.active chosen
-  have first : selected.target.first = installed.activeFirst :=
-    (congrArg WalSegment.first keeper).trans installedKeeper.symm
-  have generationRead : ∃ selectedGeneration : UInt64,
-      ((retry.image.directory.active.manifest.mapM fun bytes =>
-        (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) :
-          Except String UInt64) = .ok selectedGeneration := by
-    cases visible : retry.image.directory.active.manifest with
-    | none => exact ⟨0, rfl⟩
-    | some bytes =>
-      have watermark := (DirectoryPublication.Bindings.walRange_accounting selected.decoded).1
-      rw [visible] at watermark
-      obtain ⟨parsed, decoded, _⟩ := selectedCheckpointWatermark_present_iff.mp watermark
-      exact ⟨parsed.header.generation, by rw [Option.mapM, decoded]; rfl⟩
-  obtain ⟨selectedGeneration, exactSelectedGeneration⟩ := generationRead
-  refine ⟨lineage.keepsSealed, layout, chain, sameManifest, sameMarker, selected, first, congrArg WalSegment.first keeper, noTail,
-    selectedGeneration, exactSelectedGeneration, ?_⟩
-  intro raw settles healthy
-  exact runOpenWithInstallation_appendLayout layout ordered selected keeper descriptors offsets prepared emptyLater
-    accepted exactSelectedGeneration raw liveRefs freshRefs acquisition unlock removeFile write sync renameFile
-    settles healthy
+  exact ⟨kept, layout, chain, sameManifest, sameMarker, selected, keeper.trans installedKeeper.symm, keeper,
+    noTail, selectedGeneration, exactGeneration, bounded⟩
 
 end Alvoki.Storage.DiskSession

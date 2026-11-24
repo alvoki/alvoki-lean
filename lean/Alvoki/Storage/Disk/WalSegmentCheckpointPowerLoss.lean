@@ -75,7 +75,7 @@ theorem physical_eq (published : CheckpointPublication.Image)
       .settled []⟩
   rw [ready.sealedFiles, keeper, later]
 
-private theorem selectedGeneration {durable binding checkpoint}
+theorem selectedGeneration {durable binding checkpoint}
     (selected : SelectedIntegrityCheckpoint durable binding checkpoint) :
     ((binding.mapM fun bytes =>
       (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =

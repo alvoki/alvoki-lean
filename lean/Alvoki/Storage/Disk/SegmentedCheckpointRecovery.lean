@@ -7,6 +7,87 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+/-- The exact returned checkpoint session and its proof-side state. The
+same endpoint is used for a reported error and for machine power loss. -/
+structure SegmentedCheckpointReopened (directory : DiskDirectory) (before : SegmentedWriterState)
+    (descriptor : Nat) (published : CheckpointPublication.Image) (retry : LockedFileState FileImage)
+    (attempt : BoundedReopenAttempt) (after : SegmentedWriterState) : Prop where
+  reopened : ∃ session final, attempt.run directory retry = .ok session final ∧
+    session.directory = directory ∧ session.descriptor = descriptor ∧ session.phase = .ready after.installed ∧
+    after.files = final.image ∧ after.owners = final.owners
+  history : after.history = before.history
+  wal : after.wal = { before.wal with directory := after.files.directory }
+  durable : after.published.durable = published.durable
+  manifest : after.published.manifest = after.files.directory.project .manifest
+  targetPair : after.target.pair = retry.image.directory.active
+  targetFirst : after.target.first = before.wal.active.first
+  targetBytes : after.target.trimmed = before.wal.active.bytes
+  checkpoint : SelectedIntegrityCheckpoint after.published.durable after.target.pair.manifest after.checkpoint
+
+private theorem sameTarget {left right : Target} (pair : left.pair = right.pair) (first : left.first = right.first)
+    (bytes : left.trimmed = right.trimmed) : left = right := by
+  have range : left.range = right.range := Option.some.inj (left.decoded.symm.trans (pair ▸ right.decoded))
+  cases left
+  cases right
+  cases pair
+  cases range
+  cases first
+  cases bytes
+  rfl
+
+private theorem sameCheckpoint {durable binding left right}
+    (a : SelectedIntegrityCheckpoint durable binding left) (b : SelectedIntegrityCheckpoint durable binding right) :
+    left = right := by
+  cases a with
+  | absent => cases b; rfl
+  | present decode stored loaded =>
+    cases b with
+    | present otherDecode otherStored otherLoaded =>
+      cases Except.ok.inj (decode.symm.trans otherDecode)
+      cases Option.some.inj (stored.symm.trans otherStored)
+      cases Except.ok.inj (loaded.symm.trans otherLoaded)
+      rfl
+
+/-- The reached file projection and the exact returned session determine
+the next proof-side writer state. -/
+theorem SegmentedCheckpointReopened.unique {directory before descriptor published retry attempt left right}
+    (a : SegmentedCheckpointReopened directory before descriptor published retry attempt left)
+    (b : SegmentedCheckpointReopened directory before descriptor published retry attempt right) :
+    left = right := by
+  obtain ⟨leftSession, leftFinal, leftResult, _, _, leftPhase, leftFiles, leftOwners⟩ := a.reopened
+  obtain ⟨rightSession, rightFinal, rightResult, _, _, rightPhase, rightFiles, rightOwners⟩ := b.reopened
+  obtain ⟨session, final⟩ := EStateM.Result.ok.inj (leftResult.symm.trans rightResult)
+  have installed : left.installed = right.installed := by
+    rw [session] at leftPhase
+    exact Phase.ready.inj (leftPhase.symm.trans rightPhase)
+  have files : left.files = right.files := by rw [leftFiles, rightFiles, final]
+  have owners : left.owners = right.owners := by rw [leftOwners, rightOwners, final]
+  have history := a.history.trans b.history.symm
+  have wal : left.wal = right.wal := by rw [a.wal, b.wal, files]
+  have durable := a.durable.trans b.durable.symm
+  have manifest : left.published.manifest = right.published.manifest := by rw [a.manifest, b.manifest, files]
+  have published : left.published = right.published := by
+    calc
+      left.published = ⟨right.published.manifest, left.published.durable⟩ :=
+        congrArg (fun binding => CheckpointPublication.Image.mk binding left.published.durable) manifest
+      _ = right.published := congrArg (CheckpointPublication.Image.mk right.published.manifest) durable
+  have target := sameTarget (a.targetPair.trans b.targetPair.symm) (a.targetFirst.trans b.targetFirst.symm)
+    (a.targetBytes.trans b.targetBytes.symm)
+  have selected := a.checkpoint
+  rw [published, target] at selected
+  have checkpoint := sameCheckpoint selected b.checkpoint
+  cases left
+  cases right
+  cases installed
+  cases wal
+  cases history
+  cases files
+  cases published
+  cases target
+  cases checkpoint
+  cases owners
+  rfl
+
 /-- One actual checkpoint dispatch failure, the release of its writer lock,
 and the reached bounded reopen attempts. The final attempt supplies its
 own lock and filesystem reports for the selected metadata and keeper. -/
@@ -59,24 +140,14 @@ variable {directory : DiskDirectory} {before : SegmentedWriterState} {writer des
 bounded open. The endpoint records the manifest and ordered checkpoint
 binding that the actual file reports select. -/
 structure Installs (failure : SegmentedCheckpointFailure directory before writer descriptor)
-    (after : SegmentedWriterState) : Prop where
+    (after : SegmentedWriterState) : Prop extends
+      SegmentedCheckpointReopened directory before descriptor failure.published failure.retry failure.reopen after where
   poisoned : runPreparedCheckpoint failure.checkpoint.prepared failure.checkpoint.perform
     (.ready before.installed, ⟨0, before.owners⟩) =
     .error failure.cause (.poisoned, ⟨failure.checkpoint.cut, before.owners⟩)
   released : failure.release.Observed (directory := directory)
     (.poisoned, ⟨failure.checkpoint.cut, before.owners⟩)
     ⟨failure.checkpoint.cut, before.owners.set (directory.file .lock) none⟩
-  reopened : ∃ session final, failure.reopen.run directory failure.retry = .ok session final ∧
-    session.directory = directory ∧ session.descriptor = descriptor ∧ session.phase = .ready after.installed ∧
-    after.files = final.image ∧ after.owners = final.owners
-  history : after.history = before.history
-  wal : after.wal = { before.wal with directory := after.files.directory }
-  durable : after.published.durable = failure.published.durable
-  manifest : after.published.manifest = after.files.directory.project .manifest
-  targetPair : after.target.pair = failure.retry.image.directory.active
-  targetFirst : after.target.first = before.wal.active.first
-  targetBytes : after.target.trimmed = before.wal.active.bytes
-  checkpoint : SelectedIntegrityCheckpoint after.published.durable after.target.pair.manifest after.checkpoint
   generation : (after.installed.generation = before.installed.generation ∧
       after.target.pair.manifest = before.wal.directory.active.manifest) ∨
     (after.installed.generation = SegmentedCheckpointReport.generation before ∧
@@ -197,72 +268,13 @@ theorem installs (failure : SegmentedCheckpointFailure directory before writer d
       rw [new, Option.mapM, decoded] at installedGeneration
       exact .inr ⟨(Except.ok.inj installedGeneration).symm,
         (congrArg DirectoryPublication.Bindings.manifest targetPair).trans new⟩
-  exact ⟨after, ⟨poisoned, released, ⟨session, final, returned, path, lock, phase, files, owners⟩,
-    history, exactWal, durable, resumed.manifestFiles, targetPair, targetFirst, targetBytes, resumed.resumed.selected,
-    generationChoice⟩, resumed⟩
+  exact ⟨after, ⟨⟨⟨session, final, returned, path, lock, phase, files, owners⟩,
+    history, exactWal, durable, resumed.manifestFiles, targetPair, targetFirst, targetBytes,
+    resumed.resumed.selected⟩, poisoned, released, generationChoice⟩, resumed⟩
 
-private theorem sameTarget {left right : Target} (pair : left.pair = right.pair) (first : left.first = right.first)
-    (bytes : left.trimmed = right.trimmed) : left = right := by
-  have range : left.range = right.range := Option.some.inj (left.decoded.symm.trans (pair ▸ right.decoded))
-  cases left
-  cases right
-  cases pair
-  cases range
-  cases first
-  cases bytes
-  rfl
-
-private theorem sameCheckpoint {durable binding left right}
-    (a : SelectedIntegrityCheckpoint durable binding left) (b : SelectedIntegrityCheckpoint durable binding right) :
-    left = right := by
-  cases a with
-  | absent => cases b; rfl
-  | present decode stored loaded =>
-    cases b with
-    | present otherDecode otherStored otherLoaded =>
-      cases Except.ok.inj (decode.symm.trans otherDecode)
-      cases Option.some.inj (stored.symm.trans otherStored)
-      cases Except.ok.inj (loaded.symm.trans otherLoaded)
-      rfl
-
-/-- The reached file projection and the exact returned session determine
-the next proof-side writer state. -/
 theorem Installs.unique {failure : SegmentedCheckpointFailure directory before writer descriptor}
-    {left right : SegmentedWriterState} (a : failure.Installs left) (b : failure.Installs right) :
-    left = right := by
-  obtain ⟨leftSession, leftFinal, leftResult, _, _, leftPhase, leftFiles, leftOwners⟩ := a.reopened
-  obtain ⟨rightSession, rightFinal, rightResult, _, _, rightPhase, rightFiles, rightOwners⟩ := b.reopened
-  obtain ⟨session, final⟩ := EStateM.Result.ok.inj (leftResult.symm.trans rightResult)
-  have installed : left.installed = right.installed := by
-    rw [session] at leftPhase
-    exact Phase.ready.inj (leftPhase.symm.trans rightPhase)
-  have files : left.files = right.files := by rw [leftFiles, rightFiles, final]
-  have owners : left.owners = right.owners := by rw [leftOwners, rightOwners, final]
-  have history := a.history.trans b.history.symm
-  have wal : left.wal = right.wal := by rw [a.wal, b.wal, files]
-  have durable := a.durable.trans b.durable.symm
-  have manifest : left.published.manifest = right.published.manifest := by rw [a.manifest, b.manifest, files]
-  have published : left.published = right.published := by
-    calc
-      left.published = ⟨right.published.manifest, left.published.durable⟩ :=
-        congrArg (fun binding => CheckpointPublication.Image.mk binding left.published.durable) manifest
-      _ = right.published := congrArg (CheckpointPublication.Image.mk right.published.manifest) durable
-  have target := sameTarget (a.targetPair.trans b.targetPair.symm) (a.targetFirst.trans b.targetFirst.symm)
-    (a.targetBytes.trans b.targetBytes.symm)
-  have selected := a.checkpoint
-  rw [published, target] at selected
-  have checkpoint := sameCheckpoint selected b.checkpoint
-  cases left
-  cases right
-  cases installed
-  cases wal
-  cases history
-  cases files
-  cases published
-  cases target
-  cases checkpoint
-  cases owners
-  rfl
+    {left right : SegmentedWriterState} (a : failure.Installs left) (b : failure.Installs right) : left = right :=
+  a.toSegmentedCheckpointReopened.unique b.toSegmentedCheckpointReopened
 
 theorem Installs.preservesReady {failure : SegmentedCheckpointFailure directory before writer descriptor}
     {after : SegmentedWriterState} (endpoint : failure.Installs after) (ready : before.Ready directory writer) :
