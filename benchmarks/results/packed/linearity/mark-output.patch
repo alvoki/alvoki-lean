@@ -1,0 +1,66 @@
+diff --git a/lean/Compaction.lean b/lean/Compaction.lean
+index d00e203..6ebbf9e 100644
+--- a/lean/Compaction.lean
++++ b/lean/Compaction.lean
+@@ -120,8 +120,9 @@ decreasing_by
+ @[inline] private def payloadOffset (i : USize) : Nat := 16 + i.toNat * 32
+
+ private def initial (a b : @& Run) : Builder :=
+-  Builder.ofPrefix (pushWordFast (pushWordFast (ByteArray.emptyWithCapacity
+-    (16 + 32 * (a.count.toNat + b.count.toNat))) 0) 3)
++  let capacity := 16 + 32 * (a.count.toNat + b.count.toNat)
++  let out := (ByteArray.emptyWithCapacity capacity).markLinear
++  Builder.ofPrefix (pushWordFast (pushWordFast out 0) 3)
+
+ private def finish (out : Builder) : ByteArray :=
+   let bytes := out.finish
+diff --git a/lean/MergePhases.lean b/lean/MergePhases.lean
+index 1d172b4..e732c5d 100644
+--- a/lean/MergePhases.lean
++++ b/lean/MergePhases.lean
+@@ -115,8 +115,8 @@ def replayChecksum (a b : @& Run) (trace : @& ByteArray) : UInt64 :=
+   replayChecksumFrom a.view b.view trace trace.usize USize.toNat_ofNat_le 0 0 0 0
+
+ def replayWrite (a b : @& Run) (trace : @& ByteArray) : ByteArray :=
+-  let header := pushWordFast (pushWordFast (ByteArray.emptyWithCapacity (16 + trace.size * 16))
+-    trace.size.toUInt64) 1
++  let out := (ByteArray.emptyWithCapacity (16 + trace.size * 16)).markLinear
++  let header := pushWordFast (pushWordFast out trace.size.toUInt64) 1
+   (replayWriteFrom a.view b.view trace trace.usize USize.toNat_ofNat_le 0 0 0
+     (Builder.ofPrefix header)).finish
+
+@@ -333,8 +333,8 @@ def ReplayPlan.prepare (plan : @& ReplayPlan) : Except String PreparedReplay :=
+ /-- The prepared writer emits the concatenation specified by appendAll_refines. -/
+ def PreparedReplay.write (prepared : @& PreparedReplay) : ByteArray :=
+   let capacity := 16 + prepared.count * 16
+-  let header := pushWordFast (pushWordFast (ByteArray.emptyWithCapacity capacity)
+-    prepared.count.toUInt64) 1
++  let out := (ByteArray.emptyWithCapacity capacity).markLinear
++  let header := pushWordFast (pushWordFast out prepared.count.toUInt64) 1
+   ((Builder.ofPrefix header).appendAll prepared.slices).finish
+
+ /-- Find the end of one span of records emitted from the same source. The
+@@ -399,8 +399,8 @@ decreasing_by
+ /-- Plan and emit one span at a time. No separate array of span descriptors is needed. -/
+ def ReplayPlan.writeSpans (plan : @& ReplayPlan) : ByteArray :=
+   let trace := plan.trace
+-  let header := pushWordFast (pushWordFast (ByteArray.emptyWithCapacity (16 + trace.size * 16))
+-    trace.size.toUInt64) 1
++  let out := (ByteArray.emptyWithCapacity (16 + trace.size * 16)).markLinear
++  let header := pushWordFast (pushWordFast out trace.size.toUInt64) 1
+   (replaySpansFrom plan.left.view plan.right.view trace trace.usize USize.toNat_ofNat_le
+     0 0 0 (Builder.ofPrefix header)).finish
+
+diff --git a/lean/NativeTune.lean b/lean/NativeTune.lean
+index 800f073..4c380aa 100644
+--- a/lean/NativeTune.lean
++++ b/lean/NativeTune.lean
+@@ -206,7 +206,7 @@ def encodeCopyLow (run : @& Run) : ByteArray :=
+ /-- Copy the original block, then rewrite one full value word per record. -/
+ def encodeCopyWords (run : @& Run) (mask : UInt64) : ByteArray := Id.run do
+   let view := run.view
+-  let mut out := view.bytes.extract 0 view.bytes.size
++  let mut out := (view.bytes.extract 0 view.bytes.size).markLinear
+   for i in [0:view.count.toNat] do
+     out := storeWord out (24 + i.toUSize * 16) (view.valueOrZero i.toUSize ^^^ mask)
+   return out

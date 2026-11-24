@@ -271,3 +271,7 @@ The stock correctness workflow runs the sequential storage checks with the pinne
 ## Exact replay table after successful marked open
 
 The native adapter and model share checkpoint reads, marked WAL validation and the return of the recovered table after the durability action. The audited composed theorem identifies the table returned by successful modeled reopen, starting from one prepared write and a fixed matching checkpoint. It shows that the table and settled WAL agree with abstract replay and that an acknowledged write survives all admitted retries. The file read and sync assumptions remain explicit. Median paired reopen times were within 4% of the baseline across the six measured workloads and the checkpoint rerun. [Proof and assumptions](verification-status.md) · [Reopen timings](benchmarks.md#shared-marked-open)
+
+## Packed writer ownership diagnostic
+
+Native `markLinear` checks completed 75 exact workload and mode combinations across replay, v3 compaction and dense rewrite. The test deliberately retained an alias to confirm that the diagnostic detects sharing in both overwrite and grow paths. The sampled writer destinations stayed unique during mutation after marking. [Checks and reproduction](../benchmarks/results/packed/linearity)
