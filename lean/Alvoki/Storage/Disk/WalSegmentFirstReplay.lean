@@ -1,5 +1,4 @@
-import Alvoki.Storage.Disk.VersionedMarkedRecovery
-import Alvoki.Storage.Disk.WalSegmentRetryReads
+import Alvoki.Storage.Disk.WalSegmentMarkerRead
 
 namespace Alvoki.Storage
 
@@ -31,6 +30,22 @@ private theorem payloadBytes_of_chain (sealed : List WalSegment) (keeper : WalSe
     change head.bytes ++ walSegmentPayloadBytes _ = (head.bytes ++ WalSegment.concatenate _) ++ tail
     rw [ByteArray.append_assoc]
     exact congrArg (head.bytes ++ ·) ih
+
+theorem WalSegment.Chain.keeperBytes {history : List WAL.Write} {first : Nat}
+    {sealed : List WalSegment} {keeper : WalSegment}
+    (chain : Chain history first (sealed ++ [keeper])) :
+    keeper.bytes = WAL.encode (history.drop keeper.first) := by
+  have reaches {start : Nat} (empty : Chain history start []) : start = history.length := by
+    cases empty
+    rfl
+  induction sealed generalizing first with
+  | nil =>
+    cases chain with
+    | cons _ _ bytes done =>
+      rw [bytes, reaches done, List.take_of_length_le (by simp)]
+  | cons earlier later ih =>
+    cases chain with
+    | cons _ _ _ remaining => exact ih remaining
 
 /-- Each observed sealed file supplies its exact canonical span and the
 keeper can carry an arbitrary unselected tail. The executable per-file
