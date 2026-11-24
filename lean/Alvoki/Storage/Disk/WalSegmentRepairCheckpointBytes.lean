@@ -1,9 +1,11 @@
 import Alvoki.Storage.Disk.WalSegmentBoundedOpen
 import Alvoki.Storage.Disk.CheckpointRunChunkReports
+import Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
 
 namespace Alvoki.Storage.WalSegmentRepair
 
-open System Manifest CheckpointPublication
+open System Manifest CheckpointPublication DiskSession
+open WAL.Boundary (CheckpointRepresentsPrefix)
 
 private theorem stagedWal_ne_checkpoint (directory : DiskDirectory) {file : DiskFile}
     (checkpoint : file = .manifest ∨ file = .walBoundary ∨ ∃ generation index, file = .run generation index) :
@@ -272,5 +274,142 @@ theorem finishBoundedMarkedOpen_preservesDurableCheckpoint {state : Type}
   exact selectedWithKnownRuns current (fun _ manifest _ _ index _ _ stored =>
     (RunUnlinkRetry.crash (approved := []) (.start (runs after)) chosen).keepsKnown
       (name := (manifest.header.generation, index)) stored (by simp))
+
+/-- Projections of the same reached filesystem state. WAL mutations leave
+both namespaces alone. A directory sync can settle them, including before
+a reported error. The callbacks are the ones used by the cached worker. -/
+structure CachedCheckpointRepairEffects (state : Type) (directory : DiskDirectory) where
+  metadata : state → DirectoryPublication.Image
+  runs : state → RunUnlinkImage
+  removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit)
+  write : FilePath → ByteArray → EStateM IO.Error state Unit
+  sync : Array FilePath → EStateM IO.Error state Unit
+  renameFile : FilePath → FilePath → EStateM IO.Error state Unit
+  unlink : ∀ first before,
+    let after := reachedState (removeFile (directory.file (.walSegment first)) before)
+    metadata after = metadata before ∧ runs after = runs before
+  stage : ∀ bytes before,
+    let after := reachedState (write (directory.file .stagedWal) bytes before)
+    metadata after = metadata before ∧ runs after = runs before
+  rename : ∀ first before,
+    let after := reachedState (renameFile (directory.file .stagedWal) (directory.file (.walSegment first)) before)
+    metadata after = metadata before ∧ runs after = runs before
+  syncs : ∀ paths before,
+    let after := reachedState (sync paths before)
+    (metadata after = metadata before ∨
+      directory.path ∈ paths.toList ∧ metadata after = (metadata before).syncDirectory) ∧
+    (runs after = runs before ∨ directory.path ∈ paths.toList ∧ runs after = (runs before).syncDirectory)
+
+def CachedCheckpointRepairEffects.reopen {state : Type} {directory : DiskDirectory}
+    {image : FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout image history}
+    (effects : CachedCheckpointRepairEffects state directory) (reported : CachedRetryReadReports directory layout)
+    (readRunPrefix : FilePath → Nat → Except IO.Error ByteArray) : EStateM IO.Error state Reopened :=
+  reopenMarkedBoundedWithCachedExtents directory
+    (fun path => liftExcept (reported.inventory.reports.readOptional path))
+    (fun path => liftExcept (checkpointRunSizeReport reported.inventory.reports path))
+    (fun path size => liftExcept (readRunPrefix path size))
+    (fun path => liftExcept (reported.list path))
+    (fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _))
+    (fun path size => liftExcept (reported.readSeal path size))
+    (fun path size physical => liftExcept (reported.readKeeper path size physical))
+    effects.removeFile effects.write effects.sync effects.renameFile
+
+/-- A cached retry of an already settled pair reads its exact checkpoint
+before repair. Even on a reported repair error, the same physical crash
+outcome selects that pair and contains the same ordered durable run bytes.
+The two crash observations refer to one state. -/
+theorem CachedRetryReadReports.checkpointSurvivesRepair {state : Type} {directory : DiskDirectory}
+    {image : FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout image history}
+    (reported : CachedRetryReadReports directory layout) (effects : CachedCheckpointRepairEffects state directory)
+    (initial after : state) (observedDirectory : effects.metadata initial = image.directory)
+    (settled : image.directory.crashImages = [image.directory.active])
+    (laterValid : image.later.Beyond layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : (⟨image.directory.project .manifest, (effects.runs initial).guaranteed⟩ : Image).AcceptsVersioned
+      history.length.toUInt64 (CheckpointRepresentsPrefix history) image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    (sizes : SizedCheckpointRunReports directory reported.inventory.reports image.directory.active.manifest
+      (effects.runs initial).guaranteed)
+    (manifestRead : reported.inventory.reports.readOptional (directory.file .manifest) = .ok image.directory.active.manifest)
+    (markerRead : reported.inventory.reports.readOptional (directory.file .walBoundary) = .ok image.directory.active.walBoundary)
+    (reached : reachedState (effects.reopen reported sizes.readPrefix initial) = after) :
+    ∃ opened checkpoint,
+      (effects.reopen reported sizes.readPrefix initial = .ok opened after ∨
+        ∃ cause, effects.reopen reported sizes.readPrefix initial = .error cause after) ∧
+      recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok opened.table ∧
+      opened.generation = (checkpoint.getD (.empty, 0)).2 ∧
+      opened.walBytes.toNat = history.length * WAL.frameSize ∧
+      opened.keeper = layout.keeper.first ∧
+      effects.metadata after = image.directory ∧
+      SelectedIntegrityCheckpoint (effects.runs after).guaranteed image.directory.active.manifest checkpoint ∧
+      ∀ crashed : state,
+        (effects.metadata crashed).active ∈ (effects.metadata after).crashImages →
+        (effects.runs crashed).visible ∈ (effects.runs after).crashImages →
+        (effects.metadata crashed).active = image.directory.active ∧
+        SelectedIntegrityCheckpoint (effects.runs crashed).visible (effects.metadata crashed).active.manifest checkpoint := by
+  obtain ⟨opened, checkpoint, _, prepared, selected, replay, generation, bytes, keeper, _⟩ :=
+    reported.prepares initial laterValid following accepted ordered sizes manifestRead markerRead
+  let finish := finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size
+    effects.removeFile effects.write effects.sync effects.renameFile
+  have ran : effects.reopen reported sizes.readPrefix initial =
+      match finish initial with
+      | .ok _ next => .ok opened next
+      | .error cause next => .error cause next := by
+    change EStateM.bind (reported.prepare sizes.readPrefix)
+      (fun (plan, prepared, size) => do
+        finishBoundedMarkedOpen directory plan size effects.removeFile effects.write effects.sync effects.renameFile
+        return prepared) initial = _
+    simp only [EStateM.bind, prepared, Bind.bind, Pure.pure, EStateM.pure, finish]
+    cases finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size
+      effects.removeFile effects.write effects.sync effects.renameFile initial <;> rfl
+  have result : (effects.reopen reported sizes.readPrefix initial = .ok opened after ∨
+      ∃ cause, effects.reopen reported sizes.readPrefix initial = .error cause after) ∧
+      (finish initial = .ok () after ∨ ∃ cause, finish initial = .error cause after) := by
+    rw [ran] at reached ⊢
+    cases phase : finish initial with
+    | ok value next =>
+      cases value
+      rw [phase] at reached
+      change next = after at reached
+      subst after
+      exact ⟨.inl rfl, .inl rfl⟩
+    | error cause next =>
+      rw [phase] at reached
+      change next = after at reached
+      subst after
+      exact ⟨.inr ⟨cause, rfl⟩, .inr ⟨cause, rfl⟩⟩
+  have directoryFixed : image.directory.syncDirectory = image.directory := by
+    unfold DirectoryPublication.Image.syncDirectory
+    rw [← settled]
+  let property (state : state) := effects.metadata state = image.directory
+  have syncKeeps paths : preserves property (effects.sync paths) := by
+    intro before same
+    rcases (effects.syncs paths before).1 with unchanged | ⟨_, settled⟩
+    · exact unchanged.trans same
+    · change effects.metadata (reachedState (effects.sync paths before)) = image.directory
+      change effects.metadata before = image.directory at same
+      rw [settled, same, directoryFixed]
+  have preserved := finisher_preserves directory layout.boundedPlan layout.plan.keeperBytes.size property
+    effects.removeFile effects.write effects.sync effects.renameFile
+    (fun first before same => (effects.unlink first before).1.trans same)
+    (fun bytes before same => (effects.stage bytes before).1.trans same)
+    syncKeeps
+    (fun first before same => (effects.rename first before).1.trans same)
+    initial observedDirectory
+  have sameDirectory : effects.metadata after = image.directory := by
+    change property (reachedState (finish initial)) at preserved
+    rcases result.2 with returned | ⟨_, returned⟩ <;> rw [returned] at preserved <;> exact preserved
+  have durable := finishBoundedMarkedOpen_preservesDurableCheckpoint
+    directory layout.boundedPlan layout.plan.keeperBytes.size effects.runs
+    effects.removeFile effects.write effects.sync effects.renameFile
+    (fun first before => (effects.unlink first before).2) (fun bytes before => (effects.stage bytes before).2)
+    (fun first before => (effects.rename first before).2) (fun paths before => (effects.syncs paths before).2)
+    initial after result.2 selected
+  refine ⟨opened, checkpoint, result.1, replay, generation, bytes, keeper, sameDirectory, durable.1, ?_⟩
+  intro crashed metadataSurvives runSurvives
+  rw [sameDirectory, settled] at metadataSurvives
+  have samePair := List.mem_singleton.mp metadataSurvives
+  exact ⟨samePair, samePair.symm ▸ durable.2 _ runSurvives⟩
 
 end Alvoki.Storage.WalSegmentRepair
