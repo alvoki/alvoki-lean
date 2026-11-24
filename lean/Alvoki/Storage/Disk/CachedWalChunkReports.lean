@@ -47,6 +47,27 @@ private def readWalKeeperBytes (reads : CheckpointRunChunkReads)
   | .ok payload _ => .ok payload
   | .error cause _ => .error cause
 
+private theorem readWalKeeperWithChunks_project {state : Type} (reads : CheckpointRunChunkReads)
+    (path : FilePath) (count fileSize : Nat) (cache : Cache (DescriptorInventory × DescriptorSlot × Nat))
+    (initial : state) :
+    (match readWalKeeperWithChunks reads path count fileSize (cache, initial) with
+    | .ok payload _ => .ok payload
+    | .error cause _ => .error cause) = readWalKeeperBytes reads path count fileSize := by
+  by_cases admitted : count ≤ fileSize ∧ count < USize.size
+  · cases opened : reads.openRead path with
+    | error cause =>
+      simp [readWalKeeperWithChunks, readWalKeeperBytes, readKeeperWith, admitted, opened,
+        liftExcept, withCache, Bind.bind, EStateM.bind, throw, throwThe,
+        MonadExceptOf.throw, EStateM.throw]
+    | ok handle =>
+      cases read : reads.readOpenedPrefix (IO.userError "short or oversized WAL keeper read") handle count <;>
+        cases aligned : count == fileSize <;>
+        simp [readWalKeeperWithChunks, readWalKeeperBytes, readKeeperWith, admitted, opened, read, aligned,
+          liftExcept, withCache, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+  · simp [readWalKeeperWithChunks, readWalKeeperBytes, readKeeperWith, admitted, Bind.bind, EStateM.bind,
+      throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+
 /-- Derive the selected payload callbacks from per-open reports on the held
 WAL names. Stat and open must name the same stable file object. Liveness,
 cursor and chunk behavior remain explicit primitive observations. Later names
@@ -79,5 +100,28 @@ def CachedRetryReadReports.ofChunkReads {directory : DiskDirectory} {image : Fil
     have same : seen.metadata = actual := Except.ok.inj stat
     subst actual
     exact ⟨seen.extent, by simp [readWalKeeperBytes, readWalKeeperWithChunks_exact seen keeperFits]⟩
+
+/-- The keeper callback used to select WAL bytes is the projection of
+the stateful read from any entered cache. In particular, the same read
+that yields the reported bytes can supply the pending handle for fsync. -/
+theorem CachedRetryReadReports.ofChunkReads_readKeeper
+    {state : Type} {directory : DiskDirectory} {image : FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout image history} (observed : CachedRetryReadInventory directory layout)
+    (reads : CheckpointRunChunkReads)
+    (metadata : ∀ path, observed.inventory.reports.lstat path = (reads.stat path).map Prod.fst)
+    (seals : ∀ segment ∈ layout.sealed, image.kept segment.first = some segment.bytes ∧
+      segment.bytes.size < USize.size ∧
+      Nonempty (reads.ObservesFile (directory.file (.walSegment segment.first)) segment.bytes))
+    (keeper : Nonempty (reads.ObservesFile (directory.file (.walSegment layout.keeper.first))
+      (layout.keeper.bytes ++ layout.tail)))
+    (keeperFits : layout.keeper.bytes.size < USize.size)
+    (path : FilePath) (count fileSize : Nat) (cache : Cache (DescriptorInventory × DescriptorSlot × Nat))
+    (initial : state) :
+    (match readWalKeeperWithChunks reads path count fileSize (cache, initial) with
+    | .ok payload _ => .ok payload
+    | .error cause _ => .error cause) =
+      (CachedRetryReadReports.ofChunkReads observed reads metadata seals keeper keeperFits).readKeeper
+        path count fileSize :=
+  readWalKeeperWithChunks_project reads path count fileSize cache initial
 
 end Alvoki.Storage.WalSegmentRepair
