@@ -1,6 +1,8 @@
 import Alvoki.Storage.Disk.VersionedManifest
+import Alvoki.Storage.Disk.WalSegmentCollection
 import CompactionCodec
 
+open Alvoki.Storage
 open Alvoki.Manifest
 open Alvoki.Compaction
 
@@ -37,9 +39,18 @@ def main : IO Unit := do
     if (VersionedCheckpoint.decode invalid).isOk then
       throw (IO.userError "corrupt, wrong-size, or invalid-floor manifest was accepted")
 
-  let .ok (.legacy legacy) := VersionedCheckpoint.decode (Alvoki.Manifest.encode header) |
+  let legacyBytes := Alvoki.Manifest.encode header
+  let .ok (.legacy legacy) := VersionedCheckpoint.decode legacyBytes |
     throw (IO.userError "could not reopen v1 manifest with the versioned reader")
   unless legacy == header do throw (IO.userError "v1 header changed")
+  let marker := Alvoki.WAL.Boundary.encode (2 * Alvoki.WAL.frameSize).toUInt64
+  let sealed : WalSegment := ⟨0, 2, Alvoki.WAL.encode [⟨1, 3, some 40⟩, ⟨2, 4, some 80⟩]⟩
+  let active : WalSegment := ⟨2, 2, ByteArray.empty⟩
+  let canCollect := fun binding =>
+    let image : WalSegmentImage := ⟨.settled ⟨binding, some marker⟩, [sealed], active⟩
+    image.canRemove sealed
+  unless canCollect (some encoded) && !canCollect (some legacyBytes) && !canCollect none do
+    throw (IO.userError "WAL collection eligibility did not require a covering v2 checkpoint")
   let empty := IntegrityCheckpoint.fromRuns ⟨8, 0, 0, 0⟩ []
   let .ok (.integrity decodedEmpty) := VersionedCheckpoint.decode empty.encode |
     throw (IO.userError "48-byte v2 manifest for zero runs was classified as v1")

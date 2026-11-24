@@ -180,8 +180,7 @@ theorem SelectedIntegrityCheckpoint.watermark {durable : CheckpointPublication.R
   | @present bytes manifest files table decoded _ loaded =>
     obtain ⟨_, _, restored⟩ := loadRunSet_restored (loadIntegrityRunSet_iff.mp loaded).2
     have clock := (PackedTable.restore_spec restored).2.2.1
-    simp [selectedCheckpointWatermark, Manifest.VersionedCheckpoint.decode_integrity decoded,
-      Manifest.VersionedCheckpoint.header, Except.toOption, clock]
+    simp [selectedCheckpointWatermark, decoded, Except.toOption, clock]
 
 private theorem recoverMarkedWalSegments_spans {base : PackedTable} {count : UInt64}
     {files : List (Nat × ByteArray)} {selected : ByteArray} {table : PackedTable}

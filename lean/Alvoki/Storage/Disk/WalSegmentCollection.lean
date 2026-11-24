@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.VersionedManifest
+import Alvoki.Storage.Disk.ManifestIntegrity
 import Alvoki.Storage.Disk.WalWritePublicationModel
 
 namespace Alvoki.Storage
@@ -66,11 +66,17 @@ structure MarkedWalRange where
 
 def selectedCheckpointWatermark : Option ByteArray → Option Nat
   | none => some 0
-  | some bytes => (Manifest.VersionedCheckpoint.decode bytes).toOption.map (·.header.committed.toNat)
+  | some bytes => (Manifest.IntegrityCheckpoint.decode bytes).toOption.map (·.header.committed.toNat)
 
-/-- Decode both bytes from the same selected directory pair. An absent
-checkpoint covers zero frames. A missing, invalid or unaligned marker
-cannot authorize deletion. -/
+theorem selectedCheckpointWatermark_present_iff {bytes : ByteArray} {watermark : Nat} :
+    selectedCheckpointWatermark (some bytes) = some watermark ↔ ∃ manifest,
+      Manifest.IntegrityCheckpoint.decode bytes = .ok manifest ∧ manifest.header.committed.toNat = watermark := by
+  cases decoded : Manifest.IntegrityCheckpoint.decode bytes <;>
+    simp [selectedCheckpointWatermark, decoded, Except.toOption]
+
+/-- Decode the strict v2 manifest and marker from the same selected pair.
+An absent checkpoint covers zero frames. A missing, invalid or unaligned
+marker cannot authorize deletion. -/
 def DirectoryPublication.Bindings.walRange (pair : DirectoryPublication.Bindings) : Option MarkedWalRange := do
   let watermark ← selectedCheckpointWatermark pair.manifest
   let marker ← pair.walBoundary

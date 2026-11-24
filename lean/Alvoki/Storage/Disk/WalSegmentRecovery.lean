@@ -111,9 +111,8 @@ theorem WalSegmentCollectionRetry.recoversSelected
       ⟨marker, length, selected, visible, decodedMarker, byteCount, (ByteArray.append_right_inj _).mp sameBytes,
         actual, full⟩, abstract, refined, represented⟩
 
-/-- Use the actual result of the dual-format reader as the replay base.
-Checkpoint acceptance supplies provenance for the same ordered files that
-the reader loaded, including the integrity check on v2 run bytes. -/
+/-- Recover from the exact ordered run bytes loaded for the strict v2
+checkpoint selected by the same pair as the WAL marker. -/
 theorem WalSegmentCollectionRetry.recoversLoaded
     {initial after : WalSegmentImage} {history : List Write} (retry : WalSegmentCollectionRetry initial after)
     (valid : initial.Valid history) {pair : DirectoryPublication.Bindings} (chosen : after.Selects pair)
@@ -124,15 +123,13 @@ theorem WalSegmentCollectionRetry.recoversLoaded
     {base : PackedTable} {generation : UInt64} (loaded : reads.result = .ok (some (base, generation)))
     (ordered : WAL.OrdinalsFrom 1 history) :
     ∃ first table, WalSegmentRecovery after pair range history base first table := by
-  have admitted := accepted
-  obtain ⟨selected, format, _⟩ := admitted
+  have observedWatermark := (DirectoryPublication.Bindings.walRange_accounting decoded).1
+  rw [manifest] at observedWatermark
+  obtain ⟨selected, integrity, observedClock⟩ := selectedCheckpointWatermark_present_iff.mp observedWatermark
   obtain ⟨files, _, _, ⟨checkpoint, model, written, refined, historyPrefix⟩, _, structural, _, _⟩ :=
-    reads.loaded_lineage accepted format loaded
-  have selectedWatermark : selectedCheckpointWatermark pair.manifest = some selected.header.committed.toNat := by
-    simp [selectedCheckpointWatermark, manifest, format, Except.toOption]
-  have watermark := Option.some.inj ((DirectoryPublication.Bindings.walRange_accounting decoded).1.symm.trans
-    selectedWatermark)
-  have headerClock := written.watermark
+    reads.loaded_lineage accepted (Manifest.VersionedCheckpoint.decode_integrity integrity) loaded
+  have watermark := observedClock.symm
+  have headerClock : selected.header.committed = checkpoint.committed := written.watermark
   obtain ⟨expectedBase, interpreted, same⟩ := written.loads
   have sameBase := Except.ok.inj (interpreted.symm.trans structural)
   subst expectedBase

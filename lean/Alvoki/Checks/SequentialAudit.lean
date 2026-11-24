@@ -431,6 +431,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegment.Chain.concatenate_eq
 #check_axioms Alvoki.Storage.WalSegment.Chain.afterWatermark
 #check_axioms Alvoki.Storage.DirectoryPublication.Bindings.walRange_accounting
+#check_axioms Alvoki.Storage.selectedCheckpointWatermark_present_iff
 #check_axioms Alvoki.Storage.WalSegmentImage.Eligible.notActive
 #check_axioms Alvoki.Storage.WalSegmentImage.canRemove_iff
 #check_axioms Alvoki.Storage.WalSegmentImage.Valid.of_chain
