@@ -149,12 +149,25 @@ def PackedTable.acquireAt (state : PackedTable) (snapshot : UInt64) :
     Option (SnapshotPin × PackedTable) :=
   (state.pins.acquire state.committed snapshot).map fun (pin, pins) => (pin, { state with pins })
 
+/-- Acquisition activates a pin at the requested sequence and changes only the pin registry. -/
+structure PackedTable.AcquiredAt (before after : PackedTable) (snapshot : UInt64)
+    (pin : SnapshotPin) : Prop where
+  sequence : pin.sequence = snapshot
+  active : pin ∈ after.pins.active
+  sameData : after.SameData before
+
+theorem PackedTable.acquireAt_spec {before after : PackedTable} {snapshot : UInt64}
+    {pin : SnapshotPin} (acquired : before.acquireAt snapshot = some (pin, after)) :
+    before.AcquiredAt after snapshot pin := by
+  obtain ⟨⟨_, pins⟩, recorded, equal⟩ := Option.map_eq_some_iff.mp acquired
+  cases equal
+  obtain ⟨_, _, sequence, _, active, _, floor⟩ := SnapshotPins.acquire_spec recorded
+  exact ⟨sequence, active ▸ List.mem_cons_self .., ⟨rfl, rfl, rfl, floor⟩⟩
+
 theorem PackedTable.RowBounds.acquireAt {state after : PackedTable} {snapshot : UInt64}
     {pin : SnapshotPin} (bounded : state.RowBounds) (acquired : state.acquireAt snapshot = some (pin, after)) :
-    after.RowBounds := by
-  obtain ⟨⟨_, _⟩, _, same⟩ := Option.map_eq_some_iff.mp acquired
-  cases same
-  exact ⟨bounded.runs, bounded.memory⟩
+    after.RowBounds :=
+  (PackedTable.acquireAt_spec acquired).sameData.rowBounds bounded
 
 def PackedTable.acquire (state : PackedTable) : Option (SnapshotPin × PackedTable) :=
   state.acquireAt state.committed
@@ -356,20 +369,15 @@ private theorem PackedTable.acquireAt_reads {before after : PackedTable} {snapsh
     (∀ key, after.lookup pin.handle key = some (before.describe.lookup key snapshot)) ∧
     (∀ start stop, after.range pin.handle start stop =
       some (before.describe.range start stop snapshot)) := by
-  unfold PackedTable.acquireAt at acquired
-  obtain ⟨⟨newPin, pins⟩, added, same⟩ := Option.map_eq_some_iff.mp acquired
-  cases same
-  obtain ⟨_, _, sequence, _, active, _, _⟩ := SnapshotPins.acquire_spec added
-  have found : pins.find pin.handle = some pin := by
-    change (pins.active.find? (fun p => decide (p.handle = pin.handle))) = some pin
-    simp [active]
+  have spec := PackedTable.acquireAt_spec acquired
+  have found := after.pins.find_of_mem spec.active
   constructor
   · intro key
-    simp only [PackedTable.lookup, found, Option.map_some, sequence, PackedTable.lookupAt_eq]
-    rfl
+    simp only [PackedTable.lookup, found, Option.map_some, spec.sequence, PackedTable.lookupAt_eq,
+      spec.sameData.describe]
   · intro start stop
-    simp only [PackedTable.range, found, Option.map_some, sequence, PackedTable.rangeAt_eq]
-    rfl
+    simp only [PackedTable.range, found, Option.map_some, spec.sequence, PackedTable.rangeAt_eq,
+      spec.sameData.describe]
 
 /-- Reacquiring a retained snapshot after replay reads the reference data,
 regardless of the identifiers issued in the old pin registry. -/

@@ -293,13 +293,9 @@ theorem MarkedDatabaseTrace.reacquireReadsStable {initial after : ObservedMarked
   have canPin : (after.writer.table.acquireAt oldPin.sequence).isSome = true := by
     simpa only [PackedTable.acquireAt, Option.isSome_map] using canAcquire
   obtain ⟨⟨newPin, table⟩, acquired⟩ := Option.isSome_iff_exists.mp canPin
-  obtain ⟨⟨found, pins⟩, recorded, same⟩ := Option.map_eq_some_iff.mp acquired
-  cases same
-  obtain ⟨_, _, sequence, _, active, _, _⟩ := Sequential.SnapshotPins.acquire_spec recorded
-  have newActive : newPin ∈ pins.active := by
-    rw [active]
-    exact List.mem_cons_self ..
+  have spec := PackedTable.acquireAt_spec acquired
   let extended := path.step (.acquireAt acquired)
-  exact ⟨newPin, _, acquired, sequence, extended.pinnedReadsStable valid oldActive newActive sequence⟩
+  exact ⟨newPin, table, acquired, spec.sequence,
+    extended.pinnedReadsStable valid oldActive spec.active spec.sequence⟩
 
 end Alvoki.WAL.Boundary

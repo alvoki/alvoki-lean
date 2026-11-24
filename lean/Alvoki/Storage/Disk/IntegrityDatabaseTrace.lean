@@ -357,13 +357,10 @@ theorem IntegrityDatabaseTrace.reacquireReadsStable {directory : DiskDirectory} 
   have available : (after.writer.table.acquireAt oldPin.sequence).isSome = true := by
     simpa only [PackedTable.acquireAt, Option.isSome_map] using canAcquire
   obtain ⟨⟨newPin, table⟩, acquired⟩ := Option.isSome_iff_exists.mp available
-  obtain ⟨⟨found, pins⟩, recorded, same⟩ := Option.map_eq_some_iff.mp acquired
-  have sequence := (Sequential.SnapshotPins.acquire_spec recorded).2.2.1
-  have samePin : found = newPin := congrArg Prod.fst same
-  have newSequence : newPin.sequence = oldPin.sequence := samePin ▸ sequence
-  have active := PackedTable.acquireAt_active acquired
+  have spec := PackedTable.acquireAt_spec acquired
   let extended := trace.step (.acquireAt acquired)
-  exact ⟨newPin, table, acquired, newSequence, extended.pinnedReadsStable valid integrity oldActive active newSequence⟩
+  exact ⟨newPin, table, acquired, spec.sequence,
+    extended.pinnedReadsStable valid integrity oldActive spec.active spec.sequence⟩
 
 /-- The fresh branch uses the same owned paths. It may create the WAL and
 publish its first marker after any admitted empty bootstrap cuts. -/

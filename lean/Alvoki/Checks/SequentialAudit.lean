@@ -72,6 +72,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Sequential.SnapshotPins.floor_check_cost
 #check_axioms Alvoki.Sequential.SnapshotPins.advance_iff
 #check_axioms Alvoki.Sequential.SnapshotPins.advance_spec
+#check_axioms Alvoki.Sequential.SnapshotPins.find_of_mem
 #check_axioms Alvoki.Sequential.SnapshotTable.acquireAt_iff
 #check_axioms Alvoki.Sequential.SnapshotTable.advanceFloor_iff
 #check_axioms Alvoki.Sequential.SnapshotTable.release_idempotent
@@ -94,6 +95,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.PackedTable.restore_spec
 #check_axioms Alvoki.Storage.PackedTable.restore_complete
 #check_axioms Alvoki.Storage.PackedTable.write_refines
+#check_axioms Alvoki.Storage.PackedTable.acquireAt_spec
 #check_axioms Alvoki.Storage.PackedTable.acquireAt_refines
 #check_axioms Alvoki.Storage.PackedTable.release_refines
 #check_axioms Alvoki.Storage.PackedTable.advanceFloor_refines

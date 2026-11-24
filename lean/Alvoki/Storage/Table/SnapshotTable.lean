@@ -171,6 +171,10 @@ private theorem pinAt_mem {pins : List SnapshotPin} {pin : SnapshotPin}
         exact h.1 (List.mem_map.mpr ⟨pin, tail, eq.symm⟩)
       simpa [pinAt, other] using ih h.2 tail
 
+theorem SnapshotPins.find_of_mem (pins : SnapshotPins) {pin : SnapshotPin}
+    (active : pin ∈ pins.active) : pins.find pin.handle = some pin :=
+  pinAt_mem pins.unique active
+
 /-- Outer absence means the handle is inactive. Inner absence means the key is absent. -/
 def SnapshotTable.lookup (state : SnapshotTable α) (handle : SnapshotHandle)
     (key : UInt64) : Option (Option α) :=
@@ -183,13 +187,13 @@ def SnapshotTable.range (state : SnapshotTable α) (handle : SnapshotHandle)
 theorem SnapshotTable.lookup_pinned (state : SnapshotTable α) {pin : SnapshotPin}
     (mem : pin ∈ state.pins.active) (key : UInt64) :
     state.lookup pin.handle key = some (state.table.lookup key pin.sequence) := by
-  rw [SnapshotTable.lookup, SnapshotPins.find, pinAt_mem state.pins.unique mem]
+  rw [SnapshotTable.lookup, state.pins.find_of_mem mem]
   rfl
 
 theorem SnapshotTable.range_pinned (state : SnapshotTable α) {pin : SnapshotPin}
     (mem : pin ∈ state.pins.active) (start stop : UInt64) :
     state.range pin.handle start stop = some (state.table.range start stop pin.sequence) := by
-  rw [SnapshotTable.range, SnapshotPins.find, pinAt_mem state.pins.unique mem]
+  rw [SnapshotTable.range, state.pins.find_of_mem mem]
   rfl
 
 /-- The relation only admits states obtained by the operations above. -/

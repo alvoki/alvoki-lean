@@ -1,23 +1,6 @@
 import Alvoki.Storage.Disk.DiskLockLifecycle
 import Alvoki.Storage.Disk.SessionReadGuards
 
-namespace Alvoki.Storage
-
-open Sequential (SnapshotPin SnapshotPins)
-
-/-- The pin returned by a successful acquisition is active in its returned table. -/
-theorem PackedTable.acquireAt_active {before after : PackedTable} {snapshot : UInt64}
-    {pin : SnapshotPin} (acquired : before.acquireAt snapshot = some (pin, after)) :
-    pin ∈ after.pins.active := by
-  obtain ⟨⟨_, pins⟩, recorded, same⟩ := Option.map_eq_some_iff.mp acquired
-  cases same
-  change pin ∈ pins.active
-  obtain ⟨_, _, _, _, active, _, _⟩ := SnapshotPins.acquire_spec recorded
-  rw [active]
-  exact List.mem_cons_self ..
-
-end Alvoki.Storage
-
 namespace Alvoki.Storage.DiskSession
 
 /-- Apply the outer native lock schedule to the reported shared recovery.
