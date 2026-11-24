@@ -113,7 +113,8 @@ theorem runOpenWithInstallation_cachedRetryCompletes
     distinct, freshPhase, freshSession, exactImage ▸ durable, exactImage ▸ trace, selected, replay, generation, bytes,
     keeper, committed, bounds, refines, represents, noPins⟩
 
-private theorem selectedCheckpointUnique {durable : CheckpointPublication.RunFiles}
+/-- The selected manifest and durable run map determine the restored checkpoint. -/
+theorem _root_.Alvoki.Storage.SelectedIntegrityCheckpoint.uniqueResult {durable : CheckpointPublication.RunFiles}
     {binding left right}
     (first : SelectedIntegrityCheckpoint durable binding left)
     (second : SelectedIntegrityCheckpoint durable binding right) : left = right := by
@@ -153,7 +154,7 @@ theorem CachedRetryInstalled.sameInstalled {directory : DiskDirectory} {history 
     _, _, _, _, _, _, _, _, _, _, leftSelected, leftReplay, leftGeneration, leftBytes, leftKeeper, _⟩ := left
   obtain ⟨rightOpen, rightCheckpoint, _, rightSession, rightFinal, ranRight, _, _, rightPhase,
     _, _, _, _, _, _, _, _, _, _, rightSelected, rightReplay, rightGeneration, rightBytes, rightKeeper, _⟩ := right
-  have checkpoint : leftCheckpoint = rightCheckpoint := selectedCheckpointUnique leftSelected (sameManifest.symm ▸ rightSelected)
+  have checkpoint : leftCheckpoint = rightCheckpoint := leftSelected.uniqueResult (sameManifest.symm ▸ rightSelected)
   have table : leftOpen.table = rightOpen.table := by
     rw [checkpoint, rightReplay] at leftReplay
     exact (Except.ok.inj leftReplay).symm
