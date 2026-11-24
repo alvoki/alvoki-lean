@@ -123,11 +123,26 @@ def read_pipe(fd, size):
     return received
 
 
+def check_flat_wal_before_lock(binary, database):
+    database.mkdir()
+    flat = database / "WAL"
+    missing = database / "missing"
+    flat.symlink_to(missing)
+    alias = database / ".." / database.name
+    status, stderr = run_probe(binary, "--open-once", alias)
+    require(status != 0 and f"unsupported flat WAL binding: '{flat}'" in stderr,
+            f"open did not reject the canonical flat WAL binding: {stderr}")
+    require(set(database.iterdir()) == {flat} and flat.is_symlink() and flat.readlink() == missing,
+            "flat WAL refusal created LOCK or changed the dangling binding")
+
+
 def check_fork_exec_lock(binary, shim, database):
     database.mkdir()
     status, stderr = run_probe(binary, "--write-once", database)
     require(status == 0, f"could not prepare acknowledged write: {stderr}")
     lock = database / "LOCK"
+    lock_bytes = b"native LOCK sentinel"
+    lock.write_bytes(lock_bytes)
     original = lock.stat()
     with native_process(binary, "--open-once", database, env={
         **os.environ,
@@ -153,6 +168,7 @@ def check_fork_exec_lock(binary, shim, database):
         require(status == 0, f"open after the child's exec did not recover the acknowledged write: {stderr}")
         require(os.waitpid(child, os.WNOHANG) == (0, 0), "lock holder exited before the post-exec open")
         require(os.path.samestat(lock.stat(), original), "reopening changed the LOCK inode")
+        require(lock.read_bytes() == lock_bytes, "opening LOCK did not preserve its existing bytes")
         owner.stdin.close()
         wait_for_child_success(child, "exec child")
 
@@ -376,6 +392,7 @@ if __name__ == "__main__":
             ["cc", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", source, "-o", shim, "-ldl"],
             check=True,
         )
+        check_flat_wal_before_lock(binary, root / "flat-wal-admission")
         check_fork_exec_lock(binary, shim, root / "fork-exec")
         check_batch_append_cut(binary, shim, root / "batch-append-cut")
         for batch in (False, True):
@@ -385,6 +402,7 @@ if __name__ == "__main__":
                         case = root / f"{int(batch)}-{int(rotated)}-{int(after_rename)}-{int(detached)}"
                         case.mkdir()
                         check_process_death(binary, shim, case, after_rename, rotated, detached, batch)
+    print("Rejected a dangling flat WAL before opening LOCK and preserved LOCK bytes across reopen.")
     print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")
