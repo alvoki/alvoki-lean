@@ -53,6 +53,7 @@ lake env leanchecker Alvoki.Storage.Disk.MarkedDatabaseTrace
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery
 lake env leanchecker Alvoki.Storage.Disk.LegacyMarkedBootstrap
+lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapCuts
 lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
 lake env leanchecker Alvoki.Storage.Disk.RecoveredPinRefinement
 lake env leanchecker Alvoki.Storage.Disk.WalReplayAgreement

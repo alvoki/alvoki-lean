@@ -510,6 +510,31 @@ theorem runMarkedReopen_durability_success (validated : MarkedPreflight)
       Publication.runReopen_aligned _ _ shorter, synced shorter]
     rfl
 
+/-- Reported repair effects choose a prefix of the shared replacement
+schedule. The entire replacement must have completed on success. -/
+theorem runMarkedReopen_repair_outcome (validated : MarkedPreflight)
+    (report : Publication.Step → RepairReport) (walAlreadySynced : Bool) (aligned : AlignedSyncReport)
+    (before : ReopenImage) (shorter : validated.selected.size < validated.contents.size) :
+    match runMarkedReopen (.ok validated) report walAlreadySynced aligned before with
+    | .ok table after => table = validated.table ∧
+        before.repairCut validated.selected Publication.steps.length = some after
+    | .error _ after => ∃ cut, before.repairCut validated.selected cut = some after := by
+  simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen_repair _ _ shorter]
+  have outcome := repairSchedule_outcome report validated.selected Publication.steps before
+  unfold Publication.run
+  cases result : (Publication.steps.forM (performRepair report validated.selected)) before with
+  | ok _ after =>
+    rw [result] at outcome
+    simp only [Bind.bind, EStateM.bind, result, Pure.pure, EStateM.pure]
+    refine ⟨True.intro, ?_⟩
+    rw [← before.repairSteps_prefix]
+    simpa only [List.take_length] using outcome
+  | error _ after =>
+    rw [result] at outcome
+    simp only [Bind.bind, EStateM.bind, result]
+    obtain ⟨cut, ran⟩ := outcome
+    exact ⟨cut, (before.repairSteps_prefix _ _).symm.trans ran⟩
+
 theorem runMarkedReopen_preflight_error {checkpoint : Except String PackedTable}
     {marker wal : Except String (Option ByteArray)} {message : String}
     (failed : markedReopenPreflight checkpoint marker wal = .error message)
@@ -540,28 +565,20 @@ theorem ReopenRetry.runMarkedReopen_effect {initial before : ReopenImage}
   | error message => exact path
   | ok validated =>
     by_cases shorter : validated.selected.size < validated.contents.size
-    · simp only [runMarkedReopen, Publication.finishReopen,
-        Publication.runReopen_repair _ _ shorter]
-      obtain ⟨length, covers⟩ := repair validated rfl shorter
-      have outcome := repairSchedule_outcome report validated.selected Publication.steps before
-      unfold Publication.run
-      cases result : (Publication.steps.forM (performRepair report validated.selected)) before with
-      | ok value after =>
+    · obtain ⟨length, covers⟩ := repair validated rfl shorter
+      have outcome := runMarkedReopen_repair_outcome validated report walAlreadySynced aligned before shorter
+      cases result : runMarkedReopen (.ok validated) report walAlreadySynced aligned before with
+      | ok table after =>
         rw [result] at outcome
-        have completed : before.repairCut validated.selected Publication.steps.length = some after := by
-          rw [← before.repairSteps_prefix]
-          simpa only [List.take_length] using outcome
+        obtain ⟨rfl, complete⟩ := outcome
         have ran := before.repair_complete validated.selected
-        rw [ran] at completed
-        cases completed
-        simp only [Bind.bind, EStateM.bind, result, Pure.pure, EStateM.pure]
-        exact ⟨.repair path covers ran, trivial, rfl, validated, rfl, rfl, by
+        rw [ran] at complete
+        cases complete
+        exact ⟨.repair path covers ran, rfl, rfl, validated, rfl, rfl, by
           simp [shorter, Publication.Image.settled]⟩
-      | error message after =>
-        simp only [Bind.bind, EStateM.bind, result]
+      | error _ after =>
         rw [result] at outcome
         obtain ⟨cut, ran⟩ := outcome
-        rw [before.repairSteps_prefix] at ran
         exact .repair path covers ran
     · simp only [runMarkedReopen, Publication.finishReopen,
         Publication.runReopen_aligned _ _ shorter]

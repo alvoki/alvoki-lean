@@ -18,7 +18,9 @@ def LegacyOpenReports.Succeeds (reports : LegacyOpenReports) (walSize selectedSi
   (¬ selectedSize < walSize → reports.aligned = .success) ∧
   ∀ step, reports.marker step = .success
 
-private def legacyPreflight (checkpoint : Except String (Option (PackedTable × UInt64)))
+/-- Validate the existing unmarked WAL using the observed checkpoint and
+the same optional file lookup order as the native open. -/
+def legacyPreflight (checkpoint : Except String (Option (PackedTable × UInt64)))
     (marker wal : Except String (Option ByteArray)) : Except String (MarkedPreflight × UInt64) := do
   let checkpoint ← checkpoint
   let (base, generation) := checkpoint.getD (.empty, 0)
@@ -27,10 +29,16 @@ private def legacyPreflight (checkpoint : Except String (Option (PackedTable × 
     let (selected, table) ← recoverLegacy base bytes
     return (⟨bytes, selected, table⟩, generation)
 
-private def performLegacyMarker (report : Publication.Step → RepairReport) (bytes : ByteArray)
-    (step : Publication.Step) : EStateM String ReopenImage Unit := fun before =>
-  let updated := (before.directory.step .walBoundary bytes step).map
+def legacyMarkerStep (bytes : ByteArray) (before : ReopenImage) (step : Publication.Step) :
+    Option ReopenImage :=
+  (before.directory.step .walBoundary bytes step).map
     fun directory => { before with directory }
+
+/-- Interpret reports from the first marker's staged replacement. An
+error can retain the state before or after the reported step. -/
+def performLegacyMarker (report : Publication.Step → RepairReport) (bytes : ByteArray)
+    (step : Publication.Step) : EStateM String ReopenImage Unit := fun before =>
+  let updated := legacyMarkerStep bytes before step
   match report step with
   | .success =>
     match updated with
@@ -78,7 +86,9 @@ private theorem publishLegacyMarker_complete (before : ReopenImage) (bytes : Byt
   rw [cleared]
   rfl
 
-private theorem selected_eq_of_aligned {base table : PackedTable} {bytes selected : ByteArray}
+/-- An accepted legacy WAL on the aligned path is already its own selected
+prefix, so the synced active binding has the selected bytes. -/
+theorem recoverLegacy_selected_eq_of_aligned {base table : PackedTable} {bytes selected : ByteArray}
     (recovered : recoverLegacy base bytes = .ok (selected, table))
     (aligned : ¬ selected.size < bytes.size) : selected = bytes := by
   obtain ⟨events, decoded, canonical, _⟩ := recoverLegacy_exact recovered
@@ -121,7 +131,7 @@ private theorem runLegacyMarkedOpen_success {before : ReopenImage} {loaded : Opt
   · by_cases shorter : selected.size < bytes.size
     · simp [after, afterLegacyMarker, durable, shorter, Publication.Image.settled]
     · simpa [after, afterLegacyMarker, durable, shorter, ReopenImage.syncDirectory] using
-        visible.trans (congrArg some (selected_eq_of_aligned recovered shorter).symm)
+        visible.trans (congrArg some (recoverLegacy_selected_eq_of_aligned recovered shorter).symm)
   · by_cases shorter : selected.size < bytes.size <;>
       simp [after, afterLegacyMarker, durable, shorter, ReopenImage.syncDirectory, Publication.Image.settled]
 
