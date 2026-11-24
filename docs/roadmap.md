@@ -22,9 +22,25 @@ The Linux adapter now calls `fsync` on open descriptors. Evaluate durable batche
 
 ## Release performance
 
-After the crash and reclamation proof priorities, record release-to-release microbenchmarks for codecs, merge and replay, and macrobenchmarks for the public engine under sustained writes, mixed reads and writes, checkpoints, compaction, reopen and pinned snapshots. Keep throughput, read and write latency percentiles, peak memory, retained bytes and write amplification as separate measurements. Report sync time separately from replay. Keep these measurements in the benchmark workflow for now.
+Make Alvoki a verified embedded LSM that is competitive with an established engine on sustained durable workloads with one foreground thread. Start with RocksDB. Fjall or another established engine is acceptable when it supports a simpler, like-for-like comparison. Pin the reference engine and version before collecting the baseline.
 
-Use YCSB workload mixes as starting points for comparisons with RocksDB and Fjall. Run the same key and value sizes, durability guarantees, dataset, workload and hardware wherever the APIs permit it. Document workload differences when an engine cannot match those parameters. Performance changes to the native path carry the corresponding end-to-end proof and fault checks. [YCSB](https://github.com/brianfrankcooper/YCSB) · [RocksDB](https://github.com/facebook/rocksdb) · [Fjall](https://github.com/fjall-rs/fjall)
+The initial target is at least 50% of the reference's durable throughput and at most twice its read and acknowledged-write p99 on the primary workload at a common offered load. Recovery work must be bounded by the selected checkpoint, required WAL suffix, and required repair actions. Check all three scenarios and record resource tradeoffs when judging whether the goal is met.
+
+| Scenario | Starting workload | Measurements |
+|---|---|---|
+| Durable mixed load | Deterministic, YCSB-inspired 50/50 point reads and writes with 64-bit keys and values. Start with individually durable writes. Measure batches separately with matched size, acknowledgement and atomicity. | Sustained throughput and per-operation read and acknowledged-write p99 at a common load. |
+| Maintenance and an old snapshot | Run the same mix through several maintenance cycles. Hold a snapshot across cycles, then release it. Exercise checkpoint, compaction and reclamation with equivalent maintenance pressure. | Foreground p99 during maintenance, physical and retained bytes per live byte, write amplification and time to reclaim space after release. |
+| Crash reopen | Exercise aligned reopen and torn-tail repair. Vary required WAL suffix, segment count and bytes outside the selected range independently where the formats allow it. | Time to the first successful read, bytes read, peak RSS and sync time separate from replay. |
+
+Use native release builds on the same Linux machine and storage. Match input, operation mix, durability and foreground thread count. Record background thread budgets, cache state, configuration, seeds, warm-ups, raw samples and differences the engines cannot match. Keep codec, merge, checkpoint and replay microbenchmarks for diagnosis and release comparisons.
+
+1. Run the three baseline scenarios before choosing the first optimization.
+2. Rank repeatable gaps by their impact on the primary workload. Split costs by phase and test a concrete explanation with a controlled experiment. Profile when phase timing and byte or syscall counts leave the gap unexplained.
+3. Apply one focused change and rerun the same scenario against the same baseline. Independent hypotheses can be explored in parallel on isolated worktrees. Run decisive timed comparisons without concurrent benchmarks.
+4. Verify the affected contracts, differential fixtures and crash cases. Record the commit, hypothesis, before-and-after samples, tradeoffs and next experiment. Add a scenario when it answers an open diagnostic question or guards against an observed regression.
+5. Repeat while the target is unmet. When comparable, repeatable measurements satisfy the primary target and the recovery and correctness checks pass, record the final comparison and close the optimization loop.
+
+[YCSB](https://github.com/brianfrankcooper/YCSB) · [RocksDB](https://github.com/facebook/rocksdb) · [Fjall](https://github.com/fjall-rs/fjall) · [Benchmark method](high-performance-lean.md#reproduce-before-generalizing) · [Proof and runtime performance requirements](proof-roadmap.md#performance-requirements-for-verified-paths)
 
 ## Repository review follow-ups
 

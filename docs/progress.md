@@ -1,5 +1,7 @@
 # Current handoff
 
+The release performance roadmap defines the three-scenario baseline, the comparison target and the measure–diagnose–optimize loop. The first milestone is a comparable baseline and a measured choice of the first optimization. [Release performance](roadmap.md#release-performance)
+
 The writer-session and mixed database traces each derive readiness and acknowledged history in one induction. Full-chain provenance is propagated separately from the shared retained-WAL facts. Packed-table restore, write, flush and compaction share success specifications used by row bounds, logical refinement and checkpoint proofs. [Proof techniques and reuse](proof-index.md)
 
 Append retries share an installation contract for full-chain and retained-WAL recovery. The aligned collection and power-loss routes share the keeper-sync proof. Packed and sequential range proofs use one interval-local congruence lemma, and the tree memtable derives its upper bound from its lower bound. [Proof techniques and reuse](proof-index.md)
