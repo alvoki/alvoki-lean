@@ -69,14 +69,8 @@ theorem replay_rowBounds {state result : PackedTable} {events : List Write}
 
 private theorem replayWrite_advances {state result : PackedTable} {event : Write}
     (applied : replayWrite state event = .ok result) :
-    result.committed.toNat = state.committed.toNat + 1 := by
-  have written := (replayWrite_spec applied).1
-  unfold PackedTable.write at written
-  split at written
-  · rename_i fits
-    cases written
-    exact UInt64.toNat_ofNat_of_lt' fits
-  · contradiction
+    result.committed.toNat = state.committed.toNat + 1 :=
+  (PackedTable.write_spec (replayWrite_spec applied).1).1
 
 private theorem ordinals_append_iff (start : Nat) (left right : List Write) :
     WAL.OrdinalsFrom start (left ++ right) ↔
@@ -150,13 +144,7 @@ theorem replay_pins {state result : PackedTable} {events : List Write}
     | error => rw [step] at applied; contradiction
     | ok next =>
       rw [step] at applied
-      have samePins : next.pins = state.pins := by
-        have written := (replayWrite_spec step).1
-        unfold PackedTable.write at written
-        split at written
-        · cases written
-          rfl
-        · contradiction
+      have samePins := (PackedTable.write_spec (replayWrite_spec step).1).2.2.1
       exact (ih (state := next) applied).trans samePins
 
 /-- Each correctly numbered event supplies a representable next sequence, so
