@@ -4,6 +4,8 @@ import Alvoki.Storage.Disk.WalBatchMarkerPowerLoss
 import Alvoki.Storage.Disk.SegmentedBatchPowerLoss
 import Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
 import Alvoki.Storage.Disk.SegmentedBatchAppendPowerLoss
+import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
+import Alvoki.Storage.Disk.SegmentedBatchMarkerProcessExit
 import Alvoki.Storage.Disk.SegmentedBootstrapCompletion
 import Alvoki.Storage.Disk.AppendCutContinuation
 import Alvoki.Storage.Disk.AppendRetrySession
@@ -662,6 +664,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendPowerLossReport.Valid.reachesInterruption
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendPowerLossReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchAppendPowerLoss
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendProcessExitReport.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchAppendProcessExit
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.processExit
 #check_axioms Alvoki.Storage.WalSegmentRepair.boundedBatchRetry_selection
 #check_axioms Alvoki.Storage.replayPreparedBatchSelection
 #check_axioms Alvoki.Storage.prepareBatch_spec
@@ -718,6 +723,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.mem_remaining
 #check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.afterFileDrops_surviving
 #check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.afterFileDrops_released
+#check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.afterFileDrops_admits
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_notAcquired
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_acquired
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_segmented
@@ -1087,6 +1093,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.CheckpointRunChunkReads.ObservesFile.readOpenedExactPrefix
 #check_axioms Alvoki.Storage.WalSegmentRepair.readWalKeeperWithChunks_exact
 #check_axioms Alvoki.Storage.WalSegmentRepair.readWalKeeperWithChunks_syncAligned
+#check_axioms Alvoki.Storage.WalSegmentRepair.readWalKeeperWithChunks_syncCapturedDirectory
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.ofChunkReads
 #check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.ofChunkReads
 #check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.readExact
@@ -1158,6 +1165,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_checkpointError
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedCheckpointError
 #check_axioms Alvoki.Storage.SyncPathGroup.run_pair
+#check_axioms Alvoki.Storage.SyncPathGroup.run_single
 #check_axioms Alvoki.Storage.SyncPathGroup.failedWalPublication
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.resolve_owned
 #check_axioms Alvoki.Storage.SyncHandleRouting.pendingSync
