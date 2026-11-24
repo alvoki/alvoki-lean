@@ -435,6 +435,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.RecoveryBoundary.completes
 #check_axioms Alvoki.Storage.DiskTable.open_fileTargets
 #check_axioms Alvoki.Storage.DiskTable.open_admission
+#check_axioms Alvoki.Storage.DiskTable.withOpenAdmission_flatRefused
+#check_axioms Alvoki.Storage.DiskTable.withOpenAdmission_lockRefused
+#check_axioms Alvoki.Storage.DiskTable.withOpenAdmission_lockOpenError
 #check_axioms Alvoki.Storage.DiskTable.acquireAt_schedule
 #check_axioms Alvoki.Storage.OpenPathReadReports.checkpointCompletes
 #check_axioms Alvoki.WAL.Boundary.RecoveryReads.ofLockedPaths

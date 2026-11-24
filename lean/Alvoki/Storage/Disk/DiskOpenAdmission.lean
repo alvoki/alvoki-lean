@@ -44,6 +44,73 @@ theorem OpenAdmissionReports.admits {image result : Type} {input : FilePath} {di
     simp [Bind.bind, EStateM.bind, rejectFlatWalWith, optionalMetadataWith, checkPrivateRegularWith, absent,
       present, regular, single, fileKind, liftExcept, observed.opened, Pure.pure, EStateM.pure]
 
+/-- A reported flat WAL binding ends admission at the resolved path, with
+no append-open or lock acquisition. The metadata lookup is read-only. -/
+theorem _root_.Alvoki.Storage.DiskTable.withOpenAdmission_flatRefused {state handle result : Type}
+    {input : FilePath} {directory : DiskDirectory} {before : state}
+    (realPath : FilePath → EStateM IO.Error state FilePath)
+    (lookup : FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata))
+    (openAppend : FilePath → EStateM IO.Error state handle)
+    (acquire : DiskDirectory → handle → EStateM IO.Error state result)
+    (resolved : realPath input before = .ok directory.path before)
+    {metadata : IO.FS.Metadata} (present : lookup (directory.file .wal) before = .ok (.ok metadata) before) :
+    DiskTable.withOpenAdmission input realPath lookup openAppend acquire before =
+      .error (IO.userError s!"unsupported flat WAL binding: '{directory.file .wal}'") before := by
+  simp [DiskTable.withOpenAdmission, DiskDirectory.openWith_reported realPath directory resolved,
+    rejectFlatWalWith, optionalMetadataWith, present, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+    throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+
+/-- An existing non-private lock is rejected before its append-open. -/
+theorem _root_.Alvoki.Storage.DiskTable.withOpenAdmission_lockRefused {state handle result : Type}
+    {input : FilePath} {directory : DiskDirectory} {before : state}
+    (realPath : FilePath → EStateM IO.Error state FilePath)
+    (lookup : FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata))
+    (openAppend : FilePath → EStateM IO.Error state handle)
+    (acquire : DiskDirectory → handle → EStateM IO.Error state result)
+    (resolved : realPath input before = .ok directory.path before)
+    (flat : optionalMetadataWith (lookup (directory.file .wal)) before = .ok none before)
+    {metadata : IO.FS.Metadata} (present : lookup (directory.file .lock) before = .ok (.ok metadata) before)
+    (invalid : (metadata.type == .file && metadata.numLinks == 1) = false) :
+    DiskTable.withOpenAdmission input realPath lookup openAppend acquire before =
+      .error (IO.userError s!"expected a regular database file with one link: '{directory.file .lock}'") before := by
+  have probed : optionalMetadataWith (lookup (directory.file .lock)) before = .ok (some metadata) before := by
+    simp [optionalMetadataWith, Bind.bind, EStateM.bind, present, Pure.pure, EStateM.pure]
+  have rejected :
+      checkPrivateRegularWith (m := EStateM IO.Error state) (directory.file .lock) metadata before =
+        .error (IO.userError s!"expected a regular database file with one link: '{directory.file .lock}'") before := by
+    unfold checkPrivateRegularWith
+    rw [invalid]
+    rfl
+  simp only [DiskTable.withOpenAdmission, DiskDirectory.openWith_reported realPath directory resolved,
+    rejectFlatWalWith, Bind.bind, EStateM.bind, flat, Option.isSome_none, Bool.false_eq_true, ↓reduceIte,
+    Pure.pure, EStateM.pure, probed, rejected]
+
+/-- A reported append-open error returns its reached state before flock.
+Creating the lock name or obtaining a raw descriptor can precede the
+failed runtime handle allocation, so the result retains those effects. -/
+theorem _root_.Alvoki.Storage.DiskTable.withOpenAdmission_lockOpenError {state handle result : Type}
+    {input : FilePath} {directory : DiskDirectory} {before reached : state}
+    (realPath : FilePath → EStateM IO.Error state FilePath)
+    (lookup : FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata))
+    (openAppend : FilePath → EStateM IO.Error state handle)
+    (acquire : DiskDirectory → handle → EStateM IO.Error state result)
+    (resolved : realPath input before = .ok directory.path before)
+    (flat : optionalMetadataWith (lookup (directory.file .wal)) before = .ok none before)
+    {lock : Option IO.FS.Metadata}
+    (probed : optionalMetadataWith (lookup (directory.file .lock)) before = .ok lock before)
+    (safe : ∀ metadata, lock = some metadata → (metadata.type == .file && metadata.numLinks == 1) = true)
+    {cause : IO.Error} (failed : openAppend (directory.file .lock) before = .error cause reached) :
+    DiskTable.withOpenAdmission input realPath lookup openAppend acquire before = .error cause reached := by
+  have checked := DiskDirectory.openWith_reported realPath directory resolved
+  cases lock with
+  | none =>
+    simp [DiskTable.withOpenAdmission, checked, rejectFlatWalWith, flat, probed, failed, Bind.bind,
+      EStateM.bind, Pure.pure, EStateM.pure]
+  | some metadata =>
+    have regular := safe metadata rfl
+    simp [DiskTable.withOpenAdmission, checked, rejectFlatWalWith, flat, probed, checkPrivateRegularWith,
+      regular, failed, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
 def MarkedRetryChunkReports.runWithAdmission {files : Type} {input : FilePath}
     {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
     {layout : CanonicalKeeperLayout before.image history} {published : CheckpointPublication.Image}
