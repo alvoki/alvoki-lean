@@ -10,7 +10,7 @@ the fresh pin registry. Every acknowledgement extends the durable history
 in order, and only the final ambiguous event may be dropped. -/
 theorem MarkedSessionStep.refinesHistory {checkpoint : FixedMarkedCheckpoint}
     {initial after : MarkedWriterState} {writes : MarkedSessionWrites} {pending : List WAL.Write}
-    (step : MarkedSessionStep checkpoint initial writes after)
+    (step : MarkedSessionStep checkpoint.image.durable initial writes after)
     (ready : initial.ReadyFor checkpoint.manifest) (start : initial.history = checkpoint.covered ++ pending)
     (checkpointHistory : RepresentsWalHistory checkpoint.covered checkpoint.model) :
     ∃ suffix, after.ReadyFor checkpoint.manifest ∧ after.history = initial.history ++ suffix ∧

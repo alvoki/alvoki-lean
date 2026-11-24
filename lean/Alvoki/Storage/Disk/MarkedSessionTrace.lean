@@ -60,17 +60,17 @@ theorem MarkedSessionRetention.orderedSubmissions
 
 /-- Successful modeled open from the given cut. The evidence records the
 observed reads and reports and retains the concrete table and file image. -/
-inductive MarkedSessionOpen (checkpoint : FixedMarkedCheckpoint)
+inductive MarkedSessionOpen (durable : UInt64 → Nat → Option ByteArray)
     (cut : ReopenImage) (table : PackedTable) (after : ReopenImage) : Prop where
   | observed {before : ReopenImage} (attempts : MarkedReopenAttempts cut before)
-      (checkpointReads : CheckpointReadObservations checkpoint.image before.directory.active.manifest)
+      (checkpointReads : CheckpointFileReads durable before.directory.active.manifest)
       (walReads : MarkedWalReads before)
       {report : Publication.Step → RepairReport} {aligned : AlignedSyncReport}
       (opened : runMarkedReopen
         (MarkedReopenReads.mk walReads
           (checkpointReads.result.map fun loaded => (loaded.getD (.empty, 0)).1)).preflight
         report false aligned before = .ok table after) :
-      MarkedSessionOpen checkpoint cut table after
+      MarkedSessionOpen durable cut table after
 
 /-- Recover the verification-only history and exact byte count from the
 settled file image. The executable open does not run this second decode. -/
@@ -91,14 +91,14 @@ private theorem MarkedWriterState.observeReopen_ready
 /-- A session performs confirmed writes and either reopens from their settled
 files or attempts one more write whose error leads to recovery. In either
 case the next session takes the table and files returned by that open. -/
-inductive MarkedSessionStep (checkpoint : FixedMarkedCheckpoint) (initial : MarkedWriterState) :
+inductive MarkedSessionStep (durable : UInt64 → Nat → Option ByteArray) (initial : MarkedWriterState) :
     MarkedSessionWrites → MarkedWriterState → Prop where
   | clean {submitted : List WAL.Write} {writer next : MarkedWriterState}
       {table : PackedTable} {image : ReopenImage}
       (path : AcknowledgedWrites initial submitted writer)
-      (opened : MarkedSessionOpen checkpoint writer.image table image)
+      (opened : MarkedSessionOpen durable writer.image table image)
       (observed : MarkedWriterState.observeReopen table image = some next) :
-      MarkedSessionStep checkpoint initial ⟨submitted, none⟩ next
+      MarkedSessionStep durable initial ⟨submitted, none⟩ next
   | interrupted {submitted : List WAL.Write} {writer next : MarkedWriterState}
       {key : UInt64} {value : Option UInt64} {event : WAL.Write} {preparedTable table : PackedTable}
       {effects : WriteEffects} {cut image : ReopenImage}
@@ -106,9 +106,9 @@ inductive MarkedSessionStep (checkpoint : FixedMarkedCheckpoint) (initial : Mark
       (prepared : prepareWrite writer.table key value = some (event, preparedTable))
       (fits : writer.walBytes + WAL.frameSize < UInt64.size)
       (failed : runWriteEffectsFrom writer.history event effects writer.image = .error () cut)
-      (opened : MarkedSessionOpen checkpoint cut table image)
+      (opened : MarkedSessionOpen durable cut table image)
       (observed : MarkedWriterState.observeReopen table image = some next) :
-      MarkedSessionStep checkpoint initial ⟨submitted, some event⟩ next
+      MarkedSessionStep durable initial ⟨submitted, some event⟩ next
 
 /-- The exact checkpoint loader and selected WAL recover the writer's table. -/
 def FixedMarkedCheckpoint.RecoveredTable (checkpoint : FixedMarkedCheckpoint)
@@ -130,7 +130,7 @@ def FixedMarkedCheckpoint.RecoveredReads (checkpoint : FixedMarkedCheckpoint)
 theorem MarkedSessionStep.refinesWithReplay {checkpoint : FixedMarkedCheckpoint}
     {initial after : MarkedWriterState}
     {writes : MarkedSessionWrites} {pending : List WAL.Write}
-    (step : MarkedSessionStep checkpoint initial writes after)
+    (step : MarkedSessionStep checkpoint.image.durable initial writes after)
     (ready : initial.ReadyFor checkpoint.manifest) (start : initial.history = checkpoint.covered ++ pending) :
     ∃ suffix, after.ReadyFor checkpoint.manifest ∧ after.history = initial.history ++ suffix ∧
       writes.Retains suffix ∧ checkpoint.RecoveredTable after ∧ checkpoint.RecoveredReads after := by
@@ -164,7 +164,7 @@ theorem MarkedSessionStep.refinesWithReplay {checkpoint : FixedMarkedCheckpoint}
 
 theorem MarkedSessionStep.refines {checkpoint : FixedMarkedCheckpoint} {initial after : MarkedWriterState}
     {writes : MarkedSessionWrites} {pending : List WAL.Write}
-    (step : MarkedSessionStep checkpoint initial writes after)
+    (step : MarkedSessionStep checkpoint.image.durable initial writes after)
     (ready : initial.ReadyFor checkpoint.manifest) (start : initial.history = checkpoint.covered ++ pending) :
     ∃ suffix, after.ReadyFor checkpoint.manifest ∧ after.history = initial.history ++ suffix ∧
       writes.Retains suffix ∧ checkpoint.RecoveredReads after := by
@@ -178,7 +178,7 @@ inductive MarkedSessionTrace (checkpoint : FixedMarkedCheckpoint) (initial : Mar
     List MarkedSessionWrites → MarkedWriterState → Prop where
   | start : MarkedSessionTrace checkpoint initial [] initial
   | step (prior : MarkedSessionTrace checkpoint initial sessions before)
-      (one : MarkedSessionStep checkpoint before writes after) :
+      (one : MarkedSessionStep checkpoint.image.durable before writes after) :
       MarkedSessionTrace checkpoint initial (sessions ++ [writes]) after
 
 /-- The durable history extends the starting prefix by a suffix accounted for

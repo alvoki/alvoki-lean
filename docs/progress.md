@@ -351,3 +351,9 @@ Successful fresh initialization derives the first ready writer from the locked a
 ## Exact history for an existing unmarked WAL
 
 The native unmarked open and proof share WAL selection and replay. For successful input, the complete prefix is exactly the encoding of its numbered history. A short tail leaves the ordinal decoder result unchanged, including a complete-frame error. The observed checkpoint loader supplies the exact base and a recovered fresh-pin model. Once the selected bytes and marker are durable, marked recovery returns the identical table. Native release timings for opens without a marker gave median paired ratios from 0.971× to 1.012× against the baseline. [Legacy recovery proof](../lean/Alvoki/Storage/Disk/LegacyWalRecovery.lean) · [Measurements](../benchmarks/results/disk/legacy-wal-recovery)
+
+## Observed ready states and fresh-bootstrap cuts
+
+Ready-boundary evidence now records the writer state, installed generation and durable run bindings. The matching checkpoint and its refinement are obtained from the invariant. Fixed-checkpoint session evidence uses the run bindings directly, so the same observed file reads, write outcomes and reopen can preserve the invariant without a supplied checkpoint proof for the resulting state. [Observed boundary](../lean/Alvoki/Storage/Disk/ObservedMarkedState.lean)
+
+The fresh-bootstrap cut proof covers empty-WAL creation, partial sync effects, marker publication and power-loss choices. A retry can observe a missing WAL, an existing unmarked empty WAL, or a marked empty WAL. Any selectable marker names an already durable empty WAL. This establishes the input cases for retry completion. [Bootstrap cut proof](../lean/Alvoki/Storage/Disk/FreshMarkedBootstrap.lean)

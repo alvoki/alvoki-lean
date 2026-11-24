@@ -233,15 +233,19 @@ private theorem observed_ordered_runs {indices : List Nat} {durableFiles files :
 /-- Successful checkpoint reads under the database lock observe the selected
 manifest and the contents of the durable run files it names. Read errors are
 retained. An untracked run path is outside this part of the model. -/
-structure CheckpointReadObservations (image : CheckpointPublication.Image) (manifest : Option ByteArray) where
+structure CheckpointFileReads (durable : UInt64 → Nat → Option ByteArray)
+    (manifest : Option ByteArray) where
   readManifest : Except String (Option ByteArray)
   readRun : UInt64 → Nat → Except String ByteArray
   manifestVisible : ∀ value, readManifest = .ok value → value = manifest
   runDurable : ∀ generation index value expected, readRun generation index = .ok value →
-    image.durable generation index = some expected → value = expected
+    durable generation index = some expected → value = expected
 
-def CheckpointReadObservations.result {image : CheckpointPublication.Image} {manifest : Option ByteArray}
-    (reads : CheckpointReadObservations image manifest) : Except String (Option (PackedTable × UInt64)) :=
+abbrev CheckpointReadObservations (image : CheckpointPublication.Image) (manifest : Option ByteArray) :=
+  CheckpointFileReads image.durable manifest
+
+def CheckpointFileReads.result {durable : UInt64 → Nat → Option ByteArray} {manifest : Option ByteArray}
+    (reads : CheckpointFileReads durable manifest) : Except String (Option (PackedTable × UInt64)) :=
   readCheckpoint reads.readManifest reads.readRun (fun result => result)
 
 /-- A successful run of the native checkpoint read protocol obtains exactly
@@ -260,16 +264,16 @@ theorem CheckpointReadObservations.loaded {image : CheckpointPublication.Image}
         return some (table, header.generation)) = .ok loaded := by
   cases observedManifest : reads.readManifest with
   | error =>
-    simp [CheckpointReadObservations.result, readCheckpoint, observedManifest, bind, Except.bind] at opened
+    simp [CheckpointFileReads.result, readCheckpoint, observedManifest, bind, Except.bind] at opened
   | ok value =>
     have visible := reads.manifestVisible value observedManifest
     subst manifest
     cases value with
     | none =>
-      simpa [CheckpointReadObservations.result, readCheckpoint, observedManifest, bind, Except.bind,
+      simpa [CheckpointFileReads.result, readCheckpoint, observedManifest, bind, Except.bind,
         pure, Except.pure] using opened
     | some bytes =>
-      simp only [CheckpointReadObservations.result, readCheckpoint, observedManifest, bind, Except.bind] at opened
+      simp only [CheckpointFileReads.result, readCheckpoint, observedManifest, bind, Except.bind] at opened
       cases decoded : Manifest.decode bytes with
       | error => rw [decoded] at opened; contradiction
       | ok header =>

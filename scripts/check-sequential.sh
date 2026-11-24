@@ -47,6 +47,7 @@ lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointReady
 lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointReopenReady
 lake env leanchecker Alvoki.Storage.Disk.MarkedSessionHistory
 lake env leanchecker Alvoki.Storage.Disk.MarkedDatabaseState
+lake env leanchecker Alvoki.Storage.Disk.ObservedMarkedState
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery
 lake env leanchecker Alvoki.Storage.Disk.RecoveredPinRefinement

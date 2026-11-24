@@ -104,7 +104,7 @@ theorem release {state : MarkedDatabaseState} (valid : state.Valid) (handle : Sn
 extended in order and the pin registry starts with no active pins. -/
 theorem sessionStep {state : MarkedDatabaseState} {writer : MarkedWriterState}
     {writes : MarkedSessionWrites} (valid : state.Valid)
-    (step : MarkedSessionStep state.checkpoint state.writer writes writer) :
+    (step : MarkedSessionStep state.checkpoint.image.durable state.writer writes writer) :
     ∃ suffix, (state.withWriter writer).Valid ∧ writer.history = state.writer.history ++ suffix ∧
       writes.Retains suffix ∧ writer.table.pins.active = [] := by
   obtain ⟨pending, start⟩ := valid.coveredPrefix

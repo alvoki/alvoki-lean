@@ -131,7 +131,7 @@ theorem freshMarkedOpen_ready {before : ReopenImage} (fresh : before.Fresh)
     (congrArg DirectoryPublication.Bindings.walBoundary active)
   have absentWal : observedWal = none := (walReads.walVisible _ readWal).symm.trans fresh.2.2.1
   have load : checkpointReads.result = .ok none := by
-    rw [CheckpointReadObservations.result, readManifest, absentManifest]
+    rw [CheckpointFileReads.result, readManifest, absentManifest]
     rfl
   let after := afterFreshOpen before
   let fixed : FixedMarkedCheckpoint := {
@@ -156,5 +156,209 @@ theorem freshMarkedOpen_ready {before : ReopenImage} (fresh : before.Fresh)
     change before.directory.active.replace .walBoundary (encode 0) = ⟨none, some (encode 0)⟩
     rw [active]
     rfl
+
+/-- An empty database can publish only the zero marker, with no manifest. -/
+private def EmptyBootstrapBindings (pair : DirectoryPublication.Bindings) : Prop :=
+  pair.manifest = none ∧ (pair.walBoundary = none ∨ pair.walBoundary = some (encode 0))
+
+/-- Both the visible and all selectable crash WAL files exist and are empty. -/
+def ReopenImage.DurableEmptyWal (image : ReopenImage) : Prop :=
+  ∀ wal ∈ image.wal.active :: image.wal.crashImages, wal = some ByteArray.empty
+
+/-- Every possible marker selects an empty WAL whose bytes and binding are
+already durable. Before marker publication the empty file may still be absent. -/
+structure ReopenImage.EmptyBootstrapValid (image : ReopenImage) : Prop where
+  metadata : image.directory.Valid EmptyBootstrapBindings
+  walChoices : ∀ wal ∈ image.wal.active :: image.wal.crashImages,
+    wal = none ∨ wal = some ByteArray.empty
+  markedWal : ∀ pair ∈ image.directory.crashImages, pair.walBoundary ≠ none → image.DurableEmptyWal
+
+private def alignedBootstrapImage (image : ReopenImage) (report : AlignedSyncReport) : ReopenImage :=
+  match performAlignedSync false report image with
+  | .ok _ after | .error _ after => after
+
+/-- Apply a successful prefix of the shared marker replacement schedule. -/
+def runEmptyBootstrapMarkerCut (image : ReopenImage) (cut : Nat) : Except String (Unit × ReopenImage) :=
+  ((Publication.steps.take cut).forM (publishMarker (fun _ => .ok ()) (encode 0))).run image
+
+/-- A failed staging write may leave arbitrary scratch contents. A retry
+starts a new marker schedule by overwriting that name. -/
+private def withBootstrapMarkerScratch (image : ReopenImage)
+    (scratch : Option (ByteArray × Bool)) : ReopenImage :=
+  { image with directory := { image.directory with
+      staged := fun entry => if entry = .walBoundary then scratch else image.directory.staged entry } }
+
+/-- Cuts can leave a successful prefix of the marker schedule visible, even
+if the final syscall reported an error. Another attempt starts from that
+visible state or from a selectable power-loss image. The marker schedule can
+start only after an empty WAL has been synced and its name made durable. -/
+inductive EmptyBootstrapAttempts (initial : ReopenImage) : ReopenImage → Prop where
+  | start : EmptyBootstrapAttempts initial initial
+  | createWal (prior : EmptyBootstrapAttempts initial before)
+      (absentManifest : before.directory.active.manifest = none)
+      (absentMarker : before.directory.active.walBoundary = none) (absentWal : before.wal.active = none) :
+      EmptyBootstrapAttempts initial (visibleEmptyWal before)
+  | aligned (prior : EmptyBootstrapAttempts initial before) (wal : before.wal.active = some ByteArray.empty)
+      (report : AlignedSyncReport) : EmptyBootstrapAttempts initial (alignedBootstrapImage before report)
+  | marker (prior : EmptyBootstrapAttempts initial before)
+      (unmarked : before.directory.active.walBoundary = none) (synced : before.DurableEmptyWal) (cut : Nat)
+      (executed : runEmptyBootstrapMarkerCut before cut = .ok ((), after)) :
+      EmptyBootstrapAttempts initial after
+  | interruptedStage (prior : EmptyBootstrapAttempts initial before)
+      (unmarked : before.directory.active.walBoundary = none) (synced : before.DurableEmptyWal)
+      (scratch : Option (ByteArray × Bool)) : EmptyBootstrapAttempts initial (withBootstrapMarkerScratch before scratch)
+  | crash (prior : EmptyBootstrapAttempts initial before) (pairSurvives : pair ∈ before.directory.crashImages)
+      (walSurvives : wal ∈ before.wal.crashImages) : EmptyBootstrapAttempts initial (ReopenImage.crash pair wal)
+
+private theorem ReopenImage.Fresh.emptyBootstrapValid {image : ReopenImage} (fresh : image.Fresh) :
+    image.EmptyBootstrapValid := by
+  obtain ⟨active, crashes, wal, walCrashes⟩ := fresh
+  refine ⟨⟨by rw [crashes]; simp, ?_⟩, ?_, ?_⟩
+  · intro pair chosen
+    rw [crashes, active] at chosen
+    obtain rfl := List.mem_singleton.mp chosen
+    exact ⟨rfl, Or.inl rfl⟩
+  · intro contents chosen
+    rw [wal, walCrashes] at chosen
+    exact Or.inl (by simpa using chosen)
+  · intro pair chosen marked
+    rw [crashes, active] at chosen
+    obtain rfl := List.mem_singleton.mp chosen
+    exact False.elim (marked rfl)
+
+private theorem ReopenImage.EmptyBootstrapValid.create {image : ReopenImage}
+    (valid : image.EmptyBootstrapValid) (absent : image.wal.active = none) :
+    (visibleEmptyWal image).EmptyBootstrapValid := by
+  refine ⟨valid.metadata, ?_, ?_⟩
+  · intro wal chosen
+    rcases List.mem_cons.mp chosen with rfl | remaining
+    · exact Or.inr rfl
+    · rcases List.mem_cons.mp remaining with rfl | previous
+      · exact Or.inr rfl
+      · exact valid.walChoices wal (List.mem_cons_of_mem _ previous)
+  · intro pair chosen marked
+    have present := valid.markedWal pair chosen marked _ (List.mem_cons_self ..)
+    rw [absent] at present
+    contradiction
+
+private theorem ReopenImage.EmptyBootstrapValid.sync {image : ReopenImage}
+    (valid : image.EmptyBootstrapValid) (wal : image.wal.active = some ByteArray.empty) :
+    image.syncDirectory.EmptyBootstrapValid := by
+  have durable : image.syncDirectory.DurableEmptyWal := by
+    intro contents chosen
+    change contents ∈ [image.wal.active, image.wal.active] at chosen
+    simpa [wal] using chosen
+  exact ⟨valid.metadata.syncDirectory, fun contents chosen => Or.inr (durable contents chosen),
+    fun _ _ _ => durable⟩
+
+private theorem ReopenImage.EmptyBootstrapValid.metadataSync {image : ReopenImage}
+    (valid : image.EmptyBootstrapValid) : image.syncMetadata.EmptyBootstrapValid := by
+  refine ⟨valid.metadata.syncDirectory, valid.walChoices, ?_⟩
+  intro pair chosen marked
+  obtain rfl := List.mem_singleton.mp chosen
+  exact valid.markedWal _ valid.metadata.activeMaySurvive marked
+
+private theorem ReopenImage.EmptyBootstrapValid.allowWal {image : ReopenImage}
+    (valid : image.EmptyBootstrapValid) : image.allowVisibleWal.EmptyBootstrapValid := by
+  have previous (wal : Option ByteArray) (chosen : wal ∈ image.allowVisibleWal.wal.active ::
+      image.allowVisibleWal.wal.crashImages) : wal ∈ image.wal.active :: image.wal.crashImages := by
+    rcases List.mem_cons.mp chosen with rfl | compatible
+    · exact List.mem_cons_self
+    · exact compatible
+  exact ⟨valid.metadata, fun wal chosen => valid.walChoices wal (previous wal chosen),
+    fun pair chosen marked wal selected => valid.markedWal pair chosen marked wal (previous wal selected)⟩
+
+private theorem markerBootstrapCut_valid {before after : ReopenImage} {cut : Nat}
+    (valid : before.directory.Valid EmptyBootstrapBindings)
+    (executed : runEmptyBootstrapMarkerCut before cut = .ok ((), after)) :
+    after.directory.Valid EmptyBootstrapBindings ∧ after.wal = before.wal := by
+  have replacement (pair : DirectoryPublication.Bindings) (accepted : EmptyBootstrapBindings pair) :
+      EmptyBootstrapBindings (pair.replace .walBoundary (encode 0)) := ⟨accepted.1, Or.inr rfl⟩
+  rcases cut with _ | _ | _ | _ | cut
+  · cases executed
+    exact ⟨valid, rfl⟩
+  · cases executed
+    exact ⟨⟨valid.activeMaySurvive, valid.crashValid⟩, rfl⟩
+  · cases executed
+    exact ⟨⟨valid.activeMaySurvive, valid.crashValid⟩, rfl⟩
+  · cases executed
+    refine ⟨⟨List.mem_append_left _ (List.mem_map_of_mem valid.activeMaySurvive), ?_⟩, rfl⟩
+    intro pair chosen
+    rcases List.mem_append.mp chosen with new | old
+    · obtain ⟨earlier, survived, rfl⟩ := List.mem_map.mp new
+      exact replacement _ (valid.crashValid _ survived)
+    · exact valid.crashValid _ old
+  · simp only [runEmptyBootstrapMarkerCut, Publication.steps, List.take_succ_cons, List.take_nil] at executed
+    cases executed
+    refine ⟨⟨List.mem_cons_self, ?_⟩, rfl⟩
+    intro pair chosen
+    obtain rfl := List.mem_singleton.mp chosen
+    exact replacement _ valid.activeValid
+
+/-- Creating or syncing the empty WAL, cutting marker replacement, and
+retrying after any admitted crash all preserve the bootstrap invariant. -/
+theorem EmptyBootstrapAttempts.valid {initial after : ReopenImage} (fresh : initial.Fresh)
+    (attempts : EmptyBootstrapAttempts initial after) : after.EmptyBootstrapValid := by
+  induction attempts with
+  | start => exact fresh.emptyBootstrapValid
+  | createWal _ _ _ absent valid => exact valid.create absent
+  | aligned _ wal report valid =>
+    cases report with
+    | success => exact valid.sync wal
+    | failure message walSynced directorySynced =>
+      cases walSynced <;> cases directorySynced
+      · exact valid
+      · exact valid.metadataSync.allowWal
+      · exact valid.allowWal
+      · exact valid.sync wal
+  | marker _ _ synced _ executed valid =>
+    obtain ⟨metadata, sameWal⟩ := markerBootstrapCut_valid valid.metadata executed
+    refine ⟨metadata, ?_, fun _ _ _ => ?_⟩
+    · rw [sameWal]
+      exact valid.walChoices
+    · unfold ReopenImage.DurableEmptyWal
+      rw [sameWal]
+      exact synced
+  | interruptedStage _ _ _ _ valid =>
+    exact ⟨⟨valid.metadata.activeMaySurvive, valid.metadata.crashValid⟩,
+      valid.walChoices, valid.markedWal⟩
+  | @crash before pair wal _ pairSurvives walSurvives valid =>
+    refine ⟨DirectoryPublication.Image.settled_valid (valid.metadata.crashValid _ pairSurvives), ?_, ?_⟩
+    · intro choice selected
+      have same : choice = wal := by simpa [ReopenImage.crash, Publication.Image.settled] using selected
+      rw [same]
+      exact valid.walChoices _ (List.mem_cons_of_mem _ walSurvives)
+    · intro candidate chosen marked contents selected
+      obtain rfl := List.mem_singleton.mp chosen
+      have present := valid.markedWal _ pairSurvives marked _ (List.mem_cons_of_mem _ walSurvives)
+      have selectedWal : contents = wal := by simpa [ReopenImage.crash, Publication.Image.settled] using selected
+      exact selectedWal.trans present
+
+/-- The three open paths that can observe a cut of empty bootstrap. A
+marked open must find the existing empty WAL and does not create one. -/
+inductive EmptyBootstrapObservation : DirectoryPublication.Bindings → Option ByteArray → Prop where
+  | fresh : EmptyBootstrapObservation ⟨none, none⟩ none
+  | unmarked : EmptyBootstrapObservation ⟨none, none⟩ (some ByteArray.empty)
+  | marked : EmptyBootstrapObservation ⟨none, some (encode 0)⟩ (some ByteArray.empty)
+
+theorem ReopenImage.EmptyBootstrapValid.observe {image : ReopenImage} (valid : image.EmptyBootstrapValid)
+    {pair : DirectoryPublication.Bindings} {wal : Option ByteArray}
+    (metadata : pair ∈ image.directory.active :: image.directory.crashImages)
+    (contents : wal ∈ image.wal.active :: image.wal.crashImages) : EmptyBootstrapObservation pair wal := by
+  have survives : pair ∈ image.directory.crashImages := (List.mem_cons.mp metadata).elim
+    (fun same => same.symm ▸ valid.metadata.activeMaySurvive) id
+  have accepted := valid.metadata.crashValid _ survives
+  rcases pair with ⟨manifest, marker⟩
+  obtain ⟨rfl, absent | published⟩ := accepted
+  · change marker = none at absent
+    subst marker
+    rcases valid.walChoices wal contents with rfl | rfl
+    · exact .fresh
+    · exact .unmarked
+  · change marker = some (encode 0) at published
+    subst marker
+    have present := valid.markedWal _ survives (by simp) wal contents
+    subst wal
+    exact .marked
 
 end Alvoki.WAL.Boundary

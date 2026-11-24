@@ -397,7 +397,8 @@ inductive AlignedSyncReport where
   | success
   | failure (message : String) (walSynced directorySynced : Bool)
 
-private def performAlignedSync (walAlreadySynced : Bool) (report : AlignedSyncReport) :
+/-- Interpret the grouped sync's reported effects on the WAL and directory. -/
+def performAlignedSync (walAlreadySynced : Bool) (report : AlignedSyncReport) :
     EStateM String ReopenImage Unit := fun image =>
   match report with
   | .success => .ok () image.syncDirectory
