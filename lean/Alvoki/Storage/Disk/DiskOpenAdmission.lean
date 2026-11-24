@@ -129,6 +129,31 @@ theorem MarkedRetryChunkReports.runWithAdmission_eq {files : Type} {input : File
     observed.runWithAdmission admission = observed.run :=
   admission.admits observed.runAt before
 
+/-- The exact admitted result uses the allocation reported by that same
+open. Its token is distinct from every older reference in the census. -/
+theorem MarkedRetryChunkReports.admittedSessionRefs {files : Type} {input : FilePath}
+    {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout before.image history} {published : CheckpointPublication.Image}
+    (observed : MarkedRetryChunkReports files directory layout published)
+    (admission : OpenAdmissionReports input directory observed.slot)
+    {session : SegmentedSession} {final : LockedFileState FileImage}
+    (opened : observed.runWithAdmission admission = .ok session final) :
+    session.phaseRef = observed.nextRef ∧ session.sessionRef = observed.nextRef + 1 ∧
+      session.phaseRef ∉ observed.liveRefs ∧ session.sessionRef ∉ observed.liveRefs := by
+  rw [observed.runWithAdmission_eq admission, MarkedRetryChunkReports.run, MarkedRetryChunkReports.runAt,
+    runOpenWithInstallation_outcome] at opened
+  cases reached : runOpenWithImage directory observed.slot.description (observed.flock observed.slot)
+      observed.unlock (observed.recoverAt directory) before with
+  | error cause after => rw [reached] at opened; contradiction
+  | ok table after =>
+    rw [reached] at opened
+    obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj opened
+    refine ⟨rfl, rfl, Nat.lt_irrefl _ ∘ observed.fresh _, ?_⟩
+    intro current
+    change observed.nextRef + 1 ∈ observed.liveRefs at current
+    have earlier := observed.fresh _ current
+    omega
+
 /-- Compose the pre-lock native admission projection with the marked
 installer. The chunk reports belong to the actual append-open slot and
 reported flock at the resolved directory, and the locked schedule probes

@@ -41,7 +41,8 @@ structure AdmittedCleanReopen {files : Type} {input : FilePath} {directory : Dis
   writer : CheckpointChunkWriter directory before before.published observed after
   reopenEffect : ∃ session final, observed.runWithAdmission admission = .ok session final ∧
     session.directory = directory ∧ session.descriptor = observed.slot.description ∧
-    session.phase = .ready after.installed ∧ after.files = final.image ∧ after.owners = final.owners
+    session.phase = .ready after.installed ∧ session.sessionRef ∉ observed.liveRefs ∧
+    after.files = final.image ∧ after.owners = final.owners
   target : after.target = before.target
   checkpoint : after.checkpoint = before.checkpoint
   generation : after.installed.generation = before.installed.generation
@@ -115,9 +116,10 @@ theorem SegmentedWriterState.RetainedReady.closeWithAdmission {files : Type} {in
   have returnedSession := (EStateM.Result.ok.inj (returned.symm.trans recovered)).1
   rw [returnedSession] at installedPhase
   have exactInstalled := Phase.ready.inj (installedPhase.symm.trans phase)
+  have admitted := (observed.runWithAdmission_eq admission).trans returned
   exact ⟨layout, observed, admission, after, closeRan, sameLock, distinct, output,
-    ⟨session, files, (observed.runWithAdmission_eq admission).trans returned, path,
-      description.trans observed.inventoryDescription, returnedSession.symm ▸ installedPhase, afterFiles, owners⟩,
+    ⟨session, files, admitted, path, description.trans observed.inventoryDescription, returnedSession.symm ▸ installedPhase,
+      (observed.admittedSessionRefs admission admitted).2.2.2, afterFiles, owners⟩,
     exactTarget, checkpoint, (congrArg Installed.generation exactInstalled).trans generation,
     (congrArg Installed.table exactInstalled).symm ▸ replayed⟩
 
