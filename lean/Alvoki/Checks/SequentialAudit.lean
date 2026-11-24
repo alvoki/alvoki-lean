@@ -1113,6 +1113,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalMarkerRead.reached_eq_of_readonly
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedMarkerDecodeError
 #check_axioms Alvoki.Storage.DiskSession.CachedMarkerRejection.run_error
+#check_axioms Alvoki.Storage.DiskSession.CachedMarkerRejection.decodeError
 #check_axioms Alvoki.Storage.DiskSession.CachedMarkerRejection.immediateReacquire
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.afterCachedMarkerLastDrop
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofSealExtent

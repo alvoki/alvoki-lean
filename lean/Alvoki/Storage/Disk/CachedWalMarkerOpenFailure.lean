@@ -143,23 +143,32 @@ theorem runOpenWithInstallation_cachedMarkerDecodeError {image : Type} (director
     subst released
     rfl
 
-/-- A cached retry that reads the actual visible malformed marker after
-taking the lock. Read-only callbacks cannot change the retry's file image. -/
+/-- A cached retry reads the bounded prefix of the visible malformed
+marker after taking the lock. The read-only callbacks preserve the retry's
+file image, including the unread bytes of an oversized marker. -/
 structure CachedMarkerRejection (directory : DiskDirectory) (before : LockedFileState FileImage)
     extends CachedOpenAttempt directory before where
   reads : CachedWalMarkerRead directory readOptional readRunSize readRunPrefix before.image before.image
   checkpointReadOnly : reads.afterCheckpoint = before.image
-  visibleMarker : before.image.directory.active.walBoundary = some reads.marker
+  storedMarker : ByteArray
+  visibleMarker : before.image.directory.active.walBoundary = some storedMarker
+  boundedRead : reads.marker = storedMarker.extract 0 (min WAL.Boundary.acquisitionLimit storedMarker.size)
   message : String
-  malformed : WAL.Boundary.decode reads.marker = .error message
+  malformed : WAL.Boundary.decode storedMarker = .error message
 
 namespace CachedMarkerRejection
 
 variable {directory : DiskDirectory} {before : LockedFileState FileImage}
 
+/-- The exact prefix reaching the decoder yields the stored marker's error. -/
+theorem decodeError (rejection : CachedMarkerRejection directory before) :
+    WAL.Boundary.decode rejection.reads.marker = .error rejection.message := by
+  rw [rejection.boundedRead, WAL.Boundary.decode_acquisitionPrefix]
+  exact rejection.malformed
+
 def certified (rejection : CachedMarkerRejection directory before) : CachedOpenRejection directory before :=
   ⟨rejection.toCachedOpenAttempt, IO.userError rejection.message,
-    rejection.reads.prepare_decodeError _ rejection.malformed⟩
+    rejection.reads.prepare_decodeError _ rejection.decodeError⟩
 
 abbrev run (rejection : CachedMarkerRejection directory before) := rejection.toCachedOpenAttempt.run
 abbrev after (rejection : CachedMarkerRejection directory before) := rejection.certified.after
