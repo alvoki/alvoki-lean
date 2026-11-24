@@ -72,6 +72,8 @@ On a successful marked WAL acquisition over `n` listed entries, the shared reade
 
 The proposed checkpoint reader supplies each run stamp's decoded byte count to size admission and reuses the existing integrity loader. It requests at most the sum of the stamps even if a payload call fails. Healthy reports produce the same ordered files and exact restored table. When wiring this route into the adapter, traverse the run stamps linearly. [Sized checkpoint reads](../lean/Alvoki/Storage/Disk/IntegrityCheckpointSizedRead.lean)
 
+`PackedTable.retainRunVersions` rewrites exactly one selected run at the current snapshot floor using the checked span compactor. Lean proves that supported point and range reads, row bounds, the other runs, and the memtable and pins are preserved. A floor tombstone continues to hide an older value. The fixture exercises both memtable backends. The next checkpoint-level step is to carry the same visible-entry law through WAL history and publication of the smaller run. [Packed retention](../lean/Alvoki/Storage/Table/PackedTable.lean) · [Both backends](../lean/Alvoki/Checks/PackedTableChecks.lean)
+
 The serial replay theorem now proves equality of tables and decoder or replay diagnostics for checked aligned spans and an exact keeper prefix. The next performance proof connects this fold to ordered I/O and global malformed-span checks. [Serial replay](../lean/Alvoki/Storage/Disk/WalSegmentSerialReplay.lean)
 
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

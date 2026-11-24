@@ -164,6 +164,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.PackedTable.SameData.acquireAt_reads
 #check_axioms Alvoki.Storage.PackedTable.flush_refines
 #check_axioms Alvoki.Storage.PackedTable.compact_refines
+#check_axioms Alvoki.Sequential.replaceSuffix_spec_at
+#check_axioms Alvoki.Compaction.CheckedRun.retainVersions_spec
+#check_axioms Alvoki.Compaction.CheckedRun.retainVersions_complete
+#check_axioms Alvoki.Storage.PackedTable.retainRunVersions_spec
+#check_axioms Alvoki.Storage.PackedTable.RowBounds.retainRunVersions
+#check_axioms Alvoki.Storage.PackedTable.retainRunVersions_visibleEntry
+#check_axioms Alvoki.Storage.PackedTable.retainRunVersions_reads
 #check_axioms Alvoki.Storage.PackedTable.restore_rowBounds
 #check_axioms Alvoki.Storage.PackedTable.RowBounds.write
 #check_axioms Alvoki.Storage.PackedTable.RowBounds.acquireAt
