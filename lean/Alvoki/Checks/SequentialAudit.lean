@@ -88,6 +88,7 @@ import Alvoki.Storage.Disk.SegmentedCheckpointStep
 import Alvoki.Storage.Disk.SegmentedWriterTrace
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
+import Alvoki.Storage.Disk.SegmentedCollectionInventory
 import Alvoki.Storage.Disk.SegmentedRetainedWriter
 import Alvoki.Storage.Disk.WalSegmentRecoveryWork
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -715,6 +716,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.keepsReadDescriptors
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.collectionReadPlan
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.collectionSelectsReads
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.collectionReadsBounded
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.trans
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.keepsSettledPair
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.collectionCanRemove
