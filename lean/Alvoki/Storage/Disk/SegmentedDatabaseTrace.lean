@@ -132,4 +132,30 @@ theorem SegmentedDatabaseTrace.acquireReads {directory initialDescriptor initial
   exact ⟨reference, replayed, pin, pinned, acquired,
     by simpa only [pinSpec.sequence] using represented.packedPinnedReads refined replayed pinSpec.active⟩
 
+/-- An earlier pin's sequence reads the same values after reacquiring it
+in the final session, provided the final writer still retains it. -/
+theorem SegmentedDatabaseTrace.reacquireReadsStable {directory initialDescriptor initial log descriptor last}
+    (trace : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor last)
+    (initialReady : initial.Ready directory initialDescriptor) {oldPin : SnapshotPin}
+    (active : oldPin ∈ initial.installed.table.pins.active)
+    (retained : last.installed.table.pins.floor ≤ oldPin.sequence) :
+    ∃ newPin pinned, last.installed.table.acquireAt oldPin.sequence = some (newPin, pinned) ∧
+      newPin.sequence = oldPin.sequence ∧
+      (∀ key, pinned.lookup newPin.handle key = initial.installed.table.lookup oldPin.handle key) ∧
+      ∀ start stop, pinned.range newPin.handle start stop = initial.installed.table.range oldPin.handle start stop := by
+  obtain ⟨ready, suffix, history, _⟩ := trace.preservesReady initialReady
+  obtain ⟨initialModel, initialRefines, previous⟩ := initialReady.resumed.canonical
+  obtain ⟨lastModel, lastRefines, represented⟩ := ready.resumed.canonical
+  have oldCommitted := initialModel.pins_committed oldPin (initialRefines.pins ▸ active)
+  have nowCommitted : oldPin.sequence ≤ last.installed.table.committed := by
+    rw [UInt64.le_iff_toNat_le, previous.committed_count] at oldCommitted
+    rw [lastRefines.committed, UInt64.le_iff_toNat_le, represented.committed_count, history]
+    exact Nat.le_trans oldCommitted (by simp)
+  obtain ⟨reference, replayed, newPin, pinned, acquired, _, _⟩ := trace.acquireReads initialReady retained nowCommitted
+  obtain ⟨_, refined, next⟩ := represented.acquireAt lastRefines ready.resumed.bounds acquired
+  have pinSpec := PackedTable.acquireAt_spec acquired
+  rw [history] at next replayed
+  exact ⟨newPin, pinned, acquired, pinSpec.sequence,
+    previous.packedPinnedReadsAfterAppend next initialRefines refined replayed active pinSpec.active pinSpec.sequence⟩
+
 end Alvoki.Storage.DiskSession

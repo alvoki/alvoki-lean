@@ -699,6 +699,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromBootstrap
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.pinnedReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.acquireReads
+#check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.reacquireReadsStable
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.readLayout
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.keepsReadDescriptors
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.collectionReadPlan
