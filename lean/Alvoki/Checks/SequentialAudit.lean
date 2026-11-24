@@ -768,6 +768,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendReport.selectedReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendReport.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendTrace.preservesReady
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterTrace.preservesRetainedWithChain
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterTrace.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterTrace.fromBootstrap
 #check_axioms Alvoki.Storage.DiskSession.SegmentedTableStep.preservesReady
@@ -781,6 +782,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedReadyPowerLossReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedReadyPowerLossReport.Installs.unique
 #check_axioms Alvoki.Storage.DiskSession.SegmentedReadyPowerLossReport.Installs.preservesReady
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.withChain
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromBootstrap
