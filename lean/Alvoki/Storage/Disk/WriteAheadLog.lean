@@ -371,6 +371,20 @@ theorem decodeOrdinals_reencode {bytes : ByteArray} {events : List Write}
   simp only [List.reverse_nil, List.nil_append] at result
   simpa only [result, Nat.zero_add] using encoded
 
+/-- A successful decoder returns one event per complete frame at any absolute offset. -/
+theorem decodeOrdinalsFrom_length {first : Nat} {bytes : ByteArray} {events : List Write}
+    (decoded : decodeOrdinalsFrom first bytes = .ok events) :
+    events.length = bytes.size / frameSize := by
+  obtain ⟨suffix, result, encoded⟩ :=
+    decodeFrom_reencode bytes first 0 (bytes.size / frameSize) [] events decoded
+  simp only [List.reverse_nil, List.nil_append] at result
+  have maxBytes : bytes.size / frameSize * frameSize ≤ bytes.size := Nat.div_mul_le_self _ _
+  have size := congrArg ByteArray.size encoded
+  simp only [encode_size, ByteArray.size_extract, Nat.zero_add, Nat.sub_zero, Nat.min_eq_left maxBytes] at size
+  rw [result]
+  apply Nat.eq_of_mul_eq_mul_left (by decide : 0 < frameSize)
+  rw [size, Nat.mul_comm]
+
 /-- A complete, malformed last frame cannot be treated as a short tear by the
 current decoder. A durable replay boundary must come from outside this codec. -/
 theorem decode_bad_final_frame (events : List Write) {last : ByteArray} {message : String}
