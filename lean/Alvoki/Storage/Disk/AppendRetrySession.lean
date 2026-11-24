@@ -114,6 +114,76 @@ private theorem appendRetryLayout {before : WalSegmentImage} {history : List WAL
     · rw [sealed, nextKeeper]; exact descriptors
     · rw [start]; exact offsets
 
+/-- Project the physical cut of the append and marker schedule into the
+bounded opener's file image. The immutable sealed inventory comes from
+the ready writer. -/
+def appendCutFiles (before : WalSegmentImage) (history : List WAL.Write) (event : WAL.Write)
+    (effects : WriteEffects) (scratch : Option (ByteArray × Bool)) : FileImage :=
+  before.appendReopenFiles
+    ((writeFilesAfter (runWriteEffects history event effects (before.directory.staged .walBoundary))).reopenSegment
+      before.active.first history before.directory.active.manifest) scratch
+
+/-- Recover a modeled physical append cut after finitely many failed opens
+or crashes. The cut fixes the allowable old and extended markers. This
+depends on file effects and the submitted frame, independently of how
+the writer's execution stopped. -/
+theorem BoundedReopenTrace.installsAfterAppendCut {directory : DiskDirectory} {owners : LockOwners}
+    {installed : Installed} {before : WalSegmentImage} {history : List WAL.Write}
+    {published : CheckpointPublication.Image} {watermark : Nat}
+    (ready : AppendCutWriter installed before history published watermark)
+    (event : WAL.Write) (extended : WAL.OrdinalsFrom 1 (history ++ [event]))
+    (allFit : (WAL.encode (history ++ [event])).size < UInt64.size) (effects : WriteEffects)
+    (scratch : Option (ByteArray × Bool)) {retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (AppendRetryTarget history event before.active.first)
+      ⟨appendCutFiles before history event effects scratch, owners⟩ retry)
+    {descriptor nextRef : Nat} (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    retry.image.kept = (appendCutFiles before history event effects scratch).kept ∧
+    ∃ selectedHistory, (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
+      retry.image.directory.active.manifest = before.directory.active.manifest ∧
+      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
+      ∃ wal : WalSegmentImage, wal = before.appendSelectedView retry.image.directory.active selectedHistory ∧
+      wal.ReadLayout selectedHistory ∧ WalSegment.Chain selectedHistory 0 wal.segments ∧
+      retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
+      ∃ selected : CanonicalKeeperLayout retry.image selectedHistory,
+        selected.target.first = installed.activeFirst ∧ selected.target.first = wal.active.first ∧
+        ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+            wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
+          sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
+          (∀ action prior next,
+            ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+            prior.effect selected.target action = some next →
+            performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
+          AppendCutReady directory descriptor liveRefs selectedHistory published retry.image selected.target
+            installed.generation (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+              (raw.reopen removeFile write sync renameFile) retry) := by
+  have lineage := attempts.lineage (fun a b pair => AppendRetryTarget.unique a b pair)
+  refine ⟨lineage.keepsSealed, ?_⟩
+  obtain ⟨strict, covered, _⟩ := DirectoryPublication.Bindings.walRange_accounting ready.range
+  obtain ⟨selectedHistory, allowed, manifest, marker, wal, exactWal, layout, chain, kept, selected, range, keeper, first,
+    descriptors, offsets, selectedPrepared, empty⟩ := appendRetryLayout ready.layout ready.chain covered event allFit
+      effects (before.directory.staged .walBoundary) strict lineage
+  have accepted : published.AcceptsVersioned selectedHistory.length.toUInt64 (CheckpointRepresentsPrefix selectedHistory)
+      retry.image.directory.active.manifest := by
+    rw [manifest]
+    rcases allowed with rfl | rfl
+    · exact ready.checkpoint
+    · exact published.acceptsVersioned_extend_history ready.checkpoint allFit
+  have consecutive : WAL.OrdinalsFrom 1 selectedHistory := by
+    rcases allowed with rfl | rfl
+    · exact ready.ordered
+    · exact extended
+  refine ⟨selectedHistory, allowed, manifest, marker, wal, exactWal, layout, chain, kept, selected, first.trans ready.first.symm,
+    congrArg WalSegment.first keeper, ?_⟩
+  intro raw settles healthy
+  exact runOpenWithInstallation_appendLayout layout consecutive selected keeper (range.symm ▸ descriptors)
+    (range.symm ▸ offsets) selectedPrepared empty accepted (manifest.symm ▸ ready.generation) raw
+    liveRefs fresh acquisition unlock removeFile write sync renameFile settles healthy
+
 /-- Start with the exact files left by the reported append error and the
 ownership map after close or the last observed reference drop. A finite
 sequence of bounded open failures, observed reference drops, and power
@@ -188,28 +258,11 @@ theorem BoundedReopenTrace.installsAfterAppendError {directory : DiskDirectory} 
   rw [forgetError, commitFailed] at modeled
   have exactError : writeFilesAfter (runWriteEffects history event effects
       (before.directory.staged .walBoundary)) = failed := by rw [← modeled]; rfl
-  have lineage := attempts.lineage (fun a b pair => AppendRetryTarget.unique a b pair)
-  refine ⟨unknown, closed, dropped, lineage.keepsSealed, ?_⟩
-  obtain ⟨strict, covered, _⟩ := DirectoryPublication.Bindings.walRange_accounting ready.range
-  have allFit := byteCount ▸ fits
-  obtain ⟨selectedHistory, allowed, manifest, marker, wal, exactWal, layout, chain, kept, selected, range, keeper, first,
-    descriptors, offsets, selectedPrepared, empty⟩ := appendRetryLayout ready.layout ready.chain covered event allFit
-      effects (before.directory.staged .walBoundary) strict (by rw [exactError]; exact lineage)
-  have accepted : published.AcceptsVersioned selectedHistory.length.toUInt64 (CheckpointRepresentsPrefix selectedHistory)
-      retry.image.directory.active.manifest := by
-    rw [manifest]
-    rcases allowed with rfl | rfl
-    · exact ready.checkpoint
-    · exact published.acceptsVersioned_extend_history ready.checkpoint allFit
-  have consecutive : WAL.OrdinalsFrom 1 selectedHistory := by
-    rcases allowed with rfl | rfl
-    · exact ready.ordered
-    · exact extended
-  refine ⟨selectedHistory, allowed, manifest, marker, wal, exactWal, layout, chain, kept, selected, first.trans ready.first.symm,
-    congrArg WalSegment.first keeper, ?_⟩
-  intro raw settles healthy
-  exact runOpenWithInstallation_appendLayout layout consecutive selected keeper (range.symm ▸ descriptors)
-    (range.symm ▸ offsets) selectedPrepared empty accepted (manifest.symm ▸ ready.generation) raw
-    liveRefs fresh acquisition unlock removeFile write sync renameFile settles healthy
+  have observed : BoundedReopenTrace directory (AppendRetryTarget history event before.active.first)
+      ⟨appendCutFiles before history event effects scratch, owners.set (directory.file .lock) none⟩ retry := by
+    simpa only [appendCutFiles, exactError] using attempts
+  refine ⟨unknown, closed, dropped, ?_⟩
+  simpa only [appendCutFiles, exactError] using observed.installsAfterAppendCut ready event extended (byteCount ▸ fits)
+    effects scratch liveRefs fresh acquisition unlock removeFile write sync renameFile
 
 end Alvoki.Storage.DiskSession
