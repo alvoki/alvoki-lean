@@ -239,6 +239,146 @@ theorem WalSegmentImage.ReadLayout.afterSuccessfulAppend
   rw [← exactKeeper]
   exact keeperDurable
 
+private theorem WalSegmentImage.ReadLayout.selectedAppendValid
+    {before : WalSegmentImage} {history : List WAL.Write} (layout : before.ReadLayout history)
+    (valid : before.Valid history) {watermark : Nat}
+    (oldRange : before.directory.active.walRange = some ⟨watermark, history.length⟩)
+    (event : WAL.Write) {selected : List WAL.Write} (allowed : selected = history ∨ selected = history ++ [event])
+    (pair : DirectoryPublication.Bindings) (decoded : pair.walRange = some ⟨watermark, selected.length⟩) :
+    (before.appendSelectedView pair selected).Valid selected := by
+  rcases allowed with rfl | rfl
+  · intro candidate chosen
+    have same : candidate = pair := by
+      simpa [WalSegmentImage.Selects, WalSegmentImage.appendSelectedView, DirectoryPublication.Image.settled]
+        using chosen
+    subst candidate
+    obtain ⟨range, first, original, covers, through, chain⟩ :=
+      valid before.directory.active (List.mem_cons_self ..)
+    have sameRange := Option.some.inj (original.symm.trans oldRange)
+    subst range
+    have sameKeeper : before.active.atHistoryEnd selected = before.active := by
+      unfold WalSegment.atHistoryEnd
+      rw [← layout.activeEnd, ← layout.activeBytes]
+    refine ⟨_, first, decoded, covers, through, ?_⟩
+    simpa only [WalSegmentImage.afterWatermark, WalSegmentImage.appendSelectedView, sameKeeper] using chain
+  · exact (layout.afterRetainedAppend valid oldRange pair event decoded).2.1
+
+private theorem WalSegmentImage.ReadLayout.afterAppendCutBy
+    {before : WalSegmentImage} {history : List WAL.Write} (layout : before.ReadLayout history)
+    {watermark : Nat} (covered : watermark ≤ history.length)
+    (event : WAL.Write) (fits : (WAL.encode (history ++ [event])).size < UInt64.size)
+    (validSelection : ∀ selectedHistory, (selectedHistory = history ∨ selectedHistory = history ++ [event]) →
+      ∀ pair : DirectoryPublication.Bindings, pair.walRange = some ⟨watermark, selectedHistory.length⟩ →
+        (before.appendSelectedView pair selectedHistory).Valid selectedHistory)
+    (effects : WriteEffects) (manifest : Option ByteArray) (markerScratch : Option (ByteArray × Bool))
+    (checkpoint : selectedCheckpointWatermark manifest = some watermark)
+    (observed : ReopenImage) (scratch : Option (ByteArray × Bool)) :
+    let cut := (writeFilesAfter (runWriteEffects history event effects markerScratch)).reopenSegment
+      before.active.first history manifest
+    AppendReopenObservation cut observed →
+    let files := before.appendReopenFiles observed scratch
+    ∃ selectedHistory,
+      let wal := before.appendSelectedView observed.directory.active selectedHistory
+      (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
+      files.directory.active.manifest = manifest ∧
+      files.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
+      wal.ReadLayout selectedHistory ∧ wal.Valid selectedHistory ∧
+      ∃ selected : CanonicalKeeperLayout files selectedHistory,
+        selected.range = ⟨watermark, selectedHistory.length⟩ ∧ selected.keeper = wal.active ∧
+        selected.sealed ++ [selected.keeper] = wal.readDescriptors watermark ∧
+        selectWalSegmentReads (wal.segments.map (·.first)) watermark =
+          some (selected.first, (wal.readDescriptors watermark).map (·.first)) ∧
+        (∀ segment ∈ selected.sealed, files.kept segment.first = some segment.bytes) ∧
+        files.keeper.crashImages ≠ [] ∧
+        (∀ bytes ∈ files.keeper.crashImages, ∃ tail, bytes = some (selected.keeper.bytes ++ tail)) ∧
+        files.later.Beyond selected.range.through := by
+  intro cut observedCut files
+  have starts : before.active.first ≤ history.length := by
+    rw [← layout.activeEnd]
+    exact layout.forward before.active (List.mem_append_right _ (by simp))
+  have nonempty : cut.wal.crashImages ≠ [] :=
+    (writeFilesAfter (runWriteEffects history event effects markerScratch)).reopenImage_crashWal_nonempty
+      (history.drop before.active.first) manifest
+  obtain ⟨chosen, possible, survivors⟩ := observedCut.choices nonempty
+  obtain ⟨unchecked, _, visible⟩ := (writeFilesAfter (runWriteEffects history event effects markerScratch)).candidate_from_tail
+    (history.drop before.active.first) manifest (survivors _ (List.mem_cons_self ..))
+  obtain ⟨selectedHistory, target, allowed, targetPair, sameManifest, rawMarker, first, selectedRange, trimmed, prepared⟩ :=
+    prepareAfterAppendCut starts covered event fits effects manifest markerScratch checkpoint files visible possible
+      (by exact ⟨rfl, rfl⟩) chosen survivors
+  let wal := before.appendSelectedView observed.directory.active selectedHistory
+  have selectedStarts : before.active.first ≤ selectedHistory.length := by
+    simpa only [first, selectedRange] using target.firstCovered
+  have view := layout.atSelectedHistory observed.directory.active selectedHistory selectedStarts
+  have decoded : wal.directory.active.walRange = some ⟨watermark, selectedHistory.length⟩ := by
+    rw [← selectedRange]
+    exact targetPair ▸ target.decoded
+  have valid : wal.Valid selectedHistory := validSelection selectedHistory allowed _ decoded
+  obtain ⟨canonicalKeeper, range, keeper, _, descriptors, offsets, sealedReads, _, _, _⟩ :=
+    view.checkpointReopenLayout valid .visible decoded rfl scratch
+  have activeBytes : target.trimmed = canonicalKeeper.keeper.bytes := by
+    simp only [trimmed, keeper, WalSegmentImage.appendSelectedView, WalSegment.atHistoryEnd]
+  obtain ⟨tail, actual⟩ := prepared.keeperPrefix.activeValid
+  rw [activeBytes] at actual
+  let selected : CanonicalKeeperLayout files selectedHistory :=
+    ⟨canonicalKeeper.range, by rw [range]; exact decoded, canonicalKeeper.through,
+      canonicalKeeper.first, canonicalKeeper.sealed, canonicalKeeper.keeper, canonicalKeeper.chain,
+      canonicalKeeper.covers, tail, actual⟩
+  refine ⟨selectedHistory, allowed, targetPair ▸ sameManifest, targetPair ▸ rawMarker, view, valid,
+    selected, range, keeper, descriptors, offsets, sealedReads, prepared.keeperPrefix.hasCrashImage, ?_, ?_⟩
+  · intro bytes survives
+    obtain ⟨suffix, exactBytes⟩ := prepared.keeperPrefix.crashValid bytes survives
+    exact ⟨suffix, by rw [exactBytes, activeBytes]⟩
+  · change files.later.Beyond canonicalKeeper.range.through
+    rw [range, ← selectedRange]
+    exact prepared.newer
+
+/-- The observed write cut selects the same validated WAL suffix after
+covered segment files have been collected. It keeps the exact original
+read layout for the old marker or extends its active segment by one frame
+for the newer marker. -/
+theorem WalSegmentImage.ReadLayout.afterRetainedAppendCut
+    {before : WalSegmentImage} {history : List WAL.Write} (layout : before.ReadLayout history)
+    (valid : before.Valid history) {watermark : Nat}
+    (oldRange : before.directory.active.walRange = some ⟨watermark, history.length⟩)
+    (event : WAL.Write) (fits : (WAL.encode (history ++ [event])).size < UInt64.size)
+    (effects : WriteEffects) (markerScratch : Option (ByteArray × Bool))
+    (observed : ReopenImage) (scratch : Option (ByteArray × Bool)) :
+    let cut := (writeFilesAfter (runWriteEffects history event effects markerScratch)).reopenSegment
+      before.active.first history before.directory.active.manifest
+    AppendReopenObservation cut observed →
+    let files := before.appendReopenFiles observed scratch
+    ∃ selectedHistory,
+      let wal := before.appendSelectedView observed.directory.active selectedHistory
+      (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
+      files.directory.active.manifest = before.directory.active.manifest ∧
+      files.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
+      wal.ReadLayout selectedHistory ∧ wal.Valid selectedHistory ∧
+      ∃ selected : CanonicalKeeperLayout files selectedHistory,
+        selected.range = ⟨watermark, selectedHistory.length⟩ ∧ selected.keeper = wal.active ∧
+        selected.sealed ++ [selected.keeper] = wal.readDescriptors watermark ∧
+        selectWalSegmentReads (wal.segments.map (·.first)) watermark =
+          some (selected.first, (wal.readDescriptors watermark).map (·.first)) ∧
+        (∀ segment ∈ selected.sealed, files.kept segment.first = some segment.bytes) ∧
+        files.keeper.crashImages ≠ [] ∧
+        (∀ bytes ∈ files.keeper.crashImages, ∃ tail, bytes = some (selected.keeper.bytes ++ tail)) ∧
+        files.later.Beyond selected.range.through := by
+  have accounting := DirectoryPublication.Bindings.walRange_accounting oldRange
+  exact layout.afterAppendCutBy accounting.2.1 event fits
+    (fun _ allowed pair decoded => layout.selectedAppendValid valid oldRange event allowed pair decoded)
+    effects before.directory.active.manifest markerScratch accounting.1 observed scratch
+
+private theorem WalSegmentImage.ReadLayout.selectedAppendChain
+    {before : WalSegmentImage} {history : List WAL.Write} (layout : before.ReadLayout history)
+    (chain : WalSegment.Chain history 0 before.segments) (event : WAL.Write) {selected : List WAL.Write}
+    (allowed : selected = history ∨ selected = history ++ [event]) (pair : DirectoryPublication.Bindings) :
+    WalSegment.Chain selected 0 (before.appendSelectedView pair selected).segments := by
+  have starts := chain.startsWithin before.active (List.mem_append_right _ (List.mem_singleton_self _))
+  have sealedEnd := layout.sealedEndsBeforeHistory starts
+  rcases allowed with rfl | rfl
+  · simpa only [WalSegmentImage.appendSelectedView, WalSegmentImage.segments, List.append_nil]
+      using chainAppend chain sealedEnd []
+  · exact chainAppend chain sealedEnd [event]
+
 /-- A write cut selects the acknowledged history or exactly one additional
 frame. Every sealed segment still describes its original slice, while the
 keeper's selected prefix and any physical tail come from the actual cut.
@@ -270,54 +410,19 @@ theorem WalSegmentImage.ReadLayout.afterAppendCut
         files.keeper.crashImages ≠ [] ∧
         (∀ bytes ∈ files.keeper.crashImages, ∃ tail, bytes = some (selected.keeper.bytes ++ tail)) ∧
         files.later.Beyond selected.range.through := by
-  intro cut observedCut files
-  have starts := chain.startsWithin before.active (List.mem_append_right _ (List.mem_singleton_self _))
-  have nonempty : cut.wal.crashImages ≠ [] :=
-    (writeFilesAfter (runWriteEffects history event effects markerScratch)).reopenImage_crashWal_nonempty
-      (history.drop before.active.first) manifest
-  obtain ⟨chosen, possible, survivors⟩ := observedCut.choices nonempty
-  obtain ⟨unchecked, _, visible⟩ := (writeFilesAfter (runWriteEffects history event effects markerScratch)).candidate_from_tail
-    (history.drop before.active.first) manifest (survivors _ (List.mem_cons_self ..))
-  obtain ⟨selectedHistory, target, allowed, targetPair, sameManifest, rawMarker, first, selectedRange, trimmed, prepared⟩ :=
-    prepareAfterAppendCut starts covered event fits effects manifest markerScratch checkpoint files visible possible
-      (by exact ⟨rfl, rfl⟩) chosen survivors
-  let wal := before.appendSelectedView observed.directory.active selectedHistory
-  have sealedEnd := layout.sealedEndsBeforeHistory starts
-  have canonical : WalSegment.Chain selectedHistory 0 wal.segments := by
-    rcases allowed with old | appended
-    · simpa only [wal, WalSegmentImage.appendSelectedView, WalSegmentImage.segments, old, List.append_nil]
-        using chainAppend chain sealedEnd []
-    · simpa only [wal, WalSegmentImage.appendSelectedView, WalSegmentImage.segments, appended]
-        using chainAppend chain sealedEnd [event]
-  have selectedStarts : before.active.first ≤ selectedHistory.length := by
-    simpa only [first, selectedRange] using target.firstCovered
-  have view := layout.atSelectedHistory observed.directory.active selectedHistory selectedStarts
-  have decoded : wal.directory.active.walRange = some ⟨watermark, selectedHistory.length⟩ := by
-    rw [← selectedRange]
-    exact targetPair ▸ target.decoded
-  have valid : wal.Valid selectedHistory := WalSegmentImage.Valid.of_chain canonical fun pair choice => by
-    have same : pair = wal.directory.active := by
-      simpa [WalSegmentImage.Selects, wal, WalSegmentImage.appendSelectedView, DirectoryPublication.Image.settled]
-        using choice
-    subst pair
+  intro cut seen files
+  have valid (selected : List WAL.Write) (allowed : selected = history ∨ selected = history ++ [event])
+      (pair : DirectoryPublication.Bindings) (decoded : pair.walRange = some ⟨watermark, selected.length⟩) :
+      (before.appendSelectedView pair selected).Valid selected := by
+    apply WalSegmentImage.Valid.of_chain (layout.selectedAppendChain chain event allowed pair)
+    intro candidate chosen
+    have same : candidate = pair := by
+      simpa [WalSegmentImage.Selects, WalSegmentImage.appendSelectedView, DirectoryPublication.Image.settled]
+        using chosen
+    subst candidate
     exact ⟨_, decoded, Nat.zero_le _, Nat.le_refl _⟩
-  obtain ⟨canonicalKeeper, range, keeper, _, descriptors, offsets, sealedReads, _, _, _⟩ :=
-    view.checkpointReopenLayout valid .visible decoded rfl scratch
-  have activeBytes : target.trimmed = canonicalKeeper.keeper.bytes := by
-    simp only [trimmed, keeper, WalSegmentImage.appendSelectedView, WalSegment.atHistoryEnd]
-  obtain ⟨tail, actual⟩ := prepared.keeperPrefix.activeValid
-  rw [activeBytes] at actual
-  let selected : CanonicalKeeperLayout files selectedHistory :=
-    ⟨canonicalKeeper.range, by rw [range]; exact decoded, canonicalKeeper.through,
-      canonicalKeeper.first, canonicalKeeper.sealed, canonicalKeeper.keeper, canonicalKeeper.chain,
-      canonicalKeeper.covers, tail, actual⟩
-  refine ⟨selectedHistory, allowed, targetPair ▸ sameManifest, targetPair ▸ rawMarker, view, canonical,
-    selected, range, keeper, descriptors, offsets, sealedReads, prepared.keeperPrefix.hasCrashImage, ?_, ?_⟩
-  · intro bytes survives
-    obtain ⟨suffix, exactBytes⟩ := prepared.keeperPrefix.crashValid bytes survives
-    exact ⟨suffix, by rw [exactBytes, activeBytes]⟩
-  · change files.later.Beyond canonicalKeeper.range.through
-    rw [range, ← selectedRange]
-    exact prepared.newer
+  obtain ⟨history, allowed, manifest, marker, view, _, keeper⟩ :=
+    layout.afterAppendCutBy covered event fits valid effects manifest markerScratch checkpoint observed scratch seen
+  exact ⟨history, allowed, manifest, marker, view, layout.selectedAppendChain chain event allowed _, keeper⟩
 
 end Alvoki.Storage

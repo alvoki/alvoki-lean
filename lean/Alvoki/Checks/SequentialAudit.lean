@@ -659,6 +659,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runPreparedWrite_failure_handoff
 #check_axioms Alvoki.Storage.DiskSession.runPreparedWrite_success
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterAppendCut
+#check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterRetainedAppendCut
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readCheckpoint
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readVisibleKeeper
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readSelectedBounded
