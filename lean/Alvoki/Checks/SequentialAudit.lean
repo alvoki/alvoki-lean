@@ -1132,6 +1132,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeThenCachedReopen
 #check_axioms Alvoki.Storage.DiskTable.close.eq_def
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeWithAdmission
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterCleanCloseAdmission
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.durableCrashLayout
 #check_axioms Alvoki.Storage.DiskSession.UncheckpointedCachedReadReports.reopens
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.run_error

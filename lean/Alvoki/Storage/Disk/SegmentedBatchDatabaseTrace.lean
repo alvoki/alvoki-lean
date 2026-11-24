@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
+import Alvoki.Storage.Disk.DiskCleanReopenAdmission
 import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
 import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.SegmentedBatchAppend
@@ -76,6 +77,14 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (step : SegmentedDatabaseTrace directory writer before allowCollection submissions descriptor after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.ordinary submissions]) descriptor after
+  | cleanReopenObserved {files : Type} {input : System.FilePath}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (closed : CleanUnlockReports directory writer)
+      {layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history}
+      {observed : MarkedRetryChunkReports files directory layout before.published}
+      {admission : OpenAdmissionReports input directory observed.slot}
+      (endpoint : AdmittedCleanReopen closed observed admission after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after
   | checkpointPowerLossObserved {files : Type}
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (cut : CheckpointPowerCut directory before) {published : CheckpointPublication.Image}
@@ -153,6 +162,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     obtain ⟨afterReady, suffix, extended, kept⟩ := step.preservesRetained beforeReady
     exact ⟨afterReady, retained ++ suffix, by rw [extended, beforeHistory, List.append_assoc],
       .append retention kept⟩
+  | cleanReopenObserved _ _ endpoint ih =>
+    obtain ⟨_, retained, history, retention⟩ := ih
+    exact ⟨endpoint.writer.retained, retained, endpoint.writer.history.trans history, retention⟩
   | checkpointPowerLossObserved _ _ _ _ _ _ installed ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨installed.retained, retained, installed.history.trans history, retention⟩
@@ -177,6 +189,22 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | batchAppendProcessExit _ _ _ installed ih =>
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history (.inl installed.history)⟩
+
+/-- Continue the mixed history at the exact reported clean reopen. Explicit
+unlock and reacquisition change the session while the checkpoint binding
+and the submission log stay fixed. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterCleanCloseAdmission {files : Type} {input : System.FilePath}
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (ready : initial.RetainedReady directory initialDescriptor) (closed : CleanUnlockReports directory writer)
+    (observes : closed.ReopenObservations files input before) :
+    ∃ (layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history)
+      (observed : MarkedRetryChunkReports files directory layout before.published)
+      (admission : OpenAdmissionReports input directory observed.slot) (after : SegmentedWriterState),
+      AdmittedCleanReopen closed observed admission after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after := by
+  obtain ⟨layout, observed, admission, after, endpoint⟩ :=
+    (trace.preservesRetained ready).1.closeWithAdmission closed observes
+  exact ⟨layout, observed, admission, after, endpoint, .cleanReopenObserved trace closed endpoint⟩
 
 /-- The admitted reopen after checkpoint recovery returns the exact next
 writer in the mixed trace. The run map can change without a write submission. -/

@@ -47,6 +47,17 @@ structure AdmittedCleanReopen {files : Type} {input : FilePath} {directory : Dis
   generation : after.installed.generation = before.installed.generation
   replay : recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table
 
+/-- The reached marked-open observations for the canonical retained layout
+and the same lock object as the successful explicit unlock. -/
+abbrev CleanUnlockReports.ReopenObservations (closed : CleanUnlockReports directory oldDescriptor)
+    (files : Type) (input : FilePath) (before : SegmentedWriterState) : Prop :=
+  ∀ layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history,
+    layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
+    layout.sealed ++ [layout.keeper] = before.wal.readDescriptors layout.range.watermark →
+    ∃ observed : MarkedRetryChunkReports files directory layout before.published,
+      observed.bindings (directory.file .lock) = closed.bindings (directory.file .lock) ∧
+      observed.slot.description ≠ oldDescriptor ∧ Nonempty (OpenAdmissionReports input directory observed.slot)
+
 /-- Derive the lookup and recovery plan from the old writer's settled
 physical layout. The callback packets come from the same canonical lock
 object at explicit unlock and later acquisition. A newly opened
@@ -54,12 +65,7 @@ file description may reuse a numeric fd after the previous slot drops. -/
 theorem SegmentedWriterState.RetainedReady.closeWithAdmission {files : Type} {input : FilePath}
     {directory : DiskDirectory} {oldDescriptor : Nat} {before : SegmentedWriterState}
     (ready : before.RetainedReady directory oldDescriptor) (closed : CleanUnlockReports directory oldDescriptor)
-    (observes : ∀ layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history,
-      layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
-      layout.sealed ++ [layout.keeper] = before.wal.readDescriptors layout.range.watermark →
-      ∃ observed : MarkedRetryChunkReports files directory layout before.published,
-        observed.bindings (directory.file .lock) = closed.bindings (directory.file .lock) ∧
-        observed.slot.description ≠ oldDescriptor ∧ Nonempty (OpenAdmissionReports input directory observed.slot)) :
+    (observes : closed.ReopenObservations files input before) :
     ∃ (layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history)
       (observed : MarkedRetryChunkReports files directory layout before.published)
       (admission : OpenAdmissionReports input directory observed.slot) (after : SegmentedWriterState),
