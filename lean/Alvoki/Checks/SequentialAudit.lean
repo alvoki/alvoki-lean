@@ -20,6 +20,7 @@ import Alvoki.Storage.Disk.SegmentedCollectionRetryPowerLoss
 import Alvoki.Storage.Disk.WalGroupSyncSchedule
 import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.SyncHandleCustody
+import Alvoki.Storage.Disk.SyncHandleEffects
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
@@ -989,6 +990,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.Agrees.activate
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.Agrees.consume
 #check_axioms Alvoki.Storage.SyncHandleRouting.syncRemembered
+#check_axioms Alvoki.Storage.SyncHandleRouting.sync_resolutionError
+#check_axioms Alvoki.Storage.SyncHandleRouting.sync_observedEffect
+#check_axioms Alvoki.Storage.SyncHandleRouting.FsyncObservation.ofDirectory
+#check_axioms Alvoki.Storage.SyncHandleRouting.FsyncObservation.ofKeeper
 #check_axioms Alvoki.Storage.DiskTable.retainRunVersions_fileEffects
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.afterRunRetention
 #check_axioms Alvoki.Storage.RepresentsWalHistory.retainRunVersions
