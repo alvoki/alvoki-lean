@@ -14,4 +14,6 @@ The segmented review follow-up covers both surviving layouts of an interrupted r
 
 Native tests now cover public sparse prune/retry with a nonzero keeper, errors after the final bootstrap and rotation barriers, append preflight and lock-file guards. The process-death cases check the recovered value and the next append. Bounded keeper reads reduce returned WAL bytes and measured peak RSS for unselected tails. Replay still copies multiple selected buffers into a contiguous byte array. [Fixture sources](../lean/Alvoki/Checks/DiskTableChecks.lean) · [Resource benchmark](../benchmarks/results/disk/bounded-keeper-replay)
 
+The per-segment prototype reduces measured peak memory for large multi-segment preparations. The exact aligned-decoder split proof preserves the first decoder error and supplies the first step toward proving the prototype's ordered read and replay fold. [Decoder split](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean) · [Per-segment experiment](../benchmarks/results/disk/segmented-replay-lifetimes)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
