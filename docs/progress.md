@@ -182,4 +182,8 @@ For machine power loss during batch marker publication after a completed append,
 
 The bounded prefix loop issues at most one requested read callback per requested byte, including returned failures. This counts calls to the primitive reader and leaves libc's internal syscall work separate. [Recovery request bounds](../lean/Alvoki/Storage/Disk/WalSegmentCachedOpenWork.lean)
 
+An accepted checkpoint proves each selected run's machine-size bound. The exact generation and index, same-inode stat and open, and chunk reports from the newly opened description now derive the sized checkpoint run report. Each open has its own descriptor observation, so successive runs can reuse an fd number. [Checkpoint run reads](../lean/Alvoki/Storage/Disk/CheckpointRunChunkReports.lean)
+
+The cached WAL selector derives the selected segment bytes, the keeper's physical extent and the exact names to prune from the reached inventory and metadata. It handles gapped later names without reading their payloads. The next step connects this selection to healthy repair and the installed checkpointed writer after retries. [Cached retry reads](../lean/Alvoki/Storage/Disk/WalSegmentCachedRetryReads.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

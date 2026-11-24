@@ -137,6 +137,8 @@ import Alvoki.Storage.Disk.WalSegmentSizedOpen
 import Alvoki.Storage.Disk.IntegrityCheckpointSizedRead
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
+import Alvoki.Storage.Disk.CheckpointRunChunkReports
+import Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 import Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
@@ -1058,6 +1060,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.readExactPrefixWith_completes
 #check_axioms Alvoki.Storage.readExactPrefixWith_completesAtStart
 #check_axioms Alvoki.Storage.readExactPrefixWith_completesFile
+#check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.runSizeFits
+#check_axioms Alvoki.Storage.WalSegmentRepair.CheckpointRunChunkReads.ObservesFile.readExact
+#check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.ofChunkReads
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.readSelected
 #check_axioms Alvoki.Storage.DiskSession.UncheckpointedCachedReadReports.reopens
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.run_error
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.immediateReacquire
