@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Disk.SegmentedCollectionPowerLoss
+import Alvoki.Storage.Disk.SegmentedCollectionStep
 import Alvoki.Storage.Disk.SegmentedAppendRecovery
 import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
@@ -87,6 +88,11 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (report : SegmentedCollectionPowerLossReport directory before writer descriptor)
       (observed : report.Valid) (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
+  | collection {log descriptor before after}
+      (enabled : allowCollection = true)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor before)
+      (report : SegmentedCollectionReport directory before) (endpoint : report.Installs after) :
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
 
 private theorem retainsInterruptedAppend {initial before after : List WAL.Write} {log retained event}
     (history : before = initial ++ retained) (submitted : MarkedSessionRetention log retained)
@@ -139,6 +145,7 @@ theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initi
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
   | collectionPowerLoss enabled => cases enabled
+  | collection enabled => cases enabled
 
 theorem SegmentedDatabaseTrace.preservesRetained {directory initialDescriptor initial allowCollection log descriptor last}
     (trace : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
@@ -184,6 +191,9 @@ theorem SegmentedDatabaseTrace.preservesRetained {directory initialDescriptor in
   | collectionPowerLoss _ _ _ observed endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
+  | collection _ _ _ endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained before, retained, endpoint.history.trans history, submitted⟩
 
 /-- A history from the first installed empty writer retains all
 acknowledgements in order. It may retain the uncertain append at a
