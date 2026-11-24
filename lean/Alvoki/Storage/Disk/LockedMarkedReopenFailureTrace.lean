@@ -169,4 +169,86 @@ theorem LockedMarkedReopenFailureTrace.completesSettled {directory : DiskDirecto
   exact ⟨next, result, by simpa only [sameOwners, sameDirectory] using available,
     terminalOwner, ready, strict, history, byteCount, manifest, generation, pins⟩
 
+/-- Start the locked retry from the file image of the reported v2 checkpoint
+failure. A final healthy reopen selects its old or proposed checkpoint and
+preserves the acknowledged WAL, using the ownership left by the actual retries. -/
+theorem LockedMarkedReopenFailureTrace.completesInterruptedCheckpoint {directory : DiskDirectory}
+    {state : ObservedMarkedState} (prepared : CheckpointPreparation state)
+    (valid : state.VersionedReady) (integrity : state.HasIntegrityManifest)
+    (byteLengthsFit : ∀ bytes ∈ prepared.runs.files, bytes.size < UInt64.size)
+    {checkpointReport : CheckpointPublication.Step → CheckpointPublication.StepReport}
+    {published : CheckpointPublication.Image}
+    (failed : state.publicationInput.runVersionedWithReports (.integrity prepared.runs) checkpointReport =
+      some (.error () published))
+    {initialOwners : LockOwners} {after : LockedReopenState}
+    (retry : LockedMarkedReopenFailureTrace directory published.durable
+      ⟨published.markedReopenImage state.writer.image, initialOwners⟩ after)
+    (reports : IntegrityLockedOpenReports after.image published.durable)
+    (sameDirectory : reports.directory = directory) (sameOwners : reports.owners = after.owners)
+    (aligned : reports.aligned = .success) :
+    ∃ next : ObservedMarkedState,
+      reports.Returned next ∧ after.owners (directory.file .lock) = none ∧
+      reports.toIntegrityOpenPaths.heldOwners.Owns directory reports.descriptor ∧
+      next.VersionedReady ∧ next.HasIntegrityManifest ∧
+      next.writer.history = state.writer.history ∧ next.writer.walBytes = (WAL.encode state.writer.history).size ∧
+      next.writer.table.pins.active = [] ∧
+      (next.writer.image.directory.active.manifest = state.writer.image.directory.active.manifest ∨
+        next.writer.image.directory.active.manifest =
+          some (CheckpointPublication.VersionedRunSet.integrity prepared.runs).manifest.encode) ∧
+      ∀ bytes, next.writer.image.directory.active.manifest = some bytes →
+        ∃ manifest files,
+          Manifest.IntegrityCheckpoint.decode bytes = .ok manifest ∧ next.generation = manifest.header.generation ∧
+          (List.range manifest.header.runCount.toNat).mapM (published.durable manifest.header.generation) = some files ∧
+          (List.range manifest.header.runCount.toNat).mapM
+            (fun index => (reports.paths.readBin (directory.file (.run manifest.header.generation index))).mapError toString) =
+              .ok files ∧ manifest.validateRuns files = true := by
+  have attempts := retry.toAttempts .start (published.markedReopenBound valid.ready.settled)
+  obtain ⟨next, installed, available, held, observed, ready, strict, history, files, pins, selected⟩ :=
+    prepared.reopenAfterIntegrityCheckpointErrorWithLock valid integrity byteLengthsFit failed attempts
+      reports.acquisition reports.observes reports.manifestRead reports.runReads
+      reports.markerRead reports.walRead reports.repair reports.unlock reports.cause
+  have result : reports.Returned next := by
+    refine ⟨?_, observed, files⟩
+    unfold IntegrityLockedOpenReports.run
+    rw [aligned]
+    exact installed
+  have byteCount : next.writer.walBytes = (WAL.encode state.writer.history).size := by
+    rw [ready.ready.length, history]
+  have terminalOwner : reports.toIntegrityOpenPaths.heldOwners.Owns directory reports.descriptor := by
+    rw [← sameDirectory]
+    exact held
+  have allowed := prepared.reportedManifestChoices valid failed
+  have priorOrProposed : next.writer.image.directory.active.manifest = state.writer.image.directory.active.manifest ∨
+      next.writer.image.directory.active.manifest =
+        some (CheckpointPublication.VersionedRunSet.integrity prepared.runs).manifest.encode := by
+    rw [selected]
+    rcases published.markedReopenManifestChoice valid.ready.settled attempts with active | survived
+    · exact active ▸ allowed.activeValid
+    · exact allowed.crashValid _ survived
+  refine ⟨next, result, by simpa only [sameOwners, sameDirectory] using available,
+    terminalOwner, ready, strict, history, byteCount, pins, priorOrProposed, ?_⟩
+  intro bytes visible
+  obtain ⟨manifest, decoded⟩ := strict bytes visible
+  have tagged := Manifest.VersionedCheckpoint.decode_integrity decoded
+  have accepted := ready.selected
+  rw [visible] at accepted
+  obtain ⟨orderedRuns, stored, _, checked, _⟩ :=
+    CheckpointPublication.Image.acceptsVersioned_runs accepted tagged
+  change (List.range manifest.header.runCount.toNat).mapM (next.durable manifest.header.generation) =
+    some orderedRuns at stored
+  rw [files] at stored
+  have actualManifest : after.image.directory.active.manifest = some bytes := selected.symm.trans visible
+  have reads := VersionedCheckpointFileReads.ofLockedPaths_runs_success (selected := .integrity manifest)
+    reports.toIntegrityOpenPaths.held reports.observes actualManifest tagged
+    (reports.runReads bytes manifest actualManifest decoded) stored
+  have observed : (List.range manifest.header.runCount.toNat).mapM
+      (fun index => (reports.paths.readBin
+        (reports.directory.file (.run manifest.header.generation index))).mapError toString) = .ok orderedRuns := reads
+  have installed := ready.generationMatches
+  rw [visible] at installed
+  have generation : manifest.header.generation = next.generation := by
+    simpa [Option.mapM, tagged, Functor.map, Except.map, Manifest.VersionedCheckpoint.header] using installed
+  exact ⟨manifest, orderedRuns, decoded, generation.symm, stored,
+    by simpa only [sameDirectory] using observed, checked⟩
+
 end Alvoki.Storage.DiskSession

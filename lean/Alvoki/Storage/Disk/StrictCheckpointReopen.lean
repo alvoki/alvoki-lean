@@ -111,12 +111,13 @@ theorem CheckpointPreparation.reopenAfterIntegrityCheckpointErrorWithLock {state
       owners (directory.file .lock) = none ∧ heldOwners.Owns directory descriptor ∧
       MarkedWriterState.observeReopen next.writer.table next.writer.image = some next.writer ∧
       next.VersionedReady ∧ next.HasIntegrityManifest ∧ next.writer.history = state.writer.history ∧
-      next.durable = published.durable ∧ next.writer.table.pins.active = [] := by
-  obtain ⟨next, installed, previous, owned, observed, ready, strict, history, files, pins, _⟩ :=
+      next.durable = published.durable ∧ next.writer.table.pins.active = [] ∧
+      next.writer.image.directory.active.manifest = reopen.directory.active.manifest := by
+  obtain ⟨next, installed, previous, owned, observed, ready, strict, history, files, pins, selected⟩ :=
     valid.installWithLock (prepared.reportedFromVersionedReady valid byteLengthsFit failed)
       (prepared.reportedIntegrityBindings valid integrity failed) attempts acquisition observes manifestRead
       runReads markerRead walRead report unlock cause
-  exact ⟨next, installed, previous, owned, observed, ready, strict, history, files, pins⟩
+  exact ⟨next, installed, previous, owned, observed, ready, strict, history, files, pins, selected⟩
 
 /-- Reopen a settled strict writer through any admitted retries with no
 intervening operation. The selected manifest and its files stay the same,

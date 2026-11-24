@@ -274,6 +274,27 @@ private theorem CheckpointPreparation.integrityPlanBinding {state : ObservedMark
     prepared.runCountFits prepared.runs.header.generation
   exact ⟨_, VersionedCheckpoint.decoded_case (prepared.decodeVersionedManifest floor)⟩
 
+private theorem CheckpointPreparation.reportedManifestBindings {state : ObservedMarkedState}
+    (prepared : CheckpointPreparation state) (valid : state.VersionedReady)
+    {acceptable : Option ByteArray → Prop}
+    (current : acceptable state.writer.image.directory.active.manifest)
+    (replacement : acceptable (some (VersionedRunSet.integrity prepared.runs).manifest.encode))
+    {report : Step → StepReport} {result : EStateM.Result Unit Image Unit}
+    (reported : state.publicationInput.runVersionedWithReports (.integrity prepared.runs) report = some result) :
+    match result with
+    | .ok _ after | .error _ after => after.manifest.Valid acceptable := by
+  have prior : state.publicationInput.manifest.Valid acceptable := by
+    refine ⟨valid.validPublicationInput.hasCrashImage, current, ?_⟩
+    intro candidate possible
+    rw [valid.crashChoice] at possible
+    exact (List.mem_singleton.mp possible).symm ▸ current
+  have actual := state.publicationInput.runVersionedWithReports_outcome (.integrity prepared.runs) report reported
+  cases result with
+  | ok value after => exact Image.executeVersioned_manifest_valid prior replacement _ actual
+  | error failure after =>
+    obtain ⟨cut, ran⟩ := actual
+    exact Image.executeVersioned_manifest_valid prior replacement cut ran
+
 /-- Every raw manifest still selectable after the actual report is absent
 or accepted by the strict v2 decoder. -/
 theorem CheckpointPreparation.reportedIntegrityBindings {state : ObservedMarkedState}
@@ -284,23 +305,30 @@ theorem CheckpointPreparation.reportedIntegrityBindings {state : ObservedMarkedS
     match result with
     | .ok _ after | .error _ after => after.manifest.Valid (fun binding =>
         ∀ bytes, binding = some bytes → ∃ manifest, IntegrityCheckpoint.decode bytes = .ok manifest) := by
-  let accepted := fun binding : Option ByteArray =>
-    ∀ bytes, binding = some bytes → ∃ manifest, IntegrityCheckpoint.decode bytes = .ok manifest
-  have prior : state.publicationInput.manifest.Valid accepted := by
-    refine ⟨valid.validPublicationInput.hasCrashImage, integrity, ?_⟩
-    intro candidate possible
-    rw [valid.crashChoice] at possible
-    exact (List.mem_singleton.mp possible).symm ▸ integrity
-  have replacement : accepted (some (VersionedRunSet.integrity prepared.runs).manifest.encode) := by
-    intro bytes visible
+  have replacement (bytes : ByteArray) (visible : some (VersionedRunSet.integrity prepared.runs).manifest.encode =
+      some bytes) : ∃ manifest, IntegrityCheckpoint.decode bytes = .ok manifest := by
     rw [← Option.some.inj visible]
     exact prepared.integrityPlanBinding valid
-  have actual := state.publicationInput.runVersionedWithReports_outcome (.integrity prepared.runs) report reported
-  cases result with
-  | ok value after => exact Image.executeVersioned_manifest_valid prior replacement _ actual
-  | error failure after =>
-    obtain ⟨cut, ran⟩ := actual
-    exact Image.executeVersioned_manifest_valid prior replacement cut ran
+  have accepted := prepared.reportedManifestBindings valid
+    (acceptable := fun binding => ∀ bytes, binding = some bytes →
+      ∃ manifest, IntegrityCheckpoint.decode bytes = .ok manifest) integrity replacement reported
+  cases result <;> exact accepted
+
+/-- A reported attempt can only leave the prior raw binding or the exact
+proposed v2 bytes selectable by a later open. -/
+theorem CheckpointPreparation.reportedManifestChoices {state : ObservedMarkedState}
+    (prepared : CheckpointPreparation state) (valid : state.VersionedReady)
+    {report : Step → StepReport} {result : EStateM.Result Unit Image Unit}
+    (reported : state.publicationInput.runVersionedWithReports (.integrity prepared.runs) report = some result) :
+    match result with
+    | .ok _ after | .error _ after => after.manifest.Valid (fun binding =>
+        binding = state.writer.image.directory.active.manifest ∨
+        binding = some (VersionedRunSet.integrity prepared.runs).manifest.encode) := by
+  have choices := prepared.reportedManifestBindings valid
+    (acceptable := fun binding => binding = state.writer.image.directory.active.manifest ∨
+      binding = some (VersionedRunSet.integrity prepared.runs).manifest.encode)
+    (.inl rfl) (.inr rfl) reported
+  cases result <;> exact choices
 
 /-- A successful versioned publication uses an integrity manifest whose
 exact bytes are recognized by the strict reader. -/

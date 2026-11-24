@@ -22,7 +22,9 @@ private theorem Image.markedPair {image : Image} {before : ReopenImage}
   · obtain ⟨candidate, survives, rfl⟩ := List.mem_map.mp crash
     exact ⟨congrArg DirectoryPublication.Bindings.walBoundary settled.1, .inr survives⟩
 
-private theorem Image.markedReopenBound (image : Image) {before : ReopenImage}
+/-- Checkpoint publication pairs each selectable manifest with the already
+settled WAL boundary, so marked retries have the same marker bound. -/
+theorem Image.markedReopenBound (image : Image) {before : ReopenImage}
     {manifest : Option ByteArray} {history : List WAL.Write} (settled : before.SettledFor manifest history) :
     MarkerBound (image.markedReopenImage before).directory := by
   refine ⟨_, _, (image.markedPair settled (List.mem_cons_self ..)).1, WAL.Boundary.decode_encode _, ?_⟩
