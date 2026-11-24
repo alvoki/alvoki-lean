@@ -259,3 +259,7 @@ An ordered write supplies a visible marker that covers every surviving marker. E
 ## Abstract recovery from a prepared write and observed reopen effects
 
 The composed theorem starts from one actual prepared write, an already durable marked WAL and a fixed matching checkpoint. It derives the physical write-cut witnesses and retry relation from the modeled callback effects and the observed reopen reads. If the write reports success, every possible final marker recovers the extended history. If it reports an error, recovery can return the old history or include the one submitted write. Run loading, marker selection and replay on the final chosen bytes produce the corresponding abstract suffix and agree on point and range reads at each supported snapshot. Linking the checkpoint observation to the native loaded runs and the returned open session remains part of the Linux adapter refinement. [Composed effect refinement](../lean/Alvoki/Storage/Disk/MarkedAdapterRefinement.lean)
+
+## Sequential storage checks on GitHub
+
+The stock correctness workflow runs the sequential storage checks with the pinned Lean toolchain. The suite rechecks the disk and table proofs in Lean's kernel, enforces the axiom allowlist with a negative control, and runs the packed and disk regressions. Both stock workflow commands passed locally. [Workflow](../.github/workflows/correctness.yml) · [Sequential checks](../scripts/check-sequential.sh)

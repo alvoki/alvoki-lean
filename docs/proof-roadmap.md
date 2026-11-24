@@ -68,7 +68,7 @@ Benchmark-only variants can retain exact-output differential tests and code-gene
 
 For each completed item, record the theorem on the executable entry point, its preconditions, and its remaining trusted boundaries. Add it to the kernel and axiom audit in the stock correctness workflow and preserve relevant independent fixtures. Keep performance comparisons in the benchmark suites. [Correctness command](../scripts/check.sh)
 
-Run `bash scripts/check-sequential.sh` locally for the snapshot, packed-table and file-backed checks, kernel rechecks, and the enforced transitive axiom policy. The policy also checks that an unexpected dependency fails. [Local checks](../scripts/check-sequential.sh)
+The stock correctness workflow runs `bash scripts/check-sequential.sh` for the snapshot, packed-table and file-backed checks, kernel rechecks, and the enforced transitive axiom policy. The same command works locally. The policy also checks that an unexpected dependency fails. [Correctness workflow](../.github/workflows/correctness.yml) · [Sequential checks](../scripts/check-sequential.sh)
 
 ## Disk guarantees to prove
 

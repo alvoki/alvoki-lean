@@ -20,6 +20,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: bash scripts/bootstrap.sh "$RUNNER_TEMP/alvoki-toolchains"
       - run: ALVOKI_TOOLCHAINS="$RUNNER_TEMP/alvoki-toolchains" bash scripts/check.sh
+      - run: ALVOKI_TOOLCHAINS="$RUNNER_TEMP/alvoki-toolchains" bash scripts/check-sequential.sh
 
   runtime:
     if: github.event_name == 'workflow_dispatch' && inputs.runtime
