@@ -58,6 +58,14 @@ theorem CheckpointRunChunkReads.ObservesFile.readExact
     (seen.observes payload source) (seen.healthy payload source) fits
   simp [CheckpointRunChunkReads.readPrefix, seen.opened, read, Bind.bind, Except.bind, Pure.pure, Except.pure]
 
+/-- Opened-file observations for precisely the runs selected by the manifest. -/
+abbrev CheckpointRunChunkReads.ObservesSelected (reads : CheckpointRunChunkReads) (directory : DiskDirectory)
+    (binding : Option ByteArray) (durable : CheckpointPublication.RunFiles) : Prop :=
+  ∀ bytes manifest, binding = some bytes → IntegrityCheckpoint.decode bytes = .ok manifest →
+    ∀ index, index < manifest.header.runCount.toNat → ∀ payload,
+      durable manifest.header.generation index = some payload →
+      Nonempty (reads.ObservesFile (directory.file (.run manifest.header.generation index)) payload)
+
 /-- Only the strict manifest's selected generation and ordered indices
 need these observations. The committed checkpoint proves the size bound;
 the immutable published binding, same-object open and primitive chunk
@@ -68,10 +76,7 @@ def SizedCheckpointRunReports.ofChunkReads {directory : DiskDirectory}
     (selected : SelectedIntegrityCheckpoint durable binding checkpoint)
     (reads : CheckpointRunChunkReads)
     (metadata : ∀ path, reports.lstat path = (reads.stat path).map Prod.fst)
-    (observes : ∀ bytes manifest, binding = some bytes → IntegrityCheckpoint.decode bytes = .ok manifest →
-      ∀ index, index < manifest.header.runCount.toNat → ∀ payload,
-        durable manifest.header.generation index = some payload →
-        Nonempty (reads.ObservesFile (directory.file (.run manifest.header.generation index)) payload)) :
+    (observes : reads.ObservesSelected directory binding durable) :
     SizedCheckpointRunReports directory reports binding durable where
   readPrefix := reads.readPrefix
   runs := by
