@@ -502,6 +502,29 @@ theorem SegmentedDatabaseTrace.checkpointPowerLossCached
   exact ⟨after, session, final, .checkpointPowerLoss prior report observed installed,
     selected, replay, ran, phase, files, owners⟩
 
+/-- Extend the history using the exact segment layout installed by the
+cached opener across a crash during WAL rotation. -/
+theorem SegmentedDatabaseTrace.rotationPowerLossCached
+    {directory initialDescriptor initial allowCollection log writer descriptor before}
+    (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (report : SegmentedRotationPowerLossReport directory before descriptor)
+    (sizes : SizedCheckpointRunReports directory report.read.reports
+      (report.retry.image.settledReopenImage before.wal).directory.active.manifest before.published.durable)
+    (cached : CachedWalFileReports directory report.read.reports
+      (report.retry.image.settleForReopen.visible before.wal) before.target.range.watermark ByteArray.empty) :
+    ∃ after,
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after ∧
+      SegmentedRotationReopenEndpoint directory descriptor before after
+        (runOpenWithInstallation directory descriptor report.nextRef (.ok true) report.unlock
+          (report.read.reopenCachedWithState sizes cached report.removeFile report.write report.sync report.renameFile)
+          report.retry) ∧
+      after.wal.segments = (report.retry.image.visible before.wal).segments ∧
+      after.wal.active = (report.retry.image.visible before.wal).active := by
+  have ready := (prior.preservesRetained initialReady).1
+  obtain ⟨after, installed, endpoint, _, segments, active⟩ := report.installsRetainedCached ready sizes cached
+  exact ⟨after, .rotationPowerLoss prior report installed, endpoint, segments, active⟩
+
 /-- Reads with a pin belonging to the current writer match replay of the
 retained history from the empty abstract table. -/
 theorem SegmentedDatabaseTrace.pinnedReads {directory initialDescriptor initial allowCollection log descriptor last}
