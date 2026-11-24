@@ -51,7 +51,7 @@ theorem CachedRetryReadReports.readSelected {state : Type} {directory : DiskDire
     (reported : CachedRetryReadReports directory layout)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
-    (later : image.later.Beyond layout.range.through)
+    (later : ∀ start ∈ image.later.visible, layout.range.through < start)
     {count : UInt64} (absolute : count.toNat = layout.range.through * frameSize) (initial : state) :
     let files := layout.sealed.map (fun segment => (segment.first, segment.bytes)) ++
       [(layout.keeper.first, layout.keeper.bytes)]
@@ -89,8 +89,7 @@ theorem CachedRetryReadReports.readSelected {state : Type} {directory : DiskDire
       layout.range.watermark (count.toNat / frameSize) = some (files.map Prod.fst, image.later.visible) := by
     rw [atThrough, fileOffsets, head]
     exact selectWalSegmentReadsThrough_split reported.older rest image.later.visible layout.first
-      layout.range.watermark layout.range.through layout.covers covered beforeFirst follows
-      (later _ List.mem_cons_self)
+      layout.range.watermark layout.range.through layout.covers covered beforeFirst follows later
   have projection :
       (readWalSegmentExtentsWith (m := Except IO.Error) directory
         (fun path => .ok (reported.inventory.reports.lstat path)) (reported.entries.toList.map (·.fileName))).map
