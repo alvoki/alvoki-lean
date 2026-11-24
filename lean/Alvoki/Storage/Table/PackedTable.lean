@@ -537,4 +537,81 @@ theorem PackedTable.compact_refines {before after : PackedTable} {model : Snapsh
   change Sequential.Table.mk (runs.map CheckedRun.history) before.memory = _
   exact congrArg (Sequential.Table.mk (runs.map CheckedRun.history)) memory
 
+private def retainRunSuffix (floor : UInt64) : List CheckedRun → Option (List CheckedRun)
+  | run :: tail => (run.retainVersions floor).toOption.map (· :: tail)
+  | [] => none
+
+/-- Rewrite one run at the table's current retention floor. The original
+position in the oldest-to-newest run order and the pin registry stay intact. -/
+def PackedTable.retainRunVersions (state : PackedTable) (index : Nat) : Option PackedTable :=
+  (Sequential.replaceSuffix (retainRunSuffix state.pins.floor) index state.runs).map fun runs =>
+    { state with runs }
+
+theorem PackedTable.retainRunVersions_spec {before after : PackedTable} {index : Nat}
+    (retained : before.retainRunVersions index = some after) :
+    after.memory = before.memory ∧ after.committed = before.committed ∧ after.pins = before.pins ∧
+      ∃ older source output newer, before.runs = older ++ source :: newer ∧
+        after.runs = older ++ output :: newer ∧ output.history = source.history.retain before.pins.floor := by
+  unfold PackedTable.retainRunVersions at retained
+  obtain ⟨runs, changed, rfl⟩ := Option.map_eq_some_iff.mp retained
+  obtain ⟨older, suffix, replacement, original, updated, valid⟩ := Sequential.replaceSuffix_spec changed
+  cases suffix with
+  | nil => simp [retainRunSuffix] at valid
+  | cons source newer =>
+    cases written : source.retainVersions before.pins.floor with
+    | error => simp [retainRunSuffix, written, Except.toOption] at valid
+    | ok output =>
+      have replaced : output :: newer = replacement := by
+        simpa [retainRunSuffix, written, Except.toOption] using valid
+      exact ⟨rfl, rfl, rfl, older, source, output, newer, original,
+        updated.trans (congrArg (older ++ ·) replaced.symm), CheckedRun.retainVersions_spec written⟩
+
+theorem PackedTable.RowBounds.retainRunVersions {before after : PackedTable} {index : Nat}
+    (bounded : before.RowBounds) (retained : before.retainRunVersions index = some after) :
+    after.RowBounds := by
+  obtain ⟨memory, clock, _, older, source, output, newer, original, updated, history⟩ :=
+    PackedTable.retainRunVersions_spec retained
+  constructor
+  · intro run member row inside
+    rw [updated] at member
+    rw [clock]
+    rcases List.mem_append.mp member with earlier | remaining
+    · exact bounded.runs run (by rw [original]; exact List.mem_append_left _ earlier) row inside
+    · rcases List.mem_cons.mp remaining with rfl | later
+      · rw [history] at inside
+        exact bounded.runs source (by simp [original]) row ((retainFrom_sublist _ _ _ _).subset inside)
+      · exact bounded.runs run (by simp [original, later]) row inside
+  · rw [memory, clock]
+    exact bounded.memory
+
+private theorem across_retain (older newer : List (History α)) (run : History α) (key : UInt64)
+    {floor snapshot : UInt64} (retained : floor ≤ snapshot) :
+    Sequential.across key snapshot (older ++ run.retain floor :: newer) =
+      Sequential.across key snapshot (older ++ run :: newer) := by
+  induction older with
+  | nil => simp [Sequential.across, History.retain, winner_retain _ key retained]
+  | cons head older ih => simp only [List.cons_append, Sequential.across, ih]
+
+theorem PackedTable.retainRunVersions_visibleEntry {before after : PackedTable} {index : Nat} {snapshot : UInt64}
+    (retained : before.retainRunVersions index = some after) (supported : before.pins.floor ≤ snapshot)
+    (key : UInt64) : after.describe.visibleEntry key snapshot = before.describe.visibleEntry key snapshot := by
+  obtain ⟨memory, _, _, older, source, output, newer, original, updated, history⟩ :=
+    PackedTable.retainRunVersions_spec retained
+  unfold Sequential.Table.visibleEntry Sequential.Table.histories PackedTable.describe
+  rw [memory, original, updated]
+  simp only [List.map_append, List.map_cons, List.append_assoc, List.cons_append, history]
+  rw [across_retain _ _ _ key supported]
+
+theorem PackedTable.retainRunVersions_reads {before after : PackedTable} {index : Nat} {snapshot : UInt64}
+    (retained : before.retainRunVersions index = some after) (supported : before.pins.floor ≤ snapshot)
+    (key start stop : UInt64) :
+    after.lookupAt key snapshot = before.lookupAt key snapshot ∧
+      after.rangeAt start stop snapshot = before.rangeAt start stop snapshot := by
+  have visible := retainRunVersions_visibleEntry retained supported
+  constructor
+  · rw [lookupAt_eq, lookupAt_eq, Sequential.Table.lookup_eq_visibleEntry,
+      Sequential.Table.lookup_eq_visibleEntry, visible key]
+  · rw [rangeAt_eq, rangeAt_eq]
+    exact Sequential.Table.range_of_visibleEntry_eq start stop snapshot visible
+
 end Alvoki.Storage

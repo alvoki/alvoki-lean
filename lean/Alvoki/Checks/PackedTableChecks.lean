@@ -106,6 +106,22 @@ private def mixed (seed : UInt64) : List Operation := Id.run do
     out := op :: out
   return out.reverse
 
+private def checkRetainRunVersions (kind : MemTable.Kind) : IO Unit := do
+  let trace ← run kind [.write 7 (some 70), .flush, .write 7 (some 71), .write 7 none,
+    .write 7 (some 72), .write 4 (some 40), .flush, .pin (some 3), .advance 3, .write 9 (some 90)]
+  let before := trace.packed
+  let some after := before.retainRunVersions 1 | throw (IO.userError "single-run retention failed")
+  let some (pin, _) := trace.handles[0]? | throw (IO.userError "missing retention floor pin")
+  let counts := fun (table : PackedTable) => table.runs.map (·.run.count.toNat)
+  expect (counts before == [1, 4] && counts after == [1, 3])
+    "retention rewrote a different run or failed to remove the shadowed version"
+  expect ((after.retainRunVersions 2).isNone && after.lookup pin 7 == some none)
+    "retention accepted a missing run or exposed an older put at the floor"
+  for snapshot in [3, 4, 5, 6] do
+    expect (decide (after.lookupAt 7 snapshot = before.lookupAt 7 snapshot ∧
+        after.rangeAt 0 10 snapshot = before.rangeAt 0 10 snapshot))
+      s!"single-run retention changed a read at snapshot {snapshot}"
+
 private def checkBackend (kind : MemTable.Kind) : IO Unit := do
   let t ← run kind fixture
   let some (old, _) := t.handles[0]? | throw (IO.userError "missing original handle")
@@ -116,8 +132,10 @@ private def checkBackend (kind : MemTable.Kind) : IO Unit := do
     "the latest snapshot missed an overwrite or tombstone"
   expect (decide (t.packed.lookup current maxKey = some (some 99)))
     "the maximum key was lost during a packed read"
+  checkRetainRunVersions kind
   for seed in [7, 23, 271, 20261123] do
     let _ ← run kind (mixed seed)
+
 def main : IO Unit := do
   checkBackend .list
   checkBackend .tree
