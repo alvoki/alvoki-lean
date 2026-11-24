@@ -76,6 +76,8 @@ lake env leanchecker Alvoki.Storage.Disk.ManifestIntegritySingleByte
 lake env leanchecker Alvoki.Storage.Disk.VersionedCheckpointRead
 lake env leanchecker Alvoki.Storage.Disk.VersionedCheckpointLineage
 lake env leanchecker Alvoki.Storage.Disk.VersionedCheckpointPublication
+lake env leanchecker Alvoki.Storage.Disk.VersionedCheckpointRetry
+lake env leanchecker Alvoki.Storage.Disk.VersionedMarkedRecovery
 lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapRetry
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery

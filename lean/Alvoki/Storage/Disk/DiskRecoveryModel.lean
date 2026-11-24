@@ -319,7 +319,7 @@ theorem CheckpointForRecovery.ordered_durable_runs {image : CheckpointPublicatio
     subst stored
     exact read_durable_runs decoded count durable
 
-private theorem readList_succeeds {indices : List Nat} {read : Nat → Except String ByteArray}
+theorem ordered_reads_succeed {indices : List Nat} {read : Nat → Except String ByteArray}
     (success : ∀ index ∈ indices, ∃ bytes, read index = .ok bytes) :
     ∃ files, indices.mapM read = .ok files := by
   induction indices with
@@ -358,7 +358,7 @@ theorem CheckpointReadObservations.completes {image : CheckpointPublication.Imag
     | ok header =>
       rw [decoded] at loaded
       simp only [CheckpointPublication.Image.readDurableCheckpointRuns, decoded, Except.toOption] at durable
-      obtain ⟨readFiles, observed⟩ := readList_succeeds (indices := List.range header.runCount.toNat)
+      obtain ⟨readFiles, observed⟩ := ordered_reads_succeed (indices := List.range header.runCount.toNat)
         (fun index present => runReads bytes header rfl decoded index (List.mem_range.mp present))
       have same := observed_ordered_runs
         (fun index member => reads.runDurable bytes header rfl decoded index (List.mem_range.mp member))

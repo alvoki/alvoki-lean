@@ -143,6 +143,33 @@ private theorem VersionedCheckpointFileReads.selectedRunDurable
   | legacy header => exact reads.runDurable bytes header rfl parsed index within value expected read known
   | integrity manifest => exact reads.integrityRunDurable bytes manifest rfl parsed index within value expected read known
 
+/-- A valid selected checkpoint loads from its exact durable file list when
+the indicated reads report success and the structural loader accepts it. -/
+theorem VersionedCheckpointFileReads.completes_selected
+    {image : CheckpointPublication.Image} {bytes : ByteArray} {selected : VersionedCheckpoint}
+    {files : List ByteArray} {base : PackedTable}
+    (reads : VersionedCheckpointFileReads image.durable (some bytes))
+    (manifestRead : reads.readManifest = .ok (some bytes))
+    (decoded : VersionedCheckpoint.decode bytes = .ok selected)
+    (runReads : ∀ index, index < selected.header.runCount.toNat →
+      ∃ payload, reads.readRun selected.header.generation index = .ok payload)
+    (durable : (List.range selected.header.runCount.toNat).mapM
+      (image.durable selected.header.generation) = some files)
+    (validated : selected.ValidatesFiles files) (loaded : loadRunSet selected.header files = .ok base) :
+    reads.result = .ok (some (base, selected.header.generation)) := by
+  obtain ⟨observed, ordered⟩ := ordered_reads_succeed
+    (indices := List.range selected.header.runCount.toNat)
+    (fun index member => runReads index (List.mem_range.mp member))
+  have same := observed_ordered_runs
+    (fun index member _ _ => reads.selectedRunDurable decoded (List.mem_range.mp member)) durable ordered
+  subst observed
+  have versioned : loadVersionedRunSet selected files = .ok base := by
+    cases selected with
+    | legacy => exact loaded
+    | integrity manifest => exact loadVersionedRunSet_integrity_iff.mpr ⟨validated, loaded⟩
+  simp [VersionedCheckpointFileReads.result, readVersionedCheckpoint, manifestRead, decoded,
+    readCheckpointRunBytes_eq_mapM, ordered, versioned, Bind.bind, Except.bind, Pure.pure, Except.pure]
+
 /-- A successful versioned read uses exactly the accepted durable run map.
 The selected v2 descriptor table was checked on those same observed bytes. -/
 theorem VersionedCheckpointFileReads.loaded_lineage

@@ -46,7 +46,7 @@ def CheckpointRepresentsPrefix (history : List WAL.Write) (header : Manifest.Che
   ∃ checkpoint model, CheckpointForRecovery (some (Manifest.encode header)) files checkpoint ∧
     checkpoint.Refines model ∧ RepresentsWalHistory (history.take checkpoint.committed.toNat) model
 
-private theorem checkpointHeaderWatermark {bytes : ByteArray} {files : List ByteArray}
+theorem CheckpointForRecovery.headerWatermark {bytes : ByteArray} {files : List ByteArray}
     {table : PackedTable} {header : Manifest.Checkpoint}
     (written : CheckpointForRecovery (some bytes) files table)
     (decoded : Manifest.decode bytes = .ok header) : header.committed = table.committed := by
@@ -79,7 +79,7 @@ private theorem FixedMarkedCheckpoint.validPublicationInput (checkpoint : FixedM
       have old := checkpoint.accepted
       rw [selected] at old
       obtain ⟨header, files, decoded, written, _, count, durable⟩ := old
-      have exactClock := checkpointHeaderWatermark (selected ▸ checkpoint.written) decoded
+      have exactClock := CheckpointForRecovery.headerWatermark (selected ▸ checkpoint.written) decoded
       have within : header.committed ≤ writer.history.length.toUInt64 := by
         rw [clock, UInt64.le_iff_toNat_le, exactClock, ← ready.count, ← checkpoint.watermark, history]
         simp

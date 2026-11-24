@@ -47,6 +47,15 @@ theorem run_effects_outcome {State Action Error : Type}
         rw [List.take_succ_cons, List.foldlM_cons, effect]
         exact prefixRun
 
+/-- A successful effect sequence admits every prefix. -/
+theorem foldlM_take_exists {State Action : Type} {step : State → Action → Option State}
+    {actions : List Action} {start after : State} (ran : actions.foldlM step start = some after) (cut : Nat) :
+    ∃ intermediate, (actions.take cut).foldlM step start = some intermediate := by
+  rw [← List.take_append_drop cut actions, List.foldlM_append] at ran
+  cases applied : (actions.take cut).foldlM step start with
+  | none => simp [applied] at ran
+  | some image => exact ⟨image, rfl⟩
+
 /-- One active name and a protocol-owned temporary name in a fixed directory.
 The active contents survive a crash according to the separate directory outcomes.
 An outstanding staged file can be overwritten on the next attempt. -/

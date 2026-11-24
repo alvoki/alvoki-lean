@@ -62,6 +62,15 @@ theorem checkpointVersioned_complete (initial : Image) (next : VersionedRunSet) 
     Publication.successful_replace]
   rfl
 
+theorem Image.executeVersioned_exists (initial : Image) (next : VersionedRunSet) (cut : Nat) :
+    ∃ after, initial.executeVersioned next cut = some after := by
+  obtain ⟨_, ran, _⟩ := checkpoint_runs_complete initial next.runSet
+  obtain ⟨written, runPrefix⟩ := Image.execute_take_exists ran cut
+  change initial.execute next.runSet ((runBarrier next.files.length).take cut) = some written at runPrefix
+  obtain ⟨manifest, manifestPrefix⟩ := Publication.foldlM_take_exists
+    (Publication.successful_replace written.manifest next.manifest.encode) (cut - (runBarrier next.files.length).length)
+  exact ⟨{ written with manifest }, by simp [Image.executeVersioned, runPrefix, Publication.Image.execute, manifestPrefix]⟩
+
 /-- A complete integrity checkpoint publishes the exact ordered runs and the
 v2 manifest built from their fingerprints. WAL coverage and the caller's
 semantic checkpoint witness are explicit. -/

@@ -67,6 +67,13 @@ can be overwritten in the next attempt. -/
 def Image.execute (initial : Image) (next : RunSet) (actions : List Step) : Option Image :=
   (Pending.execute ⟨initial, 0, false⟩ next actions).map Pending.image
 
+theorem Image.execute_take_exists {initial after : Image} {next : RunSet} {actions : List Step}
+    (ran : initial.execute next actions = some after) (cut : Nat) :
+    ∃ intermediate, initial.execute next (actions.take cut) = some intermediate := by
+  obtain ⟨_, performed, _⟩ := Option.map_eq_some_iff.mp ran
+  obtain ⟨intermediate, existsPrefix⟩ := Publication.foldlM_take_exists performed cut
+  exact ⟨intermediate.image, by simp [Image.execute, Pending.execute, existsPrefix]⟩
+
 /-- Whether an operation reports success, or reports an error before or
 after having the modeled effect. A partial write to an unreachable run or
 staged manifest has no effect on current recoverable file bindings. -/
