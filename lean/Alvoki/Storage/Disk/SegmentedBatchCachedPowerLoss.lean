@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.SegmentedBatchMarkerProcessExit
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
+import Alvoki.Storage.Disk.DiskOpenAdmission
 
 namespace Alvoki.Storage.DiskSession
 
@@ -161,6 +162,79 @@ theorem ProcessExitCachedReopenReports.installs (report : ProcessExitCachedReope
     ∃ after, report.reopen.InstallsFromCut after := by
   have released := (observed.processExit ready report.references report.process).1
   exact report.reopen.installsFromCut observed ready (released.trans report.reopen.attempts)
+
+/-- The admitted marked open returns the next writer at the lock description
+it actually opened. The physical cut and all retries precede this open. -/
+structure AdmittedRetry {files : Type} (cut : SegmentedBatchMarkerPowerLossReport directory before writer)
+    (input : FilePath) (retry : LockedFileState FileImage) (descriptor : Nat) (after : SegmentedWriterState) : Prop where
+  retries : BoundedReopenTrace directory (BatchRetryTarget before.history cut.batch before.wal.active.first)
+    cut.inFlight retry
+  reopened : ∃ (history : List WAL.Write) (layout : CanonicalKeeperLayout retry.image history)
+    (reported : MarkedRetryChunkReports files directory layout before.published)
+    (admission : OpenAdmissionReports input directory reported.slot) (session : SegmentedSession)
+    (final : LockedFileState FileImage),
+    reported.runWithAdmission admission = .ok session final ∧
+    session.directory = directory ∧ session.descriptor = descriptor ∧ session.phase = .ready after.installed ∧
+    final.owners.Owns directory descriptor ∧ after.files = final.image ∧ after.owners = final.owners ∧
+    final.image.directory.active = retry.image.directory.active ∧ after.history = history
+  history : after.history = before.history ∨ after.history = before.history ++ cut.batch
+  checkpoint : after.checkpoint = before.checkpoint
+  generation : after.installed.generation = before.installed.generation
+  durable : after.published.durable = before.published.durable
+  retained : after.RetainedReady directory descriptor
+
+/-- The post-retry layout comes from the reached batch cut. Exact native
+admission and checkpoint/WAL reads for that layout then install the next
+writer. There is one selection for the whole batch, including after a live
+exit followed by another machine power loss. -/
+theorem Reached.installsAdmitted {files : Type} {input : FilePath} {retry : LockedFileState FileImage}
+    (observed : cut.Reached) (ready : before.RetainedReady directory writer)
+    (attempts : BoundedReopenTrace directory (BatchRetryTarget before.history cut.batch before.wal.active.first)
+      cut.inFlight retry)
+    (reads : ∀ history, ∀ layout : CanonicalKeeperLayout retry.image history,
+      (history = before.history ∨ history = before.history ++ cut.batch) →
+      layout.target.first = before.wal.active.first →
+      ∃ reported : MarkedRetryChunkReports files directory layout before.published,
+        Nonempty (OpenAdmissionReports input directory reported.slot)) :
+    ∃ descriptor after, AdmittedRetry (files := files) cut input retry descriptor after := by
+  let effects := cut.cut.writeEffects cut.appendCrashTails (before.wal.directory.staged .walBoundary)
+  have oldRange : before.wal.directory.active.walRange = some ⟨before.target.range.watermark, before.history.length⟩ := by
+    rw [ready.walPair, ← ready.resumed.through]
+    exact before.target.decoded
+  have oldAccepted := (congrArg DirectoryPublication.Bindings.manifest ready.walPair).symm ▸ ready.resumed.accepted
+  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
+  have count : before.history.length = before.installed.table.committed.toNat :=
+    represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
+  obtain ⟨kept, manifest, history, allowed, _, layout, valid, selected, _, first, _, descriptors, offsets,
+    prepared, _, accepted, ordered, _, _⟩ :=
+    attempts.selectsAfterBatchCut ready.layout ready.valid oldRange ready.resumed.ordered count observed.prepared
+      (observed.preparedHistory ready).2.1 oldAccepted effects cut.physicalProjection
+  obtain ⟨reported, ⟨admission⟩⟩ := reads history selected allowed first
+  have following := reported.selectedAfterWatermark offsets descriptors
+  have installed := runOpenWithAdmission_markedRetryFromChunks reported admission
+    prepared.keeperPrefix prepared.newer following accepted ordered
+  rw [reported.runWithAdmission_eq admission] at installed
+  obtain ⟨_, cutReady⟩ := installed.appendCutReady accepted ordered
+  let wal := before.wal.appendSelectedView retry.image.directory.active history
+  have sealed : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept := kept
+  have spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize := ready.spans
+  obtain ⟨session, final, after, returned, path, slot, phase, files, owners, _, target, exactHistory, _, durable, next⟩ :=
+    cutReady.writerRetained layout valid spans rfl first sealed
+  have readyAfter : after.RetainedReady directory reported.slot.description := reported.inventoryDescription ▸ next
+  have oldManifest := manifest.trans (congrArg DirectoryPublication.Bindings.manifest ready.walPair)
+  have oldCheckpoint : SelectedIntegrityCheckpoint before.published.durable retry.image.directory.active.manifest
+      before.checkpoint := oldManifest.symm ▸ ready.resumed.selected
+  have loaded := readyAfter.resumed.selected
+  rw [durable, target] at loaded
+  have checkpoint := loaded.uniqueResult oldCheckpoint
+  have generation : after.installed.generation = before.installed.generation := by
+    rw [readyAfter.resumed.generation, checkpoint, ← ready.resumed.generation]
+  have held : final.owners.Owns directory reported.slot.description := owners ▸ readyAfter.held
+  have pair : final.image.directory.active = retry.image.directory.active :=
+    files ▸ (readyAfter.resumed.ready.selected.trans (congrArg Target.pair target))
+  exact ⟨reported.slot.description, after, attempts, ⟨history, selected, reported, admission, session, final,
+    (reported.runWithAdmission_eq admission).trans returned, path, slot.trans reported.inventoryDescription,
+    phase, held, files, owners, pair, exactHistory⟩, exactHistory ▸ allowed, checkpoint, generation, durable, readyAfter⟩
 
 end SegmentedBatchMarkerPowerLossReport
 end Alvoki.Storage.DiskSession

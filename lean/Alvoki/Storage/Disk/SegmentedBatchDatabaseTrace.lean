@@ -114,6 +114,12 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (report : cut.ProcessExitCachedReopenReports descriptor) (installed : report.reopen.InstallsFromCut after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.uncertainBatch cut.batch]) descriptor after
+  | batchMarkerAdmitted {files : Type} {input : System.FilePath} {retry : LockedFileState FileImage}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (cut : SegmentedBatchMarkerPowerLossReport directory before writer) (observed : cut.Reached)
+      (installed : cut.AdmittedRetry (files := files) input retry descriptor after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch cut.batch]) descriptor after
   | batchAppendPowerLoss
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedBatchAppendPowerLossReport directory before descriptor) (observed : report.Valid)
@@ -163,7 +169,8 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     rw [beforeHistory, List.append_assoc]
   | batchError _ _ installed ih
   | batchPowerLoss _ _ _ _ installed ih
-  | batchMarkerProcessExit _ _ _ _ installed ih =>
+  | batchMarkerProcessExit _ _ _ _ installed ih
+  | batchMarkerAdmitted _ _ _ installed ih =>
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history installed.history⟩
   | batchAppendPowerLoss _ _ _ installed ih
@@ -254,6 +261,27 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterBatchMarkerProcessExit
         (log ++ [.uncertainBatch cut.batch]) descriptor after := by
   obtain ⟨after, installed⟩ := report.installs observed (trace.preservesRetained ready).1
   exact ⟨after, installed, .batchMarkerProcessExit trace cut observed report installed⟩
+
+/-- Extend the trace by a reached marker-publication cut, its admitted
+retry lineage, and the exact marked open of the selected files. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterBatchMarkerWithAdmission {files : Type}
+    {input : System.FilePath} {retry : LockedFileState FileImage}
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (ready : initial.RetainedReady directory initialDescriptor)
+    (cut : SegmentedBatchMarkerPowerLossReport directory before writer) (observed : cut.Reached)
+    (attempts : BoundedReopenTrace directory (BatchRetryTarget before.history cut.batch before.wal.active.first)
+      cut.inFlight retry)
+    (reads : ∀ history, ∀ layout : CanonicalKeeperLayout retry.image history,
+      (history = before.history ∨ history = before.history ++ cut.batch) →
+      layout.target.first = before.wal.active.first →
+      ∃ reported : MarkedRetryChunkReports files directory layout before.published,
+        Nonempty (OpenAdmissionReports input directory reported.slot)) :
+    ∃ descriptor after, cut.AdmittedRetry (files := files) input retry descriptor after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch cut.batch]) descriptor after := by
+  obtain ⟨descriptor, after, installed⟩ :=
+    observed.installsAdmitted (trace.preservesRetained ready).1 attempts reads
+  exact ⟨descriptor, after, installed, .batchMarkerAdmitted trace cut observed installed⟩
 
 /-- A batch interrupted before marker publication contributes one uncertain
 submission and no retained frames. The next cached open installs the old

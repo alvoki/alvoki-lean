@@ -430,11 +430,9 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentCommit WalSegmentRepair WAL.Boundary
 
-/-- After a physical batch cut and any admitted finite retry trace, the
-selected directory pair determines exact WAL descriptors and keeper bytes.
-Healthy reports at the reached locked paths install the corresponding old
-or complete history through the existing bounded reopen worker. -/
-theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
+/-- A bounded retry lineage from an interrupted batch selects one actual
+marked layout before any new opener reads the files. -/
+theorem BoundedReopenTrace.selectsAfterBatchCut {directory : DiskDirectory}
     {oldWal : WalSegmentImage} {before batch : List WAL.Write} {watermark : Nat}
     (layout : oldWal.ReadLayout before) (valid : oldWal.Valid before)
     (oldRange : oldWal.directory.active.walRange = some ⟨watermark, before.length⟩)
@@ -448,13 +446,7 @@ theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
     (attempts : BoundedReopenTrace directory (BatchRetryTarget before batch oldWal.active.first) initial retry)
     (observed : BatchCutProjection initial.image
       ((writeFilesAfter (runBatchEffects before batch effects (oldWal.directory.staged .walBoundary))).reopenSegment
-        oldWal.active.first before oldWal.directory.active.manifest))
-    {descriptor nextRef : Nat} (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
-    (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
-    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
-    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
-    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
-    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+        oldWal.active.first before oldWal.directory.active.manifest)) :
     retry.image.kept = initial.image.kept ∧
     retry.image.directory.active.manifest = oldWal.directory.active.manifest ∧
     ∃ history, (history = before ∨ history = before ++ batch) ∧
@@ -463,21 +455,18 @@ theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
       wal.ReadLayout history ∧ wal.Valid history ∧
       ∃ selected : CanonicalKeeperLayout retry.image history,
         selected.range.watermark = watermark ∧ selected.target.first = oldWal.active.first ∧
+        selected.keeper = wal.active ∧
+        selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark ∧
+        selectWalSegmentReads (wal.segments.map WalSegment.first) selected.range.watermark =
+          some (selected.first, (wal.readDescriptors selected.range.watermark).map WalSegment.first) ∧
+        Prepared retry.image selected.target selected.plan ∧ retry.image.later.visible = [] ∧
+        published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+          retry.image.directory.active.manifest ∧
+        WAL.OrdinalsFrom 1 history ∧
         ∃ generation : UInt64,
           ((retry.image.directory.active.manifest.mapM fun bytes =>
               (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) :
-              Except String UInt64) = .ok generation ∧
-          ∀ raw : HealthyBoundedWalReports directory
-              (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
-              wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
-            sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
-            (∀ action prior after,
-              ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
-              prior.effect selected.target action = some after →
-              performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () after) →
-            AppendCutReady directory descriptor liveRefs history published retry.image selected.target generation
-              (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
-                (raw.reopen removeFile write sync renameFile) retry) := by
+              Except String UInt64) = .ok generation := by
   obtain ⟨watermarkRead, covered, _⟩ := DirectoryPublication.Bindings.walRange_accounting oldRange
   have starts : oldWal.active.first ≤ before.length := by
     rw [← layout.activeEnd]
@@ -552,10 +541,6 @@ theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
       obtain ⟨parsed, parsedOk, _⟩ := selectedCheckpointWatermark_present_iff.mp selectedWatermark
       exact ⟨parsed.header.generation, by rw [Option.mapM, parsedOk]; rfl⟩
   obtain ⟨generation, generationRead⟩ := generationRead
-  refine ⟨sealed, pair ▸ sameManifest, history, allowed, selectedMarker, layoutValid.1, layoutValid.2, selected,
-    congrArg MarkedWalRange.watermark range,
-    selectedFirst, generation, generationRead, ?_⟩
-  intro raw settles healthy
   have exactDescriptors : selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark := by
     change ideal.sealed ++ [ideal.keeper] = wal.readDescriptors ideal.range.watermark
     rw [range]
@@ -566,8 +551,66 @@ theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
       some (ideal.first, (wal.readDescriptors ideal.range.watermark).map WalSegment.first)
     rw [range]
     exact offsets
-  exact runOpenWithInstallation_appendLayout layoutValid.1 consecutive selected sameKeeper exactDescriptors
-    exactOffsets plan noLater accepted generationRead raw liveRefs fresh acquisition unlock removeFile write sync
+  exact ⟨sealed, pair ▸ sameManifest, history, allowed, selectedMarker, layoutValid.1, layoutValid.2,
+    selected, congrArg MarkedWalRange.watermark range, selectedFirst, sameKeeper, exactDescriptors,
+    exactOffsets, plan, noLater, accepted, consecutive, generation, generationRead⟩
+
+/-- After a physical batch cut and any admitted finite retry trace, the
+selected directory pair determines exact WAL descriptors and keeper bytes.
+Healthy reports at the reached locked paths install the corresponding old
+or complete history through the existing bounded reopen worker. -/
+theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
+    {oldWal : WalSegmentImage} {before batch : List WAL.Write} {watermark : Nat}
+    (layout : oldWal.ReadLayout before) (valid : oldWal.Valid before)
+    (oldRange : oldWal.directory.active.walRange = some ⟨watermark, before.length⟩)
+    (ordered : WAL.OrdinalsFrom 1 before) {live next : PackedTable} {rows : List (UInt64 × Option UInt64)}
+    (committed : before.length = live.committed.toNat) (prepared : prepareBatch live rows = some (batch, next))
+    (fits : (WAL.encode (before ++ batch)).size < UInt64.size)
+    {published : CheckpointPublication.Image}
+    (checkpoint : published.AcceptsVersioned before.length.toUInt64 (CheckpointRepresentsPrefix before)
+      oldWal.directory.active.manifest)
+    (effects : WriteEffects) {initial retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (BatchRetryTarget before batch oldWal.active.first) initial retry)
+    (observed : BatchCutProjection initial.image
+      ((writeFilesAfter (runBatchEffects before batch effects (oldWal.directory.staged .walBoundary))).reopenSegment
+        oldWal.active.first before oldWal.directory.active.manifest))
+    {descriptor nextRef : Nat} (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    retry.image.kept = initial.image.kept ∧
+    retry.image.directory.active.manifest = oldWal.directory.active.manifest ∧
+    ∃ history, (history = before ∨ history = before ++ batch) ∧
+      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) ∧
+      let wal := oldWal.appendSelectedView retry.image.directory.active history
+      wal.ReadLayout history ∧ wal.Valid history ∧
+      ∃ selected : CanonicalKeeperLayout retry.image history,
+        selected.range.watermark = watermark ∧ selected.target.first = oldWal.active.first ∧
+        ∃ generation : UInt64,
+          ((retry.image.directory.active.manifest.mapM fun bytes =>
+              (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) :
+              Except String UInt64) = .ok generation ∧
+          ∀ raw : HealthyBoundedWalReports directory
+              (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+              wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
+            sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
+            (∀ action prior after,
+              ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+              prior.effect selected.target action = some after →
+              performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () after) →
+            AppendCutReady directory descriptor liveRefs history published retry.image selected.target generation
+              (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+                (raw.reopen removeFile write sync renameFile) retry) := by
+  obtain ⟨sealed, manifest, history, allowed, marker, layout, valid, selected, sameWatermark, first,
+    keeper, descriptors, offsets, plan, noLater, accepted, consecutive, generation, generationRead⟩ :=
+      attempts.selectsAfterBatchCut layout valid oldRange ordered committed prepared fits checkpoint effects observed
+  refine ⟨sealed, manifest, history, allowed, marker, layout, valid, selected, sameWatermark, first,
+    generation, generationRead, ?_⟩
+  intro raw settles healthy
+  exact runOpenWithInstallation_appendLayout layout consecutive selected keeper descriptors
+    offsets plan noLater accepted generationRead raw liveRefs fresh acquisition unlock removeFile write sync
     renameFile settles healthy
 
 end Alvoki.Storage.DiskSession

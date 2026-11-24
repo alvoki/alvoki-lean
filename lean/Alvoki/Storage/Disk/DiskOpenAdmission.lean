@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.CachedMarkedRetryInstallation
+import Alvoki.Storage.Disk.AppendCutSession
 
 namespace Alvoki.Storage.DiskSession
 
@@ -81,5 +82,74 @@ theorem runOpenWithAdmission_markedRetryFromChunks {files : Type} {input : FileP
       published observed.liveRefs (observed.runWithAdmission admission) := by
   rw [observed.runWithAdmission_eq admission]
   exact runOpenWithInstallation_markedRetryFromChunks observed keeperValid laterValid following accepted ordered
+
+private theorem followingAfterSelection {offsets selected : List Nat} {watermark first : Nat}
+    (chosen : selectWalSegmentReads offsets watermark = some (first, selected))
+    (ordered : selected.Pairwise (· < ·)) (head : selected.head? = some first) :
+    ∀ start ∈ selected.drop 1, watermark < start := by
+  unfold selectWalSegmentReads at chosen
+  cases maximum : (offsets.filter fun offset => decide (offset ≤ watermark)).max? with
+  | none => simp [maximum, Bind.bind, Option.bind] at chosen
+  | some greatest =>
+    have pair : (greatest, offsets.filter fun offset => decide (greatest ≤ offset)) = (first, selected) := by
+      simpa [maximum, Bind.bind, Option.bind, Pure.pure] using chosen
+    obtain ⟨rfl, selectedOffsets⟩ := Prod.mk.inj pair
+    have upper := (List.max?_eq_some_iff.mp maximum).2
+    cases selected with
+    | nil => contradiction
+    | cons start rest =>
+      have exactHead : start = greatest := Option.some.inj head
+      subst start
+      intro later member
+      have greater := (List.pairwise_cons.mp ordered).1 _ member
+      have listed := List.mem_filter.mp (selectedOffsets ▸ List.mem_cons_of_mem _ member)
+      apply Nat.lt_of_not_ge
+      intro within
+      exact Nat.not_le_of_gt greater (upper _ (List.mem_filter.mpr ⟨listed.1, decide_eq_true within⟩))
+
+private theorem headOfChain {history : List WAL.Write} {first : Nat} {segments : List WalSegment}
+    (chain : WalSegment.Chain history first segments) (nonempty : segments ≠ []) :
+    (segments.map WalSegment.first).head? = some first := by
+  cases chain with
+  | endOfHistory => contradiction
+  | cons => rfl
+
+/-- The selected canonical descriptors are ordered, and every descriptor
+after the first begins strictly above the loaded checkpoint watermark. -/
+theorem MarkedRetryChunkReports.selectedAfterWatermark {files : Type} {directory : DiskDirectory}
+    {before : LockedFileState FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout before.image history} {published : CheckpointPublication.Image}
+    (observed : MarkedRetryChunkReports files directory layout published)
+    {offsets : List Nat} {selected : List WalSegment}
+    (chosen : selectWalSegmentReads offsets layout.range.watermark = some (layout.first, selected.map WalSegment.first))
+    (descriptors : layout.sealed ++ [layout.keeper] = selected) :
+    ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start := by
+  rw [← descriptors] at chosen
+  have ordered := (List.pairwise_append.mp (List.pairwise_append.mp observed.reported.ordered).1).2.1
+  exact followingAfterSelection chosen ordered (headOfChain layout.chain (by simp))
+
+/-- The cached callback and installation proof supplies the same exact
+inputs used to reconstruct a retained writer after a bounded reopen. -/
+theorem CachedRetryInstalled.appendCutReady
+    {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout before.image history} {reported : CachedRetryReadReports directory layout}
+    {descriptors slot bindings published liveRefs result}
+    (installed : CachedRetryInstalled reported descriptors slot bindings published liveRefs result)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+      before.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ generation, AppendCutReady directory reported.inventory.descriptor liveRefs history published before.image
+      layout.target generation result := by
+  obtain ⟨opened, checkpoint, model, session, final, returned, path, descriptor, phase, _, _, _, _, held,
+    distinct, freshPhase, freshSession, ready, effects, selected, replay, generation, bytes, keeper, committed,
+    bounds, refines, represents, pins⟩ := installed
+  have exactBytes : opened.walBytes.toNat = (WAL.encode history).size := by
+    rw [bytes, WAL.encode_size, Nat.mul_comm]
+  have payload : session.phase = .ready ⟨opened.table, opened.generation, (WAL.encode history).size, layout.target.first⟩ := by
+    simpa only [Reopened.installed, exactBytes, keeper, CanonicalKeeperLayout.target] using phase
+  exact ⟨opened.generation, layout.through, layout.chain.keeperBytes, accepted, ordered, checkpoint, opened.table,
+    model, session, final, returned, selected, generation, replay, path, descriptor, payload, ready, effects.keepsSealed,
+    descriptor ▸ held, committed, bounds, refines, represents, pins, distinct, freshPhase, freshSession⟩
 
 end Alvoki.Storage.DiskSession
