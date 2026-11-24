@@ -1,6 +1,8 @@
 import Alvoki.Checks.AxiomPolicy
 import Alvoki.Storage.Disk.WalBatchRecovery
 import Alvoki.Storage.Disk.WalBatchMarkerPowerLoss
+import Alvoki.Storage.Disk.SegmentedBatchPowerLoss
+import Alvoki.Storage.Disk.SegmentedBootstrapCompletion
 import Alvoki.Storage.Disk.AppendCutContinuation
 import Alvoki.Storage.Disk.AppendRetrySession
 import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
@@ -678,6 +680,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.BootstrapValid.crash
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_safe
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_completes
+#check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromHealthyBootstrap
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_readEmpty
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_liftReports
 #check_axioms Alvoki.Storage.replay_drop_append
@@ -776,6 +779,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.MarkerInterruption.actionAt
 #check_axioms Alvoki.WAL.Boundary.MarkerInterruption.matchesWriteEffects
 #check_axioms Alvoki.WAL.Boundary.MarkerInterruption.matchesBatchEffects
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Valid.reachesInterruption
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Valid.powerLoss
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Valid.modeledRetries
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Valid.selectsWholeBatch
 #check_axioms Alvoki.Storage.DiskSession.AppendRetryEndpoint.unique
 #check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.Valid.powerLoss
 #check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.Valid.submittedSequence
@@ -1095,6 +1102,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_requestBound
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_requestBound
 #check_axioms Alvoki.Storage.WalSegmentRepair.countCachedMarkedOpenRequests_bound
+#check_axioms Alvoki.Storage.readExactPrefixWith_requestBound
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBoundedMarkedFromReaders_reported
