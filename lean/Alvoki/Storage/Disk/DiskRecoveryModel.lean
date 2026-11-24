@@ -221,6 +221,81 @@ theorem CheckpointForRecovery.loaded_observation {image : CheckpointPublication.
     (fun checkpoint => (checkpoint.getD (.empty, 0)).1) <$> result) exactLoaded
   cases manifest <;> simp [← bind_pure_comp, bind_assoc] at table <;> exact table
 
+/-- The session uses generation zero for an absent manifest and the decoded
+generation for a successfully loaded manifest. -/
+theorem CheckpointForRecovery.loaded_generation {image : CheckpointPublication.Image}
+    {walSequence : UInt64} {manifest : Option ByteArray} {files : List ByteArray} {checkpoint : PackedTable}
+    {loaded : Option (PackedTable × UInt64)}
+    (written : CheckpointForRecovery manifest files checkpoint)
+    (accepted : image.Accepts walSequence (fun header stored =>
+      CheckpointForRecovery (some (Manifest.encode header)) stored checkpoint) manifest)
+    (reads : CheckpointReadObservations image manifest)
+    (opened : reads.result = .ok loaded) :
+    ((manifest.mapM fun bytes => (Manifest.decode bytes).map (·.generation)).map (·.getD 0) :
+      Except String UInt64) = .ok (loaded.getD (.empty, 0)).2 := by
+  have exactLoaded := reads.loaded (written.ordered_durable_runs accepted) opened
+  cases manifest with
+  | none =>
+    cases Except.ok.inj exactLoaded
+    rfl
+  | some bytes =>
+    change (do
+      let header ← Manifest.decode bytes
+      let table ← loadRunSet header files
+      pure (some (table, header.generation))) = .ok loaded at exactLoaded
+    cases decoded : Manifest.decode bytes with
+    | error =>
+      rw [decoded] at exactLoaded
+      contradiction
+    | ok header =>
+      rw [decoded] at exactLoaded
+      cases runSet : loadRunSet header files with
+      | error =>
+        simp [Bind.bind, Except.bind, runSet] at exactLoaded
+      | ok table =>
+        simp only [Bind.bind, Except.bind, runSet, Pure.pure, Except.pure] at exactLoaded
+        cases Except.ok.inj exactLoaded
+        simp [Option.mapM, decoded, Functor.map, Except.map]
+
+/-- A successful marked reopen gets its installed generation from the
+checkpoint read and its installed byte count from the decoded marker.
+The latter is the length of the WAL left in the visible binding after the
+shared durability schedule. Successful primitive reads obey the locked
+filesystem observation contract. -/
+theorem CheckpointForRecovery.marked_reopen_metadata {image : CheckpointPublication.Image}
+    {walSequence : UInt64} {files : List ByteArray} {checkpoint table : PackedTable}
+    {before after : WAL.Boundary.ReopenImage}
+    (written : CheckpointForRecovery before.directory.active.manifest files checkpoint)
+    (accepted : image.Accepts walSequence (fun header stored =>
+      CheckpointForRecovery (some (Manifest.encode header)) stored checkpoint)
+      before.directory.active.manifest)
+    (checkpointReads : CheckpointReadObservations image before.directory.active.manifest)
+    (walReads : WAL.Boundary.MarkedWalReads before)
+    (bound : WAL.Boundary.MarkerBound before.directory)
+    {report : Publication.Step → WAL.Boundary.RepairReport} {aligned : WAL.Boundary.AlignedSyncReport}
+    (opened : WAL.Boundary.runMarkedReopen
+      (WAL.Boundary.MarkedReopenReads.mk walReads
+        (checkpointReads.result.map fun loaded => (loaded.getD (.empty, 0)).1)).preflight
+      report false aligned before = .ok table after) :
+    ∃ loaded marker length selected,
+      checkpointReads.result = .ok loaded ∧
+      ((before.directory.active.manifest.mapM fun bytes =>
+        (Manifest.decode bytes).map (·.generation)).map (·.getD 0) :
+        Except String UInt64) = .ok (loaded.getD (.empty, 0)).2 ∧
+      before.directory.active.walBoundary = some marker ∧
+      WAL.Boundary.decode marker = .ok length ∧
+      after.wal.active = some selected ∧ selected.size = length.toNat := by
+  obtain ⟨base, marker, _, selected, length, loadedBase, markerVisible, _, decoded,
+    selectedResult, _, _, walActive, _⟩ := WAL.Boundary.MarkedReopenReads.success _ bound opened
+  change (checkpointReads.result.map fun loaded => (loaded.getD (.empty, 0)).1) = .ok base
+    at loadedBase
+  cases loaded : checkpointReads.result with
+  | error => rw [loaded] at loadedBase; contradiction
+  | ok checkpoint =>
+    exact ⟨checkpoint, marker, length, selected, rfl,
+      written.loaded_generation accepted checkpointReads loaded, markerVisible, decoded,
+      walActive, WAL.Boundary.select_size selectedResult⟩
+
 private theorem ordinals_prefix {first : Nat} {initial suffix : List WAL.Write}
     (ordered : WAL.OrdinalsFrom first (initial ++ suffix)) : WAL.OrdinalsFrom first initial := by
   induction initial generalizing first with

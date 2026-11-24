@@ -45,6 +45,38 @@ The selected bytes are also used if reopen must repair the on-disk WAL. -/
   let table ← Storage.recoverSelected base selected
   return (selected, table)
 
+/-- Read and validate the optional marker before requesting the WAL. An absent
+file takes a separate path from a failed read. The caller supplies bootstrap
+behavior for the absent WAL. Inline the continuation to pass the bytes and
+decoded count without allocating an intermediate pair. -/
+@[macro_inline] def withOpenWal [Monad m] {α : Type}
+    (readBoundary readWal : m (Option ByteArray)) (validate : Except String UInt64 → m UInt64)
+    (missingWal : Option UInt64 → m ByteArray) (finish : Option UInt64 → ByteArray → m α) : m α := do
+  let boundary ← (← readBoundary).mapM fun bytes => validate (decode bytes)
+  let contents ← match ← readWal with
+    | some bytes => pure bytes
+    | none => missingWal boundary
+  finish boundary contents
+
+/-- For a present marker, decoding precedes even a WAL lookup that reports
+an error or an absent file. -/
+theorem withOpenWal_marked {α : Type} (marker : ByteArray)
+    (wal : Except String (Option ByteArray))
+    (missingWal : Option UInt64 → Except String ByteArray)
+    (finish : Option UInt64 → ByteArray → Except String α) :
+    withOpenWal (.ok (some marker)) wal id missingWal finish = (do
+      let count ← decode marker
+      let contents ← match ← wal with
+        | some bytes => pure bytes
+        | none => missingWal (some count)
+      finish (some count) contents) := by
+  cases decoded : decode marker <;>
+    simp [withOpenWal, Option.mapM, Functor.map, Except.map, Except.bind, Bind.bind, Pure.pure,
+      Except.pure, decoded]
+
+/-- Native open error for a missing WAL required by installed metadata. -/
+def missingOpenWal : String := "installed checkpoint or boundary is missing its WAL"
+
 private theorem select_eq_ok_iff {length : UInt64} {wal selected : ByteArray} :
     select length wal = .ok selected ↔
       length.toNat % frameSize = 0 ∧ length.toNat ≤ wal.size ∧

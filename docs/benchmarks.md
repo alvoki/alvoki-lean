@@ -123,6 +123,8 @@ The existing `DiskTable.write` path measured 3.158 ms per acknowledged write bef
 
 The shared checkpoint loader and marked WAL replay were measured with 14 interleaved pairs per workload. The median paired candidate-to-baseline ratios were 0.985× to 1.026× for marked WALs with 32 or 2,048 records, covering aligned and repaired WALs. Reopen with four runs of 32 rows measured 0.984× and with 32 runs of 128 rows measured 0.977×. Repeating the two checkpoint workloads gave 0.968× and 1.036×. The generated C retains the checkpoint read loop and inlines the durability callbacks. [Samples and reproduction](../benchmarks/results/disk/shared-marked-open)
 
+Sharing the optional marker and WAL reads gave pooled median paired ratios of 0.953× to 1.014× over the four marked WAL cases and two checkpoint cases. The A/A control ranged from 0.946× to 1.039×. The generated code inlines the read schedule with the same number of allocation sites and primitive calls. [Cohorts, control and reproduction](../benchmarks/results/disk/shared-open-wal-reads)
+
 ### Shared publication file and sync targets
 
 The shared dispatcher passes the exact native write, grouped sync, rename and directory sync targets to the adapter callbacks. Generated C inlines the dispatch. Native measurements comparing this refactor gave median paired ratios of 0.999× for write, 1.012× for checkpoint and 0.992× to 1.038× across four reopen workloads. Both builds use the same acknowledgement barriers. [Raw samples, driver and environment](../benchmarks/results/disk/shared-publication-effects)

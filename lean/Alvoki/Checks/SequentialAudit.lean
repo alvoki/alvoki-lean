@@ -92,6 +92,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DirectoryPublication.Image.step_valid
 #check_axioms Alvoki.Storage.DirectoryPublication.retry_preserves
 #check_axioms Alvoki.WAL.Boundary.decode_encode
+#check_axioms Alvoki.WAL.Boundary.withOpenWal_marked
 #check_axioms Alvoki.WAL.Boundary.select_encoded
 #check_axioms Alvoki.WAL.Boundary.select_size
 #check_axioms Alvoki.WAL.Boundary.select_shorter_after_trim
@@ -106,6 +107,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.select_chosen
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.recover_chosen
 #check_axioms Alvoki.WAL.Boundary.markedReopenPreflight_selected
+#check_axioms Alvoki.WAL.Boundary.markedReopenPreflight_missingWal
 #check_axioms Alvoki.WAL.Boundary.runMarkedReopen_preflight_error
 #check_axioms Alvoki.WAL.Boundary.ReopenRetry.runMarkedReopen_effect
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.markerBound_of_write_cut
@@ -125,6 +127,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.reopenPreparedWrite_refines
 #check_axioms Alvoki.WAL.Boundary.reopenAfterAcknowledgedWrites_refines
 #check_axioms Alvoki.WAL.Boundary.reopenSettledHistory_refines
+#check_axioms Alvoki.WAL.Boundary.reopenSettledHistory_completes
+#check_axioms Alvoki.Storage.CheckpointForRecovery.marked_reopen_metadata
 #check_axioms Alvoki.WAL.Boundary.commit_append_error
 #check_axioms Alvoki.WAL.Boundary.write_cut_selects_old_or_new
 #check_axioms Alvoki.WAL.Boundary.write_cut_active_bounds_marker

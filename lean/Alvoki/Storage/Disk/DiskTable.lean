@@ -263,34 +263,31 @@ private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTabl
   let checkpoint ← openCheckpoint dir
   let (checkpointTable, checkpointGeneration) := checkpoint.getD (.empty, 0)
   let walPath := dir.file .wal
-  let boundary ← (← readOptionalFile (dir.file .walBoundary)).mapM fun bytes =>
-    IO.ofExcept (WAL.Boundary.decode bytes)
-  let bytes ← match ← readOptionalFile walPath with
-    | some bytes => pure bytes
-    | none =>
+  WAL.Boundary.withOpenWal (readOptionalFile (dir.file .walBoundary)) (readOptionalFile walPath)
+    IO.ofExcept (fun boundary => do
       if checkpoint.isSome || boundary.isSome then
-        throw (IO.userError "installed checkpoint or boundary is missing its WAL")
+        throw (IO.userError WAL.Boundary.missingOpenWal)
       writeFlushed walPath ByteArray.empty
-      pure ByteArray.empty
-  let (selected, table) ← IO.ofExcept <| match boundary with
-    | some count => WAL.Boundary.recoverMarked checkpointTable count bytes
-    | none => do
-      let selected := (WAL.repairPrefix bytes).getD bytes
-      let table ← recoverSelected checkpointTable selected
-      return (selected, table)
-  -- Both paths sync the directory to settle the visible checkpoint and WAL marker,
-  -- including any rename reached by a prior process before its directory sync.
-  let table ← Publication.finishReopen bytes.size selected.size
-    (fun _ => atomicReplace dir .stagedWal .wal selected)
-    (fun _ => syncPaths #[walPath, dir.path]) table
-  -- Bootstrap an empty or legacy WAL only after its selected prefix is durable.
-  if boundary.isNone then
-    unless selected.size < UInt64.size do throw (IO.userError "WAL byte count is too large")
-    publishWalBoundary dir selected.size
-  let installed : Installed := { table, generation := checkpointGeneration, walBytes := selected.size }
-  -- ST.Ref.ptrEq distinguishes allocations. Keeping a separate cell lets a
-  -- stale handle retain its identity without retaining the database state.
-  return ⟨dir, lock, ← IO.mkRef (.ready installed), ← IO.mkRef ()⟩
+      pure ByteArray.empty) fun boundary bytes => do
+    let (selected, table) ← IO.ofExcept <| match boundary with
+      | some count => WAL.Boundary.recoverMarked checkpointTable count bytes
+      | none => do
+        let selected := (WAL.repairPrefix bytes).getD bytes
+        let table ← recoverSelected checkpointTable selected
+        return (selected, table)
+    -- Both paths sync the directory to settle the visible checkpoint and WAL marker,
+    -- including any rename reached by a prior process before its directory sync.
+    let table ← Publication.finishReopen bytes.size selected.size
+      (fun _ => atomicReplace dir .stagedWal .wal selected)
+      (fun _ => syncPaths #[walPath, dir.path]) table
+    -- Bootstrap an empty or legacy WAL only after its selected prefix is durable.
+    if boundary.isNone then
+      unless selected.size < UInt64.size do throw (IO.userError "WAL byte count is too large")
+      publishWalBoundary dir selected.size
+    let installed : Installed := { table, generation := checkpointGeneration, walBytes := selected.size }
+    -- ST.Ref.ptrEq distinguishes allocations. Keeping a separate cell lets a
+    -- stale handle retain its identity without retaining the database state.
+    return ⟨dir, lock, ← IO.mkRef (.ready installed), ← IO.mkRef ()⟩
 
 /-- Open a database in an existing directory and replay its durable WAL. -/
 def DiskTable.open (path : FilePath) : IO DiskTable := do

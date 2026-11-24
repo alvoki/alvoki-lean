@@ -442,39 +442,36 @@ structure MarkedPreflight where
 is the result of opening its manifest and run set, with an empty base on
 absence. The marker and WAL inputs include metadata and read errors. -/
 def markedReopenPreflight (checkpoint : Except String PackedTable)
-    (marker wal : Except String ByteArray) : Except String MarkedPreflight := do
+    (marker wal : Except String (Option ByteArray)) : Except String MarkedPreflight := do
   let base ← checkpoint
-  let count ← marker >>= decode
-  let contents ← wal
-  let (selected, table) ← recoverMarked base count contents
-  return ⟨contents, selected, table⟩
+  withOpenWal marker wal id (fun _ => .error missingOpenWal) fun boundary contents => do
+    let some count := boundary | throw "marked reopen is missing its WAL boundary"
+    let (selected, table) ← recoverMarked base count contents
+    return ⟨contents, selected, table⟩
 
 theorem markedReopenPreflight_selected {checkpoint : Except String PackedTable}
-    {marker wal : Except String ByteArray} {validated : MarkedPreflight}
+    {marker wal : Except String (Option ByteArray)} {validated : MarkedPreflight}
     (ready : markedReopenPreflight checkpoint marker wal = .ok validated) :
-    ∃ base markerBytes length, checkpoint = .ok base ∧ marker = .ok markerBytes ∧
-      wal = .ok validated.contents ∧ decode markerBytes = .ok length ∧
+    ∃ base markerBytes length, checkpoint = .ok base ∧ marker = .ok (some markerBytes) ∧
+      wal = .ok (some validated.contents) ∧ decode markerBytes = .ok length ∧
       select length validated.contents = .ok validated.selected ∧
       recoverSelected base validated.selected = .ok validated.table := by
   cases checkpoint with
   | error => contradiction
   | ok base =>
-    cases marker with
-    | error => contradiction
-    | ok markerBytes =>
-      change (do
-        let length ← decode markerBytes
-        let bytes ← wal
-        let (selected, table) ← recoverMarked base length bytes
-        pure (⟨bytes, selected, table⟩ : MarkedPreflight)) = .ok validated at ready
+    rcases marker with _ | (_ | markerBytes)
+    · contradiction
+    · rcases wal with _ | (_ | _) <;> contradiction
+    · dsimp only [markedReopenPreflight, Bind.bind, Except.bind] at ready
+      rw [withOpenWal_marked] at ready
       cases decoded : decode markerBytes with
       | error => rw [decoded] at ready; contradiction
       | ok length =>
         rw [decoded] at ready
-        cases wal with
-        | error => contradiction
-        | ok bytes =>
-          change (do
+        rcases wal with _ | (_ | bytes)
+        · contradiction
+        · contradiction
+        · change (do
             let (selected, table) ← recoverMarked base length bytes
             pure (⟨bytes, selected, table⟩ : MarkedPreflight)) = .ok validated at ready
           simp only [recoverMarked, bind_assoc, pure_bind] at ready
@@ -491,6 +488,15 @@ theorem markedReopenPreflight_selected {checkpoint : Except String PackedTable}
               rw [replayed] at ready
               cases Except.ok.inj ready
               exact ⟨base, markerBytes, length, rfl, rfl, rfl, decoded, accepted, replayed⟩
+
+/-- A missing WAL after a valid marker is an error, so marked reopen never
+creates a replacement WAL for a missing durable prefix. -/
+theorem markedReopenPreflight_missingWal (base : PackedTable) {marker : ByteArray}
+    {length : UInt64} (decoded : decode marker = .ok length) :
+    markedReopenPreflight (.ok base) (.ok (some marker)) (.ok none) = .error missingOpenWal := by
+  dsimp only [markedReopenPreflight, Bind.bind, Except.bind]
+  rw [withOpenWal_marked, decoded]
+  rfl
 
 /-- Interpret the shared reopen decision in a state-and-error monad. The
 `walAlreadySynced` fact may be used only when the caller knows the current
@@ -509,7 +515,7 @@ def runMarkedReopen (preflight : Except String MarkedPreflight)
       (fun _ => performAlignedSync walAlreadySynced aligned) validated.table
 
 theorem runMarkedReopen_preflight_error {checkpoint : Except String PackedTable}
-    {marker wal : Except String ByteArray} {message : String}
+    {marker wal : Except String (Option ByteArray)} {message : String}
     (failed : markedReopenPreflight checkpoint marker wal = .error message)
     (report : Publication.Step → RepairReport) (walAlreadySynced : Bool)
     (aligned : AlignedSyncReport) (image : ReopenImage) :
@@ -576,13 +582,13 @@ theorem ReopenRetry.runMarkedReopen_effect {initial before : ReopenImage}
           · exact .allowVisibleWal path
           · exact path
 
-/-- Successful marked WAL reads under the database lock return the visible
-marker or WAL bytes. Errors need not expose either value. -/
+/-- Successful optional reads under the database lock observe the visible
+bindings, including absence. A lookup or read error stays separate. -/
 structure MarkedWalReads (image : ReopenImage) where
-  marker : Except String ByteArray
-  wal : Except String ByteArray
-  markerVisible : ∀ bytes, marker = .ok bytes → image.directory.active.walBoundary = some bytes
-  walVisible : ∀ bytes, wal = .ok bytes → image.wal.active = some bytes
+  marker : Except String (Option ByteArray)
+  wal : Except String (Option ByteArray)
+  markerVisible : ∀ found, marker = .ok found → image.directory.active.walBoundary = found
+  walVisible : ∀ found, wal = .ok found → image.wal.active = found
 
 /-- Opening the checkpoint supplies its own observed result before recovery
 reads or repairs the WAL. -/
@@ -601,8 +607,8 @@ private theorem MarkedReopenReads.repair {before : ReopenImage}
   obtain ⟨_, marker, length, _, readMarker, readWal, decoded, accepted, _⟩ :=
     markedReopenPreflight_selected (checkpoint := reads.checkpoint) (marker := reads.marker)
       (wal := reads.wal) ready
-  exact ⟨length, ReopenImage.repairsTo_of_markerBound bound (reads.markerVisible marker readMarker)
-    (reads.walVisible validated.contents readWal) decoded accepted shorter⟩
+  exact ⟨length, ReopenImage.repairsTo_of_markerBound bound (reads.markerVisible _ readMarker)
+    (reads.walVisible _ readWal) decoded accepted shorter⟩
 
 private theorem MarkedReopenReads.retry_effect {initial before : ReopenImage}
     (reads : MarkedReopenReads before) (path : ReopenRetry initial before)
@@ -655,7 +661,7 @@ theorem MarkedReopenReads.success {before after : ReopenImage}
   obtain ⟨base, marker, length, checkpoint, markerRead, walRead, decoded, selected, replayed⟩ :=
     markedReopenPreflight_selected (checkpoint := reads.checkpoint) (marker := reads.marker)
       (wal := reads.wal) ready
-  have contents := reads.walVisible validated.contents walRead
+  have contents := reads.walVisible _ walRead
   have settled : after.wal.active = some validated.selected := by
     rw [walActive]
     split
@@ -664,7 +670,7 @@ theorem MarkedReopenReads.success {before after : ReopenImage}
       rw [select_unchanged selected aligned]
       exact contents
   exact ⟨base, marker, validated.contents, validated.selected, length,
-    checkpoint, reads.markerVisible marker markerRead, contents, decoded, selected, replayed,
+    checkpoint, reads.markerVisible _ markerRead, contents, decoded, selected, replayed,
     directory, settled, walChoices.trans (congrArg List.singleton settled)⟩
 
 /-- A finite sequence of observed marked reopen attempts and crashes. The

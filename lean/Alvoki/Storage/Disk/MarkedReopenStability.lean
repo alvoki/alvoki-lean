@@ -184,4 +184,52 @@ theorem reopenSettledHistory_refines {initial before after : ReopenImage}
       simpa only [agrees.committed, committed] using within)
     simpa only [refined.table] using agreesSymm.acquireAt_reads floor upper
 
+/-- Once the checkpoint loader and file reads succeed, an exact settled
+history replays successfully and takes the aligned durability path. This
+states progress under a successful sync report. -/
+theorem reopenSettledHistory_completes {initial before : ReopenImage}
+    {manifest : Option ByteArray} {covered pending : List WAL.Write}
+    (settled : initial.SettledFor manifest (covered ++ pending))
+    (fits : (WAL.encode (covered ++ pending)).size < UInt64.size)
+    (attempts : MarkedReopenAttempts initial before)
+    (reads : MarkedReopenReads before) {base : PackedTable} {marker contents : ByteArray}
+    (checkpointRead : reads.checkpoint = .ok base)
+    (markerRead : reads.marker = .ok (some marker))
+    (walRead : reads.wal = .ok (some contents))
+    (watermark : covered.length = base.committed.toNat)
+    (ordered : WAL.OrdinalsFrom 1 (covered ++ pending))
+    (report : Publication.Step → RepairReport) :
+    ∃ table, runMarkedReopen reads.preflight report false .success before =
+      .ok table before.syncDirectory := by
+  have exactHistory := exactHistory_after_attempts settled fits attempts
+  have markerEq : marker = encode (WAL.encode (covered ++ pending)).size.toUInt64 :=
+    Option.some.inj ((reads.markerVisible _ markerRead).symm.trans
+      (congrArg DirectoryPublication.Bindings.walBoundary exactHistory.1.activeValid))
+  have contentsEq : contents = WAL.encode (covered ++ pending) :=
+    Option.some.inj ((reads.walVisible _ walRead).symm.trans exactHistory.2.activeValid)
+  subst marker contents
+  let bytes := WAL.encode (covered ++ pending)
+  have selected : select bytes.size.toUInt64 bytes = .ok bytes := by
+    simpa [bytes] using select_encoded (covered ++ pending) ByteArray.empty fits
+  obtain ⟨table, replayed, _⟩ := recoverSelected_encoded_complete base covered pending ordered watermark
+  have recovered : recoverMarked base bytes.size.toUInt64 bytes = .ok (bytes, table) := by
+    unfold recoverMarked
+    rw [selected]
+    change (recoverSelected base bytes >>= fun loaded => Except.ok (bytes, loaded)) = _
+    rw [replayed]
+    rfl
+  have preflight : reads.preflight = .ok ⟨bytes, bytes, table⟩ := by
+    unfold MarkedReopenReads.preflight markedReopenPreflight
+    rw [checkpointRead]
+    change (withOpenWal reads.marker reads.wal id _ _) = _
+    rw [markerRead, withOpenWal_marked, decode_encode, walRead]
+    change (recoverMarked base bytes.size.toUInt64 bytes >>= fun (selected, loaded) =>
+      Except.ok (⟨bytes, selected, loaded⟩ : MarkedPreflight)) = _
+    rw [recovered]
+    rfl
+  refine ⟨table, ?_⟩
+  rw [preflight]
+  simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen, Nat.lt_irrefl, ↓reduceIte]
+  rfl
+
 end Alvoki.WAL.Boundary
