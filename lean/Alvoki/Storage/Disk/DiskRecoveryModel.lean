@@ -621,6 +621,45 @@ theorem ReopenImage.valid_of_writeCut {image : ReopenImage}
   exact ⟨survives, accept _ (List.mem_cons_self ..),
     fun binding possible => accept binding (List.mem_cons_of_mem _ possible)⟩
 
+/-- A selected marker and WAL binding after retries still expose the old
+history or the old history plus the submitted frame. The raw manifest bytes
+do not affect this selection. -/
+theorem selectWriteCutAfterReopenRetry {initial after : ReopenImage} {before : List WAL.Write} {event : WAL.Write}
+    {pair : DirectoryPublication.Bindings} {walBinding : Option ByteArray}
+    (path : ReopenRetry initial after)
+    (metadataChosen : pair ∈ after.directory.active :: after.directory.crashImages)
+    (walChosen : walBinding ∈ after.wal.active :: after.wal.crashImages)
+    (hasCrash : initial.wal.crashImages ≠ [])
+    (fits : (WAL.encode (before ++ [event])).size < UInt64.size)
+    (physical : ∀ binding ∈ initial.wal.active :: initial.wal.crashImages,
+      ∃ contents markerImage, binding = some contents ∧ WriteCut before event contents markerImage ∧
+        markerImage.active = initial.directory.active.walBoundary ∧
+        ∀ pair ∈ initial.directory.crashImages, pair.walBoundary ∈ markerImage.crashImages) :
+    ∃ marker contents events,
+      pair.walBoundary = some marker ∧ marker = encode (WAL.encode events).size.toUInt64 ∧
+      walBinding = some contents ∧ select (WAL.encode events).size.toUInt64 contents = .ok (WAL.encode events) ∧
+      (events = before ∨ events = before ++ [event]) := by
+  have initialChosen := path.chosen_pair_from_initial metadataChosen
+  have valid := ReopenImage.valid_of_writeCut hasCrash fits physical
+  obtain ⟨initialContents, markerImage, present, cut, visible, candidates⟩ :=
+    physical initial.wal.active (List.mem_cons_self ..)
+  have oldFits := Nat.lt_trans (encoded_history_grows before event) fits
+  obtain ⟨initialMarker, events, initialBound, encodedMarker, history, selected⟩ :=
+    write_cut_selects_old_or_new cut oldFits fits (marker_chosen_of_pair initialChosen visible candidates)
+  obtain ⟨markerBytes, walBytes, length, sameMarker, sameWal, decoded, accepted⟩ :=
+    valid.activeValid pair initialChosen
+  have markerMatches := Option.some.inj (sameMarker.symm.trans initialBound)
+  have walMatches := Option.some.inj (sameWal.symm.trans present)
+  subst markerBytes
+  subst walBytes
+  rw [decoded] at selected
+  have prefixEq := Except.ok.inj (accepted.symm.trans selected)
+  obtain ⟨marker, contents, bound, present, selectedAfter⟩ :=
+    ReopenImage.select_chosen (reopenRetry_valid valid path) metadataChosen walChosen
+  have markerEncoding := (Option.some.inj (bound.symm.trans initialBound)).trans encodedMarker
+  refine ⟨marker, contents, events, bound, markerEncoding, present, ?_, history⟩
+  simpa only [prefixEq, markerEncoding, decode_encode, Bind.bind, Except.bind] using selectedAfter
+
 /-- With a fixed matching checkpoint, a selected metadata pair after any
 modeled marked reopen retries recovers its original WAL prefix. The abstract
 suffix and retained snapshot reads follow from that selection. The caller

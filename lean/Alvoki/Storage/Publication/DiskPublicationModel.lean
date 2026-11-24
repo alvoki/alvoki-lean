@@ -105,7 +105,7 @@ theorem run_model_success (initial : Image) (bytes : ByteArray) :
     (run (Image.perform bytes)).run initial = some ((), .settled (some bytes)) := by
   rfl
 
-private theorem cut_preserves {acceptable : Option ByteArray → Prop} {initial : Image}
+theorem Image.execute_cut_valid {acceptable : Option ByteArray → Prop} {initial : Image}
     {bytes : ByteArray} (old : initial.Valid acceptable) (new : acceptable (some bytes))
     (cut : Nat) {after : Image} (ran : initial.execute bytes (steps.take cut) = some after) :
     after.Valid acceptable := by
@@ -149,7 +149,7 @@ theorem retry_preserves {mayReplace : Image → ByteArray → Prop}
     (old : initial.Valid acceptable) (path : Retry mayReplace initial after) : after.Valid acceptable := by
   induction path with
   | refl => exact old
-  | attempt _ chosen cut ran earlier => exact cut_preserves earlier (validReplacement _ _ earlier chosen) cut ran
+  | attempt _ chosen cut ran earlier => exact Image.execute_cut_valid earlier (validReplacement _ _ earlier chosen) cut ran
   | crash _ survives earlier => exact Image.settled_valid (earlier.crashValid _ survives)
 
 def choosesRepair (image : Image) (replacement : ByteArray) : Prop :=

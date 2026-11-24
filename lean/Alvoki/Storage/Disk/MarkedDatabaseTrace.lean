@@ -182,10 +182,7 @@ theorem ObservedMarkedState.Valid.pinnedReads {state : ObservedMarkedState} (val
       some (reference.table.range start stop pin.sequence) := by
   obtain ⟨_, _, represented⟩ := valid
   obtain ⟨model, refined, history⟩ := represented.live
-  have member : pin ∈ model.pins.active := refined.pins ▸ active
-  obtain ⟨lookup, range⟩ := history.reads replayed (model.pins.safe pin member)
-  exact ⟨fun key => by rw [PackedTable.lookup_refines refined, model.lookup_pinned member, lookup],
-    fun start stop => by rw [PackedTable.range_refines refined, model.range_pinned member, range]⟩
+  exact history.packedPinnedReads refined replayed active
 
 /-- Reconstruct the initial ready boundary from the actual successful result
 after any admitted empty-bootstrap attempts. The raw writer's history is

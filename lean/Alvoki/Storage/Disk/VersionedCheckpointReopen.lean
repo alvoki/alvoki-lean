@@ -22,6 +22,23 @@ private theorem Image.markedPair {image : Image} {before : ReopenImage}
   · obtain ⟨candidate, survives, rfl⟩ := List.mem_map.mp crash
     exact ⟨congrArg DirectoryPublication.Bindings.walBoundary settled.1, .inr survives⟩
 
+private theorem Image.markedReopenBound (image : Image) {before : ReopenImage}
+    {manifest : Option ByteArray} {history : List WAL.Write} (settled : before.SettledFor manifest history) :
+    MarkerBound (image.markedReopenImage before).directory := by
+  refine ⟨_, _, (image.markedPair settled (List.mem_cons_self ..)).1, WAL.Boundary.decode_encode _, ?_⟩
+  intro pair chosen
+  exact ⟨_, _, (image.markedPair settled chosen).1, WAL.Boundary.decode_encode _, Nat.le_refl _⟩
+
+/-- WAL reopen attempts can settle one of the publication's selectable raw
+manifest bindings. They cannot select a different manifest. -/
+theorem Image.markedReopenManifestChoice (image : Image) {before reopen : ReopenImage}
+    {manifest : Option ByteArray} {history : List WAL.Write} (settled : before.SettledFor manifest history)
+    (attempts : MarkedReopenAttempts (image.markedReopenImage before) reopen) :
+    image.manifest.active = reopen.directory.active.manifest ∨
+      reopen.directory.active.manifest ∈ image.manifest.crashImages := by
+  have path := attempts.toRetry (image.markedReopenBound settled)
+  exact (image.markedPair settled (path.chosen_pair_from_initial (List.mem_cons_self ..))).2
+
 /-- Versioned checkpoint retries followed by marked reopen attempts still
 select a checkpoint covered by the original WAL. Successful read reports
 then supply the exact old or new manifest and WAL to the shared open. -/
@@ -41,10 +58,7 @@ theorem VersionedRetry.markedReadInputs {initial published : Image}
       (chosen : pair ∈ lifted.directory.active :: lifted.directory.crashImages) :
       pair.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) :=
     (published.markedPair settled chosen).1
-  have bound : MarkerBound lifted.directory :=
-    ⟨_, _, markers _ (List.mem_cons_self ..), WAL.Boundary.decode_encode _, fun pair chosen =>
-      ⟨_, _, markers pair chosen, WAL.Boundary.decode_encode _, Nat.le_refl _⟩⟩
-  have path := attempts.toRetry bound
+  have path := attempts.toRetry (published.markedReopenBound settled)
   obtain ⟨marker, manifestChoice⟩ := published.markedPair settled
     (path.chosen_pair_from_initial (List.mem_cons_self ..))
   have originalWal : lifted.wal.Valid (· = some (WAL.encode history)) := by

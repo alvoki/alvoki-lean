@@ -95,6 +95,40 @@ theorem RepresentsWalHistory.reads {table reference : SnapshotTable UInt64}
   intro key
   rw [Table.lookup_eq_visibleEntry, Table.lookup_eq_visibleEntry, visible snapshot retained key]
 
+theorem RepresentsWalHistory.packedPinnedReads {table : PackedTable} {model reference : SnapshotTable UInt64}
+    {history : List WAL.Write} (represented : RepresentsWalHistory history model) (refines : table.Refines model)
+    (replayed : SnapshotWalReplay .empty history reference) {pin : SnapshotPin}
+    (active : pin ∈ table.pins.active) :
+    (∀ key, table.lookup pin.handle key = some (reference.table.lookup key pin.sequence)) ∧
+    ∀ start stop, table.range pin.handle start stop = some (reference.table.range start stop pin.sequence) := by
+  have member : pin ∈ model.pins.active := refines.pins ▸ active
+  obtain ⟨lookup, range⟩ := represented.reads replayed (model.pins.safe pin member)
+  exact ⟨fun key => by rw [PackedTable.lookup_refines refines, model.lookup_pinned member, lookup],
+    fun start stop => by rw [PackedTable.range_refines refines, model.range_pinned member, range]⟩
+
+/-- Pins change the registry while preserving the represented table history. -/
+theorem RepresentsWalHistory.acquireAt {before after : PackedTable} {model : SnapshotTable UInt64}
+    {history : List WAL.Write} {snapshot : UInt64} {pin : SnapshotPin}
+    (represented : RepresentsWalHistory history model) (refines : before.Refines model)
+    (bounded : before.RowBounds) (acquired : before.acquireAt snapshot = some (pin, after)) :
+    ∃ result, after.Refines result ∧ RepresentsWalHistory history result := by
+  obtain ⟨result, selected, refined⟩ := PackedTable.acquireAt_refines refines acquired
+  refine ⟨result, refined, ?_⟩
+  unfold SnapshotTable.acquireAt at selected
+  split at selected
+  · contradiction
+  · rename_i accepted
+    cases selected
+    obtain ⟨_, _, _, _, _, _, floor⟩ := SnapshotPins.acquire_spec accepted
+    exact represented.preserve rfl (UInt64.le_of_eq floor.symm)
+      (refined.rowsBounded (bounded.acquireAt acquired)) (fun _ _ _ => rfl)
+
+theorem RepresentsWalHistory.release {model : SnapshotTable UInt64} {history : List WAL.Write}
+    (represented : RepresentsWalHistory history model) (handle : SnapshotHandle) :
+    RepresentsWalHistory history (model.release handle) := by
+  obtain ⟨reference, replayed, clock, bounded, referenceBounded, visible⟩ := represented
+  exact ⟨reference, replayed, clock, bounded, referenceBounded, visible⟩
+
 /-- Advancing the live floor keeps the clock and rows and narrows the
 snapshots for which the table must agree with the same WAL. -/
 theorem RepresentsWalHistory.advanceFloor {before after : PackedTable}

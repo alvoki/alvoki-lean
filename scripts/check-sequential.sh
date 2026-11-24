@@ -88,6 +88,10 @@ lake env leanchecker Alvoki.Storage.Disk.LockedVersionedCheckpointRead
 lake env leanchecker Alvoki.Storage.Disk.VersionedCheckpointReopen
 lake env leanchecker Alvoki.Storage.Disk.FirstVersionedCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.VersionedReadyWriter
+lake env leanchecker Alvoki.Storage.Disk.VersionedReadyMaintenance
+lake env leanchecker Alvoki.Storage.Disk.VersionedUncertainWrite
+lake env leanchecker Alvoki.Storage.Disk.IntegrityBootstrap
+lake env leanchecker Alvoki.Storage.Disk.StrictCheckpointReopen
 lake env leanchecker Alvoki.Storage.Disk.RetainedWalSuffix
 lake env leanchecker Alvoki.Storage.Disk.RetainedWalBoundary
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentFileName

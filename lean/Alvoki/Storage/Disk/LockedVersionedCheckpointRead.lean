@@ -119,4 +119,22 @@ theorem VersionedCheckpointFileReads.ofLockedPaths_absent
   simp [VersionedCheckpointFileReads.result, readVersionedCheckpoint, read, Bind.bind, Except.bind, Pure.pure,
     Except.pure]
 
+/-- With an absent or accepted v2 manifest, the same reported reads give
+the exact checkpoint result under the strict native reader. -/
+theorem VersionedCheckpointFileReads.integrityResult_eq
+    {durable : CheckpointPublication.RunFiles} {binding : Option ByteArray}
+    (reads : VersionedCheckpointFileReads durable binding)
+    (manifestRead : reads.readManifest = .ok binding)
+    (integrity : ∀ bytes, binding = some bytes →
+      ∃ manifest, IntegrityCheckpoint.decode bytes = .ok manifest) :
+    readIntegrityCheckpoint reads.readManifest reads.readRun id = reads.result := by
+  change readIntegrityCheckpoint reads.readManifest reads.readRun id =
+    readVersionedCheckpoint reads.readManifest reads.readRun id
+  rw [manifestRead]
+  cases binding with
+  | none => exact readIntegrityCheckpoint_absent (m := Except String) reads.readRun id
+  | some bytes =>
+    obtain ⟨_, decoded⟩ := integrity bytes rfl
+    exact readIntegrityCheckpoint_integrity (m := Except String) reads.readRun id (fun _ => rfl) decoded
+
 end Alvoki.Storage

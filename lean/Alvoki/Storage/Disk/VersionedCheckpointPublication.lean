@@ -123,6 +123,35 @@ private theorem keeps_versioned_acceptance {before written : Image} {walSequence
     exact ⟨selected, decoded, header, files, canonical, good, covered, count,
       fun index inside => (preserved _ different index).trans (names index inside)⟩
 
+/-- Run creation does not change the manifest. Its later replacement
+preserves any predicate shared by the old bindings and the proposed bytes. -/
+theorem Image.executeVersioned_manifest_valid {initial after : Image} {next : VersionedRunSet}
+    {acceptable : Option ByteArray → Prop} (old : initial.manifest.Valid acceptable)
+    (replacement : acceptable (some next.manifest.encode)) (cut : Nat)
+    (ran : initial.executeVersioned next cut = some after) : after.manifest.Valid acceptable := by
+  let barrier := runBarrier next.files.length
+  change ((initial.execute next.runSet (barrier.take cut)).bind fun written =>
+    (written.manifest.execute next.manifest.encode (Publication.steps.take (cut - barrier.length))).bind
+      fun manifest => some { written with manifest }) = some after at ran
+  obtain ⟨written, ranRuns, ranManifest⟩ := Option.bind_eq_some_iff.mp ran
+  obtain ⟨manifest, replaced, same⟩ := Option.bind_eq_some_iff.mp ranManifest
+  cases same
+  have previous : written.manifest = initial.manifest := by
+    by_cases early : cut < barrier.length
+    · have beforeRuns : cut ≤ (runSteps next.files.length).length := by
+        simp [barrier, runBarrier] at early
+        omega
+      have onlyRuns : barrier.take cut = (runSteps next.files.length).take cut := by
+        change ((runSteps next.files.length ++ [Step.syncRunsDirectory]).take cut) = _
+        rw [List.take_append, Nat.sub_eq_zero_of_le beforeRuns, List.take_zero, List.append_nil]
+      rw [onlyRuns] at ranRuns
+      exact congrArg Image.manifest (Image.execute_run_cut_unchanged ranRuns)
+    · rw [List.take_of_length_le (Nat.le_of_not_lt early)] at ranRuns
+      obtain ⟨complete, applied, manifestEq, _⟩ := checkpoint_runs_complete initial next.runSet
+      have sameImage := Option.some.inj (applied.symm.trans ranRuns)
+      exact sameImage ▸ manifestEq
+  exact Publication.Image.execute_cut_valid (previous.symm ▸ old) replacement _ replaced
+
 /-- Every cut of the shared publication schedule preserves recoverability
 for both versions. The new files are durable before the manifest suffix can
 select them, and no previously selectable manifest uses the new generation. -/

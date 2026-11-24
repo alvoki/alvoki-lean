@@ -3,6 +3,17 @@ import Alvoki.Storage.Disk.FirstVersionedCheckpoint
 namespace Alvoki.WAL.Boundary
 open Storage CheckpointPublication Manifest
 
+/-- A visible checkpoint is accepted by the strict v2 decoder. An absent
+manifest is admitted for a database before its first checkpoint. -/
+def ObservedMarkedState.HasIntegrityManifest (state : ObservedMarkedState) : Prop :=
+  ∀ bytes, state.writer.image.directory.active.manifest = some bytes →
+    ∃ selected, IntegrityCheckpoint.decode bytes = .ok selected
+
+theorem ObservedMarkedState.HasIntegrityManifest.ofSameManifest {before after : ObservedMarkedState}
+    (known : before.HasIntegrityManifest)
+    (same : after.writer.image.directory.active.manifest = before.writer.image.directory.active.manifest) :
+    after.HasIntegrityManifest := fun bytes present => known bytes (same.symm.trans present)
+
 /-- The ready writer's selected raw manifest binds exact ordered bytes in its
 kept run map. Its live table represents the whole WAL, and the selected
 checkpoint represents the prefix covered by its own watermark. -/
@@ -71,6 +82,30 @@ private theorem CheckpointRepresentsPrefix.append {history : List WAL.Write} {he
   refine ⟨checkpoint, model, written, refined, ?_⟩
   rwa [List.take_append_of_le_length within]
 
+/-- Run bindings do not change when a new WAL suffix is retained. -/
+theorem _root_.Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_extend_history
+    {image : Image} {binding : Option ByteArray} {history suffix : List WAL.Write}
+    (accepted : image.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history) binding)
+    (fits : (WAL.encode (history ++ suffix)).size < UInt64.size) :
+    image.AcceptsVersioned (history ++ suffix).length.toUInt64 (CheckpointRepresentsPrefix (history ++ suffix))
+      binding := by
+  cases binding with
+  | none => trivial
+  | some bytes =>
+    obtain ⟨selected, decoded, header, files, canonical, ⟨witness, checked⟩, covered, count, durable⟩ := accepted
+    have afterFits : (history ++ suffix).length < UInt64.size := by
+      rw [WAL.encode_size] at fits
+      simp [WAL.frameSize] at fits
+      rw [List.length_append]
+      omega
+    have grows : history.length ≤ (history ++ suffix).length := by simp
+    have beforeFits : history.length < UInt64.size := Nat.lt_of_le_of_lt grows afterFits
+    have monotone : history.length.toUInt64 ≤ (history ++ suffix).length.toUInt64 := by
+      rw [UInt64.le_iff_toNat_le, UInt64.toNat_ofNat_of_lt' beforeFits, UInt64.toNat_ofNat_of_lt' afterFits]
+      exact grows
+    exact ⟨selected, decoded, header, files, canonical, ⟨witness.append suffix, checked⟩,
+      UInt64.le_trans covered monotone, count, durable⟩
+
 /-- Acknowledged writes extend the live WAL and its table without changing
 the selected manifest, its run bytes, or its covered prefix. -/
 theorem ObservedMarkedState.VersionedReady.acknowledgedWrites {state : ObservedMarkedState}
@@ -88,21 +123,10 @@ theorem ObservedMarkedState.VersionedReady.acknowledgedWrites {state : ObservedM
   · change after.publicationInput.AcceptsVersioned writer.history.length.toUInt64
       (CheckpointRepresentsPrefix writer.history) writer.image.directory.active.manifest
     rw [sameManifest, extended]
-    have monotone : state.writer.history.length.toUInt64 ≤ (state.writer.history ++ submitted).length.toUInt64 := by
-      rw [← extended]
-      have beforeCount : state.writer.history.length.toUInt64 = state.writer.table.committed := by
-        rw [valid.ready.count]; simp
-      have afterCount : writer.history.length.toUInt64 = writer.table.committed := by rw [ready.count]; simp
-      rw [beforeCount, afterCount, UInt64.le_iff_toNat_le, ← valid.ready.count, ← ready.count, extended]
-      simp
-    have accepted := valid.selected
-    cases binding : state.writer.image.directory.active.manifest with
-    | none => trivial
-    | some bytes =>
-      rw [binding] at accepted
-      obtain ⟨selected, decoded, header, files, canonical, ⟨witness, checked⟩, covered, count, durable⟩ := accepted
-      exact ⟨selected, decoded, header, files, canonical, ⟨witness.append submitted, checked⟩,
-        UInt64.le_trans covered monotone, count, durable⟩
+    have fits : (WAL.encode (state.writer.history ++ submitted)).size < UInt64.size := by
+      rw [← extended, ← ready.length]
+      exact ready.fits
+    exact state.publicationInput.acceptsVersioned_extend_history valid.selected fits
   · change ((writer.image.directory.active.manifest.mapM fun bytes =>
       (VersionedCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
         .ok state.generation
@@ -203,5 +227,62 @@ theorem CheckpointPreparation.succeededFromVersionedReady {state : ObservedMarke
       prepared.decodeVersionedManifest floor
     simp only [Option.mapM, decoded, Functor.map, Except.map, Option.getD]
     rfl
+
+private theorem CheckpointPreparation.integrityPlanBinding {state : ObservedMarkedState}
+    (prepared : CheckpointPreparation state) (valid : state.VersionedReady) :
+    ∃ manifest, IntegrityCheckpoint.decode (VersionedRunSet.integrity prepared.runs).manifest.encode =
+      .ok manifest := by
+  obtain ⟨model, refined, represented⟩ := valid.live
+  obtain ⟨floor, _, _, _⟩ := checkpointPublicationWitness valid.ready prepared.flushed refined represented
+    prepared.runCountFits prepared.runs.header.generation
+  exact ⟨_, VersionedCheckpoint.decoded_case (prepared.decodeVersionedManifest floor)⟩
+
+/-- Every raw manifest still selectable after the actual report is absent
+or accepted by the strict v2 decoder. -/
+theorem CheckpointPreparation.reportedIntegrityBindings {state : ObservedMarkedState}
+    (prepared : CheckpointPreparation state) (valid : state.VersionedReady)
+    (integrity : state.HasIntegrityManifest) {report : Step → StepReport}
+    {result : EStateM.Result Unit Image Unit}
+    (reported : state.publicationInput.runVersionedWithReports (.integrity prepared.runs) report = some result) :
+    match result with
+    | .ok _ after | .error _ after => after.manifest.Valid (fun binding =>
+        ∀ bytes, binding = some bytes → ∃ manifest, IntegrityCheckpoint.decode bytes = .ok manifest) := by
+  let accepted := fun binding : Option ByteArray =>
+    ∀ bytes, binding = some bytes → ∃ manifest, IntegrityCheckpoint.decode bytes = .ok manifest
+  have prior : state.publicationInput.manifest.Valid accepted := by
+    refine ⟨valid.validPublicationInput.hasCrashImage, integrity, ?_⟩
+    intro candidate possible
+    rw [valid.crashChoice] at possible
+    exact (List.mem_singleton.mp possible).symm ▸ integrity
+  have replacement : accepted (some (VersionedRunSet.integrity prepared.runs).manifest.encode) := by
+    intro bytes visible
+    rw [← Option.some.inj visible]
+    exact prepared.integrityPlanBinding valid
+  have actual := state.publicationInput.runVersionedWithReports_outcome (.integrity prepared.runs) report reported
+  cases result with
+  | ok value after => exact Image.executeVersioned_manifest_valid prior replacement _ actual
+  | error failure after =>
+    obtain ⟨cut, ran⟩ := actual
+    exact Image.executeVersioned_manifest_valid prior replacement cut ran
+
+/-- A successful versioned publication uses an integrity manifest whose
+exact bytes are recognized by the strict reader. -/
+theorem CheckpointPreparation.succeededIntegrityManifest {state : ObservedMarkedState}
+    (prepared : CheckpointPreparation state) (valid : state.VersionedReady)
+    {report : Step → StepReport} {published : Image}
+    (reported : state.publicationInput.runVersionedWithReports (.integrity prepared.runs) report =
+      some (.ok () published)) :
+    (prepared.installed published).HasIntegrityManifest := by
+  let plan := VersionedRunSet.integrity prepared.runs
+  have actual := state.publicationInput.runVersionedWithReports_outcome plan report reported
+  obtain ⟨after, complete, manifest, _, _⟩ := checkpointVersioned_complete state.publicationInput plan
+  have same := Option.some.inj (complete.symm.trans actual)
+  subst after
+  intro bytes observed
+  change published.manifest.active = some bytes at observed
+  rw [manifest] at observed
+  have binding : plan.manifest.encode = bytes := Option.some.inj observed
+  subst bytes
+  exact prepared.integrityPlanBinding valid
 
 end Alvoki.WAL.Boundary

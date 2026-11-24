@@ -49,6 +49,69 @@ private theorem alignedSettledFor {before : ReopenImage} {history : List WAL.Wri
     DirectoryPublication.Bindings) = ⟨_, _⟩
   rw [visible, reads.markerVisible _ markerRead]
 
+/-- A checked versioned checkpoint and the exact selected WAL bytes load
+and replay independently of the durability branch used to settle them. -/
+theorem _root_.Alvoki.Storage.VersionedCheckpointFileReads.replays_selected
+    {image : CheckpointPublication.Image} {bytes : ByteArray} {selected : VersionedCheckpoint}
+    {history : List WAL.Write}
+    (reads : VersionedCheckpointFileReads image.durable (some bytes))
+    (decoded : VersionedCheckpoint.decode bytes = .ok selected)
+    (accepted : image.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history) (some bytes))
+    (manifestRead : reads.readManifest = .ok (some bytes))
+    (runReads : ∀ index, index < selected.header.runCount.toNat →
+      ∃ payload, reads.readRun selected.header.generation index = .ok payload)
+    (fits : (WAL.encode history).size < UInt64.size) (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ files base table,
+      (List.range selected.header.runCount.toNat).mapM
+        (image.durable selected.header.generation) = some files ∧
+      selected.ValidatesFiles files ∧ loadRunSet selected.header files = .ok base ∧
+      reads.result = .ok (some (base, selected.header.generation)) ∧
+      replay base (history.drop selected.header.committed.toNat) = .ok table ∧
+      recoverSelected base (WAL.encode history) = .ok table ∧
+      table.committed.toNat = history.length ∧ table.RowBounds ∧
+      ∃ model, table.Refines model ∧ RepresentsWalHistory history model ∧ table.pins.active = [] := by
+  obtain ⟨files, durable, ⟨checkpoint, baseModel, written, baseRefines, baseHistory⟩, validated, covered⟩ :=
+    image.acceptsVersioned_runs accepted decoded
+  have canonical := Manifest.decode_encode selected.header (VersionedCheckpoint.decoded_floor decoded)
+  have watermark := CheckpointForRecovery.headerWatermark written canonical
+  obtain ⟨base, structural, same⟩ := written.loads
+  change (Manifest.decode (Manifest.encode selected.header) >>= fun header => loadRunSet header files) =
+    .ok base at structural
+  rw [canonical] at structural
+  have loaded := reads.completes_selected manifestRead decoded runReads durable validated structural
+  have historyFits : history.length < UInt64.size := by
+    rw [WAL.encode_size] at fits
+    simp [WAL.frameSize] at fits
+    omega
+  have within : selected.header.committed.toNat ≤ history.length := by
+    simpa only [UInt64.toNat_ofNat_of_lt' historyFits] using UInt64.le_iff_toNat_le.mp covered
+  let prefixLength := selected.header.committed.toNat
+  let coveredPrefix := history.take prefixLength
+  let suffix := history.drop prefixLength
+  have split : coveredPrefix ++ suffix = history := List.take_append_drop ..
+  have clock : coveredPrefix.length = base.committed.toNat := by
+    simp [coveredPrefix, prefixLength, same.committed, ← watermark, Nat.min_eq_left within]
+  obtain ⟨table, replayed, count⟩ :=
+    recoverSelected_encoded_complete base coveredPrefix suffix (split.symm ▸ ordered) clock
+  have exactReplay : replay base suffix = .ok table := by
+    rw [← recoverSelected_encoded base coveredPrefix suffix (split.symm ▸ ordered) clock]
+    exact replayed
+  rw [split] at replayed
+  have total : table.committed.toNat = history.length := by
+    rwa [← List.length_append, split] at count
+  obtain ⟨abstract, model, applied, refined, sameTable, sameClock, sameFloor, fresh⟩ :=
+    replay_refines_recoveredPins same (loadRunSet_clearsPins structural) baseRefines exactReplay
+  have abstractHistory : RepresentsWalHistory history abstract := by
+    rw [← split]
+    change RepresentsWalHistory (history.take selected.header.committed.toNat ++ suffix) abstract
+    rw [watermark]
+    exact baseHistory.append applied
+  have bounded := replay_rowBounds (same.rowBounds written.rowBounds) exactReplay
+  have represented := abstractHistory.preserve sameClock (UInt64.le_of_eq sameFloor.symm)
+    (refined.rowsBounded bounded) (fun snapshot _ key => by rw [sameTable])
+  exact ⟨files, base, table, durable, validated, structural, loaded, exactReplay, replayed, total, bounded,
+    model, refined, represented, by rw [refined.pins, fresh]⟩
+
 /-- A marked open with a valid selected versioned checkpoint loads its runs
 and replays precisely the suffix above the selected watermark. Success of
 the indicated reads and aligned durability operation suffices for recovery
@@ -79,49 +142,12 @@ theorem VersionedCheckpointFileReads.completes_marked
       before.syncDirectory.SettledFor (some bytes) history ∧ table.committed.toNat = history.length ∧
       table.RowBounds ∧
       ∃ model, table.Refines model ∧ RepresentsWalHistory history model ∧ table.pins.active = [] := by
-  obtain ⟨files, durable, ⟨checkpoint, baseModel, written, baseRefines, baseHistory⟩, validated, covered⟩ :=
-    image.acceptsVersioned_runs accepted decoded
-  have canonical := Manifest.decode_encode selected.header (VersionedCheckpoint.decoded_floor decoded)
-  have watermark := CheckpointForRecovery.headerWatermark written canonical
-  obtain ⟨base, structural, same⟩ := written.loads
-  change (Manifest.decode (Manifest.encode selected.header) >>= fun header => loadRunSet header files) =
-    .ok base at structural
-  rw [canonical] at structural
-  have loaded := reads.completes_selected manifestRead decoded runReads durable validated structural
-  have historyFits : history.length < UInt64.size := by
-    rw [WAL.encode_size] at fits
-    simp [WAL.frameSize] at fits
-    omega
-  have within : selected.header.committed.toNat ≤ history.length := by
-    simpa only [UInt64.toNat_ofNat_of_lt' historyFits] using UInt64.le_iff_toNat_le.mp covered
-  let prefixLength := selected.header.committed.toNat
-  let coveredPrefix := history.take prefixLength
-  let suffix := history.drop prefixLength
-  have split : coveredPrefix ++ suffix = history := List.take_append_drop ..
-  have clock : coveredPrefix.length = base.committed.toNat := by
-    simp [coveredPrefix, prefixLength, same.committed, ← watermark, Nat.min_eq_left within]
-  obtain ⟨table, replayed, count⟩ :=
-    recoverSelected_encoded_complete base coveredPrefix suffix (split.symm ▸ ordered) clock
-  have exactReplay : replay base suffix = .ok table := by
-    rw [← recoverSelected_encoded base coveredPrefix suffix (split.symm ▸ ordered) clock]
-    exact replayed
-  rw [split] at replayed
+  obtain ⟨files, base, table, durable, validated, structural, loaded, exactReplay, replayed, total, bounded,
+    model, refined, represented, fresh⟩ := reads.replays_selected decoded accepted manifestRead runReads fits ordered
   have installed := runSharedMarkedOpen_exactAligned loaded walReads markerRead walRead fits replayed report
   have settled := alignedSettledFor visible walReads markerRead walRead
-  have total : table.committed.toNat = history.length := by
-    rwa [← List.length_append, split] at count
-  obtain ⟨abstract, model, applied, refined, sameTable, sameClock, sameFloor, fresh⟩ :=
-    replay_refines_recoveredPins same (loadRunSet_clearsPins structural) baseRefines exactReplay
-  have abstractHistory : RepresentsWalHistory history abstract := by
-    rw [← split]
-    change RepresentsWalHistory (history.take selected.header.committed.toNat ++ suffix) abstract
-    rw [watermark]
-    exact baseHistory.append applied
-  have bounded := replay_rowBounds (same.rowBounds written.rowBounds) exactReplay
-  have represented := abstractHistory.preserve sameClock (UInt64.le_of_eq sameFloor.symm)
-    (refined.rowsBounded bounded) (fun snapshot _ key => by rw [sameTable])
   exact ⟨files, base, table, durable, validated, structural, loaded, exactReplay, installed, settled, total, bounded,
-    model, refined, represented, by rw [refined.pins, fresh]⟩
+    model, refined, represented, fresh⟩
 
 /-- If the first checkpoint was discarded, an absent manifest lets the
 same marked open replay the entire WAL from the empty table. -/
@@ -150,5 +176,43 @@ theorem VersionedCheckpointFileReads.completes_marked_absent
   exact ⟨table, model, applied, installed, alignedSettledFor visible walReads markerRead walRead,
     replay_rowBounds PackedTable.empty_rowBounds applied, refined,
     List.nil_append history ▸ RepresentsWalHistory.empty.append abstract, by rw [replay_pins applied]; rfl⟩
+
+/-- The selected binding determines the base and its installed generation.
+This also covers a writer that has yet to publish a checkpoint. -/
+theorem _root_.Alvoki.Storage.VersionedCheckpointFileReads.replays_history
+    {image : CheckpointPublication.Image} {binding : Option ByteArray} {history : List WAL.Write}
+    (reads : VersionedCheckpointFileReads image.durable binding)
+    (accepted : image.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history) binding)
+    (manifestRead : reads.readManifest = .ok binding)
+    (runReads : ∀ bytes selected, binding = some bytes → VersionedCheckpoint.decode bytes = .ok selected →
+      ∀ index, index < selected.header.runCount.toNat →
+        ∃ payload, reads.readRun selected.header.generation index = .ok payload)
+    (fits : (WAL.encode history).size < UInt64.size) (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ loaded table model,
+      reads.result = .ok loaded ∧
+      ((binding.mapM fun bytes => (VersionedCheckpoint.decode bytes).map (·.header.generation)).map
+        (·.getD 0) : Except String UInt64) = .ok (loaded.getD (.empty, 0)).2 ∧
+      recoverSelected (loaded.getD (.empty, 0)).1 (WAL.encode history) = .ok table ∧
+      table.RowBounds ∧ table.Refines model ∧ RepresentsWalHistory history model ∧ table.pins.active = [] := by
+  cases binding with
+  | none =>
+    have loaded : reads.result = .ok none := by
+      change readVersionedCheckpoint reads.readManifest reads.readRun id = _
+      rw [manifestRead]
+      exact readVersionedCheckpoint_absent (m := Except String) reads.readRun id
+    obtain ⟨table, applied, _⟩ := replay_ordinals_complete .empty history ordered
+    have recovered : recoverSelected .empty (WAL.encode history) = .ok table := by
+      simpa using (recoverSelected_encoded .empty [] history ordered rfl).trans applied
+    obtain ⟨model, abstract, refined⟩ := replay_refines PackedTable.empty_refines applied
+    exact ⟨none, table, model, loaded, rfl, recovered, replay_rowBounds PackedTable.empty_rowBounds applied,
+      refined, List.nil_append history ▸ RepresentsWalHistory.empty.append abstract,
+      by rw [replay_pins applied]; rfl⟩
+  | some bytes =>
+    have ⟨selected, decoded, _⟩ := accepted
+    obtain ⟨_, base, table, _, _, _, loaded, _, recovered, _, bounded, model, refined, represented, pins⟩ :=
+      reads.replays_selected decoded accepted manifestRead (runReads bytes selected rfl decoded) fits ordered
+    refine ⟨some (base, selected.header.generation), table, model, loaded, ?_, recovered, bounded, refined,
+      represented, pins⟩
+    simp [Option.mapM, decoded, Functor.map, Except.map]
 
 end Alvoki.WAL.Boundary

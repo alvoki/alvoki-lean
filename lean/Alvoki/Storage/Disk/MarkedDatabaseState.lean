@@ -80,25 +80,14 @@ theorem acquireAt {state : MarkedDatabaseState} {table : PackedTable} {snapshot 
     (acquired : state.writer.table.acquireAt snapshot = some (pin, table)) :
     (state.withTable table).Valid := by
   obtain ⟨model, refined, represented⟩ := valid.live
-  obtain ⟨next, selected, nextRefined⟩ := PackedTable.acquireAt_refines refined acquired
-  have bounded := valid.ready.rowBounds.acquireAt acquired
-  refine valid.withTable bounded nextRefined ?_
-  unfold SnapshotTable.acquireAt at selected
-  split at selected
-  · contradiction
-  · rename_i accepted
-    cases selected
-    obtain ⟨_, _, _, _, _, _, floor⟩ := SnapshotPins.acquire_spec accepted
-    exact represented.preserve rfl (UInt64.le_of_eq floor.symm)
-      (nextRefined.rowsBounded bounded) (fun _ _ _ => rfl)
+  obtain ⟨_, nextRefined, nextHistory⟩ := represented.acquireAt refined valid.ready.rowBounds acquired
+  exact valid.withTable (valid.ready.rowBounds.acquireAt acquired) nextRefined nextHistory
 
 theorem release {state : MarkedDatabaseState} (valid : state.Valid) (handle : SnapshotHandle) :
     (state.withTable (state.writer.table.release handle)).Valid := by
   obtain ⟨model, refined, represented⟩ := valid.live
-  have nextRefined := PackedTable.release_refines refined handle
-  have bounded := valid.ready.rowBounds.release handle
-  exact valid.withTable bounded nextRefined (represented.preserve rfl (UInt64.le_refl _)
-    (nextRefined.rowsBounded bounded) (fun _ _ _ => rfl))
+  exact valid.withTable (valid.ready.rowBounds.release handle) (PackedTable.release_refines refined handle)
+    (represented.release handle)
 
 /-- The next writer is the actual successful reopen. The old history is
 extended in order and the pin registry starts with no active pins. -/
