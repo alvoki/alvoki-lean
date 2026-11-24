@@ -14,7 +14,9 @@ import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
 import Alvoki.Storage.Disk.SegmentedKeeperSyncBeforeBarrier
 import Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
 import Alvoki.Storage.Disk.SegmentedCollectionBarrierError
+import Alvoki.Storage.Disk.SegmentedCollectionKeeperError
 import Alvoki.Storage.Disk.WalGroupSyncSchedule
+import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
@@ -857,6 +859,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CollectionBarrierErrorEffect.reaches
 #check_axioms Alvoki.Storage.DiskSession.CollectionBarrierErrorEffect.keepsVisible
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.errorAtCollectionBarrier
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.errorAtCollectionKeeper
 #check_axioms Alvoki.Storage.DiskSession.PendingCollectionBarrierFailure.returned
 #check_axioms Alvoki.Storage.DiskSession.PendingCollectionBarrierFailure.namespaceState
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.cleanReopenRetained
@@ -920,6 +923,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.countCheckpointRunBytes_bound
 #check_axioms Alvoki.Storage.SyncPathGroup.run_pair
 #check_axioms Alvoki.Storage.SyncPathGroup.failedWalPublication
+#check_axioms Alvoki.Storage.SyncHandleRouting.Cache.resolve_owned
+#check_axioms Alvoki.Storage.SyncHandleRouting.pendingSync
+#check_axioms Alvoki.Storage.SyncHandleRouting.groupedActivePending
+#check_axioms Alvoki.Storage.RepresentsWalHistory.retainRunVersions
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop

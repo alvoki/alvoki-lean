@@ -209,7 +209,7 @@ theorem RepresentsWalHistory.compact {before after : PackedTable}
   rw [Table.compactAt_winner changed retained key]
 
 /-- Retaining versions within one run changes the represented run history
-while preserving the committed clock and every supported winning put. -/
+while preserving the committed clock and every supported visible entry. -/
 theorem RepresentsWalHistory.retainRunVersions {before after : PackedTable}
     {model : SnapshotTable UInt64} {history : List WAL.Write} {index : Nat}
     (represented : RepresentsWalHistory history model) (refines : before.Refines model)
