@@ -5,6 +5,24 @@ namespace Alvoki.Storage.DiskSession
 
 open Sequential (SnapshotHandle SnapshotPin)
 
+/-- Interpret snapshot acquisition with the reached ready cell and its
+session identity from the reference allocation report. -/
+def SegmentedSession.runAcquireAt (snapshot : UInt64) :
+    EStateM IO.Error SegmentedSession (Option (Nat × SnapshotPin)) := fun session =>
+  acquireSnapshotWith (m := EStateM IO.Error SegmentedSession) session.phase.installed
+    (fun phase state => .ok () { state with phase })
+    (fun pin => (session.sessionRef, pin)) snapshot session
+
+/-- A supported pin carries the issuing session's token. Acquisition
+updates that same ready cell and preserves its allocation identity. -/
+theorem SegmentedSession.runAcquireAt_ready {session : SegmentedSession} {installed : Installed}
+    (phase : session.phase = .ready installed) {snapshot : UInt64} {pin : SnapshotPin} {table : PackedTable}
+    (acquired : installed.table.acquireAt snapshot = some (pin, table)) :
+    SegmentedSession.runAcquireAt snapshot session =
+      .ok (some (session.sessionRef, pin)) { session with phase := .ready { installed with table } } := by
+  simp only [SegmentedSession.runAcquireAt, acquireSnapshotWith, phase, Phase.installed, Bind.bind, EStateM.bind,
+    Pure.pure, EStateM.pure, acquired]
+
 /-- Interpret the same phase and handle decisions used by `DiskTable.lookup`
 and `DiskTable.range` after observing the native pointer comparison. -/
 def readWithHandle (phase : Phase PackedTable) (sameSession : Bool)

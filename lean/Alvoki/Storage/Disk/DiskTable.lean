@@ -572,6 +572,22 @@ def DiskTable.acquireAt (db : DiskTable) (snapshot : UInt64) : IO (Option DiskSn
     db.phase.set (.ready { state with table })
     return some ⟨⟨db.session, pin.handle⟩, pin.sequence⟩
 
+/-- Project the native snapshot acquisition onto the phase and token
+callbacks of the reached session. -/
+@[macro_inline] def DiskSession.acquireSnapshotWith [Monad m]
+    (installed : m DiskSession.Installed) (record : DiskSession.Phase DiskSession.Installed → m Unit)
+    (issued : Alvoki.Sequential.SnapshotPin → α) (snapshot : UInt64) : m (Option α) := do
+  let state ← installed
+  match state.table.acquireAt snapshot with
+  | none => return none
+  | some (pin, table) =>
+    record (.ready { state with table })
+    return some (issued pin)
+
+theorem DiskTable.acquireAt_schedule (db : DiskTable) (snapshot : UInt64) :
+    db.acquireAt snapshot = DiskSession.acquireSnapshotWith (m := IO) db.installed db.phase.set
+      (fun pin => ⟨⟨db.session, pin.handle⟩, pin.sequence⟩) snapshot := rfl
+
 def DiskTable.acquire (db : DiskTable) : IO DiskSnapshotPin := do
   let state ← db.installed
   fromOption (← db.acquireAt state.table.committed) "cannot acquire the latest snapshot"

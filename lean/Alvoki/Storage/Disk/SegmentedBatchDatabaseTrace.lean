@@ -372,6 +372,41 @@ theorem SegmentedBatchDatabaseTrace.guardedKeyValueRefinement
     exact ⟨fun key => readWithHandle_foreign pinned _ compared localToken,
       fun start stop => readWithHandle_foreign pinned _ compared localToken⟩
 
+/-- Acquire a supported snapshot in the reached ready cell and use the
+issued pin with the same guards as the native lookup and range. The token
+on the returned pin belongs to this cell's session by construction. -/
+theorem SegmentedBatchDatabaseTrace.guardedAcquireReads
+    {directory initialDescriptor allowCollection log descriptor last}
+    {first : LockedFileState WalSegmentRotation.State} (bootstrap : BootstrapReady first.image)
+    (held : first.owners.Owns directory initialDescriptor)
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor (bootstrap.writerState first.owners)
+      allowCollection log descriptor last)
+    {session : SegmentedSession} (readyPhase : session.phase = .ready last.installed) :
+    ∃ reference : SnapshotTable UInt64,
+      SnapshotWalReplay .empty last.history reference ∧
+      ∀ snapshot, last.installed.table.pins.floor ≤ snapshot → snapshot ≤ last.installed.table.committed →
+        ∃ (issued : Nat × SnapshotPin) (after : SegmentedSession),
+          SegmentedSession.runAcquireAt snapshot session = .ok (some issued) after ∧
+          issued.1 = after.sessionRef ∧ issued.2.sequence = snapshot ∧
+          ∀ sameSession : Bool, sameSession = decide (issued.1 = after.sessionRef) →
+            (∀ key, withLocalHandle (m := Except IO.Error) after.phase.installed (.ok sameSession) none
+                (fun state => pure (state.table.lookup issued.2.handle key)) =
+              .ok (some (reference.table.lookup key snapshot))) ∧
+            ∀ start stop, withLocalHandle (m := Except IO.Error) after.phase.installed (.ok sameSession) none
+                (fun state => pure (state.table.range issued.2.handle start stop)) =
+              .ok (some (reference.table.range start stop snapshot)) := by
+  obtain ⟨reference, replayed, _, _, _, reads⟩ := trace.keyValueRefinement bootstrap held
+  refine ⟨reference, replayed, ?_⟩
+  intro snapshot floor committed
+  obtain ⟨pin, pinned, acquired, lookup, range⟩ := reads snapshot floor committed
+  let after := { session with phase := .ready { last.installed with table := pinned } }
+  refine ⟨(session.sessionRef, pin), after, SegmentedSession.runAcquireAt_ready readyPhase acquired,
+    rfl, (PackedTable.acquireAt_spec acquired).sequence, ?_⟩
+  intro sameSession compared
+  have localToken : sameSession = true := compared.trans (decide_eq_true rfl)
+  rw [localToken]
+  exact ⟨fun key => congrArg Except.ok (lookup key), fun start stop => congrArg Except.ok (range start stop)⟩
+
 /-- Reacquiring an earlier pin's sequence preserves its reads while the
 final writer still retains that sequence. -/
 theorem SegmentedBatchDatabaseTrace.reacquireReadsStable
