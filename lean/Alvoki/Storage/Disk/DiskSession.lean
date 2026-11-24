@@ -14,6 +14,15 @@ inductive Phase (α : Type) where
   let session ← allocateSession ()
   assemble phase session
 
+/-- Publish a prepared write while the session is poisoned. Only a durable
+commit makes the next table state accessible. -/
+@[macro_inline] def publishPreparedWrite [Monad m] (next : α) (sequence : UInt64)
+    (setPhase : Phase α → m Unit) (commit : m Unit) : m UInt64 := do
+  setPhase .poisoned
+  commit
+  setPhase (.ready next)
+  return sequence
+
 @[macro_inline] def Phase.installed [Monad m] [MonadExceptOf IO.Error m] (phase : Phase α) : m α :=
   match phase with
   | .ready value => pure value

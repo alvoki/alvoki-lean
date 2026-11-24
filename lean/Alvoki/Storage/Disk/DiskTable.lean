@@ -358,10 +358,8 @@ theorem commitWalWrite_fileEffects (dir : DiskDirectory) (activeFirst : Nat) (ev
   let walBytes := state.walBytes + WAL.frameSize
   unless walBytes < UInt64.size do throw (onRejected (IO.userError "WAL byte count is too large"))
   (checkActiveSegment db.dir state).adapt onRejected
-  db.phase.set .poisoned
-  (commitWalWrite db.dir state.activeFirst event walBytes).adapt onCommitUnknown
-  db.phase.set (.ready { state with table, walBytes })
-  return event.sequence
+  DiskSession.publishPreparedWrite { state with table, walBytes } event.sequence db.phase.set
+    ((commitWalWrite db.dir state.activeFirst event walBytes).adapt onCommitUnknown)
 
 /-- Acknowledgement follows the WAL sync and durable publication of the byte boundary. -/
 def DiskTable.write (db : DiskTable) (key : UInt64) (value : Option UInt64) : IO UInt64 :=

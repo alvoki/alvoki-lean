@@ -6,6 +6,32 @@ namespace Alvoki.Storage.WalSegmentCommit
 
 open System WAL.Boundary
 
+/-- Classify a write by its file effects while retaining its original
+error in the caller's execution. -/
+def forgetError {ε σ α : Type} (run : EStateM ε σ α) : EStateM Unit σ α :=
+  fun state => match run state with
+    | .ok value after => .ok value after
+    | .error _ after => .error () after
+
+private theorem forgetError_bind {ε σ α β : Type} (run : EStateM ε σ α)
+    (next : α → EStateM ε σ β) :
+    forgetError (run >>= next) = (forgetError run >>= fun value => forgetError (next value)) := by
+  funext state
+  simp only [forgetError, Bind.bind, EStateM.bind]
+  cases run state <;> rfl
+
+theorem forgetError_commitAt {ε : Type} (dir : DiskDirectory) (first : Nat) (event : WAL.Write)
+    (newBytes : Nat) (append write : FilePath → ByteArray → EStateM ε WriteFiles Unit)
+    (sync : Array FilePath → EStateM ε WriteFiles Unit)
+    (rename : FilePath → FilePath → EStateM ε WriteFiles Unit) :
+    forgetError (commitAt dir first event newBytes append write sync rename) =
+      commitAt dir first event newBytes (fun path bytes => forgetError (append path bytes))
+        (fun path bytes => forgetError (write path bytes)) (fun paths => forgetError (sync paths))
+        (fun source target => forgetError (rename source target)) := by
+  rw [commitAt_fileEffects, commitAt_fileEffects]
+  simp only [WAL.Boundary.commit, forgetError_bind]
+  rfl
+
 private theorem markerSteps_agree
     (observed modeled : Publication.Step → EStateM Unit WriteFiles Unit)
     (steps : List Publication.Step) (initial : WriteFiles)
