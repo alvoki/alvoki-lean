@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.CachedOpenRejection
+import Alvoki.Storage.Disk.OptionalFileRead
 
 namespace Alvoki.WAL.Boundary
 
@@ -76,6 +77,35 @@ end Alvoki.Storage.WalSegmentRepair
 namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
+
+/-- After a successful checkpoint read, the actual marker callback can
+fail with its own diagnostic before decoding or requesting WAL bytes. -/
+def CachedOpenRejection.ofMarkerReadError {directory : DiskDirectory} {before : LockedFileState FileImage}
+    (attempt : CachedOpenAttempt directory before) {checkpoint : Option (PackedTable × UInt64)} {cause : IO.Error}
+    (checkpointRead : readIntegrityCheckpointSized directory (attempt.readOptional (directory.file .manifest))
+      attempt.readRunSize attempt.readRunPrefix before.image = .ok checkpoint before.image)
+    (failed : attempt.readOptional (directory.file .walBoundary) before.image = .error cause before.image) :
+    CachedOpenRejection directory before := by
+  refine ⟨attempt, cause, ?_⟩
+  simp only [CachedOpenAttempt.prepare, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, checkpointRead, failed]
+
+/-- The shared optional reader preserves the original payload error after
+finding a regular marker, even when the read itself reports ENOENT. -/
+def CachedOpenRejection.ofMarkerPayloadReadError {directory : DiskDirectory} {before : LockedFileState FileImage}
+    (attempt : CachedOpenAttempt directory before) {checkpoint : Option (PackedTable × UInt64)} {cause : IO.Error}
+    (checkpointRead : readIntegrityCheckpointSized directory (attempt.readOptional (directory.file .manifest))
+      attempt.readRunSize attempt.readRunPrefix before.image = .ok checkpoint before.image)
+    (marker : OptionalPathRead before.image.directory.active.walBoundary)
+    (reported : attempt.readOptional (directory.file .walBoundary) before.image =
+      (liftExcept (marker.result (directory.file .walBoundary)) : EStateM IO.Error FileImage (Option ByteArray))
+        before.image)
+    {metadata : IO.FS.Metadata} (found : marker.lookup = .ok metadata) (regular : metadata.type = .file)
+    (failed : marker.read = .error cause) : CachedOpenRejection directory before := by
+  apply ofMarkerReadError attempt (cause := cause) checkpointRead
+  rw [reported]
+  have fileCheck : (IO.FS.FileType.file == IO.FS.FileType.file) = true := rfl
+  simp [OptionalPathRead.result, readOptionalDatabaseFile, found, regular, fileCheck, failed, Pure.pure, Bind.bind,
+    Except.pure, Except.bind, liftExcept, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
 
 /-- A malformed marker prevents installation. The local unlock outcome
 decides which error and lock owner return with the reached image. -/
