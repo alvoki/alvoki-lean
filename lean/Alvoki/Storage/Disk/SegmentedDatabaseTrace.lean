@@ -261,6 +261,27 @@ theorem SegmentedDatabaseTrace.collectionPowerLossCached {directory initialDescr
   obtain ⟨after, installed, _⟩ := report.installs observed ready
   exact ⟨after, installed, .collectionPowerLoss rfl prior report observed installed⟩
 
+/-- Extend the mixed history across power loss in the append callback with
+the session and physical image returned by the cached recovery action. -/
+theorem SegmentedDatabaseTrace.appendPowerLossCached {directory initialDescriptor initial allowCollection log writer descriptor before}
+    (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (report : SegmentedAppendPowerLossReport directory before writer descriptor) (observed : report.Valid)
+    (sizes : SizedCheckpointRunReports directory report.read.reports report.retry.image.directory.active.manifest
+      before.published.durable)
+    (cached : CachedWalFileReports directory report.read.reports before.wal before.target.range.watermark report.currentTail) :
+    ∃ after session final,
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [⟨[], some report.event⟩]) descriptor after ∧
+      runOpenWithInstallation directory descriptor report.nextRef (.ok true) report.unlock
+        (report.read.reopenCached sizes cached report.removeFile report.write report.sync report.renameFile)
+        report.retry = .ok session final ∧
+      session.phase = .ready after.installed ∧ final.image = after.files ∧ final.owners = after.owners := by
+  have ready := (prior.preservesRetained initialReady).1
+  obtain ⟨after, installed, session, final, ran, phase, image, owners⟩ :=
+    report.installsRetainedCached observed ready sizes cached
+  exact ⟨after, session, final, .appendPowerLoss prior report observed installed, ran, phase, image, owners⟩
+
 /-- Start the mixed history from the actual shared bootstrap attempt and
 its returned session, using only the reached native callback reports. -/
 theorem SegmentedDatabaseTrace.fromBootstrapRun (directory : DiskDirectory) (descriptor nextRef : Nat)

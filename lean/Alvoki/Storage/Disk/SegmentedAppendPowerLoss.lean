@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
+import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 
 namespace Alvoki.Storage.DiskSession
 
@@ -187,6 +188,46 @@ theorem installsRetained (report : SegmentedAppendPowerLossReport directory befo
     durable, checkpoint, generation, writerReady⟩ := reopened report.read observed.syncDirectory effects
   exact ⟨writer, report.assembleEndpoint ready writerReady powerLoss ran path owner phase
     files owners wal writerTarget history durable checkpoint generation, writerReady⟩
+
+/-- The cached recovery action reaches the same report endpoint after a crash
+inside the append callback, including the session and final file image. -/
+theorem installsRetainedCached (report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory oldDescriptor)
+    (sizes : SizedCheckpointRunReports directory report.read.reports report.retry.image.directory.active.manifest
+      before.published.durable)
+    (cached : CachedWalFileReports directory report.read.reports before.wal before.target.range.watermark report.currentTail) :
+    ∃ after, report.Installs after ∧ ∃ session final,
+      runOpenWithInstallation directory nextDescriptor report.nextRef (.ok true) report.unlock
+        (report.read.reopenCached sizes cached report.removeFile report.write report.sync report.renameFile)
+        report.retry = .ok session final ∧
+      session.phase = .ready after.installed ∧ final.image = after.files ∧ final.owners = after.owners := by
+  obtain ⟨_, selected, exactTarget, _⟩ := report.cut.reopensRetained ready observed.survives report.failures
+    (nextDescriptor := nextDescriptor) report.liveRefs observed.fresh observed.acquisition report.unlock
+    report.removeFile report.write report.sync report.renameFile
+  have pair : report.retry.image.directory.active = before.target.pair := congrArg Target.pair exactTarget
+  have decoded : report.retry.image.directory.active.walRange = some before.target.range := by
+    rw [pair]
+    exact before.target.decoded
+  have chosen : before.wal.Selects report.retry.image.directory.active := by
+    rw [pair, ← ready.walPair]
+    exact List.mem_cons_self ..
+  have checkpoint : SelectedIntegrityCheckpoint before.published.durable report.retry.image.directory.active.manifest
+      before.checkpoint := by
+    rw [pair]
+    exact ready.resumed.selected
+  have same := report.read.reopenCached_eq sizes cached ready.layout ready.valid chosen decoded rfl
+    ready.resumed.through checkpoint report.removeFile report.write report.sync report.renameFile
+  obtain ⟨after, installed, _⟩ := report.installsRetained observed ready
+  obtain ⟨session, final, _, ran, _, _, phase, exactWriter⟩ := installed.openEffect
+  refine ⟨after, installed, session, final, ?_, ?_, ?_, ?_⟩
+  · rw [same]
+    exact ran
+  · rw [exactWriter]
+    exact phase
+  · rw [exactWriter]
+    rfl
+  · rw [exactWriter]
+    rfl
 
 theorem Installs.unique {report : SegmentedAppendPowerLossReport directory before oldDescriptor nextDescriptor}
     {left right : SegmentedWriterState} (a : report.Installs left) (b : report.Installs right) : left = right := by
