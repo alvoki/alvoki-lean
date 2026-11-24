@@ -79,6 +79,8 @@ lake env leanchecker Alvoki.Storage.Disk.ReopenedSegmentAppend
 lake env leanchecker Alvoki.Storage.Disk.AppendCutContinuation
 lake env leanchecker Alvoki.Storage.Disk.AppendRetrySession
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRetrySession
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRetryTrace

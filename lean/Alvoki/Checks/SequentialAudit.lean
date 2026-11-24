@@ -91,6 +91,8 @@ import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.SegmentedCollectionInventory
 import Alvoki.Storage.Disk.SegmentedRetainedWriter
 import Alvoki.Storage.Disk.WalSegmentRecoveryWork
+import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
+import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
@@ -723,6 +725,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.collectionSuffixBounds
 #check_axioms Alvoki.Storage.WalSegmentRepair.countBoundedRepairCallbacks_exact
 #check_axioms Alvoki.Storage.WalSegmentRepair.countBoundedRepairCallbacks_bound
+#check_axioms Alvoki.Storage.DiskSession.RotationInFlightCut.schedule
+#check_axioms Alvoki.Storage.DiskSession.RotationInFlightCut.trace
+#check_axioms Alvoki.Storage.DiskSession.RotationInFlightCut.startsRetry
+#check_axioms Alvoki.Storage.DiskSession.RotationInFlightCut.selectsPriorHistory
+#check_axioms Alvoki.Storage.CheckpointPublication.segmentedCheckpoint_cut
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.reachedCount
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.physical_eq
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.selectsAcknowledgedHistory
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop
