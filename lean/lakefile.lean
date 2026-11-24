@@ -123,3 +123,6 @@ lean_exe «alvoki-disk-workload» where
 
 lean_exe «alvoki-disk-crash» where
   root := `DiskCrashBench
+
+lean_exe «alvoki-disk-batch» where
+  root := `DiskBatchBench
