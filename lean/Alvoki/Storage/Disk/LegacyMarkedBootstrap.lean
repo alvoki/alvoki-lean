@@ -18,8 +18,8 @@ def LegacyOpenReports.Succeeds (reports : LegacyOpenReports) (walSize selectedSi
   (¬ selectedSize < walSize → reports.aligned = .success) ∧
   ∀ step, reports.marker step = .success
 
-/-- Validate the existing unmarked WAL using the observed checkpoint and
-the same optional file lookup order as the native open. -/
+/-- Validate the observed checkpoint and existing unmarked WAL in the
+historical adoption protocol. -/
 def legacyPreflight (checkpoint : Except String (Option (PackedTable × UInt64)))
     (marker wal : Except String (Option ByteArray)) : Except String (MarkedPreflight × UInt64) := do
   let checkpoint ← checkpoint
@@ -67,7 +67,7 @@ returned after any reported effect, including an effect before an error. -/
 theorem runLegacyMarkedOpen_eq_shared (checkpoint : Option (PackedTable × UInt64))
     (bytes : ByteArray) (reports : LegacyOpenReports) :
     runLegacyMarkedOpen (.ok checkpoint) (.ok none) (.ok (some bytes)) reports =
-      withRecoveredOpen (m := EStateM String ReopenImage) checkpoint (pure none) (pure (some bytes))
+      withLegacyRecoveredOpen (m := EStateM String ReopenImage) checkpoint (pure none) (pure (some bytes))
         (fun result => match result with | .ok value => pure value | .error message => throw message)
         (fun message => throw message) (fun _ => throw "expected an existing legacy WAL")
         (fun selected => Publication.run (performRepair reports.repair selected))
@@ -76,7 +76,7 @@ theorem runLegacyMarkedOpen_eq_shared (checkpoint : Option (PackedTable × UInt6
         (fun table generation length => pure (table, generation, length)) := by
   funext before
   cases recovered : recoverLegacy (checkpoint.getD (.empty, 0)).1 bytes <;>
-    simp [runLegacyMarkedOpen, legacyPreflight, withRecoveredOpen, withOpenWal, Option.mapM,
+    simp [runLegacyMarkedOpen, legacyPreflight, withLegacyRecoveredOpen, withOpenWal, Option.mapM,
       recovered, Bind.bind, Except.bind, EStateM.bind, Pure.pure, Except.pure, EStateM.pure,
       runMarkedReopen, Publication.finishReopen] <;> rfl
 

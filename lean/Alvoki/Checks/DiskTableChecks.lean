@@ -189,13 +189,14 @@ private def checkBoundedRecovery (dir : FilePath) : IO Unit := do
   let marker := dir / "WAL.commit"
   let event : WAL.Write := ⟨1, 3, some 81⟩
   let durable := WAL.encodeFrame event
-  -- A valid legacy log is migrated on open.
-  IO.FS.writeBinFile wal (durable ++ (WAL.encodeFrame ⟨2, 3, some 82⟩).extract 0 7)
-  (← DiskTable.open dir).close
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write event.key event.value) == event.sequence) "incorrect initial WAL sequence"
+  finally db.close
   let committed ← IO.FS.readBinFile marker
-  let .ok count := WAL.Boundary.decode committed | throw (IO.userError "invalid migrated boundary")
+  let .ok count := WAL.Boundary.decode committed | throw (IO.userError "invalid published boundary")
   check (count == WAL.frameSize.toUInt64)
-    "legacy open did not install the recovered boundary"
+    "write did not publish the expected boundary"
   let fullTear := ByteArray.mk (Array.replicate WAL.frameSize 0)
   for tail in [fullTear, WAL.encodeFrame ⟨2, 3, some 82⟩, fullTear ++ fullTear] do
     IO.FS.writeBinFile wal (durable ++ tail)
@@ -371,6 +372,44 @@ private def syncFixtureBin (root : FilePath) : IO FilePath := do
   check (chmod.exitCode == 0) "could not make sync fault fixture executable"
   return bin
 
+private def checkMarkerlessRefusal (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let wal := dir / "WAL"
+  let manifest := dir / "MANIFEST"
+  let marker := dir / "WAL.commit"
+  let checkRefusal := do
+    match ← (DiskTable.open dir).toBaseIO with
+    | .error (.userError message) =>
+      check (message == WAL.Boundary.missingOpenMarker) "unexpected markerless open error"
+    | .error error => throw error
+    | .ok db =>
+      db.close
+      throw (IO.userError "open accepted installed data without a WAL marker")
+    let (opened, syncs) ← probeDisk bin dir none
+    check (!opened && syncs.isEmpty) "markerless refusal reached durability operations"
+    for name in ["WAL.next", "WAL.commit.next", "WAL.commit", "MANIFEST.next"] do
+      check (!(← (dir / name).pathExists)) s!"markerless refusal created {name}"
+  let nonempty := WAL.encodeFrame ⟨1, 7, some 60⟩ ++ (WAL.encodeFrame ⟨2, 7, none⟩).extract 0 9
+  IO.FS.writeBinFile wal nonempty
+  checkRefusal
+  check (decide ((← IO.FS.readBinFile wal) = nonempty) && !(← manifest.pathExists))
+    "markerless refusal changed an unmarked WAL or created a manifest"
+
+  IO.FS.removeFile wal
+  let db ← DiskTable.open dir
+  try db.checkpoint finally db.close
+  expectManifest dir 1 0 0 0
+  let checkpoint ← IO.FS.readBinFile manifest
+  IO.FS.removeFile marker
+  checkRefusal
+  check (← (IO.FS.readBinFile wal).map ByteArray.isEmpty) "markerless refusal changed the empty WAL"
+  IO.FS.removeFile wal
+  checkRefusal
+  check (!(← wal.pathExists) && decide ((← IO.FS.readBinFile manifest) = checkpoint))
+    "markerless refusal created an absent WAL or changed the installed checkpoint"
+
 private def checkRetrySync (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
@@ -385,6 +424,9 @@ private def checkRetrySync (root : FilePath) : IO Unit := do
   let (opened, syncs) ← probeDisk bin dir none
   check (opened && syncs == expected ++ [stagedBoundary.toString, dir.toString])
     "successful retry did not settle the WAL and its initial boundary"
+  let marker ← IO.FS.readBinFile (dir / "WAL.commit")
+  let .ok 0 := WAL.Boundary.decode marker | throw (IO.userError "fresh retry did not publish an empty boundary")
+  check (← (IO.FS.readBinFile wal).map ByteArray.isEmpty) "fresh retry changed the empty WAL"
   let db ← DiskTable.open dir
   let _ ← db.write 7 (some 60)
   db.close
@@ -1035,6 +1077,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkDirectoryIdentity
     IO.FS.withTempDir checkDanglingFiles
     IO.FS.withTempDir checkSnapshotSessions
+    IO.FS.withTempDir checkMarkerlessRefusal
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkWritesAcrossReopens
     IO.FS.withTempDir checkGroupedSyncPartialEffects

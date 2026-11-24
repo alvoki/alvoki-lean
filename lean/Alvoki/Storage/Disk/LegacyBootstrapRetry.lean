@@ -3,13 +3,13 @@ import Alvoki.Storage.Disk.LegacyBootstrapCuts
 namespace Alvoki.WAL.Boundary
 open Storage
 
-/-- Evaluate the shared native open continuation after the locked checkpoint
-read. The successfully observed WAL already exists. The first marker is
-published only if its lookup found no marker. -/
+/-- Evaluate the historical adoption protocol after the locked checkpoint
+read. The observed WAL already exists. A missing marker is published only
+after successful recovery and durability operations. -/
 def runLegacyRetryOpen (checkpoint : Option (PackedTable × UInt64))
     (marker : Option ByteArray) (bytes : ByteArray) (reports : LegacyOpenReports) :
     EStateM String ReopenImage (PackedTable × UInt64 × Nat) :=
-  withRecoveredOpen checkpoint (pure marker) (pure (some bytes))
+  withLegacyRecoveredOpen checkpoint (pure marker) (pure (some bytes))
     (fun result => match result with | .ok value => pure value | .error message => throw message)
     (fun message => throw message) (fun _ => throw "expected an existing legacy WAL")
     (fun selected => Publication.run (performRepair reports.repair selected))
@@ -24,7 +24,7 @@ private theorem runLegacyRetryOpen_marked {checkpoint : Option (PackedTable × U
     (synced : reports.aligned = .success) (before : ReopenImage) :
     runLegacyRetryOpen checkpoint (some marker) bytes reports before =
       .ok (table, (checkpoint.getD (.empty, 0)).2, bytes.size) before.syncDirectory := by
-  simp [runLegacyRetryOpen, withRecoveredOpen, withOpenWal, Option.mapM, Functor.map, EStateM.map,
+  simp [runLegacyRetryOpen, withLegacyRecoveredOpen, withOpenWal, Option.mapM, Functor.map, EStateM.map,
     Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, decoded, recovered, synced,
     Publication.finishReopen, Publication.runReopen, performAlignedSync]
 

@@ -286,14 +286,6 @@ def recoverSelected (state : PackedTable) (bytes : ByteArray) : Except String Pa
   if table.committed.toNat == bytes.size / frameSize then .ok table
   else .error "selected WAL frame count disagrees with the recovered sequence"
 
-/-- Legacy open trims only the incomplete tail before validating every complete
-frame and replaying the suffix above the checkpoint watermark. -/
-@[macro_inline] def recoverLegacy (base : PackedTable) (bytes : ByteArray) :
-    Except String (ByteArray × PackedTable) := do
-  let selected := (WAL.repairPrefix bytes).getD bytes
-  let table ← recoverSelected base selected
-  return (selected, table)
-
 theorem recoverSelected_success {state result : PackedTable} {bytes : ByteArray}
     (recovered : recoverSelected state bytes = .ok result) :
     ∃ events, WAL.decodeOrdinals bytes = .ok events ∧

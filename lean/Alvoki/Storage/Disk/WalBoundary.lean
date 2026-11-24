@@ -77,6 +77,9 @@ theorem withOpenWal_marked {α : Type} (marker : ByteArray)
 /-- Native open error for a missing WAL required by installed metadata. -/
 def missingOpenWal : String := "installed checkpoint or boundary is missing its WAL"
 
+/-- Only empty bootstrap can open without a WAL commit marker. -/
+def missingOpenMarker : String := "checkpoint or nonempty WAL is missing its commit marker"
+
 private theorem select_eq_ok_iff {length : UInt64} {wal selected : ByteArray} :
     select length wal = .ok selected ↔
       length.toNat % frameSize = 0 ∧ length.toNat ≤ wal.size ∧

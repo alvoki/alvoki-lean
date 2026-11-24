@@ -438,6 +438,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.LockOwners.release_unowned
 #check_axioms Alvoki.WAL.Boundary.freshMarkedOpen_ready
 #check_axioms Alvoki.WAL.Boundary.emptyBootstrapOpen_ready
+#check_axioms Alvoki.WAL.Boundary.withRecoveredOpen_markerless_rejects
 #check_axioms Alvoki.WAL.Boundary.legacyMarkedOpen_ready
 #check_axioms Alvoki.WAL.Boundary.legacyBootstrapRetry_completes
 #check_axioms Alvoki.WAL.Boundary.runLegacyMarkedOpen_eq_shared

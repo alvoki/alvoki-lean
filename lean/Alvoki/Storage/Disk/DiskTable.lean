@@ -131,9 +131,9 @@ private def openCheckpoint (dir : DiskDirectory) : IO (Option (PackedTable × UI
   readIntegrityCheckpoint (readOptionalFile (dir.file .manifest))
     (fun generation index => IO.FS.readBinFile (dir.file (.run generation index))) IO.ofExcept
 
-/-- After loading the checkpoint, read and validate the WAL, settle its
-selected prefix, and publish a missing marker before installing the session.
-Keep the file operations and the final installation in their callers. -/
+/-- Recover the selected marked WAL, or bootstrap an empty database. A
+returned writer always has a durable marker. Keep the file operations and
+final installation in the caller. -/
 @[macro_inline] def withRecoveredOpen [Monad m] {α : Type}
     (checkpoint : Option (PackedTable × UInt64)) (readMarker readWal : m (Option ByteArray))
     (validate : {β : Type} → Except String β → m β) (fail : {β : Type} → String → m β)
@@ -142,21 +142,26 @@ Keep the file operations and the final installation in their callers. -/
     (install : PackedTable → UInt64 → Nat → m α) : m α := do
   let (base, generation) := checkpoint.getD (.empty, 0)
   WAL.Boundary.withOpenWal readMarker readWal validate (fun boundary => do
-    if checkpoint.isSome || boundary.isSome then
+    if boundary.isSome then
       fail WAL.Boundary.missingOpenWal
+    else if checkpoint.isSome then
+      fail WAL.Boundary.missingOpenMarker
     else
       createWal ()
       pure ByteArray.empty) fun boundary bytes => do
-    let (selected, table) ← validate <| match boundary with
-      | some count => WAL.Boundary.recoverMarked base count bytes
-      | none => recoverLegacy base bytes
-    -- Both paths settle the visible checkpoint and marker before installation.
-    let table ← Publication.finishReopen bytes.size selected.size
-      (fun _ => repairWal selected) syncWal table
-    if boundary.isNone then
-      unless selected.size < UInt64.size do fail "WAL byte count is too large"
-      publishMarker selected.size
-    install table generation selected.size
+    match boundary with
+    | some count =>
+      let (selected, table) ← validate (WAL.Boundary.recoverMarked base count bytes)
+      let table ← Publication.finishReopen bytes.size selected.size
+        (fun _ => repairWal selected) syncWal table
+      install table generation selected.size
+    | none =>
+      if checkpoint.isSome || !bytes.isEmpty then
+        fail WAL.Boundary.missingOpenMarker
+      else
+        syncWal ()
+        publishMarker 0
+        install .empty 0 0
 
 private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTable := do
   let checkpoint ← openCheckpoint dir

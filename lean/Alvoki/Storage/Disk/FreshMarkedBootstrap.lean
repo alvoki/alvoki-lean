@@ -58,6 +58,28 @@ def runFreshMarkedOpen (checkpoint : Except String (Option (PackedTable × UInt6
     (fun length => Publication.run (publishMarker reports.marker (encode length.toUInt64)))
     (fun table generation length => pure (table, generation, length))
 
+/-- After the read reports, a missing marker with installed data returns
+the rejection without calling any durability or installation callback. -/
+theorem withRecoveredOpen_markerless_rejects {checkpoint : Option (PackedTable × UInt64)}
+    {wal : Option ByteArray}
+    (installed : checkpoint.isSome = true ∨ ∃ bytes, wal = some bytes ∧ bytes.isEmpty = false)
+    (validate : {β : Type} → Except String β → EStateM String σ β)
+    (createWal : Unit → EStateM String σ Unit) (repairWal : ByteArray → EStateM String σ Unit)
+    (syncWal : Unit → EStateM String σ Unit) (publishMarker : Nat → EStateM String σ Unit)
+    (install : PackedTable → UInt64 → Nat → EStateM String σ α) (before : σ) :
+    withRecoveredOpen checkpoint (pure none) (pure wal) validate (fun message => throw message)
+      createWal repairWal syncWal publishMarker install before = .error missingOpenMarker before := by
+  rcases installed with hasCheckpoint | ⟨bytes, rfl, nonempty⟩
+  · cases checkpoint with
+    | none => contradiction
+    | some checkpoint => cases wal <;> rfl
+  · cases checkpoint with
+    | none =>
+      simp [withRecoveredOpen, withOpenWal, Bind.bind, EStateM.bind,
+        Pure.pure, EStateM.pure, nonempty]
+      rfl
+    | some checkpoint => rfl
+
 private theorem emptyReplay : recoverSelected .empty ByteArray.empty = .ok .empty := by
   exact recoverSelected_encoded .empty [] [] trivial rfl
 
@@ -79,8 +101,7 @@ private theorem runFreshMarkedOpen_unmarked
   all_goals
     simp [runFreshMarkedOpen, withRecoveredOpen, StateT.run, Bind.bind, StateT.bind, Except.bind,
       Pure.pure, StateT.pure, Except.pure, Except.map, observed, withOpenWal, Option.mapM,
-      createEmptyWal, created, recoverLegacy, WAL.repairPrefix, emptyReplay, Publication.finishReopen,
-      Publication.runReopen, syncNewWal, synced, published, Publication.run, Publication.steps,
+      createEmptyWal, created, ByteArray.isEmpty, syncNewWal, synced, published, Publication.run, Publication.steps,
       publishMarker, visibleEmptyWal, ReopenImage.syncDirectory, DirectoryPublication.Image.syncDirectory,
       DirectoryPublication.Image.step, observes]
   all_goals change Except.ok ((PackedTable.empty, (0 : UInt64), (0 : Nat)),

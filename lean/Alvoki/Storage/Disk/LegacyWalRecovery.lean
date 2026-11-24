@@ -3,6 +3,39 @@ import Alvoki.Storage.Disk.RecoveredPinRefinement
 namespace Alvoki.Storage
 open Alvoki.Sequential (SnapshotTable)
 
+/-- Legacy open trims only the incomplete tail before validating every complete
+frame and replaying the suffix above the checkpoint watermark. -/
+@[macro_inline] def recoverLegacy (base : PackedTable) (bytes : ByteArray) :
+    Except String (ByteArray × PackedTable) := do
+  let selected := (WAL.repairPrefix bytes).getD bytes
+  let table ← recoverSelected base selected
+  return (selected, table)
+
+/-- Interpret the earlier legacy adoption protocol in the historical effect model. -/
+@[macro_inline] def withLegacyRecoveredOpen [Monad m] {α : Type}
+    (checkpoint : Option (PackedTable × UInt64)) (readMarker readWal : m (Option ByteArray))
+    (validate : {β : Type} → Except String β → m β) (fail : {β : Type} → String → m β)
+    (createWal : Unit → m Unit)
+    (repairWal : ByteArray → m Unit) (syncWal : Unit → m Unit) (publishMarker : Nat → m Unit)
+    (install : PackedTable → UInt64 → Nat → m α) : m α := do
+  let (base, generation) := checkpoint.getD (.empty, 0)
+  WAL.Boundary.withOpenWal readMarker readWal validate (fun boundary => do
+    if checkpoint.isSome || boundary.isSome then
+      fail WAL.Boundary.missingOpenWal
+    else
+      createWal ()
+      pure ByteArray.empty) fun boundary bytes => do
+    let (selected, table) ← validate <| match boundary with
+      | some count => WAL.Boundary.recoverMarked base count bytes
+      | none => recoverLegacy base bytes
+    -- Both paths settle the visible checkpoint and marker before installation.
+    let table ← Publication.finishReopen bytes.size selected.size
+      (fun _ => repairWal selected) syncWal table
+    if boundary.isNone then
+      unless selected.size < UInt64.size do fail "WAL byte count is too large"
+      publishMarker selected.size
+    install table generation selected.size
+
 /-- Successful legacy recovery selects the exact complete prefix of the
 bytes it read. Its watermark check rules out a checkpoint that covers more
 frames than this prefix contains. -/
