@@ -37,12 +37,8 @@ theorem Reached.processExit {report : SegmentedBatchMarkerPowerLossReport direct
   let tail := (report.cut.interrupt marker report.reached).visibleTail
   let bytes := WAL.encode (before.history.drop before.wal.active.first) ++ tail
   have visibleBytes : report.physical.keeper.active = some bytes := rfl
-  obtain ⟨sameTail, _, sameMarker, _⟩ :=
-    report.cut.matchesBatchEffects before.history report.batch report.appendCrashTails scratch
-  have pair : report.physical.directory.active = modeled.directory.active :=
-    congrArg (DirectoryPublication.Bindings.mk before.wal.directory.active.manifest) sameMarker
-  have keeper : some bytes = modeled.wal.active :=
-    congrArg (fun tail => some (WAL.encode (before.history.drop before.wal.active.first) ++ tail)) sameTail
+  have pair : report.physical.directory.active = modeled.directory.active := report.physicalProjection.active
+  have keeper : some bytes = modeled.wal.active := visibleBytes.symm.trans report.physicalProjection.keeper
   have starts : before.wal.active.first ≤ before.history.length := by
     rw [← ready.layout.activeEnd]
     exact ready.layout.forward before.wal.active (List.mem_append_right _ (by simp))

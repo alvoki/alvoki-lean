@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedBatchPowerLoss
+import Alvoki.Storage.Disk.SegmentedBatchMarkerProcessExit
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 
 namespace Alvoki.Storage.DiskSession
@@ -31,10 +31,10 @@ private theorem retryPair {retry : LockedFileState FileImage}
 reached image. The selected layout determines which observations the
 final lock holder must supply. -/
 structure CachedReopenReports (cut : SegmentedBatchMarkerPowerLossReport directory before writer)
-    (descriptor : Nat) where
+    (descriptor : Nat) (source : LockedFileState FileImage := cut.crashed) where
   retry : LockedFileState FileImage
   attempts : BoundedReopenTrace directory (BatchRetryTarget before.history cut.batch before.wal.active.first)
-    cut.crashed retry
+    source retry
   nextRef : Nat
   liveRefs : List Nat
   fresh : ∀ ref ∈ liveRefs, ref < nextRef
@@ -63,32 +63,37 @@ structure CachedReopenReports (cut : SegmentedBatchMarkerPowerLossReport directo
 
 namespace CachedReopenReports
 
-def run (report : CachedReopenReports cut descriptor) :
+variable {source : LockedFileState FileImage}
+
+def run (report : CachedReopenReports cut descriptor source) :
     EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession :=
   runOpenWithInstallation directory descriptor report.nextRef (.ok true) report.unlock report.recover report.retry
 
-structure Installs (report : CachedReopenReports cut descriptor) (after : SegmentedWriterState) : Prop where
+structure InstallsFromCut (report : CachedReopenReports cut descriptor source) (after : SegmentedWriterState) : Prop where
   retries : BoundedReopenTrace directory (BatchRetryTarget before.history cut.batch before.wal.active.first)
     cut.inFlight report.retry
   reopened : ∃ session final, report.run = .ok session final ∧
     session.directory = directory ∧ session.descriptor = descriptor ∧ session.phase = .ready after.installed ∧
     after.files = final.image ∧ after.owners = final.owners
   history : after.history = before.history ∨ after.history = before.history ++ cut.batch
-  pair : after.target.pair = cut.pair
-  marker : cut.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64)
+  selectedPair : after.target.pair = report.retry.image.directory.active
+  selectedMarker : after.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64)
   checkpoint : after.checkpoint = before.checkpoint
   generation : after.installed.generation = before.installed.generation
   durable : after.published.durable = before.published.durable
   retained : after.RetainedReady directory descriptor
 
-/-- The actual cached worker installs the prior history or the entire
-batch from the machine crash's surviving pair. The exact selected
-checkpoint and its durable run bytes carry forward unchanged. -/
-theorem installs (report : CachedReopenReports cut descriptor)
-    (observed : cut.Valid) (ready : before.RetainedReady directory writer) :
-    ∃ after, report.Installs after := by
+structure Installs (report : CachedReopenReports cut descriptor) (after : SegmentedWriterState) :
+    Prop extends InstallsFromCut report after where
+  pair : after.target.pair = cut.pair
+  marker : cut.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64)
+
+private theorem installsFromCut (report : CachedReopenReports cut descriptor source)
+    (observed : cut.Reached) (ready : before.RetainedReady directory writer)
+    (attempts : BoundedReopenTrace directory (BatchRetryTarget before.history cut.batch before.wal.active.first)
+      cut.inFlight report.retry) :
+    ∃ after, report.InstallsFromCut after := by
   let effects := cut.cut.writeEffects cut.appendCrashTails (before.wal.directory.staged .walBoundary)
-  have attempts := observed.modeledRetries report.attempts
   have oldRange : before.wal.directory.active.walRange = some ⟨before.target.range.watermark, before.history.length⟩ := by
     rw [ready.walPair, ← ready.resumed.through]
     exact before.target.decoded
@@ -97,9 +102,9 @@ theorem installs (report : CachedReopenReports cut descriptor)
   have count : before.history.length = before.installed.table.committed.toNat :=
     represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
   obtain ⟨kept, manifest, history, allowed, marker, layout, valid, selected, _, first, generation, _, installs⟩ :=
-    BoundedReopenTrace.installsAfterBatchCut ready.layout ready.valid oldRange ready.resumed.ordered count
-      observed.prepared (observed.preparedHistory ready).2.1 accepted effects before.files.keeper.staged
-      attempts report.liveRefs report.fresh report.acquisition report.unlock report.removeFile report.write
+    attempts.installsAfterBatchCut ready.layout ready.valid oldRange ready.resumed.ordered count
+      observed.prepared (observed.preparedHistory ready).2.1 accepted effects cut.physicalProjection
+      report.liveRefs report.fresh report.acquisition report.unlock report.removeFile report.write
       report.sync report.renameFile
   let wal := before.wal.appendSelectedView report.retry.image.directory.active history
   obtain ⟨raw, sizes, cached, observedRead⟩ := report.reads history selected allowed first
@@ -122,14 +127,40 @@ theorem installs (report : CachedReopenReports cut descriptor)
   have checkpoint := Except.ok.inj ((raw.readCheckpoint loaded).symm.trans (raw.readCheckpoint oldCheckpoint))
   have generation : after.installed.generation = before.installed.generation := by
     rw [next.resumed.generation, checkpoint, ← ready.resumed.generation]
-  have survivor := retryPair report.attempts
-  have survives : after.target.pair = cut.pair := target ▸ survivor
-  have boundary : cut.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64) := by
-    rw [← survivor, exactHistory]
+  have pair : after.target.pair = report.retry.image.directory.active := congrArg Target.pair target
+  have boundary : after.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64) := by
+    rw [pair, exactHistory]
     exact marker
-  exact ⟨after, ⟨observed.powerLoss.trans report.attempts, ⟨session, final, ran, path, slot, phase, files, owners⟩,
-    exactHistory ▸ allowed, survives, boundary, checkpoint, generation, durable, next⟩⟩
+  exact ⟨after, ⟨attempts, ⟨session, final, ran, path, slot, phase, files, owners⟩,
+    exactHistory ▸ allowed, pair, boundary, checkpoint, generation, durable, next⟩⟩
+
+/-- The actual cached worker installs the prior history or the entire
+batch from the machine crash's surviving pair. The exact selected
+checkpoint and its durable run bytes carry forward unchanged. -/
+theorem installs (report : CachedReopenReports cut descriptor)
+    (observed : cut.Valid) (ready : before.RetainedReady directory writer) :
+    ∃ after, report.Installs after := by
+  obtain ⟨after, installed⟩ := report.installsFromCut observed.toReached ready (observed.powerLoss.trans report.attempts)
+  have pair := installed.selectedPair.trans (retryPair report.attempts)
+  exact ⟨after, ⟨installed, pair, pair ▸ installed.selectedMarker⟩⟩
 
 end CachedReopenReports
+
+/-- The first transition drops references from the exiting process.
+Subsequent retries use the live file image and its possible survivors. -/
+structure ProcessExitCachedReopenReports (cut : SegmentedBatchMarkerPowerLossReport directory before writer)
+    (descriptor : Nat) where
+  references : HeldLockReferences writer
+  process : Nat
+  reopen : cut.CachedReopenReports descriptor (references.afterFileDrops [.exited process] directory cut.inFlight)
+
+/-- Install the exact history selected by the final retry after process
+exit. The checkpoint is unchanged and the entire batch is kept or lost. -/
+theorem ProcessExitCachedReopenReports.installs (report : ProcessExitCachedReopenReports cut descriptor)
+    (observed : cut.Reached) (ready : before.RetainedReady directory writer) :
+    ∃ after, report.reopen.InstallsFromCut after := by
+  have released := (observed.processExit ready report.references report.process).1
+  exact report.reopen.installsFromCut observed ready (released.trans report.reopen.attempts)
+
 end SegmentedBatchMarkerPowerLossReport
 end Alvoki.Storage.DiskSession

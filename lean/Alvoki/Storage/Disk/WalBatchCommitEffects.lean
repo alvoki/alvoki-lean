@@ -315,6 +315,15 @@ theorem prepareAfterBatchCut {before batch : List WAL.Write} {first watermark : 
       fun binding h => accepted binding (List.mem_cons_of_mem _ h)⟩,
       later, rfl, rfl, noLater.1.symm, readKeeper⟩⟩
 
+/-- Compare the reached files with the batch interpreter's visible and
+crash choices. The reached staging files are carried by the retry trace. -/
+structure BatchCutProjection (initial : FileImage) (cut : ReopenImage) : Prop where
+  active : initial.directory.active = cut.directory.active
+  metadata : initial.directory.crashImages = cut.directory.crashImages
+  keeper : initial.keeper.active = cut.wal.active
+  keeperChoices : initial.keeper.crashImages = cut.wal.crashImages
+  noLater : initial.later.DurablyEmpty
+
 /-- Any finite series of reported bounded reopen failures, final reference
 drops and power losses retains an old-or-whole batch selection. Before the
 directory barrier a power loss may still select either original marker.
@@ -325,17 +334,15 @@ private theorem boundedBatchRetry_layoutInputs {before batch : List WAL.Write} {
     (effects : WriteEffects) (manifest : Option ByteArray) (scratch : Option (ByteArray × Bool))
     (checkpoint : selectedCheckpointWatermark manifest = some watermark)
     {directory : DiskDirectory} {initial after : DiskSession.LockedFileState FileImage}
-    (noLater : initial.image.later.DurablyEmpty)
     (attempts : DiskSession.BoundedReopenTrace directory (BatchRetryTarget before batch first) initial after) :
     let cut := (writeFilesAfter (runBatchEffects before batch effects scratch)).reopenSegment first before manifest
-    initial.image.directory = cut.directory →
-    initial.image.keeper.active = cut.wal.active →
-    initial.image.keeper.crashImages = cut.wal.crashImages →
+    BatchCutProjection initial.image cut →
     after.image.kept = initial.image.kept ∧
       ∃ target, BatchRetryTarget before batch first target ∧ target.pair.manifest = manifest ∧
         after.image.directory.active = target.pair ∧ after.image.keeper.Valid target.Accepts ∧
         after.image.later.Beyond target.range.through ∧ after.image.later.visible = [] := by
-  intro cut directoryEq keeperEq crashEq
+  intro cut observed
+  obtain ⟨activeEq, metadataEq, keeperEq, crashEq, noLater⟩ := observed
   have keeperCrash : initial.image.keeper.crashImages ≠ [] := by
     rw [crashEq]
     exact (writeFilesAfter (runBatchEffects before batch effects scratch)).reopenImage_crashWal_nonempty
@@ -359,14 +366,14 @@ private theorem boundedBatchRetry_layoutInputs {before batch : List WAL.Write} {
     cases observation with
     | live =>
       apply prepare _ _ keeperCrash noLater
-      · rw [directoryEq]
+      · rw [activeEq]
         exact List.mem_cons_self ..
       · intro binding member
         simpa only [keeperEq, crashEq] using member
     | crash pair keeper later observed read names =>
       have empty : later = [] := List.mem_singleton.mp (noLater.2 ▸ names)
       have keeperMember : keeper ∈ cut.wal.crashImages := crashEq ▸ read
-      have pairMember : pair ∈ cut.directory.crashImages := directoryEq ▸ observed
+      have pairMember : pair ∈ cut.directory.crashImages := metadataEq ▸ observed
       subst later
       apply prepare (List.mem_cons_of_mem _ pairMember) _ (by simp [FileImage.crash, Publication.Image.settled])
         (by exact ⟨rfl, rfl⟩)
@@ -412,8 +419,9 @@ theorem boundedBatchRetry_selection {before batch : List WAL.Write} {first water
         after.image.directory.active = target.pair ∧ after.image.keeper.Valid target.Accepts := by
   intro cut directoryEq keeperEq crashEq
   obtain ⟨sealed, target, admitted, sameManifest, pair, keeper, _, _⟩ :=
-    boundedBatchRetry_layoutInputs starts covered fits effects manifest scratch checkpoint noLater attempts
-      directoryEq keeperEq crashEq
+    boundedBatchRetry_layoutInputs starts covered fits effects manifest scratch checkpoint attempts
+      ⟨congrArg DirectoryPublication.Image.active directoryEq, congrArg DirectoryPublication.Image.crashImages directoryEq,
+        keeperEq, crashEq, noLater⟩
   exact ⟨sealed, target, admitted, sameManifest, pair, keeper⟩
 
 end Alvoki.Storage.WalSegmentRepair
@@ -436,19 +444,18 @@ theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
     {published : CheckpointPublication.Image}
     (checkpoint : published.AcceptsVersioned before.length.toUInt64 (CheckpointRepresentsPrefix before)
       oldWal.directory.active.manifest)
-    (effects : WriteEffects) (scratch : Option (ByteArray × Bool)) {owners : LockOwners}
-    {retry : LockedFileState FileImage}
-    (attempts : BoundedReopenTrace directory (BatchRetryTarget before batch oldWal.active.first)
-      ⟨oldWal.appendReopenFiles
-        ((writeFilesAfter (runBatchEffects before batch effects (oldWal.directory.staged .walBoundary))).reopenSegment
-          oldWal.active.first before oldWal.directory.active.manifest) scratch, owners⟩ retry)
+    (effects : WriteEffects) {initial retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (BatchRetryTarget before batch oldWal.active.first) initial retry)
+    (observed : BatchCutProjection initial.image
+      ((writeFilesAfter (runBatchEffects before batch effects (oldWal.directory.staged .walBoundary))).reopenSegment
+        oldWal.active.first before oldWal.directory.active.manifest))
     {descriptor nextRef : Nat} (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
     (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
     (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
     (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
     (sync : Array FilePath → EStateM IO.Error FileImage Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
-    retry.image.kept = (oldWal.checkpointReopenFiles oldWal.directory none).kept ∧
+    retry.image.kept = initial.image.kept ∧
     retry.image.directory.active.manifest = oldWal.directory.active.manifest ∧
     ∃ history, (history = before ∨ history = before ++ batch) ∧
       retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) ∧
@@ -478,7 +485,7 @@ theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
   obtain ⟨sealed, target, ⟨start, history, allowed, marker, through, trimmed⟩, sameManifest, pair, keeper,
       later, noLater⟩ :=
     boundedBatchRetry_layoutInputs starts covered fits effects oldWal.directory.active.manifest
-      (oldWal.directory.staged .walBoundary) watermarkRead ⟨rfl, rfl⟩ attempts rfl rfl rfl
+      (oldWal.directory.staged .walBoundary) watermarkRead attempts observed
   have count : (WAL.encode history).size.toUInt64.toNat = history.length * WAL.frameSize := by
     rw [UInt64.toNat_ofNat_of_lt' (batchHistoryFits allowed fits), WAL.encode_size, Nat.mul_comm]
   have newCovered := Nat.le_trans covered (batchLengthMonotone allowed)

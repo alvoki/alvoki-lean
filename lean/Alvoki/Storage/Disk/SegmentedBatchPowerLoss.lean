@@ -118,13 +118,21 @@ theorem Valid.powerLoss {report : SegmentedBatchMarkerPowerLossReport directory 
       report.inFlight report.crashed :=
   .powerLoss .empty observed.pairSurvives observed.keeperSurvives (List.mem_singleton_self _)
 
-private theorem crashChoices (report : SegmentedBatchMarkerPowerLossReport directory before writer) :
-    report.physical.directory.crashImages = report.modeled.image.directory.crashImages ∧
-      report.physical.keeper.crashImages = report.modeled.image.keeper.crashImages := by
-  obtain ⟨_, tails, _, markers⟩ := report.cut.matchesBatchEffects before.history report.batch report.appendCrashTails
-    (before.wal.directory.staged .walBoundary)
-  exact ⟨congrArg (List.map (DirectoryPublication.Bindings.mk before.wal.directory.active.manifest)) markers,
-    congrArg (List.map (fun tail => some (WAL.encode (before.history.drop before.wal.active.first) ++ tail))) tails⟩
+/-- The physical cut and the batch interpreter agree on the live and
+surviving bindings and keeper bytes. Their staging fields can differ. -/
+theorem physicalProjection (report : SegmentedBatchMarkerPowerLossReport directory before writer) :
+    let scratch := before.wal.directory.staged .walBoundary
+    let effects := report.cut.writeEffects report.appendCrashTails scratch
+    let modeled := writeFilesAfter (runBatchEffects before.history report.batch effects scratch)
+    BatchCutProjection report.physical
+      (modeled.reopenSegment before.wal.active.first before.history before.wal.directory.active.manifest) := by
+  intro scratch effects modeled
+  obtain ⟨visible, tails, active, markers⟩ :=
+    report.cut.matchesBatchEffects before.history report.batch report.appendCrashTails scratch
+  let bindMarker := DirectoryPublication.Bindings.mk before.wal.directory.active.manifest
+  let includePrefix := fun tail => some (WAL.encode (before.history.drop before.wal.active.first) ++ tail)
+  exact ⟨congrArg bindMarker active, congrArg (List.map bindMarker) markers,
+    congrArg includePrefix visible, congrArg (List.map includePrefix) tails, ⟨rfl, rfl⟩⟩
 
 /-- The physical cut supplies the same surviving state to the existing
 batch retry interpreter. Later retries start at the actual crashed image. -/
@@ -134,7 +142,8 @@ theorem Valid.modeledRetries {report : SegmentedBatchMarkerPowerLossReport direc
       report.crashed retry) :
     BoundedReopenTrace directory (BatchRetryTarget before.history report.batch before.wal.active.first)
       report.modeled retry := by
-  obtain ⟨markers, keepers⟩ := report.crashChoices
+  have markers := report.physicalProjection.metadata
+  have keepers := report.physicalProjection.keeperChoices
   have poweredOff : BoundedReopenTrace directory (BatchRetryTarget before.history report.batch before.wal.active.first)
       report.modeled report.crashed :=
     .powerLoss .empty (markers ▸ observed.pairSurvives) (keepers ▸ observed.keeperSurvives) (List.mem_singleton_self _)
@@ -152,7 +161,8 @@ theorem Valid.selectsWholeBatch {report : SegmentedBatchMarkerPowerLossReport di
   have starts : before.wal.active.first ≤ before.history.length := by
     rw [← ready.layout.activeEnd]
     exact ready.layout.forward before.wal.active (List.mem_append_right _ (by simp))
-  obtain ⟨markers, keepers⟩ := report.crashChoices
+  have markers := report.physicalProjection.metadata
+  have keepers := report.physicalProjection.keeperChoices
   exact selectSegment_atReportedBatchCut starts (observed.preparedHistory ready).2.1
     (report.cut.writeEffects report.appendCrashTails (before.wal.directory.staged .walBoundary))
     before.wal.directory.active.manifest (before.wal.directory.staged .walBoundary) report.pair report.keeper
