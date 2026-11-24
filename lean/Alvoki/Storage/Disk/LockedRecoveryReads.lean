@@ -5,7 +5,7 @@ namespace Alvoki.WAL.Boundary
 
 open Storage
 
-private theorem observedOptional_success {read : Except IO.Error (Option ByteArray)}
+theorem observedOptional_success {read : Except IO.Error (Option ByteArray)}
     {expected : Option ByteArray} (reported : ∃ value, read = .ok value)
     (agrees : ∀ value, read.mapError toString = .ok value → value = expected) :
     read.mapError toString = .ok expected := by

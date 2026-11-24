@@ -487,3 +487,7 @@ The run path extraction changes the native call boundary. The initial paired run
 ## Descriptor effects project to admitted recoveries
 
 The inode model now constructs the WAL sync target from the actual effect-point binding and distinguishes the current inode from a held old inode. Allowed concrete crash outcomes of a live sync map to marked reopen attempts. For a delayed old-file sync, the pre-settlement crash outcomes map to the lower-level retry trace after an authorized rename cut. The post-settlement effect leaves the identical endpoint in the marked trace. [Descriptor retry projection](../lean/Alvoki/Storage/Disk/ReplacedWalDescriptor.lean)
+
+## Concrete locked installer after versioned checkpoint retries
+
+Repeated v1/v2 checkpoint reports, crash choices and marked reopen attempts now supply the versioned installer from the same settled predecessor and unchanged WAL. The selected manifest controls the exact canonical run paths. Successful reads and aligned durability give the installer the checked base plus the proper WAL suffix, or full replay from empty if the first checkpoint was discarded. The modeled native lock schedule returns the exact table, selected generation and WAL length while retaining lock ownership. The abstract table represents the full history with fresh pins. Production open remains on the v1 reader. [Locked path observations](../lean/Alvoki/Storage/Disk/LockedVersionedCheckpointRead.lean) · [Joint retry proof](../lean/Alvoki/Storage/Disk/VersionedCheckpointReopen.lean)

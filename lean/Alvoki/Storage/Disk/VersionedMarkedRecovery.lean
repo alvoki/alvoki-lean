@@ -6,6 +6,49 @@ import Alvoki.Storage.Disk.RecoveredPinRefinement
 namespace Alvoki.WAL.Boundary
 open Storage Manifest
 
+private theorem runSharedMarkedOpen_exactAligned
+    {before : ReopenImage} {history : List WAL.Write}
+    {checkpoint : Except String (Option (PackedTable × UInt64))}
+    {loaded : Option (PackedTable × UInt64)} {table : PackedTable}
+    (checkpointRead : checkpoint = .ok loaded)
+    (reads : MarkedWalReads before)
+    (markerRead : reads.marker = .ok (some (encode (WAL.encode history).size.toUInt64)))
+    (walRead : reads.wal = .ok (some (WAL.encode history)))
+    (fits : (WAL.encode history).size < UInt64.size)
+    (replayed : recoverSelected (loaded.getD (.empty, 0)).1 (WAL.encode history) = .ok table)
+    (report : Publication.Step → RepairReport) :
+    runSharedMarkedOpen checkpoint reads.marker reads.wal report .success before =
+      .ok (table, (loaded.getD (.empty, 0)).2, (WAL.encode history).size) before.syncDirectory := by
+  let wal := WAL.encode history
+  have chosen : select wal.size.toUInt64 wal = .ok wal := by
+    simpa [wal] using select_encoded history ByteArray.empty fits
+  let observations := MarkedReopenReads.mk reads (checkpoint.map fun result => (result.getD (.empty, 0)).1)
+  have baseRead : observations.checkpoint = .ok (loaded.getD (.empty, 0)).1 := by
+    simp [observations, checkpointRead, Except.map]
+  have preflight : observations.preflight = .ok ⟨wal, wal, table⟩ :=
+    observations.preflight_succeeds baseRead markerRead walRead (decode_encode _) chosen replayed
+  have opened : runMarkedReopen (.ok ⟨wal, wal, table⟩) report false .success before =
+      .ok table before.syncDirectory := by
+    simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen, Nat.lt_irrefl, ↓reduceIte]
+    rfl
+  rw [runSharedMarkedOpen_eq _ _ _ (by simp [markerRead]) _ _ _]
+  change (match runMarkedReopen observations.preflight report false .success before with
+    | .error message after => EStateM.Result.error message after
+    | .ok installed after =>
+      .ok (installed, ((checkpoint.toOption.getD none).getD (.empty, 0)).2,
+        (observations.preflight.toOption.map (fun value : MarkedPreflight => value.selected.size)).getD 0) after) = _
+  rw [preflight, opened, checkpointRead]
+  rfl
+
+private theorem alignedSettledFor {before : ReopenImage} {history : List WAL.Write} {manifest : Option ByteArray}
+    (visible : before.directory.active.manifest = manifest) (reads : MarkedWalReads before)
+    (markerRead : reads.marker = .ok (some (encode (WAL.encode history).size.toUInt64)))
+    (walRead : reads.wal = .ok (some (WAL.encode history))) : before.syncDirectory.SettledFor manifest history := by
+  refine ⟨?_, rfl, reads.walVisible _ walRead, rfl⟩
+  change (⟨before.directory.active.manifest, before.directory.active.walBoundary⟩ :
+    DirectoryPublication.Bindings) = ⟨_, _⟩
+  rw [visible, reads.markerVisible _ markerRead]
+
 /-- A marked open with a valid selected versioned checkpoint loads its runs
 and replays precisely the suffix above the selected watermark. Success of
 the indicated reads and aligned durability operation suffices for recovery
@@ -62,34 +105,8 @@ theorem VersionedCheckpointFileReads.completes_marked
     rw [← recoverSelected_encoded base coveredPrefix suffix (split.symm ▸ ordered) clock]
     exact replayed
   rw [split] at replayed
-  let wal := WAL.encode history
-  have chosen : select wal.size.toUInt64 wal = .ok wal := by
-    simpa [wal] using select_encoded history ByteArray.empty fits
-  let observations := MarkedReopenReads.mk walReads
-    (reads.result.map fun result => (result.getD (.empty, 0)).1)
-  have baseRead : observations.checkpoint = .ok base := by
-    simp [observations, loaded, Except.map]
-  have preflight : observations.preflight = .ok ⟨wal, wal, table⟩ :=
-    observations.preflight_succeeds baseRead markerRead walRead (decode_encode _) chosen replayed
-  have opened : runMarkedReopen (.ok ⟨wal, wal, table⟩) report false .success before =
-      .ok table before.syncDirectory := by
-    simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen, Nat.lt_irrefl, ↓reduceIte]
-    rfl
-  have installed : runSharedMarkedOpen reads.result walReads.marker walReads.wal report .success before =
-      .ok (table, selected.header.generation, wal.size) before.syncDirectory := by
-    rw [runSharedMarkedOpen_eq _ _ _ (by simp [markerRead]) _ _ _]
-    change (match runMarkedReopen observations.preflight report false .success before with
-      | .error message after => EStateM.Result.error message after
-      | .ok installed after =>
-        .ok (installed, ((reads.result.toOption.getD none).getD (.empty, 0)).2,
-          (observations.preflight.toOption.map (fun value : MarkedPreflight => value.selected.size)).getD 0) after) = _
-    rw [preflight, opened, loaded]
-    rfl
-  have settled : before.syncDirectory.SettledFor (some bytes) history := by
-    refine ⟨?_, rfl, walReads.walVisible _ walRead, rfl⟩
-    change (⟨before.directory.active.manifest, before.directory.active.walBoundary⟩ :
-      DirectoryPublication.Bindings) = ⟨_, _⟩
-    rw [visible, walReads.markerVisible _ markerRead]
+  have installed := runSharedMarkedOpen_exactAligned loaded walReads markerRead walRead fits replayed report
+  have settled := alignedSettledFor visible walReads markerRead walRead
   have total : table.committed.toNat = history.length := by
     rwa [← List.length_append, split] at count
   obtain ⟨abstract, model, applied, refined, sameTable, sameClock, sameFloor, fresh⟩ :=
@@ -104,5 +121,32 @@ theorem VersionedCheckpointFileReads.completes_marked
     (refined.rowsBounded bounded) (fun snapshot _ key => by rw [sameTable])
   exact ⟨files, base, table, durable, validated, structural, loaded, exactReplay, installed, settled, total,
     model, refined, represented, by rw [refined.pins, fresh]⟩
+
+/-- If the first checkpoint was discarded, an absent manifest lets the
+same marked open replay the entire WAL from the empty table. -/
+theorem VersionedCheckpointFileReads.completes_marked_absent
+    {image : CheckpointPublication.Image} {before : ReopenImage} {history : List WAL.Write}
+    (reads : VersionedCheckpointFileReads image.durable none)
+    (visible : before.directory.active.manifest = none) (manifestRead : reads.readManifest = .ok none)
+    (walReads : MarkedWalReads before)
+    (markerRead : walReads.marker = .ok (some (encode (WAL.encode history).size.toUInt64)))
+    (walRead : walReads.wal = .ok (some (WAL.encode history)))
+    (fits : (WAL.encode history).size < UInt64.size) (ordered : WAL.OrdinalsFrom 1 history)
+    (report : Publication.Step → RepairReport) :
+    ∃ table model, replay .empty history = .ok table ∧
+      runSharedMarkedOpen reads.result walReads.marker walReads.wal report .success before =
+        .ok (table, 0, (WAL.encode history).size) before.syncDirectory ∧
+      before.syncDirectory.SettledFor none history ∧ table.Refines model ∧
+      RepresentsWalHistory history model ∧ table.pins.active = [] := by
+  have loaded : reads.result = .ok none := by
+    simp [VersionedCheckpointFileReads.result, readVersionedCheckpoint, manifestRead, Bind.bind, Except.bind,
+      Pure.pure, Except.pure]
+  obtain ⟨table, applied, _⟩ := replay_ordinals_complete .empty history ordered
+  have replayed : recoverSelected .empty (WAL.encode history) = .ok table := by
+    simpa using (recoverSelected_encoded .empty [] history ordered rfl).trans applied
+  have installed := runSharedMarkedOpen_exactAligned loaded walReads markerRead walRead fits replayed report
+  obtain ⟨model, abstract, refined⟩ := replay_refines PackedTable.empty_refines applied
+  exact ⟨table, model, applied, installed, alignedSettledFor visible walReads markerRead walRead, refined,
+    List.nil_append history ▸ RepresentsWalHistory.empty.append abstract, by rw [replay_pins applied]; rfl⟩
 
 end Alvoki.WAL.Boundary

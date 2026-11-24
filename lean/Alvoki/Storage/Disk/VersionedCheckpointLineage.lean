@@ -133,37 +133,53 @@ def VersionedCheckpointFileReads.result {durable : UInt64 → Nat → Option Byt
   readVersionedCheckpoint reads.readManifest reads.readRun id
 
 private theorem VersionedCheckpointFileReads.selectedRunDurable
-    {durable : UInt64 → Nat → Option ByteArray} {bytes : ByteArray}
-    (reads : VersionedCheckpointFileReads durable (some bytes)) {selected : VersionedCheckpoint}
+    {durable : UInt64 → Nat → Option ByteArray} {manifest : Option ByteArray} {bytes : ByteArray}
+    (reads : VersionedCheckpointFileReads durable manifest) (visible : manifest = some bytes)
+    {selected : VersionedCheckpoint}
     (decoded : VersionedCheckpoint.decode bytes = .ok selected)
     {index : Nat} (within : index < selected.header.runCount.toNat) {value expected : ByteArray}
     (read : reads.readRun selected.header.generation index = .ok value)
     (known : durable selected.header.generation index = some expected) : value = expected := by
   have parsed := VersionedCheckpoint.decoded_case decoded
   cases selected with
-  | legacy header => exact reads.runDurable bytes header rfl parsed index within value expected read known
-  | integrity manifest => exact reads.integrityRunDurable bytes manifest rfl parsed index within value expected read known
+  | legacy header => exact reads.runDurable bytes header visible parsed index within value expected read known
+  | integrity manifest =>
+    exact reads.integrityRunDurable bytes manifest visible parsed index within value expected read known
 
-/-- A valid selected checkpoint loads from its exact durable file list when
-the indicated reads report success and the structural loader accepts it. -/
-theorem VersionedCheckpointFileReads.completes_selected
-    {image : CheckpointPublication.Image} {bytes : ByteArray} {selected : VersionedCheckpoint}
-    {files : List ByteArray} {base : PackedTable}
-    (reads : VersionedCheckpointFileReads image.durable (some bytes))
-    (manifestRead : reads.readManifest = .ok (some bytes))
+/-- The successful ordered read loop returns the exact durable bytes for
+the generation and indices selected by either manifest version. -/
+theorem VersionedCheckpointFileReads.selected_runs_success
+    {durable : CheckpointPublication.RunFiles} {manifest : Option ByteArray} {bytes : ByteArray}
+    {selected : VersionedCheckpoint} {files : List ByteArray}
+    (reads : VersionedCheckpointFileReads durable manifest) (visible : manifest = some bytes)
     (decoded : VersionedCheckpoint.decode bytes = .ok selected)
     (runReads : ∀ index, index < selected.header.runCount.toNat →
       ∃ payload, reads.readRun selected.header.generation index = .ok payload)
-    (durable : (List.range selected.header.runCount.toNat).mapM
-      (image.durable selected.header.generation) = some files)
-    (validated : selected.ValidatesFiles files) (loaded : loadRunSet selected.header files = .ok base) :
-    reads.result = .ok (some (base, selected.header.generation)) := by
+    (stored : (List.range selected.header.runCount.toNat).mapM (durable selected.header.generation) = some files) :
+    (List.range selected.header.runCount.toNat).mapM (reads.readRun selected.header.generation) = .ok files := by
   obtain ⟨observed, ordered⟩ := ordered_reads_succeed
     (indices := List.range selected.header.runCount.toNat)
     (fun index member => runReads index (List.mem_range.mp member))
   have same := observed_ordered_runs
-    (fun index member _ _ => reads.selectedRunDurable decoded (List.mem_range.mp member)) durable ordered
-  subst observed
+    (fun _ member _ _ => reads.selectedRunDurable visible decoded (List.mem_range.mp member)) stored ordered
+  exact same ▸ ordered
+
+/-- A valid selected checkpoint loads from its exact durable file list when
+the indicated reads report success and the structural loader accepts it. -/
+theorem VersionedCheckpointFileReads.completes_selected
+    {durable : CheckpointPublication.RunFiles} {manifest : Option ByteArray}
+    {bytes : ByteArray} {selected : VersionedCheckpoint}
+    {files : List ByteArray} {base : PackedTable}
+    (reads : VersionedCheckpointFileReads durable manifest)
+    (manifestRead : reads.readManifest = .ok (some bytes))
+    (decoded : VersionedCheckpoint.decode bytes = .ok selected)
+    (runReads : ∀ index, index < selected.header.runCount.toNat →
+      ∃ payload, reads.readRun selected.header.generation index = .ok payload)
+    (stored : (List.range selected.header.runCount.toNat).mapM (durable selected.header.generation) = some files)
+    (validated : selected.ValidatesFiles files) (loaded : loadRunSet selected.header files = .ok base) :
+    reads.result = .ok (some (base, selected.header.generation)) := by
+  have visible := (reads.manifestVisible _ manifestRead).symm
+  have ordered := reads.selected_runs_success visible decoded runReads stored
   have versioned : loadVersionedRunSet selected files = .ok base := by
     cases selected with
     | legacy => exact loaded
@@ -198,7 +214,7 @@ theorem VersionedCheckpointFileReads.loaded_lineage
     have agrees (index : Nat) (member : index ∈ List.range selected.header.runCount.toNat)
         (value expected : ByteArray) (read : reads.readRun selected.header.generation index = .ok value)
         (known : image.durable selected.header.generation index = some expected) : value = expected :=
-      reads.selectedRunDurable decoded (List.mem_range.mp member) read known
+      reads.selectedRunDurable rfl decoded (List.mem_range.mp member) read known
     have same := observed_ordered_runs agrees durable loaded
     subst observed
     rw [loaded] at opened
