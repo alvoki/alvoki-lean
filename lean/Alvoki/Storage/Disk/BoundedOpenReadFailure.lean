@@ -44,6 +44,22 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+/-- A reported recovery error prevents installation. Cleanup changes only
+ownership and can replace the error, while retaining the exact reached image. -/
+theorem runOpenWithInstallation_acquiredRecoveryError {image : Type}
+    (directory : DiskDirectory) (descriptor nextRef : Nat) (unlock : UnlockReport)
+    (recover : EStateM IO.Error image Reopened) (before : LockedFileState image)
+    {cause : IO.Error} {reached : image}
+    (failed : recover before.image = .error cause reached) :
+    runOpenWithInstallation directory descriptor nextRef (.ok true) unlock recover before =
+      match unlock with
+      | .success => .error cause ⟨reached, before.owners.set (directory.file .lock) none⟩
+      | .failure cleanup released =>
+        .error cleanup ⟨reached, before.owners.set (directory.file .lock)
+          (if released then none else some descriptor)⟩ := by
+  rw [runOpenWithInstallation_outcome, runOpenWithImage_acquired, failed]
+  cases unlock <;> rfl
+
 /-- A denied acquisition returns its original error or the busy error,
 without starting the marked reader. If acquisition succeeded, a rejected
 preparation installs no session and leaves the file image untouched.
@@ -76,14 +92,11 @@ theorem runOpenWithInstallation_boundedPreparationError {image : Type}
           .error cleanup ⟨before.image, before.owners.set (directory.file .lock)
             (if released then none else some descriptor)⟩ := by
   intro recover
-  rw [runOpenWithInstallation_outcome]
   rcases acquired with lockError | (_ | _)
   · rfl
   · rfl
-  · have rejected : recover before.image = .error cause before.image := by
-      dsimp only [recover]
-      rw [reopenMarkedBoundedWith_readOutcome, failed rfl]
-    rw [runOpenWithImage_acquired, rejected]
-    cases unlock <;> rfl
+  · apply runOpenWithInstallation_acquiredRecoveryError
+    dsimp only [recover]
+    rw [reopenMarkedBoundedWith_readOutcome, failed rfl]
 
 end Alvoki.Storage.DiskSession
