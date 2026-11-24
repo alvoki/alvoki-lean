@@ -111,7 +111,7 @@ In the pinned Linux Lean 4.36 runtime, a successful raw `open` followed by faile
 
 Start with a settled checkpointed close and reopen. Derive the exact run bytes at the selected generation and indices from the observed stat, open and bounded reads. Use those observations to derive any reference-model reads. The reached directory inventory supplies the selected WAL and names to prune. Connect successful primitive repair effects to the installed writer, then reuse that composition for the final reopen after retry or crash. [Checkpoint run reads](../lean/Alvoki/Storage/Disk/CheckpointRunChunkReports.lean) · [Cached WAL retry reads](../lean/Alvoki/Storage/Disk/WalSegmentCachedRetryReads.lean)
 
-Connect the admitted direct batch power-loss cut to the same cached installation, with a separate live-file and lock-release route for process death. Then lift the snapshot and compaction laws to WAL and row-version reclamation and bound replay work and retained space. [Batch crash and retries](../lean/Alvoki/Storage/Disk/SegmentedBatchPowerLoss.lean)
+Machine power loss during batch marker publication after a completed append now reaches the exact cached installation after admitted retries. Extend the batch trace to an interrupted append and to process death with separate live-file and lock-release observations. Lift the snapshot and compaction laws to WAL and row-version reclamation and bound replay work and retained space. [Batch crash and retries](../lean/Alvoki/Storage/Disk/SegmentedBatchCachedPowerLoss.lean)
 
 ### Garbage collection contract
 
