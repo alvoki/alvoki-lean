@@ -22,7 +22,7 @@ theorem mapM_readReport {ε σ α β : Type} (items : List α) (read : α → Ex
   | cons item rest ih =>
     simp only [List.mapM_cons, ih, bind_pure_comp, map_readReport, bind_readReport]
 
-private theorem filterMapM_readReport {ε σ α β : Type} (items : List α) (read : α → Except ε (Option β)) :
+theorem filterMapM_readReport {ε σ α β : Type} (items : List α) (read : α → Except ε (Option β)) :
     (items.filterMapM (fun item => liftExcept (read item)) : EStateM ε σ (List β)) =
       liftExcept (items.filterMapM read) := by
   induction items with

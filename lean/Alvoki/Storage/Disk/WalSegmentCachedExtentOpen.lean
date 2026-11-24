@@ -129,20 +129,25 @@ theorem CachedWalPayloadReports.byteCount {dir : DiskDirectory} {through : Nat}
     change (next - first) * frameSize + (through - next) * frameSize = (through - first) * frameSize
     rw [← Nat.add_mul, width]
 
-private theorem readCachedWalPayloadsFrom_reported {dir : DiskDirectory} {through : Nat}
+private theorem readCachedWalPayloadsFrom_reported [Monad m] [LawfulMonad m] [MonadExceptOf IO.Error m]
+    {dir : DiskDirectory} {through : Nat}
     {readSeal : FilePath → Nat → Except IO.Error ByteArray}
     {readKeeper : FilePath → Nat → Nat → Except IO.Error ByteArray}
+    {sealAction : FilePath → Nat → m ByteArray}
+    {keeperAction : FilePath → Nat → Nat → m ByteArray}
+    (sealOk : ∀ path count bytes, readSeal path count = .ok bytes → sealAction path count = pure bytes)
+    (keeperOk : ∀ path count size bytes,
+      readKeeper path count size = .ok bytes → keeperAction path count size = pure bytes)
     {required : List (Nat × IO.FS.Metadata)} {files : List (Nat × ByteArray)} {fileSize : Nat}
     (reports : CachedWalPayloadReports dir through readSeal readKeeper required files fileSize)
     (before : List (Nat × ByteArray)) :
-    readCachedWalPayloadsFrom dir through readSeal readKeeper required before =
-      .ok (before.reverse ++ files, fileSize) := by
+    readCachedWalPayloadsFrom dir through sealAction keeperAction required before =
+      pure (before.reverse ++ files, fileSize) := by
   induction reports generalizing before with
   | keeper size covers read =>
-    simp [readCachedWalPayloadsFrom, read, size, covers, Bind.bind, Except.bind, Pure.pure, Except.pure]
+    simp [readCachedWalPayloadsFrom, keeperOk _ _ _ _ read, size, covers]
   | sealed forward size extent fits read nextRead ih =>
-    simp [readCachedWalPayloadsFrom, forward, readExactRecoveryFileWith, extent, ← size, read, fits, ih,
-      Bind.bind, Except.bind, Pure.pure, Except.pure]
+    simp [readCachedWalPayloadsFrom, forward, readExactRecoveryFileWith, extent, ← size, sealOk _ _ _ read, fits, ih]
 
 theorem readCachedWalPayloads_reported {dir : DiskDirectory} {through : Nat}
     {readSeal : FilePath → Nat → Except IO.Error ByteArray}
@@ -150,7 +155,26 @@ theorem readCachedWalPayloads_reported {dir : DiskDirectory} {through : Nat}
     {required : List (Nat × IO.FS.Metadata)} {files : List (Nat × ByteArray)} {fileSize : Nat}
     (reports : CachedWalPayloadReports dir through readSeal readKeeper required files fileSize) :
     readCachedWalPayloads dir through readSeal readKeeper required = .ok (files, fileSize) := by
-  simpa [readCachedWalPayloads] using readCachedWalPayloadsFrom_reported reports []
+  change _ = (pure (files, fileSize) : Except IO.Error _)
+  simpa [readCachedWalPayloads] using readCachedWalPayloadsFrom_reported
+    (m := Except IO.Error) (sealAction := readSeal) (keeperAction := readKeeper)
+    (fun _ _ _ exactRead => exactRead) (fun _ _ _ _ exactRead => exactRead) reports []
+
+/-- Exact successful byte reports leave the repair interpreter state unchanged. -/
+theorem readCachedWalPayloads_reportedEffects {state : Type} {dir : DiskDirectory} {through : Nat}
+    {readSeal : FilePath → Nat → Except IO.Error ByteArray}
+    {readKeeper : FilePath → Nat → Nat → Except IO.Error ByteArray}
+    {required : List (Nat × IO.FS.Metadata)} {files : List (Nat × ByteArray)} {fileSize : Nat}
+    (reports : CachedWalPayloadReports dir through readSeal readKeeper required files fileSize) :
+    (readCachedWalPayloads dir through (fun path count => liftExcept (readSeal path count))
+      (fun path count size => liftExcept (readKeeper path count size)) required :
+        EStateM IO.Error state (List (Nat × ByteArray) × Nat)) = pure (files, fileSize) := by
+  simpa [readCachedWalPayloads] using readCachedWalPayloadsFrom_reported
+    (m := EStateM IO.Error state)
+    (sealAction := fun path count => liftExcept (readSeal path count))
+    (keeperAction := fun path count size => liftExcept (readKeeper path count size))
+    (fun _ _ _ exactRead => by rw [exactRead]; rfl)
+    (fun _ _ _ _ exactRead => by rw [exactRead]; rfl) reports []
 
 theorem readSelectedWithCachedExtents_reported (dir : DiskDirectory) (watermark : Nat) (length : UInt64)
     (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
