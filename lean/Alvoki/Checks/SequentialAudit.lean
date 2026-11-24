@@ -827,6 +827,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchRecoveryReport.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.pinnedReads
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.acquireReads
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reacquireReadsStable
 #check_axioms Alvoki.Storage.DiskSession.DatabaseBatchRetention.orderedSubmissions
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.preservesReady

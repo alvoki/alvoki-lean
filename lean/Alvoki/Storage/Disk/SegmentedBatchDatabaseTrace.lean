@@ -127,8 +127,8 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterBatchError
   obtain ⟨after, installed, _⟩ := report.installsRetained (trace.preservesRetained ready).1
   exact ⟨after, installed, .batchError trace report installed⟩
 
-/-- Current-session reads after any covered sequence agree with replay of
-the retained history, including after an uncertain batch. -/
+/-- Reads through active snapshot pins in the current session agree with
+replay of the retained history, including after an uncertain batch. -/
 theorem SegmentedBatchDatabaseTrace.pinnedReads
     (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
     (ready : initial.RetainedReady directory initialDescriptor) :
@@ -138,5 +138,31 @@ theorem SegmentedBatchDatabaseTrace.pinnedReads
         ∀ start stop, last.installed.table.range pin.handle start stop =
           some (reference.table.range start stop pin.sequence) :=
   (trace.preservesRetained ready).1.pinnedReads
+
+/-- A supported snapshot can be acquired against the installed table and
+reads the corresponding version of the retained history. -/
+theorem SegmentedBatchDatabaseTrace.acquireReads
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
+    (ready : initial.RetainedReady directory initialDescriptor) {snapshot : UInt64}
+    (retained : last.installed.table.pins.floor ≤ snapshot) (committed : snapshot ≤ last.installed.table.committed) :
+    ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty last.history reference ∧
+      ∃ pin pinned, last.installed.table.acquireAt snapshot = some (pin, pinned) ∧
+        (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+        ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) :=
+  (trace.preservesRetained ready).1.acquireReads retained committed
+
+/-- Reacquiring an earlier pin's sequence preserves its reads while the
+final writer still retains that sequence. -/
+theorem SegmentedBatchDatabaseTrace.reacquireReadsStable
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
+    (initialReady : initial.RetainedReady directory initialDescriptor) {oldPin : SnapshotPin}
+    (active : oldPin ∈ initial.installed.table.pins.active)
+    (retained : last.installed.table.pins.floor ≤ oldPin.sequence) :
+    ∃ newPin pinned, last.installed.table.acquireAt oldPin.sequence = some (newPin, pinned) ∧
+      newPin.sequence = oldPin.sequence ∧
+      (∀ key, pinned.lookup newPin.handle key = initial.installed.table.lookup oldPin.handle key) ∧
+      ∀ start stop, pinned.range newPin.handle start stop = initial.installed.table.range oldPin.handle start stop := by
+  obtain ⟨ready, _, history, _⟩ := trace.preservesRetained initialReady
+  exact initialReady.reacquireReadsStable ready history active retained
 
 end Alvoki.Storage.DiskSession
