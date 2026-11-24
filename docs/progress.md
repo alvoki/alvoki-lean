@@ -557,3 +557,7 @@ The shared rotation dispatcher selects the canonical successor path and uses the
 ## Canonical reads through the native session guard
 
 After a strict v2 trace from fresh open, the final ready session's active local pins return canonical point and range results through the `DiskTable` read guard. The read leaves the held lock map unchanged. The proof uses the observed final ready table and live session token comparison, so the final session can differ from the one installed during the initial open. [Strict guarded reads](../lean/Alvoki/Storage/Disk/IntegrityTraceReads.lean)
+
+## Progress after failed locked opens and healthy run collection
+
+Repeated marked-open failures preserve the admitted file image and carry the actual reported ownership outcome. A retained owner prevents another cooperating acquire until reported release. Given a settled strict writer and a final healthy open, the proof returns the exact table, generation, WAL history and byte count with fresh pins. Separately, a complete run inventory and healthy callbacks force durable absence of the eligible older unheld regular runs, including already-hidden files in an empty retry pass. Protected known bytes survive. [Locked recovery progress](../lean/Alvoki/Storage/Disk/LockedMarkedReopenFailureTrace.lean) · [Run collection progress](../lean/Alvoki/Storage/Disk/IntegrityRunCollectionProgress.lean)

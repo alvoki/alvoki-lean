@@ -46,6 +46,8 @@ import Alvoki.Storage.Disk.StrictCheckpointReopen
 import Alvoki.Storage.Disk.IntegrityDatabaseTrace
 import Alvoki.Storage.Disk.IntegrityTraceReads
 import Alvoki.Storage.Disk.LockedMarkedReopenEffects
+import Alvoki.Storage.Disk.LockedMarkedReopenFailureTrace
+import Alvoki.Storage.Disk.IntegrityRunCollectionProgress
 import Alvoki.Storage.Disk.RetainedWalSuffix
 import Alvoki.Storage.Disk.RetainedWalBoundary
 import Alvoki.Storage.Disk.WalSegmentPathIdentity
@@ -393,6 +395,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runLockedMarkedOpenRetainingImage_notAcquired
 #check_axioms Alvoki.Storage.DiskSession.runLockedMarkedOpenRetainingImage_recoveryError
 #check_axioms Alvoki.Storage.DiskSession.runLockedStrictMarkedOpenRetainingImage_retry
+#check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenReports.failure_retry
+#check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenReports.whileHeld
+#check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.toAttempts
+#check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.completesSettled
+#check_axioms Alvoki.Storage.CheckpointPublication.runUnlinkSchedule_success
+#check_axioms Alvoki.WAL.Boundary.IntegrityRunCollectionReports.completePass
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_encode
 #check_axioms Alvoki.WAL.decodeOrdinals_append_encoded
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_eq_recoverSelected

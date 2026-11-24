@@ -106,6 +106,41 @@ private theorem foldl_collectionSteps (before : RunUnlinkImage) (names : List Ru
     RunUnlinkImage.applyCollectionStep, RunUnlinkImage.syncDirectory]
   exact congrArg RunUnlinkImage.settled (foldl_collection_visible names rfl)
 
+/-- Every requested callback reports success at the image reached by its
+successful predecessors. This includes the final barrier for an empty pass. -/
+def RunUnlinkScheduleHealthy {error : Type} (before : RunUnlinkImage) (actions : List (RunCollection.Step RunAddress))
+    (perform : RunCollection.Step RunAddress → EStateM error RunUnlinkImage Unit) : Prop :=
+  ∀ prior action remaining, actions = prior ++ action :: remaining →
+    ∃ next, perform action (prior.foldl RunUnlinkImage.applyCollectionStep before) = .ok () next
+
+private theorem runCollectionSteps_success {error : Type} (actions : List (RunCollection.Step RunAddress))
+    (perform : RunCollection.Step RunAddress → EStateM error RunUnlinkImage Unit)
+    (reports : RunUnlinkEffectContract perform) (before : RunUnlinkImage)
+    (healthy : RunUnlinkScheduleHealthy before actions perform) :
+    (actions.forM perform) before = .ok () (actions.foldl RunUnlinkImage.applyCollectionStep before) := by
+  induction actions generalizing before with
+  | nil => rfl
+  | cons action remaining ih =>
+    obtain ⟨next, succeeded⟩ := healthy [] action remaining rfl
+    change perform action before = .ok () next at succeeded
+    have applied : next = before.applyCollectionStep action := by
+      simpa only [succeeded] using reports action before
+    simp only [List.forM_eq_forM, List.forM_cons, Bind.bind, EStateM.bind]
+    rw [succeeded, applied, List.foldl_cons]
+    apply ih
+    intro prior next rest chosen
+    exact healthy (action :: prior) next rest (by simp only [List.cons_append, ← chosen])
+
+/-- Healthy callbacks on the finite native schedule finish the whole
+pass and settle its exact visible run map as the sole crash image. -/
+theorem runUnlinkSchedule_success {error : Type} (names : List RunAddress) (before : RunUnlinkImage)
+    (perform : RunCollection.Step RunAddress → EStateM error RunUnlinkImage Unit)
+    (reports : RunUnlinkEffectContract perform)
+    (healthy : RunUnlinkScheduleHealthy before (RunCollection.steps names) perform) :
+    RunCollection.run names perform before = .ok () (before.finishPass names) := by
+  rw [← foldl_collectionSteps before names]
+  exact runCollectionSteps_success _ perform reports before healthy
+
 /-- Success of the actual finite schedule completes the durable pass. A
 reported failure returns exactly the effect of a prefix, which can include
 the operation that returned an error. -/
