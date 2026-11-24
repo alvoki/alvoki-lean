@@ -9,6 +9,17 @@ open System
     (pending : List (FilePath × handle)) : List (FilePath × handle) :=
   (path, descriptor) :: pending
 
+/-- Only an aligned keeper needs to retain its read handle for fsync. -/
+@[macro_inline] def readKeeperWith [Monad m] [MonadExceptOf IO.Error m] {handle : Type}
+    (openRead : FilePath → m handle) (readPrefix : handle → Nat → m ByteArray)
+    (remember : FilePath → handle → m Unit) (path : FilePath) (count fileSize : Nat) : m ByteArray := do
+  unless count ≤ fileSize ∧ count < USize.size do
+    throw (IO.userError s!"WAL keeper does not cover its selected prefix: '{path}'")
+  let file ← openRead path
+  let bytes ← readPrefix file count
+  if count == fileSize then remember path file
+  return bytes
+
 /-- Use only the cache fields required by this lookup. A pending match
 removes every entry for the path before the chosen handle is synced. -/
 @[macro_inline] def syncWithHandles [Monad m] [MonadExceptOf IO.Error m] {handle : Type}

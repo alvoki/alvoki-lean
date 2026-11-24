@@ -222,13 +222,10 @@ private def readSealedWalPrefix (path : FilePath) (count : Nat) : IO ByteArray :
 
 /-- Use the same held no-follow extent to read and decide whether to replace
 the keeper. Preserve the exact opened handle for an aligned keeper sync. -/
-private def readKeeperPrefix (files : SyncFiles) (path : FilePath) (count fileSize : Nat) : IO ByteArray := do
-  unless count ≤ fileSize ∧ count < USize.size do
-    throw (IO.userError s!"WAL keeper does not cover its selected prefix: '{path}'")
-  let file ← IO.FS.Handle.mk path .read
-  let bytes ← readExactPrefix (IO.userError "short or oversized WAL keeper read") file count ByteArray.empty
-  if count == fileSize then files.remember path file
-  return bytes
+private def readKeeperPrefix (files : SyncFiles) : FilePath → Nat → Nat → IO ByteArray :=
+  SyncHandleRouting.readKeeperWith (fun path => IO.FS.Handle.mk path .read)
+    (fun file count => readExactPrefix (IO.userError "short or oversized WAL keeper read") file count ByteArray.empty)
+    files.remember
 
 private def inspectWalSegment (path : FilePath) : IO (Except IO.Error IO.FS.Metadata) := do
   let report ← path.symlinkMetadata.toBaseIO
