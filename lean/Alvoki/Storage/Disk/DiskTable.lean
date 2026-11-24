@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.CheckpointRead
 import Alvoki.Storage.Disk.IntegrityCheckpointRead
 import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.RunFileSelection
+import Alvoki.Storage.Disk.ReadRecoveryPrefix
 import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.WalBatch
@@ -188,14 +189,8 @@ private def requiredRegularMetadata (path : FilePath) : IO IO.FS.Metadata := do
   return metadata
 
 private def readExactPrefix (mismatch : IO.Error) (file : IO.FS.Handle) (remaining : Nat)
-    (bytes : ByteArray) : IO ByteArray := do
-  if remaining = 0 then return bytes
-  let chunk ← file.read remaining.toUSize
-  if _valid : 0 < chunk.size ∧ chunk.size ≤ remaining then
-    let bytes := if bytes.isEmpty then chunk else bytes ++ chunk
-    readExactPrefix mismatch file (remaining - chunk.size) bytes
-  else throw mismatch
-termination_by remaining
+    (bytes : ByteArray) : IO ByteArray :=
+  readExactPrefixWith mismatch file.read remaining bytes
 
 private def readCheckpointRunSize (path : FilePath) : IO Nat := do
   return (← requiredRegularMetadata path).byteSize.toNat

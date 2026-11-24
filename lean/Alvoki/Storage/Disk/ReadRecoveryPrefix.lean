@@ -82,4 +82,60 @@ theorem readExactPrefixWith_success (mismatch : IO.Error)
 termination_by remaining
 decreasing_by omega
 
+/-- A healthy read can return any positive chunk within the pending request.
+The caller supplies successful primitive reads only for requests covered
+by the stable file and representable as machine sizes. -/
+def PrefixChunksAvailable (source : ByteArray) (read : USize → EStateM IO.Error Nat ByteArray) : Prop :=
+  ∀ offset count, 0 < count → count < USize.size → offset + count ≤ source.size →
+    ∃ chunk next, read count.toUSize offset = .ok chunk next ∧ 0 < chunk.size ∧ chunk.size ≤ count
+
+/-- Healthy primitive reads of the covered interval complete despite
+positive short reads and leave the cursor at the end of the interval. -/
+theorem readExactPrefixWith_completes (mismatch : IO.Error)
+    {source : ByteArray} {read : USize → EStateM IO.Error Nat ByteArray}
+    (observes : PrefixChunkObserves source read) (available : PrefixChunksAvailable source read)
+    (remaining : Nat) (fits : remaining < USize.size) {offset : Nat} {bytes : ByteArray}
+    (covered : offset + remaining ≤ source.size) :
+    readExactPrefixWith mismatch read remaining bytes offset =
+      .ok (bytes ++ source.extract offset (offset + remaining)) (offset + remaining) := by
+  rw [readExactPrefixWith]
+  by_cases finished : remaining = 0
+  · subst remaining
+    simp [Pure.pure, EStateM.pure]
+  · obtain ⟨chunk, next, reported, progress, within⟩ := available offset remaining (by omega) fits covered
+    obtain ⟨cursor, payload⟩ := observes remaining.toUSize offset next chunk reported
+    have endAt : next + (remaining - chunk.size) = offset + remaining := by omega
+    have later := readExactPrefixWith_completes mismatch observes available
+      (remaining - chunk.size) (by omega) (offset := next)
+      (bytes := if bytes.isEmpty then chunk else bytes ++ chunk) (by omega)
+    have joined : (if bytes.isEmpty then chunk else bytes ++ chunk) ++
+        source.extract next (offset + remaining) = bytes ++ source.extract offset (offset + remaining) := by
+      rw [appendPrefixChunk, ByteArray.append_assoc, payload,
+        ← ByteArray.extract_eq_extract_append_extract next (by omega) (by omega)]
+    rw [endAt, joined] at later
+    simp only [finished, ↓reduceIte, Bind.bind, EStateM.bind, reported, progress, within, and_self, ↓reduceDIte]
+    exact later
+termination_by remaining
+decreasing_by omega
+
+/-- A newly opened description starts at offset zero. Its admitted read
+returns exactly the selected bytes and leaves the cursor at their end. -/
+theorem readExactPrefixWith_completesAtStart (mismatch : IO.Error)
+    {source : ByteArray} {read : USize → EStateM IO.Error Nat ByteArray}
+    (observes : PrefixChunkObserves source read) (available : PrefixChunksAvailable source read)
+    (count : Nat) (fits : count < USize.size) (covered : count ≤ source.size) :
+    readExactPrefixWith mismatch read count ByteArray.empty 0 = .ok (source.extract 0 count) count := by
+  simpa only [Nat.zero_add, ByteArray.empty_append] using
+    readExactPrefixWith_completes mismatch observes available count fits (offset := 0)
+      (bytes := ByteArray.empty) (by simpa using covered)
+
+/-- Reading an admitted complete run or sealed WAL returns the file bytes. -/
+theorem readExactPrefixWith_completesFile (mismatch : IO.Error)
+    {source : ByteArray} {read : USize → EStateM IO.Error Nat ByteArray}
+    (observes : PrefixChunkObserves source read) (available : PrefixChunksAvailable source read)
+    (fits : source.size < USize.size) :
+    readExactPrefixWith mismatch read source.size ByteArray.empty 0 = .ok source source.size := by
+  simpa only [ByteArray.extract_zero_size] using
+    readExactPrefixWith_completesAtStart mismatch observes available source.size fits (Nat.le_refl _)
+
 end Alvoki.Storage
