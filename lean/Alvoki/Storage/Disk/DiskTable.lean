@@ -2,7 +2,9 @@ import Alvoki.Storage.Disk.DiskPaths
 import Alvoki.Storage.Disk.WalBoundary
 import Alvoki.Storage.Disk.CheckpointRead
 import Alvoki.Storage.Disk.DiskSession
+import Alvoki.Storage.Disk.RunFileSelection
 import Alvoki.Storage.Publication.CheckpointPublication
+import Alvoki.Storage.Publication.RunCollection
 
 namespace Alvoki.Storage
 open System Alvoki.Compaction
@@ -374,5 +376,55 @@ def DiskTable.checkpoint (db : DiskTable) : IO Unit := do
     (performCheckpointFileStep db.dir generation runs stagedManifest manifestBytes
       (fromOption · "checkpoint run index is out of bounds") writeFlushed syncPaths IO.FS.rename)
   db.phase.set (.ready { state with table, generation })
+
+/-- Inspect the final component without following symlinks. A missing entry
+in the owned parent is ineligible. Other lookup errors stop the pass. -/
+private def runCollectionKindAt (path : FilePath) : IO (Except String IO.FS.FileType) := do
+  match ← path.symlinkMetadata.toBaseIO with
+  | .ok metadata => return .ok metadata.type
+  | .error (.noFileOrDirectory _ 2 _) => return .error "run file is absent"
+  | .error error => throw error
+
+/-- Reclaim strictly older, unheld run generations in a ready writer session.
+Open and checkpoint settle the selected manifest before the writer becomes
+ready. Under the same lock, check that the observed v1 generation still
+matches before inspecting run paths. Callers must keep external file holds
+stable and pass their generations. Snapshot pins use runs in memory.
+
+An I/O error can leave a partial pass. The session can retry by listing
+again. Even an empty retry syncs the directory to settle earlier unlinks. -/
+def DiskTable.collectObsoleteRuns (db : DiskTable) (heldGenerations : List UInt64 := []) : IO Unit := do
+  let state ← db.installed
+  let manifest ← readOptionalFile (db.dir.file .manifest)
+  let current ← IO.ofExcept (validateRunCollectionGeneration state.generation manifest)
+  let entries ← db.dir.path.readDir
+  let names := entries.toList.map (·.fileName)
+  let selected ← selectRunFilesWith db.dir current (retainRunGeneration state.generation heldGenerations)
+    runCollectionKindAt names
+  RunCollection.run selected (RunCollection.performPaths (fun path => (IO.FS.removeFile path).toBaseIO)
+    (fun path => syncPaths #[path]) throw (fun (generation, index) => db.dir.file (.run generation index))
+    db.dir.path)
+
+/-- The native maintenance entry point validates the ready session and its
+manifest before executing the shared selector and unlink schedule. Both
+lookup and unlink reconstruct each run's path in the same locked directory. -/
+theorem DiskTable.collectObsoleteRuns_fileEffects (db : DiskTable) (heldGenerations : List UInt64) :
+    db.collectObsoleteRuns heldGenerations = (do
+      let state ← (← db.phase.get).installed
+      let manifestPath := db.dir.file .manifest
+      let manifest ← readOptionalDatabaseFile manifestPath.symlinkMetadata.toBaseIO
+        (fun _ => IO.FS.readBinFile manifestPath)
+        (fun _ => IO.userError s!"expected a regular database file: '{manifestPath}'") throw
+      let current ← IO.ofExcept (validateRunCollectionGeneration state.generation manifest)
+      let entries ← db.dir.path.readDir
+      let selected ← selectRunFilesWith db.dir current (retainRunGeneration state.generation heldGenerations)
+        (fun path => do
+          match ← path.symlinkMetadata.toBaseIO with
+          | .ok metadata => return .ok metadata.type
+          | .error (.noFileOrDirectory _ 2 _) => return .error "run file is absent"
+          | .error error => throw error) (entries.toList.map (·.fileName))
+      RunCollection.run selected (RunCollection.performPaths (fun path => (IO.FS.removeFile path).toBaseIO)
+        (fun path => syncPaths #[path]) throw (fun (generation, index) => db.dir.file (.run generation index))
+        db.dir.path)) := rfl
 
 end Alvoki.Storage

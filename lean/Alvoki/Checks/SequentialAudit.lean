@@ -21,6 +21,7 @@ import Alvoki.Storage.Disk.MarkedOpenControl
 import Alvoki.Storage.Disk.DiskLockLifecycle
 import Alvoki.Storage.Disk.RunGenerationCollection
 import Alvoki.Storage.Disk.RunUnlinkSchedule
+import Alvoki.Storage.Disk.LockedRunCollection
 import Alvoki.Storage.Disk.RecoveryProgress
 import Alvoki.Storage.Disk.LockedOpenFileReads
 import Alvoki.Storage.Disk.LockedMarkedRead
@@ -163,6 +164,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.RunUnlinkEffectContract.ofPaths
 #check_axioms Alvoki.Storage.CheckpointPublication.runUnlinkSchedule_outcome
 #check_axioms Alvoki.Storage.CheckpointPublication.RunUnlinkRetry.runSchedule
+#check_axioms Alvoki.Storage.validateRunCollectionGeneration_ok_iff
+#check_axioms Alvoki.Storage.retainRunGeneration_false_iff
+#check_axioms Alvoki.Storage.selectRunFilesWith_pure
+#check_axioms Alvoki.Storage.DiskTable.collectObsoleteRuns_fileEffects
+#check_axioms Alvoki.Storage.LockedRunInventory.selectOlderRuns_iff
+#check_axioms Alvoki.Storage.LockedRunInventory.runOlderCollection_outcome
 #check_axioms Alvoki.WAL.Boundary.checkpointMarked_reported
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_recoveryInputs

@@ -310,7 +310,8 @@ for path do
   printf '%s\n' "$path" >> "$ALVOKI_CHECK_SYNC_LOG"
   if [ "$mode" != second-only ] && [ "$path" = "${ALVOKI_CHECK_SYNC_FAIL-}" ]; then
     seen=$(grep -Fxc -- "$path" "$ALVOKI_CHECK_SYNC_LOG")
-    if [ "$seen" -gt "${ALVOKI_CHECK_SYNC_SKIP-0}" ]; then
+    skip=${ALVOKI_CHECK_SYNC_SKIP-0}
+    if [ "$seen" -gt "$skip" ] && { [ "$mode" != before-once ] || [ "$seen" -eq "$((skip + 1))" ]; }; then
       if [ "$mode" = after ]; then
         [ "$#" -eq 2 ]
         [ "$1" = -- ]
@@ -327,6 +328,7 @@ done
 
 private inductive SyncFailureMode where
   | beforeSync
+  | beforeOnce
   | afterSync
   | secondOnly
 
@@ -340,6 +342,7 @@ private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation
   let executable ← IO.appPath
   let mode := match failureMode with
     | .beforeSync => "before"
+    | .beforeOnce => "before-once"
     | .afterSync => "after"
     | .secondOnly => "second-only"
   let result ← IO.Process.output {
@@ -733,6 +736,101 @@ private def checkCheckpointRetryWithFewerRuns (root : FilePath) : IO Unit := do
       "reopen with the shorter run set changed the latest range"
   finally final.close
 
+private def checkObsoleteRunCollection (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let wal := dir / "WAL"
+  let manifest := dir / "MANIFEST"
+  let retired := dir / "run-1-0.v3"
+  let selected := dir / "run-3-0.v3"
+  let aliasPath := dir / "run-01-7.v3"
+  let currentExtra := dir / "run-3-9.v3"
+  let futureOrphan := dir / "run-4-0.v3"
+  let linked := dir / "run-1-8.v3"
+  let filler := ByteArray.mk #[17]
+  let firstRun := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩, ⟨7, 2, (0, 70)⟩]
+  let secondRun := Compaction.encodeV3 [⟨4, 3, (0, 41)⟩]
+  let thirdRun := Compaction.encodeV3 [⟨7, 4, (1, 0)⟩]
+  let heldFiles := [(dir / "run-2-0.v3", firstRun), (dir / "run-2-1.v3", secondRun)]
+  let expectFiles := fun (files : List (FilePath × ByteArray)) => do
+    for (path, expected) in files do
+      check (decide ((← IO.FS.readBinFile path) = expected)) s!"collection changed {path}"
+    check ((← linked.symlinkMetadata).type == .symlink) "collection did not preserve the obsolete symlink"
+  let expectReads := fun (db : DiskTable) (historical : DiskSnapshotPin) => do
+    let rows := (← db.range historical.handle 0 8).map (List.map fun row => (row.key, row.payload))
+    check (historical.sequence == 2 && (← db.lookup historical.handle 7) == some (some 70) &&
+      rows == some [(4, some 40), (7, some 70)]) "collection changed the retained snapshot"
+    let latest ← db.acquire
+    try
+      let rows := (← db.range latest.handle 0 8).map (List.map fun row => (row.key, row.payload))
+      check (latest.sequence == 5 && (← db.lookup latest.handle 7) == some none &&
+        (← db.lookup latest.handle 6) == some (some 60) && rows == some [(4, some 41), (6, some 60)])
+        "collection changed the current snapshot"
+    finally db.release latest.handle
+  let db ← DiskTable.open dir
+  let protectedFiles ← try
+    check ((← db.write 4 (some 40)) == 1) "unexpected first collection write sequence"
+    check ((← db.write 7 (some 70)) == 2) "unexpected second collection write sequence"
+    check (← db.advanceFloor 2) "could not set collection retention floor"
+    db.checkpoint
+    let historical ← db.acquire
+    check ((← db.write 4 (some 41)) == 3) "unexpected collection overwrite sequence"
+    db.checkpoint
+    let previousManifest ← IO.FS.readBinFile manifest
+    check ((← db.write 7 none) == 4) "unexpected collection tombstone sequence"
+    db.checkpoint
+    check ((← db.write 6 (some 60)) == 5) "unexpected collection WAL suffix"
+    for path in [aliasPath, currentExtra, futureOrphan] do
+      IO.FS.writeBinFile path filler
+    let link ← IO.Process.output { cmd := "ln", args := #["-s", "--", selected.toString, linked.toString] }
+    check (link.exitCode == 0) "could not create an obsolete run symlink"
+    let history := WAL.encode [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩,
+      ⟨4, 7, none⟩, ⟨5, 6, some 60⟩]
+    let manifestBytes ← IO.FS.readBinFile manifest
+    let protectedFiles := [(manifest, manifestBytes), (wal, history),
+      (dir / "WAL.commit", WAL.Boundary.encode history.size.toUInt64),
+      (selected, firstRun), (dir / "run-3-1.v3", secondRun), (dir / "run-3-2.v3", thirdRun),
+      (aliasPath, filler), (currentExtra, filler), (futureOrphan, filler)]
+    check (← retired.pathExists) "fixture did not create an obsolete checkpoint run"
+    expectFiles (protectedFiles ++ heldFiles)
+    expectReads db historical
+    -- Present the actual older, valid manifest without changing the ready writer.
+    let savedManifest := dir / "MANIFEST.fixture-original"
+    IO.FS.rename manifest savedManifest
+    try
+      IO.FS.writeBinFile manifest previousManifest
+      let .error (.userError message) ← (db.collectObsoleteRuns [2]).toBaseIO
+        | throw (IO.userError "collection accepted a different manifest generation")
+      check (message == "checkpoint generation changed before run collection")
+        "collection did not reject the generation mismatch"
+      check (decide ((← IO.FS.readBinFile retired) = firstRun))
+        "collection unlinked a run before rejecting the manifest generation"
+    finally IO.FS.rename savedManifest manifest
+    let restored ← IO.Process.output { cmd := "sync", args := #["--", dir.toString] }
+    check (restored.exitCode == 0) "could not settle the restored fixture manifest"
+    db.collectObsoleteRuns [2]
+    check (!(← retired.pathExists)) "collection did not unlink the obsolete run"
+    expectFiles (protectedFiles ++ heldFiles)
+    expectReads db historical
+    pure protectedFiles
+  finally db.close
+  -- Fail the first collection barrier after open. The same handle retries the
+  -- empty pass, so no reopen sync can hide a missing retry barrier.
+  let expectedSyncs := [wal.toString, dir.toString, dir.toString, dir.toString]
+  let (retried, syncs) ← probeDisk bin dir (some dir) (operation := "--collect-runs-and-retry")
+    (skipFailures := 1) (failureMode := .beforeOnce)
+  check (retried && syncs == expectedSyncs) "empty collection retry skipped its directory barrier"
+  for (path, _) in heldFiles do
+    check (!(← path.pathExists)) s!"collection retry kept the obsolete name {path}"
+  expectFiles protectedFiles
+  let reopened ← DiskTable.open dir
+  try
+    check ((← reopened.acquireAt 1).isNone) "collection changed the recovered retention floor"
+    let some historical ← reopened.acquireAt 2 | throw (IO.userError "collection lost the retained snapshot")
+    expectReads reopened historical
+  finally reopened.close
+
 private def checkRecoveryAfterCheckpointAndWriteFailures (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
@@ -855,6 +953,21 @@ private def checkPublicationCuts : IO Unit := do
 def main (args : List String) : IO Unit := do
   match args with
   | ["--open-once", dir] => (← DiskTable.open ⟨dir⟩).close
+  | ["--collect-runs-and-retry", path] =>
+    let dir : FilePath := ⟨path⟩
+    let db ← DiskTable.open dir
+    try
+      let latest ← db.acquire
+      let .error (.userError message) ← (db.collectObsoleteRuns []).toBaseIO
+        | throw (IO.userError "collection did not report its final sync error")
+      check (message.startsWith "sync failed for " && message.endsWith s!"injected sync failure: {dir}\n")
+        "collection did not preserve its sync error"
+      for name in ["run-2-0.v3", "run-2-1.v3"] do
+        check (!(← (dir / name).pathExists)) "collection sync did not follow the obsolete unlinks"
+      check (latest.sequence == 5 && (← db.lookup latest.handle 6) == some (some 60))
+        "collection sync error invalidated the active session"
+      db.collectObsoleteRuns
+    finally db.close
   | ["--write-once", dir] =>
     let db ← DiskTable.open ⟨dir⟩
     try
@@ -899,6 +1012,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkCheckpointReadFailureBeforeWalRepair
     IO.FS.withTempDir checkFirstCheckpointCuts
     IO.FS.withTempDir checkCheckpointRetryWithFewerRuns
+    IO.FS.withTempDir checkObsoleteRunCollection
     IO.FS.withTempDir checkRecoveryAfterCheckpointAndWriteFailures
     IO.println "Passed disk identity, WAL boundaries and ordinals, checkpoint cuts, and sync retry checks."
   | _ => throw (IO.userError "unexpected disk fixture arguments")
