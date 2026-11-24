@@ -53,6 +53,7 @@ import Alvoki.Storage.Disk.RetainedWalBoundary
 import Alvoki.Storage.Disk.WalSegmentPathIdentity
 import Alvoki.Storage.Disk.WalSegmentRecovery
 import Alvoki.Storage.Disk.WalSegmentRotation
+import Alvoki.Storage.Disk.WalSegmentRotationCommit
 import Alvoki.Storage.Disk.WalSegmentReadPlan
 import Alvoki.Storage.Disk.WalSegmentMarkerRead
 import Alvoki.Storage.Disk.WalSegmentRepairOpen
@@ -232,6 +233,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DirectoryPublication.Image.step_valid
 #check_axioms Alvoki.Storage.DirectoryPublication.retry_preserves
 #check_axioms Alvoki.WAL.Boundary.decode_encode
+#check_axioms Alvoki.WAL.Boundary.decode_reencode
 #check_axioms Alvoki.WAL.Boundary.withOpenWal_marked
 #check_axioms Alvoki.WAL.Boundary.select_encoded
 #check_axioms Alvoki.WAL.Boundary.select_size
@@ -462,6 +464,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRotation.Trace.selectsOriginal
 #check_axioms Alvoki.Storage.WalSegmentRotation.Trace.preservesRecovery
 #check_axioms Alvoki.Storage.WalSegmentRotation.Trace.readyForAppend
+#check_axioms Alvoki.Storage.WalSegment.concatenate_append_empty
+#check_axioms Alvoki.Storage.WalSegmentRotation.Trace.firstCommitSelection
 #check_axioms Alvoki.Storage.OpenPathReadReports.mem_walSegmentOffsets
 #check_axioms Alvoki.Storage.OpenPathReadReports.walSegmentOffsets_ordered
 #check_axioms Alvoki.Storage.OpenPathReadReports.walSegmentOffsets_strict

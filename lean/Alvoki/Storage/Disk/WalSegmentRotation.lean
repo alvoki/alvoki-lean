@@ -58,10 +58,10 @@ private theorem rotated_tail (image : WalSegmentImage) (watermark : Nat) :
       ([image.rotated.active].filter (fun segment => decide (watermark < segment.last))) := by
   simp only [WalSegmentImage.rotated, WalSegmentImage.afterWatermark, List.filter_append]
 
-private theorem concat_append_empty (segments : List WalSegment) (first : Nat) :
-    WalSegment.concatenate (segments ++ [.emptyAt first]) = WalSegment.concatenate segments := by
+theorem _root_.Alvoki.Storage.WalSegment.concatenate_append_empty (segments : List WalSegment) (first : Nat) :
+    WalSegment.concatenate (segments ++ [⟨first, first, ByteArray.empty⟩]) = WalSegment.concatenate segments := by
   induction segments with
-  | nil => simp [WalSegment.concatenate, WalSegment.emptyAt]
+  | nil => simp [WalSegment.concatenate]
   | cons segment rest ih => simp [WalSegment.concatenate, ih]
 
 /-- Observing the successor changes no recoverable byte concatenation. -/
@@ -71,7 +71,7 @@ theorem rotated_bytes (image : WalSegmentImage) (watermark : Nat) :
   rw [rotated_tail]
   by_cases needed : watermark < image.active.last
   · simpa [WalSegmentImage.rotated, WalSegment.emptyAt, needed] using
-      concat_append_empty (image.afterWatermark watermark) image.active.last
+      WalSegment.concatenate_append_empty (image.afterWatermark watermark) image.active.last
   · simp [WalSegmentImage.rotated, WalSegment.emptyAt, needed]
 
 theorem CanRotate.valid_rotated {image : WalSegmentImage} {history : List WAL.Write}

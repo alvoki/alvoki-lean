@@ -28,6 +28,32 @@ theorem decode_encode (length : UInt64) : decode (encode length) = .ok length :=
     word_encodeWords words 2 (by simp [words])
   simp [decode, version, count, hash]
 
+/-- An accepted marker is exactly the canonical encoding of its byte count. -/
+theorem decode_reencode {bytes : ByteArray} {length : UInt64}
+    (accepted : decode bytes = .ok length) : encode length = bytes := by
+  unfold decode at accepted
+  split at accepted
+  · contradiction
+  rename_i size
+  dsimp only at accepted
+  split at accepted
+  · contradiction
+  rename_i version
+  split at accepted
+  · contradiction
+  rename_i checksum
+  cases accepted
+  have bytesSize : bytes.size = 24 := by simpa using size
+  have original : encodeWords [word bytes 0, word bytes 8, word bytes 16] = bytes := by
+    apply eq_of_aligned_words (by simp [bytesSize])
+    intro index within
+    have lane : index = 0 ∨ index = 1 ∨ index = 2 := by omega
+    rcases lane with rfl | rfl | rfl <;> rw [word_encodeWords] <;> first | rfl | simp
+  have tag : word bytes 0 = magic := by simpa using version
+  have digest : word bytes 16 = checksumWords [magic, word bytes 8] := by simpa using checksum
+  rw [digest, tag] at original
+  exact original
+
 /-- Check the recorded byte count before selecting complete frames. The common
 case returns the existing byte array and retains no second copy. -/
 def select (length : UInt64) (wal : ByteArray) : Except String ByteArray :=
