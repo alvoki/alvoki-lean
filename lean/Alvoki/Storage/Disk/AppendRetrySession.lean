@@ -160,6 +160,36 @@ def appendCutFiles (before : WalSegmentImage) (history : List WAL.Write) (event 
     ((writeFilesAfter (runWriteEffects history event effects (before.directory.staged .walBoundary))).reopenSegment
       before.active.first history before.directory.active.manifest) scratch
 
+/-- The marker selects the acknowledged history or that history with the
+submitted frame. The selected keeper layout supplies the exact installation
+when the bounded reopen reports the required reads and durability effects. -/
+abbrev AppendRetryInstallation (directory : DiskDirectory) (descriptor nextRef : Nat)
+    (liveRefs : List Nat) (before : WalSegmentImage) (history : List WAL.Write) (event : WAL.Write)
+    (validLayout : WalSegmentImage → List WAL.Write → Prop) (published : CheckpointPublication.Image)
+    (generation : UInt64) (activeFirst : Nat) (retry : LockedFileState FileImage) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) : Prop :=
+  ∃ selectedHistory, (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
+    retry.image.directory.active.manifest = before.directory.active.manifest ∧
+    retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
+    ∃ wal : WalSegmentImage, wal = before.appendSelectedView retry.image.directory.active selectedHistory ∧
+    wal.ReadLayout selectedHistory ∧ validLayout wal selectedHistory ∧
+    retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
+    ∃ selected : CanonicalKeeperLayout retry.image selectedHistory,
+      selected.target.first = activeFirst ∧ selected.target.first = wal.active.first ∧
+      ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+          wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
+        sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
+        (∀ action prior next,
+          ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+          prior.effect selected.target action = some next →
+          performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
+        AppendCutReady directory descriptor liveRefs selectedHistory published retry.image selected.target
+          generation (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+            (raw.reopen removeFile write sync renameFile) retry)
+
 private theorem installAppendRetryLayout {directory : DiskDirectory} {before : WalSegmentImage}
     {history : List WAL.Write} {event : WAL.Write} {watermark activeFirst : Nat}
     {validLayout : WalSegmentImage → List WAL.Write → Prop} {retry : LockedFileState FileImage}
@@ -180,24 +210,8 @@ private theorem installAppendRetryLayout {directory : DiskDirectory} {before : W
     (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
     (sync : Array FilePath → EStateM IO.Error FileImage Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
-    ∃ selectedHistory, (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
-      retry.image.directory.active.manifest = before.directory.active.manifest ∧
-      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
-      ∃ wal : WalSegmentImage, wal = before.appendSelectedView retry.image.directory.active selectedHistory ∧
-      wal.ReadLayout selectedHistory ∧ validLayout wal selectedHistory ∧
-      retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
-      ∃ selected : CanonicalKeeperLayout retry.image selectedHistory,
-        selected.target.first = activeFirst ∧ selected.target.first = wal.active.first ∧
-        ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
-            wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
-          sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
-          (∀ action prior next,
-            ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
-            prior.effect selected.target action = some next →
-            performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
-          AppendCutReady directory descriptor liveRefs selectedHistory published retry.image selected.target
-            generation (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
-              (raw.reopen removeFile write sync renameFile) retry) := by
+    AppendRetryInstallation directory descriptor nextRef liveRefs before history event validLayout
+      published generation activeFirst retry unlock removeFile write sync renameFile := by
   obtain ⟨selectedHistory, allowed, manifest, marker, wal, exactWal, layout, valid, kept, selected, range, keeper, first,
     descriptors, offsets, selectedPrepared, empty⟩ := recovered
   have accepted : published.AcceptsVersioned selectedHistory.length.toUInt64 (CheckpointRepresentsPrefix selectedHistory)
@@ -237,24 +251,9 @@ theorem BoundedReopenTrace.installsAfterAppendCut {directory : DiskDirectory} {o
     (sync : Array FilePath → EStateM IO.Error FileImage Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
     retry.image.kept = (appendCutFiles before history event effects scratch).kept ∧
-    ∃ selectedHistory, (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
-      retry.image.directory.active.manifest = before.directory.active.manifest ∧
-      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
-      ∃ wal : WalSegmentImage, wal = before.appendSelectedView retry.image.directory.active selectedHistory ∧
-      wal.ReadLayout selectedHistory ∧ WalSegment.Chain selectedHistory 0 wal.segments ∧
-      retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
-      ∃ selected : CanonicalKeeperLayout retry.image selectedHistory,
-        selected.target.first = installed.activeFirst ∧ selected.target.first = wal.active.first ∧
-        ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
-            wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
-          sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
-          (∀ action prior next,
-            ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
-            prior.effect selected.target action = some next →
-            performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
-          AppendCutReady directory descriptor liveRefs selectedHistory published retry.image selected.target
-            installed.generation (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
-              (raw.reopen removeFile write sync renameFile) retry) := by
+    AppendRetryInstallation directory descriptor nextRef liveRefs before history event
+      (fun wal selected => WalSegment.Chain selected 0 wal.segments) published installed.generation installed.activeFirst
+      retry unlock removeFile write sync renameFile := by
   have lineage := attempts.lineage (fun a b pair => AppendRetryTarget.unique a b pair)
   obtain ⟨strict, covered, _⟩ := DirectoryPublication.Bindings.walRange_accounting ready.range
   have recovered := appendRetryLayout ready.layout ready.chain covered event allFit effects
@@ -288,24 +287,9 @@ theorem BoundedReopenTrace.installsAfterRetainedAppendCut {directory : DiskDirec
     (sync : Array FilePath → EStateM IO.Error FileImage Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
     retry.image.kept = (appendCutFiles before history event effects scratch).kept ∧
-    ∃ selectedHistory, (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
-      retry.image.directory.active.manifest = before.directory.active.manifest ∧
-      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
-      ∃ wal : WalSegmentImage, wal = before.appendSelectedView retry.image.directory.active selectedHistory ∧
-      wal.ReadLayout selectedHistory ∧ wal.Valid selectedHistory ∧
-      retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
-      ∃ selected : CanonicalKeeperLayout retry.image selectedHistory,
-        selected.target.first = before.active.first ∧ selected.target.first = wal.active.first ∧
-        ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
-            wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
-          sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
-          (∀ action prior next,
-            ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
-            prior.effect selected.target action = some next →
-            performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
-          AppendCutReady directory descriptor liveRefs selectedHistory published retry.image selected.target
-            generation (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
-              (raw.reopen removeFile write sync renameFile) retry) := by
+    AppendRetryInstallation directory descriptor nextRef liveRefs before history event
+      WalSegmentImage.Valid published generation before.active.first
+      retry unlock removeFile write sync renameFile := by
   have lineage := attempts.lineage (fun a b pair => AppendRetryTarget.unique a b pair)
   have recovered := retainedAppendRetryLayout layout valid oldRange event allFit effects
     (before.directory.staged .walBoundary) lineage
@@ -355,24 +339,9 @@ theorem BoundedReopenTrace.installsAfterAppendError {directory : DiskDirectory} 
       references.remaining drops = [] → references.afterFileDrops drops directory poisoned.2 = released) ∧
     retry.image.kept = (before.appendReopenFiles
       (failed.reopenSegment before.active.first history before.directory.active.manifest) scratch).kept ∧
-    ∃ selectedHistory, (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
-      retry.image.directory.active.manifest = before.directory.active.manifest ∧
-      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
-      ∃ wal : WalSegmentImage, wal = before.appendSelectedView retry.image.directory.active selectedHistory ∧
-      wal.ReadLayout selectedHistory ∧ WalSegment.Chain selectedHistory 0 wal.segments ∧
-      retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
-      ∃ selected : CanonicalKeeperLayout retry.image selectedHistory,
-        selected.target.first = installed.activeFirst ∧ selected.target.first = wal.active.first ∧
-        ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
-            wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
-          sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
-          (∀ action prior next,
-            ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
-            prior.effect selected.target action = some next →
-            performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
-          AppendCutReady directory descriptor liveRefs selectedHistory published retry.image selected.target
-            installed.generation (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
-              (raw.reopen removeFile write sync renameFile) retry) := by
+    AppendRetryInstallation directory descriptor nextRef liveRefs before history event
+      (fun wal selected => WalSegment.Chain selected 0 wal.segments) published installed.generation installed.activeFirst
+      retry unlock removeFile write sync renameFile := by
   intro initial next commit poisoned released
   obtain ⟨unknown, closed, dropped, _⟩ := runPreparedWrite_failure_handoff
     (before := ⟨initial, owners⟩) installed next event.sequence commitFailed ownership
