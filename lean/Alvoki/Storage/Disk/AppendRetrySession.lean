@@ -51,12 +51,12 @@ private theorem appendObservation {before : WalSegmentImage} {cut : ReopenImage}
     exact ⟨.crash pair keeper, none, .crash pair keeper metadata payload, rfl⟩
 
 private def AppendRetryLayout (before : WalSegmentImage) (history : List WAL.Write)
-    (event : WAL.Write) (watermark : Nat) (current : FileImage) : Prop :=
+    (event : WAL.Write) (watermark : Nat) (validLayout : WalSegmentImage → List WAL.Write → Prop) (current : FileImage) : Prop :=
   ∃ selectedHistory, (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
     current.directory.active.manifest = before.directory.active.manifest ∧
     current.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
     ∃ wal : WalSegmentImage, wal = before.appendSelectedView current.directory.active selectedHistory ∧
-    wal.ReadLayout selectedHistory ∧ WalSegment.Chain selectedHistory 0 wal.segments ∧
+    wal.ReadLayout selectedHistory ∧ validLayout wal selectedHistory ∧
     current.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
     ∃ selected : CanonicalKeeperLayout current selectedHistory,
       selected.range.watermark = watermark ∧ selected.keeper = wal.active ∧
@@ -66,32 +66,16 @@ private def AppendRetryLayout (before : WalSegmentImage) (history : List WAL.Wri
         some (selected.first, (wal.readDescriptors watermark).map WalSegment.first) ∧
       Prepared current selected.target selected.plan ∧ current.later.visible = []
 
-/-- At the end of a finite failed-open prefix, recover the exact current
-keeper layout under the original append's old-or-new marker rule. -/
-private theorem appendRetryLayout {before : WalSegmentImage} {history : List WAL.Write}
-    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
-    {watermark : Nat} (covered : watermark ≤ history.length)
-    (event : WAL.Write) (fits : (WAL.encode (history ++ [event])).size < UInt64.size)
-    (effects : WriteEffects) (markerScratch : Option (ByteArray × Bool))
-    (checkpoint : selectedCheckpointWatermark before.directory.active.manifest = some watermark)
-    {scratch : Option (ByteArray × Bool)} {current : FileImage} :
-    let cut := (writeFilesAfter (runWriteEffects history event effects markerScratch)).reopenSegment
-      before.active.first history before.directory.active.manifest
-    ReopenLineage (before.appendReopenFiles cut scratch) (AppendRetryTarget history event before.active.first) current →
-    AppendRetryLayout before history event watermark current := by
-  intro cut lineage
-  have readChoice {image : FileImage} (observed : BeforeReopenBarrier (before.appendReopenFiles cut scratch) image) :
-      AppendRetryLayout before history event watermark image := by
-    obtain ⟨seen, observedScratch, admitted, rfl⟩ := appendObservation observed
-    obtain ⟨selectedHistory, allowed, manifest, marker, canonical, whole, selected, range, keeper, descriptors,
-      offsets, _, keeperChoices, keptPrefix, later⟩ := layout.afterAppendCut chain covered event fits effects
-        before.directory.active.manifest markerScratch checkpoint seen observedScratch admitted
-    refine ⟨selectedHistory, allowed, manifest, marker, _, rfl, canonical, whole, rfl, selected,
-      congrArg MarkedWalRange.watermark range, keeper, ?_, descriptors, offsets,
-      selected.prepared keeperChoices keptPrefix later, rfl⟩
-    change selected.keeper.first = before.active.first
-    rw [keeper]
-    rfl
+/-- Retries retain the selected descriptor property while repairing the
+visible keeper. The authorized target identifies the same history and
+pair through every subsequent effect and crash. -/
+private theorem appendRetryFromObservation {before : WalSegmentImage} {history : List WAL.Write}
+    {event : WAL.Write} {watermark : Nat} {validLayout : WalSegmentImage → List WAL.Write → Prop}
+    {source current : FileImage}
+    (lineage : ReopenLineage source (AppendRetryTarget history event before.active.first) current)
+    (readChoice : ∀ {image}, BeforeReopenBarrier source image →
+      AppendRetryLayout before history event watermark validLayout image) :
+    AppendRetryLayout before history event watermark validLayout current := by
   cases lineage with
   | before original => exact readChoice original
   | repairing original admitted prepared trace =>
@@ -114,6 +98,59 @@ private theorem appendRetryLayout {before : WalSegmentImage} {history : List WAL
     · rw [sealed, nextKeeper]; exact descriptors
     · rw [start]; exact offsets
 
+/-- At the end of a finite failed-open prefix, recover the exact current
+keeper layout under the original append's old-or-new marker rule. -/
+private theorem appendRetryLayout {before : WalSegmentImage} {history : List WAL.Write}
+    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
+    {watermark : Nat} (covered : watermark ≤ history.length)
+    (event : WAL.Write) (fits : (WAL.encode (history ++ [event])).size < UInt64.size)
+    (effects : WriteEffects) (markerScratch : Option (ByteArray × Bool))
+    (checkpoint : selectedCheckpointWatermark before.directory.active.manifest = some watermark)
+    {scratch : Option (ByteArray × Bool)} {current : FileImage} :
+    let cut := (writeFilesAfter (runWriteEffects history event effects markerScratch)).reopenSegment
+      before.active.first history before.directory.active.manifest
+    ReopenLineage (before.appendReopenFiles cut scratch) (AppendRetryTarget history event before.active.first) current →
+    AppendRetryLayout before history event watermark (fun wal history => WalSegment.Chain history 0 wal.segments) current := by
+  intro cut lineage
+  have readChoice {image : FileImage} (observed : BeforeReopenBarrier (before.appendReopenFiles cut scratch) image) :
+      AppendRetryLayout before history event watermark (fun wal history => WalSegment.Chain history 0 wal.segments) image := by
+    obtain ⟨seen, observedScratch, admitted, rfl⟩ := appendObservation observed
+    obtain ⟨selectedHistory, allowed, manifest, marker, canonical, whole, selected, range, keeper, descriptors,
+      offsets, _, keeperChoices, keptPrefix, later⟩ := layout.afterAppendCut chain covered event fits effects
+        before.directory.active.manifest markerScratch checkpoint seen observedScratch admitted
+    refine ⟨selectedHistory, allowed, manifest, marker, _, rfl, canonical, whole, rfl, selected,
+      congrArg MarkedWalRange.watermark range, keeper, ?_, descriptors, offsets,
+      selected.prepared keeperChoices keptPrefix later, rfl⟩
+    change selected.keeper.first = before.active.first
+    rw [keeper]
+    rfl
+  exact appendRetryFromObservation lineage readChoice
+
+private theorem retainedAppendRetryLayout {before : WalSegmentImage} {history : List WAL.Write}
+    (layout : before.ReadLayout history) (valid : before.Valid history) {watermark : Nat}
+    (oldRange : before.directory.active.walRange = some ⟨watermark, history.length⟩)
+    (event : WAL.Write) (fits : (WAL.encode (history ++ [event])).size < UInt64.size)
+    (effects : WriteEffects) (markerScratch : Option (ByteArray × Bool))
+    {scratch : Option (ByteArray × Bool)} {current : FileImage} :
+    let cut := (writeFilesAfter (runWriteEffects history event effects markerScratch)).reopenSegment
+      before.active.first history before.directory.active.manifest
+    ReopenLineage (before.appendReopenFiles cut scratch) (AppendRetryTarget history event before.active.first) current →
+    AppendRetryLayout before history event watermark WalSegmentImage.Valid current := by
+  intro cut lineage
+  have readChoice {image : FileImage} (observed : BeforeReopenBarrier (before.appendReopenFiles cut scratch) image) :
+      AppendRetryLayout before history event watermark WalSegmentImage.Valid image := by
+    obtain ⟨seen, observedScratch, admitted, rfl⟩ := appendObservation observed
+    obtain ⟨selectedHistory, allowed, manifest, marker, canonical, whole, selected, range, keeper, descriptors,
+      offsets, _, keeperChoices, keptPrefix, later⟩ := layout.afterRetainedAppendCut valid oldRange event fits effects
+        markerScratch seen observedScratch admitted
+    refine ⟨selectedHistory, allowed, manifest, marker, _, rfl, canonical, whole, rfl, selected,
+      congrArg MarkedWalRange.watermark range, keeper, ?_, descriptors, offsets,
+      selected.prepared keeperChoices keptPrefix later, rfl⟩
+    change selected.keeper.first = before.active.first
+    rw [keeper]
+    rfl
+  exact appendRetryFromObservation lineage readChoice
+
 /-- Project the physical cut of the append and marker schedule into the
 bounded opener's file image. The immutable sealed inventory comes from
 the ready writer. -/
@@ -122,6 +159,63 @@ def appendCutFiles (before : WalSegmentImage) (history : List WAL.Write) (event 
   before.appendReopenFiles
     ((writeFilesAfter (runWriteEffects history event effects (before.directory.staged .walBoundary))).reopenSegment
       before.active.first history before.directory.active.manifest) scratch
+
+private theorem installAppendRetryLayout {directory : DiskDirectory} {before : WalSegmentImage}
+    {history : List WAL.Write} {event : WAL.Write} {watermark activeFirst : Nat}
+    {validLayout : WalSegmentImage → List WAL.Write → Prop} {retry : LockedFileState FileImage}
+    (recovered : AppendRetryLayout before history event watermark validLayout retry.image)
+    (sameStart : activeFirst = before.active.first) (ordered : WAL.OrdinalsFrom 1 history)
+    (extended : WAL.OrdinalsFrom 1 (history ++ [event]))
+    (allFit : (WAL.encode (history ++ [event])).size < UInt64.size)
+    {published : CheckpointPublication.Image}
+    (checkpoint : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      before.directory.active.manifest)
+    {generation : UInt64}
+    (generationRead : ((before.directory.active.manifest.mapM fun bytes =>
+      (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
+      .ok generation)
+    {descriptor nextRef : Nat} (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    ∃ selectedHistory, (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
+      retry.image.directory.active.manifest = before.directory.active.manifest ∧
+      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
+      ∃ wal : WalSegmentImage, wal = before.appendSelectedView retry.image.directory.active selectedHistory ∧
+      wal.ReadLayout selectedHistory ∧ validLayout wal selectedHistory ∧
+      retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
+      ∃ selected : CanonicalKeeperLayout retry.image selectedHistory,
+        selected.target.first = activeFirst ∧ selected.target.first = wal.active.first ∧
+        ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+            wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
+          sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
+          (∀ action prior next,
+            ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+            prior.effect selected.target action = some next →
+            performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
+          AppendCutReady directory descriptor liveRefs selectedHistory published retry.image selected.target
+            generation (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+              (raw.reopen removeFile write sync renameFile) retry) := by
+  obtain ⟨selectedHistory, allowed, manifest, marker, wal, exactWal, layout, valid, kept, selected, range, keeper, first,
+    descriptors, offsets, selectedPrepared, empty⟩ := recovered
+  have accepted : published.AcceptsVersioned selectedHistory.length.toUInt64 (CheckpointRepresentsPrefix selectedHistory)
+      retry.image.directory.active.manifest := by
+    rw [manifest]
+    rcases allowed with rfl | rfl
+    · exact checkpoint
+    · exact published.acceptsVersioned_extend_history checkpoint allFit
+  have consecutive : WAL.OrdinalsFrom 1 selectedHistory := by
+    rcases allowed with rfl | rfl
+    · exact ordered
+    · exact extended
+  refine ⟨selectedHistory, allowed, manifest, marker, wal, exactWal, layout, valid, kept, selected, first.trans sameStart.symm,
+    congrArg WalSegment.first keeper, ?_⟩
+  intro raw settles healthy
+  exact runOpenWithInstallation_appendLayout layout consecutive selected keeper (range.symm ▸ descriptors)
+    (range.symm ▸ offsets) selectedPrepared empty accepted (manifest.symm ▸ generationRead) raw
+    liveRefs fresh acquisition unlock removeFile write sync renameFile settles healthy
 
 /-- Recover a modeled physical append cut after finitely many failed opens
 or crashes. The cut fixes the allowable old and extended markers. This
@@ -162,27 +256,61 @@ theorem BoundedReopenTrace.installsAfterAppendCut {directory : DiskDirectory} {o
             installed.generation (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
               (raw.reopen removeFile write sync renameFile) retry) := by
   have lineage := attempts.lineage (fun a b pair => AppendRetryTarget.unique a b pair)
-  refine ⟨lineage.keepsSealed, ?_⟩
   obtain ⟨strict, covered, _⟩ := DirectoryPublication.Bindings.walRange_accounting ready.range
-  obtain ⟨selectedHistory, allowed, manifest, marker, wal, exactWal, layout, chain, kept, selected, range, keeper, first,
-    descriptors, offsets, selectedPrepared, empty⟩ := appendRetryLayout ready.layout ready.chain covered event allFit
-      effects (before.directory.staged .walBoundary) strict lineage
-  have accepted : published.AcceptsVersioned selectedHistory.length.toUInt64 (CheckpointRepresentsPrefix selectedHistory)
-      retry.image.directory.active.manifest := by
-    rw [manifest]
-    rcases allowed with rfl | rfl
-    · exact ready.checkpoint
-    · exact published.acceptsVersioned_extend_history ready.checkpoint allFit
-  have consecutive : WAL.OrdinalsFrom 1 selectedHistory := by
-    rcases allowed with rfl | rfl
-    · exact ready.ordered
-    · exact extended
-  refine ⟨selectedHistory, allowed, manifest, marker, wal, exactWal, layout, chain, kept, selected, first.trans ready.first.symm,
-    congrArg WalSegment.first keeper, ?_⟩
-  intro raw settles healthy
-  exact runOpenWithInstallation_appendLayout layout consecutive selected keeper (range.symm ▸ descriptors)
-    (range.symm ▸ offsets) selectedPrepared empty accepted (manifest.symm ▸ ready.generation) raw
-    liveRefs fresh acquisition unlock removeFile write sync renameFile settles healthy
+  have recovered := appendRetryLayout ready.layout ready.chain covered event allFit effects
+    (before.directory.staged .walBoundary) strict lineage
+  exact ⟨lineage.keepsSealed, installAppendRetryLayout recovered ready.first ready.ordered extended allFit
+    ready.checkpoint ready.generation liveRefs fresh acquisition unlock removeFile write sync renameFile⟩
+
+/-- The same bounded retry and healthy open apply after covered WAL
+collection. The selected valid read suffix supplies the canonical keeper
+and exact history as the actual open installs its next writer. -/
+theorem BoundedReopenTrace.installsAfterRetainedAppendCut {directory : DiskDirectory} {owners : LockOwners}
+    {before : WalSegmentImage} {history : List WAL.Write}
+    (layout : before.ReadLayout history) (valid : before.Valid history) {watermark : Nat}
+    (oldRange : before.directory.active.walRange = some ⟨watermark, history.length⟩)
+    (ordered : WAL.OrdinalsFrom 1 history) {published : CheckpointPublication.Image}
+    (checkpoint : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      before.directory.active.manifest)
+    {generation : UInt64}
+    (generationRead : ((before.directory.active.manifest.mapM fun bytes =>
+      (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
+      .ok generation)
+    (event : WAL.Write) (extended : WAL.OrdinalsFrom 1 (history ++ [event]))
+    (allFit : (WAL.encode (history ++ [event])).size < UInt64.size) (effects : WriteEffects)
+    (scratch : Option (ByteArray × Bool)) {retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (AppendRetryTarget history event before.active.first)
+      ⟨appendCutFiles before history event effects scratch, owners⟩ retry)
+    {descriptor nextRef : Nat} (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    retry.image.kept = (appendCutFiles before history event effects scratch).kept ∧
+    ∃ selectedHistory, (selectedHistory = history ∨ selectedHistory = history ++ [event]) ∧
+      retry.image.directory.active.manifest = before.directory.active.manifest ∧
+      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
+      ∃ wal : WalSegmentImage, wal = before.appendSelectedView retry.image.directory.active selectedHistory ∧
+      wal.ReadLayout selectedHistory ∧ wal.Valid selectedHistory ∧
+      retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
+      ∃ selected : CanonicalKeeperLayout retry.image selectedHistory,
+        selected.target.first = before.active.first ∧ selected.target.first = wal.active.first ∧
+        ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+            wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
+          sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
+          (∀ action prior next,
+            ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+            prior.effect selected.target action = some next →
+            performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
+          AppendCutReady directory descriptor liveRefs selectedHistory published retry.image selected.target
+            generation (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+              (raw.reopen removeFile write sync renameFile) retry) := by
+  have lineage := attempts.lineage (fun a b pair => AppendRetryTarget.unique a b pair)
+  have recovered := retainedAppendRetryLayout layout valid oldRange event allFit effects
+    (before.directory.staged .walBoundary) lineage
+  exact ⟨lineage.keepsSealed, installAppendRetryLayout recovered rfl ordered extended allFit
+    checkpoint generationRead liveRefs fresh acquisition unlock removeFile write sync renameFile⟩
 
 /-- Start with the exact files left by the reported append error and the
 ownership map after close or the last observed reference drop. A finite

@@ -680,6 +680,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.lineage
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_appendLayout
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterAppendCut
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterRetainedAppendCut
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterAppendError
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.modeledFiles
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.startsRetry
