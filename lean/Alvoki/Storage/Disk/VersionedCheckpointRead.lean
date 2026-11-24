@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.DiskRecoveryModel
+import Alvoki.Storage.Disk.CheckpointRead
 import Alvoki.Storage.Disk.ManifestIntegrity
 
 namespace Alvoki.Storage

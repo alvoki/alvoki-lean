@@ -36,6 +36,8 @@ lake env leanchecker Alvoki.Storage.Disk.WriteAheadLog
 lake env leanchecker Alvoki.Storage.Disk.Recovery
 lake env leanchecker Alvoki.Storage.Disk.Manifest
 lake env leanchecker Alvoki.Storage.Disk.DiskTable
+lake env leanchecker Alvoki.Storage.Disk.DiskPaths
+lake env leanchecker Alvoki.Storage.Disk.CheckpointRead
 lake env leanchecker Alvoki.Storage.Disk.DiskRecoveryModel
 lake env leanchecker Alvoki.Storage.Disk.FullWatermarkReopen
 lake env leanchecker Alvoki.Storage.Disk.MarkedAdapterRefinement
@@ -59,6 +61,7 @@ lake env leanchecker Alvoki.Storage.Disk.MarkedOpenControl
 lake env leanchecker Alvoki.Storage.Disk.DiskLockLifecycle
 lake env leanchecker Alvoki.Storage.Disk.RunGenerationCollection
 lake env leanchecker Alvoki.Storage.Disk.RunFileName
+lake env leanchecker Alvoki.Storage.Disk.RunFileSelection
 lake env leanchecker Alvoki.Storage.Disk.RunFileInventory
 lake env leanchecker Alvoki.Storage.Disk.RunUnlinkEffects
 lake env leanchecker Alvoki.Storage.Publication.RunCollection

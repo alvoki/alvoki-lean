@@ -1,12 +1,8 @@
-import Alvoki.Storage.Disk.DiskTable
+import Alvoki.Storage.Disk.DiskPaths
 import Std.Data.String.ToNat
 
 namespace Alvoki.Storage
 open System
-
-/-- The basename spelling of a checkpoint run. The equation below ties it to
-`DiskDirectory.file`, which currently keeps the disk protocol renderer private. -/
-def renderRunFileName (generation : UInt64) (index : Nat) : String := s!"run-{generation}-{index}.v3"
 
 private def runFileNumbers (name : String) : Option (Nat × Nat) := do
   let ["run", generation, withVersion] := (name.split '-').toList.map (·.copy) | none

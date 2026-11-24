@@ -194,13 +194,6 @@ theorem CheckpointForRecovery.accepts_exact_durable {image : CheckpointPublicati
     exact ⟨header, _, decoded, .written header checkpoint flushed count watermark floor validFloor bounded,
       UInt64.le_of_eq watermark, runCount, names⟩
 
-/-- The executable loop reads exactly the manifest's run indices in order. -/
-theorem readCheckpointRunBytes_eq_mapM [Monad m] [LawfulMonad m]
-    (read : UInt64 → Nat → m ByteArray) (header : Manifest.Checkpoint) :
-    readCheckpointRunBytes read header =
-      (List.range header.runCount.toNat).mapM (read header.generation) := by
-  simp [readCheckpointRunBytes, Std.Legacy.Range.size, ← List.range_eq_range']
-
 /-- Successful ordered reads that agree with the durable map return its
 ordered byte list. -/
 theorem observed_ordered_runs {indices : List Nat} {durableFiles files : List ByteArray}

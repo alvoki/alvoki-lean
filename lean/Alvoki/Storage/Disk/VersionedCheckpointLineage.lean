@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.DiskRecoveryModel
 import Alvoki.Storage.Disk.VersionedCheckpointRead
 
 namespace Alvoki.Manifest

@@ -1,59 +1,12 @@
+import Alvoki.Storage.Disk.DiskPaths
 import Alvoki.Storage.Disk.WalBoundary
-import Alvoki.Storage.Disk.Manifest
+import Alvoki.Storage.Disk.CheckpointRead
 import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Publication.CheckpointPublication
 
 namespace Alvoki.Storage
 open System Alvoki.Compaction
 open Alvoki.Sequential (SnapshotHandle)
-
-/-- The files the Linux disk protocol addresses within a database directory. -/
-inductive DiskFile where
-  | lock | wal | stagedWal | manifest | stagedManifest
-  | walBoundary | stagedWalBoundary
-  | run (generation : UInt64) (index : Nat)
-
-private def DiskFile.name : DiskFile → String
-  | .lock => "LOCK"
-  | .wal => "WAL"
-  | .stagedWal => "WAL.next"
-  | .manifest => "MANIFEST"
-  | .stagedManifest => "MANIFEST.next"
-  | .walBoundary => "WAL.commit"
-  | .stagedWalBoundary => "WAL.commit.next"
-  | .run generation index => s!"run-{generation}-{index}.v3"
-
-/-- A fixed absolute directory path for all operations in an open session. -/
-structure DiskDirectory where
-  private mk ::
-  path : FilePath
-  absolute : path.toString.startsWith '/'
-
-def DiskDirectory.file (dir : DiskDirectory) (file : DiskFile) : FilePath :=
-  ⟨dir.path.toString ++ "/" ++ file.name⟩
-
-theorem DiskDirectory.file_absolute (dir : DiskDirectory) (file : DiskFile) :
-    (dir.file file).toString.startsWith '/' := by
-  obtain ⟨rest, pathEq⟩ := String.startsWith_char_iff_exists_append.mp dir.absolute
-  apply String.startsWith_char_iff_exists_append.mpr
-  exact ⟨rest ++ "/" ++ file.name, by simp [DiskDirectory.file, pathEq, String.append_assoc]⟩
-
-/-- POSIX interpretation of an argument with respect to the working directory. -/
-def resolveDiskPath (cwd path : FilePath) : FilePath :=
-  if path.toString.startsWith '/' then path else cwd / path
-
-theorem DiskDirectory.paths_independent_of_cwd (dir : DiskDirectory) (cwd : FilePath) :
-    resolveDiskPath cwd dir.path = dir.path ∧
-      ∀ file, resolveDiskPath cwd (dir.file file) = dir.file file := by
-  exact ⟨by simp [resolveDiskPath, dir.absolute],
-    fun file => by simp [resolveDiskPath, dir.file_absolute file]⟩
-
-private def openDirectory (input : FilePath) : IO DiskDirectory := do
-  let path ← IO.FS.realPath input
-  if absolute : path.toString.startsWith '/' then
-    return ⟨path, absolute⟩
-  else
-    throw (IO.userError s!"database path is not absolute: {path}")
 
 private structure Installed where
   table : PackedTable
@@ -119,59 +72,6 @@ flushed table's run order and avoiding an extra empty run. -/
 @[macro_inline] def flushForCheckpoint [Monad m] (table : PackedTable)
     (validate : Except String PackedTable → m PackedTable) : m PackedTable :=
   if table.memory.rows.isEmpty then pure table else validate table.flush
-
-private def installRuns (runs : List CheckedRun) (header : Manifest.Checkpoint) :
-    Except String PackedTable :=
-  match PackedTable.restore runs header.committed header.floor with
-  | none => .error "installed v3 runs exceed the manifest watermark"
-  | some table => .ok table
-
-/-- Validate the ordered file contents identified by a checkpoint. -/
-def loadRunSet (header : Manifest.Checkpoint) (files : List ByteArray) : Except String PackedTable := do
-  if files.length ≠ header.runCount.toNat then throw "installed run count differs from the manifest"
-  let runs ← files.mapM CheckedRun.openBytes
-  installRuns runs header
-
-/-- A loaded checkpoint starts a new session with no active snapshot pins. -/
-theorem loadRunSet_clearsPins {header : Manifest.Checkpoint} {files : List ByteArray}
-    {table : PackedTable} (loaded : loadRunSet header files = .ok table) :
-    table.pins.active = [] := by
-  unfold loadRunSet at loaded
-  split at loaded
-  · contradiction
-  · cases decoded : files.mapM CheckedRun.openBytes with
-    | error => rw [decoded] at loaded; contradiction
-    | ok runs =>
-      rw [decoded] at loaded
-      change installRuns runs header = Except.ok table at loaded
-      unfold installRuns at loaded
-      split at loaded
-      · contradiction
-      · rename_i restored restoredEq
-        cases loaded
-        exact (PackedTable.restore_spec restoredEq).2.2.2.2
-
-private theorem readWrittenRuns (runs : List CheckedRun) :
-    (runs.map (·.run.bytes)).mapM CheckedRun.openBytes = Except.ok runs := by
-  induction runs with
-  | nil => rfl
-  | cons run rest ih =>
-    simp only [List.map_cons, List.mapM_cons, run.openOwnBytes]
-    change Except.map (run :: ·) ((rest.map (·.run.bytes)).mapM CheckedRun.openBytes) = _
-    rw [ih]
-    rfl
-
-theorem loadRunSet_written (header : Manifest.Checkpoint) (runs : List CheckedRun)
-    (count : runs.length = header.runCount.toNat) (floor : header.floor ≤ header.committed)
-    (bounded : ∀ run ∈ runs, ∀ row ∈ run.history.rows, row.sequence ≤ header.committed) :
-    ∃ table, loadRunSet header (runs.map (·.run.bytes)) = .ok table ∧
-      PackedTable.restore runs header.committed header.floor = some table := by
-  obtain ⟨table, restored⟩ := PackedTable.restore_complete runs header.committed header.floor floor bounded
-  refine ⟨table, ?_, restored⟩
-  simp only [loadRunSet, List.length_map, count, ne_eq, not_true_eq_false, ↓reduceIte,
-    readWrittenRuns]
-  change installRuns runs header = .ok table
-  simp [installRuns, restored]
 
 /-- Reconstruct the committed data from the file contents emitted for a
 flushed checkpoint, independently of the old session's pin registry. -/
@@ -267,25 +167,6 @@ private def readOptionalFile (path : FilePath) : IO (Option ByteArray) :=
   readOptionalDatabaseFile path.symlinkMetadata.toBaseIO (fun _ => IO.FS.readBinFile path)
     (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
 
-/-- Read the manifest's run files in increasing index order. Grow the array
-as reads succeed since the run count comes from on-disk input. -/
-@[inline] def readCheckpointRunBytes [Monad m] (read : UInt64 → Nat → m ByteArray)
-    (manifest : Manifest.Checkpoint) : m (List ByteArray) := do
-  let mut files : Array ByteArray := #[]
-  for index in [:manifest.runCount.toNat] do
-    files := files.push (← read manifest.generation index)
-  return files.toList
-
-/-- Read and validate the selected checkpoint before inspecting the WAL. -/
-@[inline] def readCheckpoint [Monad m] (readManifest : m (Option ByteArray))
-    (readRun : UInt64 → Nat → m ByteArray) (validate : {α : Type} → Except String α → m α) :
-    m (Option (PackedTable × UInt64)) := do
-  let some header ← readManifest | return none
-  let manifest ← validate (Manifest.decode header)
-  let files ← readCheckpointRunBytes readRun manifest
-  let table ← validate (loadRunSet manifest files)
-  return some (table, manifest.generation)
-
 private def openCheckpoint (dir : DiskDirectory) : IO (Option (PackedTable × UInt64)) :=
   readCheckpoint (readOptionalFile (dir.file .manifest))
     (fun generation index => IO.FS.readBinFile (dir.file (.run generation index))) IO.ofExcept
@@ -331,7 +212,7 @@ private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTabl
 
 /-- Open a database in an existing directory and replay its durable WAL. -/
 def DiskTable.open (path : FilePath) : IO DiskTable := do
-  let dir ← openDirectory path
+  let dir ← DiskDirectory.open path
   let lock ← IO.FS.Handle.mk (dir.file .lock) .append
   DiskSession.openWithLock lock.tryLock (fun _ => IO.userError s!"database already open: {dir.path}")
     (fun _ => lock.unlock) (fun _ => openLocked dir lock)
@@ -340,7 +221,7 @@ def DiskTable.open (path : FilePath) : IO DiskTable := do
 directory. Optional reads use lstat and the subsequent read of that same path.
 The checkpoint decoder selects the exact generation and run indices. -/
 theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
-    let dir ← openDirectory path
+    let dir ← DiskDirectory.open path
     let lock ← IO.FS.Handle.mk (dir.file .lock) .append
     DiskSession.openWithLock (lock.tryLock (exclusive := true))
       (fun _ => IO.userError s!"database already open: {dir.path}") (fun _ => lock.unlock) fun _ => do
@@ -371,8 +252,8 @@ inductive DiskWriteError where
   /-- WAL mutation was attempted. The write may be recovered after reopening. -/
   | commitUnknown (cause : IO.Error)
 
-/-- Commit the prepared frame to the WAL and publish the new byte count. -/
-@[macro_inline] def commitWalWrite (dir : DiskDirectory) (event : WAL.Write)
+/-- Commit the prepared frame and publish its new byte count from the locked write path. -/
+@[macro_inline] private def commitWalWrite (dir : DiskDirectory) (event : WAL.Write)
     (walBytes : Nat) : IO Unit :=
   let walPath := dir.file .wal
   WAL.Boundary.commit (do
