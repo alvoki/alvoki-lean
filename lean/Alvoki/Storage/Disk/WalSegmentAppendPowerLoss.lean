@@ -6,6 +6,27 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair WAL.Boundary
 
+/-- Bytes appended beyond a settled marker cannot change its selected
+keeper prefix, even if the append reaches disk before power loss. -/
+theorem SegmentedWriterState.RetainedReady.selectPriorKeeper {directory descriptor} {before : SegmentedWriterState}
+    (ready : before.RetainedReady directory descriptor) (tail : ByteArray) :
+    before.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode before.history).size.toUInt64) ∧
+    selectRetained before.installed.activeFirst (WAL.encode before.history).size.toUInt64
+      (WAL.encode (before.history.drop before.wal.active.first) ++ tail) = .ok before.wal.active.bytes := by
+  have marker := congrArg Publication.Image.active ready.resumed.markerImage
+  change before.files.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode before.history).size.toUInt64)
+    at marker
+  rw [ready.resumed.ready.selected] at marker
+  have keeperBytes : before.target.trimmed = before.wal.active.bytes := by
+    rw [ready.resumed.contents, ready.active, ready.layout.activeBytes]
+  have accepts : before.target.Accepts
+      (some (WAL.encode (before.history.drop before.wal.active.first) ++ tail)) := by
+    refine ⟨tail, ?_⟩
+    rw [ready.resumed.contents, ready.active]
+  have selected := before.target.selectKeeper marker (WAL.Boundary.decode_encode _) accepts
+  rw [← ready.resumed.keeper, keeperBytes] at selected
+  exact ⟨marker, selected⟩
+
 /-- A physical observation while the first append callback is still in
 flight. The preceding keeper prefix is durable. The callback has yet to
 return, so no marker operation has been reached. -/
@@ -46,7 +67,9 @@ private theorem keeperSurvivors (cut : FirstAppendCut) (before : SegmentedWriter
     (cut.physical before).keeper.crashImages = (ByteArray.empty :: cut.crashTails).map
       (fun tail => some (WAL.encode (before.history.drop before.wal.active.first) ++ tail)) := rfl
 
-private theorem powersOff (cut : FirstAppendCut) {directory descriptor before}
+/-- Power loss during the append starts a retry at the old marker and
+the observed surviving keeper bytes. -/
+theorem powersOff (cut : FirstAppendCut) {directory descriptor before}
     (ready : before.RetainedReady directory descriptor) (admits : Target → Prop)
     {tail : ByteArray} (survives : tail ∈ ByteArray.empty :: cut.crashTails) :
     BoundedReopenTrace directory admits ⟨cut.physical before, before.owners⟩ (cut.crashed before directory tail) := by
@@ -102,18 +125,7 @@ theorem selectsPriorHistory (cut : FirstAppendCut) {directory descriptor before}
   subst later
   rw [cut.keeperSurvivors] at payload
   obtain ⟨tail, _, rfl⟩ := List.mem_map.mp payload
-  have exactMarker := congrArg Publication.Image.active ready.resumed.markerImage
-  change before.files.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode before.history).size.toUInt64)
-    at exactMarker
-  rw [ready.resumed.ready.selected] at exactMarker
-  have keeperBytes : before.target.trimmed = before.wal.active.bytes := by
-    rw [ready.resumed.contents, ready.active, ready.layout.activeBytes]
-  have accepts : before.target.Accepts
-      (some (WAL.encode (before.history.drop before.wal.active.first) ++ tail)) := by
-    refine ⟨tail, ?_⟩
-    rw [ready.resumed.contents, ready.active]
-  have selected := before.target.selectKeeper exactMarker (WAL.Boundary.decode_encode _) accepts
-  rw [← ready.resumed.keeper, keeperBytes] at selected
+  obtain ⟨exactMarker, selected⟩ := ready.toRetained.selectPriorKeeper tail
   refine ⟨rfl, rfl, ⟨rfl, rfl⟩, exactMarker, _, rfl, rfl, ?_, ?_⟩
   · change ((before.target.pair.walBoundary.mapM fun marker => do
         let count ← WAL.Boundary.decode marker
