@@ -198,4 +198,6 @@ Two successful cached reopens from the same manifest, published run map, selecte
 
 A reported successful close of a checkpointed writer preserves the file image and clears the old lock. The subsequent reported marked open uses that exact reached image, which determines the same checkpoint and marker bindings, generation and acknowledged WAL history. Native close and open supply the observed callback, handle and lock facts. [Close and cached reopen](../lean/Alvoki/Storage/Disk/SegmentedCleanCachedReopen.lean)
 
+An observed writer exit during a batch append preserves the live file image and all its modeled crash candidates. The old marker still selects the prior keeper prefix. The complete lock-reference census determines whether a successful acquisition is admissible, including the case where an inherited reference keeps the lock. This gives the prepared live layout for the next reported cached reopen. [Live batch cut](../lean/Alvoki/Storage/Disk/WalBatchAppendProcessExit.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
