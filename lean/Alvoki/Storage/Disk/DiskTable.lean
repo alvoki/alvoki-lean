@@ -8,6 +8,7 @@ import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Disk.WalSegmentCommit
 import Alvoki.Storage.Disk.WalSegmentBootstrapIO
 import Alvoki.Storage.Disk.WalSegmentBoundedOpen
+import Alvoki.Storage.Disk.WalSegmentCollectionPlan
 import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Publication.CheckpointPublication
 import Alvoki.Storage.Publication.RunCollection
@@ -351,6 +352,19 @@ def DiskTable.close (db : DiskTable) : IO Unit := do
 
 private def DiskTable.installed (db : DiskTable) : IO Installed := do
   (← db.phase.get).installed
+
+/-- Inspect which sealed WAL segments the current durable checkpoint covers.
+The result describes the inventory observed during this call. -/
+def DiskTable.planWalCollection (db : DiskTable) : IO (List Nat) := do
+  let state ← db.installed
+  planWalCollectionWith db.dir state.generation state.walBytes state.activeFirst
+    readOptionalFile FilePath.readDir inspectWalSegment
+
+theorem DiskTable.planWalCollection_fileEffects (db : DiskTable) :
+    db.planWalCollection = (do
+      let state ← (← db.phase.get).installed
+      planWalCollectionWith db.dir state.generation state.walBytes state.activeFirst
+        readOptionalFile FilePath.readDir inspectWalSegment) := rfl
 
 private def checkActiveSegment (dir : DiskDirectory) (state : Installed) : IO Unit := do
   let path := dir.file (.walSegment state.activeFirst)
