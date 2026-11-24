@@ -9,6 +9,7 @@ import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Disk.MarkedCheckpointPublication
 import Alvoki.Storage.Disk.MarkedCheckpointReady
 import Alvoki.Storage.Disk.RecoveredPinRefinement
+import Alvoki.Storage.Disk.CheckpointHistory
 import Alvoki.Storage.Publication.DiskPublicationModel
 import Alvoki.Storage.Disk.WalBoundaryModel
 import Alvoki.Storage.Disk.MarkedWalReopenModel
@@ -86,6 +87,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loads
 #check_axioms Alvoki.Storage.CheckpointForRecovery.recoverSelected_rowBounds
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_flushForCheckpoint
+#check_axioms Alvoki.Storage.CheckpointForRecovery.of_flushForCheckpoint_history
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest_with
 #check_axioms Alvoki.Storage.readCheckpointRunBytes_eq_mapM
@@ -99,6 +101,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_recoveryInputs
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_reopen_refines
+#check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarkedRetry_reopen_canonical
+#check_axioms Alvoki.Storage.SnapshotWalReplay.of_ordinals
+#check_axioms Alvoki.Storage.SnapshotWalReplay.deterministic
+#check_axioms Alvoki.Storage.SnapshotWalReplay.visibleEntry_agrees
+#check_axioms Alvoki.Storage.SnapshotWalReplay.reads_agree
+#check_axioms Alvoki.Storage.PackedTable.Refines.rowsBounded
+#check_axioms Alvoki.Storage.RepresentsWalHistory.append
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarked_complete
 #check_axioms Alvoki.WAL.Boundary.checkpointMarked_ready
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.unreachable_after_reopen

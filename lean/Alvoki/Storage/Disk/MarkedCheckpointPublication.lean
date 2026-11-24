@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.DiskRecoveryModel
 import Alvoki.Storage.Disk.WalWritePublicationModel
+import Alvoki.Storage.Disk.WalReplayProvenance
 
 namespace Alvoki.Storage.CheckpointPublication
 open Alvoki.WAL.Boundary
@@ -169,13 +170,6 @@ theorem checkpointMarkedRetry_recoveryInputs {initial published : Image}
     contents, written, property, durable, watermark, Option.some.inj (presentMarker.symm.trans boundary),
     presentMarker, presentWal, selected⟩
 
-private theorem replay_keeps_pins {before after : Sequential.SnapshotTable UInt64}
-    {events : List WAL.Write} (replayed : SnapshotWalReplay before events after) :
-    after.pins = before.pins := by
-  induction replayed with
-  | nil => rfl
-  | cons written _ _ ih => exact ih.trans (Sequential.SnapshotTable.write_spec written).2.1
-
 /-- After checkpoint cuts and reopen retries, the successful shared reopen
 loads the exact ordered files named by the visible manifest and replays the
 remaining part of the same WAL. The checkpoint witness relates its model to
@@ -273,7 +267,7 @@ theorem checkpointMarkedRetry_reopen_refines {initial published : Image}
   obtain ⟨reference, replay, agrees⟩ := replay_sameData same.symm suffix played
   obtain ⟨abstract, modeled, refined⟩ := replay_refines represents replay
   have keepsFloor : abstract.pins.floor = checkpoint.pins.floor := by
-    rw [replay_keeps_pins modeled, represents.pins]
+    rw [modeled.pins, represents.pins]
   refine ⟨⟨?_, ?_, walActive, walActive.symm ▸ walChoices⟩, accepted, committed,
     files, checkpoint, base, model, abstract, written, durable, actualBase, same, replayed, played,
     represents, prefixMatches, modeled, ?_, keepsFloor, ?_⟩
