@@ -61,6 +61,8 @@ lake env leanchecker Alvoki.Storage.Disk.MarkedOpenControl
 lake env leanchecker Alvoki.Storage.Disk.DiskLockLifecycle
 lake env leanchecker Alvoki.Storage.Disk.LockDescriptionLifetime
 lake env leanchecker Alvoki.Storage.Disk.LockedSegmentReopenEffects
+lake env leanchecker Alvoki.Storage.Disk.SegmentedSessionInstall
+lake env leanchecker Alvoki.Storage.Disk.BoundedSegmentSession
 lake env leanchecker Alvoki.Storage.Disk.RunGenerationCollection
 lake env leanchecker Alvoki.Storage.Disk.RunFileName
 lake env leanchecker Alvoki.Storage.Disk.RunFileSelection
@@ -126,6 +128,11 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentOpenFastEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCommit
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCommitEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentAppendRepair
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentFirstReplay
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentFirstOpen
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentRotationReopen
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentBootstrapEffects
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentBoundedOpenEffects
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
 lake env leanchecker Alvoki.Storage.Disk.RecoveredPinRefinement
