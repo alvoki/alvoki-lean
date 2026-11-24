@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.SegmentedAppendRecovery
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.SegmentedCleanReopen
 import Alvoki.Storage.Disk.SegmentedRotationRecovery
+import Alvoki.Storage.Disk.SegmentedRotationStep
 import Alvoki.Storage.Disk.SegmentedWriterTrace
 
 namespace Alvoki.Storage.DiskSession
@@ -20,6 +21,10 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (prior : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor before)
       (writer : SegmentedWriterTrace directory descriptor before acknowledged checkpoints after) :
       SegmentedDatabaseTrace directory initialDescriptor initial (log ++ [⟨acknowledged, none⟩]) descriptor after
+  | rotate {log descriptor before target}
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor before)
+      (report : SegmentedRotationReport directory before) (selected : report.Selects target) :
+      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor (report.next target)
   | close {log writer descriptor before after}
       (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
       (report : SegmentedCleanReopenReport directory before writer descriptor)
@@ -54,6 +59,9 @@ theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initi
     obtain ⟨before, retained, history, submitted⟩ := ih
     obtain ⟨ready, appended, _, _⟩ := writer.preservesReady before
     exact ⟨ready, _, by rw [appended, history, List.append_assoc], submitted.append (Or.inl rfl)⟩
+  | rotate _ report selected ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨report.preservesReady before selected, retained, history, submitted⟩
   | close _ _ observed endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesReady observed before, retained, endpoint.history.trans history, submitted⟩
@@ -101,5 +109,27 @@ theorem SegmentedDatabaseTrace.pinnedReads {directory initialDescriptor initial 
   obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
   obtain ⟨reference, replayed⟩ := SnapshotWalReplay.fromEmpty last.history ready.resumed.ordered
   exact ⟨reference, replayed, fun _ active => represented.packedPinnedReads refined replayed active⟩
+
+/-- After any covered reopen, every supported sequence can be acquired
+against the returned table and reads the same snapshot as abstract replay. -/
+theorem SegmentedDatabaseTrace.acquireReads {directory initialDescriptor initial log descriptor last}
+    (trace : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor last)
+    (initialReady : initial.Ready directory initialDescriptor) {snapshot : UInt64}
+    (retained : last.installed.table.pins.floor ≤ snapshot) (committed : snapshot ≤ last.installed.table.committed) :
+    ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty last.history reference ∧
+      ∃ pin pinned, last.installed.table.acquireAt snapshot = some (pin, pinned) ∧
+        (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+        ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) := by
+  have ready := (trace.preservesReady initialReady).1
+  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
+  obtain ⟨reference, replayed⟩ := SnapshotWalReplay.fromEmpty last.history ready.resumed.ordered
+  have available : (last.installed.table.acquireAt snapshot).isSome = true := by
+    simpa only [PackedTable.acquireAt, Option.isSome_map] using
+      (SnapshotPins.acquire_iff last.installed.table.pins _ _).mpr ⟨retained, committed⟩
+  obtain ⟨⟨pin, pinned⟩, acquired⟩ := Option.isSome_iff_exists.mp available
+  obtain ⟨_, refined, represented⟩ := represented.acquireAt refined ready.resumed.bounds acquired
+  have pinSpec := PackedTable.acquireAt_spec acquired
+  exact ⟨reference, replayed, pin, pinned, acquired,
+    by simpa only [pinSpec.sequence] using represented.packedPinnedReads refined replayed pinSpec.active⟩
 
 end Alvoki.Storage.DiskSession
