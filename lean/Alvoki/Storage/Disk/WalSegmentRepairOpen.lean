@@ -50,6 +50,11 @@ def reopenMarkedWith [Monad m] [MonadExceptOf IO.Error m] (directory : DiskDirec
   runAt directory (pure plan) removeFile write sync renameFile
   pure reopened
 
+private theorem validate_report : (fun {α : Type} (report : Except String α) => (validate report : Except IO.Error α)) =
+    (fun {_α : Type} report => report.mapError IO.userError) := by
+  funext _α report
+  cases report <;> rfl
+
 theorem prepareMarkedWith_reported (directory : DiskDirectory)
     (readOptional : FilePath → Except IO.Error (Option ByteArray))
     (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
@@ -70,12 +75,66 @@ theorem prepareMarkedWith_reported (directory : DiskDirectory)
     prepareMarkedWith directory readOptional list lstat readBin =
       .ok (⟨length.toNat / WAL.frameSize, keeper, reads.newer, keeperBytes⟩,
         ⟨table, (checkpoint.getD (.empty, 0)).2, length, keeper⟩) := by
-  have translate : (fun {β : Type} (report : Except String β) => (validate report : Except IO.Error β)) =
-      (fun {β : Type} report => report.mapError IO.userError) := by
-    funext β report
-    cases report <;> rfl
-  simp [prepareMarkedWith, translate, checkpointRead, markerRead, decoded, walRead, recovered, target,
+  simp [prepareMarkedWith, validate_report, checkpointRead, markerRead, decoded, walRead, recovered, target,
     validate, Bind.bind, Except.bind, Pure.pure, Except.pure]
+
+/-- A successful full preparation exposes the actual read transcript that
+selected its checkpoint, keeper and replay. -/
+theorem prepareMarkedWith_readReports (directory : DiskDirectory)
+    (readOptional : FilePath → Except IO.Error (Option ByteArray))
+    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata))
+    (readBin : FilePath → Except IO.Error ByteArray) {plan : Plan} {opened : Reopened}
+    (prepared : prepareMarkedWith directory readOptional list lstat readBin = .ok (plan, opened)) :
+    ∃ (checkpoint : Option (PackedTable × UInt64)) (marker : ByteArray) (length : UInt64)
+      (reads : WalSegmentMarkerReads) (selected : ByteArray) (table : PackedTable) (keeper : Nat) (bytes : ByteArray),
+      readIntegrityCheckpoint (readOptional (directory.file .manifest))
+        (fun generation index => readBin (directory.file (.run generation index)))
+        (fun report => report.mapError IO.userError) = .ok checkpoint ∧
+      readOptional (directory.file .walBoundary) = .ok (some marker) ∧
+      WAL.Boundary.decode marker = .ok length ∧
+      readWalSegmentsThroughWith directory (checkpoint.getD (.empty, 0)).1.committed.toNat length
+        list lstat readBin = .ok reads ∧
+      recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1 length reads.files = .ok (selected, table) ∧
+      reads.files.getLast? = some (keeper, bytes) ∧
+      plan = ⟨length.toNat / WAL.frameSize, keeper, reads.newer, bytes⟩ ∧
+      opened = ⟨table, (checkpoint.getD (.empty, 0)).2, length, keeper⟩ := by
+  unfold prepareMarkedWith at prepared
+  rw [validate_report] at prepared
+  cases checkpointRead : readIntegrityCheckpoint (readOptional (directory.file .manifest))
+      (fun generation index => readBin (directory.file (.run generation index)))
+      (fun report => report.mapError IO.userError) with
+  | error cause => simp [checkpointRead, Bind.bind, Except.bind] at prepared
+  | ok checkpoint =>
+    simp only [checkpointRead, Bind.bind, Except.bind] at prepared
+    cases observed : readOptional (directory.file .walBoundary) with
+    | error cause => simp [observed] at prepared
+    | ok binding =>
+      cases binding with
+      | none => simp [observed, throw] at prepared
+      | some marker =>
+        simp only [observed] at prepared
+        cases decoded : WAL.Boundary.decode marker with
+        | error cause => simp [decoded, validate, throw] at prepared
+        | ok length =>
+          simp only [decoded, validate, Pure.pure, Except.pure] at prepared
+          cases walRead : readWalSegmentsThroughWith directory (checkpoint.getD (.empty, 0)).1.committed.toNat
+              length list lstat readBin with
+          | error cause => simp [walRead] at prepared
+          | ok reads =>
+            simp only [walRead] at prepared
+            cases replayed : recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1 length reads.files with
+            | error cause => simp [replayed, throw] at prepared
+            | ok selectedTable =>
+              obtain ⟨selected, table⟩ := selectedTable
+              simp only [replayed] at prepared
+              cases target : reads.files.getLast? with
+              | none => simp [target, throw] at prepared
+              | some targetRead =>
+                obtain ⟨keeper, bytes⟩ := targetRead
+                simp only [target, Except.ok.injEq, Prod.mk.injEq] at prepared
+                exact ⟨checkpoint, marker, length, reads, selected, table, keeper, bytes, rfl, rfl, decoded, walRead, replayed,
+                  target, prepared.1.symm, prepared.2.symm⟩
 
 theorem reopenMarkedWith_reported [Monad m] [LawfulMonad m] [MonadExceptOf IO.Error m]
     (directory : DiskDirectory) (readOptional : FilePath → m (Option ByteArray))

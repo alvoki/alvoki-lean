@@ -10,7 +10,7 @@ theorem bind_readReport {ε σ α β : Type} (report : Except ε α) (next : α 
       liftExcept (report >>= next) := by
   cases report <;> rfl
 
-theorem map_readReport {ε σ α β : Type} (report : Except ε α) (transform : α → β) :
+private theorem map_readReport {ε σ α β : Type} (report : Except ε α) (transform : α → β) :
     transform <$> (liftExcept report : EStateM ε σ α) = liftExcept (transform <$> report) := by
   cases report <;> rfl
 

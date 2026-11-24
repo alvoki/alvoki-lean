@@ -160,6 +160,149 @@ theorem prepareBoundedMarkedWith_liftReports {state : Type} (dir : DiskDirectory
   · intro α report
     cases report <;> rfl
 
+private theorem mapM_report_length {α β ε : Type} (read : α → Except ε β) (inputs : List α)
+    {outputs : List β} (reports : inputs.mapM read = .ok outputs) : inputs.length = outputs.length := by
+  induction inputs generalizing outputs with
+  | nil => cases reports; rfl
+  | cons first rest ih =>
+    simp only [List.mapM_cons, Bind.bind, Except.bind] at reports
+    cases head : read first with
+    | error error => rw [head] at reports; contradiction
+    | ok headValue =>
+      rw [head] at reports
+      cases tail : rest.mapM read with
+      | error error => simp [tail] at reports
+      | ok remaining =>
+        have same : headValue :: remaining = outputs := by
+          simpa [tail, Bind.bind, Except.bind, Pure.pure, Except.pure] using reports
+        simp [← same, ih tail]
+
+/-- Matching prefix and physical-size reports at the actual keeper path
+transport a complete-payload observation to the bounded read worker. -/
+theorem readSelectedWithPrefix_from_full (dir : DiskDirectory) (watermark : Nat) (length : UInt64)
+    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (readBin : FilePath → Except IO.Error ByteArray)
+    (readPrefix : FilePath → Nat → Except IO.Error KeeperPrefix)
+    {sealed : List (Nat × ByteArray)} {keeper : Nat} {bytes : ByteArray} {newer : List Nat}
+    (complete : readWalSegmentsThroughWith dir watermark length list lstat readBin =
+      .ok ⟨sealed ++ [(keeper, bytes)], newer⟩)
+    (enough : (length.toNat / WAL.frameSize - keeper) * WAL.frameSize ≤ bytes.size)
+    (prefixRead : readPrefix (dir.file (.walSegment keeper)) ((length.toNat / WAL.frameSize - keeper) * WAL.frameSize) =
+      .ok ⟨bytes.extract 0 ((length.toNat / WAL.frameSize - keeper) * WAL.frameSize), bytes.size⟩) :
+    readSelectedWithPrefix dir watermark length list lstat readBin readPrefix =
+      .ok (⟨sealed ++ [(keeper, bytes.extract 0 ((length.toNat / WAL.frameSize - keeper) * WAL.frameSize))], newer⟩,
+        bytes.size) := by
+  have checked : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize := by
+    by_cases ok : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize
+    · exact ok
+    · simp [readWalSegmentsThroughWith, ok, throw] at complete
+  change readWalSegmentsThroughWith dir watermark length list lstat readBin = _ at complete
+  simp only [readWalSegmentsThroughWith, ite_eq_left checked, Bind.bind, Except.bind] at complete
+  cases listed : list dir.path with
+  | error error => simp [listed] at complete
+  | ok entries =>
+    simp only [listed] at complete
+    cases scanned : scanWalSegmentOffsets (probeWalSegmentWith dir lstat) (entries.toList.map (·.fileName)) with
+    | error error => simp [scanned] at complete
+    | ok offsets =>
+      simp only [scanned] at complete
+      cases addresses : selectWalSegmentReadsThrough offsets watermark (length.toNat / WAL.frameSize) with
+      | none => simp [addresses, throw] at complete
+      | some chosen =>
+        obtain ⟨required, later⟩ := chosen
+        simp only [addresses] at complete
+        have nonempty : required ≠ [] := by
+          intro empty
+          subst required
+          simp [readWalSegmentPayloadsWith, Pure.pure, Except.pure] at complete
+        let earlier := required.dropLast
+        let last := required.getLast nonempty
+        have split : earlier ++ [last] = required := List.dropLast_concat_getLast nonempty
+        rw [← split] at addresses complete
+        have splitRead : readWalSegmentPayloadsWith dir readBin (earlier ++ [last]) =
+            (do let rest ← readWalSegmentPayloadsWith dir readBin earlier
+                let bytes ← readBin (dir.file (.walSegment last))
+                pure (rest ++ [bytes])) := by
+          simp [readWalSegmentPayloadsWith, List.mapM_append, List.mapM_cons]
+        rw [splitRead] at complete
+        cases readEarlier : readWalSegmentPayloadsWith dir readBin earlier with
+        | error error => simp [readEarlier, Bind.bind, Except.bind] at complete
+        | ok payloads =>
+          cases lastRead : readBin (dir.file (.walSegment last)) with
+          | error error => simp [readEarlier, lastRead, Bind.bind, Except.bind] at complete
+          | ok raw =>
+            have sizes : earlier.length = payloads.length := mapM_report_length _ earlier readEarlier
+            have pair : (⟨earlier.zip payloads ++ [(last, raw)], later⟩ : WalSegmentMarkerReads) =
+                ⟨sealed ++ [(keeper, bytes)], newer⟩ := by
+              apply Except.ok.inj
+              simpa only [readEarlier, lastRead, Bind.bind, Except.bind, Pure.pure, Except.pure,
+                List.zip_append sizes, List.zip_cons_cons, List.zip_nil_left] using complete
+            have files := congrArg WalSegmentMarkerReads.files pair
+            have laterEq : later = newer := congrArg WalSegmentMarkerReads.newer pair
+            have lastEq : (last, raw) = (keeper, bytes) := by
+              simpa using congrArg List.getLast? files
+            have sameKeeper : last = keeper := congrArg Prod.fst lastEq
+            have sameBytes : raw = bytes := congrArg Prod.snd lastEq
+            rw [lastEq] at files
+            have earlierEq : earlier.zip payloads = sealed := List.append_cancel_right files
+            have boundedEnough : (length.toNat / WAL.frameSize - last) * WAL.frameSize ≤ raw.size := by
+              rwa [sameKeeper, sameBytes]
+            have read : readPrefix (dir.file (.walSegment last)) ((length.toNat / WAL.frameSize - last) * WAL.frameSize) =
+                .ok ⟨raw.extract 0 ((length.toNat / WAL.frameSize - last) * WAL.frameSize), raw.size⟩ := by
+              simpa only [sameKeeper, sameBytes] using prefixRead
+            have result := readSelectedWithPrefix_reported dir watermark length list lstat readBin readPrefix
+              checked listed scanned addresses readEarlier read
+              (by simp [Nat.min_eq_left boundedEnough]) boundedEnough
+            simpa [earlierEq, laterEq, sameKeeper, sameBytes] using result
+
+/-- Use the accepted full preparation and its exact selected keeper
+observation to derive bounded preparation. The prefix report supplies the
+physical length and only the selected byte interval. -/
+theorem prepareBoundedMarkedWith_from_full (dir : DiskDirectory)
+    (readOptional : FilePath → Except IO.Error (Option ByteArray))
+    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (readBin : FilePath → Except IO.Error ByteArray)
+    (readPrefix : FilePath → Nat → Except IO.Error KeeperPrefix)
+    {plan : Plan} {opened : Reopened} (valid : plan.valid = true)
+    (prepared : prepareMarkedWith dir readOptional list lstat readBin = .ok (plan, opened))
+    (prefixRead : readPrefix (dir.file (.walSegment plan.keeper)) plan.keeperSize =
+      .ok ⟨plan.keeperBytes.extract 0 plan.keeperSize, plan.keeperBytes.size⟩) :
+    prepareBoundedMarkedWith dir readOptional list lstat readBin readPrefix =
+      .ok ({ plan with keeperBytes := plan.keeperBytes.extract 0 plan.keeperSize }, opened, plan.keeperBytes.size) := by
+  obtain ⟨checkpoint, marker, length, reads, selected, table, keeper, bytes, checkpointRead, markerRead, decoded,
+    walRead, replayed, lastRead, planned, reopened⟩ := prepareMarkedWith_readReports dir readOptional list lstat readBin prepared
+  subst plan opened
+  obtain ⟨sealed, fileList⟩ := List.getLast?_eq_some_iff.mp lastRead
+  let kept := bytes.extract 0 ((length.toNat / WAL.frameSize - keeper) * WAL.frameSize)
+  let bounded : WalSegmentMarkerReads := ⟨sealed ++ [(keeper, kept)], reads.newer⟩
+  have enough : (length.toNat / WAL.frameSize - keeper) * WAL.frameSize ≤ bytes.size :=
+    ((Plan.valid_iff _).mp valid).2.1
+  have boundedRead : readSelectedWithPrefix dir (checkpoint.getD (.empty, 0)).1.committed.toNat length list lstat
+      readBin readPrefix = .ok (bounded, bytes.size) :=
+    readSelectedWithPrefix_from_full dir _ _ list lstat readBin readPrefix (by
+      have equal : reads = ⟨sealed ++ [(keeper, bytes)], reads.newer⟩ := by cases reads; simp_all
+      rw [← equal]; exact walRead) enough prefixRead
+  have aligned : length.toNat % WAL.frameSize = 0 := by
+    by_cases aligned : length.toNat % WAL.frameSize = 0
+    · exact aligned
+    · simp [readWalSegmentsThroughWith, aligned, throw] at walRead
+  have checked : checkSelectedWalSegmentSpans (length.toNat / WAL.frameSize) reads.files = true := by
+    cases found : reads.files with
+    | nil => simp [found, recoverMarkedWalSegments] at replayed
+    | cons first rest =>
+      obtain ⟨offset, content⟩ := first
+      by_cases valid : checkSelectedWalSegmentSpans (length.toNat / WAL.frameSize) ((offset, content) :: rest) = true
+      · exact valid
+      · simp [found, recoverMarkedWalSegments, valid] at replayed
+  rw [fileList] at checked replayed
+  have replay : recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1 length bounded.files =
+      .ok (selected, table) :=
+    (recoverMarkedWalSegments_keeperPrefix _ length sealed keeper bytes aligned enough checked).trans replayed
+  have lastBound : bounded.files.getLast? = some (keeper, kept) := by simp [bounded]
+  simpa only [bounded, kept, Plan.keeperSize] using
+    prepareBoundedMarkedWith_reported dir readOptional list lstat readBin readPrefix checkpointRead markerRead
+      decoded boundedRead replay lastBound
+
 /-- When the full and bounded read-only preparations report the same
 selected layout (with exactly the keeper prefix loaded), the actual marked
 worker has the same effectful result, including failures after effects. -/
