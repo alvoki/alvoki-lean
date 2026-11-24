@@ -47,7 +47,7 @@ Five paired trials appended 4,096 ordered distinct keys to fresh databases on CP
 | 8 | 10,273 | 36,035 | 1.509 ms | 0.506 ms |
 | 32 | 36,536 | 114,969 | 1.579 ms | 0.521 ms |
 
-With 64 rows across fresh open, write and validation reopen, the Alvoki trace counted 198 fsyncs at size one, 30 at size eight, and 12 at size 32. Six calls were from opening the database and reopening for validation. The write phase kept all three barriers per batch. At size 32 the pilot reached 32% of RocksDB's matched batch throughput. This write-only, closed-loop experiment leaves the mixed-workload target and p99 at a common offered load open.
+With 64 rows across fresh open, write and validation reopen, the Alvoki trace counted 198 fsyncs at size one, 30 at size eight, and 12 at size 32. Six calls were from opening the database and reopening for validation. The write phase kept all three barriers per batch. RocksDB used `WriteBatch` at the same three sizes, with its WAL enabled and synchronous acknowledgement. Its WAL had 64, 8 and 2 fsyncs respectively, one per batch, plus 17 sync calls elsewhere in the open/write/reopen trace at each size. Alvoki reached 25%, 29% and 32% of RocksDB's matched throughput at sizes 1, 8 and 32 respectively. This write-only, closed-loop experiment leaves the mixed-workload target and p99 at a common offered load open.
 
 Build `alvoki-disk-batch` with Lake and compile `benchmarks/rocksdb_batch.cc` as C++17 against the same pinned RocksDB library as below. Run `python3 benchmarks/engine_batch.py --rocks-bin /tmp/rocksdb-batch --rows 4096 --batch-sizes 1 8 32 --trials 5 --cpu 0 --out /tmp/durable-batch.csv`. [Raw batch samples](../benchmarks/results/disk/durable-batch) · [Batch contract](specifications.md#durable-write-batches)
 

@@ -624,6 +624,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentCommit.settledSegment_ofBatchSuccess
 #check_axioms Alvoki.Storage.WalSegmentRepair.BatchRetryTarget.unique
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareAfterBatchCut
+#check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterRetainedSuffix
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterBatchCut
 #check_axioms Alvoki.Storage.WalSegmentRepair.boundedBatchRetry_selection
 #check_axioms Alvoki.Storage.replayPreparedBatchSelection
 #check_axioms Alvoki.Storage.prepareBatch_spec

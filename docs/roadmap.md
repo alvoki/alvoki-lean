@@ -44,6 +44,12 @@ Use native release builds on the same Linux machine and storage. Match input, op
 
 [YCSB](https://github.com/brianfrankcooper/YCSB) · [RocksDB](https://github.com/facebook/rocksdb) · [Fjall](https://github.com/fjall-rs/fjall) · [Benchmark method](high-performance-lean.md#reproduce-before-generalizing) · [Proof and runtime performance requirements](proof-roadmap.md#performance-requirements-for-verified-paths)
 
+### Small durable writes
+
+Matched batch sizes 1, 8 and 32 keep a per-commit gap. Alvoki syncs the WAL, staged marker and directory for each batch, while the RocksDB control syncs its WAL once per batch. Keep size 1 as a separate target and distinguish batching gains from reducing the number of barriers for that same submission.
+
+Evaluate in-segment commit records as a candidate protocol. It could append the batch and its boundary together and sync the active file once, with directory barriers on segment creation or rotation. First specify crash cuts, including a visible commit record with missing or torn payload, incomplete final records, interrupted rotation and retries. Derive that every acknowledged batch survives, no strictly partial batch becomes visible, and previous acknowledged data survives rejected tails. Specify exact decoder and corruption assumptions. Compare a proof-backed candidate on the same small-batch cells and run the native fault suite before adoption. [Sampled sync counts](performance-baseline.md#durable-batch-experiment)
+
 ### Workload coverage and toolchain experiments
 
 Use the baseline as the starting point for a performance map of Alvoki. Keep the three core scenarios stable for release comparisons. Add representative points as a use case or bottleneck calls for them. Vary read/write mix, uniform versus Zipfian access, working-set size, key and value size, batch size, snapshot lifetime, cache state and maintenance pressure. When diagnosing a difference, vary one dimension at a time. Retain an established-engine control where semantics match, and keep Alvoki's absolute timings and resource use for cases with a different contract.
