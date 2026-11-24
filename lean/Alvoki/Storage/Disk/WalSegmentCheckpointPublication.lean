@@ -22,7 +22,7 @@ private theorem Image.segmentedCheckpointView_pair {published : Image} {before :
   · obtain ⟨candidate, member, rfl⟩ := List.mem_map.mp survives
     exact ⟨rfl, .inr member⟩
 
-private theorem walRange_of_reports {pair : DirectoryPublication.Bindings} {marker : ByteArray}
+theorem walRange_of_reports {pair : DirectoryPublication.Bindings} {marker : ByteArray}
     {count : UInt64} {watermark through : Nat}
     (checkpoint : selectedCheckpointWatermark pair.manifest = some watermark)
     (visible : pair.walBoundary = some marker) (decoded : WAL.Boundary.decode marker = .ok count)
