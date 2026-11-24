@@ -64,6 +64,9 @@ lake env leanchecker Alvoki.Storage.Disk.LockedMarkedRead
 lake env leanchecker Alvoki.Storage.Disk.LockedRecoveryReads
 lake env leanchecker Alvoki.Storage.Disk.LegacyTraceEntry
 lake env leanchecker Alvoki.Storage.Disk.LockedRecoveryCompletion
+lake env leanchecker Alvoki.Storage.Disk.ManifestIntegrity
+lake env leanchecker Alvoki.Storage.Disk.ManifestIntegritySingleByte
+lake env leanchecker Alvoki.Storage.Disk.VersionedCheckpointRead
 lake env leanchecker Alvoki.Storage.Disk.LegacyBootstrapRetry
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.LegacyWalRecovery
@@ -84,5 +87,7 @@ lake env leanchecker Alvoki.Storage.Publication.CheckpointPublicationModel
 lake env leanchecker Alvoki.Storage.Publication.DirectoryPublicationModel
 lake env lean --run Alvoki/Checks/SequentialChecks.lean
 lake env lean --run Alvoki/Checks/PackedTableChecks.lean
+lake env lean --run Alvoki/Checks/ManifestIntegrityChecks.lean
+lake env lean --run Alvoki/Checks/VersionedCheckpointReadChecks.lean
 lake exe alvoki-disk-checks
 python3 ../scripts/check-disk-process-death.py .lake/build/bin/alvoki-disk-checks
