@@ -9,18 +9,20 @@ open System Manifest
 private def runExtentError : IO.Error := IO.userError checkpointIntegrityMismatch
 
 private def readStampedRun [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
-    (manifest : IntegrityCheckpoint) (readSize : FilePath → m Nat)
+    (stamps : Array RunIntegrity) (readSize : FilePath → m Nat)
     (readPrefix : FilePath → Nat → m ByteArray) (generation : UInt64) (index : Nat) : m ByteArray := do
-  let some stamp := manifest.runs[index]? | throw runExtentError
+  let some stamp := stamps[index]? | throw runExtentError
   readExactRecoveryFileWith (dir.file (.run generation index)) stamp.byteCount.toNat
     runExtentError readSize readPrefix
 
 /-- The existing increasing-index loop checks the observed file extent
-against its decoded integrity stamp before requesting payload bytes. -/
+against its decoded integrity stamp before requesting payload bytes.
+Index a single array of stamps so the traversal takes linear work. -/
 def readIntegrityRunBytesSized [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
     (manifest : IntegrityCheckpoint) (readSize : FilePath → m Nat)
     (readPrefix : FilePath → Nat → m ByteArray) : m (List ByteArray) :=
-  readCheckpointRunBytes (readStampedRun dir manifest readSize readPrefix) manifest.header
+  let stamps := manifest.runs.toArray
+  readCheckpointRunBytes (readStampedRun dir stamps readSize readPrefix) manifest.header
 
 /-- Read the strict manifest and its selected runs. Integrity checks and
 structural restoration consume the same ordered bytes as the older route. -/
@@ -98,7 +100,7 @@ private def runRequestSize (manifest : IntegrityCheckpoint) (index : Nat) : Nat 
 private def countedRun (dir : DiskDirectory) (manifest : IntegrityCheckpoint)
     (readSize : FilePath → Except IO.Error Nat) (readPrefix : FilePath → Nat → Except IO.Error ByteArray)
     (index : Nat) : EStateM IO.Error Nat ByteArray :=
-  readStampedRun dir manifest (fun path => recordRequest 0 (readSize path))
+  readStampedRun dir manifest.runs.toArray (fun path => recordRequest 0 (readSize path))
     (fun path bytes => recordRequest bytes (readPrefix path bytes)) manifest.header.generation index
 
 private theorem countedRun_le (dir : DiskDirectory) (manifest : IntegrityCheckpoint)
@@ -107,6 +109,7 @@ private theorem countedRun_le (dir : DiskDirectory) (manifest : IntegrityCheckpo
     requestedBytes (countedRun dir manifest readSize readPrefix index initial) ≤
       initial + runRequestSize manifest index := by
   unfold countedRun readStampedRun runRequestSize
+  simp only [List.getElem?_toArray]
   cases declared : manifest.runs[index]? with
   | none => exact Nat.le_refl _
   | some stamp =>
