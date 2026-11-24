@@ -777,6 +777,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.segmentedCheckpointView_retained
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.segmentedCheckpointView_settledRetained
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.runPaths
+#check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.collectionOffsets_approved
+#check_axioms Alvoki.Storage.WalSegmentImage.collectionOffsets_observed
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_rejectsLiveToken
 #check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.unchangedProjection
 #check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.preservesSettledReplacement

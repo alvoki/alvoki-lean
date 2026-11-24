@@ -1,7 +1,54 @@
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
+import Alvoki.Storage.Disk.WalSegmentBoundedOpenReports
 import Alvoki.Storage.Publication.RunCollection
 
 namespace Alvoki.Storage
+
+/-- The canonical sealed offsets whose complete spans are covered by
+every selected metadata pair. -/
+def WalSegmentImage.collectionOffsets (image : WalSegmentImage) : List Nat :=
+  (image.sealed.filter image.canRemove).map WalSegment.first
+
+private theorem sameStart {segments : List WalSegment}
+    (ordered : segments.Pairwise (fun earlier later => earlier.first < later.first))
+    {left right : WalSegment} (leftIn : left ∈ segments) (rightIn : right ∈ segments)
+    (same : left.first = right.first) : left = right := by
+  induction segments with
+  | nil => simp at leftIn
+  | cons segment rest ih =>
+    obtain ⟨before, further⟩ := List.pairwise_cons.mp ordered
+    rcases List.mem_cons.mp leftIn with rfl | earlier <;> rcases List.mem_cons.mp rightIn with rfl | later
+    · rfl
+    · exact False.elim ((Nat.ne_of_lt (before right later)) same)
+    · exact False.elim ((Nat.ne_of_lt (before left earlier)) same.symm)
+    · exact ih further earlier later
+
+theorem WalSegmentImage.ReadLayout.collectionOffsets_approved {image : WalSegmentImage} {history : List WAL.Write}
+    (layout : image.ReadLayout history) {first : Nat} (planned : first ∈ image.collectionOffsets) :
+    (∃ segment ∈ image.sealed, segment.first = first) ∧
+      ∀ segment ∈ image.sealed, segment.first = first → image.Eligible segment := by
+  obtain ⟨selected, included, offset⟩ := List.mem_map.mp planned
+  obtain ⟨sealed, eligible⟩ := List.mem_filter.mp included
+  refine ⟨⟨selected, sealed, offset⟩, ?_⟩
+  have ordered := (List.pairwise_append.mp layout.ordered).1.imp (fun pair => pair.1)
+  intro segment member same
+  have identical := sameStart ordered member sealed (same.trans offset.symm)
+  rw [identical]
+  exact WalSegmentImage.canRemove_iff.mp eligible
+
+/-- The bounded worker's held inventory authenticates each approved
+offset at its actual canonical, no-follow regular file path. -/
+theorem WalSegmentImage.collectionOffsets_observed {directory owners descriptor image pair watermark durable tail}
+    (raw : WalSegmentRepair.HealthyBoundedWalReports directory owners descriptor image pair watermark durable tail)
+    {first : Nat} (planned : first ∈ image.collectionOffsets) :
+    renderWalSegmentName first ∈ raw.entries.toList.map (·.fileName) ∧
+      ∃ metadata, raw.reports.lstat (directory.file (.walSegment first)) = .ok metadata ∧
+        metadata.type = .file ∧ metadata.numLinks = 1 := by
+  obtain ⟨segment, included, rfl⟩ := List.mem_map.mp planned
+  have sealed := (List.mem_filter.mp included).1
+  have listed : segment.first ∈ image.segments.map WalSegment.first :=
+    List.mem_map_of_mem (List.mem_append_left _ sealed)
+  exact ⟨(raw.names _).mpr listed, raw.regular _ listed⟩
 
 /-- A completed unlink can remove the guarantee for its exact sealed
 address. The directory barrier then settles the visible metadata pair. -/
