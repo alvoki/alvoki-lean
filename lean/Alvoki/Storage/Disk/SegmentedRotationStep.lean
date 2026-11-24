@@ -1,11 +1,23 @@
 import Alvoki.Storage.Disk.RotationLockHandoff
 import Alvoki.Storage.Disk.RotationAuthorityRetry
-import Alvoki.Storage.Disk.SegmentedWriterState
+import Alvoki.Storage.Disk.RetainedWriterState
 
 namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair WalSegmentRotation
 open WAL (frameSize)
+
+theorem SegmentedWriterState.RetainedReady.rotationInput {directory descriptor} {state : SegmentedWriterState}
+    (ready : state.RetainedReady directory descriptor)
+    (nonempty : state.installed.activeFirst < state.installed.walBytes / frameSize) :
+    CanRotate state.wal state.history := by
+  have endAt : state.installed.walBytes / frameSize = state.history.length := by
+    rw [ready.resumed.bytes, WAL.encode_size, Nat.mul_comm,
+      Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
+  refine ⟨?_, ready.layout.activeEnd, ?_⟩
+  · rwa [ready.resumed.keeper, ready.active, endAt, ← ready.layout.activeEnd] at nonempty
+  · intro segment present
+    exact ((List.pairwise_append.mp ready.layout.ordered).2.2 segment present state.wal.active (by simp)).1
 
 /-- The successful, nonempty branch of native rotation after the active-file
 guard. The complete starting layout has no successor at the history end. -/
@@ -68,20 +80,24 @@ theorem acknowledges (report : SegmentedRotationReport directory before) :
     MonadStateOf.modifyGet, EStateM.modifyGet, report.ran]
 
 private theorem successorAtEnd (report : SegmentedRotationReport directory before) {descriptor : Nat}
-    (ready : before.Ready directory descriptor) :
+    (ready : before.RetainedReady directory descriptor) :
     report.nextInstalled.activeFirst = before.history.length := by
   change before.installed.walBytes / frameSize = before.history.length
   rw [ready.resumed.bytes, WAL.encode_size, Nat.mul_comm,
     Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
 
-theorem rotated (report : SegmentedRotationReport directory before) {descriptor : Nat}
-    (ready : before.Ready directory descriptor) : report.wal = before.wal.rotated := by
+theorem rotatedRetained (report : SegmentedRotationReport directory before) {descriptor : Nat}
+    (ready : before.RetainedReady directory descriptor) : report.wal = before.wal.rotated := by
   have sameDirectory : before.wal.directory.syncDirectory = before.wal.directory := by
     rw [DirectoryPublication.Image.syncDirectory, ← ready.walDirectorySettled]
   simp [wal, report.settled, sameDirectory, WalSegmentRotation.State.visible]
 
+theorem rotated (report : SegmentedRotationReport directory before) {descriptor : Nat}
+    (ready : before.Ready directory descriptor) : report.wal = before.wal.rotated :=
+  report.rotatedRetained ready.toRetained
+
 private theorem selectTarget (report : SegmentedRotationReport directory before) {descriptor : Nat}
-    (ready : before.Ready directory descriptor) : ∃ target, report.Selects target := by
+    (ready : before.RetainedReady directory descriptor) : ∃ target, report.Selects target := by
   have atEnd := report.successorAtEnd ready
   let target : Target := ⟨before.target.pair, before.target.range, before.target.decoded,
     report.nextInstalled.activeFirst, by simp [atEnd, ready.resumed.through], ByteArray.empty, by
@@ -89,16 +105,17 @@ private theorem selectTarget (report : SegmentedRotationReport directory before)
       rfl⟩
   exact ⟨target, rfl, rfl, rfl⟩
 
-/-- Preserve the full history as the old keeper joins the sealed list and
-the empty successor becomes the new keeper. -/
-theorem preservesReady (report : SegmentedRotationReport directory before) {descriptor : Nat}
-    (ready : before.Ready directory descriptor) {target : Target} (chosen : report.Selects target) :
-    (report.next target).Ready directory descriptor := by
+/-- Rotate under the retained writer invariant, with the same logical history
+and checkpoint. The old keeper joins the exact surviving sealed inventory
+and the empty successor becomes the new keeper. -/
+theorem preservesRetainedReady (report : SegmentedRotationReport directory before) {descriptor : Nat}
+    (ready : before.RetainedReady directory descriptor) {target : Target} (chosen : report.Selects target) :
+    (report.next target).RetainedReady directory descriptor := by
   obtain ⟨pair, first, bytes⟩ := chosen
   have range := Option.some.inj (target.decoded.symm.trans (pair ▸ before.target.decoded))
   have atEnd := report.successorAtEnd ready
   have rotation := ready.rotationInput report.nonempty
-  have wal := report.rotated ready
+  have wal := report.rotatedRetained ready
   have directoryFiles : report.files.directory = before.files.directory := by
     change report.wal.directory = before.files.directory
     rw [wal]
@@ -116,23 +133,58 @@ theorem preservesReady (report : SegmentedRotationReport directory before) {desc
     rw [bytes, first, atEnd, List.drop_length]
     rfl
   have layout := report.cut.visibleReadLayout rotation ready.layout
-  have chain := report.cut.visibleChain rotation ready.chain
+  have valid : report.wal.Valid before.history := wal.symm ▸ rotation.valid_rotated ready.valid
+  have spans : ∀ segment ∈ report.wal.sealed, segment.bytes.size = (segment.last - segment.first) * frameSize := by
+    intro segment present
+    rw [wal] at present
+    rcases List.mem_append.mp present with sealed | keeper
+    · exact ready.spans _ sealed
+    · obtain rfl := List.mem_singleton.mp keeper
+      rw [ready.layout.activeBytes, WAL.encode_size, List.length_drop, ready.layout.activeEnd, Nat.mul_comm]
   have active : target.first = report.wal.active.first := by
     rw [first, atEnd, wal]
     exact rotation.atEnd.symm
   refine ⟨⟨durable, (congrArg MarkedWalRange.through range).trans ready.resumed.through, first.symm, ready.resumed.bytes, contents,
     ready.resumed.generation, ?_, ?_, ready.resumed.ordered, ready.resumed.bounds, ready.resumed.canonical⟩,
-    layout, chain, rfl, rfl, active, ?_, ready.held⟩
+    layout, valid, spans, rfl, rfl, active, ?_, ready.held⟩
   · simpa only [next, pair] using ready.resumed.selected
   · simpa only [next, pair] using ready.resumed.accepted
   · change before.published.manifest = report.files.directory.project .manifest
     rw [directoryFiles]
     exact ready.manifestFiles
 
+theorem selectedRetainedReady (report : SegmentedRotationReport directory before) {descriptor : Nat}
+    (ready : before.RetainedReady directory descriptor) :
+    ∃ target, report.Selects target ∧ (report.next target).RetainedReady directory descriptor := by
+  obtain ⟨target, chosen⟩ := report.selectTarget ready
+  exact ⟨target, chosen, report.preservesRetainedReady ready chosen⟩
+
+/-- The reported successor uses the absolute history end, and no present
+sealed descriptor or old keeper bytes are replaced. -/
+theorem retainedIdentities (report : SegmentedRotationReport directory before) {descriptor : Nat}
+    (ready : before.RetainedReady directory descriptor) :
+    report.wal.sealed = before.wal.sealed ++ [before.wal.active] ∧
+      report.wal.active = ⟨before.history.length, before.history.length, ByteArray.empty⟩ ∧
+      ∀ segment ∈ before.wal.segments,
+        directory.file (.walSegment report.wal.active.first) ≠ directory.file (.walSegment segment.first) := by
+  rw [report.rotatedRetained ready]
+  refine ⟨rfl, by rw [← ready.layout.activeEnd]; rfl, ?_⟩
+  intro segment present
+  exact (ready.rotationInput report.nonempty).successorDistinct directory present
+
+/-- For a caller that still holds the entire physical chain, keep that
+stronger property as well as the retained writer invariant. -/
+theorem preservesReady (report : SegmentedRotationReport directory before) {descriptor : Nat}
+    (ready : before.Ready directory descriptor) {target : Target} (chosen : report.Selects target) :
+    (report.next target).Ready directory descriptor := by
+  have next := report.preservesRetainedReady ready.toRetained chosen
+  have chain := report.cut.visibleChain (ready.rotationInput report.nonempty) ready.chain
+  exact ⟨next.resumed, next.layout, chain, next.directoryFiles, next.sealedFiles, next.active, next.manifestFiles, next.held⟩
+
 theorem selectedReady (report : SegmentedRotationReport directory before) {descriptor : Nat}
     (ready : before.Ready directory descriptor) :
     ∃ target, report.Selects target ∧ (report.next target).Ready directory descriptor := by
-  obtain ⟨target, chosen⟩ := report.selectTarget ready
+  obtain ⟨target, chosen⟩ := report.selectTarget ready.toRetained
   exact ⟨target, chosen, report.preservesReady ready chosen⟩
 
 end SegmentedRotationReport
