@@ -160,9 +160,8 @@ private def readKeeperPrefix (path : FilePath) (count : Nat) : IO WalSegmentRepa
   checkPrivateRegular path metadata
   unless count ≤ metadata.byteSize.toNat ∧ count < USize.size do
     throw (IO.userError s!"WAL keeper does not cover its selected prefix: '{path}'")
-  let bytes ← if count = 0 then pure ByteArray.empty else do
-    let file ← IO.FS.Handle.mk path .read
-    readExactPrefix file count ByteArray.empty
+  let file ← IO.FS.Handle.mk path .read
+  let bytes ← readExactPrefix file count ByteArray.empty
   return ⟨bytes, metadata.byteSize.toNat⟩
 
 private def inspectWalSegment (path : FilePath) : IO (Except IO.Error IO.FS.Metadata) := do
