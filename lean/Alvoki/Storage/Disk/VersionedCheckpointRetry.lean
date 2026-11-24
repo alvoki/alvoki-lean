@@ -19,6 +19,66 @@ def Image.runVersionedWithReports (initial : Image) (next : VersionedRunSet)
   | .ok _ cut => (initial.executeVersioned next cut).map (EStateM.Result.ok ())
   | .error _ cut => (initial.executeVersioned next cut).map (EStateM.Result.error ())
 
+/-- A primitive report describes whether its operation took effect. The
+reported error itself is retained by the caller, independently of the cut. -/
+def StepReport.Observes (report : StepReport) (before : Nat)
+    (result : EStateM.Result IO.Error Nat Unit) : Prop :=
+  match report, result with
+  | .success, .ok _ after => after = before + 1
+  | .failure applied, .error _ after => after = if applied then before + 1 else before
+  | _, _ => False
+
+/-- Require a report only after the actual preceding callbacks succeeded. -/
+def ReachedFileReports (report : Step → StepReport) (perform : Step → EStateM IO.Error Nat Unit)
+    (actions : List Step) (start : Nat) : Prop :=
+  ∀ done action todo, actions = done ++ action :: todo → ∀ before,
+    (done.forM perform) start = .ok () before → (report action).Observes before (perform action before)
+
+private def withoutCheckpointError (result : EStateM.Result IO.Error Nat Unit) : EStateM.Result Unit Nat Unit :=
+  match result with
+  | .ok value after => .ok value after
+  | .error _ after => .error () after
+
+private theorem reportsMatchSchedule (report : Step → StepReport) (perform : Step → EStateM IO.Error Nat Unit)
+    (actions : List Step) (start : Nat)
+    (observed : ReachedFileReports report perform actions start) :
+    withoutCheckpointError ((actions.forM perform) start) = (actions.forM (reportEffect report)) start := by
+  induction actions generalizing start with
+  | nil => rfl
+  | cons action rest ih =>
+    have current := observed [] action rest rfl start rfl
+    change withoutCheckpointError (EStateM.bind (perform action) (fun _ => rest.forM perform) start) =
+      EStateM.bind (reportEffect report action) (fun _ => rest.forM (reportEffect report)) start
+    cases status : report action <;> cases actual : perform action start <;>
+      simp only [status, actual, StepReport.Observes] at current
+    · rename_i value after
+      have later : ReachedFileReports report perform rest after := by
+        intro done step todo order before reached
+        apply observed (action :: done) step todo (by rw [order]; rfl) before
+        change EStateM.bind (perform action) (fun _ => done.forM perform) start = .ok () before
+        simpa only [EStateM.bind, actual] using reached
+      simpa only [EStateM.bind, actual, reportEffect, status, ← current] using ih _ later
+    · simp only [EStateM.bind, actual, reportEffect, status, withoutCheckpointError, current]
+
+/-- Match a failed file-dispatch schedule to its modeled publication cut.
+The image describes selectable manifests and durable run bytes. A private
+scratch file may have changed during an operation that failed. -/
+theorem Image.runVersionedWithObservedFailure (initial : Image) (next : VersionedRunSet)
+    (report : Step → StepReport) (perform : Step → EStateM IO.Error Nat Unit)
+    (observed : ReachedFileReports report perform (steps next.files.length) 0)
+    {cause : IO.Error} {cut : Nat} (failed : run next.files.length perform 0 = .error cause cut) :
+    ∃ published, initial.executeVersioned next cut = some published ∧
+      initial.runVersionedWithReports next report = some (.error () published) := by
+  have counted := reportsMatchSchedule report perform (steps next.files.length) 0 observed
+  change withoutCheckpointError (run next.files.length perform 0) =
+    run next.files.length (reportEffect report) 0 at counted
+  rw [failed] at counted
+  obtain ⟨published, exactFiles⟩ := initial.executeVersioned_exists next cut
+  refine ⟨published, exactFiles, ?_⟩
+  unfold runVersionedWithReports
+  rw [← counted]
+  simp [withoutCheckpointError, exactFiles]
+
 theorem Image.runVersionedWithReports_exists (initial : Image) (next : VersionedRunSet)
     (report : Step → StepReport) : ∃ result, initial.runVersionedWithReports next report = some result := by
   unfold runVersionedWithReports
