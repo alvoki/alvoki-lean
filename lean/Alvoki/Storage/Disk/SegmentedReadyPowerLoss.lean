@@ -170,27 +170,11 @@ theorem installsRetained (report : SegmentedReadyPowerLossReport directory befor
     have noNames : selected.plan.newer = [] := empty
     simp only [Plan.alignedWithoutPrune, currentPrepared.valid, noNames, List.isEmpty_nil, exactSize,
       beq_self_eq_true, Bool.and_self]
-  have healthy : ∀ action prior next,
-      ReachesAction selected.target report.retry.image.syncDirectory selected.plan.finishActions action prior →
-      prior.effect selected.target action = some next →
-      performPaths directory selected.plan report.removeFile throw report.write report.sync report.renameFile action prior =
-        .ok () next := by
-    intro action prior next reached applied
-    obtain ⟨priorActions, suffix, schedule, ran⟩ := reached
-    rw [Plan.finishActions, ite_eq_left aligned] at schedule
-    have sizes := congrArg List.length schedule
-    simp only [List.length_append, List.length_cons, List.length_nil] at sizes
-    have beforeHead : priorActions = [] := List.length_eq_zero_iff.mp (by omega)
-    subst priorActions
-    have atHead : action = .syncKeeper := (List.cons.inj schedule).1.symm
-    subst action
-    have firstImage : prior = report.retry.image.syncDirectory := (Option.some.inj ran).symm
-    subst prior
-    have lastImage : next = report.retry.image.syncDirectory.syncKeeper := (Option.some.inj applied).symm
-    subst next
-    change report.sync #[directory.file (.walSegment selected.plan.keeper)] report.retry.image.syncDirectory = _
-    rw [show selected.plan.keeper = before.wal.active.first from congrArg WalSegment.first keeperExact]
-    exact observed.syncKeeper
+  have healthy := finishActions_aligned_success (target := selected.target)
+    (directory := directory) (sync := report.sync) (initial := report.retry.image.syncDirectory) aligned report.removeFile
+    report.write report.renameFile
+    (by simpa only [show selected.plan.keeper = before.wal.active.first from congrArg WalSegment.first keeperExact]
+      using observed.syncKeeper)
   let raw : HealthyBoundedWalReports directory (report.retry.owners.set (directory.file .lock) (some nextDescriptor))
       nextDescriptor before.wal report.retry.image.directory.active selected.range.watermark before.published.durable
       selected.tail :=

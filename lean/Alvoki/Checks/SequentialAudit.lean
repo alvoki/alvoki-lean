@@ -587,6 +587,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.prepareObservedRetry
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareMarkedWith_liftReports
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.completesObservedRetry
+#check_axioms Alvoki.Storage.WalSegmentRepair.finishActions_aligned_success
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishMarkedOpen_safe
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishMarkedOpen_completes
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedFastWith_completes

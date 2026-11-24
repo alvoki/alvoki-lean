@@ -19,6 +19,37 @@ private theorem reachedAlignedKeeper {initial : FileImage} {target : Target} {pl
     ReachesAction target initial.syncDirectory plan.finishActions .syncKeeper initial.syncDirectory :=
   ⟨[], [], by simp [Plan.finishActions, fast], rfl⟩
 
+private theorem reachesKeeperSync {target : Target} {initial before : FileImage} {action : Step}
+    (reaches : ReachesAction target initial [.syncKeeper] action before) :
+    action = .syncKeeper ∧ before = initial := by
+  obtain ⟨earlier, rest, schedule, ran⟩ := reaches
+  have length := congrArg List.length schedule
+  simp only [List.length_cons, List.length_nil, List.length_append] at length
+  have empty : earlier = [] := List.length_eq_zero_iff.mp (by omega)
+  subst earlier
+  simp only [List.nil_append, List.cons.injEq] at schedule
+  exact ⟨schedule.1.symm, (Option.some.inj ran).symm⟩
+
+/-- A successful keeper sync supplies every reached effect on the aligned route. -/
+theorem finishActions_aligned_success {initial : FileImage} {target : Target} {plan : Plan}
+    {directory : DiskDirectory} {sync : Array FilePath → EStateM IO.Error FileImage Unit}
+    (fast : plan.alignedWithoutPrune = true)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit)
+    (keeperSync : sync #[directory.file (.walSegment plan.keeper)] initial = .ok () initial.syncKeeper) :
+    ∀ action prior next, ReachesAction target initial plan.finishActions action prior →
+      prior.effect target action = some next →
+      performPaths directory plan removeFile throw write sync renameFile action prior = .ok () next := by
+  intro action prior next reached applied
+  simp only [Plan.finishActions, fast, ite_true] at reached
+  obtain ⟨onlyAction, samePrior⟩ := reachesKeeperSync reached
+  subst action
+  subst prior
+  have same : initial.syncKeeper = next := Option.some.inj applied
+  subst next
+  exact keeperSync
+
 private theorem Prepared.readyAfterAlignedSync {initial : FileImage} {target : Target} {plan : Plan}
     (prepared : Prepared initial target plan) (fast : plan.alignedWithoutPrune = true) :
     EffectTrace target initial initial.syncDirectory.syncKeeper ∧ initial.syncDirectory.syncKeeper.Ready target := by

@@ -40,17 +40,6 @@ theorem AppendCutReady.writerRetained {directory descriptor liveRefs history pub
     ⟨resumed, ⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩,
       retained, spans, rfl, kept.trans sealed, keeper, rfl, held⟩⟩
 
-private theorem reachesKeeperSync {target : Target} {initial before : FileImage} {action : Step}
-    (reaches : ReachesAction target initial [.syncKeeper] action before) :
-    action = .syncKeeper ∧ before = initial := by
-  obtain ⟨earlier, rest, schedule, ran⟩ := reaches
-  have length := congrArg List.length schedule
-  simp only [List.length_cons, List.length_nil, List.length_append] at length
-  have empty : earlier = [] := List.length_eq_zero_iff.mp (by omega)
-  subst earlier
-  simp only [List.nil_append, List.cons.injEq] at schedule
-  exact ⟨schedule.1.symm, (Option.some.inj ran).symm⟩
-
 /-- After covered collection, the healthy locked inventory feeds the
 native bounded reader. The keeper is still aligned, so only the directory
 and keeper barriers are reached before the retained writer is installed. -/
@@ -94,16 +83,9 @@ theorem SegmentedWriterState.RetainedReady.openAfterCollection {directory descri
       exact selected.target.trimmedSize
     have empty : selected.plan.newer = [] := rfl
     simp [Plan.alignedWithoutPrune, prepared.valid, size, empty]
-  have healthy : ∀ action prior next,
-      ReachesAction selected.target files.syncDirectory selected.plan.finishActions action prior →
-      prior.effect selected.target action = some next →
-      performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next := by
-    intro action prior next reached effect
-    simp only [Plan.finishActions, fast, ite_true] at reached
-    obtain ⟨rfl, rfl⟩ := reachesKeeperSync reached
-    have same : files.syncDirectory.syncKeeper = next := Option.some.inj effect
-    subst next
-    simpa only [performPaths, CanonicalKeeperLayout.plan, keeper] using syncKeeper
+  have healthy := finishActions_aligned_success (target := selected.target)
+    (directory := directory) (sync := sync) (initial := files.syncDirectory) fast removeFile write renameFile
+    (by simpa only [CanonicalKeeperLayout.plan, keeper] using syncKeeper)
   -- The plan proves the expected watermark and empty tail. Keep the same
   -- observed read callbacks when carrying those facts into the worker.
   let reports : HealthyBoundedWalReports directory (owners.set (directory.file .lock) (some readerDescriptor))

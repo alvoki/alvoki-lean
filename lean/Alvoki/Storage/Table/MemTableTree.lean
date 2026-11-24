@@ -148,34 +148,24 @@ private theorem isEmpty_spec (tree : MemTableTree) :
     isEmpty tree = (history tree).rows.isEmpty := by
   simp [isEmpty, history]
 
-private theorem ge_iff (slot : Slot) (key snapshot : UInt64) :
-    (compareVersion slot.1 (key, snapshot)).isGE = true ↔
-      key < slot.1.1 ∨ slot.1.1 = key ∧ slot.1.2 ≤ snapshot := by
+private theorem ge_iff (left right : Version) :
+    (compareVersion left right).isGE = true ↔
+      right.1 < left.1 ∨ left.1 = right.1 ∧ left.2 ≤ right.2 := by
   rw [Ordering.isGE_iff_ne_lt, compareVersion_lt]
   simp only [not_or, not_and, UInt64.not_lt]
   constructor
   · rintro ⟨le, h⟩
-    by_cases eq : slot.1.1 = key
+    by_cases eq : left.1 = right.1
     · exact Or.inr ⟨eq, h eq⟩
     · exact Or.inl (UInt64.lt_of_le_of_ne le (Ne.symm eq))
-  · rintro (lt | ⟨rfl, le⟩)
-    · exact ⟨UInt64.le_of_lt lt, fun eq => False.elim (UInt64.lt_irrefl _ (eq ▸ lt))⟩
-    · exact ⟨UInt64.le_refl _, fun _ => le⟩
-
-private theorem le_iff (slot : Slot) (key snapshot : UInt64) :
-    (compareVersion slot.1 (key, snapshot)).isLE = true ↔
-      slot.1.1 < key ∨ slot.1.1 = key ∧ snapshot ≤ slot.1.2 := by
-  rw [OrientedCmp.eq_swap (cmp := compareVersion), Ordering.isLE_swap,
-    Ordering.isGE_iff_ne_lt, compareVersion_lt]
-  simp only [not_or, not_and, UInt64.not_lt]
-  constructor
-  · rintro ⟨le, h⟩
-    by_cases eq : slot.1.1 = key
-    · exact Or.inr ⟨eq, h eq.symm⟩
-    · exact Or.inl (UInt64.lt_of_le_of_ne le eq)
   · rintro (lt | ⟨eq, le⟩)
     · exact ⟨UInt64.le_of_lt lt, fun eq => False.elim (UInt64.lt_irrefl _ (eq ▸ lt))⟩
-    · exact ⟨eq ▸ UInt64.le_refl _, fun _ => le⟩
+    · exact ⟨by rw [eq]; exact UInt64.le_refl _, fun _ => le⟩
+
+private theorem le_iff (left right : Version) :
+    (compareVersion left right).isLE = true ↔
+      left.1 < right.1 ∨ left.1 = right.1 ∧ right.2 ≤ left.2 := by
+  rw [OrientedCmp.eq_swap (cmp := compareVersion), Ordering.isLE_swap, ge_iff, eq_comm (a := right.1)]
 
 private def lookup (tree : MemTableTree) (key snapshot : UInt64) :
     Option (Entry (Option UInt64)) :=
