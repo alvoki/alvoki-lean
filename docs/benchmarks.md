@@ -114,6 +114,8 @@ python3 benchmarks/disk_replay_resources.py \
   --out /tmp/alvoki-replay-resources.csv
 ```
 
+With a 32 MiB tail, the bounded keeper requests reduced the measured WAL reads from about 33.65 MB to 98–99 kB across 1, 8 and 32 segments. Median peak RSS fell by about 34 MiB. The aligned 32-frame median moved from 2.38 to 2.32 ms on CPU 1, with an interval spanning parity. [Matched resource and timing samples](../benchmarks/results/disk/bounded-keeper-replay)
+
 ### Canonical database path at open
 
 We measured the directory-identity change on the same Linux VM using seven release trials for each of 100, 5,000, and 10,000 records in all three replay orders. The median ratios after the change ranged from 0.84× to 1.08× at 5,000 and 10,000 records. At 100 records the shuffled median rose from 39.6 to 48.0 microseconds and the other two medians moved by less than one microsecond. The comparison uses one run per build. Native code performs `realpath` and the absolute-path check once on open, and the path proof is erased. [Before samples](../benchmarks/results/disk/disk-identity-before.csv) · [After samples](../benchmarks/results/disk/disk-identity-after.csv) · [Environment and command](../benchmarks/results/disk/disk-identity-environment.txt)
