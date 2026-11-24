@@ -139,6 +139,50 @@ theorem selectsPriorHistory (cut : FirstAppendCut) {directory descriptor before}
   · rw [ready.chain.concatenate_eq, List.drop_zero]
     exact WAL.decodeOrdinals_encode _ ready.resumed.ordered
 
+private theorem layoutWithTail {directory descriptor} {before : SegmentedWriterState}
+    (ready : before.RetainedReady directory descriptor) (files : FileImage) (tail : ByteArray)
+    (observed : before.wal.CheckpointReopenDirectory files.directory)
+    (pair : files.directory.active = before.target.pair)
+    (visible : files.keeper.active = some (WAL.encode (before.history.drop before.wal.active.first) ++ tail)) :
+    ∃ selected : CanonicalKeeperLayout files before.history,
+      selected.target = before.target ∧ selected.keeper = before.wal.active ∧
+      selected.tail = tail ∧
+      selected.sealed ++ [selected.keeper] = before.wal.readDescriptors selected.range.watermark ∧
+      selectWalSegmentReads (before.wal.segments.map WalSegment.first) selected.range.watermark =
+        some (selected.first, (before.wal.readDescriptors selected.range.watermark).map WalSegment.first) := by
+  have decoded : files.directory.active.walRange = some before.target.range := pair ▸ before.target.decoded
+  obtain ⟨base, range, keeper, _, descriptors, offsets, _, _, _, _⟩ :=
+    ready.layout.checkpointReopenLayout ready.valid observed decoded ready.resumed.through none
+  let source : CanonicalKeeperLayout files before.history :=
+    { range := base.range
+      decoded := base.decoded
+      through := base.through
+      first := base.first
+      sealed := base.sealed
+      keeper := base.keeper
+      chain := base.chain
+      covers := base.covers
+      tail := tail
+      visible := by rw [keeper, ready.layout.activeBytes]; exact visible }
+  have start : source.target.first = before.target.first :=
+    (congrArg WalSegment.first keeper).trans ready.active.symm
+  have bytes : source.target.trimmed = before.target.trimmed := by
+    change base.keeper.bytes = before.target.trimmed
+    rw [keeper, ready.resumed.contents, ready.active, ready.layout.activeBytes]
+  have target : source.target = before.target := by
+    change source.target.pair = before.target.pair at pair
+    have exactRange : source.target.range = before.target.range := range
+    generalize source.target = a at pair start bytes exactRange ⊢
+    generalize before.target = b at pair start bytes exactRange ⊢
+    cases a
+    cases b
+    cases pair
+    cases exactRange
+    cases start
+    cases bytes
+    rfl
+  exact ⟨source, target, keeper, rfl, range.symm ▸ descriptors, range.symm ▸ offsets⟩
+
 private theorem crashedLayout (cut : FirstAppendCut) {directory descriptor before}
     (ready : before.RetainedReady directory descriptor) (tail : ByteArray) :
     let files := (cut.crashed before directory tail).image
@@ -152,42 +196,63 @@ private theorem crashedLayout (cut : FirstAppendCut) {directory descriptor befor
   have pairSurvives : before.target.pair ∈ before.wal.directory.crashImages := by
     rw [← ready.directoryFiles, ready.resumed.ready.settled]
     exact List.mem_singleton_self _
-  have decoded : (DirectoryPublication.Image.settled before.target.pair).active.walRange =
-    some before.target.range := before.target.decoded
-  obtain ⟨base, range, keeper, _, descriptors, offsets, _, _, _, _⟩ :=
-    ready.layout.checkpointReopenLayout ready.valid (.crash pairSurvives) decoded ready.resumed.through none
-  let source : CanonicalKeeperLayout files before.history :=
-    { range := base.range
-      decoded := base.decoded
-      through := base.through
-      first := base.first
-      sealed := base.sealed
-      keeper := base.keeper
-      chain := base.chain
-      covers := base.covers
-      tail := tail
-      visible := by rw [keeper, ready.layout.activeBytes]; rfl }
-  have start : source.target.first = before.target.first :=
-    (congrArg WalSegment.first keeper).trans ready.active.symm
-  have bytes : source.target.trimmed = before.target.trimmed := by
-    change base.keeper.bytes = before.target.trimmed
-    rw [keeper, ready.resumed.contents, ready.active, ready.layout.activeBytes]
-  have target : source.target = before.target := by
-    have pair : source.target.pair = before.target.pair := rfl
-    have exactRange : source.target.range = before.target.range := range
-    generalize source.target = a at pair start bytes exactRange ⊢
-    generalize before.target = b at pair start bytes exactRange ⊢
-    cases a
-    cases b
-    cases pair
-    cases exactRange
-    cases start
-    cases bytes
-    rfl
+  obtain ⟨source, target, keeper, _, descriptors, offsets⟩ :=
+    layoutWithTail ready files tail (.crash pairSurvives) rfl rfl
   have prepared := source.prepared (by simp [files, crashed, FileImage.crash, Publication.Image.settled])
-    (fun _ present => ⟨tail, (List.mem_singleton.mp present).trans source.visible⟩)
+    (fun _ present => ⟨tail, by rw [List.mem_singleton.mp present, keeper, ready.layout.activeBytes]⟩)
     (by simp [files, crashed, FileImage.crash, LaterNames.settled, LaterNames.Beyond])
-  exact ⟨source, target, keeper, range.symm ▸ descriptors, range.symm ▸ offsets, prepared⟩
+  exact ⟨source, target, keeper, descriptors, offsets, prepared⟩
+
+/-- An observation of the live append cut selects the prior keeper. Its
+unsynced tail and every crash candidate remain in the file image. -/
+theorem liveLayout (cut : FirstAppendCut) {directory descriptor before}
+    (ready : before.RetainedReady directory descriptor) :
+    let files := cut.physical before
+    files.syncDirectory = files ∧ files.later.visible = [] ∧
+    ∃ selected : CanonicalKeeperLayout files before.history,
+      selected.target = before.target ∧ selected.keeper = before.wal.active ∧
+      selected.tail = cut.visibleTail ∧
+      selected.sealed ++ [selected.keeper] = before.wal.readDescriptors selected.range.watermark ∧
+      selectWalSegmentReads (before.wal.segments.map WalSegment.first) selected.range.watermark =
+        some (selected.first, (before.wal.readDescriptors selected.range.watermark).map WalSegment.first) ∧
+      Prepared files selected.target selected.plan := by
+  intro files
+  have observed : before.wal.CheckpointReopenDirectory files.directory := by
+    change before.wal.CheckpointReopenDirectory before.files.directory
+    rw [ready.directoryFiles]
+    exact .visible
+  obtain ⟨source, target, keeper, tail, descriptors, offsets⟩ :=
+    layoutWithTail ready files cut.visibleTail observed ready.resumed.ready.selected rfl
+  have compatible : ∀ bytes ∈ files.keeper.crashImages, ∃ suffix, bytes = some (source.keeper.bytes ++ suffix) := by
+    intro bytes present
+    rw [cut.keeperSurvivors] at present
+    obtain ⟨suffix, _, rfl⟩ := List.mem_map.mp present
+    exact ⟨suffix, by rw [keeper, ready.layout.activeBytes]⟩
+  have choices : files.keeper.crashImages ≠ [] := by rw [cut.keeperSurvivors]; simp
+  have empty := ready.resumed.ready.pruned.1
+  have durable := ready.resumed.ready.pruned.2
+  have later : files.later.Beyond source.range.through := by
+    change before.files.later.Beyond source.range.through
+    intro names presented first listed
+    rw [empty, durable] at presented
+    have absent : names = [] := by simpa using presented
+    rw [absent] at listed
+    exact (List.not_mem_nil listed).elim
+  have fixed : files.syncDirectory = files := by
+    have metadata : files.directory.syncDirectory = files.directory := by
+      have settled : [files.directory.active] = files.directory.crashImages := by
+        change [before.files.directory.active] = before.files.directory.crashImages
+        rw [ready.resumed.ready.selected, ready.resumed.ready.settled]
+      unfold DirectoryPublication.Image.syncDirectory
+      rw [settled]
+    have names : files.later.syncDirectory = files.later := by
+      have settled : [files.later.visible] = files.later.crashImages := by
+        change [before.files.later.visible] = before.files.later.crashImages
+        rw [empty, durable]
+      unfold LaterNames.syncDirectory LaterNames.settled
+      rw [settled]
+    rw [FileImage.syncDirectory, metadata, names]
+  exact ⟨fixed, empty, source, target, keeper, tail, descriptors, offsets, source.prepared choices compatible later⟩
 
 private theorem reopensPriorMarker (cut : FirstAppendCut) {directory descriptor before}
     (ready : before.RetainedReady directory descriptor)
