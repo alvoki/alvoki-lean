@@ -804,6 +804,20 @@ private def checkWalCollectionBarrierError (root : FilePath) (afterSync : Bool) 
   check (reported && syncs == failureSyncs)
     "collection did not report its directory barrier error after unlink"
 
+  let surviving := [keeper, dir / "MANIFEST", dir / "WAL.commit", dir / "run-1-0.v3"]
+  let expected ← surviving.mapM IO.FS.readBinFile
+  for mode in [SyncFailureMode.beforeSync, .afterSync] do
+    let (opened, attempted) ← probeDisk bin dir (some keeper) (failureMode := mode)
+    let expectedSyncs := alignedWalSyncs dir keeper ++
+      match mode with
+      | .afterSync => [s!"synced before error: {keeper}"]
+      | _ => []
+    check (!opened && attempted == expectedSyncs)
+      "collection recovery did not stop at the reported keeper sync error"
+    check (decide ((← surviving.mapM IO.FS.readBinFile) = expected) &&
+      !(← (dir / firstWalSegment).pathExists))
+      "failed collection reopen changed the checkpoint or settled WAL catalog"
+
   let (collected, syncs) ← probeDisk bin dir none (operation := "--collect-wal-once")
   check (collected && syncs == collectionSyncs) "an empty collection skipped its directory barrier"
   let reopened ← DiskTable.open dir
