@@ -109,7 +109,8 @@ theorem write_cut_selects_old_or_new {before : List WAL.Write} {event : WAL.Writ
     (oldFits : (WAL.encode before).size < UInt64.size)
     (newFits : (WAL.encode (before ++ [event])).size < UInt64.size)
     {binding : Option ByteArray} (chosen : binding = image.active ∨ binding ∈ image.crashImages) :
-    ∃ bytes events, binding = some bytes ∧ (events = before ∨ events = before ++ [event]) ∧
+    ∃ bytes events, binding = some bytes ∧ bytes = encode (WAL.encode events).size.toUInt64 ∧
+      (events = before ∨ events = before ++ [event]) ∧
       (do
         let size ← decode bytes
         select size wal) = .ok (WAL.encode events) := by
@@ -119,7 +120,7 @@ theorem write_cut_selects_old_or_new {before : List WAL.Write} {event : WAL.Writ
       rcases chosen with visible | survives
       · exact visible
       · exact List.mem_singleton.mp survives
-    exact ⟨marker before, before, old, Or.inl rfl, select_marker before tail oldFits⟩
+    exact ⟨marker before, before, old, rfl, Or.inl rfl, select_marker before tail oldFits⟩
   | publishing path =>
     let allowed := fun candidate => candidate = some (marker before) ∨
       candidate = some (marker (before ++ [event]))
@@ -131,10 +132,10 @@ theorem write_cut_selects_old_or_new {before : List WAL.Write} {event : WAL.Writ
       · exact visible.symm ▸ valid.activeValid
       · exact valid.crashValid binding survives
     rcases admissible with old | new
-    · refine ⟨marker before, before, old, Or.inl rfl, ?_⟩
+    · refine ⟨marker before, before, old, rfl, Or.inl rfl, ?_⟩
       rw [WAL.encode_append]
       exact select_marker before (WAL.encode [event]) oldFits
-    · refine ⟨marker (before ++ [event]), before ++ [event], new, Or.inr rfl, ?_⟩
+    · refine ⟨marker (before ++ [event]), before ++ [event], new, rfl, Or.inr rfl, ?_⟩
       simpa only [ByteArray.append_empty] using
         select_marker (before ++ [event]) ByteArray.empty newFits
 
@@ -164,7 +165,7 @@ theorem write_cut_replays_old_or_new (base : PackedTable) {before : List WAL.Wri
         recoverCheckpoint base selected
       recovered = recoverCheckpoint base (WAL.encode before) ∨
         recovered = recoverCheckpoint base (WAL.encode (before ++ [event])) := by
-  obtain ⟨bytes, events, binding, history, selected⟩ :=
+  obtain ⟨bytes, events, binding, _, history, selected⟩ :=
     write_cut_selects_old_or_new cut oldFits newFits (Or.inr survives)
   refine ⟨bytes, binding, ?_⟩
   rcases history with rfl | rfl

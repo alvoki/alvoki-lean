@@ -287,3 +287,7 @@ Pre-extending a destination and writing through a cursor sped up encoding of own
 ## Wide accessors and published toolchain controls
 
 Unchanged packed writer code passed exact fixtures on Lean 4.36, the 23 November nightly, and the official build of PR #14053. Alternating replay on the three toolchains differed by about 2% in the repeated run. In a separate benchmark that uses the draft accessors, the preallocated owned v3 encoder took 4.13 ms at one million rows, down from 14.65 ms with stock byte stores. The fixed-size `memcpy` variant further cut alternating replay, while the post-store exclusivity assumption changed generated checks with mixed timing effects. Both timing scopes and the exact external toolchain revisions are archived. [Published toolchains](../benchmarks/results/packed/upstream-toolchains) · [Accessor timings and code generation](../benchmarks/results/packed/wide-accessors)
+
+## Exact metadata after marked reopen
+
+The write-cut selector now carries the exact encoded marker alongside the selected history. The composed reopen theorem uses its lineage across retries to identify the final active metadata pair. The fixed manifest and marker for the recovered WAL length are settled together. This gives the next protocol operation a concrete history witness under the existing filesystem contract. [Composed reopen theorem](../lean/Alvoki/Storage/Disk/MarkedAdapterRefinement.lean)

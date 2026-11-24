@@ -249,6 +249,7 @@ theorem recoverWriteCutSelectedPair {manifest marker : Option ByteArray} {files 
     (ordered : WAL.OrdinalsFrom 1 ((covered ++ pending) ++ [event]))
     (watermark : covered.length = checkpoint.committed.toNat) :
     ∃ markerBytes events base reopened reference, marker = some markerBytes ∧
+      markerBytes = WAL.Boundary.encode (WAL.encode events).size.toUInt64 ∧
       (match manifest with
       | none => Except.ok PackedTable.empty
       | some bytes => do
@@ -271,7 +272,7 @@ theorem recoverWriteCutSelectedPair {manifest marker : Option ByteArray} {files 
               (∀ start stop, pinned.range pin.handle start stop =
                 some (abstract.table.range start stop snapshot))) := by
   obtain ⟨base, loaded, same⟩ := written.loads
-  obtain ⟨markerBytes, events, bound, history, selected⟩ :=
+  obtain ⟨markerBytes, events, bound, markerEncoding, history, selected⟩ :=
     WAL.Boundary.write_cut_selects_old_or_new cut oldFits newFits chosen
   obtain ⟨suffix, split, ordinals⟩ :
       ∃ suffix, events = covered ++ suffix ∧ WAL.OrdinalsFrom 1 (covered ++ suffix) := by
@@ -286,7 +287,7 @@ theorem recoverWriteCutSelectedPair {manifest marker : Option ByteArray} {files 
   obtain ⟨reference, expected, agrees⟩ := replay_sameData same.symm suffix replayed
   have finalCount : reopened.committed.toNat = (covered ++ suffix).length := by
     simpa only [List.length_append] using sequence
-  refine ⟨markerBytes, covered ++ suffix, base, reopened, reference, bound, loaded, selected,
+  refine ⟨markerBytes, covered ++ suffix, base, reopened, reference, bound, markerEncoding, loaded, selected,
     recovered, history, finalCount, by simpa only [List.drop_left] using expected, agrees, ?_⟩
   intro model represents
   obtain ⟨abstract, modeled, refined⟩ := replay_refines represents expected
@@ -347,7 +348,7 @@ theorem ReopenImage.valid_of_writeCut {image : ReopenImage}
           decode marker = .ok length ∧ select length contents = .ok (writeCutPrefix before event pair) := by
     obtain ⟨contents, markerImage, present, cut, visible, candidates⟩ := physical binding possible
     intro pair chosen
-    obtain ⟨marker, events, bound, history, selected⟩ :=
+    obtain ⟨marker, events, bound, _, history, selected⟩ :=
       write_cut_selects_old_or_new cut (Nat.lt_trans grows fits) fits
         (marker_chosen_of_pair chosen visible candidates)
     cases decoded : decode marker with
@@ -391,7 +392,8 @@ theorem recoverWriteCutAfterReopenRetry {initial after : ReopenImage}
     (ordered : WAL.OrdinalsFrom 1 ((covered ++ pending) ++ [event]))
     (watermark : covered.length = checkpoint.committed.toNat) :
     ∃ marker contents events base reopened abstract,
-      pair.walBoundary = some marker ∧ walBinding = some contents ∧
+      pair.walBoundary = some marker ∧ marker = encode (WAL.encode events).size.toUInt64 ∧
+      walBinding = some contents ∧
       (match pair.manifest with
       | none => Except.ok PackedTable.empty
       | some bytes => do
@@ -413,13 +415,13 @@ theorem recoverWriteCutAfterReopenRetry {initial after : ReopenImage}
   obtain ⟨initialContents, markerImage, present, cut, visible, candidates⟩ :=
     physical initial.wal.active (List.mem_cons_self ..)
   have oldFits := Nat.lt_trans (encoded_history_grows (covered ++ pending) event) fits
-  obtain ⟨initialMarker, events, base, reopened, _, bound, loaded, selected, recovered,
+  obtain ⟨initialMarker, events, base, reopened, _, initialBound, markerEncoding, loaded, selected, recovered,
     history, sequence, _, _, abstractReplay⟩ :=
     recoverWriteCutSelectedPair (written pair initialChosen) cut
       (marker_chosen_of_pair initialChosen visible candidates) oldFits fits ordered watermark
   obtain ⟨markerBytes, walBytes, length, sameMarker, sameWal, decoded, accepted⟩ :=
     valid.activeValid pair initialChosen
-  have markerMatches := Option.some.inj (sameMarker.symm.trans bound)
+  have markerMatches := Option.some.inj (sameMarker.symm.trans initialBound)
   have walMatches := Option.some.inj (sameWal.symm.trans present)
   subst markerBytes
   subst walBytes
@@ -430,7 +432,8 @@ theorem recoverWriteCutAfterReopenRetry {initial after : ReopenImage}
     ReopenImage.select_chosen (reopenRetry_valid valid path) metadataChosen walChosen
   obtain ⟨abstract, replayed, counted, reads⟩ := abstractReplay model represents
   rw [expected] at selectedAfter
-  exact ⟨marker, contents, events, base, reopened, abstract, bound, present, loaded, selectedAfter,
+  have encoding := (Option.some.inj (bound.symm.trans initialBound)).trans markerEncoding
+  exact ⟨marker, contents, events, base, reopened, abstract, bound, encoding, present, loaded, selectedAfter,
     recovered, history, sequence, replayed, counted, reads⟩
 
 end Alvoki.WAL.Boundary

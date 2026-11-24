@@ -42,7 +42,8 @@ theorem recoverPreparedWriteAfterReopenAttempts {state next checkpoint : PackedT
     (represents : checkpoint.Refines model)
     (watermark : covered.length = checkpoint.committed.toNat) :
     ∃ marker contents events base reopened abstract,
-      pair.walBoundary = some marker ∧ walBinding = some contents ∧
+      pair.walBoundary = some marker ∧ marker = encode (WAL.encode events).size.toUInt64 ∧
+      walBinding = some contents ∧
       (match pair.manifest with
       | none => Except.ok PackedTable.empty
       | some bytes => do
@@ -78,11 +79,11 @@ theorem recoverPreparedWriteAfterReopenAttempts {state next checkpoint : PackedT
       CheckpointForRecovery candidate.manifest files checkpoint := by
     rw [physical.reopenImage_manifest_eq old manifest chosen]
     exact written
-  obtain ⟨marker, contents, events, base, reopened, abstract, markerAt, walAt, loaded,
+  obtain ⟨marker, contents, events, base, reopened, abstract, markerAt, markerEncoding, walAt, loaded,
       selected, recovered, history, count, abstractWrites, abstractCount, reads⟩ :=
     recoverWriteCutAfterReopenRetry path metadataChosen walChosen nonempty extendedFits cuts
       checkpointAt represents validOrdinals watermark
-  refine ⟨marker, contents, events, base, reopened, abstract, markerAt, walAt, loaded,
+  refine ⟨marker, contents, events, base, reopened, abstract, markerAt, markerEncoding, walAt, loaded,
     selected, recovered, history, ?_, count, abstractWrites, abstractCount, reads⟩
   intro writtenFiles acknowledged
   have chosen := path.chosen_pair_from_initial metadataChosen
@@ -134,7 +135,9 @@ theorem reopenPreparedWrite_refines {state next checkpoint table : PackedTable}
     (represents : checkpoint.Refines model)
     (watermark : covered.length = checkpoint.committed.toNat) :
     ∃ events abstract,
-      after.directory = before.directory.syncDirectory ∧ after.wal.active = some (WAL.encode events) ∧
+      after.directory = before.directory.syncDirectory ∧
+      after.directory.active = ⟨manifest, some (encode (WAL.encode events).size.toUInt64)⟩ ∧
+      after.wal.active = some (WAL.encode events) ∧
       after.wal.crashImages = [some (WAL.encode events)] ∧
       (events = covered ++ pending ∨ events = (covered ++ pending) ++ [event]) ∧
       (∀ writtenFiles, runWriteEffects (covered ++ pending) event effects = .ok () writtenFiles →
@@ -172,7 +175,7 @@ theorem reopenPreparedWrite_refines {state next checkpoint table : PackedTable}
     (visibleManifest.symm ▸ written) (visibleManifest.symm ▸ accepted) checkpointReads loadResult
   rw [sameLoaded] at actualBase
   obtain ⟨expectedMarker, expectedContents, events, expectedBase, expectedTable, abstract,
-      markerAt, walAt, expectedLoad, expectedSelection, expectedReplay, history, acknowledged, count,
+      markerAt, markerEncoding, walAt, expectedLoad, expectedSelection, expectedReplay, history, acknowledged, count,
       replay, abstractCount, reads⟩ :=
     recoverPreparedWriteAfterReopenAttempts prepared ordered sequence walLength fits effects attempts
       (pair := before.directory.active) (walBinding := before.wal.active)
@@ -186,7 +189,14 @@ theorem reopenPreparedWrite_refines {state next checkpoint table : PackedTable}
   have sameTable := Except.ok.inj (replayed.symm.trans expectedReplay)
   subst expectedTable
   rw [sameSelected] at walActive walChoices
-  exact ⟨events, abstract, directory, walActive, walChoices, history,
+  have metadata : after.directory.active = ⟨manifest, some (encode (WAL.encode events).size.toUInt64)⟩ := by
+    rw [directory]
+    change before.directory.active = _
+    calc
+      before.directory.active =
+          ⟨before.directory.active.manifest, before.directory.active.walBoundary⟩ := rfl
+      _ = _ := by rw [visibleManifest, markerAt, markerEncoding]
+  exact ⟨events, abstract, directory, metadata, walActive, walChoices, history,
     acknowledged, count, replay, abstractCount, reads⟩
 
 end Alvoki.WAL.Boundary
