@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedBatchAppend
-import Alvoki.Storage.Disk.SegmentedBatchAppendPowerLoss
+import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
 import Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
 import Alvoki.Storage.Disk.WalBatchSession
 
@@ -96,7 +96,13 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (report : SegmentedBatchAppendPowerLossReport directory before descriptor) (observed : report.Valid)
       (installed : report.Installs after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
-        (log ++ [.uncertainBatch report.batch]) descriptor after
+        (log ++ [.uncertainBatch report.reopen.batch]) descriptor after
+  | batchAppendProcessExit
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (report : SegmentedBatchAppendProcessExitReport directory before writer descriptor) (observed : report.reopen.Valid)
+      (installed : report.reopen.Installs after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch report.reopen.batch]) descriptor after
 
 private theorem appendUncertainBatch {initial before after batch retained : List WAL.Write}
     {log : List DatabaseSubmissions} (retention : DatabaseBatchRetention log retained)
@@ -133,7 +139,8 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | batchPowerLoss _ _ _ _ installed ih =>
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history installed.history⟩
-  | batchAppendPowerLoss _ _ _ installed ih =>
+  | batchAppendPowerLoss _ _ _ installed ih
+  | batchAppendProcessExit _ _ _ installed ih =>
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history (.inl installed.history)⟩
 
@@ -172,9 +179,22 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterBatchAppendPowerLoss
     (report : SegmentedBatchAppendPowerLossReport directory before descriptor) (observed : report.Valid) :
     ∃ after, report.Installs after ∧
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
-        (log ++ [.uncertainBatch report.batch]) descriptor after := by
+        (log ++ [.uncertainBatch report.reopen.batch]) descriptor after := by
   obtain ⟨after, installed⟩ := report.installs observed (trace.preservesRetained ready).1
   exact ⟨after, installed, .batchAppendPowerLoss trace report observed installed⟩
+
+/-- Process exit before marker publication records an uncertain batch and
+installs the old history from the live WAL and observed lock transitions. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterBatchAppendProcessExit
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (ready : initial.RetainedReady directory initialDescriptor)
+    (report : SegmentedBatchAppendProcessExitReport directory before writer descriptor)
+    (observed : report.reopen.Valid) :
+    ∃ after, report.reopen.Installs after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch report.reopen.batch]) descriptor after := by
+  obtain ⟨after, installed⟩ := report.installs observed (trace.preservesRetained ready).1
+  exact ⟨after, installed, .batchAppendProcessExit trace report observed installed⟩
 
 /-- Reads through active snapshot pins in the current session agree with
 replay of the retained history, including after an uncertain batch. -/

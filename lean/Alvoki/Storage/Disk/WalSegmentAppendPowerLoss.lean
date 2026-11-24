@@ -183,7 +183,8 @@ private theorem layoutWithTail {directory descriptor} {before : SegmentedWriterS
     rfl
   exact ⟨source, target, keeper, rfl, range.symm ▸ descriptors, range.symm ▸ offsets⟩
 
-private theorem crashedLayout (cut : FirstAppendCut) {directory descriptor before}
+/-- The selected layout after a machine crash during the first append. -/
+theorem crashedLayout (cut : FirstAppendCut) {directory descriptor before}
     (ready : before.RetainedReady directory descriptor) (tail : ByteArray) :
     let files := (cut.crashed before directory tail).image
     ∃ selected : CanonicalKeeperLayout files before.history,
