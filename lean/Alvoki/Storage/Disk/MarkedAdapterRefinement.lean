@@ -149,6 +149,9 @@ theorem reopenPreparedWrite_refines {state next checkpoint table : PackedTable}
         events = (covered ++ pending) ++ [event]) ∧
       table.committed.toNat = events.length ∧
       table.RowBounds ∧
+      (manifest.elim (Except.ok PackedTable.empty)
+        (fun bytes => Manifest.decode bytes >>= fun header => loadRunSet header files) >>= fun base =>
+          recoverSelected base (WAL.encode events)) = .ok table ∧
       SnapshotWalReplay model (events.drop covered.length) abstract ∧
       abstract.committed.toNat = events.length ∧
       ∀ snapshot : UInt64, abstract.pins.floor ≤ snapshot → snapshot.toNat ≤ events.length →
@@ -200,9 +203,12 @@ theorem reopenPreparedWrite_refines {state next checkpoint table : PackedTable}
       (fun header => Manifest.decode header >>= fun decoded => loadRunSet decoded files) = .ok base := by
     rw [visibleManifest] at actualBase
     cases manifest <;> exact actualBase
-  have bounded : table.RowBounds := written.recoverSelected_rowBounds (bytes := WAL.encode events) (by
+  have recovered : (manifest.elim (Except.ok PackedTable.empty)
+      (fun bytes => Manifest.decode bytes >>= fun header => loadRunSet header files) >>= fun base =>
+        recoverSelected base (WAL.encode events)) = .ok table := by
     rw [load, ← sameSelected]
-    exact replayed)
+    exact replayed
+  have bounded := written.recoverSelected_rowBounds recovered
   rw [sameSelected] at walActive walChoices
   have metadata : after.directory.active = ⟨manifest, some (encode (WAL.encode events).size.toUInt64)⟩ := by
     rw [directory]
@@ -212,7 +218,7 @@ theorem reopenPreparedWrite_refines {state next checkpoint table : PackedTable}
           ⟨before.directory.active.manifest, before.directory.active.walBoundary⟩ := rfl
       _ = _ := by rw [visibleManifest, markerAt, markerEncoding]
   exact ⟨events, abstract, directory, metadata, walActive, walChoices, history,
-    acknowledged, count, bounded, replay, abstractCount, reads⟩
+    acknowledged, count, bounded, recovered, replay, abstractCount, reads⟩
 
 /-- With a fixed checkpoint, any finite sequence of acknowledged writes and
 one write reporting a publication error can be followed by crashes and open
@@ -246,6 +252,9 @@ theorem reopenAfterAcknowledgedWrites_refines {initial writer : MarkedWriterStat
       (⟨table, (WAL.encode events).size, after, events⟩ : MarkedWriterState).ReadyFor manifest ∧
       (events = covered ++ pending ++ submitted ∨
         events = covered ++ pending ++ submitted ++ [event]) ∧
+      (manifest.elim (Except.ok PackedTable.empty)
+        (fun bytes => Manifest.decode bytes >>= fun header => loadRunSet header files) >>= fun base =>
+          recoverSelected base (WAL.encode events)) = .ok table ∧
       SnapshotWalReplay model (events.drop covered.length) abstract ∧
       abstract.committed.toNat = events.length ∧
       ∀ snapshot : UInt64, abstract.pins.floor ≤ snapshot → snapshot.toNat ≤ events.length →
@@ -277,7 +286,7 @@ theorem reopenAfterAcknowledgedWrites_refines {initial writer : MarkedWriterStat
   have count := old ▸ current.count
   have length := old ▸ current.length
   obtain ⟨events, abstract, directory, metadata, walActive, walChoices, selected, _, committed,
-      bounded, replayed, abstractCount, reads⟩ :=
+      bounded, recovered, replayed, abstractCount, reads⟩ :=
     reopenPreparedWrite_refines prepared ordered count length fits effects stableAttempts
       accepted checkpointReads walReads opened written represents watermark
   have directoryChoices : after.directory.crashImages = [after.directory.active] := by
@@ -293,7 +302,7 @@ theorem reopenAfterAcknowledgedWrites_refines {initial writer : MarkedWriterStat
     · rw [size, ← length]
       exact ⟨extended, fits⟩
   refine ⟨events, abstract, ⟨settled, orderedAndFits.1, committed.symm, rfl, orderedAndFits.2, bounded⟩,
-    ?_, replayed, abstractCount, reads⟩
+    ?_, recovered, replayed, abstractCount, reads⟩
   simpa only [List.append_assoc] using selected
 
 end Alvoki.WAL.Boundary

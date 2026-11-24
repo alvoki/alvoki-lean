@@ -110,6 +110,13 @@ inductive MarkedSessionStep (checkpoint : FixedMarkedCheckpoint) (initial : Mark
       (observed : MarkedWriterState.observeReopen table image = some next) :
       MarkedSessionStep checkpoint initial ⟨submitted, some event⟩ next
 
+/-- The exact checkpoint loader and selected WAL recover the writer's table. -/
+def FixedMarkedCheckpoint.RecoveredTable (checkpoint : FixedMarkedCheckpoint)
+    (state : MarkedWriterState) : Prop :=
+  (checkpoint.manifest.elim (Except.ok PackedTable.empty)
+    (fun bytes => Manifest.decode bytes >>= fun header => loadRunSet header checkpoint.files) >>= fun base =>
+      recoverSelected base (WAL.encode state.history)) = .ok state.table
+
 def FixedMarkedCheckpoint.RecoveredReads (checkpoint : FixedMarkedCheckpoint)
     (state : MarkedWriterState) : Prop :=
   ∃ abstract,
@@ -120,29 +127,30 @@ def FixedMarkedCheckpoint.RecoveredReads (checkpoint : FixedMarkedCheckpoint)
         (∀ key, pinned.lookup pin.handle key = some (abstract.table.lookup key snapshot)) ∧
         (∀ lo hi, pinned.range pin.handle lo hi = some (abstract.table.range lo hi snapshot))
 
-theorem MarkedSessionStep.refines {checkpoint : FixedMarkedCheckpoint} {initial after : MarkedWriterState}
+theorem MarkedSessionStep.refinesWithReplay {checkpoint : FixedMarkedCheckpoint}
+    {initial after : MarkedWriterState}
     {writes : MarkedSessionWrites} {pending : List WAL.Write}
     (step : MarkedSessionStep checkpoint initial writes after)
     (ready : initial.ReadyFor checkpoint.manifest) (start : initial.history = checkpoint.covered ++ pending) :
     ∃ suffix, after.ReadyFor checkpoint.manifest ∧ after.history = initial.history ++ suffix ∧
-      writes.Retains suffix ∧ checkpoint.RecoveredReads after := by
+      writes.Retains suffix ∧ checkpoint.RecoveredTable after ∧ checkpoint.RecoveredReads after := by
   cases step with
   | clean path opened observed =>
     cases opened with
     | observed attempts checkpointReads walReads opened =>
-      obtain ⟨abstract, readyAfter, replay, count, reads⟩ :=
+      obtain ⟨abstract, readyAfter, recovered, replay, count, reads⟩ :=
         reopenAfterSettledWrites_refines ready start path attempts checkpoint.accepted
           checkpointReads walReads opened checkpoint.written checkpoint.represents checkpoint.watermark
       have identified := Option.some.inj (observed.symm.trans
         (MarkedWriterState.observeReopen_ready readyAfter))
       subst after
-      refine ⟨_, readyAfter, by simp [start, List.append_assoc], Or.inl rfl, abstract,
+      refine ⟨_, readyAfter, by simp [start, List.append_assoc], Or.inl rfl, recovered, abstract,
         ?_, count, reads⟩
       simpa only [List.append_assoc, List.drop_left] using replay
   | interrupted path prepared fits failed opened observed =>
     cases opened with
     | observed attempts checkpointReads walReads opened =>
-      obtain ⟨history, abstract, readyAfter, choice, replay, count, reads⟩ :=
+      obtain ⟨history, abstract, readyAfter, choice, recovered, replay, count, reads⟩ :=
         reopenAfterAcknowledgedWrites_refines ready start path prepared fits failed attempts
           checkpoint.accepted checkpointReads walReads opened checkpoint.written
           checkpoint.represents checkpoint.watermark
@@ -150,9 +158,18 @@ theorem MarkedSessionStep.refines {checkpoint : FixedMarkedCheckpoint} {initial 
         (MarkedWriterState.observeReopen_ready readyAfter))
       subst after
       rcases choice with rfl | rfl
-      · exact ⟨_, readyAfter, by simp [start], Or.inl rfl, abstract, replay, count, reads⟩
+      · exact ⟨_, readyAfter, by simp [start], Or.inl rfl, recovered, abstract, replay, count, reads⟩
       · exact ⟨_, readyAfter, by simp [start, List.append_assoc], Or.inr ⟨_, rfl, rfl⟩,
-          abstract, replay, count, reads⟩
+          recovered, abstract, replay, count, reads⟩
+
+theorem MarkedSessionStep.refines {checkpoint : FixedMarkedCheckpoint} {initial after : MarkedWriterState}
+    {writes : MarkedSessionWrites} {pending : List WAL.Write}
+    (step : MarkedSessionStep checkpoint initial writes after)
+    (ready : initial.ReadyFor checkpoint.manifest) (start : initial.history = checkpoint.covered ++ pending) :
+    ∃ suffix, after.ReadyFor checkpoint.manifest ∧ after.history = initial.history ++ suffix ∧
+      writes.Retains suffix ∧ checkpoint.RecoveredReads after := by
+  obtain ⟨suffix, nextReady, extended, retained, _, reads⟩ := step.refinesWithReplay ready start
+  exact ⟨suffix, nextReady, extended, retained, reads⟩
 
 /-- A succession of writing and recovery sessions starts from a single
 durable checkpoint. The output of each successful recovery is the input of

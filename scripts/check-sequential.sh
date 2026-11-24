@@ -44,6 +44,8 @@ lake env leanchecker Alvoki.Storage.Disk.MarkedReopenStability
 lake env leanchecker Alvoki.Storage.Disk.MarkedSessionTrace
 lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointPublication
 lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointReady
+lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointReopenReady
+lake env leanchecker Alvoki.Storage.Disk.MarkedSessionHistory
 lake env leanchecker Alvoki.Storage.Disk.RecoveredPinRefinement
 lake env leanchecker Alvoki.Storage.Disk.WalReplayAgreement
 lake env leanchecker Alvoki.Storage.Disk.WalReplayProvenance

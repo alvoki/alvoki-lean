@@ -171,6 +171,28 @@ theorem CheckpointForRecovery.of_durable_manifest {image : CheckpointPublication
       (fun _ _ ⟨checkpoint, loader⟩ => ⟨checkpoint, loader, trivial⟩)
   exact ⟨files, checkpoint, written, durable⟩
 
+/-- A selected checkpoint with the exact ordered durable files can serve as
+the fixed checkpoint of a later session. Its own watermark suffices for
+acceptance once the observed manifest and files have been identified. -/
+theorem CheckpointForRecovery.accepts_exact_durable {image : CheckpointPublication.Image}
+    {walSequence : UInt64} {manifest : Option ByteArray} {files : List ByteArray}
+    {checkpoint : PackedTable} {expected : Manifest.Checkpoint → List ByteArray → Prop}
+    (written : CheckpointForRecovery manifest files checkpoint)
+    (accepted : image.Accepts walSequence expected manifest)
+    (durable : image.readDurableCheckpointRuns manifest = some files) :
+    image.Accepts checkpoint.committed (fun header stored =>
+      CheckpointForRecovery (some (Manifest.encode header)) stored checkpoint) manifest := by
+  cases written with
+  | absent => trivial
+  | written header checkpoint flushed count watermark floor validFloor bounded =>
+    obtain ⟨found, stored, decoded, _, _, runCount, names⟩ := accepted
+    have sameHeader := Except.ok.inj (decoded.symm.trans (Manifest.decode_encode header validFloor))
+    subst found
+    have sameFiles := Option.some.inj ((read_durable_runs decoded runCount names).symm.trans durable)
+    subst stored
+    exact ⟨header, _, decoded, .written header checkpoint flushed count watermark floor validFloor bounded,
+      UInt64.le_of_eq watermark, runCount, names⟩
+
 /-- The executable loop reads exactly the manifest's run indices in order. -/
 theorem readCheckpointRunBytes_eq_mapM [Monad m] [LawfulMonad m]
     (read : UInt64 → Nat → m ByteArray) (header : Manifest.Checkpoint) :

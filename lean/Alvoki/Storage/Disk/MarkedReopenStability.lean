@@ -209,6 +209,9 @@ theorem reopenAfterSettledWrites_refines {initial writer : MarkedWriterState}
     ∃ abstract,
       (⟨table, (WAL.encode (covered ++ pending ++ submitted)).size, after,
         covered ++ pending ++ submitted⟩ : MarkedWriterState).ReadyFor manifest ∧
+      (manifest.elim (Except.ok PackedTable.empty)
+        (fun bytes => Manifest.decode bytes >>= fun header => loadRunSet header files) >>= fun base =>
+          recoverSelected base (WAL.encode (covered ++ pending ++ submitted))) = .ok table ∧
       SnapshotWalReplay model (pending ++ submitted) abstract ∧
       abstract.committed.toNat = (covered ++ pending ++ submitted).length ∧
       ∀ snapshot : UInt64, abstract.pins.floor ≤ snapshot →
@@ -231,7 +234,8 @@ theorem reopenAfterSettledWrites_refines {initial writer : MarkedWriterState}
   have readyAfter : (⟨table, (WAL.encode (covered ++ (pending ++ submitted))).size, after,
       covered ++ (pending ++ submitted)⟩ : MarkedWriterState).ReadyFor manifest :=
     ⟨settledAfter, ordered, count.symm, rfl, fits, written.recoverSelected_rowBounds recovered⟩
-  exact ⟨abstract, by simpa only [List.append_assoc] using readyAfter, replayed,
+  exact ⟨abstract, by simpa only [List.append_assoc] using readyAfter,
+    by simpa only [List.append_assoc] using recovered, replayed,
     by simpa only [List.append_assoc] using abstractCount,
     by simpa only [List.append_assoc] using reads⟩
 
