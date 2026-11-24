@@ -420,11 +420,40 @@ private def checkWriteSyncErrorAfterEffect (root : FilePath) : IO Unit := do
     check ((← db.write 7 (some 70)) == 2) "unexpected checkpoint write sequence"
     check (← db.advanceFloor 2) "could not advance the checkpoint floor"
     db.checkpoint
-    check ((← db.write 4 (some 41)) == 3) "unexpected acknowledged suffix sequence"
+    check ((← db.write 4 (some 41)) == 3) "unexpected overwrite sequence"
+    check ((← db.write 7 none) == 4) "unexpected tombstone sequence"
+    check ((← db.write 6 (some 60)) == 5) "unexpected insertion sequence"
   finally db.close
   let wal := dir / "WAL"
   let marker := dir / "WAL.commit"
   let staged := dir / "WAL.commit.next"
+  let manifest := dir / "MANIFEST"
+  let run := dir / "run-1-0.v3"
+  expectManifest dir 1 2 2 1
+  let manifestBytes ← IO.FS.readBinFile manifest
+  let runBytes ← IO.FS.readBinFile run
+  let expectFiles := fun (events : List WAL.Write) => do
+    let encoded := WAL.encode events
+    check (decide ((← IO.FS.readBinFile wal) = encoded ∧
+      (← IO.FS.readBinFile marker) = WAL.Boundary.encode encoded.size.toUInt64))
+      "write and reopen trace changed the selected WAL history"
+    check (decide ((← IO.FS.readBinFile manifest) = manifestBytes ∧ (← IO.FS.readBinFile run) = runBytes))
+      "write and reopen trace changed the fixed checkpoint"
+  let expectSnapshot := fun (db : DiskTable) (sequence : UInt64)
+      (expected : List (UInt64 × Option UInt64)) => do
+    let some pin ← db.acquireAt sequence
+      | throw (IO.userError s!"missing retained snapshot at sequence {sequence}")
+    try
+      let rows := (← db.range pin.handle 0 8).map (List.map fun row => (row.key, row.payload))
+      check (rows == some expected) s!"unexpected retained range at sequence {sequence}"
+      for key in [:8] do
+        let value := (expected.find? (·.1 == key.toUInt64)).bind (·.2)
+        check ((← db.lookup pin.handle key.toUInt64) == some value)
+          s!"unexpected point read of key {key} at sequence {sequence}"
+    finally db.release pin.handle
+  let acknowledged : List WAL.Write := [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩,
+    ⟨4, 7, none⟩, ⟨5, 6, some 60⟩]
+  expectFiles acknowledged
   -- The first directory target belongs to the grouped sync during open.
   let (classified, syncs) ← probeDisk bin dir (some dir) (operation := "--check-write-outcome")
     (skipFailures := 1) (failureMode := .afterSync)
@@ -432,22 +461,38 @@ private def checkWriteSyncErrorAfterEffect (root : FilePath) : IO Unit := do
     s!"synced before error: {dir}"]
   check (classified && syncs == expectedSyncs)
     "write did not report an unknown commit after the final directory sync succeeded"
-  expectManifest dir 1 2 2 1
-  let events : List WAL.Write := [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩, ⟨4, 7, some 99⟩]
-  let expectedWal := WAL.encode events
-  check (decide ((← IO.FS.readBinFile wal) = expectedWal)) "failed write did not leave the complete WAL"
-  check (decide ((← IO.FS.readBinFile marker) = WAL.Boundary.encode expectedWal.size.toUInt64))
-    "failed write did not leave the extended WAL marker"
+  let events := acknowledged ++ [⟨6, 7, some 99⟩]
+  expectFiles events
+  -- These failed reopen processes exercise the visible files around two sync
+  -- outcomes. Power-loss choices for unsynced files belong to the model.
+  let alignedSyncs := [wal.toString, dir.toString]
+  let (opened, syncs) ← probeDisk bin dir (some dir)
+  check (!opened && syncs == alignedSyncs) "reopen did not fail before syncing the directory"
+  expectFiles events
+  let (opened, syncs) ← probeDisk bin dir (some dir) (failureMode := .secondOnly)
+  check (!opened && syncs == alignedSyncs ++ [s!"synced second target before error: {dir}"])
+    "reopen did not fail after syncing only the directory"
+  expectFiles events
   let reopened ← DiskTable.open dir
   try
     check ((← reopened.acquireAt 1).isNone) "reopen lost the checkpoint floor"
-    let some historical ← reopened.acquireAt 2 | throw (IO.userError "reopen lost the checkpoint snapshot")
-    let oldRows := (← reopened.range historical.handle 0 8).map (List.map fun row => (row.key, row.payload))
-    check (oldRows == some [(4, some 40), (7, some 70)]) "reopen changed the retained snapshot range"
-    let latest ← reopened.acquire
-    check (latest.sequence == 4 && (← reopened.lookup latest.handle 4) == some (some 41) &&
-      (← reopened.lookup latest.handle 7) == some (some 99))
-      "reopen lost an acknowledged write or the write made durable before returning an error"
+    check ((← reopened.acquire).sequence == 6) "reopen lost the durable write with an unknown outcome"
+    expectSnapshot reopened 2 [(4, some 40), (7, some 70)]
+    expectSnapshot reopened 4 [(4, some 41)]
+    expectSnapshot reopened 6 [(4, some 41), (6, some 60), (7, some 99)]
+    expectFiles events
+    check ((← reopened.write 4 none) == 7) "append reused the surviving write's sequence"
+    check ((← reopened.write 5 (some 50)) == 8) "second append did not continue the selected history"
+  finally reopened.close
+  let finalEvents := events ++ [⟨7, 4, none⟩, ⟨8, 5, some 50⟩]
+  expectFiles finalEvents
+  let reopened ← DiskTable.open dir
+  try
+    check ((← reopened.acquire).sequence == 8) "second reopen lost an acknowledged append"
+    expectSnapshot reopened 4 [(4, some 41)]
+    expectSnapshot reopened 6 [(4, some 41), (6, some 60), (7, some 99)]
+    expectSnapshot reopened 8 [(5, some 50), (6, some 60), (7, some 99)]
+    expectFiles finalEvents
   finally reopened.close
 
 private def checkGroupedSyncPartialEffects (root : FilePath) : IO Unit := do
