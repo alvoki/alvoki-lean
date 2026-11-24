@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.LockedOpenFileReads
+import Alvoki.Storage.Disk.WalSegmentReadIO
 import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Disk.WalSegmentFileName
 
@@ -14,13 +15,7 @@ error stops the inventory before it can select an older active address. -/
 def probeWalSegment (reports : OpenPathReadReports) (directory : DiskDirectory) (first : Nat) :
     Except IO.Error (Option Nat) :=
   let path := directory.file (.walSegment first)
-  match reports.lstat path with
-  | .ok metadata =>
-    if metadata.type == .file then .ok (some first)
-    else .error (IO.userError s!"expected a regular WAL segment: '{path}'")
-  | .error error@(.noFileOrDirectory _ osCode _) =>
-    if osCode == 2 then .ok none else .error error
-  | .error error => .error error
+  classifyWalSegmentLookup path first (reports.lstat path)
 
 private theorem probeWalSegment_present {reports : OpenPathReadReports} {directory : DiskDirectory}
     {first found : Nat} : reports.probeWalSegment directory first = .ok (some found) ↔
@@ -28,7 +23,7 @@ private theorem probeWalSegment_present {reports : OpenPathReadReports} {directo
         metadata.type = .file := by
   constructor
   · intro observed
-    unfold probeWalSegment at observed
+    unfold probeWalSegment classifyWalSegmentLookup at observed
     dsimp only at observed
     cases lookup : reports.lstat (directory.file (.walSegment first)) with
     | error cause =>
@@ -42,14 +37,12 @@ private theorem probeWalSegment_present {reports : OpenPathReadReports} {directo
         cases kind : metadata.type <;> first | rfl | (rw [kind] at regular; cases regular)
       · simp [regular] at observed
   · rintro ⟨rfl, metadata, lookup, regular⟩
-    simp [probeWalSegment, lookup, regular]
+    simp [probeWalSegment, classifyWalSegmentLookup, lookup, regular]
     rfl
 
 private def listedSegment (reports : OpenPathReadReports) (directory : DiskDirectory) (name : String) :
     Except IO.Error (Option Nat) :=
-  match parseWalSegmentName name with
-  | none => .ok none
-  | some offset => reports.probeWalSegment directory offset
+  probeListedWalSegment (reports.probeWalSegment directory) name
 
 private theorem listedSegment_present {reports : OpenPathReadReports} {directory : DiskDirectory}
     {name : String} {first : Nat} : listedSegment reports directory name = .ok (some first) ↔
@@ -58,14 +51,14 @@ private theorem listedSegment_present {reports : OpenPathReadReports} {directory
   constructor
   · intro observed
     cases parsed : parseWalSegmentName name with
-    | none => simp [listedSegment, parsed] at observed
+    | none => simp [listedSegment, probeListedWalSegment, parsed, pure, Except.pure] at observed
     | some offset =>
       have chosen : reports.probeWalSegment directory offset = .ok (some first) := by
-        simpa [listedSegment, parsed] using observed
+        simpa [listedSegment, probeListedWalSegment, parsed] using observed
       obtain ⟨rfl, regular⟩ := probeWalSegment_present.mp chosen
       exact ⟨parseWalSegmentName_eq_some_iff.mp parsed, regular⟩
   · rintro ⟨rfl, regular⟩
-    simpa [listedSegment, parseWalSegmentName_render] using
+    simpa [listedSegment, probeListedWalSegment, parseWalSegmentName_render] using
       (probeWalSegment_present.mpr ⟨rfl, regular⟩)
 
 private theorem filterMapM_ok {Error α β : Type} {f : α → Except Error (Option β)}
@@ -99,12 +92,12 @@ names. Successful lookups sort the actual regular canonical addresses by
 their absolute frame starts, without reading any segment payload. -/
 def walSegmentOffsets (reports : OpenPathReadReports) (directory : DiskDirectory) (names : List String) :
     Except IO.Error (List Nat) :=
-  (names.filterMapM (listedSegment reports directory)).map (·.mergeSort)
+  scanWalSegmentOffsets (reports.probeWalSegment directory) names
 
 private theorem offsets_scan {reports : OpenPathReadReports} {directory : DiskDirectory} {names : List String}
     {offsets : List Nat} (scanned : reports.walSegmentOffsets directory names = .ok offsets) :
     ∃ found, names.filterMapM (listedSegment reports directory) = .ok found ∧ offsets = found.mergeSort := by
-  unfold walSegmentOffsets at scanned
+  change (names.filterMapM (listedSegment reports directory)).map (·.mergeSort) = .ok offsets at scanned
   cases collected : names.filterMapM (listedSegment reports directory) with
   | error cause => rw [collected] at scanned; contradiction
   | ok found => exact ⟨found, rfl, by simpa [collected, Except.map] using scanned.symm⟩
@@ -159,7 +152,7 @@ theorem observeWalSuccessor_probe {reports : OpenPathReadReports} {directory : D
     {present : Bool} (observed : reports.observeWalSuccessor directory first = .ok present) :
     reports.probeWalSegment directory first = .ok (if present then some first else none) := by
   unfold observeWalSuccessor WalSegmentRotation.observeSuccessorWith readOptional readOptionalDatabaseFile at observed
-  unfold probeWalSegment
+  unfold probeWalSegment classifyWalSegmentLookup
   simp only [Pure.pure, Except.pure, Bind.bind, Except.bind] at observed
   cases lookup : reports.lstat (directory.file (.walSegment first)) with
   | error cause =>

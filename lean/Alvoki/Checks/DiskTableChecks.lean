@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.DiskTable
+import Alvoki.Storage.Disk.WalSegmentReadIO
 import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Disk.LegacyManifest
 import Alvoki.Storage.Publication.DiskPublicationModel
@@ -476,6 +477,61 @@ private def checkWalSegmentRotation (root : FilePath) : IO Unit := do
     check (linked.exitCode == 0) "could not create rotation symlink fixture"
     rejects (WalSegmentRotation.runAt dir 1 readOptional unexpected unexpected) "rotation followed a successor symlink"
     check (!(← touched.get)) "rotation attempted durability operations on a successor symlink"
+
+private def checkWalSegmentReads (root : FilePath) : IO Unit := do
+  let dir ← DiskDirectory.open root
+  let lock ← IO.FS.Handle.mk (dir.file .lock) .append
+  check (← lock.tryLock) "could not lock segment read fixture"
+  try
+    let history : List WAL.Write := (List.range 12).map fun index =>
+      ⟨(index + 1).toUInt64, index.toUInt64, some (index + 1).toUInt64⟩
+    let active := WAL.encode (history.drop 10) ++ ByteArray.mk #[4, 5, 6]
+    let middle := WAL.encode ((history.drop 2).take 8)
+    IO.FS.writeBinFile (dir.file (.walSegment 10)) active
+    IO.FS.writeBinFile (dir.file (.walSegment 2)) middle
+    IO.FS.writeBinFile (dir.file (.walSegment 0)) (WAL.encode (history.take 2))
+    IO.FS.writeBinFile (dir.path / "WAL-segment-2.tmp") ByteArray.empty
+    let makeLink := fun (name : FilePath) => do
+      let target := (dir.file (.walSegment 2)).toString
+      let created ← IO.Process.output {cmd := "ln", args := #["-s", "--", target, name.toString]}
+      check (created.exitCode == 0) "could not create segment read symlink fixture"
+    makeLink (dir.path / "WAL-segment-02")
+    let expected := (2, [2, 10], [middle, active])
+    check (decide ((← readWalSegments dir 2) = expected)) "native segment read returned the wrong payload vector"
+
+    let calls ← IO.mkRef ([] : List (String × FilePath))
+    let record := fun kind path => calls.modify (· ++ [(kind, path)])
+    let read : IO (Nat × List Nat × List ByteArray) := readWalSegmentsWith dir 2
+      (fun path => do
+        record "list" path
+        path.readDir)
+      (fun path => do
+        record "lstat" path
+        path.symlinkMetadata.toBaseIO)
+      (fun path => do
+        record "read" path
+        IO.FS.readBinFile path)
+    check (decide ((← read) = expected)) "observed segment read returned the wrong payload vector"
+    let log ← calls.get
+    let checked := (log.drop 1).take 3
+    let expectedStats := [0, 2, 10].map fun first => ("lstat", dir.file (.walSegment first))
+    check (log.head? == some ("list", dir.path) && checked.length == 3 && expectedStats.all checked.contains)
+      "segment inventory probed an unexpected name or path"
+    check (log.drop 4 == [("read", dir.file (.walSegment 2)), ("read", dir.file (.walSegment 10))])
+      "segment payload reads did not follow all lookups in planned order"
+
+    let unexpected := dir.file (.walSegment 9)
+    let rejectKind := do
+      calls.set []
+      rejects read "segment inventory accepted a canonical nonregular name"
+      check (!(← calls.get).any (fun (kind, _) => kind == "read"))
+        "segment inventory read payloads before finishing metadata checks"
+    makeLink unexpected
+    rejectKind
+    IO.FS.removeFile unexpected
+    IO.FS.createDir unexpected
+    rejectKind
+  finally lock.unlock
 
 private def checkRetrySync (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
@@ -1146,6 +1202,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkSnapshotSessions
     IO.FS.withTempDir checkMarkerlessRefusal
     IO.FS.withTempDir checkWalSegmentRotation
+    IO.FS.withTempDir checkWalSegmentReads
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkWritesAcrossReopens
     IO.FS.withTempDir checkGroupedSyncPartialEffects

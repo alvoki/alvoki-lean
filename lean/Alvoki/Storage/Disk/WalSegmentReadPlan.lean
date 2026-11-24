@@ -4,13 +4,6 @@ import Alvoki.Storage.Disk.WalSegmentRecovery
 
 namespace Alvoki.Storage
 
-/-- Select the greatest present start at or below the checkpoint watermark,
-then keep the ordered addresses from that start onward. Older addresses
-can have gaps. -/
-def selectWalSegmentReads (offsets : List Nat) (watermark : Nat) : Option (Nat × List Nat) := do
-  let first ← (offsets.filter (fun offset => decide (offset ≤ watermark))).max?
-  return (first, offsets.filter (fun offset => decide (first ≤ offset)))
-
 def WalSegmentImage.segments (image : WalSegmentImage) : List WalSegment := image.sealed ++ [image.active]
 
 def WalSegmentImage.readDescriptors (image : WalSegmentImage) (watermark : Nat) : List WalSegment :=
@@ -222,7 +215,28 @@ theorem WalSegmentImage.readDescriptors_endsActive (image : WalSegmentImage) (wa
 paths, in the order in which replay concatenates those files. -/
 def OpenPathReadReports.readWalSegmentPayloads (reports : OpenPathReadReports) (directory : DiskDirectory)
     (offsets : List Nat) : Except IO.Error (List ByteArray) :=
-  offsets.mapM (fun first => reports.readBin (directory.file (.walSegment first)))
+  readWalSegmentPayloadsWith directory reports.readBin offsets
+
+/-- The native sequence interpreted with successful or failed primitive
+reports uses the existing inventory and ordered payload operations. -/
+theorem OpenPathReadReports.readWalSegmentsWith_reports (reports : OpenPathReadReports)
+    (directory : DiskDirectory) (watermark : Nat) (listing : Except IO.Error (Array IO.FS.DirEntry)) :
+    readWalSegmentsWith directory watermark (fun _ => listing) (fun path => pure (reports.lstat path)) reports.readBin =
+      (do
+        let entries ← listing
+        let offsets ← reports.walSegmentOffsets directory (entries.toList.map (·.fileName))
+        let some (first, selected) := selectWalSegmentReads offsets watermark
+          | throw (IO.userError "no WAL segment covers the checkpoint watermark")
+        let payloads ← reports.readWalSegmentPayloads directory selected
+        pure (first, selected, payloads)) := by
+  have probe : probeWalSegmentWith directory (fun path => pure (reports.lstat path)) =
+      reports.probeWalSegment directory := by
+    funext first
+    simp only [probeWalSegmentWith, OpenPathReadReports.probeWalSegment, pure, Except.pure, bind, Except.bind]
+    cases classifyWalSegmentLookup (directory.file (.walSegment first)) first
+      (reports.lstat (directory.file (.walSegment first))) <;> rfl
+  simp only [readWalSegmentsWith, probe, walSegmentOffsets, readWalSegmentPayloads]
+  rfl
 
 private theorem readClosedSegmentPayloads {reports : OpenPathReadReports} {directory : DiskDirectory}
     {sealed : List WalSegment} (reads : ∀ segment ∈ sealed,
@@ -233,7 +247,7 @@ private theorem readClosedSegmentPayloads {reports : OpenPathReadReports} {direc
   | cons head rest ih =>
     have first := reads head (List.mem_cons_self ..)
     have next := ih (fun segment member => reads segment (List.mem_cons_of_mem _ member))
-    simp only [OpenPathReadReports.readWalSegmentPayloads, List.map_cons, List.mapM_cons, first,
+    simp only [OpenPathReadReports.readWalSegmentPayloads, readWalSegmentPayloadsWith, List.map_cons, List.mapM_cons, first,
       Bind.bind, Except.bind]
     change (Except.map (head.bytes :: ·)
       (reports.readWalSegmentPayloads directory (rest.map (·.first)))) = .ok (head.bytes :: rest.map (·.bytes))
@@ -250,8 +264,10 @@ theorem OpenPathReadReports.readWalSegmentPayloads_exact {reports : OpenPathRead
       .ok (sealed.map (·.bytes) ++ [active.bytes ++ tail]) := by
   have closed := readClosedSegmentPayloads reads
   have opened : reports.readWalSegmentPayloads directory [active.first] = .ok [active.bytes ++ tail] := by
-    simp [OpenPathReadReports.readWalSegmentPayloads, readActive, Bind.bind, Except.bind, Pure.pure, Except.pure]
-  simp only [OpenPathReadReports.readWalSegmentPayloads, List.map_append, List.map_cons, List.map_nil, List.mapM_append]
+    simp [OpenPathReadReports.readWalSegmentPayloads, readWalSegmentPayloadsWith, readActive, Bind.bind, Except.bind,
+      Pure.pure, Except.pure]
+  simp only [OpenPathReadReports.readWalSegmentPayloads, readWalSegmentPayloadsWith, List.map_append, List.map_cons,
+    List.map_nil, List.mapM_append]
   change (do
     let earlierPayloads ← reports.readWalSegmentPayloads directory (sealed.map WalSegment.first)
     let last ← reports.readWalSegmentPayloads directory [active.first]
