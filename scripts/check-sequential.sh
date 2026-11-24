@@ -225,6 +225,7 @@ lake env leanchecker Alvoki.Storage.Disk.IntegrityCheckpointSizedRead
 lake env leanchecker Alvoki.Storage.Disk.WalGroupSyncSchedule
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleRouting
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleCustody
+lake env leanchecker Alvoki.Storage.Disk.StagedHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleEffects
 lake env leanchecker Alvoki.Storage.Disk.KeeperReadCustody
 lake env leanchecker Alvoki.Storage.Disk.WriteGroupFsync

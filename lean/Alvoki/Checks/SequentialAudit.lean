@@ -22,6 +22,7 @@ import Alvoki.Storage.Disk.SegmentedCollectionRetryPowerLoss
 import Alvoki.Storage.Disk.WalGroupSyncSchedule
 import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.SyncHandleCustody
+import Alvoki.Storage.Disk.StagedHandleCustody
 import Alvoki.Storage.Disk.SyncHandleEffects
 import Alvoki.Storage.Disk.KeeperReadCustody
 import Alvoki.Storage.Disk.WriteGroupFsync
@@ -810,6 +811,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.pinnedReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.guardedPinnedReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.acquireReads
+#check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.reacquireReadsStable
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.readLayout
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.keepsReadDescriptors
@@ -1043,6 +1045,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.Agrees.activate
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.Agrees.consume
 #check_axioms Alvoki.Storage.SyncHandleRouting.syncRemembered
+#check_axioms Alvoki.Storage.writeFreshStagedHandle_schedule
+#check_axioms Alvoki.Storage.SyncHandleRouting.stageFreshWithCache_error
+#check_axioms Alvoki.Storage.SyncHandleRouting.stageFreshWithCache_owned
+#check_axioms Alvoki.Storage.SyncHandleRouting.stageFreshWithCache_sync
 #check_axioms Alvoki.Storage.SyncHandleRouting.sync_resolutionError
 #check_axioms Alvoki.Storage.SyncHandleRouting.sync_observedEffect
 #check_axioms Alvoki.Storage.SyncHandleRouting.FsyncObservation.ofDirectory
