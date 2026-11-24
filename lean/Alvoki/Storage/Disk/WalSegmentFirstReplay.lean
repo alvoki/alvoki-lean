@@ -10,7 +10,7 @@ private theorem WalSegment.Chain.start_le {history : List WAL.Write} {first : Na
   | endOfHistory => exact Nat.le_refl _
   | cons step _ _ _ tail => exact Nat.le_trans step tail
 
-private theorem WalSegment.Chain.startsWithin {history : List WAL.Write} {first : Nat}
+theorem WalSegment.Chain.startsWithin {history : List WAL.Write} {first : Nat}
     {segments : List WalSegment} (chain : Chain history first segments) :
     ∀ segment ∈ segments, segment.first ≤ history.length := by
   induction chain with

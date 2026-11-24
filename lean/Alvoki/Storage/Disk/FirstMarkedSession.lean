@@ -22,29 +22,13 @@ structure CanonicalKeeperLayout (image : FileImage) (history : List WAL.Write) w
   tail : ByteArray
   visible : image.keeper.active = some (keeper.bytes ++ tail)
 
-private theorem keeperStart_within {history : List WAL.Write} {first : Nat}
-    {sealed : List WalSegment} {keeper : WalSegment} (chain : WalSegment.Chain history first (sealed ++ [keeper])) :
-    keeper.first ≤ history.length := by
-  have startBound {first : Nat} {files : List WalSegment} (chain : WalSegment.Chain history first files) :
-      first ≤ history.length := by
-    induction chain with
-    | endOfHistory => exact Nat.le_refl _
-    | cons step _ _ _ ih => exact Nat.le_trans step ih
-  induction sealed generalizing first with
-  | nil =>
-    cases chain with
-    | cons bound _ _ rest => exact Nat.le_trans bound (startBound rest)
-  | cons head rest ih =>
-    cases chain with
-    | cons _ _ _ remaining => exact ih remaining
-
 def CanonicalKeeperLayout.target {image : FileImage} {history : List WAL.Write}
     (layout : CanonicalKeeperLayout image history) : Target where
   pair := image.directory.active
   range := layout.range
   decoded := layout.decoded
   first := layout.keeper.first
-  firstCovered := layout.through ▸ keeperStart_within layout.chain
+  firstCovered := layout.through ▸ layout.chain.startsWithin layout.keeper (by simp)
   trimmed := layout.keeper.bytes
   trimmedSize := by
     rw [layout.chain.keeperBytes, WAL.encode_size, List.length_drop, layout.through, Nat.mul_comm]
