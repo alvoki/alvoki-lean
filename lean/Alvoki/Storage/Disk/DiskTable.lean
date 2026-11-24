@@ -6,6 +6,7 @@ import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.RunFileSelection
 import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Disk.SyncHandleRouting
+import Alvoki.Storage.Disk.WalBatch
 import Alvoki.Storage.Disk.WalSegmentCommit
 import Alvoki.Storage.Disk.WalSegmentBootstrapIO
 import Alvoki.Storage.Disk.WalSegmentCollectionPlan
@@ -493,6 +494,49 @@ theorem DiskTable.writeWithOutcome_fileEffects (db : DiskTable) (key : UInt64) (
       (commitWalWrite db.dir db.files state.activeFirst event walBytes).adapt DiskWriteError.commitUnknown
       db.phase.set (.ready { state with table, walBytes })
       return event.sequence) := rfl
+
+@[inline] private def DiskTable.writeBatchWith (db : DiskTable)
+    (rows : List (UInt64 × Option UInt64)) (onRejected onCommitUnknown : IO.Error → ε) : EIO ε UInt64 := do
+  let state ← db.installed.adapt onRejected
+  if rows.isEmpty then return state.table.committed
+  let walBytes := state.walBytes + WAL.frameSize * rows.length
+  unless walBytes < UInt64.size do throw (onRejected (IO.userError "WAL byte count is too large"))
+  let (events, table) ← (fromOption (prepareBatch state.table rows)
+    "write sequence space exhausted").adapt onRejected
+  (checkActiveSegment db.dir state).adapt onRejected
+  DiskSession.publishPreparedWrite { state with table, walBytes } table.committed db.phase.set
+    ((WalSegmentCommit.commitBytesAt db.dir state.activeFirst (WAL.encodeBatch events) walBytes
+      db.files.append db.files.stage db.files.syncPaths IO.FS.rename).adapt onCommitUnknown)
+
+/-- Publish an ordered batch as one durable WAL boundary. Each mutation
+gets a consecutive sequence. An empty batch returns the current sequence. -/
+def DiskTable.writeBatch (db : DiskTable) (rows : List (UInt64 × Option UInt64)) : IO UInt64 :=
+  db.writeBatchWith rows id id
+
+/-- A failed publication has an unknown outcome for the entire batch.
+Close and reopen the session before attempting another operation. -/
+def DiskTable.writeBatchWithOutcome (db : DiskTable) (rows : List (UInt64 × Option UInt64)) :
+    EIO DiskWriteError UInt64 :=
+  db.writeBatchWith rows .rejected .commitUnknown
+
+/-- Batch acknowledgement follows the same publication schedule as a
+single write, with one appended byte string and one selected boundary. -/
+theorem DiskTable.writeBatchWithOutcome_fileEffects (db : DiskTable)
+    (rows : List (UInt64 × Option UInt64)) :
+    db.writeBatchWithOutcome rows = (do
+      let state ← db.installed.adapt DiskWriteError.rejected
+      if rows.isEmpty then return state.table.committed
+      let walBytes := state.walBytes + WAL.frameSize * rows.length
+      unless walBytes < UInt64.size do
+        throw (.rejected (IO.userError "WAL byte count is too large"))
+      let (events, table) ← (fromOption (prepareBatch state.table rows)
+        "write sequence space exhausted").adapt DiskWriteError.rejected
+      (checkActiveSegment db.dir state).adapt DiskWriteError.rejected
+      db.phase.set .poisoned
+      (WalSegmentCommit.commitBytesAt db.dir state.activeFirst (WAL.encodeBatch events) walBytes
+        db.files.append db.files.stage db.files.syncPaths IO.FS.rename).adapt DiskWriteError.commitUnknown
+      db.phase.set (.ready { state with table, walBytes })
+      return table.committed) := rfl
 
 def DiskTable.acquireAt (db : DiskTable) (snapshot : UInt64) : IO (Option DiskSnapshotPin) := do
   let state ← db.installed
