@@ -168,6 +168,7 @@ lake env leanchecker Alvoki.Storage.Disk.VersionedReadyRunCollection
 lake env leanchecker Alvoki.Storage.Disk.LockedMarkedReopenEffects
 lake env leanchecker Alvoki.Storage.Disk.LockedMarkedReopenFailureTrace
 lake env leanchecker Alvoki.Storage.Disk.IntegrityRunCollectionProgress
+lake env leanchecker Alvoki.Storage.Disk.IntegrityRunCollectionSpace
 lake env leanchecker Alvoki.Storage.Disk.RetainedWalSuffix
 lake env leanchecker Alvoki.Storage.Disk.RetainedWalReplay
 lake env leanchecker Alvoki.Storage.Disk.RetainedWalBoundary
