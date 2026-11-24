@@ -19,14 +19,14 @@ def DescriptorInventory.delayedKeeperSync (inventory : DescriptorInventory) (dro
   sameTarget := rfl
   outcomes := outcomes
 
-/-- The repair descriptor survives the drop interval or is opened after
-it. The successful open supplies a free slot in a live process epoch and
-a fresh description of the same lock inode. The table records the repair
-slot through the observed rename cut. -/
+/-- The repair descriptor names the original lock inode and either
+survives the drop interval or is opened after it. A new open supplies a
+free slot in a live process epoch and a fresh description. -/
 inductive KeeperRepairSlot (inventory : DescriptorInventory) (drops : List LockReferenceDrop)
     (writer repair : Nat) where
   | retained (reference : LockReference)
       (live : reference ∈ (inventory.afterDrops drops).references repair)
+      (sameLock : inventory.inode repair = inventory.inode writer)
   | opened (slot : DescriptorSlot) (identity : slot.description = repair)
       (free : ∀ old ∈ (inventory.afterDrops drops).slots, old.address ≠ slot.address)
       (running : LockReferenceDrop.exited slot.reference.process ∉ drops)
@@ -41,24 +41,30 @@ def census : KeeperRepairSlot inventory drops writer repair → DescriptorInvent
   | .opened slot _ free .. => (inventory.afterDrops drops).insert slot free
 
 def reference : KeeperRepairSlot inventory drops writer repair → LockReference
-  | .retained reference _ => reference
+  | .retained reference .. => reference
   | .opened slot .. => slot.reference
 
 theorem keepsInodes (slot : KeeperRepairSlot inventory drops writer repair) :
     slot.census.inode = inventory.inode := by
   cases slot <;> rfl
 
+theorem lockInode (slot : KeeperRepairSlot inventory drops writer repair) :
+    slot.census.inode repair = inventory.inode writer := by
+  cases slot with
+  | retained _ _ sameLock => exact sameLock
+  | opened _ _ _ _ _ sameLock => exact sameLock
+
 theorem live (slot : KeeperRepairSlot inventory drops writer repair) :
     slot.reference ∈ slot.census.references repair := by
   cases slot with
-  | retained _ live => exact live
+  | retained _ live _ => exact live
   | opened _ identity _ _ _ _ => simp [reference, census, DescriptorInventory.references_insert, identity]
 
 theorem keepsExistingReferences (slot : KeeperRepairSlot inventory drops writer repair)
     {description : Nat} (present : inventory.references description ≠ []) :
     slot.census.references description = (inventory.afterDrops drops).references description := by
   cases slot with
-  | retained _ _ => rfl
+  | retained _ _ _ => rfl
   | opened opened identity _ _ fresh _ =>
     have different : opened.description ≠ description := fun same => present ((identity.symm.trans same) ▸ fresh)
     simp [census, DescriptorInventory.references_insert, different]
@@ -156,6 +162,7 @@ theorem effectTime (observed : KeeperReplacementDropObservation cut writer) :
       observed.repair.reference ∈ census.references repair ∧ census.references writer = [] ∧
       repair ≠ writer ∧
       observed.bindings (directory.file .lock) = some (census.inode repair) ∧
+      census.inode repair = observed.inventory.inode writer ∧
       observed.observedCut.during.owners.Owns directory repair ∧
       ∃ (target : Target) (full : Plan), admits target ∧ cut.bounded.keeperBytes = target.trimmed ∧
         ReachesAction target source.image.syncDirectory full.finishActions (.replace .syncDirectory) cut.reached := by
@@ -177,7 +184,7 @@ theorem effectTime (observed : KeeperReplacementDropObservation cut writer) :
     rw [same, ended] at repairLive
     exact List.not_mem_nil repairLive
   refine ⟨issuer, separate, observed.oldKeeper, ?_, observed.replacementBinding,
-    repairLive, ended, repairSeparate, ?_, ?_, ?_⟩
+    repairLive, ended, repairSeparate, ?_, observed.repair.lockInode, ?_, ?_⟩
   · change observed.inventory.inode cut.report.captured.description ≠ cut.replacement
     rw [observed.oldKeeper]
     exact cut.distinct
