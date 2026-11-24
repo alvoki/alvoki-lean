@@ -97,7 +97,9 @@ def BootstrapMarkerReports (perform : Publication.Step → BootstrapM Unit) : Pr
   | .ok _ after => bootstrapMarkerStep before action = some after
   | .error _ after => bootstrapMarkerStep before action = some after ∨
     (after.metadata.active = before.metadata.active ∧
-      after.metadata.crashImages = before.metadata.crashImages ∧ after.successor = before.successor)
+      after.metadata.crashImages = before.metadata.crashImages ∧ after.successor = before.successor ∧
+      after.metadata.staged .manifest = before.metadata.staged .manifest ∧
+      (action ≠ .writeStaged → after.metadata.staged .walBoundary = before.metadata.staged .walBoundary))
 
 private theorem markerRun (perform : Publication.Step → BootstrapM Unit) (reports : BootstrapMarkerReports perform)
     (actions : List Publication.Step) {before : State} (valid : BootstrapValid before)
@@ -122,7 +124,7 @@ private theorem markerRun (perform : Publication.Step → BootstrapM Unit) (repo
     | error _ after =>
       rw [effect] at report
       change BootstrapValid after
-      rcases report with applied | ⟨active, candidates, zero⟩
+      rcases report with applied | ⟨active, candidates, zero, _, _⟩
       · exact (markerStep_valid valid durable applied).1
       · refine ⟨⟨?_, ?_⟩, ?_⟩
         · rw [active, candidates]

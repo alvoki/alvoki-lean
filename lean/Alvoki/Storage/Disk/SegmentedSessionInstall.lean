@@ -73,13 +73,14 @@ theorem runOpenWithInstallation_ready {image : Type} {directory : DiskDirectory}
     have earlier := fresh _ present
     omega
 
-/-- The markerless branch installs an empty ready session only after both
-the segment and its zero marker are durable. A reported open failure keeps
-a bootstrap image that can be retried or followed by an admitted crash. -/
+/-- After native admission, the shared markerless schedule installs an
+empty ready session only once the segment and its zero marker are durable.
+A reported failure preserves the projected bootstrap invariant. -/
 theorem runOpenWithInstallation_bootstrap (directory : DiskDirectory) (descriptor nextRef : Nat)
     (before : LockedFileState WalSegmentRotation.State) (valid : BootstrapValid before.image)
     (empty : Option ByteArray) (seen : before.image.observeSuccessor = empty)
-    (acquired : Except IO.Error Bool) (unlock : UnlockReport)
+    (acquired : Except IO.Error Bool) (acquisition : TryLockObserves before.owners directory acquired)
+    (unlock : UnlockReport)
     (createEmpty : System.FilePath → EStateM IO.Error WalSegmentRotation.State Unit)
     (write : System.FilePath → ByteArray → EStateM IO.Error WalSegmentRotation.State Unit)
     (sync : Array System.FilePath → EStateM IO.Error WalSegmentRotation.State Unit)
@@ -91,7 +92,7 @@ theorem runOpenWithInstallation_bootstrap (directory : DiskDirectory) (descripto
     let recover := bootstrapEmptyWith directory empty createEmpty write sync renameFile
     match runOpenWithInstallation directory descriptor nextRef acquired unlock recover before with
     | .ok session after => session.phase = .ready ⟨.empty, 0, 0, 0⟩ ∧ BootstrapReady after.image ∧
-        after.owners.Owns directory descriptor
+        before.owners (directory.file .lock) = none ∧ after.owners.Owns directory descriptor
     | .error _ after => BootstrapValid after.image := by
   intro recover
   rw [runOpenWithInstallation_outcome]
@@ -107,7 +108,7 @@ theorem runOpenWithInstallation_bootstrap (directory : DiskDirectory) (descripto
     | ok opened after =>
       rw [recovered] at safe
       obtain ⟨rfl, ready⟩ := safe
-      exact ⟨rfl, ready, by simp [LockOwners.Owns, LockOwners.set]⟩
+      exact ⟨rfl, ready, acquisition rfl, by simp [LockOwners.Owns, LockOwners.set]⟩
     | error _ after =>
       rw [recovered] at safe
       cases unlock <;> exact safe
