@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Disk.SegmentedAppendRecovery
+import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.SegmentedCleanReopen
 import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
@@ -41,6 +42,11 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (report : SegmentedAppendRecoveryReport directory before writer descriptor)
       (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial (log ++ [⟨[], some report.failure.event⟩]) descriptor after
+  | appendPowerLoss {log writer descriptor before after}
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (report : SegmentedAppendPowerLossReport directory before writer descriptor)
+      (observed : report.Valid) (endpoint : report.Installs after) :
+      SegmentedDatabaseTrace directory initialDescriptor initial (log ++ [⟨[], some report.event⟩]) descriptor after
   | checkpointError {log writer descriptor before after}
       (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
       (report : SegmentedCheckpointFailure directory before writer descriptor)
@@ -81,6 +87,10 @@ theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initi
     · exact ⟨retained ++ [], by simpa using lost.trans history, submitted.append (Or.inl rfl)⟩
     · refine ⟨retained ++ [report.failure.event], by rw [kept, history, List.append_assoc], ?_⟩
       exact submitted.append (Or.inr ⟨report.failure.event, rfl, rfl⟩)
+  | appendPowerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesReady observed before, retained ++ [], by simpa using endpoint.history.trans history,
+      submitted.append (Or.inl rfl)⟩
   | checkpointError _ _ endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
