@@ -130,13 +130,14 @@ theorem HealthyBoundedWalReports.readSizedCheckpoint_eq {state : Type}
 
 /-- The actual sized checkpoint worker executed on held path reports. Only
 preparation uses lifted reads. Repair has the same effectful callbacks. -/
-def HealthyBoundedWalReports.reopenSizedCheckpoint {directory owners descriptor wal pair watermark durable tail}
+def HealthyBoundedWalReports.reopenSizedCheckpointWithState {directory owners descriptor wal pair watermark durable tail}
+    {state : Type}
     (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail)
     (sizes : SizedCheckpointRunReports directory raw.reports pair.manifest durable)
-    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
-    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
-    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
-    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) : EStateM IO.Error FileImage Reopened :=
+    (removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error state Unit)
+    (sync : Array FilePath → EStateM IO.Error state Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error state Unit) : EStateM IO.Error state Reopened :=
   reopenMarkedBoundedWithSizedCheckpoint directory (fun path => liftExcept (raw.reports.readOptional path))
     (fun path => liftExcept (checkpointRunSizeReport raw.reports path))
     (fun path count => liftExcept (sizes.readPrefix path count))
@@ -148,6 +149,26 @@ def HealthyBoundedWalReports.reopenSizedCheckpoint {directory owners descriptor 
 /-- An installation or failure theorem for the reported bounded reopen
 applies to the sized route with these exact checkpoint reports, including
 the final effect state and the returned table. -/
+theorem HealthyBoundedWalReports.reopenSizedCheckpointWithState_eq {directory owners descriptor wal pair watermark durable tail}
+    {state : Type}
+    (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail)
+    (sizes : SizedCheckpointRunReports directory raw.reports pair.manifest durable)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint durable pair.manifest checkpoint)
+    (removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error state Unit)
+    (sync : Array FilePath → EStateM IO.Error state Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error state Unit) :
+    raw.reopenSizedCheckpointWithState sizes removeFile write sync renameFile =
+      raw.reopenWithState removeFile write sync renameFile := by
+  unfold HealthyBoundedWalReports.reopenSizedCheckpointWithState HealthyBoundedWalReports.reopenWithState
+  exact reopenMarkedBoundedWithSizedCheckpoint_eq_of_checkpoint _ _ _ _ _ _ _ _ _ _ _ _
+    (raw.readSizedCheckpoint_eq sizes selected)
+
+abbrev HealthyBoundedWalReports.reopenSizedCheckpoint {directory owners descriptor wal pair watermark durable tail}
+    (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail) :=
+  raw.reopenSizedCheckpointWithState (state := FileImage)
+
 theorem HealthyBoundedWalReports.reopenSizedCheckpoint_eq {directory owners descriptor wal pair watermark durable tail}
     (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail)
     (sizes : SizedCheckpointRunReports directory raw.reports pair.manifest durable)
@@ -158,10 +179,8 @@ theorem HealthyBoundedWalReports.reopenSizedCheckpoint_eq {directory owners desc
     (sync : Array FilePath → EStateM IO.Error FileImage Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
     raw.reopenSizedCheckpoint sizes removeFile write sync renameFile =
-      raw.reopen removeFile write sync renameFile := by
-  unfold HealthyBoundedWalReports.reopenSizedCheckpoint HealthyBoundedWalReports.reopen
-  exact reopenMarkedBoundedWithSizedCheckpoint_eq_of_checkpoint _ _ _ _ _ _ _ _ _ _ _ _
-    (raw.readSizedCheckpoint_eq sizes selected)
+      raw.reopen removeFile write sync renameFile :=
+  raw.reopenSizedCheckpointWithState_eq sizes selected removeFile write sync renameFile
 
 end Alvoki.Storage.WalSegmentRepair
 

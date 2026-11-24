@@ -135,16 +135,17 @@ structure SegmentedRotationReopenEndpoint (directory : DiskDirectory) (descripto
   checkpoint : after.checkpoint = before.checkpoint
   generation : after.installed.generation = before.installed.generation
 
-/-- Install the keeper that survived a rotation handoff. The origin and
-retry reports connect the reopened state to the prior ready writer. -/
-theorem SegmentedRotationReopenReport.installsRetained {directory : DiskDirectory} {before : SegmentedWriterState}
+/-- Install from the reached rotation lineage with the exact segment
+layout that the healthy directory barrier settles. -/
+theorem SegmentedRotationReopenReport.installsRetainedSettled {directory : DiskDirectory} {before : SegmentedWriterState}
     {descriptor newDescriptor : Nat} (report : SegmentedRotationReopenReport directory before newDescriptor)
     (ready : before.RetainedReady directory descriptor)
     (rotation : CanRotate before.wal before.history)
     {initial : LockedFileState WalSegmentRotation.State} (origin : Trace before.wal initial.image)
     (attempts : RotationReopenFailures directory before.wal before.history initial report.retry) :
     ∃ writer, SegmentedRotationReopenEndpoint directory newDescriptor before writer report.run ∧
-      writer.RetainedReady directory newDescriptor := by
+      writer.RetainedReady directory newDescriptor ∧
+      writer.wal = report.retry.image.settleForReopen.visible before.wal := by
   let retry := report.retry
   let fixed := retry.image.settledReopenImage before.wal
   have originalPair {pair} (chosen : before.wal.Selects pair) : pair = before.wal.directory.active := by
@@ -185,8 +186,13 @@ theorem SegmentedRotationReopenReport.installsRetained {directory : DiskDirector
     · exact ready.spans _ sealed
     · obtain rfl := List.mem_singleton.mp active
       rw [ready.layout.activeBytes, WAL.encode_size, List.length_drop, ready.layout.activeEnd, Nat.mul_comm]
+  have opened := install report.read report.syncDirectory report.syncKeeper
   obtain ⟨session, final, writer, returned, path, lock, phase, files, visible, target, owners, history, durable, reopened⟩ :=
-    (install report.read report.syncDirectory report.syncKeeper).writerRetainedReady spans
+    opened.writerRetainedReady spans
+  obtain ⟨_, _, _, _, settledFinal, settledRun, _, _, _, _, _, settledState, _⟩ := opened
+  have sameFinal := (EStateM.Result.ok.inj (returned.symm.trans settledRun)).2
+  have settled : writer.wal = report.retry.image.settleForReopen.visible before.wal := by
+    rw [visible, sameFinal, settledState]
   have targetPair := (congrArg Target.pair target).trans pair
   have loaded := reopened.resumed.selected
   rw [durable, targetPair] at loaded
@@ -196,7 +202,21 @@ theorem SegmentedRotationReopenReport.installsRetained {directory : DiskDirector
   have keeperBytes : writer.target.trimmed = writer.wal.active.bytes := by
     rw [reopened.resumed.contents, reopened.active, reopened.layout.activeBytes]
   exact ⟨writer, ⟨⟨session, final, returned, path, lock, phase, files, visible, owners⟩,
-    history, targetPair, reopened.active, keeperBytes, reopened.manifestFiles, durable, checkpoint, generation⟩, reopened⟩
+    history, targetPair, reopened.active, keeperBytes, reopened.manifestFiles, durable, checkpoint, generation⟩,
+    reopened, settled⟩
+
+/-- Install the keeper that survived a rotation handoff. The origin and
+retry reports connect the reopened state to the prior ready writer. -/
+theorem SegmentedRotationReopenReport.installsRetained {directory : DiskDirectory} {before : SegmentedWriterState}
+    {descriptor newDescriptor : Nat} (report : SegmentedRotationReopenReport directory before newDescriptor)
+    (ready : before.RetainedReady directory descriptor)
+    (rotation : CanRotate before.wal before.history)
+    {initial : LockedFileState WalSegmentRotation.State} (origin : Trace before.wal initial.image)
+    (attempts : RotationReopenFailures directory before.wal before.history initial report.retry) :
+    ∃ writer, SegmentedRotationReopenEndpoint directory newDescriptor before writer report.run ∧
+      writer.RetainedReady directory newDescriptor := by
+  obtain ⟨writer, endpoint, retained, _⟩ := report.installsRetainedSettled ready rotation origin attempts
+  exact ⟨writer, endpoint, retained⟩
 
 theorem SegmentedRotationReopenReport.installs {directory : DiskDirectory} {before : SegmentedWriterState}
     {descriptor newDescriptor : Nat} (report : SegmentedRotationReopenReport directory before newDescriptor)

@@ -12,6 +12,13 @@ private theorem State.settleForReopen_visible (state : State) (image : WalSegmen
   by_cases absent : state.successor = .absent <;>
     simp [State.settleForReopen, State.visible, WalSegmentImage.rotated, absent]
 
+/-- The directory barrier leaves the visible segment names and their exact
+contents unchanged while settling the namespace. -/
+theorem State.settleForReopen_segments (state : State) (image : WalSegmentImage) :
+    (state.settleForReopen.visible image).segments = (state.visible image).segments := by
+  have settled := congrArg WalSegmentImage.segments (state.settleForReopen_visible image)
+  exact settled
+
 theorem State.settledReopenImage_sync (state : State) (image : WalSegmentImage) :
     (state.settledReopenImage image).syncDirectory = state.settledReopenImage image := by
   simp only [State.settledReopenImage, State.visible_metadata, State.settleForReopen]

@@ -76,7 +76,8 @@ private theorem CachedWalPayloadReports.of_spans {dir : DiskDirectory} {through 
 /-- The complete held listing, exact metadata and bounded payload reports
 derive the cached read at the actual marker. Selection and emitted bytes
 follow from the canonical surviving layout rather than a prepared result. -/
-theorem HealthyBoundedWalReports.readSelectedCached {directory owners descriptor wal pair watermark durable tail}
+theorem HealthyBoundedWalReports.readSelectedCachedWithState {directory owners descriptor wal pair watermark durable tail}
+    {state : Type}
     (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail)
     (cached : CachedWalFileReports directory raw.reports wal watermark tail)
     {history : List WAL.Write} (layout : wal.ReadLayout history) (valid : wal.Valid history)
@@ -87,7 +88,7 @@ theorem HealthyBoundedWalReports.readSelectedCached {directory owners descriptor
       (fun path => liftExcept (.ok (raw.reports.lstat path) : Except IO.Error _))
       (fun path size => liftExcept (cached.readSeal path size))
       (fun path count size => liftExcept (cached.readKeeper path count size)) :
-        EStateM IO.Error FileImage (WalSegmentMarkerReads × Nat)) =
+        EStateM IO.Error state (WalSegmentMarkerReads × Nat)) =
       readSelectedWithPrefix directory watermark count (fun path => liftExcept (raw.list path))
         (fun path => liftExcept (.ok (raw.reports.lstat path) : Except IO.Error _))
         (fun path => liftExcept (raw.reports.readBin path)) (fun path count => liftExcept (raw.readPrefix path count)) := by
@@ -159,14 +160,15 @@ theorem HealthyBoundedWalReports.readSelectedCached {directory owners descriptor
 
 /-- Execute the cached opener with the bounded checkpoint, seal and keeper
 reports at the same held paths. The repair operations are effectful. -/
-def HealthyBoundedWalReports.reopenCached {directory owners descriptor wal pair watermark durable tail}
+def HealthyBoundedWalReports.reopenCachedWithState {directory owners descriptor wal pair watermark durable tail}
+    {state : Type}
     (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail)
     (sizes : SizedCheckpointRunReports directory raw.reports pair.manifest durable)
     (cached : CachedWalFileReports directory raw.reports wal watermark tail)
-    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
-    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
-    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
-    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) : EStateM IO.Error FileImage Reopened :=
+    (removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error state Unit)
+    (sync : Array FilePath → EStateM IO.Error state Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error state Unit) : EStateM IO.Error state Reopened :=
   reopenMarkedBoundedWithCachedExtents directory (fun path => liftExcept (raw.reports.readOptional path))
     (fun path => liftExcept (checkpointRunSizeReport raw.reports path))
     (fun path count => liftExcept (sizes.readPrefix path count))
@@ -179,6 +181,62 @@ def HealthyBoundedWalReports.reopenCached {directory owners descriptor wal pair 
 /-- The exact checkpoint files select the same watermark and the real
 marker selects the same WAL extent. Thus the entire cached open agrees
 with the earlier bounded report worker, including its repair effects. -/
+theorem HealthyBoundedWalReports.reopenCachedWithState_eq {directory owners descriptor wal pair watermark durable tail}
+    {state : Type}
+    (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail)
+    (sizes : SizedCheckpointRunReports directory raw.reports pair.manifest durable)
+    (cached : CachedWalFileReports directory raw.reports wal watermark tail)
+    {history : List WAL.Write} (layout : wal.ReadLayout history) (valid : wal.Valid history)
+    (chosen : wal.Selects pair) {range : MarkedWalRange}
+    (decoded : pair.walRange = some range) (sameWatermark : range.watermark = watermark)
+    (atEnd : range.through = history.length)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint durable pair.manifest checkpoint)
+    (removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error state Unit)
+    (sync : Array FilePath → EStateM IO.Error state Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error state Unit) :
+    raw.reopenCachedWithState sizes cached removeFile write sync renameFile =
+      raw.reopenWithState removeFile write sync renameFile := by
+  obtain ⟨reportedWatermark, _, marker, count, visible, parsed, absolute⟩ :=
+    DirectoryPublication.Bindings.walRange_accounting decoded
+  have clock := (Option.some.inj (selected.watermark.symm.trans reportedWatermark)).trans sameWatermark
+  have checkpointRead := raw.readSizedCheckpoint_eq (state := state) sizes selected
+  rw [readCheckpoint_liftReports (validateReport := fun result => result.mapError IO.userError)
+    _ _ (by intro _ _; rfl), raw.readCheckpoint selected] at checkpointRead
+  have markerRead : (liftExcept (raw.reports.readOptional (directory.file .walBoundary)) :
+      EStateM IO.Error state _) = pure (some marker) := by
+    rw [raw.marker, visible]
+    rfl
+  have walRead := raw.readSelectedCachedWithState (state := state) cached layout valid chosen decoded sameWatermark atEnd absolute
+  rw [← raw.reopenSizedCheckpointWithState_eq sizes selected]
+  unfold HealthyBoundedWalReports.reopenCachedWithState HealthyBoundedWalReports.reopenSizedCheckpointWithState
+  refine reopenMarkedBoundedWithCachedExtents_eq_of_selectedWal _ _ _ _ _ _ _ _ _ _ _ _ _ _
+    checkpointRead markerRead parsed ?_
+  dsimp only
+  rwa [clock]
+
+theorem HealthyBoundedWalReports.readSelectedCached {directory owners descriptor wal pair watermark durable tail}
+    (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail)
+    (cached : CachedWalFileReports directory raw.reports wal watermark tail)
+    {history : List WAL.Write} (layout : wal.ReadLayout history) (valid : wal.Valid history)
+    (chosen : wal.Selects pair) {range : MarkedWalRange}
+    (decoded : pair.walRange = some range) (sameWatermark : range.watermark = watermark)
+    (atEnd : range.through = history.length) {count : UInt64} (absolute : count.toNat = range.through * frameSize) :
+    (readSelectedWithCachedExtents directory watermark count (fun path => liftExcept (raw.list path))
+      (fun path => liftExcept (.ok (raw.reports.lstat path) : Except IO.Error _))
+      (fun path size => liftExcept (cached.readSeal path size))
+      (fun path count size => liftExcept (cached.readKeeper path count size)) :
+        EStateM IO.Error FileImage (WalSegmentMarkerReads × Nat)) =
+      readSelectedWithPrefix directory watermark count (fun path => liftExcept (raw.list path))
+        (fun path => liftExcept (.ok (raw.reports.lstat path) : Except IO.Error _))
+        (fun path => liftExcept (raw.reports.readBin path)) (fun path count => liftExcept (raw.readPrefix path count)) :=
+  raw.readSelectedCachedWithState (state := FileImage) cached layout valid chosen decoded sameWatermark atEnd absolute
+
+abbrev HealthyBoundedWalReports.reopenCached {directory owners descriptor wal pair watermark durable tail}
+    (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail) :=
+  raw.reopenCachedWithState (state := FileImage)
+
 theorem HealthyBoundedWalReports.reopenCached_eq {directory owners descriptor wal pair watermark durable tail}
     (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail)
     (sizes : SizedCheckpointRunReports directory raw.reports pair.manifest durable)
@@ -194,24 +252,9 @@ theorem HealthyBoundedWalReports.reopenCached_eq {directory owners descriptor wa
     (sync : Array FilePath → EStateM IO.Error FileImage Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
     raw.reopenCached sizes cached removeFile write sync renameFile =
-      raw.reopen removeFile write sync renameFile := by
-  obtain ⟨reportedWatermark, _, marker, count, visible, parsed, absolute⟩ :=
-    DirectoryPublication.Bindings.walRange_accounting decoded
-  have clock := (Option.some.inj (selected.watermark.symm.trans reportedWatermark)).trans sameWatermark
-  have checkpointRead := raw.readSizedCheckpoint_eq (state := FileImage) sizes selected
-  rw [readCheckpoint_liftReports (validateReport := fun result => result.mapError IO.userError)
-    _ _ (by intro _ _; rfl), raw.readCheckpoint selected] at checkpointRead
-  have markerRead : (liftExcept (raw.reports.readOptional (directory.file .walBoundary)) :
-      EStateM IO.Error FileImage _) = pure (some marker) := by
-    rw [raw.marker, visible]
-    rfl
-  have walRead := raw.readSelectedCached cached layout valid chosen decoded sameWatermark atEnd absolute
-  rw [← raw.reopenSizedCheckpoint_eq sizes selected]
-  unfold HealthyBoundedWalReports.reopenCached HealthyBoundedWalReports.reopenSizedCheckpoint
-  refine reopenMarkedBoundedWithCachedExtents_eq_of_selectedWal _ _ _ _ _ _ _ _ _ _ _ _ _ _
-    checkpointRead markerRead parsed ?_
-  dsimp only
-  rwa [clock]
+      raw.reopen removeFile write sync renameFile :=
+  raw.reopenCachedWithState_eq sizes cached layout valid chosen decoded sameWatermark atEnd selected
+    removeFile write sync renameFile
 
 end Alvoki.Storage.WalSegmentRepair
 
