@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
+import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
 import Alvoki.Storage.Disk.SegmentedBatchAppend
 import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
 import Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
@@ -74,6 +75,21 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (step : SegmentedDatabaseTrace directory writer before allowCollection submissions descriptor after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.ordinary submissions]) descriptor after
+  | checkpointPowerLossObserved {files : Type}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (cut : CheckpointPowerCut directory before) {published : CheckpointPublication.Image}
+      (projected : before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published)
+      {pair : DirectoryPublication.Bindings}
+      (survives : pair ∈ (published.segmentedCheckpointView before.wal).directory.crashImages)
+      {retry : LockedFileState FileImage}
+      (failures : BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
+        ⟨(CheckpointPowerCut.physical before published).crash pair (some before.wal.active.bytes) [],
+          before.owners.set (directory.file .lock) none⟩ retry)
+      (selected : retry.image.directory.active = pair)
+      {layout : CanonicalKeeperLayout retry.image before.history}
+      {observed : MarkedRetryChunkReports files directory layout published}
+      (installed : CheckpointChunkWriter directory before published observed after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after
   | acknowledgedBatch
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedBatchAppendReport directory before) (selected : report.Selects target) :
@@ -124,6 +140,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     obtain ⟨afterReady, suffix, extended, kept⟩ := step.preservesRetained beforeReady
     exact ⟨afterReady, retained ++ suffix, by rw [extended, beforeHistory, List.append_assoc],
       .append retention kept⟩
+  | checkpointPowerLossObserved _ _ _ _ _ _ installed ih =>
+    obtain ⟨_, retained, history, retention⟩ := ih
+    exact ⟨installed.retained, retained, installed.history.trans history, retention⟩
   | acknowledgedBatch _ report selected ih =>
     obtain ⟨beforeReady, retained, beforeHistory, retention⟩ := ih
     obtain ⟨chosen, selectedChosen, afterReady⟩ := report.preservesRetained beforeReady
@@ -143,6 +162,37 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | batchAppendProcessExit _ _ _ installed ih =>
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history (.inl installed.history)⟩
+
+/-- Publish the observed checkpoint recovery as a step in the mixed trace.
+Checkpointing changes the reachable run map but adds no write submission. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterCheckpointPowerLossChunks {files : Type}
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (ready : initial.RetainedReady directory initialDescriptor) (cut : CheckpointPowerCut directory before)
+    (published : CheckpointPublication.Image)
+    (projected : before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published)
+    (pair : DirectoryPublication.Bindings) (survives : pair ∈ (published.segmentedCheckpointView before.wal).directory.crashImages)
+    (retry : LockedFileState FileImage)
+    (failures : BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
+      ⟨(CheckpointPowerCut.physical before published).crash pair (some before.wal.active.bytes) [],
+        before.owners.set (directory.file .lock) none⟩ retry)
+    (observes : ∀ layout : CanonicalKeeperLayout retry.image before.history,
+      layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
+      layout.sealed ++ [layout.keeper] = (published.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark →
+      Nonempty (MarkedRetryChunkReports files directory layout published)) :
+    ∃ (layout : CanonicalKeeperLayout retry.image before.history)
+      (observed : MarkedRetryChunkReports files directory layout published) (after : SegmentedWriterState),
+      CheckpointChunkWriter directory before published observed after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after ∧
+      after.target.pair = pair ∧
+      ((after.installed.generation = before.installed.generation ∧ pair.manifest = before.wal.directory.active.manifest) ∨
+        (after.installed.generation = SegmentedCheckpointReport.generation before ∧ pair.manifest = some cut.checkpoint.manifest)) := by
+  have beforeReady := (trace.preservesRetained ready).1
+  obtain ⟨_, layout, observed, _, _, _, _, _, _, _, _, _, _, _, selected, _, _, _, _, generation,
+    _, _, _, _, _, _, _, after, installed, _, installedPayload⟩ :=
+    cut.reopensFromChunks beforeReady published projected pair survives retry failures observes
+  exact ⟨layout, observed, after, installed,
+    .checkpointPowerLossObserved trace cut projected survives failures selected installed,
+    (congrArg Target.pair installed.target).trans selected, installedPayload.symm ▸ generation⟩
 
 /-- Extend the trace using the actual failed commit, lock release and
 bounded reopen reports. Retained readiness is derived from the prior trace. -/
