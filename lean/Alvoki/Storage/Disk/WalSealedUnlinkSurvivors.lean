@@ -46,6 +46,44 @@ theorem unlink_of_absent {image : WalSealedUnlinkImage} {first : Nat}
     exact missing segment member (beq_iff_eq.mp equal)
   simp [unlink, absent]
 
+private theorem unlink_sealed (image : WalSealedUnlinkImage) (first : Nat) :
+    (image.unlink first).visible.sealed = eraseName first image.visible.sealed := by
+  unfold unlink
+  split
+  · rfl
+  · rename_i absent
+    apply Eq.symm
+    rw [eraseName, List.filter_eq_self]
+    intro segment member
+    have different : segment.first ≠ first := by
+      intro same
+      exact absent (List.any_eq_true.mpr ⟨segment, member, by simp [same]⟩)
+    simpa using different
+
+/-- A complete pass leaves precisely the unplanned visible names. The
+directory barrier makes that same list the only sealed crash choice. -/
+theorem completeSealed (before : WalSealedUnlinkImage) (offsets : List Nat) :
+    let after := (RunCollection.steps offsets).foldl applyCollectionStep before
+    let kept := before.visible.sealed.filter (fun segment => !offsets.contains segment.first)
+    after.visible.sealed = kept ∧ after.crashSealed = [kept] := by
+  have eraseAll (image : WalSealedUnlinkImage) (names : List Nat) :
+      ((names.map RunCollection.Step.unlink).foldl applyCollectionStep image).visible.sealed =
+        image.visible.sealed.filter (fun segment => !names.contains segment.first) := by
+    induction names generalizing image with
+    | nil =>
+      simp only [List.map_nil, List.foldl_nil, List.contains_nil, Bool.not_false]
+      exact (List.filter_eq_self.mpr (fun _ _ => rfl)).symm
+    | cons first rest ih =>
+      change ((rest.map RunCollection.Step.unlink).foldl applyCollectionStep
+        (image.unlink first)).visible.sealed = _
+      rw [ih, unlink_sealed, eraseName, List.filter_filter]
+      apply List.filter_congr
+      intro segment _
+      by_cases same : segment.first = first <;> simp [same, Bool.and_comm]
+  simp only [RunCollection.steps, List.foldl_append, List.foldl_cons, List.foldl_nil]
+  change _ = _ ∧ [_] = [_]
+  exact ⟨eraseAll before offsets, congrArg (fun sealed => [sealed]) (eraseAll before offsets)⟩
+
 end WalSealedUnlinkImage
 
 /-- Collection retries operate on the approved offsets of the starting

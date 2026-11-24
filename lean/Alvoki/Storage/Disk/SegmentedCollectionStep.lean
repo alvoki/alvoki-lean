@@ -115,5 +115,52 @@ theorem Installs.preservesRetained {report : SegmentedCollectionReport directory
     after.RetainedReady directory descriptor :=
   (installed.outcome ready).1
 
+/-- When the dispatcher receives the complete plan, one healthy pass
+durably reclaims every eligible sealed segment and no other segment. -/
+theorem Installs.reclaimsPlan {report : SegmentedCollectionReport directory before} {after : SegmentedWriterState}
+    (installed : report.Installs after) {descriptor : Nat} (ready : before.RetainedReady directory descriptor)
+    (planned : report.offsets = before.wal.collectionOffsets) :
+    after.wal.sealed = before.wal.sealed.filter (fun segment => !before.wal.canRemove segment) ∧
+      ∃ remaining, report.run = .ok () remaining ∧ remaining.crashSealed = [after.wal.sealed] := by
+  obtain ⟨remaining, ran, rfl⟩ := installed
+  have reached := (WalSealedUnlinkTrace.start (initial := before.wal)).runPaths directory report.offsets
+    report.approved report.removeFile report.syncDirectory report.effects
+  dsimp only at reached
+  have dispatched := ran
+  unfold SegmentedCollectionReport.run at dispatched
+  rw [dispatched] at reached
+  have ⟨visible, durable⟩ := reached.1 ▸
+    (WalSealedUnlinkImage.start before.wal).completeSealed report.offsets
+  refine ⟨visible.trans ?_, remaining, ran, durable.trans (congrArg (fun sealed => [sealed]) visible.symm)⟩
+  rw [planned]
+  apply List.filter_congr
+  intro segment member
+  apply congrArg (fun allowed => !allowed)
+  apply Bool.eq_iff_iff.mpr
+  rw [List.contains_iff_mem, WalSegmentImage.canRemove_iff]
+  constructor
+  · intro offset
+    exact (ready.layout.collectionOffsets_approved offset).2 segment member rfl
+  · intro eligible
+    exact List.mem_map.mpr ⟨segment, List.mem_filter.mpr ⟨member, WalSegmentImage.canRemove_iff.mpr eligible⟩, rfl⟩
+
+/-- A healthy pass over the complete locked inventory reclaims exactly
+the sealed files covered by the selected checkpoint and marker. `physical`
+relates the no-follow size observations to the immutable file payloads. -/
+theorem Installs.reclaimsObserved {report : SegmentedCollectionReport directory before} {after : SegmentedWriterState}
+    (installed : report.Installs after) {descriptor : Nat} (ready : before.RetainedReady directory descriptor)
+    {tail : ByteArray}
+    (raw : HealthyBoundedWalReports directory before.owners descriptor before.wal before.target.pair
+      before.target.range.watermark before.published.durable tail)
+    (physical : ∀ segment ∈ before.wal.sealed, ∀ metadata,
+      raw.reports.lstat (directory.file (.walSegment segment.first)) = .ok metadata →
+        metadata.byteSize.toNat = segment.bytes.size)
+    (planned : (raw.reports.walSegmentOffsets directory (raw.entries.toList.map (·.fileName))).map
+      (fun offsets => raw.reports.walCollectionOffsets directory offsets before.installed.activeFirst
+        before.target.pair) = .ok report.offsets) :
+    after.wal.sealed = before.wal.sealed.filter (fun segment => !before.wal.canRemove segment) ∧
+      ∃ remaining, report.run = .ok () remaining ∧ remaining.crashSealed = [after.wal.sealed] :=
+  installed.reclaimsPlan ready (Except.ok.inj (planned.symm.trans (ready.collectionOffsets_exact .start raw physical)))
+
 end SegmentedCollectionReport
 end Alvoki.Storage.DiskSession
