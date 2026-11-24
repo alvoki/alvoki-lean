@@ -333,17 +333,11 @@ private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTabl
 def DiskTable.open (path : FilePath) : IO DiskTable := do
   let dir ← openDirectory path
   let lock ← IO.FS.Handle.mk (dir.file .lock) .append
-  unless ← lock.tryLock do throw (IO.userError s!"database already open: {dir.path}")
-  try openLocked dir lock catch error =>
-    lock.unlock
-    throw error
+  DiskSession.openWithLock lock.tryLock (fun _ => IO.userError s!"database already open: {dir.path}")
+    (fun _ => lock.unlock) (fun _ => openLocked dir lock)
 
 def DiskTable.close (db : DiskTable) : IO Unit := do
-  match ← db.phase.get with
-  | .closed => pure ()
-  | _ =>
-    db.lock.unlock
-    db.phase.set .closed
+  (← db.phase.get).close (fun _ => db.lock.unlock) (fun _ => db.phase.set .closed)
 
 private def DiskTable.installed (db : DiskTable) : IO Installed := do
   (← db.phase.get).installed

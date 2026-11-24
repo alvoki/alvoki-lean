@@ -297,7 +297,8 @@ private theorem CheckpointForRecovery.written_files {bytes : ByteArray} {files :
   cases written
   rfl
 
-private theorem CheckpointForRecovery.ordered_durable_runs {image : CheckpointPublication.Image}
+/-- The accepted manifest resolves to the witness's exact ordered durable run bytes. -/
+theorem CheckpointForRecovery.ordered_durable_runs {image : CheckpointPublication.Image}
     {walSequence : UInt64} {manifest : Option ByteArray} {files : List ByteArray} {checkpoint : PackedTable}
     (written : CheckpointForRecovery manifest files checkpoint)
     (accepted : image.Accepts walSequence (fun header stored =>

@@ -116,7 +116,9 @@ theorem recoverLegacy_selected_eq_of_aligned {base table : PackedTable} {bytes s
   rw [ByteArray.size_extract, Nat.sub_zero, Nat.min_eq_left bounded] at aligned
   rw [Nat.le_antisymm bounded (Nat.le_of_not_gt aligned), ByteArray.extract_zero_size]
 
-private theorem runLegacyMarkedOpen_success {before : ReopenImage} {loaded : Option (PackedTable × UInt64)}
+/-- Successful legacy adoption settles the selected WAL and publishes its
+exact byte count after the chosen durability action. -/
+theorem runLegacyMarkedOpen_success {before : ReopenImage} {loaded : Option (PackedTable × UInt64)}
     {bytes selected : ByteArray} {table : PackedTable} (reports : LegacyOpenReports)
     (recovered : recoverLegacy (loaded.getD (.empty, 0)).1 bytes = .ok (selected, table))
     (visible : before.wal.active = some bytes) (fits : selected.size < UInt64.size)

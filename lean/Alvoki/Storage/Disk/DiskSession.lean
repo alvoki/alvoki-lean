@@ -18,4 +18,22 @@ inductive Phase (α : Type) where
   let state ← installed
   if ← sameSession then localAction state else pure foreign
 
+/-- A successful lock is retained by the opened session. A recovery error
+unlocks first, so a failure to unlock takes precedence. -/
+@[macro_inline] def openWithLock [Monad m] [MonadExceptOf IO.Error m] (tryLock : m Bool)
+    (alreadyOpen : Unit → IO.Error) (unlock : Unit → m Unit) (openLocked : Unit → m α) : m α := do
+  unless ← tryLock do throw (alreadyOpen ())
+  try openLocked () catch error =>
+    unlock ()
+    throw (error : IO.Error)
+
+/-- A successful unlock precedes the change to the closed phase. -/
+@[macro_inline] def Phase.close [Monad m] (phase : Phase α)
+    (unlock recordClosed : Unit → m Unit) : m Unit := do
+  match phase with
+  | .closed => pure ()
+  | _ =>
+    unlock ()
+    recordClosed ()
+
 end Alvoki.Storage.DiskSession
