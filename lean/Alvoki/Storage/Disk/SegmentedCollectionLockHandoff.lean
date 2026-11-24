@@ -105,7 +105,9 @@ theorem SegmentedCollectionErrors.openAfterRelease {directory before reached des
       next.wal.sealed = pending.image.syncDirectory.visible.sealed ∧
       pending.image.syncDirectory.crashSealed = [next.wal.sealed] ∧
       next.target.pair = before.target.pair ∧ next.history = before.history ∧ next.checkpoint = before.checkpoint ∧
-      next.RetainedReady directory attempt.descriptor := by
+      next.RetainedReady directory attempt.descriptor ∧
+      next.wal = { pending.image.syncDirectory.visible with directory := final.image.directory } ∧
+      next.published.durable = before.published.durable := by
   intro pending files barrier sameBarrier observedBarrier syncKeeper
   have syncDirectory : attempt.sync #[directory.path] files.image = .ok () files.image.syncDirectory :=
     sameBarrier.trans (congrArg projectCollectionBarrier observedBarrier)
@@ -127,6 +129,6 @@ theorem SegmentedCollectionErrors.openAfterRelease {directory before reached des
   have checkpoint := Except.ok.inj ((raw.readCheckpoint selectedNext).symm.trans (raw.readCheckpoint selectedPrior))
   have sealed : next.wal.sealed = reached.visible.sealed := by rw [wal]
   exact ⟨trace.sync, session, final, next, actual, path, descriptor, phase, image, owners, sealed, by rw [sealed]; rfl,
-    pair, history, checkpoint, nextReady⟩
+    pair, history, checkpoint, nextReady, wal, durable⟩
 
 end Alvoki.Storage.DiskSession
