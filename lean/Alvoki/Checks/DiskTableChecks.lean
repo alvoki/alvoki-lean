@@ -899,6 +899,10 @@ private def checkProductionWalRotation (root : FilePath) (failDirectory : Bool) 
   let successor := dir / "WAL-segment-2"
   let marker := dir / "WAL.commit"
   let expectFiles := fun (last : ByteArray) (count : Nat) => do
+    let names := ((← dir.readDir).toList.map (·.fileName)).filter (·.startsWith "WAL-segment-")
+    check (names.length == 3 && names.contains firstWalSegment &&
+      names.contains "WAL-segment-1" && names.contains "WAL-segment-2")
+      "rotation or reopen changed the WAL segment names"
     check (decide ((← IO.FS.readBinFile first) = WAL.encodeFrame ⟨1, 4, some 40⟩ ∧
       (← IO.FS.readBinFile second) = WAL.encodeFrame ⟨2, 7, some 70⟩ ∧
       (← IO.FS.readBinFile successor) = last ∧
@@ -924,6 +928,14 @@ private def checkProductionWalRotation (root : FilePath) (failDirectory : Bool) 
     (skipFailures := if failDirectory then 1 else 0) (failureMode := .afterSync)
   check (reported && syncs == alignedWalSyncs dir second ++ rotationSyncs ++ [s!"synced before error: {target}"])
     s!"rotation did not report the error after syncing {target}"
+  expectFiles ByteArray.empty 2
+  let (opened, syncs) ← probeDisk bin dir (some dir)
+  check (!opened && syncs == [dir.toString])
+    "rotation-cut reopen did not stop before syncing the successor binding"
+  expectFiles ByteArray.empty 2
+  let (opened, syncs) ← probeDisk bin dir (some dir) (failureMode := .afterSync)
+  check (!opened && syncs == [dir.toString, s!"synced before error: {dir}"])
+    "rotation-cut reopen did not report the error after syncing the successor binding"
   expectFiles ByteArray.empty 2
 
   let reopened ← DiskTable.open dir
