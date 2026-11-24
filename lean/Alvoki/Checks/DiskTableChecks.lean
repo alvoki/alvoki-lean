@@ -927,6 +927,35 @@ private def checkWalSegmentReads (root : FilePath) : IO Unit := do
     rejectKind
   finally lock.unlock
 
+private def checkSealedWalSizeBeforePayload (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let dir ← DiskDirectory.open dir
+  let writer ← DiskTable.open dir.path
+  try
+    check ((← writer.write 7 (some 40)) == 1) "unexpected first seal write sequence"
+    writer.rotateWal
+    check ((← writer.write 7 (some 41)) == 2) "unexpected keeper write sequence"
+  finally writer.close
+  let sealed := dir.file (.walSegment 0)
+  let bytes ← IO.FS.readBinFile sealed
+  let failPayload := #[("ALVOKI_CHECK_READ_OPEN_FAIL", some sealed.toString)]
+  IO.FS.writeBinFile sealed (bytes.push 0)
+  let (rejected, syncs) ← probeDisk bin dir.path none "--check-seal-size-before-payload"
+    (extraArgs := #["oversized"]) (extraEnv := failPayload)
+  check (rejected && syncs.isEmpty) "oversized seal reached payload open or WAL repair"
+  IO.FS.writeBinFile sealed bytes
+  let (hookReached, syncs) ← probeDisk bin dir.path none "--check-seal-size-before-payload"
+    (extraArgs := #["healthy"]) (extraEnv := failPayload)
+  check (hookReached && syncs.isEmpty) "fixture did not stop the healthy seal's payload open"
+  let reopened ← DiskTable.open dir.path
+  try
+    let latest ← reopened.acquire
+    check (latest.sequence == 2 && (← reopened.lookup latest.handle 7) == some (some 41))
+      "reopen with bounded sealed reads changed the acknowledged data"
+  finally reopened.close
+
 private inductive WalRepairFixtureCall where
   | prepare
   | remove (path : FilePath)
@@ -1972,6 +2001,16 @@ private def checkRecoveredProbe (path : FilePath) (sequence value : UInt64) (res
 def main (args : List String) : IO Unit := do
   match args with
   | ["--open-once", dir] => (← DiskTable.open ⟨dir⟩).close
+  | ["--check-seal-size-before-payload", dir, mode] =>
+    match ← (DiskTable.open ⟨dir⟩).toBaseIO with
+    | .error error@(.userError _) =>
+      check (mode == "oversized" && toString error == toString WalSegmentRepair.selectedWalSpanError)
+        "unexpected sealed WAL rejection"
+    | .error (.permissionDenied (some _) 13 _) => check (mode == "healthy") "oversized seal reached payload open"
+    | .error error => throw error
+    | .ok db =>
+      db.close
+      throw (IO.userError "open accepted the sealed WAL payload fixture")
   | ["--check-run-size-before-payload", dir, mode] =>
     match ← (DiskTable.open ⟨dir⟩).toBaseIO with
     | .error (.userError message) =>
@@ -2102,6 +2141,7 @@ def main (args : List String) : IO Unit := do
     for afterSync in [false, true] do
       IO.FS.withTempDir (checkWalCollectionBarrierError · afterSync)
     IO.FS.withTempDir checkWalSegmentReads
+    IO.FS.withTempDir checkSealedWalSizeBeforePayload
     IO.FS.withTempDir checkWalSegmentRepair
     for failDirectory in [false, true] do
       IO.FS.withTempDir (checkProductionWalRotation · failDirectory)

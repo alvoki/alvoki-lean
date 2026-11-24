@@ -34,23 +34,32 @@ def readSelectedWithPrefix [Monad m] [MonadExceptOf IO.Error m]
   return (⟨sealed.zip payloads ++ [(keeper, kept.bytes)], newer⟩, kept.fileSize)
 
 /-- Replay the exact strict checkpoint against the absolute marker and selected WAL. -/
-def prepareBoundedMarkedFromCheckpoint [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
+@[inline] def prepareBoundedMarkedFromReaders [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
     (readCheckpoint : m (Option (PackedTable × UInt64)))
     (readOptional : FilePath → m (Option ByteArray))
-    (list : FilePath → m (Array IO.FS.DirEntry)) (lstat : FilePath → m (Except IO.Error IO.FS.Metadata))
-    (readBin : FilePath → m ByteArray) (readPrefix : FilePath → Nat → m KeeperPrefix) :
+    (readWal : Nat → UInt64 → m (WalSegmentMarkerReads × Nat)) :
     m (Plan × Reopened × Nat) := do
   let checkpoint ← readCheckpoint
   let (base, generation) := checkpoint.getD (.empty, 0)
   let some marker ← readOptional (dir.file .walBoundary)
     | throw (IO.userError "segmented WAL is missing its commit marker")
   let length ← liftExcept ((WAL.Boundary.decode marker).mapError IO.userError)
-  let (reads, keeperFileSize) ← readSelectedWithPrefix dir base.committed.toNat length list lstat readBin readPrefix
+  let (reads, keeperFileSize) ← readWal base.committed.toNat length
   let (_, table) ← liftExcept ((recoverMarkedWalSegments base length reads.files).mapError IO.userError)
   let some (keeper, keeperBytes) := reads.files.getLast?
     | throw (IO.userError "no WAL segment covers the commit marker")
   return (⟨length.toNat / frameSize, keeper, reads.newer, keeperBytes⟩,
     ⟨table, generation, length, keeper⟩, keeperFileSize)
+
+/-- Prepare with the original sealed reads and marker-bounded keeper. -/
+def prepareBoundedMarkedFromCheckpoint [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
+    (readCheckpoint : m (Option (PackedTable × UInt64)))
+    (readOptional : FilePath → m (Option ByteArray))
+    (list : FilePath → m (Array IO.FS.DirEntry)) (lstat : FilePath → m (Except IO.Error IO.FS.Metadata))
+    (readBin : FilePath → m ByteArray) (readPrefix : FilePath → Nat → m KeeperPrefix) :
+    m (Plan × Reopened × Nat) :=
+  prepareBoundedMarkedFromReaders dir readCheckpoint readOptional
+    (fun watermark length => readSelectedWithPrefix dir watermark length list lstat readBin readPrefix)
 
 /-- Strict read-only preparation, using the same checkpoint, absolute marker,
 canonical inventory and replay checks as the complete-payload worker. -/
@@ -113,6 +122,27 @@ theorem readSelectedWithPrefix_reported (dir : DiskDirectory) (watermark : Nat) 
   simp [readSelectedWithPrefix, checked, listed, scanned, addresses, payloads, read, size, covers,
     Bind.bind, Except.bind, Pure.pure, Except.pure]
 
+/-- Preparation installs the selected replay and carries the admitted keeper
+extent, independently of how the exact checkpoint and WAL bytes were read. -/
+theorem prepareBoundedMarkedFromReaders_reported (dir : DiskDirectory)
+    (readCheckpoint : Except IO.Error (Option (PackedTable × UInt64)))
+    (readOptional : FilePath → Except IO.Error (Option ByteArray))
+    (readWal : Nat → UInt64 → Except IO.Error (WalSegmentMarkerReads × Nat))
+    {checkpoint : Option (PackedTable × UInt64)} (checkpointRead : readCheckpoint = .ok checkpoint)
+    {marker : ByteArray} {length : UInt64}
+    (markerRead : readOptional (dir.file .walBoundary) = .ok (some marker))
+    (decoded : WAL.Boundary.decode marker = .ok length)
+    {reads : WalSegmentMarkerReads} {fileSize : Nat}
+    (walRead : readWal (checkpoint.getD (.empty, 0)).1.committed.toNat length = .ok (reads, fileSize))
+    {selected : ByteArray} {table : PackedTable} {keeper : Nat} {bytes : ByteArray}
+    (replayed : recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1 length reads.files = .ok (selected, table))
+    (keeperRead : reads.files.getLast? = some (keeper, bytes)) :
+    prepareBoundedMarkedFromReaders dir readCheckpoint readOptional readWal =
+      .ok (⟨length.toNat / frameSize, keeper, reads.newer, bytes⟩,
+        ⟨table, (checkpoint.getD (.empty, 0)).2, length, keeper⟩, fileSize) := by
+  simp [prepareBoundedMarkedFromReaders, checkpointRead, markerRead, decoded, walRead, replayed, keeperRead,
+    liftExcept, Bind.bind, Except.bind, Pure.pure, Except.pure, Except.mapError]
+
 /-- Successful strict checkpoint, marker and bounded payload reports feed
 the same selected replay result and carry the keeper's physical size. -/
 theorem prepareBoundedMarkedWith_reported (dir : DiskDirectory)
@@ -143,8 +173,7 @@ theorem prepareBoundedMarkedWith_reported (dir : DiskDirectory)
     funext α report
     cases report <;> rfl
   unfold prepareBoundedMarkedWith prepareBoundedMarkedFromCheckpoint
-  rw [validation, checkpointRead]
-  simp [markerRead, decoded, walRead, replayed, keeperRead, liftExcept, Bind.bind, Except.bind,
-    Pure.pure, Except.pure, Except.mapError]
+  rw [validation]
+  exact prepareBoundedMarkedFromReaders_reported dir _ _ _ checkpointRead markerRead decoded walRead replayed keeperRead
 
 end Alvoki.Storage.WalSegmentRepair

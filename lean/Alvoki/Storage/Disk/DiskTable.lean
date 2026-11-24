@@ -10,7 +10,7 @@ import Alvoki.Storage.Disk.WalSegmentCommit
 import Alvoki.Storage.Disk.WalSegmentBootstrapIO
 import Alvoki.Storage.Disk.WalSegmentCollectionPlan
 import Alvoki.Storage.Disk.WalSegmentRotationIO
-import Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
+import Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
 import Alvoki.Storage.Publication.CheckpointPublication
 import Alvoki.Storage.Publication.RunCollection
 
@@ -197,10 +197,6 @@ private def requiredRegularMetadata (path : FilePath) : IO IO.FS.Metadata := do
     throw (IO.userError s!"expected a regular database file: '{path}'")
   return metadata
 
-private def readRequiredFile (path : FilePath) : IO ByteArray := do
-  let _ ← requiredRegularMetadata path
-  IO.FS.readBinFile path
-
 private def readExactPrefix (mismatch : IO.Error) (file : IO.FS.Handle) (remaining : Nat)
     (bytes : ByteArray) : IO ByteArray := do
   if remaining = 0 then return bytes
@@ -219,17 +215,20 @@ private def readCheckpointRunPrefix (path : FilePath) (count : Nat) : IO ByteArr
   let file ← IO.FS.Handle.mk path .read
   readExactPrefix (IO.userError checkpointIntegrityMismatch) file count ByteArray.empty
 
-/-- Under the held lock, use the stable keeper's no-follow physical size
-only to select repair. Read just the byte interval selected by the marker. -/
-private def readKeeperPrefix (files : SyncFiles) (path : FilePath) (count : Nat) : IO WalSegmentRepair.KeeperPrefix := do
-  let metadata ← path.symlinkMetadata
-  checkPrivateRegular path metadata
-  unless count ≤ metadata.byteSize.toNat ∧ count < USize.size do
+/-- The held inventory has checked the seal's full size. -/
+private def readSealedWalPrefix (path : FilePath) (count : Nat) : IO ByteArray := do
+  let file ← IO.FS.Handle.mk path .read
+  readExactPrefix WalSegmentRepair.selectedWalSpanError file count ByteArray.empty
+
+/-- Use the same held no-follow extent to read and decide whether to replace
+the keeper. Preserve the exact opened handle for an aligned keeper sync. -/
+private def readKeeperPrefix (files : SyncFiles) (path : FilePath) (count fileSize : Nat) : IO ByteArray := do
+  unless count ≤ fileSize ∧ count < USize.size do
     throw (IO.userError s!"WAL keeper does not cover its selected prefix: '{path}'")
   let file ← IO.FS.Handle.mk path .read
   let bytes ← readExactPrefix (IO.userError "short or oversized WAL keeper read") file count ByteArray.empty
-  if count == metadata.byteSize.toNat then files.remember path file
-  return ⟨bytes, metadata.byteSize.toNat⟩
+  if count == fileSize then files.remember path file
+  return bytes
 
 private def inspectWalSegment (path : FilePath) : IO (Except IO.Error IO.FS.Metadata) := do
   let report ← path.symlinkMetadata.toBaseIO
@@ -302,8 +301,8 @@ theorem bootstrapSegmented_fileEffects (dir : DiskDirectory) : bootstrapSegmente
 private def recoverSegmentedWal (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentRepair.Reopened := do
   rejectFlatWal dir
   if (← optionalMetadata (dir.file .walBoundary)).isSome then
-    WalSegmentRepair.reopenMarkedBoundedWithSizedCheckpoint dir readOptionalFile
-      readCheckpointRunSize readCheckpointRunPrefix readDirectoryChecked inspectWalSegment readRequiredFile
+    WalSegmentRepair.reopenMarkedBoundedWithCachedExtents dir readOptionalFile
+      readCheckpointRunSize readCheckpointRunPrefix readDirectoryChecked inspectWalSegment readSealedWalPrefix
       (readKeeperPrefix files)
       (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
   else
@@ -341,8 +340,8 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
         let opened ← (do
           rejectFlatWal dir
           if (← optionalMetadata (dir.file .walBoundary)).isSome then
-            WalSegmentRepair.reopenMarkedBoundedWithSizedCheckpoint dir readOptionalFile
-              readCheckpointRunSize readCheckpointRunPrefix readDirectoryChecked inspectWalSegment readRequiredFile
+            WalSegmentRepair.reopenMarkedBoundedWithCachedExtents dir readOptionalFile
+              readCheckpointRunSize readCheckpointRunPrefix readDirectoryChecked inspectWalSegment readSealedWalPrefix
               (readKeeperPrefix files)
               (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
           else bootstrapSegmented dir files : IO WalSegmentRepair.Reopened)
