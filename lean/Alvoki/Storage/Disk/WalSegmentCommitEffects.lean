@@ -32,7 +32,8 @@ theorem forgetError_commitAt {ε : Type} (dir : DiskDirectory) (first : Nat) (ev
   simp only [WAL.Boundary.commit, forgetError_bind]
   rfl
 
-private theorem markerSteps_agree
+/-- Equality of the reached callbacks suffices for equality of the marker schedules. -/
+theorem markerSteps_agree
     (observed modeled : Publication.Step → EStateM Unit WriteFiles Unit)
     (steps : List Publication.Step) (initial : WriteFiles)
     (agrees : ∀ prior step remaining state, steps = prior ++ step :: remaining →
