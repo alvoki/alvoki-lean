@@ -219,6 +219,8 @@ The Linux adapter now retains the directory and active append descriptors across
 
 A separate `strace -f -yy -e trace=execve,openat,close,fsync,rename` run of `alvoki-disk-write 4 1` covered two opens and eight writes including warmup. GNU `sync` execs fell from 24 to zero, successful WAL segment opens from 20 to four, and successful temporary marker opens from 20 to ten. Both builds issued 32 `fsync` calls. [Native adapter](../lean/Alvoki/Storage/Disk/DiskTable.lean)
 
+The shared append handle schedule preserves the generated operations on the reused-handle path. Paired native release trials at one and 128 acknowledged writes per process showed substantial variation. [Paired timings and reproduction](../benchmarks/results/disk/append-handle-custody)
+
 ### Exclusive staging creation
 
 The native replacement path uses exclusive creation for its scratch files. Same-machine measurements compare acknowledged writes, aligned reopen and torn-tail repair. The report includes repeated write cohorts, same-build controls and syscall counts. [Raw samples and reproduction](../benchmarks/results/disk/fresh-staging-files)

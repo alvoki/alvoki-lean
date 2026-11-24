@@ -25,6 +25,8 @@ import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.SyncHandleCustody
 import Alvoki.Storage.Disk.StagedHandleCustody
 import Alvoki.Storage.Disk.SyncHandleEffects
+import Alvoki.Storage.Disk.DescriptorInventory
+import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.KeeperReadCustody
 import Alvoki.Storage.Disk.WriteGroupFsync
 import Alvoki.Storage.Disk.AppendGroupedReports
@@ -134,6 +136,8 @@ import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
 import Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
+import Alvoki.Storage.Disk.CachedWalExtentRetry
+import Alvoki.Storage.Disk.SegmentedRunRetentionReopen
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
@@ -883,6 +887,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.selectedRetainedReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.retainedIdentities
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetained
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetainedCached
+#check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.checkpointErrorCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.Installs.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.freshGeneration
 #check_axioms Alvoki.Storage.DiskSession.AppendCutReady.writerCheckpointRetained
@@ -1023,6 +1029,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CachedMarkerRejection.run_error
 #check_axioms Alvoki.Storage.DiskSession.CachedMarkerRejection.immediateReacquire
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.afterCachedMarkerLastDrop
+#check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofSealExtent
+#check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofKeeperExtent
+#check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.run_error
+#check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.immediateReacquire
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.afterCachedLastDrop
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReopenReport.installsCachedWithNamespace
+#check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.collectionReopenCachedWithNamespace
+#check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.retainRunVersionsCheckpointCloseCached
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.selectedThroughEnd
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithPrefix_liftReports
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readSelectedCached
@@ -1090,6 +1104,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.stageFreshWithCache_sync
 #check_axioms Alvoki.Storage.SyncHandleRouting.sync_resolutionError
 #check_axioms Alvoki.Storage.SyncHandleRouting.sync_observedEffect
+#check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.description_unique
+#check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.held_remaining
+#check_axioms Alvoki.Storage.DiskSession.DirectoryDropObservation.separate
+#check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.delayedDirectoryAppendFromInventory
+#check_axioms Alvoki.Storage.SyncHandleRouting.FsyncObservation.ofInventory
+#check_axioms Alvoki.Storage.SyncHandleRouting.runAppendWithCache_effect
+#check_axioms Alvoki.Storage.SyncHandleRouting.Cache.selectAppend_owned
+#check_axioms Alvoki.Storage.SyncHandleRouting.runAppendWithCache_owned
+#check_axioms Alvoki.Storage.SyncHandleRouting.appendThenStage_syncKeeper
 #check_axioms Alvoki.Storage.SyncHandleRouting.FsyncObservation.ofDirectory
 #check_axioms Alvoki.Storage.SyncHandleRouting.FsyncObservation.ofKeeper
 #check_axioms Alvoki.Storage.SyncHandleRouting.readKeeperWith_success

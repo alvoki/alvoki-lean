@@ -103,6 +103,8 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionStep
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionRetry
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionLiveReopen
+lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionCachedReopen
+lake env leanchecker Alvoki.Storage.Disk.SegmentedRunRetentionReopen
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionBarrierError
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionKeeperError
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionRetryPowerLoss
@@ -220,6 +222,8 @@ lake env leanchecker Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
+lake env leanchecker Alvoki.Storage.Disk.CachedOpenRejection
+lake env leanchecker Alvoki.Storage.Disk.CachedWalExtentRetry
 lake env leanchecker Alvoki.Storage.Disk.RecoveryRequestCount
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionSpace
@@ -235,6 +239,8 @@ lake env leanchecker Alvoki.Storage.Disk.SyncHandleRouting
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.StagedHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleEffects
+lake env leanchecker Alvoki.Storage.Disk.DescriptorInventory
+lake env leanchecker Alvoki.Storage.Disk.AppendHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.KeeperReadCustody
 lake env leanchecker Alvoki.Storage.Disk.WriteGroupFsync
 lake env leanchecker Alvoki.Storage.Disk.AppendGroupedReports
