@@ -75,11 +75,11 @@ theorem Image.segmentedCheckpointView_settled
   exact ⟨_, range, Nat.zero_le _, Nat.le_refl _⟩
 
 /-- The exact strict-v2 plan prepared by the writer produces this cut from
-the reported checkpoint schedule. Every selectable manifest remains tied
+a prefix of the checkpoint schedule. Every selectable manifest remains tied
 to the same marker and immutable segment layout. Its exact durable run
 bytes describe the covered history, and its watermark determines the
 canonical WAL read suffix. This case retains the full chain from zero. -/
-theorem segmentedCheckpoint_reportedCut
+theorem segmentedCheckpoint_cut
     {before : WalSegmentImage} {initial published : Image} {history : List WAL.Write}
     (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
     (settled : before.directory.crashImages = [before.directory.active])
@@ -96,9 +96,9 @@ theorem segmentedCheckpoint_reportedCut
     (runCountFits : checkpoint.runs.length < UInt64.size) (generation : UInt64)
     (fresh : initial.UnreachableVersioned generation)
     (runBytesFit : ∀ bytes ∈ checkpoint.runs.map (·.run.bytes), bytes.size < UInt64.size)
-    (report : Step → StepReport) :
+    {cut : Nat} :
     let next := VersionedRunSet.integrity ⟨checkpointHeader checkpoint generation, checkpoint.runs.map (·.run.bytes)⟩
-    initial.runVersionedWithReports next report = some (.error () published) →
+    initial.executeVersioned next cut = some published →
     let after := published.segmentedCheckpointView before
     after.ReadLayout history ∧ after.Valid history ∧
       ∀ pair, after.Selects pair →
@@ -115,7 +115,7 @@ theorem segmentedCheckpoint_reportedCut
           selectWalSegmentReads (after.segments.map (·.first)) range.watermark =
             some (first, (after.readDescriptors range.watermark).map (·.first)) ∧
           WalSegment.Chain history first (after.readDescriptors range.watermark) := by
-  intro next reported after
+  intro next executed after
   have original : initial.manifest.active = before.directory.active.manifest := by
     rw [projected]
     rfl
@@ -152,10 +152,9 @@ theorem segmentedCheckpoint_reportedCut
     apply UInt64.le_iff_toNat_le.mpr
     rw [count, UInt64.toNat_ofNat_of_lt' countFits]
     exact Nat.le_refl _
-  have route := VersionedRetry.reported (expected := CheckpointRepresentsPrefix history) (.refl initial)
+  have route := VersionedRetry.attempt (expected := CheckpointRepresentsPrefix history) (.refl initial)
     next fresh (VersionedCheckpoint.decode_integrity decoded) fileCount.symm checked covered
-    ⟨checkpoint, preparedModel, written, refined, historyPrefix⟩ report reported
-  obtain ⟨cut, executed⟩ := initial.runVersionedWithReports_outcome next report reported
+    ⟨checkpoint, preparedModel, written, refined, historyPrefix⟩ cut executed
   let allowed := fun binding => binding = before.directory.active.manifest ∨ binding = some next.manifest.encode
   have initialChoice : initial.manifest.Valid allowed := by
     refine ⟨initialValid.hasCrashImage, .inl original, ?_⟩
@@ -228,5 +227,47 @@ theorem segmentedCheckpoint_reportedCut
   obtain ⟨sameMarker, choice, accepted, runs, range, decoded, through, newCount⟩ := readInputs pair chosen
   obtain ⟨first, starts, _, addresses, required, _⟩ := afterLayout.selects afterValid chosen decoded
   exact ⟨sameMarker, choice, accepted, runs, range, first, decoded, through, newCount, starts, addresses, required⟩
+
+/-- A reported error determines the executed prefix of the checkpoint schedule. -/
+theorem segmentedCheckpoint_reportedCut
+    {before : WalSegmentImage} {initial published : Image} {history : List WAL.Write}
+    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
+    (settled : before.directory.crashImages = [before.directory.active])
+    (marker : before.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
+    (walFits : (WAL.encode history).size < UInt64.size)
+    (projected : initial.manifest = before.directory.project .manifest)
+    (previous : initial.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      before.directory.active.manifest)
+    (strict : ∀ bytes, before.directory.active.manifest = some bytes →
+      ∃ manifest, IntegrityCheckpoint.decode bytes = .ok manifest)
+    {writer checkpoint : PackedTable} {model : Sequential.SnapshotTable UInt64}
+    (refines : writer.Refines model) (represents : RepresentsWalHistory history model)
+    (rowBounds : writer.RowBounds) (flushed : (flushForCheckpoint writer id : Except String PackedTable) = .ok checkpoint)
+    (runCountFits : checkpoint.runs.length < UInt64.size) (generation : UInt64)
+    (fresh : initial.UnreachableVersioned generation)
+    (runBytesFit : ∀ bytes ∈ checkpoint.runs.map (·.run.bytes), bytes.size < UInt64.size)
+    (report : Step → StepReport) :
+    let next := VersionedRunSet.integrity ⟨checkpointHeader checkpoint generation, checkpoint.runs.map (·.run.bytes)⟩
+    initial.runVersionedWithReports next report = some (.error () published) →
+    let after := published.segmentedCheckpointView before
+    after.ReadLayout history ∧ after.Valid history ∧
+      ∀ pair, after.Selects pair →
+        pair.walBoundary = before.directory.active.walBoundary ∧
+        (pair.manifest = before.directory.active.manifest ∨ pair.manifest = some next.manifest.encode) ∧
+        published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history) pair.manifest ∧
+        (∀ bytes, pair.manifest = some bytes → ∃ manifest files,
+          IntegrityCheckpoint.decode bytes = .ok manifest ∧
+          (List.range manifest.header.runCount.toNat).mapM (published.durable manifest.header.generation) = some files ∧
+          manifest.validateRuns files = true) ∧
+        ∃ range first, pair.walRange = some range ∧ range.through = history.length ∧
+          (pair.manifest = some next.manifest.encode → range.watermark = history.length) ∧
+          first ≤ range.watermark ∧
+          selectWalSegmentReads (after.segments.map (·.first)) range.watermark =
+            some (first, (after.readDescriptors range.watermark).map (·.first)) ∧
+          WalSegment.Chain history first (after.readDescriptors range.watermark) := by
+  intro next reported
+  obtain ⟨cut, executed⟩ := initial.runVersionedWithReports_outcome next report reported
+  exact segmentedCheckpoint_cut layout chain settled marker walFits projected previous strict
+    refines represents rowBounds flushed runCountFits generation fresh runBytesFit executed
 
 end Alvoki.Storage.CheckpointPublication

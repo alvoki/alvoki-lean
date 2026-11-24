@@ -110,6 +110,15 @@ private theorem reportEffect_success_length (report : Step → StepReport) (acti
       simp only [List.length_cons]
       omega
 
+/-- A successfully returned prefix has taken one modeled effect per step. -/
+theorem ReachedFileReports.success_length {report : Step → StepReport}
+    {perform : Step → EStateM IO.Error Nat Unit} {actions : List Step} {start cut : Nat}
+    (observed : ReachedFileReports report perform actions start)
+    (returned : (actions.forM perform) start = .ok () cut) : cut = start + actions.length := by
+  have counted := reportsMatchSchedule report perform actions start observed
+  rw [returned] at counted
+  exact reportEffect_success_length report actions start counted.symm
+
 theorem Image.runVersionedWithReports_outcome (initial : Image) (next : VersionedRunSet)
     (report : Step → StepReport) {result : EStateM.Result Unit Image Unit}
     (ran : initial.runVersionedWithReports next report = some result) :
