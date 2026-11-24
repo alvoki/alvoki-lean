@@ -14,6 +14,7 @@ import Alvoki.Storage.Disk.SegmentedRotationPowerLoss
 import Alvoki.Storage.Disk.SegmentedRotationStep
 import Alvoki.Storage.Disk.SegmentedWriterTrace
 import Alvoki.Storage.Disk.SessionReadGuards
+import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 
 namespace Alvoki.Storage.DiskSession
 
@@ -235,6 +236,30 @@ theorem SegmentedDatabaseTrace.fromBootstrap {directory initialDescriptor allowC
   simp only [List.nil_append] at exactHistory
   subst retained
   exact ⟨ready, history, history.orderedSubmissions⟩
+
+/-- Extend the mixed history with the actual cached bounded opener after an
+admitted WAL unlink cut. The successful installation follows from the reached
+files and reports on that attempt. -/
+theorem SegmentedDatabaseTrace.collectionPowerLossCached {directory initialDescriptor initial log writer descriptor before}
+    (prior : SegmentedDatabaseTrace directory initialDescriptor initial true log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (report : SegmentedCollectionPowerLossReport directory before writer descriptor)
+    (sizes : SizedCheckpointRunReports directory report.raw.reports report.pair.manifest before.published.durable)
+    (cached : CachedWalFileReports directory report.raw.reports report.survivors before.target.range.watermark ByteArray.empty)
+    (descriptorEq : report.reopen.descriptor = descriptor) (acquired : report.reopen.acquired = .ok true)
+    (reads : report.reopen.recover directory = report.raw.reopenCached sizes cached
+      report.reopen.removeFile report.reopen.write report.reopen.sync report.reopen.renameFile)
+    (fresh : ∀ ref ∈ report.liveRefs, ref < report.reopen.nextRef)
+    (syncDirectory : report.reopen.sync #[directory.path] report.crashed.image = .ok () report.crashed.image.syncDirectory)
+    (syncKeeper : report.reopen.sync #[directory.file (.walSegment report.survivors.active.first)]
+      report.crashed.image.syncDirectory = .ok () report.crashed.image.syncDirectory.syncKeeper) :
+    ∃ after, report.Installs after ∧ SegmentedDatabaseTrace directory initialDescriptor initial true log descriptor after := by
+  have ready := (prior.preservesRetained initialReady).1
+  have sameAction := ready.collectionPowerLossCached_eq report.reached report.pairSurvives report.sealedSurvives
+    report.raw sizes cached report.reopen.removeFile report.reopen.write report.reopen.sync report.reopen.renameFile
+  have observed : report.Valid := ⟨descriptorEq, acquired, reads.trans sameAction, fresh, syncDirectory, syncKeeper⟩
+  obtain ⟨after, installed, _⟩ := report.installs observed ready
+  exact ⟨after, installed, .collectionPowerLoss rfl prior report observed installed⟩
 
 /-- Start the mixed history from the actual shared bootstrap attempt and
 its returned session, using only the reached native callback reports. -/

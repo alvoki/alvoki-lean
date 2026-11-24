@@ -219,6 +219,36 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+/-- Use the acquired inventory and exact file reads at an admitted WAL unlink
+cut to interpret the cached and prefix readers as the same recovery action. -/
+theorem SegmentedWriterState.RetainedReady.collectionPowerLossCached_eq {directory descriptor state}
+    (ready : SegmentedWriterState.RetainedReady directory descriptor state)
+    {cut : WalSealedUnlinkImage} {pair : DirectoryPublication.Bindings} {sealed : List WalSegment}
+    (trace : WalSealedUnlinkTrace state.wal cut)
+    (pairSurvives : pair ∈ cut.visible.directory.crashImages) (sealedSurvives : sealed ∈ cut.crashSealed)
+    {nextDescriptor : Nat}
+    (raw : HealthyBoundedWalReports directory
+      ((state.owners.release (directory.file .lock) descriptor).set (directory.file .lock) (some nextDescriptor))
+      nextDescriptor (cut.crash pair sealed).visible pair state.target.range.watermark
+      state.published.durable ByteArray.empty)
+    (sizes : SizedCheckpointRunReports directory raw.reports pair.manifest state.published.durable)
+    (cached : CachedWalFileReports directory raw.reports (cut.crash pair sealed).visible
+      state.target.range.watermark ByteArray.empty)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    raw.reopenCached sizes cached removeFile write sync renameFile = raw.reopen removeFile write sync renameFile := by
+  have retry := ((trace.powerLoss pairSurvives sealedSurvives).projects ready.layout).1
+  have survivingPair : pair = state.target.pair :=
+    (retry.keepsSettledPair ready.walDirectorySettled).1.trans ready.walPair
+  have decoded : pair.walRange = some state.target.range := survivingPair.symm ▸ state.target.decoded
+  have selected : SelectedIntegrityCheckpoint state.published.durable pair.manifest state.checkpoint := by
+    rw [survivingPair]
+    exact ready.resumed.selected
+  exact raw.reopenCached_eq sizes cached (retry.readLayout ready.layout) (retry.valid ready.valid)
+    (List.mem_cons_self ..) decoded rfl ready.resumed.through selected removeFile write sync renameFile
+
 /-- An admitted collection crash has a healthy cached reopen from the
 exact surviving files. The final writer keeps the acknowledged history
 and the strict checkpoint selected before the unlink. -/
@@ -254,16 +284,8 @@ theorem SegmentedWriterState.RetainedReady.openAfterCollectionPowerLossCached {d
       next.target = state.target ∧ next.history = state.history ∧ next.checkpoint = state.checkpoint ∧
       next.installed.generation = state.installed.generation ∧ next.RetainedReady directory nextDescriptor := by
   intro survivors owners files syncDirectory syncKeeper
-  have retry := ((trace.powerLoss pairSurvives sealedSurvives).projects ready.layout).1
-  have survivingPair : pair = state.target.pair :=
-    (retry.keepsSettledPair ready.walDirectorySettled).1.trans ready.walPair
-  have decoded : pair.walRange = some state.target.range := survivingPair.symm ▸ state.target.decoded
-  have selected : SelectedIntegrityCheckpoint state.published.durable pair.manifest state.checkpoint := by
-    rw [survivingPair]
-    exact ready.resumed.selected
-  have chosen : survivors.Selects pair := List.mem_cons_self ..
-  have cachedEq := raw.reopenCached_eq sizes cached (retry.readLayout ready.layout) (retry.valid ready.valid)
-    chosen decoded rfl ready.resumed.through selected removeFile write sync renameFile
+  have cachedEq := ready.collectionPowerLossCached_eq trace pairSurvives sealedSurvives raw sizes cached
+    removeFile write sync renameFile
   obtain ⟨_, session, final, next, returned, path, lock, phase, image, owner, _, _, target, history, checkpoint,
     generation, _, readyNext⟩ :=
     ready.openAfterCollectionPowerLoss trace pairSurvives sealedSurvives liveRefs fresh raw unlock
