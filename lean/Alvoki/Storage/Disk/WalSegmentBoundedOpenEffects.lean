@@ -123,7 +123,7 @@ theorem prepareBoundedMarkedWith_liftReports {state : Type} (dir : DiskDirectory
       (fun path => liftExcept (lstat path)) (fun path => liftExcept (readBin path))
       (fun path count => liftExcept (readPrefix path count)) : EStateM IO.Error state (Plan × Reopened × Nat)) =
       liftExcept (prepareBoundedMarkedWith dir readOptional list lstat readBin readPrefix) := by
-  unfold prepareBoundedMarkedWith
+  unfold prepareBoundedMarkedWith prepareBoundedMarkedFromCheckpoint
   rw [readCheckpoint_liftReports]
   · rw [← bind_readReport]
     congr 1

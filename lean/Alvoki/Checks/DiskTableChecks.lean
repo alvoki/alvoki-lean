@@ -1509,7 +1509,15 @@ private def checkCheckpointReadFailureBeforeWalRepair (root : FilePath) : IO Uni
     opened.close
     throw (IO.userError "open accepted a different run with the same length")
   expectNoWalEffects manifestBytes
+  let failRunPayload := #[("ALVOKI_CHECK_READ_OPEN_FAIL", some run.toString)]
+  IO.FS.writeBinFile run (runBytes.push 0)
+  let (rejectedOversize, oversizeSyncs) ← probeDisk bin dir none "--check-run-size-before-payload"
+    (extraArgs := #["oversized"]) (extraEnv := failRunPayload)
+  check (rejectedOversize && oversizeSyncs.isEmpty) "oversized checkpoint reached payload open or WAL repair"
   IO.FS.writeBinFile run runBytes
+  let (rejectedPayload, payloadSyncs) ← probeDisk bin dir none "--check-run-size-before-payload"
+    (extraArgs := #["healthy"]) (extraEnv := failRunPayload)
+  check (rejectedPayload && payloadSyncs.isEmpty) "fixture did not stop the healthy run's payload open"
   let legacyManifest := Manifest.encode ⟨1, 1, 1, 1⟩
   IO.FS.writeBinFile manifest legacyManifest
   expectNoWalEffects legacyManifest
@@ -1907,6 +1915,15 @@ private def checkRecoveredProbe (path : FilePath) (sequence value : UInt64) (res
 def main (args : List String) : IO Unit := do
   match args with
   | ["--open-once", dir] => (← DiskTable.open ⟨dir⟩).close
+  | ["--check-run-size-before-payload", dir, mode] =>
+    match ← (DiskTable.open ⟨dir⟩).toBaseIO with
+    | .error (.userError message) =>
+      check (mode == "oversized" && message == checkpointIntegrityMismatch) "unexpected checkpoint rejection"
+    | .error (.permissionDenied (some _) 13 _) => check (mode == "healthy") "oversized run reached payload open"
+    | .error error => throw error
+    | .ok db =>
+      db.close
+      throw (IO.userError "open accepted the checkpoint payload fixture")
   | ["--check-directory-read-error", dir, phase] =>
     let isReadError := fun result : Except IO.Error Unit =>
       match result with

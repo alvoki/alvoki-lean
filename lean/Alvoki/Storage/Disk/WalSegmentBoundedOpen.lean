@@ -33,16 +33,14 @@ def readSelectedWithPrefix [Monad m] [MonadExceptOf IO.Error m]
     throw (IO.userError "invalid WAL keeper prefix or physical size")
   return (⟨sealed.zip payloads ++ [(keeper, kept.bytes)], newer⟩, kept.fileSize)
 
-/-- Strict read-only preparation, using the same checkpoint, absolute marker,
-canonical inventory and replay checks as the complete-payload worker. -/
-def prepareBoundedMarkedWith [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
+/-- Replay the exact strict checkpoint against the absolute marker and selected WAL. -/
+def prepareBoundedMarkedFromCheckpoint [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
+    (readCheckpoint : m (Option (PackedTable × UInt64)))
     (readOptional : FilePath → m (Option ByteArray))
     (list : FilePath → m (Array IO.FS.DirEntry)) (lstat : FilePath → m (Except IO.Error IO.FS.Metadata))
     (readBin : FilePath → m ByteArray) (readPrefix : FilePath → Nat → m KeeperPrefix) :
     m (Plan × Reopened × Nat) := do
-  let checkpoint ← readIntegrityCheckpoint (readOptional (dir.file .manifest))
-    (fun generation index => readBin (dir.file (.run generation index)))
-    (fun report => liftExcept (report.mapError IO.userError))
+  let checkpoint ← readCheckpoint
   let (base, generation) := checkpoint.getD (.empty, 0)
   let some marker ← readOptional (dir.file .walBoundary)
     | throw (IO.userError "segmented WAL is missing its commit marker")
@@ -53,6 +51,19 @@ def prepareBoundedMarkedWith [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDir
     | throw (IO.userError "no WAL segment covers the commit marker")
   return (⟨length.toNat / frameSize, keeper, reads.newer, keeperBytes⟩,
     ⟨table, generation, length, keeper⟩, keeperFileSize)
+
+/-- Strict read-only preparation, using the same checkpoint, absolute marker,
+canonical inventory and replay checks as the complete-payload worker. -/
+def prepareBoundedMarkedWith [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
+    (readOptional : FilePath → m (Option ByteArray))
+    (list : FilePath → m (Array IO.FS.DirEntry)) (lstat : FilePath → m (Except IO.Error IO.FS.Metadata))
+    (readBin : FilePath → m ByteArray) (readPrefix : FilePath → Nat → m KeeperPrefix) :
+    m (Plan × Reopened × Nat) :=
+  prepareBoundedMarkedFromCheckpoint dir
+    (readIntegrityCheckpoint (readOptional (dir.file .manifest))
+      (fun generation index => readBin (dir.file (.run generation index)))
+      (fun report => liftExcept (report.mapError IO.userError)))
+    readOptional list lstat readBin readPrefix
 
 /-- Apply the usual repair barriers. Physical size, rather than the loaded
 prefix size, determines whether the existing keeper needs replacement. -/
@@ -131,7 +142,7 @@ theorem prepareBoundedMarkedWith_reported (dir : DiskDirectory)
       (fun {α : Type} report => report.mapError IO.userError) := by
     funext α report
     cases report <;> rfl
-  unfold prepareBoundedMarkedWith
+  unfold prepareBoundedMarkedWith prepareBoundedMarkedFromCheckpoint
   rw [validation, checkpointRead]
   simp [markerRead, decoded, walRead, replayed, keeperRead, liftExcept, Bind.bind, Except.bind,
     Pure.pure, Except.pure, Except.mapError]

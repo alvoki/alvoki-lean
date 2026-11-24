@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,23 @@ static void log_sync(const char *log, const char *prefix, const char *path) {
 static int fail_sync(void) {
     errno = EIO;
     return -1;
+}
+
+int open(const char *path, int flags, ...) {
+    int (*real_open)(const char *, int, ...) = dlsym(RTLD_NEXT, "open");
+    if (real_open == NULL) return fail_sync();
+    if ((flags & O_ACCMODE) == O_RDONLY && same(path, getenv("ALVOKI_CHECK_READ_OPEN_FAIL"))) {
+        errno = EACCES;
+        return -1;
+    }
+    if ((flags & O_CREAT) || (flags & O_TMPFILE) == O_TMPFILE) {
+        va_list args;
+        va_start(args, flags);
+        mode_t mode = va_arg(args, mode_t);
+        va_end(args);
+        return real_open(path, flags, mode);
+    }
+    return real_open(path, flags);
 }
 
 static DIR *partial_directory;
