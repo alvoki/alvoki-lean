@@ -37,7 +37,7 @@ def CanonicalKeeperLayout.plan {image : FileImage} {history : List WAL.Write}
     (layout : CanonicalKeeperLayout image history) : Plan :=
   ⟨layout.range.through, layout.keeper.first, image.later.visible, layout.keeper.bytes ++ layout.tail⟩
 
-private theorem CanonicalKeeperLayout.prepared {image : FileImage} {history : List WAL.Write}
+theorem CanonicalKeeperLayout.prepared {image : FileImage} {history : List WAL.Write}
     (layout : CanonicalKeeperLayout image history)
     (keeperChoices : image.keeper.crashImages ≠ [])
     (keptPrefix : ∀ bytes ∈ image.keeper.crashImages, ∃ tail, bytes = some (layout.keeper.bytes ++ tail))

@@ -26,7 +26,7 @@ private theorem runPresent_of_ordered {read : Nat → Option ByteArray} {indices
 /-- Recover the canonical reference from the selected publication's
 durable ordered run map. The native reader subsequently loads the same
 map from the reported paths. -/
-private theorem selectedCheckpoint_replays {published : CheckpointPublication.Image} {binding : Option ByteArray}
+theorem selectedCheckpoint_replays {published : CheckpointPublication.Image} {binding : Option ByteArray}
     {history : List WAL.Write} {watermark : Nat}
     (strict : selectedCheckpointWatermark binding = some watermark)
     (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history) binding)
