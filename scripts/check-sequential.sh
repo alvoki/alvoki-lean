@@ -60,6 +60,7 @@ lake env leanchecker Alvoki.Storage.Disk.SessionReadGuards
 lake env leanchecker Alvoki.Storage.Disk.MarkedOpenControl
 lake env leanchecker Alvoki.Storage.Disk.DiskLockLifecycle
 lake env leanchecker Alvoki.Storage.Disk.LockDescriptionLifetime
+lake env leanchecker Alvoki.Storage.Disk.LockedSegmentReopenEffects
 lake env leanchecker Alvoki.Storage.Disk.RunGenerationCollection
 lake env leanchecker Alvoki.Storage.Disk.RunFileName
 lake env leanchecker Alvoki.Storage.Disk.RunFileSelection

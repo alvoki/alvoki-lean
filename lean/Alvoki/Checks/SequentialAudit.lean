@@ -20,6 +20,7 @@ import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.MarkedOpenControl
 import Alvoki.Storage.Disk.DiskLockLifecycle
 import Alvoki.Storage.Disk.LockDescriptionLifetime
+import Alvoki.Storage.Disk.LockedSegmentReopenEffects
 import Alvoki.Storage.Disk.RunGenerationCollection
 import Alvoki.Storage.Disk.RunUnlinkSchedule
 import Alvoki.Storage.Disk.LockedRunCollection
@@ -527,6 +528,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atReportedCut
 #check_axioms Alvoki.Storage.WalSegmentCommit.settledSegment_ofSuccess
 #check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.mem_remaining
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_notAcquired
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_acquired
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_segmented
 #check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.referenceDrops
 #check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenReports.whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.ownerExit_thenChildExec

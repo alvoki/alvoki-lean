@@ -139,6 +139,71 @@ theorem runOpen_recoveryError (directory : DiskDirectory) (descriptor : Nat) (ow
       rw [releaseAcquired]
       rfl
 
+structure LockedFileState (image : Type) where
+  image : image
+  owners : LockOwners
+
+private def liftLockAction (action : EStateM IO.Error LockOwners α) :
+    EStateM IO.Error (LockedFileState image) α := fun before =>
+  match action before.owners with
+  | .ok value after => .ok value { before with owners := after }
+  | .error error after => .error error { before with owners := after }
+
+private def liftRecoveryAction (recover : EStateM IO.Error image α) :
+    EStateM IO.Error (LockedFileState image) α := fun before =>
+  match recover before.image with
+  | .ok value after => .ok value { before with image := after }
+  | .error error after => .error error { before with image := after }
+
+/-- Interpret the shared lock schedule with recovery effects on a separate
+file image. Cleanup runs with the image left by the failed recovery. -/
+def runOpenWithImage (directory : DiskDirectory) (descriptor : Nat) (acquired : Except IO.Error Bool)
+    (unlock : UnlockReport) (recover : EStateM IO.Error image α) :
+    EStateM IO.Error (LockedFileState image) α :=
+  let lock := directory.file .lock
+  openWithLock (liftLockAction (acquire lock descriptor acquired))
+    (fun _ => IO.userError s!"database already open: {directory.path}")
+    (fun _ => liftLockAction (unlock.perform (fun owners => owners.release lock descriptor)))
+    (fun _ => liftRecoveryAction recover)
+
+theorem runOpenWithImage_notAcquired (directory : DiskDirectory) (descriptor : Nat)
+    (acquired : Except IO.Error Bool) (unlock : UnlockReport) (recover : EStateM IO.Error image α)
+    (before : LockedFileState image) (denied : acquired ≠ .ok true) :
+    ∃ error, runOpenWithImage directory descriptor acquired unlock recover before = .error error before := by
+  rcases acquired with error | (_ | _)
+  · exact ⟨error, rfl⟩
+  · exact ⟨_, rfl⟩
+  · exact False.elim (denied rfl)
+
+theorem runOpenWithImage_acquired (directory : DiskDirectory) (descriptor : Nat)
+    (unlock : UnlockReport) (recover : EStateM IO.Error image α) (before : LockedFileState image) :
+    runOpenWithImage directory descriptor (.ok true) unlock recover before =
+      match recover before.image with
+      | .ok value after => .ok value ⟨after, before.owners.set (directory.file .lock) (some descriptor)⟩
+      | .error error after => match unlock with
+        | .success => .error error ⟨after, before.owners.set (directory.file .lock) none⟩
+        | .failure cleanup applied => .error cleanup
+          ⟨after, before.owners.set (directory.file .lock) (if applied then none else some descriptor)⟩ := by
+  simp only [runOpenWithImage, openWithLock, liftLockAction, acquire, Bind.bind, EStateM.bind, ite_true,
+    MonadExcept.tryCatch, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, liftRecoveryAction]
+  cases recover before.image with
+  | ok => rfl
+  | error error after =>
+    cases unlock with
+    | success =>
+      change EStateM.Result.error error
+        (⟨after, (before.owners.set (directory.file .lock) (some descriptor)).release
+          (directory.file .lock) descriptor⟩ : LockedFileState image) = _
+      rw [releaseAcquired]
+    | failure cleanup applied =>
+      cases applied
+      · rfl
+      · change EStateM.Result.error cleanup
+          (⟨after, (before.owners.set (directory.file .lock) (some descriptor)).release
+            (directory.file .lock) descriptor⟩ : LockedFileState image) = _
+        rw [releaseAcquired]
+        rfl
+
 structure LockSession (α : Type) where
   phase : Phase α
   owners : LockOwners
