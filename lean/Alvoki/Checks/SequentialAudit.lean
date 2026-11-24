@@ -665,6 +665,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.modeledFiles
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.startsRetry
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.selectsPriorHistory
+#check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.reopens
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterCheckpointError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.Installs.unique

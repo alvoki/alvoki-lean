@@ -1,9 +1,10 @@
 import Alvoki.Storage.Disk.AppendRetrySession
+import Alvoki.Storage.Disk.RotationAuthorityRetry
 import Alvoki.Storage.Disk.SegmentedWriterState
 
 namespace Alvoki.Storage.DiskSession
 
-open WalSegmentRepair WAL.Boundary
+open System WalSegmentRepair WAL.Boundary
 
 /-- A physical observation while the first append callback is still in
 flight. The preceding keeper prefix is durable. The callback has yet to
@@ -35,9 +36,30 @@ def physical (cut : FirstAppendCut) (before : SegmentedWriterState) : FileImage 
   let segment := written.reopenSegment before.wal.active.first before.history before.files.directory.active.manifest
   { before.files with keeper := { segment.wal with staged := before.files.keeper.staged } }
 
+def crashed (cut : FirstAppendCut) (before : SegmentedWriterState) (directory : DiskDirectory) (tail : ByteArray) :
+    LockedFileState FileImage :=
+  let bytes := WAL.encode (before.history.drop before.wal.active.first) ++ tail
+  ⟨(cut.physical before).crash before.target.pair (some bytes) [],
+    before.owners.set (directory.file .lock) none⟩
+
 private theorem keeperSurvivors (cut : FirstAppendCut) (before : SegmentedWriterState) :
     (cut.physical before).keeper.crashImages = (ByteArray.empty :: cut.crashTails).map
       (fun tail => some (WAL.encode (before.history.drop before.wal.active.first) ++ tail)) := rfl
+
+private theorem powersOff (cut : FirstAppendCut) {directory descriptor before}
+    (ready : before.Ready directory descriptor) (admits : Target → Prop)
+    {tail : ByteArray} (survives : tail ∈ ByteArray.empty :: cut.crashTails) :
+    BoundedReopenTrace directory admits ⟨cut.physical before, before.owners⟩ (cut.crashed before directory tail) := by
+  apply BoundedReopenTrace.powerLoss BoundedReopenTrace.empty
+  · change before.target.pair ∈ before.files.directory.crashImages
+    rw [ready.resumed.ready.settled]
+    exact List.mem_singleton_self _
+  · change some (WAL.encode (before.history.drop before.wal.active.first) ++ tail) ∈ (cut.physical before).keeper.crashImages
+    rw [cut.keeperSurvivors]
+    exact List.mem_map_of_mem survives
+  · change [] ∈ before.files.later.crashImages
+    rw [ready.resumed.ready.pruned.2]
+    exact List.mem_singleton_self _
 
 /-- Power loss chooses a surviving tail and ends the held writer lock
 while the append is still in flight. It starts the same bounded retry
@@ -49,18 +71,8 @@ theorem startsRetry (cut : FirstAppendCut) {directory descriptor before}
     let bytes := WAL.encode (before.history.drop before.wal.active.first) ++ tail
     BoundedReopenTrace directory (AppendRetryTarget before.history event before.wal.active.first)
       ⟨files, before.owners⟩
-      ⟨files.crash before.target.pair (some bytes) [], before.owners.set (directory.file .lock) none⟩ := by
-  intro files bytes
-  apply BoundedReopenTrace.powerLoss BoundedReopenTrace.empty
-  · change before.target.pair ∈ before.files.directory.crashImages
-    rw [ready.resumed.ready.settled]
-    exact List.mem_singleton_self _
-  · change some bytes ∈ (cut.physical before).keeper.crashImages
-    rw [cut.keeperSurvivors]
-    exact List.mem_map_of_mem survives
-  · change [] ∈ before.files.later.crashImages
-    rw [ready.resumed.ready.pruned.2]
-    exact List.mem_singleton_self _
+      ⟨files.crash before.target.pair (some bytes) [], before.owners.set (directory.file .lock) none⟩ :=
+  cut.powersOff ready _ survives
 
 /-- Each crash choice during the first append retains the old absolute
 marker. Even a full surviving frame lies outside it. The selected keeper
@@ -114,6 +126,123 @@ theorem selectsPriorHistory (cut : FirstAppendCut) {directory descriptor before}
     rfl
   · rw [ready.chain.concatenate_eq, List.drop_zero]
     exact WAL.decodeOrdinals_encode _ ready.resumed.ordered
+
+private theorem crashedLayout (cut : FirstAppendCut) {directory descriptor before}
+    (ready : before.Ready directory descriptor) (tail : ByteArray) :
+    let files := (cut.crashed before directory tail).image
+    ∃ selected : CanonicalKeeperLayout files before.history,
+      selected.target = before.target ∧ selected.keeper = before.wal.active ∧
+      selected.sealed ++ [selected.keeper] = before.wal.readDescriptors selected.range.watermark ∧
+      selectWalSegmentReads (before.wal.segments.map WalSegment.first) selected.range.watermark =
+        some (selected.first, (before.wal.readDescriptors selected.range.watermark).map WalSegment.first) ∧
+      Prepared files selected.target selected.plan := by
+  intro files
+  have pairSurvives : before.target.pair ∈ before.wal.directory.crashImages := by
+    rw [← ready.directoryFiles, ready.resumed.ready.settled]
+    exact List.mem_singleton_self _
+  have decoded : (DirectoryPublication.Image.settled before.target.pair).active.walRange =
+    some before.target.range := before.target.decoded
+  obtain ⟨base, range, keeper, _, descriptors, offsets, _, _, _, _⟩ :=
+    ready.layout.checkpointReopenLayout ready.walValid (.crash pairSurvives) decoded ready.resumed.through none
+  let source : CanonicalKeeperLayout files before.history :=
+    { range := base.range
+      decoded := base.decoded
+      through := base.through
+      first := base.first
+      sealed := base.sealed
+      keeper := base.keeper
+      chain := base.chain
+      covers := base.covers
+      tail := tail
+      visible := by rw [keeper, ready.layout.activeBytes]; rfl }
+  have start : source.target.first = before.target.first :=
+    (congrArg WalSegment.first keeper).trans ready.active.symm
+  have bytes : source.target.trimmed = before.target.trimmed := by
+    change base.keeper.bytes = before.target.trimmed
+    rw [keeper, ready.resumed.contents, ready.active, ready.layout.activeBytes]
+  have target : source.target = before.target := by
+    have pair : source.target.pair = before.target.pair := rfl
+    have exactRange : source.target.range = before.target.range := range
+    generalize source.target = a at pair start bytes exactRange ⊢
+    generalize before.target = b at pair start bytes exactRange ⊢
+    cases a
+    cases b
+    cases pair
+    cases exactRange
+    cases start
+    cases bytes
+    rfl
+  have prepared := source.prepared (by simp [files, crashed, FileImage.crash, Publication.Image.settled])
+    (fun _ present => ⟨tail, (List.mem_singleton.mp present).trans source.visible⟩)
+    (by simp [files, crashed, FileImage.crash, LaterNames.settled, LaterNames.Beyond])
+  exact ⟨source, target, keeper, range.symm ▸ descriptors, range.symm ▸ offsets, prepared⟩
+
+/-- From a power loss inside the append callback, any finite prefix of
+failed bounded opens keeps the prior marker authoritative. A healthy
+bounded open installs the prior history and exact checkpoint under the
+new owner, trimming any surviving unselected tail. -/
+theorem reopens (cut : FirstAppendCut) {directory descriptor before}
+    (ready : before.Ready directory descriptor)
+    {tail : ByteArray} (survives : tail ∈ ByteArray.empty :: cut.crashTails)
+    {retry : LockedFileState FileImage}
+    (failures : BoundedReopenTrace directory (fun target => target = before.target)
+      (cut.crashed before directory tail) retry)
+    {nextDescriptor nextRef : Nat} (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    BoundedReopenTrace directory (fun target => target = before.target)
+      ⟨cut.physical before, before.owners⟩ (cut.crashed before directory tail) ∧
+    ∃ selected : CanonicalKeeperLayout retry.image before.history,
+      selected.target = before.target ∧
+      ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some nextDescriptor))
+          nextDescriptor before.wal retry.image.directory.active selected.range.watermark
+          before.published.durable selected.tail,
+        sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
+        (∀ action prior next,
+          ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+          prior.effect selected.target action = some next →
+          performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
+        let attempt : BoundedReopenAttempt :=
+          ⟨nextDescriptor, nextRef, .ok true, unlock, raw.reports.readOptional, raw.list,
+            (fun path => .ok (raw.reports.lstat path)), raw.reports.readBin, raw.readPrefix,
+            removeFile, write, sync, renameFile⟩
+        ∃ session final, ∃ writer : SegmentedWriterState,
+          attempt.run directory retry = .ok session final ∧ session.directory = directory ∧
+          session.descriptor = nextDescriptor ∧ session.phase = .ready writer.installed ∧
+          writer.files = final.image ∧ writer.owners = final.owners ∧
+          writer.wal = { before.wal with directory := final.image.directory } ∧
+          writer.target = before.target ∧ writer.history = before.history ∧
+          writer.published.durable = before.published.durable ∧ writer.checkpoint = before.checkpoint ∧
+          writer.installed.generation = before.installed.generation ∧ writer.Ready directory nextDescriptor := by
+  refine ⟨cut.powersOff ready _ survives, ?_⟩
+  obtain ⟨source, target, keeper, descriptors, offsets, prepared⟩ := cut.crashedLayout ready tail
+  have attempts : BoundedReopenTrace directory (fun target => target = source.target)
+      (cut.crashed before directory tail) retry := target.symm ▸ failures
+  obtain ⟨kept, selected, selectedTarget, install⟩ := attempts.installsAfterFixedAuthority
+    ready.layout ready.resumed.ordered source keeper descriptors offsets prepared rfl rfl
+    ready.resumed.accepted ready.generationRead liveRefs fresh acquisition unlock removeFile write sync renameFile
+  have selectedTarget := selectedTarget.trans target
+  refine ⟨selected, selectedTarget, ?_⟩
+  intro raw settles healthy attempt
+  have installed := install raw settles healthy
+  have first := (congrArg Target.first selectedTarget).trans ready.active
+  obtain ⟨session, final, writer, ran, path, lock, phase, files, owners, wal, writerTarget, history, durable, nextReady⟩ :=
+    installed.writerReady ready.layout ready.chain first (kept.trans ready.sealedFiles)
+  have exactTarget := writerTarget.trans selectedTarget
+  have pair : retry.image.directory.active = before.target.pair := congrArg Target.pair selectedTarget
+  have selectedCheckpoint := nextReady.resumed.selected
+  rw [exactTarget, durable, ← pair] at selectedCheckpoint
+  have oldCheckpoint : SelectedIntegrityCheckpoint before.published.durable retry.image.directory.active.manifest
+      before.checkpoint := by rw [pair]; exact ready.resumed.selected
+  have checkpoint := Except.ok.inj
+    ((raw.readCheckpoint selectedCheckpoint).symm.trans (raw.readCheckpoint oldCheckpoint))
+  have generation : writer.installed.generation = before.installed.generation := by
+    rw [nextReady.resumed.generation, checkpoint, ← ready.resumed.generation]
+  exact ⟨session, final, writer, ran, path, lock, phase, files, owners, wal, exactTarget, history, durable,
+    checkpoint, generation, nextReady⟩
 
 end FirstAppendCut
 
