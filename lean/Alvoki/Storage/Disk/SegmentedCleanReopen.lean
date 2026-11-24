@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.CheckpointCutSession
 import Alvoki.Storage.Disk.SegmentedRetryTrace
 import Alvoki.Storage.Disk.RetainedWriterState
+import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 
 namespace Alvoki.Storage.DiskSession
 
@@ -242,6 +243,35 @@ theorem installsRetained (report : SegmentedCleanReopenReport directory before o
     ready.cleanReopenRetained report.liveRefs observed.fresh report.unlock report.raw report.removeFile report.write
       report.sync report.renameFile observed.syncDirectory observed.syncKeeper
   exact ⟨reopenedWriter before table final.owners, ⟨closed, session, final, table, opened, files, phase, rfl⟩, next⟩
+
+/-- Closing the previous writer and reading the immutable checkpoint and
+WAL through the cached opener install the same next session. -/
+theorem installsRetainedCached (report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory oldDescriptor)
+    (sizes : SizedCheckpointRunReports directory report.raw.reports before.wal.directory.active.manifest
+      before.published.durable)
+    (cached : CachedWalFileReports directory report.raw.reports before.wal before.target.range.watermark ByteArray.empty) :
+    ∃ after session final,
+      report.Installs after ∧
+      runOpenWithInstallation directory nextDescriptor report.nextRef (.ok true) report.unlock
+        (report.raw.reopenCached sizes cached report.removeFile report.write report.sync report.renameFile)
+        (released directory before) = .ok session final ∧
+      session.phase = .ready after.installed ∧ final.image = after.files ∧ final.owners = after.owners := by
+  have decoded : before.wal.directory.active.walRange = some before.target.range :=
+    ready.walPair.symm ▸ before.target.decoded
+  have checkpoint : SelectedIntegrityCheckpoint before.published.durable before.wal.directory.active.manifest
+      before.checkpoint := ready.walPair.symm ▸ ready.resumed.selected
+  have same := report.raw.reopenCached_eq sizes cached ready.layout ready.valid (List.mem_cons_self ..)
+    decoded rfl ready.resumed.through checkpoint report.removeFile report.write report.sync report.renameFile
+  obtain ⟨after, endpoint, _⟩ := report.installsRetained observed ready
+  obtain ⟨session, final, table, ran, files, phase, exactWriter⟩ := endpoint.openEffect
+  refine ⟨after, session, final, endpoint, ?_, exactWriter.symm ▸ phase, ?_, ?_⟩
+  · rw [same]
+    exact ran
+  · rw [exactWriter]
+    exact files
+  · rw [exactWriter]
+    rfl
 
 theorem Installs.unique {report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor}
     {left right : SegmentedWriterState} (a : report.Installs left) (b : report.Installs right) : left = right := by

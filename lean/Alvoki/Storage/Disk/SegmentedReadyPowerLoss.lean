@@ -130,9 +130,10 @@ structure Installs (report : SegmentedReadyPowerLossReport directory before oldD
     report.attempt.run directory report.retry = .ok session final ∧
     session.phase = .ready (reopenedWriter before table final).installed ∧ after = reopenedWriter before table final
 
-theorem installsRetained (report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor)
+private theorem installsRetained_exact (report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor)
     (observed : report.Valid) (ready : before.RetainedReady directory oldDescriptor) :
-    ∃ after, report.Installs after ∧ after.RetainedReady directory nextDescriptor := by
+    report.retry.image.directory.active = before.target.pair ∧
+      ∃ after, report.Installs after ∧ after.RetainedReady directory nextDescriptor := by
   obtain ⟨source, sourceTarget, sourceKeeper, sourceDescriptors, sourceOffsets, sourcePrepared⟩ :=
     ready.powerLossLayout
   have trace := report.failures.effectsAfterFixedAuthority (by rfl)
@@ -224,8 +225,45 @@ theorem installsRetained (report : SegmentedReadyPowerLossReport directory befor
         next.target next.checkpoint next.owners
     rw [SegmentedWriterState.mk.injEq]
     exact ⟨installedExact, wal, history, files, published, target, sameCheckpoint, owners⟩
-  exact ⟨next, ⟨ready.powerLossTrace _, session, final, writer.installed.table, ran, installedExact ▸ phase, rfl⟩,
+  exact ⟨selectedPair, next, ⟨ready.powerLossTrace _, session, final, writer.installed.table, ran, installedExact ▸ phase, rfl⟩,
     exactWriter ▸ nextReady⟩
+
+theorem installsRetained (report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory oldDescriptor) :
+    ∃ after, report.Installs after ∧ after.RetainedReady directory nextDescriptor :=
+  (report.installsRetained_exact observed ready).2
+
+/-- A settled writer survives power loss and bounded retries with the same
+checkpoint and WAL. The following cached open installs their exact table. -/
+theorem installsRetainedCached (report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory oldDescriptor)
+    (sizes : SizedCheckpointRunReports directory report.raw.reports report.retry.image.directory.active.manifest
+      before.published.durable)
+    (cached : CachedWalFileReports directory report.raw.reports before.wal before.target.range.watermark ByteArray.empty) :
+    ∃ after session final,
+      report.Installs after ∧
+      runOpenWithInstallation directory nextDescriptor report.nextRef (.ok true) report.unlock
+        (report.raw.reopenCached sizes cached report.removeFile report.write report.sync report.renameFile)
+        report.retry = .ok session final ∧
+      session.phase = .ready after.installed ∧ final.image = after.files ∧ final.owners = after.owners := by
+  obtain ⟨pair, after, endpoint, _⟩ := report.installsRetained_exact observed ready
+  have decoded : report.retry.image.directory.active.walRange = some before.target.range :=
+    pair.symm ▸ before.target.decoded
+  have chosen : before.wal.Selects report.retry.image.directory.active := by
+    rw [pair, ← ready.walPair]
+    exact List.mem_cons_self ..
+  have checkpoint : SelectedIntegrityCheckpoint before.published.durable report.retry.image.directory.active.manifest
+      before.checkpoint := pair.symm ▸ ready.resumed.selected
+  have same := report.raw.reopenCached_eq sizes cached ready.layout ready.valid chosen decoded rfl
+    ready.resumed.through checkpoint report.removeFile report.write report.sync report.renameFile
+  obtain ⟨session, final, _, ran, phase, exactWriter⟩ := endpoint.openEffect
+  refine ⟨after, session, final, endpoint, ?_, exactWriter.symm ▸ phase, ?_, ?_⟩
+  · rw [same]
+    exact ran
+  · rw [exactWriter]
+    rfl
+  · rw [exactWriter]
+    rfl
 
 theorem installs (report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor)
     (observed : report.Valid) (ready : before.Ready directory oldDescriptor) :
