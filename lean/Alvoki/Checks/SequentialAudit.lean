@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.AppendCutContinuation
 import Alvoki.Storage.Disk.AppendRetrySession
 import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentMarkerPowerLoss
+import Alvoki.Storage.Disk.SegmentedMarkerPowerLoss
 import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.CheckpointRetrySession
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
@@ -679,6 +680,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.reopens
 #check_axioms Alvoki.WAL.Boundary.MarkerInterruption.actionAt
 #check_axioms Alvoki.WAL.Boundary.MarkerInterruption.matchesWriteEffects
+#check_axioms Alvoki.Storage.DiskSession.AppendRetryEndpoint.unique
+#check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.Valid.powerLoss
+#check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.Valid.submittedSequence
+#check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.Installs.unique
+#check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.Installs.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.Valid.submittedSequence
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.Installs.unique

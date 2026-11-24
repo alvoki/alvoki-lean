@@ -73,12 +73,34 @@ structure SegmentedAppendRecoveryReport (directory : DiskDirectory) (before : Se
       performPaths directory layout.plan reopen.removeFile throw reopen.write reopen.sync reopen.renameFile action prior =
         .ok () next
 
+/-- The exact writer established by a bounded open after an append cut.
+Its physical keeper and selected history are fixed by the returned image. -/
+structure AppendRetryEndpoint (directory : DiskDirectory) (before : SegmentedWriterState)
+    (event : WAL.Write) (retry : LockedFileState FileImage) (descriptor : Nat)
+    (result : EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession)
+    (after : SegmentedWriterState) : Prop where
+  reopened : ∃ session final, result = .ok session final ∧
+    session.directory = directory ∧ session.descriptor = descriptor ∧ session.phase = .ready after.installed ∧
+    after.files = final.image ∧ after.owners = final.owners
+  history : after.history = before.history ∨ after.history = before.history ++ [event]
+  wal : after.wal = { before.wal.appendSelectedView retry.image.directory.active after.history with
+    directory := after.files.directory }
+  pair : after.target.pair = retry.image.directory.active
+  first : after.target.first = before.wal.active.first
+  through : after.target.range.through = after.history.length
+  trimmed : after.target.trimmed = WAL.encode (after.history.drop after.target.first)
+  durable : after.published.durable = before.published.durable
+  manifest : after.published.manifest = after.files.directory.project .manifest
+  checkpoint : SelectedIntegrityCheckpoint after.published.durable after.target.pair.manifest after.checkpoint
+
 namespace SegmentedAppendRecoveryReport
 
 variable {directory : DiskDirectory} {before : SegmentedWriterState} {writer descriptor : Nat}
 
 structure Installs (report : SegmentedAppendRecoveryReport directory before writer descriptor)
-    (after : SegmentedWriterState) : Prop where
+    (after : SegmentedWriterState) : Prop extends
+    AppendRetryEndpoint directory before report.failure.event report.retry descriptor
+      (report.reopen.run directory report.retry) after where
   uncertain : runPreparedWrite
     { before.installed with table := report.failure.table, walBytes := before.installed.walBytes + frameSize }
     report.failure.event.sequence
@@ -89,19 +111,6 @@ structure Installs (report : SegmentedAppendRecoveryReport directory before writ
     .error (.commitUnknown report.failure.cause) report.failure.poisoned
   released : report.release.Observed (directory := directory) report.failure.poisoned
     ⟨report.failure.failed, before.owners.set (directory.file .lock) none⟩
-  reopened : ∃ session final, report.reopen.run directory report.retry = .ok session final ∧
-    session.directory = directory ∧ session.descriptor = descriptor ∧ session.phase = .ready after.installed ∧
-    after.files = final.image ∧ after.owners = final.owners
-  history : after.history = before.history ∨ after.history = before.history ++ [report.failure.event]
-  wal : after.wal = { before.wal.appendSelectedView report.retry.image.directory.active after.history with
-    directory := after.files.directory }
-  pair : after.target.pair = report.retry.image.directory.active
-  first : after.target.first = before.wal.active.first
-  through : after.target.range.through = after.history.length
-  trimmed : after.target.trimmed = WAL.encode (after.history.drop after.target.first)
-  durable : after.published.durable = before.published.durable
-  manifest : after.published.manifest = after.files.directory.project .manifest
-  checkpoint : SelectedIntegrityCheckpoint after.published.durable after.target.pair.manifest after.checkpoint
 
 /-- Derive the next ready writer from the previous installed state and
 the actual reported append and reopen operations. -/
@@ -130,9 +139,10 @@ theorem installs (report : SegmentedAppendRecoveryReport directory before writer
     cases report.release with
     | closed => exact closed
     | references held drops last => exact drop held drops last
-  exact ⟨after, ⟨uncertain, released, ⟨session, final, actualResult, path, acquired, phase, files, owners⟩,
+  exact ⟨after, ⟨⟨⟨session, final, actualResult, path, acquired, phase, files, owners⟩,
     exactHistory ▸ survived, afterWal, target ▸ rfl, by rw [target, keeper]; rfl,
-    next.resumed.through, next.resumed.contents, durable, next.manifestFiles, next.resumed.selected⟩, next⟩
+    next.resumed.through, next.resumed.contents, durable, next.manifestFiles, next.resumed.selected⟩,
+    uncertain, released⟩, next⟩
 
 private theorem sameCheckpoint {durable binding left right}
     (a : SelectedIntegrityCheckpoint durable binding left) (b : SelectedIntegrityCheckpoint durable binding right) :
@@ -147,8 +157,10 @@ private theorem sameCheckpoint {durable binding left right}
       cases Except.ok.inj (loaded.symm.trans otherLoaded)
       rfl
 
-theorem Installs.unique {report : SegmentedAppendRecoveryReport directory before writer descriptor}
-    {left right : SegmentedWriterState} (a : report.Installs left) (b : report.Installs right) : left = right := by
+theorem _root_.Alvoki.Storage.DiskSession.AppendRetryEndpoint.unique {directory before event retry descriptor result}
+    {left right : SegmentedWriterState}
+    (a : AppendRetryEndpoint directory before event retry descriptor result left)
+    (b : AppendRetryEndpoint directory before event retry descriptor result right) : left = right := by
   obtain ⟨ls, lf, lr, _, _, lp, li, lo⟩ := a.reopened
   obtain ⟨rs, rf, rr, _, _, rp, ri, ro⟩ := b.reopened
   obtain ⟨sameSession, sameFinal⟩ := EStateM.Result.ok.inj (lr.symm.trans rr)
@@ -186,6 +198,10 @@ theorem Installs.unique {report : SegmentedAppendRecoveryReport directory before
   cases published
   cases checkpoint
   rfl
+
+theorem Installs.unique {report : SegmentedAppendRecoveryReport directory before writer descriptor}
+    {left right : SegmentedWriterState} (a : report.Installs left) (b : report.Installs right) : left = right :=
+  a.toAppendRetryEndpoint.unique b.toAppendRetryEndpoint
 
 theorem Installs.preservesReady {report : SegmentedAppendRecoveryReport directory before writer descriptor}
     {after : SegmentedWriterState} (endpoint : report.Installs after) (ready : before.Ready directory writer) :
