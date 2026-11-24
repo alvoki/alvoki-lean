@@ -959,6 +959,8 @@ private def checkSealedWalSizeBeforePayload (root : FilePath) : IO Unit := do
   checkPayload second "healthy" "fixture did not stop the healthy second seal's payload open"
   let reopened ← DiskTable.open dir.path
   try
+    expectSnapshot reopened 1 [(7, some 40)]
+    expectSnapshot reopened 2 [(7, some 41)]
     let latest ← reopened.acquire
     check (latest.sequence == 3 && (← reopened.lookup latest.handle 7) == some (some 42))
       "reopen with bounded sealed reads changed the acknowledged data"
