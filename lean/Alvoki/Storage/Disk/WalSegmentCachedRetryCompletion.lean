@@ -95,4 +95,39 @@ theorem CachedRetryReadReports.completes {directory : DiskDirectory} {retry : Fi
   dsimp only [CanonicalKeeperLayout.boundedPlan, CanonicalKeeperLayout.plan] at bounded
   rw [bounded]
 
+/-- After healthy repair, every admitted power loss keeps the same
+checkpoint binding and selected segments, with an aligned keeper and no
+names left to prune. The resulting layout can feed the next cached reopen. -/
+theorem EffectTrace.durableCrashLayout {initial after : FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout initial history} (trace : EffectTrace layout.target initial after)
+    (prepared : Prepared initial layout.target layout.plan) (ready : after.Ready layout.target)
+    {pair : DirectoryPublication.Bindings} {keeper : Option ByteArray} {later : List Nat}
+    (metadataSurvives : pair ∈ after.directory.crashImages)
+    (keeperSurvives : keeper ∈ after.keeper.crashImages)
+    (laterSurvives : later ∈ after.later.crashImages) :
+    let crashed := after.crash pair keeper later
+    ∃ retry : CanonicalKeeperLayout crashed history,
+      retry.target = layout.target ∧ retry.sealed = layout.sealed ∧ retry.keeper = layout.keeper ∧
+      crashed.kept = initial.kept ∧ retry.tail = ByteArray.empty ∧ crashed.Ready retry.target := by
+  intro crashed
+  have continued : EffectTrace layout.target initial crashed :=
+    .crash trace metadataSurvives keeperSurvives laterSurvives
+  obtain ⟨retry, target, _, _, sealed, sameKeeper, kept, _⟩ :=
+    continued.canonicalRetryLayout layout prepared
+  have samePair : pair = layout.target.pair := by simpa [ready.settled] using metadataSurvives
+  have sameBytes : keeper = some layout.target.trimmed := by simpa [ready.keeperDurable] using keeperSurvives
+  have sameLater : later = [] := by simpa [ready.pruned.2] using laterSurvives
+  have exactSize : retry.keeper.bytes ++ retry.tail = retry.keeper.bytes := by
+    have contents : keeper = some (retry.keeper.bytes ++ retry.tail) := retry.visible
+    have trimmed : layout.target.trimmed = retry.keeper.bytes := by rw [sameKeeper]; rfl
+    rw [sameBytes, trimmed] at contents
+    exact (Option.some.inj contents).symm
+  have noTail : retry.tail = ByteArray.empty := by
+    apply (ByteArray.append_right_inj retry.keeper.bytes).mp
+    simpa only [ByteArray.append_empty] using exactSize
+  refine ⟨retry, target, sealed, sameKeeper, kept, noTail, ?_⟩
+  rw [target]
+  subst pair keeper later
+  exact ⟨rfl, rfl, rfl, rfl, ⟨rfl, rfl⟩⟩
+
 end Alvoki.Storage.WalSegmentRepair
