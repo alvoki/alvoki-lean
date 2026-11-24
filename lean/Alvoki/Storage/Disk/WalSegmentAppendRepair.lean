@@ -24,7 +24,8 @@ private theorem appendedMarker_ne (before : List WAL.Write) (event : WAL.Write)
   simp only [WAL.encode_size, List.length_append, List.length_singleton, WAL.frameSize] at sizes
   omega
 
-private theorem Target.accepts_of_selected {target : Target} {count : UInt64} {bytes : ByteArray}
+/-- A marker-selected keeper prefix is accepted by the bounded repair model. -/
+theorem Target.accepts_of_selected {target : Target} {count : UInt64} {bytes : ByteArray}
     (selected : selectRetained target.first count bytes = .ok target.trimmed) :
     target.Accepts (some bytes) := by
   by_cases beforeCutoff : count.toNat < target.first * WAL.frameSize

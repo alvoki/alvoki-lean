@@ -34,6 +34,10 @@ The lock lifetime proof derives release from the complete references to one held
 
 The earlier whole-file proofs cover strict checkpoint selection, repeated open failure and snapshot stability in that model. They support the segmented proofs. The Linux adapter opens the segmented WAL described above. [Whole-file trace](../lean/Alvoki/Storage/Disk/IntegrityDatabaseTrace.lean) · [Whole-file retry model](../lean/Alvoki/Storage/Disk/LockedMarkedReopenFailureTrace.lean)
 
+### Durable batches
+
+The batch API shares the append and marker publication schedule, with one append, two file barriers before rename and a directory barrier after rename. Lean relates preparation to sequential replay and connects reached I/O callback reports to the exact committed or failed file state. After a reported error, the proof covers poisoning, lock release by close or final reference drop, and installation from bounded reopen reports. The mixed trace preserves all acknowledgements in order, retains an uncertain batch in full or discards it in full, and gives supported snapshot reads the same result as replay, including when reacquired after reopen. Native fault fixtures exercise both outcomes after checkpoint, WAL rotation and collection. The proofs assume faithful primitive reports for the durable prefix, file effects, reads, repair and lock ownership. The mixed trace covers returned batch errors. Process death during publication is exercised separately by the native fixtures. [Native schedule](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Reported failures](../lean/Alvoki/Storage/Disk/WalBatchSession.lean) · [Mixed trace](../lean/Alvoki/Storage/Disk/SegmentedBatchDatabaseTrace.lean)
+
 ## Packed block and search experiments
 
 | Property | Lean 4 | Verus |

@@ -72,7 +72,7 @@ private theorem replayWrite_advances {state result : PackedTable} {event : Write
     result.committed.toNat = state.committed.toNat + 1 :=
   (PackedTable.write_spec (replayWrite_spec applied).1).1
 
-private theorem ordinals_append_iff (start : Nat) (left right : List Write) :
+theorem ordinals_append_iff (start : Nat) (left right : List Write) :
     WAL.OrdinalsFrom start (left ++ right) ↔
       WAL.OrdinalsFrom start left ∧ WAL.OrdinalsFrom (start + left.length) right := by
   induction left generalizing start with

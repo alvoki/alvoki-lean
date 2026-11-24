@@ -53,6 +53,46 @@ private def expectSnapshot (db : DiskTable) (sequence : UInt64)
         s!"unexpected point read of key {key} at sequence {sequence}"
   finally db.release pin.handle
 
+private def batchRows : List (UInt64 × Option UInt64) :=
+  [(7, none), (3, some 30), (7, some 100), (4, some 40)]
+
+private def batchFramesAfter (sequence : UInt64) : ByteArray :=
+  WAL.encode [⟨sequence + 1, 7, none⟩, ⟨sequence + 2, 3, some 30⟩,
+    ⟨sequence + 3, 7, some 100⟩, ⟨sequence + 4, 4, some 40⟩]
+
+private def mixedBatchRows : List (UInt64 × Option UInt64) :=
+  [(3, none), (6, some 60), (7, none), (6, some 61)]
+
+private def expectUnknownBatch (db : DiskTable) (target : String)
+    (rows : List (UInt64 × Option UInt64)) : IO Unit := do
+  let .error (.commitUnknown (.userError message)) ← (db.writeBatchWithOutcome rows).toBaseIO
+    | throw (IO.userError "batch sync error did not report an unknown commit outcome")
+  check (message.startsWith s!"sync failed for '{target}':")
+    "unknown batch outcome changed the sync error"
+  let .error (.rejected (.userError retry)) ← (db.writeBatchWithOutcome []).toBaseIO
+    | throw (IO.userError "poisoned writer accepted an empty batch")
+  check (retry == "publication failed; reopen the database")
+    "poisoned batch rejection changed its cause"
+  expectRejectedWrite db "publication failed; reopen the database"
+
+private def expectBatchHistory (db : DiskTable) (oldSequence : UInt64) (published : Bool) :
+    IO Unit := do
+  let latest ← db.acquire
+  try
+    check (latest.sequence == oldSequence + (if published then 4 else 0))
+      "reopen selected only part of the write batch"
+  finally db.release latest.handle
+  expectSnapshot db oldSequence [(7, some 99)]
+  if published then
+    -- A single publication makes the completed batch current. Historical
+    -- reads can still select the individual mutation sequence numbers.
+    expectSnapshot db (oldSequence + 1) []
+    expectSnapshot db (oldSequence + 2) [(3, some 30)]
+    expectSnapshot db (oldSequence + 3) [(3, some 30), (7, some 100)]
+    expectSnapshot db (oldSequence + 4) [(3, some 30), (4, some 40), (7, some 100)]
+  else
+    check ((← db.acquireAt (oldSequence + 1)).isNone) "an unpublished batch snapshot is visible"
+
 private def checkCodecs : IO Unit := do
   let first : WAL.Write := ⟨1, 4, some 40⟩
   let second : WAL.Write := ⟨2, 7, none⟩
@@ -1389,6 +1429,200 @@ private def checkRetrySync (root : FilePath) : IO Unit := do
       "reopen did not settle the visible boundary after failed directory sync"
   finally recovered.close
 
+private def checkWriteBatch (dir : FilePath) : IO Unit := do
+  let wal := dir / firstWalSegment
+  let marker := dir / "WAL.commit"
+  let staged := dir / "WAL.commit.next"
+  let acknowledged := WAL.encodeFrame ⟨1, 7, some 99⟩
+  let before := WAL.Boundary.encode acknowledged.size.toUInt64
+  let batch := batchFramesAfter 1
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 7 (some 99)) == 1) "unexpected sequence before write batch"
+    let old ← db.acquire
+    try
+      check ((← db.writeBatch []) == 1) "empty batch advanced the sequence"
+      check ((← IO.FS.readBinFile wal) == acknowledged && (← IO.FS.readBinFile marker) == before &&
+        !(← staged.pathExists)) "empty batch changed the durable files"
+      -- A malformed active size rejects before a staging file is created.
+      IO.FS.writeBinFile wal ByteArray.empty
+      let .error (.rejected (.userError cause)) ← (db.writeBatchWithOutcome batchRows).toBaseIO
+        | throw (IO.userError "incorrect keeper size was not a pre-append rejection")
+      check (cause.startsWith "active WAL segment size disagrees")
+        "batch preflight did not preserve the keeper size error"
+      check ((← IO.FS.readBinFile wal).isEmpty && (← IO.FS.readBinFile marker) == before &&
+        !(← staged.pathExists)) "rejected batch changed the WAL or marker"
+      IO.FS.writeBinFile wal acknowledged
+      db.rotateWal
+      let .ok last ← (db.writeBatchWithOutcome batchRows).toBaseIO
+        | throw (IO.userError "valid write batch was not acknowledged")
+      check (last == 5) "write batch returned the wrong final sequence"
+      check ((← db.lookup old.handle 7) == some (some 99))
+        "write batch changed the pinned pre-batch snapshot"
+      expectBatchHistory db 1 true
+      check ((← IO.FS.readBinFile wal) == acknowledged &&
+        (← IO.FS.readBinFile (dir / "WAL-segment-1")) == batch &&
+        (← IO.FS.readBinFile marker) == WAL.Boundary.encode (acknowledged.size + batch.size).toUInt64 &&
+        !(← staged.pathExists)) "write batch published the wrong frames or absolute marker"
+    finally db.release old.handle
+  finally db.close
+  let .error (.rejected _) ← (db.writeBatchWithOutcome []).toBaseIO
+    | throw (IO.userError "closed database accepted an empty batch")
+  let reopened ← DiskTable.open dir
+  try
+    expectBatchHistory reopened 1 true
+    check ((← reopened.write 7 (some 101)) == 6) "append after a batch reused its sequence"
+  finally reopened.close
+
+private def checkBatchSyncFailure (root : FilePath) (publishMarker : Bool) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let wal := dir / firstWalSegment
+  let marker := dir / "WAL.commit"
+  let staged := dir / "WAL.commit.next"
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 7 (some 99)) == 1) "unexpected sequence before batch fault"
+    db.checkpoint
+  finally db.close
+  let acknowledged := WAL.encodeFrame ⟨1, 7, some 99⟩
+  let submitted := acknowledged ++ batchFramesAfter 1
+  let oldMarker := WAL.Boundary.encode acknowledged.size.toUInt64
+  let newMarker := WAL.Boundary.encode submitted.size.toUInt64
+  let (emptyAccepted, emptySyncs) ← probeDisk bin dir none "--empty-batch-once"
+  check (emptyAccepted && emptySyncs == alignedWalSyncs dir wal)
+    "empty batch entered the publication schedule"
+  let target := if publishMarker then dir else wal
+  let (classified, syncs) ← probeDisk bin dir (some target) "--check-batch-outcome"
+    (skipFailures := 1) (failureMode := if publishMarker then .afterSync else .beforeSync)
+  let grouped := alignedWalSyncs dir wal ++ [wal.toString, staged.toString]
+  let expectedSyncs := if publishMarker then grouped ++ [dir.toString, s!"synced before error: {dir}"]
+    else grouped
+  check (classified && syncs == expectedSyncs)
+    "batch failure used the wrong barriers or outcome"
+  check ((← IO.FS.readBinFile wal) == submitted) "failed batch did not append the exact four frames"
+  if publishMarker then
+    check ((← IO.FS.readBinFile marker) == newMarker && !(← staged.pathExists))
+      "post-rename batch failure did not leave the final marker"
+  else
+    check ((← IO.FS.readBinFile marker) == oldMarker && (← IO.FS.readBinFile staged) == newMarker)
+      "pre-rename batch failure advanced or staged the wrong marker"
+  let reopened ← DiskTable.open dir
+  try
+    expectManifest dir 1 1 0 1
+    expectBatchHistory reopened 1 publishMarker
+    let expected := if publishMarker then submitted else acknowledged
+    check ((← IO.FS.readBinFile wal) == expected &&
+      (← IO.FS.readBinFile marker) == WAL.Boundary.encode expected.size.toUInt64)
+      "batch recovery did not select the old or complete new WAL"
+    check ((← reopened.write 7 (some 101)) == (if publishMarker then 6 else 2))
+      "batch recovery returned the wrong next append sequence"
+  finally reopened.close
+
+private def checkPartialBatchTail (dir : FilePath) : IO Unit := do
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 7 (some 99)) == 1) "unexpected sequence before partial batch tail"
+  finally db.close
+  let wal := dir / firstWalSegment
+  let marker := dir / "WAL.commit"
+  let acknowledged := WAL.encodeFrame ⟨1, 7, some 99⟩
+  let partialBatch := (batchFramesAfter 1).extract 0 (2 * WAL.frameSize + 11)
+  IO.FS.writeBinFile wal (acknowledged ++ partialBatch)
+  let reopened ← DiskTable.open dir
+  try
+    expectBatchHistory reopened 1 false
+    check ((← IO.FS.readBinFile wal) == acknowledged &&
+      (← IO.FS.readBinFile marker) == WAL.Boundary.encode acknowledged.size.toUInt64)
+      "reopen kept a complete frame from the partial batch tail"
+    check ((← reopened.writeBatch batchRows) == 5) "repaired WAL did not accept a fresh batch"
+    expectBatchHistory reopened 1 true
+  finally reopened.close
+
+/-- Cross a retained checkpoint and reclamation with one cached keeper, then
+exercise both batch failure paths and continue with single and batch writes. -/
+private def checkMixedBatchRecovery (root : FilePath) (publishMarker : Bool) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  (← DiskTable.open dir).close
+  let sealedPath := dir / firstWalSegment
+  let keeper := dir / "WAL-segment-4"
+  let marker := dir / "WAL.commit"
+  let stage := dir / "WAL.commit.next"
+  let checkpoint := dir / "run-1-0.v3"
+  let manifestStage := dir / "MANIFEST.next"
+  let boundary := fun (sequence : Nat) => WAL.Boundary.encode (sequence * WAL.frameSize).toUInt64
+  -- The rotated keeper is synced on creation and on the first single write
+  -- before collection. The eighth directory barrier is the second batch.
+  let target := if publishMarker then dir else keeper
+  let (classified, syncs) ← probeDisk bin dir (some target) "--check-mixed-batch-outcome"
+    (skipFailures := if publishMarker then 7 else 2)
+    (failureMode := if publishMarker then .afterSync else .beforeSync)
+  let writeSyncs (active : FilePath) := [active.toString, stage.toString, dir.toString]
+  let checkpointSyncs := [checkpoint.toString, dir.toString, manifestStage.toString, dir.toString]
+  let rotationSyncs := [keeper.toString, dir.toString]
+  let reachable := alignedWalSyncs dir sealedPath ++ writeSyncs sealedPath ++ checkpointSyncs ++
+    rotationSyncs ++ writeSyncs keeper ++ [dir.toString, keeper.toString, stage.toString]
+  let expectedSyncs := if publishMarker then reachable ++ [dir.toString, s!"synced before error: {dir}"]
+    else reachable
+  check (classified && syncs == expectedSyncs) "mixed batch write reached the wrong failure barrier"
+  let acknowledged := WAL.encodeFrame ⟨5, 7, some 99⟩
+  let submitted := acknowledged ++
+    WAL.encode [⟨6, 3, none⟩, ⟨7, 6, some 60⟩, ⟨8, 7, none⟩, ⟨9, 6, some 61⟩]
+  check (!(← sealedPath.pathExists) && (← IO.FS.readBinFile keeper) == submitted)
+    "mixed batch changed the collected prefix or the appended keeper"
+  let selectedSequence : Nat := if publishMarker then 9 else 5
+  let selected := if publishMarker then submitted else acknowledged
+  check ((← IO.FS.readBinFile marker) == boundary selectedSequence)
+    "mixed batch selected an intermediate absolute marker"
+  if publishMarker then
+    check (!(← stage.pathExists)) "batch rename left a staged marker"
+  else
+    check ((← IO.FS.readBinFile stage) == boundary 9)
+      "batch did not stage the full absolute marker before the grouped sync"
+  let selectedVersion := selectedSequence.toUInt64
+  let finalRows : List (UInt64 × Option UInt64) :=
+    if publishMarker then [(5, some 50), (6, some 61), (7, some 72)]
+    else [(3, some 30), (5, some 50), (7, some 72)]
+  let reopened ← DiskTable.open dir
+  try
+    expectManifest dir 1 4 0 1
+    let pin ← reopened.acquire
+    check (pin.sequence == selectedVersion) "mixed batch reopen installed an intermediate sequence"
+    reopened.release pin.handle
+    check ((← IO.FS.readBinFile keeper) == selected &&
+      (← IO.FS.readBinFile marker) == boundary selectedSequence && !(← sealedPath.pathExists))
+      "mixed batch reopen did not keep exactly the selected keeper and collection"
+    expectSnapshot reopened 4 [(3, some 30), (4, some 40), (7, some 100)]
+    expectSnapshot reopened 5 [(3, some 30), (4, some 40), (7, some 99)]
+    if publishMarker then
+      expectSnapshot reopened 6 [(4, some 40), (7, some 99)]
+      expectSnapshot reopened 7 [(4, some 40), (6, some 60), (7, some 99)]
+      expectSnapshot reopened 8 [(4, some 40), (6, some 60)]
+      expectSnapshot reopened 9 [(4, some 40), (6, some 61)]
+    else
+      check ((← reopened.acquireAt 6).isNone) "mixed batch reopen exposed a discarded mutation"
+    check ((← reopened.write 5 (some 50)) == selectedVersion + 1)
+      "single append from mixed recovery returned the wrong sequence"
+    check ((← reopened.writeBatch [(4, none), (7, some 72)]) == selectedVersion + 3)
+      "batch append from mixed recovery returned the wrong final sequence"
+    expectSnapshot reopened (selectedVersion + 3) finalRows
+  finally reopened.close
+  let followed := selected ++ WAL.encode
+    [⟨selectedVersion + 1, 5, some 50⟩, ⟨selectedVersion + 2, 4, none⟩,
+     ⟨selectedVersion + 3, 7, some 72⟩]
+  check ((← IO.FS.readBinFile keeper) == followed &&
+    (← IO.FS.readBinFile marker) == boundary (selectedSequence + 3))
+    "writes after mixed batch recovery did not continue the selected absolute history"
+  let settled ← DiskTable.open dir
+  try
+    check ((← settled.acquire).sequence == selectedVersion + 3)
+      "second reopen lost a write that followed mixed batch recovery"
+    expectSnapshot settled (selectedVersion + 3) finalRows
+  finally settled.close
+
 private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
@@ -2008,6 +2242,21 @@ private def checkRecoveredProbe (path : FilePath) (sequence value : UInt64) (res
         "next append returned the wrong value or sequence"
   finally db.close
 
+private def checkRecoveredBatchProbe (path : FilePath) (sequence outcome : String)
+    (resume : Bool) : IO Unit := do
+  let oldSequence ← probeWord sequence
+  check (outcome == "old" || outcome == "new") "unexpected batch recovery outcome"
+  let published := outcome == "new"
+  let db ← DiskTable.open path
+  try
+    expectBatchHistory db oldSequence published
+    if resume then
+      let next := oldSequence + (if published then 5 else 1)
+      check ((← db.write 7 (some 101)) == next) "reopened batch did not permit the next append"
+      let expected := if published then [(3, some 30), (4, some 40), (7, some 101)] else [(7, some 101)]
+      expectSnapshot db next expected
+  finally db.close
+
 def main (args : List String) : IO Unit := do
   match args with
   | ["--open-once", dir] => (← DiskTable.open ⟨dir⟩).close
@@ -2091,6 +2340,22 @@ def main (args : List String) : IO Unit := do
     checkRecoveredProbe ⟨dir⟩ (← probeWord sequence) (← probeWord value) false
   | ["--resume-recovered", dir, sequence, value] =>
     checkRecoveredProbe ⟨dir⟩ (← probeWord sequence) (← probeWord value) true
+  | ["--batch-write-once", dir] =>
+    let db ← DiskTable.open ⟨dir⟩
+    try
+      let old ← db.acquire
+      check ((← db.writeBatch batchRows) == old.sequence + 4) "batch probe returned the wrong final sequence"
+    finally db.close
+  | ["--empty-batch-once", dir] =>
+    let db ← DiskTable.open ⟨dir⟩
+    try
+      let old ← db.acquire
+      check ((← db.writeBatch []) == old.sequence) "empty batch probe advanced the sequence"
+    finally db.close
+  | ["--check-recovered-batch", dir, sequence, outcome] =>
+    checkRecoveredBatchProbe ⟨dir⟩ sequence outcome false
+  | ["--resume-recovered-batch", dir, sequence, outcome] =>
+    checkRecoveredBatchProbe ⟨dir⟩ sequence outcome true
   | ["--rotate-wal-once", dir] =>
     let db ← DiskTable.open ⟨dir⟩
     try db.rotateWal finally db.close
@@ -2115,6 +2380,27 @@ def main (args : List String) : IO Unit := do
       check (message.startsWith s!"sync failed for '{target}':")
         "unknown commit outcome changed the sync error"
       expectRejectedWrite db "publication failed; reopen the database"
+    finally db.close
+  | ["--check-batch-outcome", dir] =>
+    let some target ← IO.getEnv "ALVOKI_CHECK_SYNC_FAIL"
+      | throw (IO.userError "missing batch sync fault target")
+    let db ← DiskTable.open ⟨dir⟩
+    try expectUnknownBatch db target batchRows finally db.close
+  | ["--check-mixed-batch-outcome", dir] =>
+    let some target ← IO.getEnv "ALVOKI_CHECK_SYNC_FAIL"
+      | throw (IO.userError "missing mixed batch sync fault target")
+    let db ← DiskTable.open ⟨dir⟩
+    try
+      check ((← db.writeBatch batchRows) == 4) "mixed trace did not acknowledge its first batch"
+      let pin ← db.acquire
+      db.checkpoint
+      db.rotateWal
+      check ((← db.write 7 (some 99)) == 5) "mixed trace did not append to the rotated keeper"
+      check ((← db.planWalCollection) == [0]) "mixed trace did not select exactly one covered seal"
+      db.collectCoveredWal
+      check (pin.sequence == 4 && (← db.lookup pin.handle 7) == some (some 100))
+        "mixed trace changed a pinned batch snapshot during maintenance"
+      expectUnknownBatch db target mixedBatchRows
     finally db.close
   | "--checkpoint-once" :: dir :: floorArg =>
     let db ← DiskTable.open ⟨dir⟩
@@ -2158,6 +2444,11 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkPublicSparsePruneRetry
     IO.FS.withTempDir checkFirstBoundedCheckpointOpen
     IO.FS.withTempDir checkRetrySync
+    IO.FS.withTempDir checkWriteBatch
+    IO.FS.withTempDir checkPartialBatchTail
+    for publishMarker in [false, true] do
+      IO.FS.withTempDir (checkBatchSyncFailure · publishMarker)
+      IO.FS.withTempDir (checkMixedBatchRecovery · publishMarker)
     IO.FS.withTempDir checkWritesAcrossReopens
     for failWal in [false, true] do
       IO.FS.withTempDir (checkGroupedSyncPartialEffects · failWal)

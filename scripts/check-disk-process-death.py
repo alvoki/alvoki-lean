@@ -106,7 +106,7 @@ def wait_for_sync_success(pid):
     raise RuntimeError("timed out waiting for the released sync")
 
 
-def check_process_death(binary, shim, root, after_rename, rotated, detached):
+def check_process_death(binary, shim, root, after_rename, rotated, detached, batch):
     database = root / "db"
     database.mkdir()
     segment = f"WAL-segment-{int(rotated)}"
@@ -136,21 +136,32 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached):
     control = root / "control"
     shutil.copytree(database, control)
     submitted_value = "100"
-    status, stderr = run_probe(binary, "--write-once", control, submitted_value)
+    operation = "--batch-write-once" if batch else "--write-once"
+    submit_args = () if batch else (submitted_value,)
+    status, stderr = run_probe(binary, operation, control, *submit_args)
     require(status == 0, f"could not prepare exact expected append: {stderr}")
     appended = (control / segment).read_bytes()
-    require(acknowledged and len(appended) == 2 * len(acknowledged) and appended.startswith(acknowledged),
-            "the acknowledged control write did not extend the WAL by one frame")
+    submitted_frames = 4 if batch else 1
+    require(acknowledged and len(appended) == (1 + submitted_frames) * len(acknowledged)
+            and appended.startswith(acknowledged), "the control did not append the submitted frames")
     expected_wal = appended if after_rename else acknowledged
     submitted_marker = (control / "WAL.commit").read_bytes()
     expected_marker = submitted_marker if after_rename else boundary
-    expected_sequence = 1 + int(rotated) + int(after_rename)
-    recovery_args = (str(expected_sequence), submitted_value if after_rename else "99")
+    old_sequence = 1 + int(rotated)
+    if batch:
+        check_operation = "--check-recovered-batch"
+        resume_operation = "--resume-recovered-batch"
+        recovery_args = (str(old_sequence), "new" if after_rename else "old")
+    else:
+        check_operation = "--check-recovered-table"
+        resume_operation = "--resume-recovered"
+        expected_sequence = old_sequence + int(after_rename)
+        recovery_args = (str(expected_sequence), submitted_value if after_rename else "99")
     resume_control = control
     if not after_rename:
         resume_control = root / "resume-control"
         shutil.copytree(database, resume_control)
-    status, stderr = run_probe(binary, "--resume-recovered", resume_control, *recovery_args)
+    status, stderr = run_probe(binary, resume_operation, resume_control, *recovery_args)
     require(status == 0, f"could not prepare exact resumed append: {stderr}")
     resumed_wal = (resume_control / segment).read_bytes()
     resumed_marker = (resume_control / "WAL.commit").read_bytes()
@@ -161,7 +172,7 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached):
     release = root / "release-sync"
     identity = root / "sync-object"
     sync_env = {**os.environ, "LD_PRELOAD": str(shim)}
-    with native_process(binary, "--write-once", database, submitted_value, sync_pid_file=ready, env={
+    with native_process(binary, operation, database, *submit_args, sync_pid_file=ready, env={
         **sync_env,
         "ALVOKI_CHECK_SYNC_HOLD": str(database if after_rename else wal),
         "ALVOKI_CHECK_SYNC_HOLD_MODE": "detached" if detached else "owner",
@@ -172,7 +183,7 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached):
         sync_pid = wait_for_sync(owner, ready)
         require((sync_pid != owner.pid) == detached, "sync paused in the wrong process")
         require(os.getpgid(sync_pid) == owner.pid, "sync escaped the fixture process group")
-        require(wal.read_bytes() == appended, "paused write did not leave the exact submitted frame")
+        require(wal.read_bytes() == appended, "paused write did not leave the exact submitted WAL bytes")
         require(marker.read_bytes() == expected_marker, "paused write selected the wrong WAL marker")
         if after_rename:
             require(not staged_marker.exists(), "paused write had not renamed the staged marker")
@@ -210,7 +221,7 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached):
             check_fixed_files()
         if not after_rename:
             require(file_sync.read_bytes() == acknowledged, "failed repair did not stage the exact prefix")
-        status, stderr = run_probe(binary, "--check-recovered-table", database, *recovery_args)
+        status, stderr = run_probe(binary, check_operation, database, *recovery_args)
         require(status == 0, f"reopen after owner death returned the wrong table: {stderr}")
         if detached:
             require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during recovery")
@@ -232,7 +243,7 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached):
         require(wal.read_bytes() == expected_wal and marker.read_bytes() == expected_marker,
                 "recovery or delayed sync changed the selected WAL bytes")
         check_fixed_files()
-        status, stderr = run_probe(binary, "--resume-recovered", database, *recovery_args)
+        status, stderr = run_probe(binary, resume_operation, database, *recovery_args)
         require(status == 0, f"could not append from the recovered state: {stderr}")
         require(os.path.samestat(wal.stat(), recovered_wal)
                 and wal.read_bytes() == resumed_wal and marker.read_bytes() == resumed_marker,
@@ -251,10 +262,11 @@ if __name__ == "__main__":
             ["cc", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", source, "-o", shim, "-ldl"],
             check=True,
         )
-        for rotated in (False, True):
-            for after_rename in (False, True):
-                for detached in (False, True):
-                    case = root / f"{int(rotated)}-{int(after_rename)}-{int(detached)}"
-                    case.mkdir()
-                    check_process_death(binary, shim, case, after_rename, rotated, detached)
-    print("Recovered and extended zero and rotated WAL keepers after native sync cuts and delayed sync.")
+        for batch in (False, True):
+            for rotated in (False, True):
+                for after_rename in (False, True):
+                    for detached in (False, True):
+                        case = root / f"{int(batch)}-{int(rotated)}-{int(after_rename)}-{int(detached)}"
+                        case.mkdir()
+                        check_process_death(binary, shim, case, after_rename, rotated, detached, batch)
+    print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")

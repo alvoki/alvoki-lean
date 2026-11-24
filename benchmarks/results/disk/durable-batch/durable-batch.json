@@ -1,0 +1,17 @@
+{
+  "cpu": 0,
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "db_root": "/workspace/work/alvoki-performance/db",
+  "rows": 4096,
+  "batch_sizes": [
+    1,
+    8,
+    32
+  ],
+  "trials": 5,
+  "alvoki_binary": "/workspace/alvoki-batch/lean/.lake/build/bin/alvoki-disk-batch",
+  "rocksdb_binary": "/workspace/work/alvoki-performance/rocksdb-batch",
+  "rocksdb_version": "9.10.0",
+  "revision": "6feaac955ae5a325d1af1f836e10443c02eb9e9b",
+  "protocol": "one synchronous submission at a time, fresh database per trial"
+}
