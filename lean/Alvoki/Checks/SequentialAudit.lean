@@ -10,6 +10,8 @@ import Alvoki.Storage.Disk.MarkedCheckpointPublication
 import Alvoki.Storage.Disk.MarkedCheckpointReady
 import Alvoki.Storage.Disk.MarkedCheckpointReopenReady
 import Alvoki.Storage.Disk.MarkedSessionHistory
+import Alvoki.Storage.Disk.MarkedDatabaseState
+import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.RecoveredPinRefinement
 import Alvoki.Storage.Disk.CheckpointHistory
 import Alvoki.Storage.Publication.DiskPublicationModel
@@ -172,6 +174,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.MarkedSessionTrace.refines
 #check_axioms Alvoki.WAL.Boundary.MarkedSessionStep.refines
 #check_axioms Alvoki.WAL.Boundary.MarkedSessionStep.refinesHistory
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseState.Valid.acknowledgedWrites
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseState.Valid.advanceFloor
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseState.Valid.compact
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseState.Valid.acquireAt
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseState.Valid.release
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseState.Valid.sessionStep
+#check_axioms Alvoki.WAL.Boundary.freshMarkedOpen_ready
 #check_axioms Alvoki.WAL.Boundary.MarkedSessionRetention.orderedSubmissions
 #check_axioms Alvoki.WAL.Boundary.reopenSettledHistory_completes
 #check_axioms Alvoki.Storage.CheckpointForRecovery.marked_reopen_metadata
