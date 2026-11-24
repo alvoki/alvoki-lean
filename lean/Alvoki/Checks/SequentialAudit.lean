@@ -12,6 +12,7 @@ import Alvoki.Storage.Disk.MarkedCheckpointReopenReady
 import Alvoki.Storage.Disk.MarkedSessionHistory
 import Alvoki.Storage.Disk.MarkedDatabaseState
 import Alvoki.Storage.Disk.ObservedMarkedState
+import Alvoki.Storage.Disk.MarkedDatabaseTrace
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.LegacyWalRecovery
 import Alvoki.Storage.Disk.LegacyMarkedBootstrap
@@ -192,6 +193,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseState.Valid.release
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseState.Valid.sessionStep
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.sessionStep
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseState.Valid.checkpointSucceeded
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseState.Valid.checkpointInterrupted
+#check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.ofEmptyBootstrap
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseStep.refines
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseTrace.refines
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseTrace.canonicalReads
 #check_axioms Alvoki.WAL.Boundary.freshMarkedOpen_ready
 #check_axioms Alvoki.WAL.Boundary.emptyBootstrapOpen_ready
 #check_axioms Alvoki.WAL.Boundary.legacyMarkedOpen_ready
