@@ -12,6 +12,7 @@ import Alvoki.Storage.Disk.RetainedAppendReports
 import Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
 import Alvoki.Storage.Disk.SegmentedDelayedAppendReopen
+import Alvoki.Storage.Disk.SegmentedKeeperReachedReplacement
 import Alvoki.Storage.Disk.SegmentedKeeperSyncBeforeBarrier
 import Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
 import Alvoki.Storage.Disk.SegmentedCollectionBarrierError
@@ -22,6 +23,7 @@ import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.SyncHandleCustody
 import Alvoki.Storage.Disk.SyncHandleEffects
 import Alvoki.Storage.Disk.KeeperReadCustody
+import Alvoki.Storage.Disk.WriteGroupFsync
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
@@ -931,6 +933,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.retainedAppendCutAfterLastDrop
 #check_axioms Alvoki.Storage.DiskSession.SegmentedAppendFailure.retainedCut
 #check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.reopensRetainedAppendError
+#check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.atBoundedReplacementBarrier
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.continuesLineage
 #check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_crashImages_subset
 #check_axioms Alvoki.Storage.WalSegmentRepair.Prepared.allowVisibleKeeper
@@ -1004,6 +1007,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.Agrees.captureKeeper
 #check_axioms Alvoki.Storage.SyncHandleRouting.alignedKeeperStep
 #check_axioms Alvoki.Storage.SyncHandleRouting.replacementKeeperBeforeRename
+#check_axioms Alvoki.WAL.Boundary.WriteEffects.markerStep_syncStaged_success
+#check_axioms Alvoki.WAL.Boundary.WriteEffects.reachedWriteGroup
+#check_axioms Alvoki.Storage.SyncHandleRouting.groupedWrite_effects
 #check_axioms Alvoki.Storage.DiskTable.retainRunVersions_fileEffects
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.afterRunRetention
 #check_axioms Alvoki.Storage.RepresentsWalHistory.retainRunVersions
