@@ -425,6 +425,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.runUnlinkSchedule_success
 #check_axioms Alvoki.WAL.Boundary.IntegrityRunCollectionReports.completePass
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_encode
+#check_axioms Alvoki.WAL.decodeOrdinalsFrom_append
 #check_axioms Alvoki.WAL.decodeOrdinals_append_encoded
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_eq_recoverSelected
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_refines

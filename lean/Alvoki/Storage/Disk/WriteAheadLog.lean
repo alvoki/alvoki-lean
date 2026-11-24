@@ -237,6 +237,67 @@ private theorem decodeFrom_appendAccumulator (bytes : ByteArray) (first offset r
       · rfl
       · simpa only [List.cons_append] using ih _ _ (_ :: current)
 
+private theorem decodeFrom_split (left right : ByteArray) (first offset count remaining : Nat)
+    (reversed : List Write) (fits : offset + count * frameSize ≤ left.size) :
+    decodeFrom true (left ++ right) first offset (count + remaining) reversed = (do
+      let prior ← decodeFrom true left first offset count reversed
+      decodeFrom true (left ++ right) (first + count) (offset + count * frameSize) remaining prior.reverse) := by
+  induction count generalizing first offset reversed with
+  | zero =>
+    simp only [Nat.zero_add, Nat.add_zero, Nat.zero_mul, decodeFrom, Bind.bind, Except.bind, List.reverse_reverse]
+  | succ count ih =>
+    have endInLeft : offset + frameSize ≤ left.size := by
+      rw [Nat.succ_mul] at fits
+      omega
+    have within : offset ≤ left.size := by omega
+    have frame : (left ++ right).extract offset (offset + frameSize) = left.extract offset (offset + frameSize) := by
+      simp [ByteArray.extract_append, Nat.sub_eq_zero_of_le within, Nat.sub_eq_zero_of_le endInLeft]
+    simp only [Nat.succ_add, decodeFrom, frame]
+    split
+    · rfl
+    next event _ =>
+      split
+      · rfl
+      · have nextFits : offset + frameSize + count * frameSize ≤ left.size := by
+          rw [Nat.succ_mul] at fits
+          omega
+        have tail := ih (first + 1) (offset + frameSize) (event :: reversed) nextFits
+        have ordinal : first + 1 + count = first + (count + 1) := by omega
+        have cursor : offset + frameSize + count * frameSize = offset + (count + 1) * frameSize := by
+          rw [Nat.succ_mul]; omega
+        simpa only [advanceOrdinal, ite_true, ordinal, cursor] using tail
+
+/-- Splitting at a complete frame boundary preserves the exact decoder
+result, including which malformed frame is reported first. -/
+theorem decodeOrdinalsFrom_append (first : Nat) (left right : ByteArray)
+    (aligned : left.size % frameSize = 0) :
+    decodeOrdinalsFrom first (left ++ right) = (do
+      let prior ← decodeOrdinalsFrom first left
+      let later ← decodeOrdinalsFrom (first + left.size / frameSize) right
+      pure (prior ++ later)) := by
+  let count := left.size / frameSize
+  have boundary : count * frameSize = left.size := by
+    have division := Nat.mod_add_div left.size frameSize
+    rw [aligned, Nat.zero_add, Nat.mul_comm] at division
+    exact division
+  have total : (left ++ right).size / frameSize = count + right.size / frameSize := by
+    rw [ByteArray.size_append, ← boundary, Nat.mul_comm count,
+      Nat.mul_add_div (by decide : 0 < frameSize)]
+  unfold decodeOrdinalsFrom
+  rw [total, decodeFrom_split left right first 0 count (right.size / frameSize) [] (by simp [boundary])]
+  rw [Nat.zero_add, boundary]
+  cases decodeFrom true left first 0 count [] with
+  | error => rfl
+  | ok prior =>
+    change decodeFrom true (left ++ right) (first + count) left.size (right.size / frameSize) prior.reverse = _
+    have shifted := decodeFrom_shift true left right (first + count) 0 (right.size / frameSize) prior.reverse
+    rw [Nat.add_zero] at shifted
+    rw [shifted]
+    have appended := decodeFrom_appendAccumulator right (first + count) 0 (right.size / frameSize) [] prior.reverse
+    simp only [List.nil_append, List.reverse_reverse] at appended
+    rw [appended]
+    cases decodeFrom true right (first + count) 0 (right.size / frameSize) [] <;> rfl
+
 /-- Removing a validated, whole prefix leaves the decoder result for the
 same retained bytes. In particular, a malformed complete retained frame
 still reports the same error. -/
@@ -244,14 +305,12 @@ theorem decodeOrdinals_append_encoded (covered : List Write) (retained : ByteArr
     (ordered : OrdinalsFrom 1 covered) :
     decodeOrdinals (encode covered ++ retained) =
       (decodeOrdinalsFrom (covered.length + 1) retained).map (covered ++ ·) := by
-  have count : (encode covered ++ retained).size / frameSize =
-      covered.length + retained.size / frameSize := by
-    rw [ByteArray.size_append, encode_size, Nat.mul_add_div (by decide : 0 < frameSize)]
-  rw [decodeOrdinals, count, decodeFrom_append_encoded true covered retained 1
-    (retained.size / frameSize) [] (fun _ => ordered)]
-  simpa only [advanceOrdinal, ite_true, List.append_nil, List.nil_append, Nat.add_comm 1,
-    List.reverse_reverse, decodeOrdinalsFrom] using decodeFrom_appendAccumulator retained (covered.length + 1) 0
-      (retained.size / frameSize) [] covered.reverse
+  have aligned : (encode covered).size % frameSize = 0 := by rw [encode_size, Nat.mul_mod_right]
+  have ordinal : 1 + (encode covered).size / frameSize = covered.length + 1 := by
+    rw [encode_size, Nat.mul_div_cancel_left _ (by decide : 0 < frameSize), Nat.add_comm]
+  change decodeOrdinalsFrom 1 (encode covered ++ retained) = _
+  rw [decodeOrdinalsFrom_append 1 _ _ aligned, decodeOrdinalsFrom_encode 1 covered ordered, ordinal]
+  cases decodeOrdinalsFrom (covered.length + 1) retained <;> rfl
 
 private theorem decodeFrom_ordinals (bytes : ByteArray) (ordinal offset remaining : Nat)
     (reversed result : List Write) (decoded : decodeFrom true bytes ordinal offset remaining reversed = .ok result) :
