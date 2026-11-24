@@ -427,3 +427,7 @@ A native fixture stops a write at the staged-marker sync command, confirms a com
 ## Concrete native checkpoint paths under the database lock
 
 The native open equation names the resolved lock, manifest, marker and WAL paths and every ordered run callback. The path-indexed proof reconstructs the checkpoint reading observations from those same path reports under the lock. Only the decoded manifest's generation and in-range indices require run byte agreement. Given those successful reads and exact durable bytes, the shared loader returns the corresponding base table. The emitted `DiskTable` C and native object remain byte-identical. [Native open equation](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Locked checkpoint reads](../lean/Alvoki/Storage/Disk/LockedOpenFileReads.lean)
+
+## Settled reopen and guarded session reads
+
+A shared reopen from a settled marked database returns a ready writer with the exact loaded generation, selected WAL byte count and a fresh pin registry. Running that successful recovery through the shared lock lifecycle also gives the opener ownership. A guarded read through an active local pin returns canonical replay data and preserves lock ownership. A closed session reports its closed error, and a distinct live session rejects the old pin. The proof uses file reports for the owned directory and live-reference identity for session comparison. [Locked marked reads](../lean/Alvoki/Storage/Disk/LockedMarkedRead.lean)
