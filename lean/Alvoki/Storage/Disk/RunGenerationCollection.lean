@@ -90,12 +90,12 @@ theorem RunDeletion.accepts_iff {held : UInt64 → Prop} {before after : Image}
   | none => rfl
   | some bytes =>
     constructor
-    · rintro ⟨header, files, decoded, witness, covered, count, bindings⟩
-      refine ⟨header, files, decoded, witness, covered, count, ?_⟩
-      exact deleted.keepsSelected selected decoded ▸ bindings
-    · rintro ⟨header, files, decoded, witness, covered, count, bindings⟩
-      refine ⟨header, files, decoded, witness, covered, count, ?_⟩
-      exact (deleted.keepsSelected selected decoded).symm ▸ bindings
+    · rintro ⟨header, files, decoded, runs⟩
+      exact ⟨header, files, decoded, runs.withKeptRuns (fun index _ =>
+        congrFun (deleted.keepsSelected selected decoded).symm index)⟩
+    · rintro ⟨header, files, decoded, runs⟩
+      exact ⟨header, files, decoded, runs.withKeptRuns (fun index _ =>
+        congrFun (deleted.keepsSelected selected decoded) index)⟩
 
 theorem RunDeletion.valid {held : UInt64 → Prop} {before after : Image}
     (deleted : RunDeletion held before after) {walSequence : UInt64}

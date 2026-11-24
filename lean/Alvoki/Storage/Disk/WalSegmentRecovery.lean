@@ -132,12 +132,8 @@ theorem WalSegmentCollectionRetry.recoversLoaded
     simp [selectedCheckpointWatermark, manifest, format, Except.toOption]
   have watermark := Option.some.inj ((DirectoryPublication.Bindings.walRange_accounting decoded).1.symm.trans
     selectedWatermark)
-  have canonical := Manifest.decode_encode selected.header (Manifest.VersionedCheckpoint.decoded_floor format)
-  have headerClock := WAL.Boundary.CheckpointForRecovery.headerWatermark written canonical
+  have headerClock := written.watermark
   obtain ⟨expectedBase, interpreted, same⟩ := written.loads
-  change (Manifest.decode (Manifest.encode selected.header) >>= fun header => loadRunSet header files) =
-    .ok expectedBase at interpreted
-  rw [canonical] at interpreted
   have sameBase := Except.ok.inj (interpreted.symm.trans structural)
   subst expectedBase
   have fresh := loadRunSet_clearsPins structural

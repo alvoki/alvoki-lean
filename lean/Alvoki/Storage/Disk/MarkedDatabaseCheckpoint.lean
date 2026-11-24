@@ -126,7 +126,10 @@ theorem MarkedDatabaseState.Valid.checkpointInterrupted {state : MarkedDatabaseS
   obtain ⟨fixed, nextModel, _, image, _, covered, _, coveredHistory, observed, ready, refined,
       live, _, loaded, _, read, generation, _, _⟩ :=
     CheckpointPublication.checkpointMarkedRetry_reopen_ready valid.ready.settled rfl fits
-      valid.ready.ordered initialValid (fun _ _ witness => witness) exactCut attempts checkpointReads walReads opened
+      valid.ready.ordered initialValid
+      (fun _ _ ⟨checkpoint, model, written, refined, represented⟩ =>
+        ⟨checkpoint, model, written.legacy, refined, represented⟩)
+      exactCut attempts checkpointReads walReads opened
   let writer : MarkedWriterState := ⟨table, (WAL.encode state.writer.history).size, after, state.writer.history⟩
   let next : MarkedDatabaseState := ⟨writer, fixed, (loaded.getD (.empty, 0)).2⟩
   have durable := congrArg CheckpointPublication.Image.durable image

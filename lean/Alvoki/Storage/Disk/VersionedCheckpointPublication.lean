@@ -91,8 +91,7 @@ theorem checkpointIntegrity_complete {walSequence : UInt64} {expected : Checkpoi
     IntegrityCheckpoint.decode_encode metadata floor (by simpa [metadata, IntegrityCheckpoint.fromRuns] using count)
   have checked := IntegrityCheckpoint.validateRuns_fromRuns next.header next.files count fits
   refine ⟨after, published, manifest, (Image.acceptsVersioned_integrity_iff decoded).mpr ?_, durable⟩
-  exact ⟨next.header, next.files, Manifest.decode_encode next.header floor, ⟨witness, checked⟩,
-    covered, count.symm, fun index _ => durable index⟩
+  exact ⟨next.files, ⟨⟨witness, checked⟩, covered, count.symm, fun index _ => durable index⟩⟩
 
 /-- Freshness checks the actual raw bindings and recognizes both manifest versions. -/
 def Image.UnreachableVersioned (image : Image) (generation : UInt64) : Prop :=
@@ -113,15 +112,9 @@ private theorem keeps_versioned_acceptance {before written : Image} {walSequence
   cases binding with
   | none => trivial
   | some bytes =>
-    obtain ⟨selected, decoded, witness⟩ := accepted
-    obtain ⟨header, files, canonical, good, covered, count, names⟩ := witness
-    have sameHeader := Except.ok.inj
-      (canonical.symm.trans (Manifest.decode_encode _ (VersionedCheckpoint.decoded_floor decoded)))
-    have different : header.generation ≠ generation := by
-      rw [sameHeader]
-      exact fresh bytes selectable selected decoded
-    exact ⟨selected, decoded, header, files, canonical, good, covered, count,
-      fun index inside => (preserved _ different index).trans (names index inside)⟩
+    obtain ⟨selected, decoded, files, runs⟩ := accepted
+    have different := fresh bytes selectable selected decoded
+    exact ⟨selected, decoded, files, runs.withKeptRuns (fun index _ => preserved _ different index)⟩
 
 /-- Run creation does not change the manifest. Its later replacement
 preserves any predicate shared by the old bindings and the proposed bytes. -/
@@ -191,9 +184,7 @@ theorem checkpointVersioned_cut_valid {initial after : Image} {next : VersionedR
         keeps_versioned_acceptance preserved fresh (.inl rfl) valid.activeValid,
         fun _ survives => keeps_versioned_acceptance preserved fresh (.inr survives) (valid.crashValid _ survives)⟩
     have installed : written.AcceptsVersioned walSequence expected (some next.manifest.encode) :=
-      ⟨next.manifest, decoded, next.manifest.header, next.files,
-        Manifest.decode_encode _ (VersionedCheckpoint.decoded_floor decoded),
-        ⟨witness, checked⟩, covered, count, fun index _ => durable index⟩
+      ⟨next.manifest, decoded, next.files, ⟨⟨witness, checked⟩, covered, count, fun index _ => durable index⟩⟩
     let actions := Publication.steps.take (cut - (runBarrier next.files.length).length)
     change (do
       let files ← initial.execute next.runSet ((runBarrier next.files.length).take cut)

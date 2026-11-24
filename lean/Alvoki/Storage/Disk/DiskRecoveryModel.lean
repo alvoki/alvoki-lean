@@ -49,6 +49,26 @@ theorem recoverRunSet_written {checkpoint committed : PackedTable} (generation :
   rw [loads]
   exact recovered
 
+/-- A decoded checkpoint header and its exact ordered run bytes describe a
+flushed table. Codec and durable-path observations are proved separately. -/
+structure WrittenCheckpoint (header : Manifest.Checkpoint) (files : List ByteArray)
+    (checkpoint : PackedTable) : Prop where
+  exactFiles : files = checkpoint.runs.map (·.run.bytes)
+  flushed : checkpoint.memory = Alvoki.Sequential.History.empty
+  count : checkpoint.runs.length = header.runCount.toNat
+  watermark : header.committed = checkpoint.committed
+  floor : header.floor = checkpoint.pins.floor
+  validFloor : header.floor ≤ header.committed
+  rowBounds : checkpoint.RowBounds
+
+theorem WrittenCheckpoint.loads {header : Manifest.Checkpoint} {files : List ByteArray}
+    {checkpoint : PackedTable} (written : WrittenCheckpoint header files checkpoint) :
+    ∃ base, loadRunSet header files = .ok base ∧ base.SameData checkpoint := by
+  obtain ⟨base, loaded, restored⟩ := loadRunSet_written header checkpoint.runs written.count written.validFloor
+    (fun run present row inside => written.watermark.symm ▸ written.rowBounds.runs run present row inside)
+  rw [written.watermark, written.floor] at restored
+  exact ⟨base, written.exactFiles.symm ▸ loaded, PackedTable.restore_sameData written.flushed restored⟩
+
 /-- A selected manifest and its exact ordered run bytes describe a flushed
 checkpoint. An absent manifest uses the same empty base as the Linux adapter. -/
 inductive CheckpointForRecovery : Option ByteArray → List ByteArray → PackedTable → Prop where
@@ -72,6 +92,24 @@ theorem CheckpointForRecovery.rowBounds {manifest : Option ByteArray} {files : L
     exact ⟨fun run mem row inside => watermark ▸ bounded run mem row inside,
       by simp [flushed, Alvoki.Sequential.History.empty]⟩
 
+theorem CheckpointForRecovery.writtenCheckpoint {bytes : ByteArray} {header : Manifest.Checkpoint}
+    {files : List ByteArray} {checkpoint : PackedTable}
+    (written : CheckpointForRecovery (some bytes) files checkpoint)
+    (decoded : Manifest.decode bytes = .ok header) : WrittenCheckpoint header files checkpoint := by
+  have bounds := written.rowBounds
+  cases written with
+  | written stored checkpoint flushed count watermark floor validFloor _ =>
+    have same := Except.ok.inj (decoded.symm.trans (Manifest.decode_encode stored validFloor))
+    subst header
+    exact ⟨rfl, flushed, count, watermark, floor, validFloor, bounds⟩
+
+theorem WrittenCheckpoint.legacy {header : Manifest.Checkpoint} {files : List ByteArray}
+    {checkpoint : PackedTable} (written : WrittenCheckpoint header files checkpoint) :
+    CheckpointForRecovery (some (Manifest.encode header)) files checkpoint := by
+  rw [written.exactFiles]
+  exact .written header checkpoint written.flushed written.count written.watermark written.floor written.validFloor
+    (fun run present row inside => written.watermark.symm ▸ written.rowBounds.runs run present row inside)
+
 theorem CheckpointForRecovery.loads {manifest : Option ByteArray} {files : List ByteArray}
     {checkpoint : PackedTable} (written : CheckpointForRecovery manifest files checkpoint) :
     ∃ base, (match manifest with
@@ -79,12 +117,14 @@ theorem CheckpointForRecovery.loads {manifest : Option ByteArray} {files : List 
       | some bytes => do
         let header ← Manifest.decode bytes
         loadRunSet header files) = .ok base ∧ base.SameData checkpoint := by
+  have bounds := written.rowBounds
   cases written with
   | absent => exact ⟨.empty, rfl, ⟨rfl, rfl, rfl, rfl⟩⟩
-  | written header checkpoint flushed count watermark floor validFloor bounded =>
-    obtain ⟨base, loaded, restored⟩ := loadRunSet_written header checkpoint.runs count validFloor bounded
-    rw [watermark, floor] at restored
-    refine ⟨base, ?_, PackedTable.restore_sameData flushed restored⟩
+  | written header checkpoint flushed count watermark floor validFloor _ =>
+    have facts : WrittenCheckpoint header (checkpoint.runs.map (·.run.bytes)) checkpoint :=
+      ⟨rfl, flushed, count, watermark, floor, validFloor, bounds⟩
+    obtain ⟨base, loaded, restored⟩ := facts.loads
+    refine ⟨base, ?_, restored⟩
     change (do
       let decoded ← Manifest.decode (Manifest.encode header)
       loadRunSet decoded (checkpoint.runs.map fun run : CheckedRun => run.run.bytes)) = .ok base
@@ -107,14 +147,14 @@ theorem CheckpointForRecovery.recoverSelected_rowBounds {manifest : Option ByteA
 /-- The native checkpoint's prepared table and exact run bytes witness
 recovery. The input rows must already be covered by the committed watermark.
 The abstract table takes the same flush decision as the adapter. -/
-theorem CheckpointForRecovery.of_flushForCheckpoint
+theorem WrittenCheckpoint.of_flushForCheckpoint
     {before checkpoint : PackedTable} {model : Alvoki.Sequential.SnapshotTable UInt64}
     (prepared : (flushForCheckpoint before id : Except String PackedTable) = .ok checkpoint)
     (refines : before.Refines model) (fits : checkpoint.runs.length < UInt64.size)
     (runBound : ∀ run ∈ before.runs, ∀ row ∈ run.history.rows, row.sequence ≤ before.committed)
     (memoryBound : ∀ row ∈ before.memory.rows, row.sequence ≤ before.committed)
     (generation : UInt64) :
-    CheckpointForRecovery (some (Manifest.encode (checkpointHeader checkpoint generation)))
+    WrittenCheckpoint (checkpointHeader checkpoint generation)
       (checkpoint.runs.map (·.run.bytes)) checkpoint ∧
     checkpoint.committed = before.committed ∧
     checkpoint.Refines (if before.memory.rows.isEmpty then model else model.flush) := by
@@ -145,24 +185,23 @@ theorem CheckpointForRecovery.of_flushForCheckpoint
   have floor : checkpoint.pins.floor ≤ checkpoint.committed := by
     rw [relation.pins, relation.committed]
     exact (if before.memory.rows.isEmpty then model else model.flush).floor_committed
-  exact ⟨.written _ _ empty (UInt64.toNat_ofNat_of_lt' fits).symm rfl rfl floor bounded.runs,
+  exact ⟨⟨rfl, empty, (UInt64.toNat_ofNat_of_lt' fits).symm, rfl, rfl, floor, bounded⟩,
     committed, relation⟩
 
-/-- Reading consecutive indices returns the recorded byte list in order. -/
-theorem read_ordered_runs (read : Nat → Option ByteArray) (first : Nat)
-    (files : List ByteArray)
-    (durable : ∀ index, index < files.length → read (first + index) = files[index]?) :
-    (List.range' first files.length).mapM read = some files := by
-  induction files generalizing first with
-  | nil => rfl
-  | cons bytes files ih =>
-    have head : read first = some bytes := by
-      simpa using durable 0 (by simp)
-    have tail : (List.range' (first + 1) files.length).mapM read = some files := by
-      apply ih
-      intro index within
-      simpa [Nat.add_assoc, Nat.add_comm 1 index] using durable (index + 1) (by simpa using within)
-    simp [List.range'_succ, List.mapM_cons, head, tail]
+theorem CheckpointForRecovery.of_flushForCheckpoint
+    {before checkpoint : PackedTable} {model : Alvoki.Sequential.SnapshotTable UInt64}
+    (prepared : (flushForCheckpoint before id : Except String PackedTable) = .ok checkpoint)
+    (refines : before.Refines model) (fits : checkpoint.runs.length < UInt64.size)
+    (runBound : ∀ run ∈ before.runs, ∀ row ∈ run.history.rows, row.sequence ≤ before.committed)
+    (memoryBound : ∀ row ∈ before.memory.rows, row.sequence ≤ before.committed)
+    (generation : UInt64) :
+    CheckpointForRecovery (some (Manifest.encode (checkpointHeader checkpoint generation)))
+      (checkpoint.runs.map (·.run.bytes)) checkpoint ∧
+    checkpoint.committed = before.committed ∧
+    checkpoint.Refines (if before.memory.rows.isEmpty then model else model.flush) := by
+  obtain ⟨written, committed, refined⟩ := WrittenCheckpoint.of_flushForCheckpoint
+    prepared refines fits runBound memoryBound generation
+  exact ⟨written.legacy, committed, refined⟩
 
 /-- Read the known durable run names in the manifest's recovery order. -/
 def CheckpointPublication.Image.readDurableCheckpointRuns (image : CheckpointPublication.Image) :
@@ -173,14 +212,13 @@ def CheckpointPublication.Image.readDurableCheckpointRuns (image : CheckpointPub
     (List.range header.runCount.toNat).mapM (image.durable header.generation)
 
 private theorem read_durable_runs {image : CheckpointPublication.Image} {bytes : ByteArray}
+    {walSequence : UInt64} {expected : Manifest.Checkpoint → List ByteArray → Prop}
     {header : Manifest.Checkpoint} {files : List ByteArray}
-    (decoded : Manifest.decode bytes = .ok header) (count : header.runCount.toNat = files.length)
-    (durable : ∀ index, index < files.length → image.durable header.generation index = files[index]?) :
+    (decoded : Manifest.decode bytes = .ok header)
+    (accepted : image.AcceptsRunSet walSequence expected header files) :
     image.readDurableCheckpointRuns (some bytes) = some files := by
-  simp only [CheckpointPublication.Image.readDurableCheckpointRuns, decoded, Except.toOption]
-  change (List.range header.runCount.toNat).mapM (image.durable header.generation) = some files
-  rw [count, List.range_eq_range']
-  exact read_ordered_runs _ 0 files (by simpa using durable)
+  simpa only [CheckpointPublication.Image.readDurableCheckpointRuns, decoded, Except.toOption, Bind.bind, Option.bind]
+    using accepted.ordered
 
 /-- A manifest accepted by the publication model supplies exact ordered run
 bytes and a loader witness with the caller's checkpoint invariant. An absent
@@ -198,9 +236,9 @@ theorem CheckpointForRecovery.of_durable_manifest_with {image : CheckpointPublic
   cases manifest with
   | none => exact ⟨[], .empty, .absent, rfl, emptyValid⟩
   | some bytes =>
-    obtain ⟨header, files, decoded, valid, _, count, durable⟩ := accepted
-    obtain ⟨checkpoint, written, property⟩ := witness header files valid
-    refine ⟨files, checkpoint, ?_, read_durable_runs decoded count durable, property⟩
+    obtain ⟨header, files, decoded, runs⟩ := accepted
+    obtain ⟨checkpoint, written, property⟩ := witness header files runs.witness
+    refine ⟨files, checkpoint, ?_, read_durable_runs decoded runs, property⟩
     simpa only [Manifest.decode_reencode decoded] using written
 
 /-- The physical loader witness for a manifest whose published exact run bytes
@@ -230,13 +268,13 @@ theorem CheckpointForRecovery.accepts_exact_durable {image : CheckpointPublicati
   cases written with
   | absent => trivial
   | written header checkpoint flushed count watermark floor validFloor bounded =>
-    obtain ⟨found, stored, decoded, _, _, runCount, names⟩ := accepted
+    obtain ⟨found, stored, decoded, runs⟩ := accepted
     have sameHeader := Except.ok.inj (decoded.symm.trans (Manifest.decode_encode header validFloor))
     subst found
-    have sameFiles := Option.some.inj ((read_durable_runs decoded runCount names).symm.trans durable)
+    have sameFiles := Option.some.inj ((read_durable_runs decoded runs).symm.trans durable)
     subst stored
-    exact ⟨header, _, decoded, .written header checkpoint flushed count watermark floor validFloor bounded,
-      UInt64.le_of_eq watermark, runCount, names⟩
+    exact ⟨header, _, decoded, ⟨.written header checkpoint flushed count watermark floor validFloor bounded,
+      UInt64.le_of_eq watermark, runs.count, runs.durable⟩⟩
 
 /-- Successful ordered reads that agree with the durable map return its
 ordered byte list. -/
@@ -351,10 +389,10 @@ theorem CheckpointForRecovery.ordered_durable_runs {image : CheckpointPublicatio
   cases manifest with
   | none => cases written; rfl
   | some bytes =>
-    obtain ⟨header, stored, decoded, witness, _, count, durable⟩ := accepted
-    have same := witness.written_files.trans written.written_files.symm
+    obtain ⟨header, stored, decoded, runs⟩ := accepted
+    have same := runs.witness.written_files.trans written.written_files.symm
     subst stored
-    exact read_durable_runs decoded count durable
+    exact read_durable_runs decoded runs
 
 theorem ordered_reads_succeed {indices : List Nat} {read : Nat → Except String ByteArray}
     (success : ∀ index ∈ indices, ∃ bytes, read index = .ok bytes) :

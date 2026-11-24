@@ -31,73 +31,42 @@ theorem VersionedCheckpoint.decoded_case {bytes : ByteArray} {selected : Version
       subst selected
       rfl
 
-private theorem legacyFloor {bytes : ByteArray} {header : Checkpoint}
-    (decoded : Manifest.decode bytes = .ok header) : header.floor ≤ header.committed := by
-  unfold Manifest.decode at decoded
-  split at decoded
-  · contradiction
-  dsimp only at decoded
-  split at decoded
-  · contradiction
-  split at decoded
-  · contradiction
-  split at decoded
-  · contradiction
-  rename_i floor
-  cases decoded
-  exact UInt64.not_lt.mp floor
-
-theorem VersionedCheckpoint.decoded_floor {bytes : ByteArray} {selected : VersionedCheckpoint}
-    (decoded : VersionedCheckpoint.decode bytes = .ok selected) : selected.header.floor ≤ selected.header.committed := by
-  have parsed := VersionedCheckpoint.decoded_case decoded
-  cases selected with
-  | legacy => exact legacyFloor parsed
-  | integrity => exact (IntegrityCheckpoint.decode_spec parsed).2.1
-
 end Alvoki.Manifest
 
 namespace Alvoki.Storage
 open Manifest
 
-/-- Reuse the original publication witness for the selected format's
-semantic header. The actual manifest must decode in its own version, and
-the additional run-payload check applies to the same exact durable bytes. -/
+/-- The raw manifest selects the typed header and run validation for its
+format. Both checks refer to the same exact durable run set. -/
 def CheckpointPublication.Image.AcceptsVersioned (image : CheckpointPublication.Image) (walSequence : UInt64)
     (expected : Checkpoint → List ByteArray → Prop) : Option ByteArray → Prop
   | none => True
   | some bytes => ∃ selected, VersionedCheckpoint.decode bytes = .ok selected ∧
-      image.Accepts walSequence (fun header files => expected header files ∧ selected.ValidatesFiles files)
-        (some (Manifest.encode selected.header))
+      ∃ files, image.AcceptsRunSet walSequence (fun header files => expected header files ∧ selected.ValidatesFiles files)
+        selected.header files
+
+theorem CheckpointPublication.Image.acceptsVersioned_decoded_iff
+    {image : CheckpointPublication.Image} {walSequence : UInt64} {expected : Checkpoint → List ByteArray → Prop}
+    {bytes : ByteArray} {selected : VersionedCheckpoint} (decoded : VersionedCheckpoint.decode bytes = .ok selected) :
+    image.AcceptsVersioned walSequence expected (some bytes) ↔ ∃ files,
+      image.AcceptsRunSet walSequence (fun header files => expected header files ∧ selected.ValidatesFiles files)
+        selected.header files := by
+  simp [Image.AcceptsVersioned, decoded]
 
 theorem CheckpointPublication.Image.acceptsVersioned_legacy_iff
     {image : CheckpointPublication.Image} {walSequence : UInt64} {expected : Checkpoint → List ByteArray → Prop}
     {bytes : ByteArray} {header : Checkpoint} (decoded : Manifest.decode bytes = .ok header) :
     image.AcceptsVersioned walSequence expected (some bytes) ↔ image.Accepts walSequence expected (some bytes) := by
-  have tagged := VersionedCheckpoint.decode_legacy decoded
-  have raw := Manifest.decode_reencode decoded
-  constructor
-  · rintro ⟨selected, decodedVersion, accepted⟩
-    have same := Except.ok.inj (decodedVersion.symm.trans tagged)
-    subst selected
-    simpa [VersionedCheckpoint.header, VersionedCheckpoint.ValidatesFiles, raw] using accepted
-  · intro accepted
-    refine ⟨.legacy header, tagged, ?_⟩
-    simpa [VersionedCheckpoint.header, VersionedCheckpoint.ValidatesFiles, raw] using accepted
+  rw [Image.accepts_decoded_iff decoded, Image.acceptsVersioned_decoded_iff (VersionedCheckpoint.decode_legacy decoded)]
+  simp [VersionedCheckpoint.header, VersionedCheckpoint.ValidatesFiles]
 
 theorem CheckpointPublication.Image.acceptsVersioned_integrity_iff
     {image : CheckpointPublication.Image} {walSequence : UInt64} {expected : Checkpoint → List ByteArray → Prop}
     {bytes : ByteArray} {manifest : IntegrityCheckpoint} (decoded : IntegrityCheckpoint.decode bytes = .ok manifest) :
-    image.AcceptsVersioned walSequence expected (some bytes) ↔
-      image.Accepts walSequence (fun header files => expected header files ∧ manifest.validateRuns files = true)
-        (some (Manifest.encode manifest.header)) := by
-  have tagged := VersionedCheckpoint.decode_integrity decoded
-  constructor
-  · rintro ⟨selected, decodedVersion, accepted⟩
-    have same := Except.ok.inj (decodedVersion.symm.trans tagged)
-    subst selected
-    exact accepted
-  · intro accepted
-    exact ⟨.integrity manifest, tagged, accepted⟩
+    image.AcceptsVersioned walSequence expected (some bytes) ↔ ∃ files,
+      image.AcceptsRunSet walSequence (fun header files => expected header files ∧ manifest.validateRuns files = true)
+        manifest.header files :=
+  Image.acceptsVersioned_decoded_iff (VersionedCheckpoint.decode_integrity decoded)
 
 theorem CheckpointPublication.Image.acceptsVersioned_runs
     {image : CheckpointPublication.Image} {walSequence : UInt64} {expected : Checkpoint → List ByteArray → Prop}
@@ -106,18 +75,8 @@ theorem CheckpointPublication.Image.acceptsVersioned_runs
     (decoded : VersionedCheckpoint.decode bytes = .ok selected) :
     ∃ files, (List.range selected.header.runCount.toNat).mapM (image.durable selected.header.generation) = some files ∧
       expected selected.header files ∧ selected.ValidatesFiles files ∧ selected.header.committed ≤ walSequence := by
-  obtain ⟨format, decodedFormat, witness⟩ := accepted
-  have same := Except.ok.inj (decodedFormat.symm.trans decoded)
-  rw [same] at witness
-  obtain ⟨header, files, canonical, ⟨spec, checked⟩, covered, count, durable⟩ := witness
-  have headerEq := Except.ok.inj
-    (canonical.symm.trans (Manifest.decode_encode selected.header (VersionedCheckpoint.decoded_floor decoded)))
-  rw [headerEq] at spec covered count durable
-  have ordered : (List.range selected.header.runCount.toNat).mapM
-      (image.durable selected.header.generation) = some files := by
-    rw [count, List.range_eq_range']
-    exact read_ordered_runs _ 0 files (by simpa using durable)
-  exact ⟨files, ordered, spec, checked, covered⟩
+  obtain ⟨files, runs⟩ := (Image.acceptsVersioned_decoded_iff decoded).mp accepted
+  exact ⟨files, runs.ordered, runs.witness.1, runs.witness.2, runs.covered⟩
 
 /-- Reuse the existing locked observations and supply the same run read
 contract for the version that adds payload metadata. -/

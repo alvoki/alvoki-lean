@@ -150,6 +150,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointForRecovery.recoverSelected_rowBounds
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_flushForCheckpoint
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_flushForCheckpoint_history
+#check_axioms Alvoki.Storage.WrittenCheckpoint.loads
+#check_axioms Alvoki.Storage.WrittenCheckpoint.of_flushForCheckpoint_history
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest_with
 #check_axioms Alvoki.Storage.readCheckpointRunBytes_eq_mapM
@@ -321,6 +323,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Manifest.VersionedCheckpoint.decoded_case
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_legacy_iff
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_integrity_iff
+#check_axioms Alvoki.Storage.CheckpointPublication.AcceptsRunSet.ordered
+#check_axioms Alvoki.Storage.CheckpointPublication.AcceptsRunSet.withKeptRuns
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_runs
 #check_axioms Alvoki.Storage.VersionedCheckpointFileReads.loaded_lineage
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.executeVersioned_legacy

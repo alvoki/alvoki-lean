@@ -43,8 +43,12 @@ private theorem Image.acceptsVersioned_sameRuns {before after : Image} {walSeque
     (sameRuns : after.durable selected.header.generation = before.durable selected.header.generation) :
     after.AcceptsVersioned walSequence expected (some bytes) ↔
       before.AcceptsVersioned walSequence expected (some bytes) := by
-  have header := Manifest.decode_encode selected.header (VersionedCheckpoint.decoded_floor decoded)
-  simp [Image.AcceptsVersioned, decoded, Image.Accepts, header, sameRuns]
+  rw [Image.acceptsVersioned_decoded_iff decoded, Image.acceptsVersioned_decoded_iff decoded]
+  constructor
+  · rintro ⟨files, runs⟩
+    exact ⟨files, runs.withKeptRuns (fun index _ => congrFun sameRuns.symm index)⟩
+  · rintro ⟨files, runs⟩
+    exact ⟨files, runs.withKeptRuns (fun index _ => congrFun sameRuns index)⟩
 
 /-- Approved older addresses cannot affect any index of the selected
 generation. The same exact ordered files still witness acceptance,

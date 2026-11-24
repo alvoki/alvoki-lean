@@ -43,17 +43,8 @@ theorem checkpointSuccessorUnreachable {writer : MarkedWriterState} {manifest : 
 for its exact run files and the prefix of the current WAL it represents. -/
 def CheckpointRepresentsPrefix (history : List WAL.Write) (header : Manifest.Checkpoint)
     (files : List ByteArray) : Prop :=
-  ∃ checkpoint model, CheckpointForRecovery (some (Manifest.encode header)) files checkpoint ∧
+  ∃ checkpoint model, WrittenCheckpoint header files checkpoint ∧
     checkpoint.Refines model ∧ RepresentsWalHistory (history.take checkpoint.committed.toNat) model
-
-theorem CheckpointForRecovery.headerWatermark {bytes : ByteArray} {files : List ByteArray}
-    {table : PackedTable} {header : Manifest.Checkpoint}
-    (written : CheckpointForRecovery (some bytes) files table)
-    (decoded : Manifest.decode bytes = .ok header) : header.committed = table.committed := by
-  cases written with
-  | written expected _ _ _ watermark _ floor _ =>
-    have same := Except.ok.inj (decoded.symm.trans (Manifest.decode_encode expected floor))
-    simpa only [same] using watermark
 
 theorem FixedMarkedCheckpoint.validPublicationInput (checkpoint : FixedMarkedCheckpoint)
     {writer : MarkedWriterState} {pending : List WAL.Write} (ready : writer.ReadyFor checkpoint.manifest)
@@ -79,11 +70,14 @@ theorem FixedMarkedCheckpoint.validPublicationInput (checkpoint : FixedMarkedChe
       have old := checkpoint.accepted
       rw [selected] at old
       obtain ⟨header, files, decoded, written, _, count, durable⟩ := old
-      have exactClock := CheckpointForRecovery.headerWatermark (selected ▸ checkpoint.written) decoded
+      have raw : CheckpointForRecovery (some bytes) files checkpoint.table :=
+        Manifest.decode_reencode decoded ▸ written
+      have typed := raw.writtenCheckpoint decoded
+      have exactClock := typed.watermark
       have within : header.committed ≤ writer.history.length.toUInt64 := by
         rw [clock, UInt64.le_iff_toNat_le, exactClock, ← ready.count, ← checkpoint.watermark, history]
         simp
-      exact ⟨header, files, decoded, ⟨checkpoint.table, checkpoint.model, written,
+      exact ⟨header, files, decoded, ⟨checkpoint.table, checkpoint.model, typed,
         checkpoint.represents, coveredPrefix.symm ▸ represents⟩, within, count, durable⟩
   refine ⟨?_, active.symm ▸ accepted, ?_⟩
   · change initial.manifest.crashImages ≠ []
@@ -106,7 +100,7 @@ theorem checkpointPublicationWitness {writer : MarkedWriterState} {manifest : Op
     header.floor ≤ header.committed ∧ files.length = header.runCount.toNat ∧
       header.committed ≤ writer.history.length.toUInt64 ∧ CheckpointRepresentsPrefix writer.history header files := by
   intro header files
-  obtain ⟨abstract, written, relation, canonical⟩ := CheckpointForRecovery.of_flushForCheckpoint_history
+  obtain ⟨abstract, written, relation, canonical⟩ := WrittenCheckpoint.of_flushForCheckpoint_history
     prepared refines represents ready.rowBounds runCountFits generation
   refine ⟨?_, ?_, ?_, checkpoint, abstract, written, relation, canonical⟩
   · change checkpoint.pins.floor ≤ checkpoint.committed

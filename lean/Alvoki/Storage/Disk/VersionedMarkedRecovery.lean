@@ -72,12 +72,8 @@ theorem _root_.Alvoki.Storage.VersionedCheckpointFileReads.replays_selected
       ∃ model, table.Refines model ∧ RepresentsWalHistory history model ∧ table.pins.active = [] := by
   obtain ⟨files, durable, ⟨checkpoint, baseModel, written, baseRefines, baseHistory⟩, validated, covered⟩ :=
     image.acceptsVersioned_runs accepted decoded
-  have canonical := Manifest.decode_encode selected.header (VersionedCheckpoint.decoded_floor decoded)
-  have watermark := CheckpointForRecovery.headerWatermark written canonical
+  have watermark := written.watermark
   obtain ⟨base, structural, same⟩ := written.loads
-  change (Manifest.decode (Manifest.encode selected.header) >>= fun header => loadRunSet header files) =
-    .ok base at structural
-  rw [canonical] at structural
   have loaded := reads.completes_selected manifestRead decoded runReads durable validated structural
   have historyFits : history.length < UInt64.size := by
     rw [WAL.encode_size] at fits

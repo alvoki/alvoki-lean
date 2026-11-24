@@ -55,12 +55,12 @@ theorem RepresentsWalHistory.preserve {before after : SnapshotTable UInt64}
 
 /-- Preparing the actual new checkpoint retains the entire represented
 history, while its manifest and ordered files witness the executable loader. -/
-theorem CheckpointForRecovery.of_flushForCheckpoint_history {before checkpoint : PackedTable}
+theorem WrittenCheckpoint.of_flushForCheckpoint_history {before checkpoint : PackedTable}
     {model : SnapshotTable UInt64} {history : List WAL.Write}
     (prepared : (flushForCheckpoint before id : Except String PackedTable) = .ok checkpoint)
     (refines : before.Refines model) (represents : RepresentsWalHistory history model)
     (bounded : before.RowBounds) (fits : checkpoint.runs.length < UInt64.size) (generation : UInt64) :
-    ∃ after, CheckpointForRecovery (some (Manifest.encode (checkpointHeader checkpoint generation)))
+    ∃ after, WrittenCheckpoint (checkpointHeader checkpoint generation)
         (checkpoint.runs.map (·.run.bytes)) checkpoint ∧ checkpoint.Refines after ∧
       RepresentsWalHistory (history.take checkpoint.committed.toNat) after := by
   obtain ⟨written, committed, relation⟩ := of_flushForCheckpoint
@@ -81,6 +81,18 @@ theorem CheckpointForRecovery.of_flushForCheckpoint_history {before checkpoint :
   rw [count, List.take_length]
   exact represents.preserve stableClock (UInt64.le_of_eq stableFloor.symm)
     (relation.rowsBounded written.rowBounds) (fun snapshot _ key => sameEntries snapshot key)
+
+theorem CheckpointForRecovery.of_flushForCheckpoint_history {before checkpoint : PackedTable}
+    {model : SnapshotTable UInt64} {history : List WAL.Write}
+    (prepared : (flushForCheckpoint before id : Except String PackedTable) = .ok checkpoint)
+    (refines : before.Refines model) (represents : RepresentsWalHistory history model)
+    (bounded : before.RowBounds) (fits : checkpoint.runs.length < UInt64.size) (generation : UInt64) :
+    ∃ after, CheckpointForRecovery (some (Manifest.encode (checkpointHeader checkpoint generation)))
+        (checkpoint.runs.map (·.run.bytes)) checkpoint ∧ checkpoint.Refines after ∧
+      RepresentsWalHistory (history.take checkpoint.committed.toNat) after := by
+  obtain ⟨after, written, refined, represented⟩ := WrittenCheckpoint.of_flushForCheckpoint_history
+    prepared refines represents bounded fits generation
+  exact ⟨after, written.legacy, refined, represented⟩
 
 theorem RepresentsWalHistory.reads {table reference : SnapshotTable UInt64}
     {history : List WAL.Write} (represented : RepresentsWalHistory history table)

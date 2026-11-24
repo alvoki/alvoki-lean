@@ -60,7 +60,7 @@ theorem ObservedMarkedState.Valid.interruptedCheckpointFromLockedOpen
   have witness : ∀ header files, CheckpointRepresentsPrefix state.writer.history header files →
       ∃ checkpoint, CheckpointForRecovery (some (Manifest.encode header)) files checkpoint := by
     rintro _ _ ⟨checkpoint, _, written, _, _⟩
-    exact ⟨checkpoint, written⟩
+    exact ⟨checkpoint, written.legacy⟩
   have boundary : RecoveryBoundary (fun installed image => reopened = .ok installed image)
       before.directory.active.manifest (· = state.writer.history) :=
     .checkpoint reads prior.ready.settled rfl fits prior.ready.ordered healthy witness cut attempts report

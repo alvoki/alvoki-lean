@@ -138,16 +138,68 @@ def Image.Unreachable (image : Image) (generation : UInt64) : Prop :=
   ∀ bytes, (image.manifest.active = some bytes ∨ some bytes ∈ image.manifest.crashImages) →
     ∀ header, Manifest.decode bytes = .ok header → header.generation ≠ generation
 
-/-- A manifest names exactly the specified run bytes, with a watermark covered
-by the already synced WAL boundary. The specification can relate those bytes
-to the abstract state of a particular checkpoint. -/
+/-- Exact durable bindings and a logical checkpoint witness for one decoded
+header, covered by the already synced WAL boundary. -/
+structure AcceptsRunSet (bindings : RunFiles) (walSequence : UInt64)
+    (expected : Manifest.Checkpoint → List ByteArray → Prop)
+    (header : Manifest.Checkpoint) (files : List ByteArray) : Prop where
+  witness : expected header files
+  covered : header.committed ≤ walSequence
+  count : header.runCount.toNat = files.length
+  durable : ∀ index, index < files.length → bindings header.generation index = files[index]?
+
+abbrev Image.AcceptsRunSet (image : Image) := CheckpointPublication.AcceptsRunSet image.durable
+
+/-- Reading consecutive indices returns the recorded byte list in order. -/
+private theorem read_ordered_runs (read : Nat → Option ByteArray) (first : Nat)
+    (files : List ByteArray)
+    (durable : ∀ index, index < files.length → read (first + index) = files[index]?) :
+    (List.range' first files.length).mapM read = some files := by
+  induction files generalizing first with
+  | nil => rfl
+  | cons bytes files ih =>
+    have head : read first = some bytes := by
+      simpa using durable 0 (by simp)
+    have tail : (List.range' (first + 1) files.length).mapM read = some files := by
+      apply ih
+      intro index within
+      simpa [Nat.add_assoc, Nat.add_comm 1 index] using durable (index + 1) (by simpa using within)
+    simp [List.range'_succ, List.mapM_cons, head, tail]
+
+/-- Read the accepted run bytes in the index order of the decoded header. -/
+theorem AcceptsRunSet.ordered {bindings : RunFiles}
+    {walSequence : UInt64} {expected : Manifest.Checkpoint → List ByteArray → Prop}
+    {header : Manifest.Checkpoint} {files : List ByteArray}
+    (accepted : AcceptsRunSet bindings walSequence expected header files) :
+    (List.range header.runCount.toNat).mapM (bindings header.generation) = some files := by
+  rw [accepted.count, List.range_eq_range']
+  exact read_ordered_runs _ 0 files (by simpa using accepted.durable)
+
+theorem AcceptsRunSet.withKeptRuns {before after : RunFiles} {walSequence : UInt64}
+    {expected : Manifest.Checkpoint → List ByteArray → Prop} {header : Manifest.Checkpoint}
+    {files : List ByteArray} (accepted : AcceptsRunSet before walSequence expected header files)
+    (preserved : ∀ index, index < files.length →
+      after header.generation index = before header.generation index) :
+    AcceptsRunSet after walSequence expected header files :=
+  ⟨accepted.witness, accepted.covered, accepted.count,
+    fun index inside => (preserved index inside).trans (accepted.durable index inside)⟩
+
 def Image.Accepts (image : Image) (walSequence : UInt64)
     (expected : Manifest.Checkpoint → List ByteArray → Prop) : Option ByteArray → Prop
   | none => True
   | some bytes => ∃ header files,
-      Manifest.decode bytes = .ok header ∧ expected header files ∧ walSequence ≥ header.committed ∧
-      header.runCount.toNat = files.length ∧
-      ∀ index, index < files.length → image.durable header.generation index = files[index]?
+      Manifest.decode bytes = .ok header ∧ image.AcceptsRunSet walSequence expected header files
+
+theorem Image.accepts_decoded_iff {image : Image} {walSequence : UInt64}
+    {expected : Manifest.Checkpoint → List ByteArray → Prop} {bytes : ByteArray}
+    {header : Manifest.Checkpoint} (decoded : Manifest.decode bytes = .ok header) :
+    image.Accepts walSequence expected (some bytes) ↔ ∃ files, image.AcceptsRunSet walSequence expected header files := by
+  constructor
+  · rintro ⟨found, files, observed, accepted⟩
+    have same := Except.ok.inj (observed.symm.trans decoded)
+    exact ⟨files, same ▸ accepted⟩
+  · rintro ⟨files, accepted⟩
+    exact ⟨header, files, decoded, accepted⟩
 
 def Image.Valid (image : Image) (walSequence : UInt64)
     (expected : Manifest.Checkpoint → List ByteArray → Prop) : Prop :=
@@ -327,10 +379,9 @@ private theorem old_names_preserved {old : Image} {next : RunSet} {walSequence :
   cases candidate with
   | none => exact True.intro
   | some bytes =>
-    obtain ⟨header, files, decoded, known, covered, length, fileEq⟩ := good
+    obtain ⟨header, files, decoded, runs⟩ := good
     have disjoint := fresh bytes selectable header decoded
-    exact ⟨header, files, decoded, known, covered, length, fun index inside => by
-      simpa [installRunNames, disjoint] using fileEq index inside⟩
+    exact ⟨header, files, decoded, runs.withKeptRuns (fun index _ => by simp [installRunNames, disjoint])⟩
 
 /-- A crash cut before run-directory sync preserves all old witnesses. After
 that sync the new durable run set is complete before any manifest rename. -/
@@ -383,8 +434,8 @@ theorem checkpoint_cut_valid {initial after : Image} {next : RunSet} {walSequenc
         old_names_preserved fresh (.inr survives) (initialValid.crashValid candidate survives)
     }
     have published : accepts (some (Manifest.encode next.header)) :=
-      ⟨next.header, next.files, Manifest.decode_encode _ floor, intent, covered, count,
-        fun _ _ => by simp [installed, installRunNames]⟩
+      ⟨next.header, next.files, Manifest.decode_encode _ floor,
+        ⟨intent, covered, count, fun _ _ => by simp [installed, installRunNames]⟩⟩
     have path : Publication.Retry (fun _ bytes => accepts (some bytes)) initial.manifest manifest :=
       .attempt (.refl _) published _ replaced
     exact Publication.retry_preserves (fun _ _ _ witness => witness) prior path

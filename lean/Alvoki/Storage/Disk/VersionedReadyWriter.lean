@@ -129,7 +129,8 @@ theorem _root_.Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_exten
   cases binding with
   | none => trivial
   | some bytes =>
-    obtain ⟨selected, decoded, header, files, canonical, ⟨witness, checked⟩, covered, count, durable⟩ := accepted
+    obtain ⟨selected, decoded, files, runs⟩ := accepted
+    obtain ⟨witness, checked⟩ := runs.witness
     have afterFits : (history ++ suffix).length < UInt64.size := by
       rw [WAL.encode_size] at fits
       simp [WAL.frameSize] at fits
@@ -140,8 +141,8 @@ theorem _root_.Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_exten
     have monotone : history.length.toUInt64 ≤ (history ++ suffix).length.toUInt64 := by
       rw [UInt64.le_iff_toNat_le, UInt64.toNat_ofNat_of_lt' beforeFits, UInt64.toNat_ofNat_of_lt' afterFits]
       exact grows
-    exact ⟨selected, decoded, header, files, canonical, ⟨witness.append suffix, checked⟩,
-      UInt64.le_trans covered monotone, count, durable⟩
+    exact ⟨selected, decoded, files, ⟨⟨witness.append suffix, checked⟩,
+      UInt64.le_trans runs.covered monotone, runs.count, runs.durable⟩⟩
 
 /-- Acknowledged writes extend the live WAL and its table without changing
 the selected manifest, its run bytes, or its covered prefix. -/
@@ -223,9 +224,9 @@ theorem CheckpointPreparation.succeededFromVersionedReady {state : ObservedMarke
   have same := Option.some.inj (complete.symm.trans actual)
   subst after
   obtain ⟨model, refined, represented⟩ := valid.live
-  obtain ⟨written, committed, _⟩ := CheckpointForRecovery.of_flushForCheckpoint prepared.flushed
+  obtain ⟨written, committed, _⟩ := WrittenCheckpoint.of_flushForCheckpoint prepared.flushed
     refined prepared.runCountFits valid.ready.rowBounds.runs valid.ready.rowBounds.memory prepared.runs.header.generation
-  obtain ⟨next, _, nextRefined, nextHistory⟩ := CheckpointForRecovery.of_flushForCheckpoint_history
+  obtain ⟨next, _, nextRefined, nextHistory⟩ := WrittenCheckpoint.of_flushForCheckpoint_history
     prepared.flushed refined represented valid.ready.rowBounds prepared.runCountFits prepared.runs.header.generation
   have clock : state.writer.history.length = prepared.table.committed.toNat := by
     rw [committed]

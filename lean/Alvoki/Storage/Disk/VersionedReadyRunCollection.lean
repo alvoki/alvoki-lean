@@ -72,22 +72,16 @@ theorem afterRunCollection {state : ObservedMarkedState} (valid : state.Versione
   | none => trivial
   | some bytes =>
     rw [visible] at accepted
-    obtain ⟨selected, decoded, header, files, canonical, witness, covered, count, bindings⟩ := accepted
-    have headerEq := Except.ok.inj
-      (canonical.symm.trans (Manifest.decode_encode selected.header (VersionedCheckpoint.decoded_floor decoded)))
-    have generation : header.generation = state.generation := by
-      rw [headerEq]
-      exact valid.selectedGeneration visible decoded
-    refine ⟨selected, decoded, header, files, canonical, witness, covered, count, ?_⟩
+    obtain ⟨selected, decoded, files, runs⟩ := accepted
+    have generation := valid.selectedGeneration visible decoded
+    refine ⟨selected, decoded, files, runs.withKeptRuns ?_⟩
     intro index inside
-    have recorded : state.durable header.generation index = some files[index] :=
-      (bindings index inside).trans (List.getElem?_eq_getElem inside)
-    have unapproved : (header.generation, index) ∉ approved := by
+    have recorded : state.durable selected.header.generation index = some files[index] :=
+      (runs.durable index inside).trans (List.getElem?_eq_getElem inside)
+    have unapproved : (selected.header.generation, index) ∉ approved := by
       intro chosen
       exact UInt64.lt_irrefl _ (by simpa only [generation] using older _ chosen)
-    change after.guaranteed header.generation index = files[index]?
-    rw [List.getElem?_eq_getElem inside]
-    exact retry.keepsKnown (known _ _ _ recorded) unapproved
+    exact (retry.keepsKnown (known _ _ _ recorded) unapproved).trans recorded.symm
 
 /-- Model the guarded part of native collection under the ready writer's
 directory lock. The observed manifest and successful read-only inventory
