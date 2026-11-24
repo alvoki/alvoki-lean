@@ -1,11 +1,11 @@
-import Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
+import Alvoki.Storage.Disk.SegmentedCollectionBarrierError
 
 namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
-/-- Early failed opens and observed lock-reference drops can change the
-owner of a pending collection, while its full namespace still survives. -/
+/-- Failed opens keep the exact returned physical namespace and lock.
+A directory barrier may settle the list even if it reports an error. -/
 inductive PendingCollectionOpenTrace (directory : DiskDirectory) (scratch : Option (ByteArray × Bool))
     (initial : LockedFileState WalSealedUnlinkImage) : LockedFileState WalSealedUnlinkImage → Prop where
   | start : PendingCollectionOpenTrace directory scratch initial initial
@@ -15,16 +15,55 @@ inductive PendingCollectionOpenTrace (directory : DiskDirectory) (scratch : Opti
       (early : attempt.acquired ≠ .ok true ∨ ∃ cause, attempt.prepare directory = .error cause)
       (returned : attempt.run directory (before.collectionReopenFiles scratch) = .error cause result) :
       PendingCollectionOpenTrace directory scratch initial { before with owners := result.owners }
+  | barrierFailure (prior : PendingCollectionOpenTrace directory scratch initial before)
+      (report : PendingCollectionBarrierFailure directory scratch before) :
+      PendingCollectionOpenTrace directory scratch initial report.after
   | referenceDrops (prior : PendingCollectionOpenTrace directory scratch initial before)
       (references : HeldLockReferences description) (drops : List LockReferenceDrop) :
       PendingCollectionOpenTrace directory scratch initial (references.afterFileDrops drops directory before)
 
+/-- Each observed attempt leaves the original namespace or settles its
+exact visible files. Later failures cannot restore alternatives once settled. -/
 theorem PendingCollectionOpenTrace.keepsNamespace {directory scratch initial after}
-    (trace : PendingCollectionOpenTrace directory scratch initial after) : after.image = initial.image := by
+    (trace : PendingCollectionOpenTrace directory scratch initial after) :
+    after.image = initial.image ∨ after.image = initial.image.syncDirectory := by
   induction trace with
-  | start => rfl
+  | start => exact Or.inl rfl
   | earlyFailure _ attempt _ _ early returned ih =>
-    exact (attempt.keepsPendingCollectionBeforeBarrier _ scratch early returned).2.trans ih
+    rw [(attempt.keepsPendingCollectionBeforeBarrier _ scratch early returned).2]
+    exact ih
+  | barrierFailure _ report ih =>
+    rcases report.namespaceState with unchanged | settled
+    · rw [unchanged]
+      exact ih
+    · rcases ih with earlier | earlier
+      · exact Or.inr (settled.trans (congrArg WalSealedUnlinkImage.syncDirectory earlier))
+      · have twice : initial.image.syncDirectory.syncDirectory = initial.image.syncDirectory := rfl
+        exact Or.inr (settled.trans ((congrArg WalSealedUnlinkImage.syncDirectory earlier).trans twice))
+  | referenceDrops _ _ _ ih => exact ih
+
+theorem PendingCollectionOpenTrace.keepsVisible {directory scratch initial after}
+    (trace : PendingCollectionOpenTrace directory scratch initial after)
+    (metadata : initial.image.visible.directory.crashImages = [initial.image.visible.directory.active]) :
+    after.image.visible = initial.image.visible := by
+  rcases trace.keepsNamespace with unchanged | settled
+  · rw [unchanged]
+  · rw [settled]
+    exact (CollectionBarrierErrorEffect.afterEffect (files := (initial.collectionReopenFiles scratch).image)
+      (pending := initial.image)).keepsVisible metadata
+
+theorem PendingCollectionOpenTrace.keepsSettled {directory scratch initial after}
+    (trace : PendingCollectionOpenTrace directory scratch initial after)
+    (settled : initial.image.syncDirectory = initial.image) : after.image = initial.image :=
+  trace.keepsNamespace.elim id (fun finished => finished.trans settled)
+
+theorem PendingCollectionOpenTrace.continues {directory scratch initial after} {wal : WalSegmentImage}
+    (trace : PendingCollectionOpenTrace directory scratch initial after)
+    (prior : WalSealedUnlinkTrace wal initial.image) : WalSealedUnlinkTrace wal after.image := by
+  induction trace with
+  | start => exact prior
+  | earlyFailure _ _ _ _ _ _ ih => exact ih
+  | barrierFailure _ report ih => exact report.effect.reaches ih
   | referenceDrops _ _ _ ih => exact ih
 
 private def releasedCollection (directory : DiskDirectory) (before : SegmentedWriterState)
@@ -42,7 +81,7 @@ structure SegmentedCollectionReopenReport (directory : DiskDirectory) (before : 
     (releasedCollection directory before reached) pending
   reopen : BoundedReopenAttempt
   raw : HealthyBoundedWalReports directory (pending.owners.set (directory.file .lock) (some reopen.descriptor))
-    reopen.descriptor reached.visible reached.visible.directory.active before.target.range.watermark before.published.durable
+    reopen.descriptor pending.image.visible pending.image.visible.directory.active before.target.range.watermark before.published.durable
     ByteArray.empty
   liveRefs : List Nat
   syncWithNamespace : Array FilePath → EStateM IO.Error (FileImage × WalSealedUnlinkImage) Unit
@@ -69,12 +108,12 @@ structure Valid (report : SegmentedCollectionReopenReport directory before write
   directoryProjection : report.reopen.sync #[directory.path] report.files.image =
     projectCollectionBarrier report.barrier
   directoryEffect : report.barrier = .ok () (report.files.image.syncDirectory, report.pending.image.syncDirectory)
-  syncKeeper : report.reopen.sync #[directory.file (.walSegment report.reached.visible.active.first)]
+  syncKeeper : report.reopen.sync #[directory.file (.walSegment report.pending.image.visible.active.first)]
       report.files.image.syncDirectory = .ok () report.files.image.syncDirectory.syncKeeper
 
 private def reopenedWriter (report : SegmentedCollectionReopenReport directory before writer descriptor)
     (installed : Installed) (final : LockedFileState FileImage) : SegmentedWriterState :=
-  SegmentedWriterState.ofReopen installed report.reached.visible before.history before.published before.target
+  SegmentedWriterState.ofReopen installed report.pending.image.visible before.history before.published before.target
     before.checkpoint final
 
 structure Installs (report : SegmentedCollectionReopenReport directory before writer descriptor)
@@ -102,22 +141,14 @@ theorem installs (report : SegmentedCollectionReopenReport directory before writ
     (observed : report.Valid) (ready : before.RetainedReady directory writer) :
     ∃ after, report.Installs after ∧ after.RetainedReady directory descriptor := by
   have closed := report.failed.close ready (phase := .poisoned) (by simp)
-  have namespaceEq : report.pending.image = report.reached := report.attempts.keepsNamespace
-  have filesEq : report.files =
-      (⟨report.reached, report.pending.owners⟩ : LockedFileState WalSealedUnlinkImage).collectionReopenFiles
-        before.files.keeper.staged := by
-    unfold files LockedFileState.collectionReopenFiles
-    rw [namespaceEq]
   obtain ⟨_, session, final, after, returned, _, _, phase, nextFiles, nextOwners, _, _, pair, history, checkpoint,
     next, wal, durable⟩ :=
-    report.failed.openAfterRelease ready report.reopen observed.acquired observed.acquisition report.raw observed.reads
-      report.liveRefs
-      observed.fresh report.syncWithNamespace (by simpa only [barrier, filesEq, namespaceEq] using observed.directoryProjection)
-      (by simpa only [barrier, filesEq, namespaceEq] using observed.directoryEffect)
-      (by simpa only [filesEq] using observed.syncKeeper)
-  have actual : report.reopen.run directory report.files = .ok session final := by
-    simpa only [filesEq] using returned
-  have kept := ((report.failed.keepsNamespace ready).1.projects ready.layout).1.keepsActive
+    report.failed.openAfterRelease ready report.attempts.keepsNamespace report.reopen observed.acquired
+      observed.acquisition report.raw observed.reads report.liveRefs observed.fresh report.syncWithNamespace
+      observed.directoryProjection observed.directoryEffect observed.syncKeeper
+  have actual : report.reopen.run directory report.files = .ok session final := returned
+  have reached := report.attempts.continues (report.failed.keepsNamespace ready).1
+  have kept := (reached.projects ready.layout).1.keepsActive
   have first : after.target.first = before.target.first := by
     rw [next.active, wal]
     exact (congrArg WalSegment.first kept).trans ready.active.symm

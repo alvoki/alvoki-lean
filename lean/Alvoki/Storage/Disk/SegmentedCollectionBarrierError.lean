@@ -13,6 +13,13 @@ inductive CollectionBarrierErrorEffect (files : FileImage) (pending : WalSealedU
   | beforeEffect : CollectionBarrierErrorEffect files pending files pending
   | afterEffect : CollectionBarrierErrorEffect files pending files.syncDirectory pending.syncDirectory
 
+theorem CollectionBarrierErrorEffect.namespaceState {pending after : WalSealedUnlinkImage} {files next : FileImage}
+    (effect : CollectionBarrierErrorEffect files pending next after) :
+    after = pending ∨ after = pending.syncDirectory := by
+  cases effect with
+  | beforeEffect => exact Or.inl rfl
+  | afterEffect => exact Or.inr rfl
+
 theorem CollectionBarrierErrorEffect.reaches {initial : WalSegmentImage} {pending after : WalSealedUnlinkImage} {files next : FileImage}
     (effect : CollectionBarrierErrorEffect files pending next after)
     (prior : WalSealedUnlinkTrace initial pending) : WalSealedUnlinkTrace initial after := by
@@ -44,6 +51,12 @@ private theorem CollectionBarrierErrorEffect.projectFiles {pending : LockedFileS
     ((⟨after, owners⟩ : LockedFileState WalSealedUnlinkImage).collectionReopenFiles scratch).image = next := by
   cases effect <;> rfl
 
+def BoundedReopenAttempt.collectionBarrierCleanup (attempt : BoundedReopenAttempt) (cause : IO.Error) :
+    IO.Error × Option Nat :=
+  match attempt.unlock with
+  | .success => (cause, none)
+  | .failure cleanup released => (cleanup, if released then none else some attempt.descriptor)
+
 /-- The observed full error of the actual first barrier in an aligned
 bounded open determines the next pending namespace. The native caller's
 unlock report determines which error is returned and which owner remains.
@@ -63,9 +76,7 @@ theorem BoundedReopenAttempt.errorAtCollectionBarrier {directory : DiskDirectory
     barrier = .error cause (nextFiles, nextNamespace) →
     CollectionBarrierErrorEffect files.image pending.image nextFiles nextNamespace →
     let lock := directory.file .lock
-    let outcome := match attempt.unlock with
-      | .success => (cause, none)
-      | .failure cleanup released => (cleanup, if released then none else some attempt.descriptor)
+    let outcome := attempt.collectionBarrierCleanup cause
     let next : LockedFileState WalSealedUnlinkImage := ⟨nextNamespace, pending.owners.set lock outcome.2⟩
     pending.owners lock = none ∧
       attempt.run directory files = .error outcome.1 (next.collectionReopenFiles scratch) := by
@@ -85,6 +96,50 @@ theorem BoundedReopenAttempt.errorAtCollectionBarrier {directory : DiskDirectory
   refine ⟨acquisition acquired, ?_⟩
   rw [BoundedReopenAttempt.run, acquired, runOpenWithInstallation_outcome, runOpenWithImage_acquired, recovered, ← sameFiles]
   cases unlock : attempt.unlock <;>
-    simp [unlock, outcome, next, files, lock, LockedFileState.collectionReopenFiles]
+    simp [unlock, outcome, next, files, lock, BoundedReopenAttempt.collectionBarrierCleanup,
+      LockedFileState.collectionReopenFiles]
 
+/-- The observed barrier error of one acquired bounded attempt, including
+the full namespace outcome that the bounded worker projects. -/
+structure PendingCollectionBarrierFailure (directory : DiskDirectory) (scratch : Option (ByteArray × Bool))
+    (prior : LockedFileState WalSealedUnlinkImage) where
+  attempt : BoundedReopenAttempt
+  acquired : attempt.acquired = .ok true
+  acquisition : TryLockObserves prior.owners directory attempt.acquired
+  localUnlock : attempt.unlock.LocalFlock
+  plan : Plan
+  reopened : Reopened
+  prepared : attempt.prepare directory = .ok (plan, reopened, plan.keeperSize)
+  valid : plan.valid = true
+  prefixSize : plan.keeperBytes.size = plan.keeperSize
+  noPrune : plan.newer = []
+  syncWithNamespace : Array FilePath → EStateM IO.Error (FileImage × WalSealedUnlinkImage) Unit
+  cause : IO.Error
+  nextFiles : FileImage
+  nextNamespace : WalSealedUnlinkImage
+  projected : let files := (prior.collectionReopenFiles scratch).image
+    attempt.sync #[directory.path] files =
+      projectCollectionBarrier (syncWithNamespace #[directory.path] (files, prior.image))
+  observed : syncWithNamespace #[directory.path] ((prior.collectionReopenFiles scratch).image, prior.image) =
+    .error cause (nextFiles, nextNamespace)
+  effect : CollectionBarrierErrorEffect (prior.collectionReopenFiles scratch).image prior.image nextFiles nextNamespace
+
+namespace PendingCollectionBarrierFailure
+
+variable {directory : DiskDirectory} {scratch : Option (ByteArray × Bool)} {prior : LockedFileState WalSealedUnlinkImage}
+
+def after (report : PendingCollectionBarrierFailure directory scratch prior) : LockedFileState WalSealedUnlinkImage :=
+  ⟨report.nextNamespace, prior.owners.set (directory.file .lock) (report.attempt.collectionBarrierCleanup report.cause).2⟩
+
+theorem returned (report : PendingCollectionBarrierFailure directory scratch prior) :
+    report.attempt.run directory (prior.collectionReopenFiles scratch) =
+      .error (report.attempt.collectionBarrierCleanup report.cause).1 (report.after.collectionReopenFiles scratch) :=
+  (report.attempt.errorAtCollectionBarrier prior scratch report.acquired report.acquisition report.prepared report.valid
+    report.prefixSize report.noPrune report.syncWithNamespace report.projected report.observed report.effect).2
+
+theorem namespaceState (report : PendingCollectionBarrierFailure directory scratch prior) :
+    report.after.image = prior.image ∨ report.after.image = prior.image.syncDirectory :=
+  report.effect.namespaceState
+
+end PendingCollectionBarrierFailure
 end Alvoki.Storage.DiskSession

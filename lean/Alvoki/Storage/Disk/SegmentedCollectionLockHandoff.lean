@@ -81,21 +81,22 @@ makes that exact list durable before the keeper barrier and installation. -/
 theorem SegmentedCollectionErrors.openAfterRelease {directory before reached descriptor}
     (failed : SegmentedCollectionErrors directory before reached)
     (ready : before.RetainedReady directory descriptor)
+    {current : WalSealedUnlinkImage} (attempted : current = reached ∨ current = reached.syncDirectory)
     {owners : LockOwners} (attempt : BoundedReopenAttempt)
     (acquired : attempt.acquired = .ok true) (acquisition : TryLockObserves owners directory attempt.acquired)
     (raw : HealthyBoundedWalReports directory (owners.set (directory.file .lock) (some attempt.descriptor))
-      attempt.descriptor reached.visible reached.visible.directory.active before.target.range.watermark
+      attempt.descriptor current.visible current.visible.directory.active before.target.range.watermark
       before.published.durable ByteArray.empty)
     (exactReads : attempt.recover directory =
       raw.reopen attempt.removeFile attempt.write attempt.sync attempt.renameFile)
     (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < attempt.nextRef)
     (syncWithNamespace : Array FilePath → EStateM IO.Error (FileImage × WalSealedUnlinkImage) Unit) :
-    let pending : LockedFileState WalSealedUnlinkImage := ⟨reached, owners⟩
+    let pending : LockedFileState WalSealedUnlinkImage := ⟨current, owners⟩
     let files := pending.collectionReopenFiles before.files.keeper.staged
     let barrier := syncWithNamespace #[directory.path] (files.image, pending.image)
     attempt.sync #[directory.path] files.image = projectCollectionBarrier barrier →
     barrier = .ok () (files.image.syncDirectory, pending.image.syncDirectory) →
-    attempt.sync #[directory.file (.walSegment reached.visible.active.first)] files.image.syncDirectory =
+    attempt.sync #[directory.file (.walSegment current.visible.active.first)] files.image.syncDirectory =
       .ok () files.image.syncDirectory.syncKeeper →
     WalSealedUnlinkTrace before.wal pending.image.syncDirectory ∧
     ∃ session final, ∃ next : SegmentedWriterState,
@@ -111,7 +112,11 @@ theorem SegmentedCollectionErrors.openAfterRelease {directory before reached des
   intro pending files barrier sameBarrier observedBarrier syncKeeper
   have syncDirectory : attempt.sync #[directory.path] files.image = .ok () files.image.syncDirectory :=
     sameBarrier.trans (congrArg projectCollectionBarrier observedBarrier)
-  obtain ⟨trace, sameDirectory⟩ := failed.keepsNamespace ready
+  have initial := (failed.keepsNamespace ready).1
+  have trace : WalSealedUnlinkTrace before.wal current := by
+    rcases attempted with rfl | rfl
+    · exact initial
+    · exact initial.sync
   have retry := (trace.projects ready.layout).1
   obtain ⟨session, final, next, returned, path, descriptor, phase, image, owners, wal, pair, history, _, durable, nextReady⟩ :=
     ready.openAfterCollection retry raw before.files.keeper.staged liveRefs fresh
@@ -120,14 +125,14 @@ theorem SegmentedCollectionErrors.openAfterRelease {directory before reached des
   have actual : attempt.run directory files = .ok session final := by
     rw [BoundedReopenAttempt.run, acquired, exactReads]
     exact returned
-  have originalPair : reached.visible.directory.active = before.target.pair := by
-    rw [sameDirectory, ready.walPair]
+  have originalPair : current.visible.directory.active = before.target.pair :=
+    (retry.keepsSettledPair ready.walDirectorySettled).1.trans ready.walPair
   have selectedNext := nextReady.resumed.selected
   rw [durable, pair, ← originalPair] at selectedNext
-  have selectedPrior : SelectedIntegrityCheckpoint before.published.durable reached.visible.directory.active.manifest
+  have selectedPrior : SelectedIntegrityCheckpoint before.published.durable current.visible.directory.active.manifest
       before.checkpoint := originalPair.symm ▸ ready.resumed.selected
   have checkpoint := Except.ok.inj ((raw.readCheckpoint selectedNext).symm.trans (raw.readCheckpoint selectedPrior))
-  have sealed : next.wal.sealed = reached.visible.sealed := by rw [wal]
+  have sealed : next.wal.sealed = current.visible.sealed := by rw [wal]
   exact ⟨trace.sync, session, final, next, actual, path, descriptor, phase, image, owners, sealed, by rw [sealed]; rfl,
     pair, history, checkpoint, nextReady, wal, durable⟩
 
