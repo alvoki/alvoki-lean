@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.WalBatch
 import Alvoki.Storage.Disk.WalSegmentAppendRepair
 import Alvoki.Storage.Disk.SegmentedRetryTrace
+import Alvoki.Storage.Disk.AppendCutSession
 
 namespace Alvoki.Storage.WalSegmentCommit
 
@@ -318,7 +319,7 @@ theorem prepareAfterBatchCut {before batch : List WAL.Write} {first watermark : 
 drops and power losses retains an old-or-whole batch selection. Before the
 directory barrier a power loss may still select either original marker.
 After the barrier the existing repair lineage keeps the authorized target. -/
-theorem boundedBatchRetry_selection {before batch : List WAL.Write} {first watermark : Nat}
+private theorem boundedBatchRetry_layoutInputs {before batch : List WAL.Write} {first watermark : Nat}
     (starts : first ≤ before.length) (covered : watermark ≤ before.length)
     (fits : (WAL.encode (before ++ batch)).size < UInt64.size)
     (effects : WriteEffects) (manifest : Option ByteArray) (scratch : Option (ByteArray × Bool))
@@ -332,7 +333,8 @@ theorem boundedBatchRetry_selection {before batch : List WAL.Write} {first water
     initial.image.keeper.crashImages = cut.wal.crashImages →
     after.image.kept = initial.image.kept ∧
       ∃ target, BatchRetryTarget before batch first target ∧ target.pair.manifest = manifest ∧
-        after.image.directory.active = target.pair ∧ after.image.keeper.Valid target.Accepts := by
+        after.image.directory.active = target.pair ∧ after.image.keeper.Valid target.Accepts ∧
+        after.image.later.Beyond target.range.through ∧ after.image.later.visible = [] := by
   intro cut directoryEq keeperEq crashEq
   have keeperCrash : initial.image.keeper.crashImages ≠ [] := by
     rw [crashEq]
@@ -371,17 +373,191 @@ theorem boundedBatchRetry_selection {before batch : List WAL.Write} {first water
       intro binding member
       have same : binding = keeper := by simpa [FileImage.crash, Publication.Image.settled] using member
       exact List.mem_cons_of_mem _ (same.symm ▸ keeperMember)
+  have observedEmpty {current : FileImage} (observation : BeforeReopenBarrier initial.image current) :
+      current.later.visible = [] := by
+    cases observation with
+    | live => exact noLater.1
+    | crash pair keeper later metadata payload names => exact List.mem_singleton.mp (noLater.2 ▸ names)
   have lineage := attempts.lineage (fun a b pair => BatchRetryTarget.unique a b pair)
   refine ⟨lineage.keepsSealed, ?_⟩
   cases lineage with
   | before observed =>
     obtain ⟨target, _, admitted, sameManifest, prepared⟩ := prepareObserved observed
-    exact ⟨target, admitted, sameManifest, prepared.pair, prepared.keeperPrefix⟩
+    exact ⟨target, admitted, sameManifest, prepared.pair, prepared.keeperPrefix, prepared.newer, observedEmpty observed⟩
   | repairing observed admitted prepared trace =>
     obtain ⟨candidate, _, candidateAdmitted, sameManifest, firstRead⟩ := prepareObserved observed
     have same := BatchRetryTarget.unique candidateAdmitted admitted (firstRead.pair.symm.trans prepared.pair)
     subst candidate
     have valid := trace.valid prepared.pair prepared.keeperPrefix prepared.newer
-    exact ⟨_, admitted, sameManifest, valid.selected, valid.keeper⟩
+    exact ⟨_, admitted, sameManifest, valid.selected, valid.keeper, valid.later, trace.emptyLater (observedEmpty observed)⟩
+
+/-- Any finite series of reported bounded reopen failures, final reference
+drops and power losses retains an old-or-whole batch selection. Before the
+directory barrier a power loss may still select either original marker.
+After the barrier the existing repair lineage keeps the authorized target. -/
+theorem boundedBatchRetry_selection {before batch : List WAL.Write} {first watermark : Nat}
+    (starts : first ≤ before.length) (covered : watermark ≤ before.length)
+    (fits : (WAL.encode (before ++ batch)).size < UInt64.size)
+    (effects : WriteEffects) (manifest : Option ByteArray) (scratch : Option (ByteArray × Bool))
+    (checkpoint : selectedCheckpointWatermark manifest = some watermark)
+    {directory : DiskDirectory} {initial after : DiskSession.LockedFileState FileImage}
+    (noLater : initial.image.later.DurablyEmpty)
+    (attempts : DiskSession.BoundedReopenTrace directory (BatchRetryTarget before batch first) initial after) :
+    let cut := (writeFilesAfter (runBatchEffects before batch effects scratch)).reopenSegment first before manifest
+    initial.image.directory = cut.directory →
+    initial.image.keeper.active = cut.wal.active →
+    initial.image.keeper.crashImages = cut.wal.crashImages →
+    after.image.kept = initial.image.kept ∧
+      ∃ target, BatchRetryTarget before batch first target ∧ target.pair.manifest = manifest ∧
+        after.image.directory.active = target.pair ∧ after.image.keeper.Valid target.Accepts := by
+  intro cut directoryEq keeperEq crashEq
+  obtain ⟨sealed, target, admitted, sameManifest, pair, keeper, _, _⟩ :=
+    boundedBatchRetry_layoutInputs starts covered fits effects manifest scratch checkpoint noLater attempts
+      directoryEq keeperEq crashEq
+  exact ⟨sealed, target, admitted, sameManifest, pair, keeper⟩
 
 end Alvoki.Storage.WalSegmentRepair
+
+namespace Alvoki.Storage.DiskSession
+
+open System WalSegmentCommit WalSegmentRepair WAL.Boundary
+
+/-- After a physical batch cut and any admitted finite retry trace, the
+selected directory pair determines exact WAL descriptors and keeper bytes.
+Healthy reports at the reached locked paths install the corresponding old
+or complete history through the existing bounded reopen worker. -/
+theorem BoundedReopenTrace.installsAfterBatchCut {directory : DiskDirectory}
+    {oldWal : WalSegmentImage} {before batch : List WAL.Write} {watermark : Nat}
+    (layout : oldWal.ReadLayout before) (valid : oldWal.Valid before)
+    (oldRange : oldWal.directory.active.walRange = some ⟨watermark, before.length⟩)
+    (ordered : WAL.OrdinalsFrom 1 before) {live next : PackedTable} {rows : List (UInt64 × Option UInt64)}
+    (committed : before.length = live.committed.toNat) (prepared : prepareBatch live rows = some (batch, next))
+    (fits : (WAL.encode (before ++ batch)).size < UInt64.size)
+    {published : CheckpointPublication.Image}
+    (checkpoint : published.AcceptsVersioned before.length.toUInt64 (CheckpointRepresentsPrefix before)
+      oldWal.directory.active.manifest)
+    (effects : WriteEffects) (scratch : Option (ByteArray × Bool)) {owners : LockOwners}
+    {retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (BatchRetryTarget before batch oldWal.active.first)
+      ⟨oldWal.appendReopenFiles
+        ((writeFilesAfter (runBatchEffects before batch effects (oldWal.directory.staged .walBoundary))).reopenSegment
+          oldWal.active.first before oldWal.directory.active.manifest) scratch, owners⟩ retry)
+    {descriptor nextRef : Nat} (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) :
+    retry.image.kept = (oldWal.checkpointReopenFiles oldWal.directory none).kept ∧
+    ∃ history, (history = before ∨ history = before ++ batch) ∧
+      let wal := oldWal.appendSelectedView retry.image.directory.active history
+      wal.ReadLayout history ∧ wal.Valid history ∧
+      ∃ selected : CanonicalKeeperLayout retry.image history,
+        selected.range.watermark = watermark ∧ selected.target.first = oldWal.active.first ∧
+        ∃ generation : UInt64,
+          ((retry.image.directory.active.manifest.mapM fun bytes =>
+              (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) :
+              Except String UInt64) = .ok generation ∧
+          ∀ raw : HealthyBoundedWalReports directory
+              (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+              wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
+            sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
+            (∀ action prior after,
+              ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+              prior.effect selected.target action = some after →
+              performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () after) →
+            AppendCutReady directory descriptor liveRefs history published retry.image selected.target generation
+              (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+                (raw.reopen removeFile write sync renameFile) retry) := by
+  obtain ⟨watermarkRead, covered, _⟩ := DirectoryPublication.Bindings.walRange_accounting oldRange
+  have starts : oldWal.active.first ≤ before.length := by
+    rw [← layout.activeEnd]
+    exact layout.forward oldWal.active (List.mem_append_right _ (by simp))
+  obtain ⟨sealed, target, ⟨start, history, allowed, marker, through, trimmed⟩, sameManifest, pair, keeper,
+      later, noLater⟩ :=
+    boundedBatchRetry_layoutInputs starts covered fits effects oldWal.directory.active.manifest
+      (oldWal.directory.staged .walBoundary) watermarkRead ⟨rfl, rfl⟩ attempts rfl rfl rfl
+  have count : (WAL.encode history).size.toUInt64.toNat = history.length * WAL.frameSize := by
+    rw [UInt64.toNat_ofNat_of_lt' (batchHistoryFits allowed fits), WAL.encode_size, Nat.mul_comm]
+  have newCovered := Nat.le_trans covered (batchLengthMonotone allowed)
+  have decoded : retry.image.directory.active.walRange = some ⟨watermark, history.length⟩ := by
+    rw [pair]
+    exact DirectoryPublication.Bindings.walRange_of_counts (sameManifest ▸ watermarkRead)
+      marker (decode_encode _) count newCovered
+  let wal := oldWal.appendSelectedView retry.image.directory.active history
+  have layoutValid : wal.ReadLayout history ∧ wal.Valid history := by
+    rcases allowed with rfl | rfl
+    · have same := layout.afterRetainedSuffix valid oldRange retry.image.directory.active []
+        (by simpa only [List.append_nil] using decoded)
+      exact ⟨by simpa only [List.append_nil] using same.1, by simpa only [List.append_nil] using same.2.1⟩
+    · have same := layout.afterRetainedSuffix valid oldRange retry.image.directory.active batch decoded
+      exact ⟨same.1, same.2.1⟩
+  obtain ⟨ideal, range, sameKeeper, _, descriptors, offsets, _, _, _, _⟩ :=
+    layoutValid.1.checkpointReopenLayout layoutValid.2 .visible decoded rfl none
+  have trimmedKeeper : target.trimmed = ideal.keeper.bytes := by
+    rw [trimmed, sameKeeper] <;> rfl
+  obtain ⟨tail, visible⟩ := keeper.activeValid
+  let selected : CanonicalKeeperLayout retry.image history :=
+    ⟨ideal.range, range.symm ▸ decoded, ideal.through, ideal.first, ideal.sealed, ideal.keeper,
+      ideal.chain, ideal.covers, tail, trimmedKeeper ▸ visible⟩
+  have selectedFirst : selected.target.first = oldWal.active.first := by
+    change ideal.keeper.first = oldWal.active.first
+    rw [sameKeeper] <;> rfl
+  have selectedTrimmed : selected.target.trimmed = WAL.encode (history.drop oldWal.active.first) := by
+    rw [← selectedFirst]
+    exact selected.chain.keeperBytes
+  have selectedMarker : selected.target.pair.walBoundary =
+      some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) := by
+    change retry.image.directory.active.walBoundary = _
+    rw [pair]
+    exact marker
+  have actual : selected.target = target :=
+    BatchRetryTarget.unique
+      ⟨selectedFirst, history, allowed, selectedMarker, selected.through, selectedTrimmed⟩
+      ⟨start, history, allowed, marker, through, trimmed⟩ pair
+  have plan : Prepared retry.image selected.target selected.plan := by
+    apply selected.prepared keeper.hasCrashImage
+    · intro payload survives
+      obtain ⟨extra, exactPayload⟩ := keeper.crashValid payload survives
+      exact ⟨extra, trimmedKeeper ▸ exactPayload⟩
+    · rw [← actual] at later
+      exact later
+  have accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest := by
+    rw [pair, sameManifest]
+    rcases allowed with rfl | rfl
+    · exact checkpoint
+    · exact published.acceptsVersioned_extend_history checkpoint fits
+  have consecutive : WAL.OrdinalsFrom 1 history :=
+    allowed.elim (fun old => old.symm ▸ ordered) fun whole =>
+      whole.symm ▸ (prepareBatch_extends_history ordered committed prepared).2.1
+  have generationRead : ∃ generation : UInt64,
+      ((retry.image.directory.active.manifest.mapM fun bytes =>
+        (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) :
+          Except String UInt64) = .ok generation := by
+    cases visible : retry.image.directory.active.manifest with
+    | none => exact ⟨0, rfl⟩
+    | some bytes =>
+      have selectedWatermark := (DirectoryPublication.Bindings.walRange_accounting decoded).1
+      rw [visible] at selectedWatermark
+      obtain ⟨parsed, parsedOk, _⟩ := selectedCheckpointWatermark_present_iff.mp selectedWatermark
+      exact ⟨parsed.header.generation, by rw [Option.mapM, parsedOk]; rfl⟩
+  obtain ⟨generation, generationRead⟩ := generationRead
+  refine ⟨sealed, history, allowed, layoutValid.1, layoutValid.2, selected, congrArg MarkedWalRange.watermark range,
+    selectedFirst, generation, generationRead, ?_⟩
+  intro raw settles healthy
+  have exactDescriptors : selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark := by
+    change ideal.sealed ++ [ideal.keeper] = wal.readDescriptors ideal.range.watermark
+    rw [range]
+    exact descriptors
+  have exactOffsets : selectWalSegmentReads (wal.segments.map WalSegment.first) selected.range.watermark =
+      some (selected.first, (wal.readDescriptors selected.range.watermark).map WalSegment.first) := by
+    change selectWalSegmentReads (wal.segments.map WalSegment.first) ideal.range.watermark =
+      some (ideal.first, (wal.readDescriptors ideal.range.watermark).map WalSegment.first)
+    rw [range]
+    exact offsets
+  exact runOpenWithInstallation_appendLayout layoutValid.1 consecutive selected sameKeeper exactDescriptors
+    exactOffsets plan noLater accepted generationRead raw liveRefs fresh acquisition unlock removeFile write sync
+    renameFile settles healthy
+
+end Alvoki.Storage.DiskSession
