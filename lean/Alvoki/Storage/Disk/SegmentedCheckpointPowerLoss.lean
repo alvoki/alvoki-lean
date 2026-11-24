@@ -82,10 +82,10 @@ private theorem keepsSelectedPair {origin current : FileImage} {admits : Target 
 /-- Recover through any number of subsequent failed opens. The final
 healthy bounded open loads exactly the surviving checkpoint and the
 unchanged acknowledged history. -/
-theorem installs (report : SegmentedCheckpointPowerLossReport directory before writer descriptor)
-    (observed : report.Valid) (ready : before.Ready directory writer) :
-    ∃ after, report.Installs after ∧ after.Ready directory descriptor := by
-  obtain ⟨published, projected, layout, chain, valid, inputs, crash⟩ :=
+theorem installsRetained (report : SegmentedCheckpointPowerLossReport directory before writer descriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory writer) :
+    ∃ after, report.Installs after ∧ after.RetainedReady directory descriptor := by
+  obtain ⟨published, projected, layout, valid, inputs, crash⟩ :=
     report.cut.selectsAcknowledgedHistory ready
   have exactPublished : published = report.published := Option.some.inj (projected.symm.trans observed.projected)
   subst published
@@ -94,7 +94,7 @@ theorem installs (report : SegmentedCheckpointPowerLossReport directory before w
   rw [CheckpointPowerCut.physical_eq report.published ready] at failures
   have observedDirectory : (report.published.segmentedCheckpointView before.wal).CheckpointReopenDirectory
       (.settled report.survivingPair) := .crash observed.survives
-  obtain ⟨kept, _, selected, keeper, tail, _, _, openReady⟩ :=
+  obtain ⟨kept, chosen, selected, keeper, tail, _, _, openReady⟩ :=
     failures.installsFromCheckpointCut (descriptor := descriptor) layout valid ready.resumed.ordered
       observedDirectory inputs report.liveRefs observed.fresh observed.acquisition report.reopen.unlock
       report.reopen.removeFile report.reopen.write report.reopen.sync report.reopen.renameFile
@@ -107,17 +107,17 @@ theorem installs (report : SegmentedCheckpointPowerLossReport directory before w
     rw [BoundedReopenAttempt.run, observed.reopenDescriptor, observed.acquired, recover]
   rw [← execution] at opened
   obtain ⟨session, final, after, returned, path, lock, phase, files, owners, wal, target, history, durable, resumed⟩ :=
-    opened.writerReady layout chain keeper kept
+    opened.writerCheckpointRetained layout valid ready.spans chosen rfl keeper kept
   have exactWal : after.wal = { before.wal with directory := after.files.directory } := by
-    rw [wal, files]; rfl
+    rw [wal, files]
   have targetPair : after.target.pair = report.retry.image.directory.active := by rw [target]; rfl
   have targetFirst : after.target.first = before.wal.active.first := target ▸ keeper
   have targetBytes : after.target.trimmed = before.wal.active.bytes := by
     rw [resumed.resumed.contents, history, targetFirst, ready.layout.activeBytes]
   have surviving : after.target.pair = report.survivingPair := targetPair.trans
     (keepsSelectedPair rfl (failures.lineage (fun a b pair => CheckpointRetryTarget.unique a b pair)))
-  have generationRead := resumed.generationRead
-  rw [surviving] at generationRead
+  have generationRead := CheckpointPowerCut.selectedGeneration resumed.resumed.selected
+  rw [← resumed.resumed.generation, surviving] at generationRead
   have generation := Except.ok.inj (generationRead.symm.trans (CheckpointPowerCut.selectedGeneration loaded))
   have decided : (after.installed.generation = before.installed.generation ∧
       after.target.pair.manifest = before.wal.directory.active.manifest) ∨
@@ -128,6 +128,24 @@ theorem installs (report : SegmentedCheckpointPowerLossReport directory before w
   exact ⟨after, ⟨⟨⟨session, final, returned, path, lock, phase, files, owners⟩,
     history, exactWal, durable, resumed.manifestFiles, targetPair, targetFirst, targetBytes,
     resumed.resumed.selected⟩, initialLoss, surviving, decided⟩, resumed⟩
+
+/-- Existing full-history writers retain their stronger chain witness
+across the same crash and recovery. -/
+theorem installs (report : SegmentedCheckpointPowerLossReport directory before writer descriptor)
+    (observed : report.Valid) (ready : before.Ready directory writer) :
+    ∃ after, report.Installs after ∧ after.Ready directory descriptor := by
+  obtain ⟨after, endpoint, retained⟩ := report.installsRetained observed ready.toRetained
+  have chain : WalSegment.Chain after.history 0 after.wal.segments := by
+    rw [endpoint.history, endpoint.wal]
+    exact ready.chain
+  exact ⟨after, endpoint, ⟨retained.resumed, retained.layout, chain, retained.directoryFiles,
+    retained.sealedFiles, retained.active, retained.manifestFiles, retained.held⟩⟩
+
+theorem Installs.preservesRetained {report : SegmentedCheckpointPowerLossReport directory before writer descriptor}
+    {after : SegmentedWriterState} (endpoint : report.Installs after) (observed : report.Valid)
+    (ready : before.RetainedReady directory writer) : after.RetainedReady directory descriptor := by
+  obtain ⟨_, opened, next⟩ := report.installsRetained observed ready
+  exact opened.toSegmentedCheckpointReopened.unique endpoint.toSegmentedCheckpointReopened ▸ next
 
 theorem Installs.preservesReady {report : SegmentedCheckpointPowerLossReport directory before writer descriptor}
     {after : SegmentedWriterState} (endpoint : report.Installs after) (observed : report.Valid)
