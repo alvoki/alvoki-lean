@@ -439,3 +439,7 @@ Successful I/O reports at the acquired directory's exact manifest, selected run,
 ## Delayed directory sync after a writer dies
 
 A delayed directory sync settles the manifest and marker visible when it takes effect. The model retains the earlier WAL crash choices as a conservative set of possible outcomes. Given the same primitive reports, an extra barrier preserves the shared reopen's table, generation and byte count or its reported error. A successful reopen already settles the metadata. The native fixture kills a writer after the marker rename, reopens and closes in a successor process, and then lets the original sync child issue the real directory sync. The complete submitted frame and checkpoint files remain exact. [Delayed sync proof](../lean/Alvoki/Storage/Disk/MarkedWalReopenModel.lean) · [Native fixture](../scripts/check-disk-process-death.py)
+
+## Legacy recovery can start a mixed database trace
+
+When the existing checkpoint represents its covered prefix of the validated legacy WAL, the exact result of recovery is a ready mixed-trace state with fresh pins, preserved run bindings and that full canonical WAL history. This holds whether the first marker survived the earlier adoption attempt or needed to be published on retry. [Legacy trace entry](../lean/Alvoki/Storage/Disk/LegacyTraceEntry.lean)
