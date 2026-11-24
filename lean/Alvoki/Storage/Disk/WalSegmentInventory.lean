@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.LockedOpenFileReads
+import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Disk.WalSegmentFileName
 
 namespace Alvoki.Storage
@@ -151,17 +152,13 @@ theorem walSegmentOffsets_strict {reports : OpenPathReadReports} {directory : Di
 /-- Read only the prospective successor payload. An existing successor can
 be reused once its no-follow optional read verifies an exact zero-byte file. -/
 def observeWalSuccessor (reports : OpenPathReadReports) (directory : DiskDirectory) (first : Nat) :
-    Except IO.Error Bool := do
-  let contents ← reports.readOptional (directory.file (.walSegment first))
-  match contents with
-  | none => pure false
-  | some bytes =>
-    if bytes.size = 0 then pure true else throw (IO.userError "WAL segment successor is not empty")
+    Except IO.Error Bool :=
+  WalSegmentRotation.observeSuccessorWith (reports.readOptional (directory.file (.walSegment first)))
 
 theorem observeWalSuccessor_probe {reports : OpenPathReadReports} {directory : DiskDirectory} {first : Nat}
     {present : Bool} (observed : reports.observeWalSuccessor directory first = .ok present) :
     reports.probeWalSegment directory first = .ok (if present then some first else none) := by
-  unfold observeWalSuccessor readOptional readOptionalDatabaseFile at observed
+  unfold observeWalSuccessor WalSegmentRotation.observeSuccessorWith readOptional readOptionalDatabaseFile at observed
   unfold probeWalSegment
   simp only [Pure.pure, Except.pure, Bind.bind, Except.bind] at observed
   cases lookup : reports.lstat (directory.file (.walSegment first)) with

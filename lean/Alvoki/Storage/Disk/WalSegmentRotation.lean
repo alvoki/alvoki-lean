@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.WalSegmentCollection
 import Alvoki.Storage.Disk.WalSegmentFileName
+import Alvoki.Storage.Disk.WalSegmentRotationIO
 
 namespace Alvoki.Storage
 
@@ -121,11 +122,6 @@ def Binding.MaySurvive : Binding → Bool → Prop
   | .created, _ | .fileSynced, _ => True
   | .durable, present => present = true
 
-inductive Step where
-  | createEmpty
-  | syncFile
-  | syncDirectory
-
 def State.step (state : State) : Step → Option State
   | .createEmpty => if state.successor = .absent then some { state with successor := .created } else none
   | .syncFile =>
@@ -142,13 +138,11 @@ def State.step (state : State) : Step → Option State
 attempt syncs the empty inode and directory, including a retry that only
 observes the bytes left by an earlier report. -/
 def State.steps (state : State) : List Step :=
-  match state.observeSuccessor with
-  | none => [.createEmpty, .syncFile, .syncDirectory]
-  | some _ => [.syncFile, .syncDirectory]
+  WalSegmentRotation.steps state.observeSuccessor.isSome
 
 theorem State.create_iff_absent (state : State) :
     Step.createEmpty ∈ state.steps ↔ state.observeSuccessor = none := by
-  cases seen : state.observeSuccessor <;> simp [steps, seen]
+  cases seen : state.observeSuccessor <;> simp [State.steps, WalSegmentRotation.steps, seen]
 
 def State.execute (state : State) (actions : List Step) : Option State :=
   actions.foldlM State.step state
@@ -161,25 +155,42 @@ private def perform (reports : Step → WAL.Boundary.OperationResult) (action : 
       | none => .error () state
       | some after => .ok () after
 
-private theorem perform_effect (reports : Step → WAL.Boundary.OperationResult) (action : Step) (state : State) :
-    match perform reports action state with
+/-- Successful reports implement a step. An error may report either before
+the effect or after it completed. -/
+def EffectReports (perform : Step → EStateM ε State Unit) : Prop :=
+  ∀ action state, match perform action state with
     | .ok _ after => state.step action = some after
-    | .error _ after => after = state ∨ state.step action = some after := by
+    | .error _ after => after = state ∨ state.step action = some after
+
+private theorem perform_effect (reports : Step → WAL.Boundary.OperationResult) : EffectReports (perform reports) := by
+  intro action state
   cases reported : reports action <;> cases applied : state.step action <;> simp [perform, reported, applied]
 
 def State.run (state : State) (reports : Step → WAL.Boundary.OperationResult) : EStateM.Result Unit State Unit :=
-  (state.steps.forM (perform reports)) state
+  WalSegmentRotation.run state.observeSuccessor.isSome (perform reports) state
+
+/-- Apply the shared executable schedule to observed callbacks. A reported
+failure can stop just before or just after an individual file effect. -/
+theorem State.runObserved_effects (state : State) (present : Bool) (action : Step → EStateM ε State Unit)
+    (reports : EffectReports action) :
+    match WalSegmentRotation.run present action state with
+    | .ok _ after => state.execute (WalSegmentRotation.steps present) = some after
+    | .error _ after => ∃ cut, state.execute ((WalSegmentRotation.steps present).take cut) = some after := by
+  have outcome := Publication.run_effects_outcome State.step action (by
+    intro step before
+    have report := reports step before
+    cases ran : action step before <;> simpa only [ran] using report) (WalSegmentRotation.steps present) state
+  unfold WalSegmentRotation.run
+  cases ran : ((WalSegmentRotation.steps present).forM action) state <;> simpa only [ran, State.execute] using outcome
 
 theorem State.run_effects (state : State) (reports : Step → WAL.Boundary.OperationResult) :
     match state.run reports with
     | .ok _ after => state.execute state.steps = some after
     | .error _ after => ∃ cut, state.execute (state.steps.take cut) = some after := by
-  have outcome := Publication.run_effects_outcome State.step (perform reports) (by
-    intro action current
-    have effect := perform_effect reports action current
-    cases ran : perform reports action current <;> simpa only [ran] using effect) state.steps state
+  have outcome := state.runObserved_effects state.observeSuccessor.isSome (perform reports) (perform_effect reports)
   unfold State.run
-  cases ran : (state.steps.forM (perform reports)) state <;> simpa only [ran, State.execute] using outcome
+  cases ran : WalSegmentRotation.run state.observeSuccessor.isSome (perform reports) state <;>
+    simpa only [ran, State.steps] using outcome
 
 /-- A successful report settles the successor and the same visible
 directory pair. A failure after effect can yield this physical state too. -/
@@ -215,17 +226,29 @@ private theorem Trace.execute {initial : WalSegmentImage} {before after : State}
       rw [applied] at ran
       exact ih (.effect trace applied) ran
 
+/-- The shared path dispatch extends the same crash/retry trace when its
+primitive outcomes satisfy the step contract. -/
+theorem Trace.afterObservedReport {initial : WalSegmentImage} {before : State} (trace : Trace initial before)
+    (present : Bool) (action : Step → EStateM ε State Unit)
+    (reports : EffectReports action) :
+    match WalSegmentRotation.run present action before with
+    | .ok _ after | .error _ after => Trace initial after := by
+  have effects := before.runObserved_effects present action reports
+  cases ran : WalSegmentRotation.run present action before
+  · rw [ran] at effects
+    exact trace.execute effects
+  · rw [ran] at effects
+    obtain ⟨_, cut⟩ := effects
+    exact trace.execute cut
+
 theorem Trace.afterReport {initial : WalSegmentImage} {before : State} (trace : Trace initial before)
     (reports : Step → WAL.Boundary.OperationResult) :
     match before.run reports with
     | .ok _ after | .error _ after => Trace initial after := by
-  have effects := before.run_effects reports
-  cases ran : before.run reports with
-  | ok _ after => rw [ran] at effects; exact trace.execute effects
-  | error _ after =>
-    rw [ran] at effects
-    obtain ⟨_, cut⟩ := effects
-    exact trace.execute cut
+  have outcome := trace.afterObservedReport before.observeSuccessor.isSome (perform reports) (perform_effect reports)
+  unfold State.run
+  cases ran : WalSegmentRotation.run before.observeSuccessor.isSome (perform reports) before <;>
+    simpa only [ran] using outcome
 
 private theorem State.step_metadata {before after : State} {step : Step} (ran : before.step step = some after) :
     after.metadata = before.metadata ∨ after.metadata = before.metadata.syncDirectory := by

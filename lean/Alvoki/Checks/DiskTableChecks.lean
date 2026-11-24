@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.DiskTable
+import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Disk.LegacyManifest
 import Alvoki.Storage.Publication.DiskPublicationModel
 
@@ -409,6 +410,72 @@ private def checkMarkerlessRefusal (root : FilePath) : IO Unit := do
   checkRefusal
   check (!(← wal.pathExists) && decide ((← IO.FS.readBinFile manifest) = checkpoint))
     "markerless refusal created an absent WAL or changed the installed checkpoint"
+
+/-- Use the future rotation path dispatcher only in a locked scratch
+directory. Each injected error retains the effects of completed calls. -/
+private def checkWalSegmentRotation (root : FilePath) : IO Unit := do
+  let withLocked := fun path (action : DiskDirectory → IO Unit) => do
+    IO.FS.createDir path
+    let dir ← DiskDirectory.open path
+    let lock ← IO.FS.Handle.mk (dir.file .lock) .append
+    check (← lock.tryLock) "could not lock rotation fixture"
+    try action dir finally lock.unlock
+  let readOptional : FilePath → IO (Option ByteArray) := fun path =>
+    readOptionalDatabaseFile path.symlinkMetadata.toBaseIO (fun _ => IO.FS.readBinFile path)
+      (fun _ => IO.userError s!"expected a regular WAL segment: '{path}'") throw
+  let syncPath := fun (path : FilePath) => do
+    let result ← IO.Process.output {cmd := "sync", args := #["--", path.toString]}
+    check (result.exitCode == 0) s!"rotation fixture sync failed: {result.stderr}"
+  let creation : List WalSegmentRotation.Step := [.createEmpty, .syncFile, .syncDirectory]
+  for (step, index) in creation.zipIdx do
+    for afterEffect in [false, true] do
+      withLocked (root / s!"rotation-{index}-{afterEffect}") fun dir => do
+        let previous := dir.file (.walSegment 0)
+        let successor := dir.file (.walSegment 1)
+        let previousBytes := WAL.encodeFrame ⟨1, 7, some 60⟩
+        IO.FS.writeBinFile previous previousBytes
+        let seen ← IO.mkRef ([] : List WalSegmentRotation.Step)
+        let attempt := fun (failure : Option (WalSegmentRotation.Step × Bool)) => do
+          let report := fun operation (effect : IO Unit) => do
+            seen.modify (· ++ [operation])
+            if failure = some (operation, false) then throw (IO.userError "rotation failed before effect")
+            effect
+            if failure = some (operation, true) then throw (IO.userError "rotation failed after effect")
+          WalSegmentRotation.runAt dir 1 (fun path => do
+              check (path == successor) "rotation looked up the wrong successor path"
+              readOptional path)
+            (fun path => do
+              check (path == successor) "rotation created the wrong successor path"
+              report .createEmpty (WalSegmentRotation.createEmptyExclusive path))
+            (fun path => do
+              check (path == successor || path == dir.path) "rotation synced a path outside its plan"
+              report (if path == successor then .syncFile else .syncDirectory) (syncPath path))
+        rejects (attempt (some (step, afterEffect))) "rotation ignored its injected error"
+        check (decide ((← seen.get) = creation.take (index + 1))) "rotation ran beyond its reported cut"
+        let present := index > 0 || afterEffect
+        check ((← successor.pathExists) == present) "rotation failure exposed the wrong successor binding"
+        seen.set []
+        attempt none
+        let expected := if present then [.syncFile, .syncDirectory] else creation
+        check (decide ((← seen.get) = expected)) "rotation retry skipped its file or directory sync"
+        check (← (IO.FS.readBinFile successor).map ByteArray.isEmpty) "rotation successor was not empty"
+        check (decide ((← IO.FS.readBinFile previous) = previousBytes)) "rotation changed the previous WAL segment"
+  withLocked (root / "rotation-existing") fun dir => do
+    let successor := dir.file (.walSegment 1)
+    let bytes := WAL.encodeFrame ⟨2, 7, some 61⟩
+    IO.FS.writeBinFile successor bytes
+    rejects (WalSegmentRotation.createEmptyExclusive successor) "exclusive creation overwrote an existing successor"
+    let touched ← IO.mkRef false
+    let unexpected := fun (_ : FilePath) => touched.set true
+    rejects (WalSegmentRotation.runAt dir 1 readOptional unexpected unexpected) "rotation accepted a nonempty successor"
+    check (!(← touched.get) && decide ((← IO.FS.readBinFile successor) = bytes)) "rotation changed a nonempty successor"
+    IO.FS.removeFile successor
+    let target := dir.path / "empty-target"
+    IO.FS.writeBinFile target ByteArray.empty
+    let linked ← IO.Process.output {cmd := "ln", args := #["-s", "--", target.toString, successor.toString]}
+    check (linked.exitCode == 0) "could not create rotation symlink fixture"
+    rejects (WalSegmentRotation.runAt dir 1 readOptional unexpected unexpected) "rotation followed a successor symlink"
+    check (!(← touched.get)) "rotation attempted durability operations on a successor symlink"
 
 private def checkRetrySync (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
@@ -1078,6 +1145,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkDanglingFiles
     IO.FS.withTempDir checkSnapshotSessions
     IO.FS.withTempDir checkMarkerlessRefusal
+    IO.FS.withTempDir checkWalSegmentRotation
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkWritesAcrossReopens
     IO.FS.withTempDir checkGroupedSyncPartialEffects

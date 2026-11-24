@@ -428,6 +428,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRotation.rotated_bytes
 #check_axioms Alvoki.Storage.WalSegmentRotation.CanRotate.valid_rotated
 #check_axioms Alvoki.Storage.WalSegmentRotation.State.create_iff_absent
+#check_axioms Alvoki.Storage.WalSegmentRotation.runAt_fileEffects
+#check_axioms Alvoki.Storage.WalSegmentRotation.State.runObserved_effects
+#check_axioms Alvoki.Storage.WalSegmentRotation.Trace.afterObservedReport
 #check_axioms Alvoki.Storage.WalSegmentRotation.State.run_effects
 #check_axioms Alvoki.Storage.WalSegmentRotation.State.run_settled
 #check_axioms Alvoki.Storage.WalSegmentRotation.Trace.afterReport

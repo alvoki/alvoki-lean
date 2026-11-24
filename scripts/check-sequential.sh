@@ -103,6 +103,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentFileName
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentPathIdentity
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollection
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRecovery
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentRotationIO
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRotation
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentInventory
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadPlan
