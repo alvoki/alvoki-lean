@@ -145,6 +145,71 @@ private theorem completeMarker {before after : State} (valid : BootstrapValid be
     obtain rfl := Option.some.inj complete
     exact ⟨rfl, absent, rfl, rfl⟩
 
+private theorem runReachedSteps {action : Type} (effect : State → action → Option State)
+    (perform : action → BootstrapM Unit) {steps : List action} {before after : State}
+    (complete : steps.foldlM effect before = some after)
+    (reports : ∀ done step todo prior next, steps = done ++ step :: todo →
+      done.foldlM effect before = some prior → effect prior step = some next →
+      perform step prior = .ok () next) :
+    (steps.forM perform) before = .ok () after := by
+  induction steps generalizing before with
+  | nil => cases complete; rfl
+  | cons step rest ih =>
+    cases applied : effect before step with
+    | none => simp [List.foldlM_cons, applied] at complete
+    | some next =>
+      have head := reports [] step rest before next rfl rfl applied
+      have tail : rest.foldlM effect next = some after := by
+        simpa [List.foldlM_cons, applied] using complete
+      have returned := ih tail (by
+        intro done action todo prior final order reached effectAt
+        exact reports (step :: done) action todo prior final (congrArg (List.cons step) order)
+          (by simpa [List.foldlM_cons, applied] using reached) effectAt)
+      change EStateM.bind (perform step) (fun _ => rest.forM perform) before = _
+      simp only [EStateM.bind, head, returned]
+
+/-- Once the empty successor is observed, successful primitive reports at
+the reached steps suffice to complete the native bootstrap worker. Segment
+zero becomes durable before the zero marker is written and settled. -/
+theorem bootstrapEmptyWith_completes (directory : DiskDirectory) (before : State)
+    (valid : BootstrapValid before) (empty : Option ByteArray) (seen : before.observeSuccessor = empty)
+    (createEmpty : FilePath → BootstrapM Unit) (write : FilePath → ByteArray → BootstrapM Unit)
+    (sync : Array FilePath → BootstrapM Unit) (renameFile : FilePath → FilePath → BootstrapM Unit) :
+    let rotate := WalSegmentRotation.performPaths directory 0 createEmpty (fun path => sync #[path])
+    let publish := Publication.performReplacement (write · (WAL.Boundary.encode 0))
+      sync renameFile (directory.file .stagedWalBoundary) directory.path (fun _ => directory.file .walBoundary) #[]
+    let settled : State := ⟨before.metadata.syncDirectory, .durable⟩
+    (∀ done step todo prior next, WalSegmentRotation.steps empty.isSome = done ++ step :: todo →
+      before.execute done = some prior → prior.step step = some next → rotate step prior = .ok () next) →
+    (∀ done step todo prior next, Publication.steps = done ++ step :: todo →
+      done.foldlM bootstrapMarkerStep settled = some prior → bootstrapMarkerStep prior step = some next →
+      publish step prior = .ok () next) →
+    ∃ after, bootstrapEmptyWith directory empty createEmpty write sync renameFile before =
+      .ok ⟨.empty, 0, 0, 0⟩ after ∧ BootstrapReady after := by
+  intro rotate publish settled rotation marker
+  have rotates : before.execute (WalSegmentRotation.steps empty.isSome) = some settled := by
+    rw [← seen]
+    cases before with
+    | mk metadata binding => cases binding <;> rfl
+  have rotated := runReachedSteps State.step rotate rotates rotation
+  have publishes : ∃ after, Publication.steps.foldlM bootstrapMarkerStep settled = some after := by
+    exact ⟨_, rfl⟩
+  obtain ⟨after, completed⟩ := publishes
+  have published := runReachedSteps bootstrapMarkerStep publish completed marker
+  have observed : WalSegmentRotation.observeSuccessorWith (EStateM.pure empty : BootstrapM (Option ByteArray)) before =
+      .ok empty.isSome before := by
+    rw [← seen]
+    cases before with
+    | mk metadata binding => cases binding <;> rfl
+  have runRotation : WalSegmentRotation.runAt directory 0 (fun _ => (EStateM.pure empty : BootstrapM _))
+      createEmpty (fun path => sync #[path]) before = .ok () settled := by
+    change EStateM.bind (WalSegmentRotation.observeSuccessorWith (EStateM.pure empty))
+      (fun present => WalSegmentRotation.run present rotate) before = _
+    simp only [EStateM.bind, observed, WalSegmentRotation.run, rotated]
+  refine ⟨after, ?_, completeMarker (valid.rotatePrefix rotates) rfl completed⟩
+  dsimp only [publish] at published
+  simp only [bootstrapEmptyWith, Bind.bind, EStateM.bind, Pure.pure, runRotation, Publication.run, published, EStateM.pure]
+
 /-- The native markerless schedule runs the segment creation and sync
 before starting marker publication. Its reported failures preserve the
 bootstrap invariant, including when a failing syscall did take effect. -/
