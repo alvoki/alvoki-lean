@@ -38,6 +38,20 @@ structure HealthyBoundedWalReports (directory : DiskDirectory) (owners : DiskSes
   keeper : readPrefix (directory.file (.walSegment wal.active.first)) wal.active.bytes.size =
     .ok ⟨wal.active.bytes, (wal.active.bytes ++ tail).size⟩
 
+/-- Run the bounded worker with these read-only reports and the actual
+repair callbacks for the selected holder. -/
+def HealthyBoundedWalReports.reopen {directory owners descriptor wal pair watermark durable tail}
+    (raw : HealthyBoundedWalReports directory owners descriptor wal pair watermark durable tail)
+    (removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) : EStateM IO.Error FileImage Reopened :=
+  reopenMarkedBoundedWith directory (fun path => liftExcept (raw.reports.readOptional path))
+    (fun path => liftExcept (raw.list path))
+    (fun path => liftExcept (.ok (raw.reports.lstat path) : Except IO.Error _))
+    (fun path => liftExcept (raw.reports.readBin path)) (fun path size => liftExcept (raw.readPrefix path size))
+    removeFile write sync renameFile
+
 /-- The manifest and scoped run reports execute the strict checkpoint
 loader on the selected durable run vector. -/
 theorem HealthyBoundedWalReports.readCheckpoint {directory owners descriptor wal pair watermark durable tail}

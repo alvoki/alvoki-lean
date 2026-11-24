@@ -649,9 +649,13 @@ theorem runObserved_completes {initial : FileImage} {target : Target} {plan : Pl
     (settles : settleMetadata initial = .ok () initial.syncDirectory)
     (healthy : ∀ action before next, ReachesAction target initial.syncDirectory plan.actions action before →
       before.effect target action = some next → perform action before = .ok () next) :
-    ∃ after, initial.runObserved plan settleMetadata perform = .ok () after ∧ after.Ready target := by
+    ∃ after, initial.runObserved plan settleMetadata perform = .ok () after ∧
+      after.Ready target ∧ EffectTrace target initial after := by
   obtain ⟨after, complete, ready⟩ := completeExecution prepared
-  refine ⟨after, ?_, ready⟩
+  have trace := complete
+  rw [← List.take_length (l := plan.actions)] at trace
+  refine ⟨after, ?_, ready, cutPreservesTrace (cut := plan.actions.length) prepared
+    trace⟩
   change EStateM.bind settleMetadata (fun _ => plan.actions.forM perform) initial = _
   unfold EStateM.bind
   rw [settles]

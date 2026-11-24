@@ -55,7 +55,7 @@ theorem reopenMarkedWith_completes {initial : FileImage} {target : Target} {plan
       performPaths dir plan removeFile throw write sync rename action before = .ok () next) :
     ∃ after, reopenMarkedWith dir readOptional list lstat readBin removeFile write sync rename initial =
       .ok reopened after ∧ after.Ready target := by
-  obtain ⟨after, repaired, ready⟩ := runObserved_completes prepared settles healthy
+  obtain ⟨after, repaired, ready, _⟩ := runObserved_completes prepared settles healthy
   refine ⟨after, ?_, ready⟩
   rw [reopenMarkedWith_afterPreparation _ _ _ _ _ _ _ _ _ observed,
     runAt_observed prepared dir (pure plan) rfl removeFile write sync rename, repaired]

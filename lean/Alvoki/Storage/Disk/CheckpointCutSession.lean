@@ -16,10 +16,7 @@ def recoverCheckpointCut
     (write : FilePath → ByteArray → EStateM IO.Error FileImage Unit)
     (sync : Array FilePath → EStateM IO.Error FileImage Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit) : EStateM IO.Error FileImage Reopened :=
-  reopenMarkedBoundedWith directory (fun path => liftExcept (raw.reports.readOptional path))
-    (fun path => liftExcept (raw.list path)) (fun path => pure (raw.reports.lstat path))
-    (fun path => liftExcept (raw.reports.readBin path)) (fun path size => liftExcept (raw.readPrefix path size))
-    removeFile write sync renameFile
+  raw.reopen removeFile write sync renameFile
 
 /-- The selected checkpoint and acknowledged history of a returned ready
 session, with its exact settled files and the acquired lock. -/
@@ -118,11 +115,8 @@ theorem runOpenWithInstallation_checkpointCut {directory : DiskDirectory} {owner
       Bool.and_self, ite_true, plan, List.isEmpty_nil, Bind.bind, EStateM.bind, syncDirectory, syncKeeper]
   have installed : recoverCheckpointCut raw removeFile write sync renameFile files =
       .ok opened files.syncDirectory.syncKeeper := by
-    dsimp only [recoverCheckpointCut, reopenMarkedBoundedWith]
-    have liftedMetadata : (fun path => (pure (raw.reports.lstat path) :
-        EStateM IO.Error FileImage (Except IO.Error IO.FS.Metadata))) =
-        fun path => liftExcept (.ok (raw.reports.lstat path) : Except IO.Error (Except IO.Error IO.FS.Metadata)) := rfl
-    rw [liftedMetadata, prepareBoundedMarkedWith_liftReports, exactBounded]
+    dsimp only [recoverCheckpointCut, HealthyBoundedWalReports.reopen, reopenMarkedBoundedWith]
+    rw [prepareBoundedMarkedWith_liftReports, exactBounded]
     simp only [liftExcept, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, finish]
   obtain ⟨session, final, result, path, lock, phase, image, _, held, distinct, phaseFresh, sessionFresh⟩ :=
     runOpenWithInstallation_ready liveRefs fresh (before := ⟨files, owners⟩) acquisition (unlock := unlock) installed

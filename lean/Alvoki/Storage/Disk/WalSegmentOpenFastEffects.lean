@@ -93,12 +93,13 @@ theorem finishMarkedOpen_completes {initial : FileImage} {target : Target} {plan
       before.effect target action = some next →
       performPaths directory plan removeFile throw write sync renameFile action before = .ok () next) :
     ∃ after, finishMarkedOpen directory plan removeFile write sync renameFile initial = .ok () after ∧
-      after.Ready target := by
+      after.Ready target ∧ EffectTrace target initial after := by
   by_cases fast : plan.alignedWithoutPrune = true
   · have keeper := healthy .syncKeeper initial.syncDirectory initial.syncDirectory.syncKeeper
       (reachedAlignedKeeper fast) rfl
     change sync #[directory.file (.walSegment plan.keeper)] initial.syncDirectory = _ at keeper
-    refine ⟨_, ?_, (prepared.readyAfterAlignedSync fast).2⟩
+    obtain ⟨trace, ready⟩ := prepared.readyAfterAlignedSync fast
+    refine ⟨_, ?_, ready, trace⟩
     simp only [finishMarkedOpen, fast, ite_true, Bind.bind, EStateM.bind, settles, keeper]
   · simp only [finishMarkedOpen, ite_eq_right fast]
     rw [runAt_observed prepared directory (pure plan) rfl removeFile write sync renameFile]
@@ -144,7 +145,7 @@ theorem reopenMarkedFastWith_completes {initial : FileImage} {target : Target} {
       performPaths directory plan removeFile throw write sync renameFile action before = .ok () next) :
     ∃ after, reopenMarkedFastWith directory readOptional list lstat readBin removeFile write sync renameFile initial =
       .ok recovered after ∧ after.Ready target := by
-  obtain ⟨after, finished, ready⟩ := finishMarkedOpen_completes prepared directory removeFile write sync
+  obtain ⟨after, finished, ready, _⟩ := finishMarkedOpen_completes prepared directory removeFile write sync
     renameFile settles healthy
   refine ⟨after, ?_, ready⟩
   rw [reopenMarkedFastWith_afterPreparation _ _ _ _ _ _ _ _ _ observed, finished]
