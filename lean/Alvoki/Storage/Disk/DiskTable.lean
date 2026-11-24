@@ -76,49 +76,6 @@ flushed table's run order and avoiding an extra empty run. -/
     (validate : Except String PackedTable → m PackedTable) : m PackedTable :=
   if table.memory.rows.isEmpty then pure table else validate table.flush
 
-/-- Reconstruct the committed data from the file contents emitted for a
-flushed checkpoint, independently of the old session's pin registry. -/
-theorem recoverRunSet_written {checkpoint committed : PackedTable} (generation : UInt64)
-    (fits : checkpoint.runs.length < UInt64.size)
-    (flushed : checkpoint.memory = Alvoki.Sequential.History.empty)
-    (floor : checkpoint.pins.floor ≤ checkpoint.committed)
-    (bounded : ∀ run ∈ checkpoint.runs, ∀ row ∈ run.history.rows, row.sequence ≤ checkpoint.committed)
-    (covered pending : List WAL.Write)
-    (old : ∀ event ∈ covered, event.sequence ≤ checkpoint.committed)
-    (new : ∀ event ∈ pending, checkpoint.committed < event.sequence)
-    (applied : replay checkpoint pending = .ok committed)
-    (tail : ByteArray) (incomplete : tail.size < WAL.frameSize) :
-    let header := checkpointHeader checkpoint generation
-    let files := checkpoint.runs.map (·.run.bytes)
-    let wal := WAL.encode (covered ++ pending) ++ tail
-    ∃ reopened, (do
-      let manifest ← Manifest.decode (Manifest.encode header)
-      let base ← loadRunSet manifest files
-      recoverCheckpoint base wal) = .ok reopened ∧ reopened.SameData committed := by
-  dsimp only
-  let header := checkpointHeader checkpoint generation
-  let files := checkpoint.runs.map (fun run => run.run.bytes)
-  let wal := WAL.encode (covered ++ pending) ++ tail
-  have count : checkpoint.runs.length = header.runCount.toNat :=
-    (UInt64.toNat_ofNat_of_lt' fits).symm
-  obtain ⟨restored, loads, physical⟩ := loadRunSet_written header checkpoint.runs count floor bounded
-  have manifest : Manifest.decode (Manifest.encode header) = .ok header :=
-    Manifest.decode_encode header floor
-  change ∃ reopened, (do
-    let manifest ← Manifest.decode (Manifest.encode header)
-    let base ← loadRunSet manifest files
-    recoverCheckpoint base wal) = .ok reopened ∧ reopened.SameData committed
-  obtain ⟨reopened, recovered, same⟩ :=
-    recoverPublished flushed physical covered pending old new applied tail incomplete
-  refine ⟨reopened, ?_, same⟩
-  rw [manifest]
-  change (do
-    let base ← loadRunSet header files
-    recoverCheckpoint base wal) = .ok reopened
-  change loadRunSet header files = .ok restored at loads
-  rw [loads]
-  exact recovered
-
 /-- The exact checkpoint and durable WAL bytes pass the native loader and
 frame-count guard. Bytes beyond the durable marker do not affect either. -/
 theorem recoverRunSet_committedBoundary {checkpoint committed : PackedTable} (generation : UInt64)

@@ -1,6 +1,6 @@
 import Alvoki.Storage.Publication.CheckpointPublication
 import Alvoki.Storage.Publication.DiskPublicationModel
-import Alvoki.Storage.Disk.Manifest
+import Alvoki.Storage.Disk.LegacyManifest
 
 namespace Alvoki.Storage.CheckpointPublication
 

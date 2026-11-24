@@ -1,9 +1,53 @@
 import Alvoki.Storage.Disk.DiskTable
+import Alvoki.Storage.Disk.LegacyCheckpointRead
 import Alvoki.Storage.Disk.MarkedWalReopenModel
 import Alvoki.Storage.Publication.CheckpointPublicationModel
 
 namespace Alvoki.Storage
 open Alvoki.Compaction (CheckedRun)
+
+/-- Reconstruct the committed data from the file contents emitted for a
+flushed checkpoint, independently of the old session's pin registry. -/
+theorem recoverRunSet_written {checkpoint committed : PackedTable} (generation : UInt64)
+    (fits : checkpoint.runs.length < UInt64.size)
+    (flushed : checkpoint.memory = Alvoki.Sequential.History.empty)
+    (floor : checkpoint.pins.floor ≤ checkpoint.committed)
+    (bounded : ∀ run ∈ checkpoint.runs, ∀ row ∈ run.history.rows, row.sequence ≤ checkpoint.committed)
+    (covered pending : List WAL.Write)
+    (old : ∀ event ∈ covered, event.sequence ≤ checkpoint.committed)
+    (new : ∀ event ∈ pending, checkpoint.committed < event.sequence)
+    (applied : replay checkpoint pending = .ok committed)
+    (tail : ByteArray) (incomplete : tail.size < WAL.frameSize) :
+    let header := checkpointHeader checkpoint generation
+    let files := checkpoint.runs.map (·.run.bytes)
+    let wal := WAL.encode (covered ++ pending) ++ tail
+    ∃ reopened, (do
+      let manifest ← Manifest.decode (Manifest.encode header)
+      let base ← loadRunSet manifest files
+      recoverCheckpoint base wal) = .ok reopened ∧ reopened.SameData committed := by
+  dsimp only
+  let header := checkpointHeader checkpoint generation
+  let files := checkpoint.runs.map (fun run => run.run.bytes)
+  let wal := WAL.encode (covered ++ pending) ++ tail
+  have count : checkpoint.runs.length = header.runCount.toNat :=
+    (UInt64.toNat_ofNat_of_lt' fits).symm
+  obtain ⟨restored, loads, physical⟩ := loadRunSet_written header checkpoint.runs count floor bounded
+  have manifest : Manifest.decode (Manifest.encode header) = .ok header :=
+    Manifest.decode_encode header floor
+  change ∃ reopened, (do
+    let manifest ← Manifest.decode (Manifest.encode header)
+    let base ← loadRunSet manifest files
+    recoverCheckpoint base wal) = .ok reopened ∧ reopened.SameData committed
+  obtain ⟨reopened, recovered, same⟩ :=
+    recoverPublished flushed physical covered pending old new applied tail incomplete
+  refine ⟨reopened, ?_, same⟩
+  rw [manifest]
+  change (do
+    let base ← loadRunSet header files
+    recoverCheckpoint base wal) = .ok reopened
+  change loadRunSet header files = .ok restored at loads
+  rw [loads]
+  exact recovered
 
 /-- A selected manifest and its exact ordered run bytes describe a flushed
 checkpoint. An absent manifest uses the same empty base as the Linux adapter. -/

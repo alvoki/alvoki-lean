@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.DiskTable
+import Alvoki.Storage.Disk.LegacyManifest
 import Alvoki.Storage.Publication.DiskPublicationModel
 
 open System Alvoki Alvoki.Storage

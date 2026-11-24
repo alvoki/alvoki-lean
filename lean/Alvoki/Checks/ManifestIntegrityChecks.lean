@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.ManifestIntegrity
+import Alvoki.Storage.Disk.VersionedManifest
 import CompactionCodec
 
 open Alvoki.Manifest

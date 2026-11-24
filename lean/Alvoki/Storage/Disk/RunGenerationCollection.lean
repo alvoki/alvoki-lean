@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.DiskRecoveryModel
+import Alvoki.Storage.Disk.LegacyCheckpointRead
 
 namespace Alvoki.Storage.CheckpointPublication
 

@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.LegacyManifest
 import Alvoki.Storage.Disk.RunFileSelection
 import Alvoki.Storage.Disk.RunGenerationCollection
 

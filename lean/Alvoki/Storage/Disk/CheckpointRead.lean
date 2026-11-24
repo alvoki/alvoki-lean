@@ -66,16 +66,6 @@ as reads succeed since the run count comes from on-disk input. -/
     files := files.push (← read manifest.generation index)
   return files.toList
 
-/-- Read and validate the selected checkpoint before inspecting the WAL. -/
-@[inline] def readCheckpoint [Monad m] (readManifest : m (Option ByteArray))
-    (readRun : UInt64 → Nat → m ByteArray) (validate : {α : Type} → Except String α → m α) :
-    m (Option (PackedTable × UInt64)) := do
-  let some header ← readManifest | return none
-  let manifest ← validate (Manifest.decode header)
-  let files ← readCheckpointRunBytes readRun manifest
-  let table ← validate (loadRunSet manifest files)
-  return some (table, manifest.generation)
-
 /-- The executable loop reads exactly the manifest's run indices in order. -/
 theorem readCheckpointRunBytes_eq_mapM [Monad m] [LawfulMonad m]
     (read : UInt64 → Nat → m ByteArray) (header : Manifest.Checkpoint) :

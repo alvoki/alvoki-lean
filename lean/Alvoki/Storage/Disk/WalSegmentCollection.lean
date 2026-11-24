@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.ManifestIntegrity
+import Alvoki.Storage.Disk.VersionedManifest
 import Alvoki.Storage.Disk.WalWritePublicationModel
 
 namespace Alvoki.Storage
