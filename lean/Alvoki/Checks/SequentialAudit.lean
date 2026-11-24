@@ -108,6 +108,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SnapshotWalReplay.reads_agree
 #check_axioms Alvoki.Storage.PackedTable.Refines.rowsBounded
 #check_axioms Alvoki.Storage.RepresentsWalHistory.append
+#check_axioms Alvoki.Storage.RepresentsWalHistory.advanceFloor
+#check_axioms Alvoki.Storage.RepresentsWalHistory.compact
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointMarked_complete
 #check_axioms Alvoki.WAL.Boundary.checkpointMarked_ready
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.unreachable_after_reopen
@@ -156,6 +158,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.runWriteEffectsFrom_eq
 #check_axioms Alvoki.WAL.Boundary.runWriteEffectsFrom_success
 #check_axioms Alvoki.WAL.Boundary.AcknowledgedWrites.refines
+#check_axioms Alvoki.WAL.Boundary.AcknowledgedWrites.refinesHistory
 #check_axioms Alvoki.WAL.Boundary.recoverPreparedWriteAfterReopenAttempts
 #check_axioms Alvoki.WAL.Boundary.reopenPreparedWrite_refines
 #check_axioms Alvoki.WAL.Boundary.reopenAfterAcknowledgedWrites_refines

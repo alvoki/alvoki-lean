@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.MarkedCheckpointPublication
+import Alvoki.Storage.Disk.MarkedWriteTrace
 import Alvoki.Storage.Disk.WalReplayAgreement
 import Alvoki.Storage.Disk.WalReplayProvenance
 
@@ -94,6 +95,44 @@ theorem RepresentsWalHistory.reads {table reference : SnapshotTable UInt64}
   intro key
   rw [Table.lookup_eq_visibleEntry, Table.lookup_eq_visibleEntry, visible snapshot retained key]
 
+/-- Advancing the live floor keeps the clock and rows and narrows the
+snapshots for which the table must agree with the same WAL. -/
+theorem RepresentsWalHistory.advanceFloor {before after : PackedTable}
+    {model : SnapshotTable UInt64} {history : List WAL.Write} {floor : UInt64}
+    (represented : RepresentsWalHistory history model) (refines : before.Refines model)
+    (bounded : before.RowBounds) (advanced : before.advanceFloor floor = some after) :
+    ∃ result, model.advanceFloor floor = some result ∧ after.Refines result ∧
+      RepresentsWalHistory history result := by
+  obtain ⟨result, moved, refined⟩ := PackedTable.advanceFloor_refines refines advanced
+  refine ⟨result, moved, refined, ?_⟩
+  unfold SnapshotTable.advanceFloor at moved
+  split at moved
+  · split at moved
+    · contradiction
+    · rename_i changed
+      cases moved
+      exact represented.preserve rfl (SnapshotPins.advance_spec changed).1
+        (refined.rowsBounded (bounded.advanceFloor advanced)) (fun _ _ _ => rfl)
+  · contradiction
+
+/-- Compaction retains the same WAL history. At every snapshot supported
+by the live floor, the compacted runs have the same winning entry. -/
+theorem RepresentsWalHistory.compact {before after : PackedTable}
+    {model : SnapshotTable UInt64} {history : List WAL.Write} {index : Nat}
+    (represented : RepresentsWalHistory history model) (refines : before.Refines model)
+    (bounded : before.RowBounds) (compacted : before.compact index = some after) :
+    ∃ result, model.compact index = some result ∧ after.Refines result ∧
+      RepresentsWalHistory history result := by
+  obtain ⟨result, merged, refined⟩ := PackedTable.compact_refines refines compacted
+  refine ⟨result, merged, refined, ?_⟩
+  unfold SnapshotTable.compact at merged
+  obtain ⟨_, changed, rfl⟩ := Option.map_eq_some_iff.mp merged
+  refine represented.preserve rfl (UInt64.le_refl _)
+    (refined.rowsBounded (bounded.compact compacted)) ?_
+  intro snapshot retained key
+  simp only [Table.visibleEntry]
+  rw [Table.compactAt_winner changed retained key]
+
 namespace CheckpointPublication
 open WAL.Boundary
 
@@ -145,3 +184,24 @@ theorem checkpointMarkedRetry_reopen_canonical {initial published : Image}
 
 end CheckpointPublication
 end Alvoki.Storage
+
+namespace Alvoki.WAL.Boundary
+open Storage
+
+/-- Acknowledged writes carry the same WAL-history relation into the exact
+writer table that will supply the next checkpoint. -/
+theorem AcknowledgedWrites.refinesHistory {initial after : MarkedWriterState}
+    {manifest : Option ByteArray} {submitted : List WAL.Write}
+    {model : Sequential.SnapshotTable UInt64}
+    (path : AcknowledgedWrites initial submitted after) (ready : initial.ReadyFor manifest)
+    (refines : initial.table.Refines model) (history : RepresentsWalHistory initial.history model) :
+    after.ReadyFor manifest ∧ after.history = initial.history ++ submitted ∧
+      ∃ next, SnapshotWalReplay model submitted next ∧ after.table.Refines next ∧
+        RepresentsWalHistory after.history next := by
+  obtain ⟨nextReady, extended, replayed⟩ := path.refines ready
+  obtain ⟨next, written, refined⟩ := replay_refines refines replayed
+  refine ⟨nextReady, extended, next, written, refined, ?_⟩
+  rw [extended]
+  exact history.append written
+
+end Alvoki.WAL.Boundary
