@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,7 @@ from contextlib import contextmanager, suppress
 
 TIMEOUT = 10
 PR_SET_CHILD_SUBREAPER = 36
+SYNC_OBJECT = struct.Struct("=QQ")
 
 
 def require(condition, message):
@@ -157,6 +159,7 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached):
 
     ready = root / "sync.pid"
     release = root / "release-sync"
+    identity = root / "sync-object"
     sync_env = {**os.environ, "LD_PRELOAD": str(shim)}
     with native_process(binary, "--write-once", database, submitted_value, sync_pid_file=ready, env={
         **sync_env,
@@ -164,6 +167,7 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached):
         "ALVOKI_CHECK_SYNC_HOLD_MODE": "detached" if detached else "owner",
         "ALVOKI_CHECK_SYNC_PID": str(ready),
         "ALVOKI_CHECK_SYNC_RELEASE": str(release),
+        "ALVOKI_CHECK_SYNC_OBJECT": str(identity),
     }) as owner:
         sync_pid = wait_for_sync(owner, ready)
         require((sync_pid != owner.pid) == detached, "sync paused in the wrong process")
@@ -175,10 +179,11 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached):
         else:
             require(staged_marker.read_bytes() == submitted_marker, "paused write had not staged the submitted marker")
         original_wal = wal.stat()
-        if detached and not after_rename:
-            held_wal = Path(f"/proc/{sync_pid}/fd/0")
-            require(os.path.samestat(held_wal.stat(), original_wal),
-                    "sync child did not open the original WAL")
+        original_target = database.stat() if after_rename else original_wal
+        if detached:
+            held_target = Path(f"/proc/{sync_pid}/fd/0")
+            require(os.path.samestat(held_target.stat(), original_target),
+                    "sync child did not retain the original target")
         status, stderr = run_probe(binary, "--open-once", database)
         require(status != 0 and f"database already open: {database}" in stderr,
                 f"open did not report the live owner's lock: {stderr}")
@@ -213,13 +218,16 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached):
         if not after_rename:
             require(not os.path.samestat(recovered_wal, original_wal), "repair did not replace the WAL inode")
             if detached:
-                require(os.path.samestat(held_wal.stat(), original_wal), "held WAL descriptor changed inode")
-                require(held_wal.read_bytes() == appended and wal.read_bytes() == acknowledged,
+                require(os.path.samestat(held_target.stat(), original_wal), "held WAL descriptor changed inode")
+                require(held_target.read_bytes() == appended and wal.read_bytes() == acknowledged,
                         "repair did not separate the old append from the selected WAL bytes")
         if detached:
             # Resume the old sync only after the successor's recovery has finished.
             release.touch()
             wait_for_sync_success(sync_pid)
+            synced_object = SYNC_OBJECT.unpack(identity.read_bytes())
+            require(synced_object == (original_target.st_dev, original_target.st_ino),
+                    "delayed fsync used a different filesystem object")
             require(os.path.samestat(wal.stat(), recovered_wal), "delayed sync changed the recovered WAL binding")
         require(wal.read_bytes() == expected_wal and marker.read_bytes() == expected_marker,
                 "recovery or delayed sync changed the selected WAL bytes")

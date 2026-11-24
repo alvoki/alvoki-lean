@@ -6,9 +6,11 @@
 #include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -110,6 +112,19 @@ static void wait_for_release(const char *ready, const char *release, const char 
     _exit(125);
 }
 
+static _Noreturn void detached_sync(SyncFn real_sync, int fd, const char *identity) {
+    struct stat status;
+    if ((identity != NULL && fstat(fd, &status) < 0) || real_sync(fd) < 0) _exit(125);
+    if (identity != NULL) {
+        // Record the object of the descriptor passed to the successful fsync.
+        uint64_t object[] = {(uint64_t)status.st_dev, (uint64_t)status.st_ino};
+        int file = open(identity, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        if (file < 0 || write(file, object, sizeof(object)) != (ssize_t)sizeof(object) ||
+            close(file) < 0) _exit(125);
+    }
+    _exit(0);
+}
+
 static int hold_sync(SyncFn real_sync, int fd) {
     const char *ready = getenv("ALVOKI_CHECK_SYNC_PID");
     const char *release = getenv("ALVOKI_CHECK_SYNC_RELEASE");
@@ -124,6 +139,7 @@ static int hold_sync(SyncFn real_sync, int fd) {
 
     // Keep the selected inode alive after the owner is killed. The fixture
     // child must drop the writer lock and every other inherited descriptor.
+    const char *identity = getenv("ALVOKI_CHECK_SYNC_OBJECT");
     int report[2];
     if (pipe2(report, O_CLOEXEC) < 0) return -1;
     pid_t child = fork();
@@ -141,7 +157,7 @@ static int hold_sync(SyncFn real_sync, int fd) {
         ssize_t length = read(STDOUT_FILENO, pid, sizeof(pid));
         if (length <= 0 || close(STDOUT_FILENO) < 0) _exit(125);
         wait_for_release(ready, release, pid, (size_t)length);
-        _exit(real_sync(STDIN_FILENO) == 0 ? 0 : 125);
+        detached_sync(real_sync, STDIN_FILENO, identity);
     }
 
     close(report[0]);
