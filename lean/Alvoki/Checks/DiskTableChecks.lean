@@ -60,6 +60,21 @@ private def batchFramesAfter (sequence : UInt64) : ByteArray :=
   WAL.encode [⟨sequence + 1, 7, none⟩, ⟨sequence + 2, 3, some 30⟩,
     ⟨sequence + 3, 7, some 100⟩, ⟨sequence + 4, 4, some 40⟩]
 
+private def mixedBatchRows : List (UInt64 × Option UInt64) :=
+  [(3, none), (6, some 60), (7, none), (6, some 61)]
+
+private def expectUnknownBatch (db : DiskTable) (target : String)
+    (rows : List (UInt64 × Option UInt64)) : IO Unit := do
+  let .error (.commitUnknown (.userError message)) ← (db.writeBatchWithOutcome rows).toBaseIO
+    | throw (IO.userError "batch sync error did not report an unknown commit outcome")
+  check (message.startsWith s!"sync failed for '{target}':")
+    "unknown batch outcome changed the sync error"
+  let .error (.rejected (.userError retry)) ← (db.writeBatchWithOutcome []).toBaseIO
+    | throw (IO.userError "poisoned writer accepted an empty batch")
+  check (retry == "publication failed; reopen the database")
+    "poisoned batch rejection changed its cause"
+  expectRejectedWrite db "publication failed; reopen the database"
+
 private def expectBatchHistory (db : DiskTable) (oldSequence : UInt64) (published : Bool) :
     IO Unit := do
   let latest ← db.acquire
@@ -1525,6 +1540,89 @@ private def checkPartialBatchTail (dir : FilePath) : IO Unit := do
     expectBatchHistory reopened 1 true
   finally reopened.close
 
+/-- Cross a retained checkpoint and reclamation with one cached keeper, then
+exercise both batch failure paths and continue with single and batch writes. -/
+private def checkMixedBatchRecovery (root : FilePath) (publishMarker : Bool) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  (← DiskTable.open dir).close
+  let sealedPath := dir / firstWalSegment
+  let keeper := dir / "WAL-segment-4"
+  let marker := dir / "WAL.commit"
+  let stage := dir / "WAL.commit.next"
+  let checkpoint := dir / "run-1-0.v3"
+  let manifestStage := dir / "MANIFEST.next"
+  let boundary := fun (sequence : Nat) => WAL.Boundary.encode (sequence * WAL.frameSize).toUInt64
+  -- The rotated keeper is synced on creation and on the first single write
+  -- before collection. The eighth directory barrier is the second batch.
+  let target := if publishMarker then dir else keeper
+  let (classified, syncs) ← probeDisk bin dir (some target) "--check-mixed-batch-outcome"
+    (skipFailures := if publishMarker then 7 else 2)
+    (failureMode := if publishMarker then .afterSync else .beforeSync)
+  let writeSyncs (active : FilePath) := [active.toString, stage.toString, dir.toString]
+  let checkpointSyncs := [checkpoint.toString, dir.toString, manifestStage.toString, dir.toString]
+  let rotationSyncs := [keeper.toString, dir.toString]
+  let reachable := alignedWalSyncs dir sealedPath ++ writeSyncs sealedPath ++ checkpointSyncs ++
+    rotationSyncs ++ writeSyncs keeper ++ [dir.toString, keeper.toString, stage.toString]
+  let expectedSyncs := if publishMarker then reachable ++ [dir.toString, s!"synced before error: {dir}"]
+    else reachable
+  check (classified && syncs == expectedSyncs) "mixed batch write reached the wrong failure barrier"
+  let acknowledged := WAL.encodeFrame ⟨5, 7, some 99⟩
+  let submitted := acknowledged ++
+    WAL.encode [⟨6, 3, none⟩, ⟨7, 6, some 60⟩, ⟨8, 7, none⟩, ⟨9, 6, some 61⟩]
+  check (!(← sealedPath.pathExists) && (← IO.FS.readBinFile keeper) == submitted)
+    "mixed batch changed the collected prefix or the appended keeper"
+  let selectedSequence : Nat := if publishMarker then 9 else 5
+  let selected := if publishMarker then submitted else acknowledged
+  check ((← IO.FS.readBinFile marker) == boundary selectedSequence)
+    "mixed batch selected an intermediate absolute marker"
+  if publishMarker then
+    check (!(← stage.pathExists)) "batch rename left a staged marker"
+  else
+    check ((← IO.FS.readBinFile stage) == boundary 9)
+      "batch did not stage the full absolute marker before the grouped sync"
+  let selectedVersion := selectedSequence.toUInt64
+  let finalRows : List (UInt64 × Option UInt64) :=
+    if publishMarker then [(5, some 50), (6, some 61), (7, some 72)]
+    else [(3, some 30), (5, some 50), (7, some 72)]
+  let reopened ← DiskTable.open dir
+  try
+    expectManifest dir 1 4 0 1
+    let pin ← reopened.acquire
+    check (pin.sequence == selectedVersion) "mixed batch reopen installed an intermediate sequence"
+    reopened.release pin.handle
+    check ((← IO.FS.readBinFile keeper) == selected &&
+      (← IO.FS.readBinFile marker) == boundary selectedSequence && !(← sealedPath.pathExists))
+      "mixed batch reopen did not keep exactly the selected keeper and collection"
+    expectSnapshot reopened 4 [(3, some 30), (4, some 40), (7, some 100)]
+    expectSnapshot reopened 5 [(3, some 30), (4, some 40), (7, some 99)]
+    if publishMarker then
+      expectSnapshot reopened 6 [(4, some 40), (7, some 99)]
+      expectSnapshot reopened 7 [(4, some 40), (6, some 60), (7, some 99)]
+      expectSnapshot reopened 8 [(4, some 40), (6, some 60)]
+      expectSnapshot reopened 9 [(4, some 40), (6, some 61)]
+    else
+      check ((← reopened.acquireAt 6).isNone) "mixed batch reopen exposed a discarded mutation"
+    check ((← reopened.write 5 (some 50)) == selectedVersion + 1)
+      "single append from mixed recovery returned the wrong sequence"
+    check ((← reopened.writeBatch [(4, none), (7, some 72)]) == selectedVersion + 3)
+      "batch append from mixed recovery returned the wrong final sequence"
+    expectSnapshot reopened (selectedVersion + 3) finalRows
+  finally reopened.close
+  let followed := selected ++ WAL.encode
+    [⟨selectedVersion + 1, 5, some 50⟩, ⟨selectedVersion + 2, 4, none⟩,
+     ⟨selectedVersion + 3, 7, some 72⟩]
+  check ((← IO.FS.readBinFile keeper) == followed &&
+    (← IO.FS.readBinFile marker) == boundary (selectedSequence + 3))
+    "writes after mixed batch recovery did not continue the selected absolute history"
+  let settled ← DiskTable.open dir
+  try
+    check ((← settled.acquire).sequence == selectedVersion + 3)
+      "second reopen lost a write that followed mixed batch recovery"
+    expectSnapshot settled (selectedVersion + 3) finalRows
+  finally settled.close
+
 private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
@@ -2287,16 +2385,22 @@ def main (args : List String) : IO Unit := do
     let some target ← IO.getEnv "ALVOKI_CHECK_SYNC_FAIL"
       | throw (IO.userError "missing batch sync fault target")
     let db ← DiskTable.open ⟨dir⟩
+    try expectUnknownBatch db target batchRows finally db.close
+  | ["--check-mixed-batch-outcome", dir] =>
+    let some target ← IO.getEnv "ALVOKI_CHECK_SYNC_FAIL"
+      | throw (IO.userError "missing mixed batch sync fault target")
+    let db ← DiskTable.open ⟨dir⟩
     try
-      let .error (.commitUnknown (.userError message)) ← (db.writeBatchWithOutcome batchRows).toBaseIO
-        | throw (IO.userError "batch sync error did not report an unknown commit outcome")
-      check (message.startsWith s!"sync failed for '{target}':")
-        "unknown batch outcome changed the sync error"
-      let .error (.rejected (.userError retry)) ← (db.writeBatchWithOutcome []).toBaseIO
-        | throw (IO.userError "poisoned writer accepted an empty batch")
-      check (retry == "publication failed; reopen the database")
-        "poisoned batch rejection changed its cause"
-      expectRejectedWrite db "publication failed; reopen the database"
+      check ((← db.writeBatch batchRows) == 4) "mixed trace did not acknowledge its first batch"
+      let pin ← db.acquire
+      db.checkpoint
+      db.rotateWal
+      check ((← db.write 7 (some 99)) == 5) "mixed trace did not append to the rotated keeper"
+      check ((← db.planWalCollection) == [0]) "mixed trace did not select exactly one covered seal"
+      db.collectCoveredWal
+      check (pin.sequence == 4 && (← db.lookup pin.handle 7) == some (some 100))
+        "mixed trace changed a pinned batch snapshot during maintenance"
+      expectUnknownBatch db target mixedBatchRows
     finally db.close
   | "--checkpoint-once" :: dir :: floorArg =>
     let db ← DiskTable.open ⟨dir⟩
@@ -2344,6 +2448,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkPartialBatchTail
     for publishMarker in [false, true] do
       IO.FS.withTempDir (checkBatchSyncFailure · publishMarker)
+      IO.FS.withTempDir (checkMixedBatchRecovery · publishMarker)
     IO.FS.withTempDir checkWritesAcrossReopens
     for failWal in [false, true] do
       IO.FS.withTempDir (checkGroupedSyncPartialEffects · failWal)
