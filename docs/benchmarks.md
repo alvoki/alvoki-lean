@@ -78,7 +78,7 @@ The archived logs preserve the paths recorded at the time of each run. The curre
 
 ## Disk replay
 
-`scripts/disk-replay.sh` measures native `DiskTable.open` with a marked WAL and no checkpoint. The workloads write the same keys and values in ascending, descending, or deterministically shuffled order. Before timing, the Python driver independently generates the WAL frames and a commit marker covering the complete frames. The Lean executable validates the entire recovered key range on the untimed warmup and checks the recovered watermark on every sample.
+`scripts/disk-replay.sh` measures native `DiskTable.open` with marked WAL segments and no checkpoint. The workloads write the same keys and values in ascending, descending, or deterministically shuffled order. Before timing, the Python driver independently generates the WAL frames and a commit marker covering the complete frames. The Lean executable validates the entire recovered key range on the untimed warmup and checks the recovered watermark on every sample.
 
 Each sample times the whole open, including lock acquisition, file reads, frame validation, replay, and the durability operations required to return a handle. The timer excludes fixture generation, process startup, validation of the returned snapshot, and close. The warmup makes this a warm-cache measurement. The driver pins itself and its child to one CPU and records the raw samples in CSV. Use the same machine, sizes, and storage setup for baseline comparisons.
 
@@ -98,13 +98,17 @@ bash scripts/disk-replay.sh --out /tmp/alvoki-replay-after.csv \
 
 Ascending insertion traverses the sorted memtable on every replayed record, so doubling the row count roughly quadruples time. Descending insertion adds each key at the front and takes roughly linear time. These timings establish the baseline for replacing the memtable. [Current insertion](../lean/Alvoki/Storage/Table/PackedTable.lean)
 
+### Native segmented WAL
+
+Use `--segments 1 8 32` to compare segment layouts with the same frame stream. The paired release comparison against the earlier single-file adapter measured a 32-frame aligned reopen at 1.169 ms and 2.227 ms. Torn-tail reopen at that size took 2.868 ms and 5.112 ms. Acknowledged writes stayed near 3 ms per write. The segmented protocol keeps separate directory and keeper barriers for aligned open and additional barriers for repair. The measured startup cost is the tradeoff for adopting that crash-safe schedule while the full segmented trace and its durability optimizations are developed. [Raw samples, controls and reproduction](../benchmarks/results/disk/native-segmented-wal)
+
 ### Canonical database path at open
 
 We measured the directory-identity change on the same Linux VM using seven release trials for each of 100, 5,000, and 10,000 records in all three replay orders. The median ratios after the change ranged from 0.84× to 1.08× at 5,000 and 10,000 records. At 100 records the shuffled median rose from 39.6 to 48.0 microseconds and the other two medians moved by less than one microsecond. The comparison uses one run per build. Native code performs `realpath` and the absolute-path check once on open, and the path proof is erased. [Before samples](../benchmarks/results/disk/disk-identity-before.csv) · [After samples](../benchmarks/results/disk/disk-identity-after.csv) · [Environment and command](../benchmarks/results/disk/disk-identity-environment.txt)
 
 ### WAL sync on successful reopen
 
-The same-machine comparison uses seven release trials at each size and order. For 100 records, the median ranged from 29 to 49 microseconds before the fix and from 0.97 to 1.21 milliseconds after it. For 10,000 descending records it rose from 2.50 to 3.82 milliseconds, and for ascending records from 326 to 330 milliseconds. An aligned reopen invokes one GNU `sync` process for the WAL and directory. The benchmark includes that operation and replay. Retain these results as a reference for work on the durability barrier and the memtable. [Before samples](../benchmarks/results/disk/disk-reopen-before.csv) · [After samples](../benchmarks/results/disk/disk-reopen-after.csv) · [Environment and command](../benchmarks/results/disk/disk-reopen-environment.txt)
+The same-machine comparison uses seven release trials at each size and order. For 100 records, the median ranged from 29 to 49 microseconds before the fix and from 0.97 to 1.21 milliseconds after it. For 10,000 descending records it rose from 2.50 to 3.82 milliseconds, and for ascending records from 326 to 330 milliseconds. In that single-file revision, an aligned reopen invoked one GNU `sync` process for the WAL and directory. The benchmark includes that operation and replay. Retain these results as a reference for work on the durability barrier and the memtable. [Before samples](../benchmarks/results/disk/disk-reopen-before.csv) · [After samples](../benchmarks/results/disk/disk-reopen-after.csv) · [Environment and command](../benchmarks/results/disk/disk-reopen-environment.txt)
 
 ### Torn WAL repair
 
