@@ -98,6 +98,21 @@ theorem readWalKeeperWithChunks_syncAligned
     change bindings path = some (seen.inventory.inode seen.slot.description)
     simpa only [seen.sameObject] using boundAtSync
 
+private abbrev KeeperOpen := DescriptorInventory × DescriptorSlot × Nat
+private abbrev KeeperRepairState := Cache KeeperOpen × LockedFileState FileImage
+
+/-- The two singleton barriers reached by aligned recovery, with their
+exact returned outcomes and cache changes. -/
+def alignedWalRepairEffects {directory : DiskDirectory} (path : FilePath)
+    (report : DelayedDirectorySync directory) (initial : LockedFileState FileImage)
+    (cache : Cache KeeperOpen) (captured : KeeperOpen)
+    (fsync : KeeperOpen → EStateM IO.Error (LockedFileState FileImage) Unit) (selected : ByteArray) :
+    EStateM.Result IO.Error KeeperRepairState ByteArray :=
+  (do
+    SyncPathGroup.run (fun _ (current, files) => withCache current (report.run files)) #[directory.path]
+    SyncPathGroup.run (fun _ (_, files) => withCache (cache.consume path) (fsync captured files)) #[path]
+    pure selected : EStateM IO.Error KeeperRepairState ByteArray) (cache.remember path captured, initial)
+
 /-- A single aligned read supplies the byte callback used by WAL selection
 and the handle consumed by the actual bounded finisher. The directory
 barrier keeps that pending handle. Only a successful directory callback
@@ -127,27 +142,22 @@ theorem readWalKeeperWithChunks_finishAligned
       (Cache (DescriptorInventory × DescriptorSlot × Nat) × LockedFileState FileImage) Unit) :
     let path := directory.file (.walSegment plan.keeper)
     let captured := (seen.inventory, seen.slot, 0)
-    let remembered := cache.remember path captured
     let report := inventory.delayedDirectorySync directoryDrops directory slot.description slot.reference directoryLive
       directoryBindings directoryBound directoryOutcome
     let grouped := SyncPathGroup.run (sync directory.path openRead fsync)
-    let directorySync (_ : FilePath) :
-        EStateM IO.Error (Cache (DescriptorInventory × DescriptorSlot × Nat) × LockedFileState FileImage) Unit :=
-      fun (current, files) => withCache current (report.run files)
-    let keeperSync (_ : FilePath) :
-        EStateM IO.Error (Cache (DescriptorInventory × DescriptorSlot × Nat) × LockedFileState FileImage) Unit :=
-      fun (_, files) => withCache (cache.consume path) (fsync captured files)
     fsync (inventory, slot, offset) initial = report.run initial →
     readWalKeeperBytes reads path plan.keeperBytes.size seen.metadata.byteSize.toNat = .ok plan.keeperBytes ∧
       (do
         let selected ← readWalKeeperWithChunks reads path plan.keeperBytes.size seen.metadata.byteSize.toNat
         finishBoundedMarkedOpen directory plan seen.metadata.byteSize.toNat remove write grouped rename
         pure selected : EStateM IO.Error _ ByteArray) (cache, initial) =
-      (do
-        SyncPathGroup.run directorySync #[directory.path]
-        SyncPathGroup.run keeperSync #[path]
-        pure plan.keeperBytes : EStateM IO.Error _ ByteArray) (remembered, initial) := by
-  intro path captured remembered report grouped directorySync keeperSync directoryEffect
+      alignedWalRepairEffects path report initial cache captured fsync plan.keeperBytes := by
+  intro path captured report grouped directoryEffect
+  let remembered := cache.remember path captured
+  let directorySync (_ : FilePath) : EStateM IO.Error KeeperRepairState Unit :=
+    fun (current, files) => withCache current (report.run files)
+  let keeperSync (_ : FilePath) : EStateM IO.Error KeeperRepairState Unit :=
+    fun (_, files) => withCache (cache.consume path) (fsync captured files)
   obtain ⟨read, _, directoryGrouped⟩ := readWalKeeperWithChunks_syncCapturedDirectory
     directory plan.keeper seen fits aligned cache inventory slot offset hasDirectory directoryDrops directoryLive
     directoryBindings directoryBound directoryOutcome initial openRead fsync directoryEffect
@@ -159,7 +169,11 @@ theorem readWalKeeperWithChunks_finishAligned
     simp [finishBoundedMarkedOpen, valid, bytes, noLater, alignedSize, path]
   refine ⟨?_, ?_⟩
   · rw [← readWalKeeperWithChunks_project reads _ _ _ cache initial, readExact]
-  · have directoryRouted : grouped #[directory.path] (remembered, initial) =
+  · change _ = (do
+      SyncPathGroup.run directorySync #[directory.path]
+      SyncPathGroup.run keeperSync #[path]
+      pure plan.keeperBytes : EStateM IO.Error KeeperRepairState ByteArray) (remembered, initial)
+    have directoryRouted : grouped #[directory.path] (remembered, initial) =
         SyncPathGroup.run directorySync #[directory.path] (remembered, initial) := directoryGrouped
     have keeperGrouped (after : LockedFileState FileImage) :
         grouped #[path] (remembered, after) = SyncPathGroup.run keeperSync #[path] (remembered, after) := by
@@ -180,5 +194,102 @@ theorem readWalKeeperWithChunks_finishAligned
     | ok result reached =>
       cases result
       simp only [directorySync, directoryRan, withCache, keeperGrouped]
+
+/-- A reported directory error returns its exact reached image with the
+keeper still pending. The keeper syscall has not been reached. -/
+theorem alignedWalRepairEffects_directoryError {directory : DiskDirectory} {path : FilePath}
+    (report : DelayedDirectorySync directory) (initial : LockedFileState FileImage)
+    (cache : Cache KeeperOpen) (captured : KeeperOpen)
+    (fsync : KeeperOpen → EStateM IO.Error (LockedFileState FileImage) Unit) (selected : ByteArray)
+    {cause : IO.Error} {reached : LockedFileState FileImage}
+    (reported : report.run initial = .error cause reached)
+    {returned : EStateM.Result IO.Error KeeperRepairState ByteArray}
+    (execution : returned = alignedWalRepairEffects path report initial cache captured fsync selected) :
+    returned = .error (IO.userError s!"sync failed for '{directory.path}': {cause}")
+      (cache.remember path captured, reached) := by
+  let directorySync (_ : FilePath) : EStateM IO.Error KeeperRepairState Unit :=
+    fun (current, files) => withCache current (report.run files)
+  have directoryRan : SyncPathGroup.run directorySync #[directory.path] (cache.remember path captured, initial) =
+      .error (IO.userError s!"sync failed for '{directory.path}': {cause}")
+        (cache.remember path captured, reached) := by
+    rw [SyncPathGroup.run_single]
+    simp only [directorySync, reported, withCache]
+    rfl
+  rw [execution]
+  change (do
+    SyncPathGroup.run directorySync #[directory.path]
+    SyncPathGroup.run (fun _ (_, files) => withCache (cache.consume path) (fsync captured files)) #[path]
+    pure selected : EStateM IO.Error KeeperRepairState ByteArray) (cache.remember path captured, initial) = _
+  simp only [Bind.bind, EStateM.bind, directoryRan]
+
+/-- After the directory barrier succeeds, classify the reached keeper
+syscall on the same open descriptor that supplied the prefix. The native
+report states whether the keeper bytes settled, including on error. The
+visible binding and live slot identify the inode at effect time. -/
+theorem alignedWalRepairEffects_observedKeeper
+    {reads : CheckpointRunChunkReads} {directory : DiskDirectory} {path : FilePath} {selected tail : ByteArray}
+    (seen : reads.ObservesFile path (selected ++ tail)) (aligned : selected.size = seen.metadata.byteSize.toNat)
+    (report : DelayedDirectorySync directory) (completed : report.outcome = .completed)
+    (initial : LockedFileState FileImage) (visible : initial.image.keeper.active = some (selected ++ tail))
+    (cache : Cache KeeperOpen) (fsync : KeeperOpen → EStateM IO.Error (LockedFileState FileImage) Unit)
+    (drops : List LockReferenceDrop)
+    (issuing : seen.slot.reference ∈ (seen.inventory.afterDrops drops).references seen.slot.description)
+    (bindings : FilePath → Option Nat) (bound : bindings path = some seen.object) {effective : Bool}
+    {returned : EStateM.Result IO.Error KeeperRepairState ByteArray} :
+    let captured := (seen.inventory, seen.slot, 0)
+    let authorized := { initial with image := initial.image.syncDirectory }
+    let settled := { authorized with image := authorized.image.syncKeeper }
+    returned = alignedWalRepairEffects path report initial cache captured fsync selected →
+    FsyncResult authorized settled effective (fsync captured authorized) →
+    (∃ observed : FsyncObservation (fun handle => handle.2.1.description)
+        (fun handle => handle.1.inode handle.2.1.description) captured authorized
+        (fun _ files => { files with image := files.image.syncKeeper }) (fsync captured authorized),
+      observed.issuer = seen.slot.reference ∧ observed.effective = effective ∧
+      bindings path = some observed.effectInode) ∧
+    authorized.image.keeper.active = some selected ∧
+    authorized.image.keeper.crashImages = initial.image.keeper.crashImages ∧
+    settled.image.keeper.active = some selected ∧ settled.image.keeper.crashImages = [some selected] ∧
+    (match fsync captured authorized with
+      | .ok () _ =>
+        returned = .ok selected (cache.consume path, settled)
+      | .error cause _ =>
+        returned = .error (IO.userError s!"sync failed for '{path}': {cause}")
+          (cache.consume path, if effective then settled else authorized)) := by
+  intro captured authorized settled execution effect
+  subst returned
+  have tailEmpty : tail = ByteArray.empty := by
+    rw [seen.extent, ByteArray.size_append] at aligned
+    exact ByteArray.size_eq_zero_iff.mp (by omega)
+  have active : initial.image.keeper.active = some selected := by
+    simpa [tailEmpty] using visible
+  let observed := FsyncObservation.ofInventory seen.inventory drops
+    (fun handle => handle.2.1.description) (fun handle => handle.1.inode handle.2.1.description)
+    captured seen.slot.reference issuing rfl authorized
+    (fun _ files => { files with image := files.image.syncKeeper }) effect
+  refine ⟨⟨observed, rfl, rfl, ?_⟩, active, rfl, active, ?_, ?_⟩
+  · change bindings path = some (seen.inventory.inode seen.slot.description)
+    simpa only [seen.sameObject] using bound
+  · change [initial.image.keeper.active] = [some selected]
+    rw [active]
+  · let remembered := cache.remember path captured
+    let directorySync (_ : FilePath) : EStateM IO.Error KeeperRepairState Unit :=
+      fun (current, files) => withCache current (report.run files)
+    let keeperSync (_ : FilePath) : EStateM IO.Error KeeperRepairState Unit :=
+      fun (_, files) => withCache (cache.consume path) (fsync captured files)
+    have directoryRan : SyncPathGroup.run directorySync #[directory.path] (remembered, initial) =
+        .ok () (remembered, authorized) := by
+      rw [SyncPathGroup.run_single]
+      simp [directorySync, DelayedDirectorySync.run, completed, withCache, authorized]
+    have repair : alignedWalRepairEffects path report initial cache captured fsync selected =
+        (do SyncPathGroup.run keeperSync #[path]; pure selected : EStateM IO.Error KeeperRepairState ByteArray)
+          (remembered, authorized) := by
+      change (do
+        SyncPathGroup.run directorySync #[directory.path]
+        SyncPathGroup.run keeperSync #[path]
+        pure selected : EStateM IO.Error KeeperRepairState ByteArray) (remembered, initial) = _
+      simp only [Bind.bind, EStateM.bind, directoryRan]
+    simp only [repair, Bind.bind, EStateM.bind, SyncPathGroup.run_single keeperSync, keeperSync]
+    generalize resultEq : fsync captured authorized = result at effect ⊢
+    cases effect <;> rfl
 
 end Alvoki.Storage.WalSegmentRepair
