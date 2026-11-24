@@ -40,10 +40,26 @@ theorem installs (report : SegmentedRotationPowerLossReport directory before des
     (ready.rotationInput report.cut.nonempty) origin report.attempts
   exact ⟨after, ⟨report.cut.startsRetry report.selected report.survives, exactOpen⟩, afterReady⟩
 
+theorem installsRetained (report : SegmentedRotationPowerLossReport directory before descriptor)
+    {oldDescriptor : Nat} (ready : before.RetainedReady directory oldDescriptor) :
+    ∃ after, report.Installs after ∧ after.RetainedReady directory descriptor := by
+  have origin : WalSegmentRotation.Trace before.wal (report.cut.released report.pair report.present).image :=
+    .crash report.cut.trace report.pair report.selected report.survives
+  obtain ⟨after, exactOpen, afterReady⟩ := report.toSegmentedRotationReopenReport.installsRetained ready
+    (ready.rotationInput report.cut.nonempty) origin report.attempts
+  exact ⟨after, ⟨report.cut.startsRetry report.selected report.survives, exactOpen⟩, afterReady⟩
+
 theorem Installs.preservesReady {report : SegmentedRotationPowerLossReport directory before descriptor}
     {after : SegmentedWriterState} (endpoint : report.Installs after)
     {oldDescriptor : Nat} (ready : before.Ready directory oldDescriptor) : after.Ready directory descriptor := by
   obtain ⟨_, next, nextReady⟩ := report.installs ready
+  exact endpoint.reopened.unique next.reopened ▸ nextReady
+
+theorem Installs.preservesRetainedReady {report : SegmentedRotationPowerLossReport directory before descriptor}
+    {after : SegmentedWriterState} (endpoint : report.Installs after)
+    {oldDescriptor : Nat} (ready : before.RetainedReady directory oldDescriptor) :
+    after.RetainedReady directory descriptor := by
+  obtain ⟨_, next, nextReady⟩ := report.installsRetained ready
   exact endpoint.reopened.unique next.reopened ▸ nextReady
 
 theorem Installs.history {report : SegmentedRotationPowerLossReport directory before descriptor}
