@@ -36,7 +36,8 @@ structure Cache (handle : Type) where
   active : Option (FilePath × handle)
   pending : List (FilePath × handle)
 
-private def withCache (cache : Cache handle) :
+/-- Carry the reached cache through either result of a modeled file action. -/
+def withCache (cache : Cache handle) :
     EStateM.Result IO.Error state α → EStateM.Result IO.Error (Cache handle × state) α
   | .ok result after => .ok result (cache, after)
   | .error cause after => .error cause (cache, after)
