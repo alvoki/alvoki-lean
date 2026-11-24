@@ -26,6 +26,7 @@ import Alvoki.Storage.Disk.SyncHandleCustody
 import Alvoki.Storage.Disk.StagedHandleCustody
 import Alvoki.Storage.Disk.SyncHandleEffects
 import Alvoki.Storage.Disk.DescriptorInventory
+import Alvoki.Storage.Disk.DelayedKeeperInventory
 import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.KeeperReadCustody
 import Alvoki.Storage.Disk.WriteGroupFsync
@@ -137,6 +138,7 @@ import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
 import Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
 import Alvoki.Storage.Disk.CachedWalExtentRetry
+import Alvoki.Storage.Disk.CachedCheckpointExtentRetry
 import Alvoki.Storage.Disk.SegmentedRunRetentionReopen
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
@@ -837,6 +839,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.pinnedReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.acquireReads
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reacquireReadsStable
 #check_axioms Alvoki.Storage.DiskSession.DatabaseBatchRetention.orderedSubmissions
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.preservesRetained
@@ -1031,6 +1034,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.afterCachedMarkerLastDrop
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofSealExtent
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofKeeperExtent
+#check_axioms Alvoki.Storage.readIntegrityRunBytesSized_prefix_of_reports
+#check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofCheckpointRunExtent
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.run_error
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.immediateReacquire
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.afterCachedLastDrop
@@ -1106,6 +1111,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.sync_observedEffect
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.description_unique
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.held_remaining
+#check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.addressFreeAfterLastDrop
+#check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.references_insert
+#check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.reopenOnReusedSlot
+#check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.delayedKeeperSync
+#check_axioms Alvoki.Storage.DiskSession.KeeperReplacementDropObservation.releasesWriter
+#check_axioms Alvoki.Storage.DiskSession.KeeperReplacementDropObservation.sameReachedStates
+#check_axioms Alvoki.Storage.DiskSession.KeeperReplacementDropObservation.effectTime
 #check_axioms Alvoki.Storage.DiskSession.DirectoryDropObservation.separate
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.delayedDirectoryAppendFromInventory
 #check_axioms Alvoki.Storage.SyncHandleRouting.FsyncObservation.ofInventory
