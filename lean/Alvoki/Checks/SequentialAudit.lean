@@ -115,6 +115,7 @@ import Alvoki.Storage.Disk.CheckpointSuccessSession
 import Alvoki.Storage.Disk.SegmentedCheckpointStep
 import Alvoki.Storage.Disk.SegmentedWriterTrace
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
+import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.SegmentedCollectionInventory
 import Alvoki.Storage.Disk.SegmentedRetainedWriter
@@ -819,6 +820,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedReadyPowerLossReport.Installs.unique
 #check_axioms Alvoki.Storage.DiskSession.SegmentedReadyPowerLossReport.Installs.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.withChain
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendReport.acknowledges
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendReport.preservesRetained
+#check_axioms Alvoki.Storage.DiskSession.BatchCommitReports.run
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchFailure.retainedCut
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchRecoveryReport.installsRetained
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.pinnedReads
+#check_axioms Alvoki.Storage.DiskSession.DatabaseBatchRetention.orderedSubmissions
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromBootstrap

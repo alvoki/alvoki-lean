@@ -66,25 +66,27 @@ private theorem resumedWalRange {pair : DirectoryPublication.Bindings} {marker :
   rw [bytes, Nat.mul_mod_left, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
   simp only [covered, and_self, ite_true]
 
-private theorem resumedAppendTarget {image : FileImage} {target : Target} (ready : image.Ready target)
+theorem resumedAppendTarget {image : FileImage} {target : Target} (ready : image.Ready target)
     {history : List WAL.Write} (through : target.range.through = history.length) {first : Nat}
-    (starts : first ≤ history.length) (event : WAL.Write)
-    (newBytes : Nat) (count : newBytes = (WAL.encode (history ++ [event])).size)
-    (fits : newBytes < UInt64.size) {effects : WriteEffects} {written : WriteFiles}
-    (reported : runWriteEffects history event effects (image.directory.staged .walBoundary) = .ok () written) :
-    let extended := history ++ [event]
+    (starts : first ≤ history.length) (suffix : List WAL.Write)
+    (newBytes : Nat) (count : newBytes = (WAL.encode (history ++ suffix)).size)
+    (fits : newBytes < UInt64.size) {written : WriteFiles}
+    (settled : let after := resumedAppendFiles image history first written
+      after.directory.active = ⟨image.directory.active.manifest, some (WAL.Boundary.encode newBytes.toUInt64)⟩ ∧
+      after.directory.crashImages = [after.directory.active] ∧
+      after.keeper.active = some (WAL.encode ((history ++ suffix).drop first)) ∧
+      after.keeper.crashImages = [after.keeper.active]) :
+    let extended := history ++ suffix
     let after := resumedAppendFiles image history first written
     ∃ nextTarget : Target,
       nextTarget.pair = ⟨target.pair.manifest, some (WAL.Boundary.encode newBytes.toUInt64)⟩ ∧
       nextTarget.range = ⟨target.range.watermark, extended.length⟩ ∧ nextTarget.first = first ∧
       nextTarget.trimmed = WAL.encode (extended.drop first) ∧ after.Ready nextTarget := by
   intro extended after
-  obtain ⟨pairExact, settled, keeperExact, keeperDurable⟩ :=
-    WalSegmentCommit.settledSegment_ofSuccess starts reported image.directory.active.manifest
+  obtain ⟨pairExact, settled, keeperExact, keeperDurable⟩ := settled
   let pair : DirectoryPublication.Bindings := ⟨target.pair.manifest, some (WAL.Boundary.encode newBytes.toUInt64)⟩
   have exactPair : after.directory.active = pair := by
-    change (⟨image.directory.active.manifest, written.marker.active⟩ : DirectoryPublication.Bindings) = _ at pairExact ⊢
-    simpa only [pair, count, ready.selected, extended] using pairExact
+    simpa only [pair, ready.selected] using pairExact
   let range : MarkedWalRange := ⟨target.range.watermark, extended.length⟩
   have grows : history.length ≤ extended.length := by simp [extended]
   have decoded : pair.walRange = some range := by
@@ -138,8 +140,10 @@ theorem ResumedAppendReady.acknowledged {state : Installed} {image : FileImage} 
     exact target.firstCovered
   have modeled := reports.run count
   rw [forgetError, committed] at modeled
+  have settled := WalSegmentCommit.settledSegment_ofSuccess first modeled.symm image.directory.active.manifest
+  rw [← count] at settled
   obtain ⟨nextTarget, pair, range, start, contents, ready⟩ :=
-    resumedAppendTarget before.ready before.through first event _ count fits modeled.symm
+    resumedAppendTarget before.ready before.through first [event] _ count fits settled
   have replayed : replay state.table [event] = .ok table := by
     change (replayWrite state.table event >>= fun table => Except.ok table) = .ok table
     rw [replay_prepared prepared]
