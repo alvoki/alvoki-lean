@@ -175,12 +175,12 @@ def replaceSuffix (replace : List β → Option (List β)) :
   | _ + 1, [] => none
   | n + 1, head :: rows => (replaceSuffix replace n rows).map (head :: ·)
 
-theorem replaceSuffix_spec {replace : List β → Option (List β)}
+theorem replaceSuffix_spec_at {replace : List β → Option (List β)}
     {index : Nat} {rows result : List β} (changed : replaceSuffix replace index rows = some result) :
-    ∃ prefixRows suffix replacement, rows = prefixRows ++ suffix ∧
+    ∃ prefixRows suffix replacement, prefixRows.length = index ∧ rows = prefixRows ++ suffix ∧
       result = prefixRows ++ replacement ∧ replace suffix = some replacement := by
   induction index generalizing rows result with
-  | zero => exact ⟨[], rows, result, rfl, rfl, changed⟩
+  | zero => exact ⟨[], rows, result, rfl, rfl, rfl, changed⟩
   | succ n ih =>
     cases rows with
     | nil => simp [replaceSuffix] at changed
@@ -188,10 +188,17 @@ theorem replaceSuffix_spec {replace : List β → Option (List β)}
       cases h : replaceSuffix replace n rows with
       | none => simp [replaceSuffix, h] at changed
       | some rest =>
-        obtain ⟨prefixRows, suffix, replacement, old, new, valid⟩ := ih h
+        obtain ⟨prefixRows, suffix, replacement, length, old, new, valid⟩ := ih h
         have eq : row :: rest = result := by simpa [replaceSuffix, h] using changed
-        exact ⟨row :: prefixRows, suffix, replacement,
+        exact ⟨row :: prefixRows, suffix, replacement, by simp [length],
           congrArg (row :: ·) old, eq.symm.trans (congrArg (row :: ·) new), valid⟩
+
+theorem replaceSuffix_spec {replace : List β → Option (List β)}
+    {index : Nat} {rows result : List β} (changed : replaceSuffix replace index rows = some result) :
+    ∃ prefixRows suffix replacement, rows = prefixRows ++ suffix ∧
+      result = prefixRows ++ replacement ∧ replace suffix = some replacement := by
+  obtain ⟨prefixRows, suffix, replacement, _, original, updated, valid⟩ := replaceSuffix_spec_at changed
+  exact ⟨prefixRows, suffix, replacement, original, updated, valid⟩
 
 theorem replaceSuffix_map_success (interpret : β → γ)
     (replace : List β → Option (List β)) (spec : List γ → Option (List γ))

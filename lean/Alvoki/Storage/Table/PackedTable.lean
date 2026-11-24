@@ -550,11 +550,12 @@ def PackedTable.retainRunVersions (state : PackedTable) (index : Nat) : Option P
 theorem PackedTable.retainRunVersions_spec {before after : PackedTable} {index : Nat}
     (retained : before.retainRunVersions index = some after) :
     after.memory = before.memory ∧ after.committed = before.committed ∧ after.pins = before.pins ∧
-      ∃ older source output newer, before.runs = older ++ source :: newer ∧
-        after.runs = older ++ output :: newer ∧ output.history = source.history.retain before.pins.floor := by
+      ∃ older source output newer, older.length = index ∧ before.runs = older ++ source :: newer ∧
+        after.runs = older ++ output :: newer ∧ source.retainVersions before.pins.floor = .ok output ∧
+        output.history = source.history.retain before.pins.floor := by
   unfold PackedTable.retainRunVersions at retained
   obtain ⟨runs, changed, rfl⟩ := Option.map_eq_some_iff.mp retained
-  obtain ⟨older, suffix, replacement, original, updated, valid⟩ := Sequential.replaceSuffix_spec changed
+  obtain ⟨older, suffix, replacement, length, original, updated, valid⟩ := Sequential.replaceSuffix_spec_at changed
   cases suffix with
   | nil => simp [retainRunSuffix] at valid
   | cons source newer =>
@@ -563,13 +564,13 @@ theorem PackedTable.retainRunVersions_spec {before after : PackedTable} {index :
     | ok output =>
       have replaced : output :: newer = replacement := by
         simpa [retainRunSuffix, written, Except.toOption] using valid
-      exact ⟨rfl, rfl, rfl, older, source, output, newer, original,
-        updated.trans (congrArg (older ++ ·) replaced.symm), CheckedRun.retainVersions_spec written⟩
+      exact ⟨rfl, rfl, rfl, older, source, output, newer, length, original,
+        updated.trans (congrArg (older ++ ·) replaced.symm), written, CheckedRun.retainVersions_spec written⟩
 
 theorem PackedTable.RowBounds.retainRunVersions {before after : PackedTable} {index : Nat}
     (bounded : before.RowBounds) (retained : before.retainRunVersions index = some after) :
     after.RowBounds := by
-  obtain ⟨memory, clock, _, older, source, output, newer, original, updated, history⟩ :=
+  obtain ⟨memory, clock, _, older, source, output, newer, _, original, updated, _, history⟩ :=
     PackedTable.retainRunVersions_spec retained
   constructor
   · intro run member row inside
@@ -595,7 +596,7 @@ private theorem across_retain (older newer : List (History α)) (run : History �
 theorem PackedTable.retainRunVersions_visibleEntry {before after : PackedTable} {index : Nat} {snapshot : UInt64}
     (retained : before.retainRunVersions index = some after) (supported : before.pins.floor ≤ snapshot)
     (key : UInt64) : after.describe.visibleEntry key snapshot = before.describe.visibleEntry key snapshot := by
-  obtain ⟨memory, _, _, older, source, output, newer, original, updated, history⟩ :=
+  obtain ⟨memory, _, _, older, source, output, newer, _, original, updated, _, history⟩ :=
     PackedTable.retainRunVersions_spec retained
   unfold Sequential.Table.visibleEntry Sequential.Table.histories PackedTable.describe
   rw [memory, original, updated]
