@@ -67,6 +67,26 @@ private theorem loadedRun_fits {files : List ByteArray} {runs : List Alvoki.Comp
           exact run.fits
         · exact ih tail file later
 
+/-- A run named by an accepted manifest already has a representable byte
+count. The checked loader fixes this bound for the exact durable payload. -/
+theorem _root_.Alvoki.Storage.SelectedIntegrityCheckpoint.runSizeFits {durable binding checkpoint}
+    (selected : SelectedIntegrityCheckpoint durable binding checkpoint)
+    {bytes : ByteArray} {manifest : IntegrityCheckpoint}
+    (visible : binding = some bytes) (decoded : IntegrityCheckpoint.decode bytes = .ok manifest)
+    {index : Nat} (within : index < manifest.header.runCount.toNat)
+    {payload : ByteArray} (stored : durable manifest.header.generation index = some payload) :
+    payload.size < USize.size := by
+  cases selected with
+  | absent => contradiction
+  | @present actual selectedManifest files table accepted reads loaded =>
+    cases visible
+    cases Except.ok.inj (decoded.symm.trans accepted)
+    have atIndex : files[index]? = some payload := by
+      simpa [List.getElem?_range within, stored] using getElem?_mapM_option reads index
+    obtain ⟨_, restored⟩ := loadIntegrityRunSet_iff.mp loaded
+    obtain ⟨_, parsed, _⟩ := loadRunSet_restored restored
+    exact loadedRun_fits parsed payload (List.mem_of_getElem? atIndex)
+
 /-- The bounded checkpoint stage and the original checkpoint stage agree
 as stateful report programs. The accepted checkpoint proves each selected
 payload's exact length and machine-size bound. -/
