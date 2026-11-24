@@ -6,6 +6,7 @@ import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.RunFileSelection
 import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Disk.WalSegmentCommit
+import Alvoki.Storage.Disk.WalSegmentBootstrapIO
 import Alvoki.Storage.Disk.WalSegmentOpenFast
 import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Publication.CheckpointPublication
@@ -15,13 +16,19 @@ namespace Alvoki.Storage
 open System Alvoki.Compaction
 open Alvoki.Sequential (SnapshotHandle)
 
-private structure Installed where
+structure DiskSession.Installed where
   table : PackedTable
   generation : UInt64
   walBytes : Nat
   activeFirst : Nat
 
+private abbrev Installed := DiskSession.Installed
+
 private abbrev Phase := DiskSession.Phase Installed
+
+@[inline] def WalSegmentRepair.Reopened.installed (opened : WalSegmentRepair.Reopened) :
+    DiskSession.Installed :=
+  ⟨opened.table, opened.generation, opened.walBytes.toNat, opened.keeper⟩
 
 /-- An opaque snapshot handle tied to the open disk session that issued it. -/
 structure DiskSnapshotHandle where
@@ -53,10 +60,6 @@ private def syncPaths (paths : Array FilePath) : IO Unit := do
   let result ← IO.Process.output { cmd := "sync", args := #["--"] ++ arguments }
   if result.exitCode ≠ 0 then
     throw (IO.userError s!"sync failed for {arguments}: {result.stderr}")
-
-private def publishEmptyWalBoundary (dir : DiskDirectory) : IO Unit :=
-  Publication.run (Publication.performReplacement (writeFreshStagedFile · (WAL.Boundary.encode 0))
-    syncPaths IO.FS.rename (dir.file .stagedWalBoundary) dir.path (fun _ => dir.file .walBoundary) #[])
 
 /-- The manifest fields for the exact run order published by a checkpoint. -/
 def checkpointHeader (table : PackedTable) (generation : UInt64) : Manifest.Checkpoint :=
@@ -199,10 +202,8 @@ private def bootstrapSegmented (dir : DiskDirectory) : IO WalSegmentRepair.Reope
   if let some staged ← optionalMetadata (dir.file .stagedWalBoundary) then
     unless staged.type == .file && empty.isSome do
       throw (IO.userError WAL.Boundary.missingOpenMarker)
-  WalSegmentRotation.runAt dir 0 (fun _ => pure empty)
-    WalSegmentRotation.createEmptyExclusive (fun path => syncPaths #[path])
-  publishEmptyWalBoundary dir
-  return ⟨.empty, 0, 0, 0⟩
+  WalSegmentRepair.bootstrapEmptyWith dir empty WalSegmentRotation.createEmptyExclusive
+    writeFreshStagedFile syncPaths IO.FS.rename
 
 /-- Check the markerless layout before creating or syncing segment zero,
 then publish the zero marker through the staged replacement schedule. -/
@@ -229,11 +230,11 @@ private def recoverSegmentedWal (dir : DiskDirectory) : IO WalSegmentRepair.Reop
     bootstrapSegmented dir
 
 private def installReopened (dir : DiskDirectory) (lock : IO.FS.Handle)
-    (opened : WalSegmentRepair.Reopened) : IO DiskTable := do
-  let installed : Installed := ⟨opened.table, opened.generation, opened.walBytes.toNat, opened.keeper⟩
+    (opened : WalSegmentRepair.Reopened) : IO DiskTable :=
   -- ST.Ref.ptrEq distinguishes allocations. Keeping a separate cell lets a
   -- stale handle retain its identity without retaining the database state.
-  return ⟨dir, lock, ← IO.mkRef (.ready installed), ← IO.mkRef ()⟩
+  DiskSession.installReady opened.installed (fun phase => IO.mkRef phase) (fun _ => IO.mkRef ()) fun phase session =>
+    pure ⟨dir, lock, phase, session⟩
 
 /-- Open a database in an existing directory and replay its durable WAL. -/
 def DiskTable.open (path : FilePath) : IO DiskTable := do
@@ -260,8 +261,8 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
             WalSegmentRepair.reopenMarkedFastWith dir readOptionalFile FilePath.readDir inspectWalSegment readRequiredFile
               (fun path => (IO.FS.removeFile path).toBaseIO) writeFreshStagedFile syncPaths IO.FS.rename
           else bootstrapSegmented dir : IO WalSegmentRepair.Reopened)
-        let installed : Installed := ⟨opened.table, opened.generation, opened.walBytes.toNat, opened.keeper⟩
-        return ⟨dir, lock, ← IO.mkRef (.ready installed), ← IO.mkRef ()⟩) := rfl
+        DiskSession.installReady opened.installed (fun phase => IO.mkRef phase) (fun _ => IO.mkRef ())
+          fun phase session => pure ⟨dir, lock, phase, session⟩) := rfl
 
 def DiskTable.close (db : DiskTable) : IO Unit := do
   (← db.phase.get).close (fun _ => db.lock.unlock) (fun _ => db.phase.set .closed)

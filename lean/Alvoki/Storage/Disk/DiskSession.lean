@@ -6,6 +6,14 @@ inductive Phase (α : Type) where
   | poisoned
   | closed
 
+/-- Allocate the ready state and a separate identity for its snapshot handles. -/
+@[macro_inline] def installReady [Monad m] (installed : α)
+    (allocatePhase : Phase α → m ρ) (allocateSession : Unit → m σ)
+    (assemble : ρ → σ → m β) : m β := do
+  let phase ← allocatePhase (.ready installed)
+  let session ← allocateSession ()
+  assemble phase session
+
 @[macro_inline] def Phase.installed [Monad m] [MonadExceptOf IO.Error m] (phase : Phase α) : m α :=
   match phase with
   | .ready value => pure value
