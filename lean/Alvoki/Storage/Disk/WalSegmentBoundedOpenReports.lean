@@ -151,6 +151,34 @@ private theorem layoutFirstAtOrBeforeEnd {wal : WalSegmentImage} {history : List
   · obtain rfl := List.mem_singleton.mp active
     exact layout.forward wal.active member
 
+/-- Every listed descriptor starts within the committed history in a
+canonical endpoint layout. The marker therefore prunes no addresses. -/
+theorem _root_.Alvoki.Storage.WalSegmentImage.ReadLayout.selectedThroughEnd
+    {wal : WalSegmentImage} {history : List WAL.Write}
+    (layout : wal.ReadLayout history) {watermark through first : Nat} (atEnd : through = history.length)
+    (selected : selectWalSegmentReads (wal.segments.map WalSegment.first) watermark =
+      some (first, (wal.readDescriptors watermark).map WalSegment.first)) :
+    selectWalSegmentReadsThrough (wal.segments.map WalSegment.first) watermark through =
+      some ((wal.readDescriptors watermark).map WalSegment.first, []) := by
+  have allNeeded : ∀ start ∈ (wal.readDescriptors watermark).map WalSegment.first,
+      decide (start ≤ through) = true := by
+    intro start member
+    obtain ⟨segment, selected, rfl⟩ := List.mem_map.mp member
+    have present : segment ∈ wal.segments := by
+      unfold WalSegmentImage.readDescriptors at selected
+      split at selected
+      · exact (List.mem_filter.mp selected).1
+      · exact List.mem_append_right _ selected
+    exact decide_eq_true (atEnd ▸ layoutFirstAtOrBeforeEnd layout present)
+  unfold selectWalSegmentReadsThrough
+  rw [selected]
+  change some (((wal.readDescriptors watermark).map WalSegment.first).takeWhile _,
+    ((wal.readDescriptors watermark).map WalSegment.first).dropWhile _) = _
+  have taken := List.takeWhile_append_of_pos (l₂ := []) allNeeded
+  have dropped := List.dropWhile_append_of_pos (l₂ := []) allNeeded
+  simp only [List.append_nil, List.takeWhile_nil, List.dropWhile_nil] at taken dropped
+  rw [taken, dropped]
+
 /-- Raw bounded reads derive the exact keeper request, payload order and
 physical size. The whole-file reference read of the keeper is unnecessary. -/
 theorem HealthyBoundedWalReports.readSelectedBounded {directory owners descriptor wal pair watermark durable tail}
@@ -167,25 +195,10 @@ theorem HealthyBoundedWalReports.readSelectedBounded {directory owners descripto
         (wal.active.bytes ++ tail).size) := by
   obtain ⟨sealed, split⟩ := wal.readDescriptors_endsActive watermark
   have sealedExact : (wal.readDescriptors watermark).dropLast = sealed := by simp [split]
-  have allNeeded : ∀ start ∈ (wal.readDescriptors watermark).map WalSegment.first, decide (start ≤ through) = true := by
-    intro start member
-    obtain ⟨segment, selected, rfl⟩ := List.mem_map.mp member
-    have present : segment ∈ wal.segments := by
-      unfold WalSegmentImage.readDescriptors at selected
-      split at selected
-      · exact (List.mem_filter.mp selected).1
-      · exact List.mem_append_right _ selected
-    exact decide_eq_true (atEnd ▸ layoutFirstAtOrBeforeEnd layout present)
   have addresses : selectWalSegmentReadsThrough (wal.segments.map WalSegment.first) watermark through =
       some (sealed.map WalSegment.first ++ [wal.active.first], []) := by
-    unfold selectWalSegmentReadsThrough
-    rw [selected]
-    change some (((wal.readDescriptors watermark).map WalSegment.first).takeWhile _,
-      ((wal.readDescriptors watermark).map WalSegment.first).dropWhile _) = _
-    have taken := List.takeWhile_append_of_pos (l₂ := []) allNeeded
-    have dropped := List.dropWhile_append_of_pos (l₂ := []) allNeeded
-    simp only [List.append_nil, List.takeWhile_nil, List.dropWhile_nil] at taken dropped
-    exact congrArg some (by rw [taken, dropped, split]; simp)
+    simpa only [split, List.map_append, List.map_cons, List.map_nil] using
+      layout.selectedThroughEnd atEnd selected
   have counted : count.toNat / frameSize = through := by
     rw [absolute, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
   have aligned : count.toNat % frameSize = 0 := by rw [absolute, Nat.mul_mod_left]

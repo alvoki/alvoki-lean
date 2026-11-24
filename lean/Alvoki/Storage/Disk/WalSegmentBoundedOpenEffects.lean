@@ -71,7 +71,7 @@ theorem finishBoundedMarkedOpen_eq_full [Monad m] [LawfulMonad m] [MonadExceptOf
   · rfl
   · simp only [runAt, pure_bind, valid, ite_true, runRepairPlan, samePaths, names]
 
-private theorem readSelectedWithPrefix_liftReports {state : Type} (dir : DiskDirectory)
+theorem readSelectedWithPrefix_liftReports {state : Type} (dir : DiskDirectory)
     (watermark : Nat) (length : UInt64) (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
     (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (readBin : FilePath → Except IO.Error ByteArray)
     (readPrefix : FilePath → Nat → Except IO.Error KeeperPrefix) :
