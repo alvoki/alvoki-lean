@@ -52,6 +52,7 @@ theorem DelayedKeeperSync.atBoundedReplacementBarrier (report : DelayedKeeperSyn
     (allowed : ∀ bytes ∈ report.outcomes, bytes = previous.visible previous.active ∨
       bytes ∈ previous.crashBytes previous.active) :
     ∃ target full cover retryPlan, admits target ∧
+      bounded.keeperBytes = target.trimmed ∧
       ReachesAction target before.syncDirectory full.finishActions (.replace .syncDirectory) reached ∧
       reached = (before.syncDirectory.withScratch none).withKeeperInodes
         (previous.renameSynced replacement target.trimmed) ∧
@@ -135,7 +136,9 @@ theorem DelayedKeeperSync.atBoundedReplacementBarrier (report : DelayedKeeperSyn
     settledPrepared rfl laterEmpty projection oldTarget distinct fresh allowed
   have sameAfter (inodes : WalInodeImage) : reached.withKeeperInodes inodes =
       (before.syncDirectory.withScratch none).withKeeperInodes inodes := by rw [exactReach]; rfl
-  refine ⟨target, full, cover, retryPlan, admitted, reachedNext, exactReach, recovery,
+  have selected : bounded.keeperBytes = target.trimmed := by
+    simpa only [exactBounded] using prepared.replacementBytes
+  refine ⟨target, full, cover, retryPlan, admitted, selected, reachedNext, exactReach, recovery,
     prepared.allowVisibleKeeper, EffectTrace.authorized.trans trace, ?_, ?_⟩
   · simpa only [sameAfter] using covers
   · simpa only [sameAfter] using retry
