@@ -20,6 +20,30 @@ open System
   if count == fileSize then remember path file
   return bytes
 
+/-- Reuse the active append description only while writing its recorded path. -/
+@[macro_inline] def selectAppendHandle [Monad m] {handle : Type}
+    (active : Option (FilePath × handle)) (openAppend : FilePath → m handle) (path : FilePath) : m handle :=
+  match active with
+  | some (name, handle) => if path == name then pure handle else openAppend path
+  | none => openAppend path
+
+/-- Keep the active description after a successful write and flush. A
+write or flush failure drops the possibly dirty stream while the lock is
+still held. An open error occurs before writing or changing the cache. -/
+@[macro_inline] def appendWithActive [Monad m] [MonadExceptOf IO.Error m] {handle : Type}
+    (getActive : m (Option (FilePath × handle))) (setActive : Option (FilePath × handle) → m Unit)
+    (openAppend : FilePath → m handle) (write : handle → ByteArray → m Unit) (flush : handle → m Unit)
+    (path : FilePath) (bytes : ByteArray) : m Unit := do
+  let active ← getActive
+  let file ← selectAppendHandle active openAppend path
+  try
+    write file bytes
+    flush file
+  catch error =>
+    setActive none
+    throw error
+  setActive (some (path, file))
+
 /-- Use only the cache fields required by this lookup. A pending match
 removes every entry for the path before the chosen handle is synced. -/
 @[macro_inline] def syncWithHandles [Monad m] [MonadExceptOf IO.Error m] {handle : Type}

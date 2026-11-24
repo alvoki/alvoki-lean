@@ -75,20 +75,9 @@ private def SyncFiles.stage (files : SyncFiles) (path : FilePath) (bytes : ByteA
 private def SyncFiles.create (files : SyncFiles) (path : FilePath) : IO Unit := do
   files.remember path (← IO.FS.Handle.mk path .writeNew)
 
-private def SyncFiles.append (files : SyncFiles) (path : FilePath) (bytes : ByteArray) : IO Unit := do
-  let current ← files.active.get
-  let wal ← match current with
-    | some (active, handle) =>
-      if path == active then pure handle else IO.FS.Handle.mk path .append
-    | none => IO.FS.Handle.mk path .append
-  try
-    wal.write bytes
-    wal.flush
-  catch error =>
-    -- Close a potentially dirty stream while this session still holds the lock.
-    files.active.set none
-    throw error
-  files.active.set (some (path, wal))
+private def SyncFiles.append (files : SyncFiles) : FilePath → ByteArray → IO Unit :=
+  SyncHandleRouting.appendWithActive files.active.get files.active.set
+    (fun path => IO.FS.Handle.mk path .append) IO.FS.Handle.write IO.FS.Handle.flush
 
 private def SyncFiles.sync (files : SyncFiles) (path : FilePath) : IO Unit :=
   SyncHandleRouting.syncWithHandles files.dir path files.directory.get files.pending.get
