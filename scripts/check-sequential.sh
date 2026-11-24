@@ -115,6 +115,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairOpen
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReopenEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReplayStability
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentRetryReads
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
 lake env leanchecker Alvoki.Storage.Disk.RecoveredPinRefinement

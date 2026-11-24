@@ -16,10 +16,12 @@ def loadRunSet (header : Manifest.Checkpoint) (files : List ByteArray) : Except 
   let runs ← files.mapM CheckedRun.openBytes
   installRuns runs header
 
-/-- A loaded checkpoint starts a new session with no active snapshot pins. -/
-theorem loadRunSet_clearsPins {header : Manifest.Checkpoint} {files : List ByteArray}
+/-- A successful run-set load decodes the ordered files and restores the
+table with the selected manifest watermark and floor. -/
+theorem loadRunSet_restored {header : Manifest.Checkpoint} {files : List ByteArray}
     {table : PackedTable} (loaded : loadRunSet header files = .ok table) :
-    table.pins.active = [] := by
+    ∃ runs, files.mapM CheckedRun.openBytes = .ok runs ∧
+      PackedTable.restore runs header.committed header.floor = some table := by
   unfold loadRunSet at loaded
   split at loaded
   · contradiction
@@ -33,7 +35,14 @@ theorem loadRunSet_clearsPins {header : Manifest.Checkpoint} {files : List ByteA
       · contradiction
       · rename_i restored restoredEq
         cases loaded
-        exact (PackedTable.restore_spec restoredEq).2.2.2.2
+        exact ⟨runs, rfl, restoredEq⟩
+
+/-- A loaded checkpoint starts a new session with no active snapshot pins. -/
+theorem loadRunSet_clearsPins {header : Manifest.Checkpoint} {files : List ByteArray}
+    {table : PackedTable} (loaded : loadRunSet header files = .ok table) :
+    table.pins.active = [] := by
+  obtain ⟨_, _, restored⟩ := loadRunSet_restored loaded
+  exact (PackedTable.restore_spec restored).2.2.2.2
 
 private theorem readWrittenRuns (runs : List CheckedRun) :
     (runs.map (·.run.bytes)).mapM CheckedRun.openBytes = Except.ok runs := by
