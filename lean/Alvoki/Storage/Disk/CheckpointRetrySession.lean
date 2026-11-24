@@ -74,11 +74,13 @@ theorem BoundedReopenTrace.installsAfterCheckpointError {directory : DiskDirecto
           ⟨files, released.owners⟩ retry →
         TryLockObserves retry.owners directory (.ok true) →
         retry.image.kept = files.kept ∧
+        wal.ReadLayout history ∧ WalSegment.Chain history 0 wal.segments ∧
         (retry.image.directory.active.manifest = before.directory.active.manifest ∨
           retry.image.directory.active.manifest = some manifest) ∧
         retry.image.directory.active.walBoundary = before.directory.active.walBoundary ∧
         ∃ selected : CanonicalKeeperLayout retry.image history,
-          selected.target.first = installed.activeFirst ∧ selected.tail = ByteArray.empty ∧
+          selected.target.first = installed.activeFirst ∧ selected.target.first = wal.active.first ∧
+          selected.tail = ByteArray.empty ∧
           ∃ selectedGeneration : UInt64,
             ((retry.image.directory.active.manifest.mapM fun bytes =>
               (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) :
@@ -122,7 +124,7 @@ theorem BoundedReopenTrace.installsAfterCheckpointError {directory : DiskDirecto
       obtain ⟨parsed, decoded, _⟩ := selectedCheckpointWatermark_present_iff.mp watermark
       exact ⟨parsed.header.generation, by rw [Option.mapM, decoded]; rfl⟩
   obtain ⟨selectedGeneration, exactSelectedGeneration⟩ := generationRead
-  refine ⟨lineage.keepsSealed, sameManifest, sameMarker, selected, first, noTail,
+  refine ⟨lineage.keepsSealed, layout, chain, sameManifest, sameMarker, selected, first, congrArg WalSegment.first keeper, noTail,
     selectedGeneration, exactSelectedGeneration, ?_⟩
   intro raw settles healthy
   exact runOpenWithInstallation_appendLayout layout ordered selected keeper descriptors offsets prepared emptyLater

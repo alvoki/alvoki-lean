@@ -60,6 +60,11 @@ lake env leanchecker Alvoki.Storage.Disk.CheckpointLockHandoff
 lake env leanchecker Alvoki.Storage.Disk.CheckpointCutSession
 lake env leanchecker Alvoki.Storage.Disk.CheckpointSuccessSession
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCheckpointStep
+lake env leanchecker Alvoki.Storage.Disk.SegmentedBootstrapReady
+lake env leanchecker Alvoki.Storage.Disk.SegmentedWriterState
+lake env leanchecker Alvoki.Storage.Disk.SegmentedWriterEntry
+lake env leanchecker Alvoki.Storage.Disk.SegmentedAppendTrace
+lake env leanchecker Alvoki.Storage.Disk.SegmentedWriterTrace
 lake env leanchecker Alvoki.Storage.Disk.AppendLockHandoff
 lake env leanchecker Alvoki.Storage.Disk.AppendCutSession
 lake env leanchecker Alvoki.Storage.Disk.ReopenedSegmentAppend

@@ -56,6 +56,7 @@ private def AppendRetryLayout (before : WalSegmentImage) (history : List WAL.Wri
     current.directory.active.manifest = before.directory.active.manifest ∧
     current.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
     ∃ wal : WalSegmentImage, wal.ReadLayout selectedHistory ∧ WalSegment.Chain selectedHistory 0 wal.segments ∧
+    current.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
     ∃ selected : CanonicalKeeperLayout current selectedHistory,
       selected.range.watermark = watermark ∧ selected.keeper = wal.active ∧
       selected.target.first = before.active.first ∧
@@ -84,7 +85,7 @@ private theorem appendRetryLayout {before : WalSegmentImage} {history : List WAL
     obtain ⟨selectedHistory, allowed, manifest, marker, canonical, whole, selected, range, keeper, descriptors,
       offsets, _, keeperChoices, keptPrefix, later⟩ := layout.afterAppendCut chain covered event fits effects
         before.directory.active.manifest markerScratch checkpoint seen observedScratch admitted
-    refine ⟨selectedHistory, allowed, manifest, marker, _, canonical, whole, selected,
+    refine ⟨selectedHistory, allowed, manifest, marker, _, canonical, whole, rfl, selected,
       congrArg MarkedWalRange.watermark range, keeper, ?_, descriptors, offsets,
       selected.prepared keeperChoices keptPrefix later, rfl⟩
     change selected.keeper.first = before.active.first
@@ -93,7 +94,7 @@ private theorem appendRetryLayout {before : WalSegmentImage} {history : List WAL
   cases lineage with
   | before original => exact readChoice original
   | repairing original admitted prepared trace =>
-    obtain ⟨selectedHistory, allowed, manifest, marker, wal, canonical, whole, selected, watermark, keeper, first,
+    obtain ⟨selectedHistory, allowed, manifest, marker, wal, canonical, whole, kept, selected, watermark, keeper, first,
       descriptors, offsets, sourcePrepared, empty⟩ := readChoice original
     have canonicalTarget : AppendRetryTarget history event before.active.first selected.target :=
       ⟨first, selectedHistory, allowed, selected.through, first ▸ selected.chain.keeperBytes⟩
@@ -103,7 +104,7 @@ private theorem appendRetryLayout {before : WalSegmentImage} {history : List WAL
       trace.canonicalRetryLayout selected sourcePrepared
     have pair := (trace.valid sourcePrepared.pair sourcePrepared.keeperPrefix sourcePrepared.newer).selected.trans
       sourcePrepared.pair.symm
-    refine ⟨selectedHistory, allowed, ?_, ?_, wal, canonical, whole, retry,
+    refine ⟨selectedHistory, allowed, ?_, ?_, wal, canonical, whole, trace.keepsSealed.trans kept, retry,
       (congrArg MarkedWalRange.watermark range).trans watermark, nextKeeper.trans keeper,
       (congrArg Target.first target).trans first, ?_, ?_, target.symm ▸ prepared, trace.emptyLater empty⟩
     · exact (congrArg DirectoryPublication.Bindings.manifest pair).trans manifest
@@ -158,8 +159,9 @@ theorem BoundedReopenTrace.installsAfterAppendError {directory : DiskDirectory} 
       retry.image.directory.active.manifest = before.directory.active.manifest ∧
       retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode selectedHistory).size.toUInt64) ∧
       ∃ wal : WalSegmentImage, wal.ReadLayout selectedHistory ∧ WalSegment.Chain selectedHistory 0 wal.segments ∧
+      retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
       ∃ selected : CanonicalKeeperLayout retry.image selectedHistory,
-        selected.target.first = installed.activeFirst ∧
+        selected.target.first = installed.activeFirst ∧ selected.target.first = wal.active.first ∧
         ∀ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
             wal retry.image.directory.active selected.range.watermark published.durable selected.tail,
           sync #[directory.path] retry.image = .ok () retry.image.syncDirectory →
@@ -187,7 +189,7 @@ theorem BoundedReopenTrace.installsAfterAppendError {directory : DiskDirectory} 
   refine ⟨unknown, closed, dropped, lineage.keepsSealed, ?_⟩
   obtain ⟨strict, covered, _⟩ := DirectoryPublication.Bindings.walRange_accounting ready.range
   have allFit := byteCount ▸ fits
-  obtain ⟨selectedHistory, allowed, manifest, marker, wal, layout, chain, selected, range, keeper, first,
+  obtain ⟨selectedHistory, allowed, manifest, marker, wal, layout, chain, kept, selected, range, keeper, first,
     descriptors, offsets, selectedPrepared, empty⟩ := appendRetryLayout ready.layout ready.chain covered event allFit
       effects (before.directory.staged .walBoundary) strict (by rw [exactError]; exact lineage)
   have accepted : published.AcceptsVersioned selectedHistory.length.toUInt64 (CheckpointRepresentsPrefix selectedHistory)
@@ -200,7 +202,8 @@ theorem BoundedReopenTrace.installsAfterAppendError {directory : DiskDirectory} 
     rcases allowed with rfl | rfl
     · exact ready.ordered
     · exact extended
-  refine ⟨selectedHistory, allowed, manifest, marker, wal, layout, chain, selected, first.trans ready.first.symm, ?_⟩
+  refine ⟨selectedHistory, allowed, manifest, marker, wal, layout, chain, kept, selected, first.trans ready.first.symm,
+    congrArg WalSegment.first keeper, ?_⟩
   intro raw settles healthy
   exact runOpenWithInstallation_appendLayout layout consecutive selected keeper (range.symm ▸ descriptors)
     (range.symm ▸ offsets) selectedPrepared empty accepted (manifest.symm ▸ ready.generation) raw

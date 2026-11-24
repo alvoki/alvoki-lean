@@ -60,6 +60,11 @@ theorem SegmentedWriterState.Ready.activeExtent {directory descriptor state}
     Nat.sub_mul, ready.resumed.bytes, WAL.encode_size, Nat.mul_comm WAL.frameSize,
     ready.resumed.keeper, ready.active]
 
+theorem SegmentedWriterState.Ready.activeContents {directory descriptor state}
+    (ready : SegmentedWriterState.Ready directory descriptor state) :
+    state.files.keeper.active = some state.wal.active.bytes := by
+  rw [ready.resumed.ready.keeper, ready.resumed.contents, ready.active, ready.layout.activeBytes]
+
 theorem SegmentedWriterState.Ready.appendInput {directory descriptor state}
     (ready : SegmentedWriterState.Ready directory descriptor state) :
     AppendCutWriter state.installed state.wal state.history state.published state.target.range.watermark := by
@@ -98,8 +103,8 @@ theorem SegmentedWriterState.Ready.rotationInput {directory descriptor state}
   · intro segment occurs
     exact ((List.pairwise_append.mp ready.layout.ordered).2.2 segment occurs state.wal.active (by simp)).1
 
-/-- The next in-range generation cannot be referenced by the settled
-manifest. Old unreferenced file names do not grant any authority. -/
+/-- The settled manifest's selected generation is older than the next
+in-range generation. -/
 theorem SegmentedWriterState.Ready.freshCheckpoint {directory descriptor state}
     (ready : SegmentedWriterState.Ready directory descriptor state)
     (fits : state.installed.generation.toNat + 1 < UInt64.size) :
@@ -145,13 +150,14 @@ theorem AppendCutReady.writerReady {directory descriptor liveRefs history publis
     ∃ session final, ∃ writer : SegmentedWriterState,
       result = .ok session final ∧ session.directory = directory ∧ session.descriptor = descriptor ∧
       session.phase = .ready writer.installed ∧ writer.files = final.image ∧ writer.owners = final.owners ∧
+      writer.wal = { wal with directory := final.image.directory } ∧ writer.target = target ∧
       writer.history = history ∧ writer.published.durable = published.durable ∧
       writer.Ready directory descriptor := by
   obtain ⟨through, trimmed, accepted, ordered, checkpoint, table, model, session, final, returned, selected,
     gen, _, path, lock, phase, durable, kept, held, _, bounds, refines, represents, _, _, _, _⟩ := opened
   let installed : Installed := ⟨table, generation, (WAL.encode history).size, target.first⟩
   refine ⟨session, final, SegmentedWriterState.ofReopen installed wal history published target checkpoint final,
-    returned, path, lock, phase, rfl, rfl, rfl, rfl, ?_⟩
+    returned, path, lock, phase, rfl, rfl, rfl, rfl, rfl, rfl, ?_⟩
   exact ⟨⟨durable, through, rfl, rfl, trimmed, gen, selected, accepted, ordered, bounds, ⟨model, refines, represents⟩⟩,
     ⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩, chain, rfl, kept.trans sealed,
     keeper, rfl, held⟩

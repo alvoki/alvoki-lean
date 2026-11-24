@@ -7,7 +7,7 @@ open System CheckpointPublication
 open WalSegmentRepair (Target)
 
 /-- The checkpoint preparation and concrete effects reported for one
-segmented writer operation. No ready-state proof is part of the report. -/
+segmented writer operation. -/
 structure SegmentedCheckpointReport (directory : DiskDirectory) (before : SegmentedWriterState) where
   table : PackedTable
   manifest : ByteArray
