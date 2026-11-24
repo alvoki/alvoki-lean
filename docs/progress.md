@@ -196,4 +196,6 @@ At a power-loss cut during the first append callback of a batch, the shared writ
 
 Two successful cached reopens from the same manifest, published run map, selected history and keeper start install exactly the same table, generation, WAL extent and keeper. The two opens have their own separately observed handle and reference identities. [Installation determinism](../lean/Alvoki/Storage/Disk/CachedRetryInstallation.lean)
 
+A reported successful close of a checkpointed writer preserves the file image and clears the old lock. The subsequent reported marked open uses that exact reached image, which determines the same checkpoint and marker bindings, generation and acknowledged WAL history. Native close and open supply the observed callback, handle and lock facts. [Close and cached reopen](../lean/Alvoki/Storage/Disk/SegmentedCleanCachedReopen.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
