@@ -71,13 +71,10 @@ private theorem selectedIntegrityCheckpoint_unique {durable binding left right}
       cases Except.ok.inj (loaded.symm.trans loadAgain)
       rfl
 
-/-- Reached file reports for the next healthy bounded open after the
-rotation failure and its observed retry prefix. -/
-structure SegmentedRotationRecoveryReport (directory : DiskDirectory) (before : SegmentedWriterState)
+/-- Reached file reports for a healthy bounded open following a rotation handoff. -/
+structure SegmentedRotationReopenReport (directory : DiskDirectory) (before : SegmentedWriterState)
     (descriptor : Nat) where
-  failure : SegmentedRotationFailure directory before
   retry : LockedFileState WalSegmentRotation.State
-  attempts : RotationReopenFailures directory before.wal before.history failure.released retry
   nextRef : Nat
   liveRefs : List Nat
   fresh : ∀ ref ∈ liveRefs, ref < nextRef
@@ -94,21 +91,21 @@ structure SegmentedRotationRecoveryReport (directory : DiskDirectory) (before : 
   syncKeeper : sync #[directory.file (.walSegment (retry.image.visible before.wal).active.first)]
     retry.image.settleForReopen = .ok () retry.image.settleForReopen
 
-def SegmentedRotationRecoveryReport.attempt {directory before descriptor}
-    (report : SegmentedRotationRecoveryReport directory before descriptor) :
+def SegmentedRotationReopenReport.attempt {directory before descriptor}
+    (report : SegmentedRotationReopenReport directory before descriptor) :
     BoundedReopenAttempt WalSegmentRotation.State :=
   ⟨descriptor, report.nextRef, .ok true, report.unlock, report.read.reports.readOptional, report.read.list,
     (fun path => .ok (report.read.reports.lstat path)), report.read.reports.readBin, report.read.readPrefix,
     report.removeFile, report.write, report.sync, report.renameFile⟩
 
-def SegmentedRotationRecoveryReport.run {directory before descriptor}
-    (report : SegmentedRotationRecoveryReport directory before descriptor) :
+def SegmentedRotationReopenReport.run {directory before descriptor}
+    (report : SegmentedRotationReopenReport directory before descriptor) :
     EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession :=
   report.attempt.run directory report.retry
 
 /-- The exact session returned by a concrete bounded open. The keeper and
 metadata are fixed by that result and the original acknowledged history. -/
-structure SegmentedRotationReopened (directory : DiskDirectory) (descriptor : Nat)
+structure SegmentedRotationReopenEndpoint (directory : DiskDirectory) (descriptor : Nat)
     (before after : SegmentedWriterState)
     (result : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession) : Prop where
   returned : ∃ session final, result = .ok session final ∧ session.directory = directory ∧
@@ -123,22 +120,19 @@ structure SegmentedRotationReopened (directory : DiskDirectory) (descriptor : Na
   durableRuns : after.published.durable = before.published.durable
   checkpoint : after.checkpoint = before.checkpoint
   generation : after.installed.generation = before.installed.generation
-  execution : ∃ report : SegmentedRotationRecoveryReport directory before descriptor, result = report.run
 
-/-- Retry the actual reported rotation failure under the next acquired lock.
-The keeper follows the surviving name. Rotation preserves the acknowledged
-history and checkpoint across the whole handoff. -/
-theorem SegmentedRotationRecoveryReport.installs {directory : DiskDirectory} {before : SegmentedWriterState}
-    {descriptor newDescriptor : Nat} (report : SegmentedRotationRecoveryReport directory before newDescriptor)
-    (ready : before.Ready directory descriptor) :
-    ∃ writer, SegmentedRotationReopened directory newDescriptor before writer report.run ∧
+/-- Install the keeper that survived a rotation handoff. The origin and
+retry reports connect the reopened state to the prior ready writer. -/
+theorem SegmentedRotationReopenReport.installs {directory : DiskDirectory} {before : SegmentedWriterState}
+    {descriptor newDescriptor : Nat} (report : SegmentedRotationReopenReport directory before newDescriptor)
+    (ready : before.Ready directory descriptor)
+    (rotation : CanRotate before.wal before.history)
+    {initial : LockedFileState WalSegmentRotation.State} (origin : Trace before.wal initial.image)
+    (attempts : RotationReopenFailures directory before.wal before.history initial report.retry) :
+    ∃ writer, SegmentedRotationReopenEndpoint directory newDescriptor before writer report.run ∧
       writer.Ready directory newDescriptor := by
-  let failure := report.failure
   let retry := report.retry
   let fixed := retry.image.settledReopenImage before.wal
-  have attempts := report.attempts
-  have rotation := ready.rotationInput failure.nonempty
-  have origin := (failure.handoff ready).1
   have originalPair {pair} (chosen : before.wal.Selects pair) : pair = before.wal.directory.active := by
     simpa [WalSegmentImage.Selects, ready.walDirectorySettled] using chosen
   have originalPairs (pair) (chosen : before.wal.Selects pair) : ∃ range, pair.walRange = some range ∧
@@ -182,8 +176,7 @@ theorem SegmentedRotationRecoveryReport.installs {directory : DiskDirectory} {be
   have keeperBytes : writer.target.trimmed = writer.wal.active.bytes := by
     rw [reopened.resumed.contents, reopened.active, reopened.layout.activeBytes]
   exact ⟨writer, ⟨⟨session, final, returned, path, lock, phase, files, visible, owners⟩,
-    history, targetPair, reopened.active, keeperBytes, reopened.manifestFiles, durable, checkpoint, generation,
-    ⟨report, rfl⟩⟩, reopened⟩
+    history, targetPair, reopened.active, keeperBytes, reopened.manifestFiles, durable, checkpoint, generation⟩, reopened⟩
 
 private theorem sameRotationTarget {left right : Target} (pair : left.pair = right.pair)
     (first : left.first = right.first) (bytes : left.trimmed = right.trimmed) : left = right := by
@@ -196,9 +189,9 @@ private theorem sameRotationTarget {left right : Target} (pair : left.pair = rig
   cases bytes
   rfl
 
-theorem SegmentedRotationReopened.unique {directory descriptor before left right result}
-    (a : SegmentedRotationReopened directory descriptor before left result)
-    (b : SegmentedRotationReopened directory descriptor before right result) : left = right := by
+theorem SegmentedRotationReopenEndpoint.unique {directory descriptor before left right result}
+    (a : SegmentedRotationReopenEndpoint directory descriptor before left result)
+    (b : SegmentedRotationReopenEndpoint directory descriptor before right result) : left = right := by
   obtain ⟨sessionA, finalA, outcomeA, _, _, phaseA, filesA, walA, ownersA⟩ := a.returned
   obtain ⟨sessionB, finalB, outcomeB, _, _, phaseB, filesB, walB, ownersB⟩ := b.returned
   obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj (outcomeA.symm.trans outcomeB)
@@ -233,6 +226,44 @@ theorem SegmentedRotationReopened.unique {directory descriptor before left right
   cases checkpoint
   cases owners
   rfl
+
+/-- The healthy bounded open after a reported rotation error and its retry prefix. -/
+structure SegmentedRotationRecoveryReport (directory : DiskDirectory) (before : SegmentedWriterState)
+    (descriptor : Nat) extends SegmentedRotationReopenReport directory before descriptor where
+  failure : SegmentedRotationFailure directory before
+  attempts : RotationReopenFailures directory before.wal before.history failure.released retry
+
+def SegmentedRotationRecoveryReport.attempt {directory before descriptor}
+    (report : SegmentedRotationRecoveryReport directory before descriptor) :
+    BoundedReopenAttempt WalSegmentRotation.State :=
+  report.toSegmentedRotationReopenReport.attempt
+
+def SegmentedRotationRecoveryReport.run {directory before descriptor}
+    (report : SegmentedRotationRecoveryReport directory before descriptor) :
+    EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession :=
+  report.toSegmentedRotationReopenReport.run
+
+structure SegmentedRotationReopened (directory : DiskDirectory) (descriptor : Nat)
+    (before after : SegmentedWriterState)
+    (result : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession) : Prop
+    extends SegmentedRotationReopenEndpoint directory descriptor before after result where
+  execution : ∃ report : SegmentedRotationRecoveryReport directory before descriptor, result = report.run
+
+/-- The reported rotation error and retry prefix preserve the acknowledged
+history and checkpoint across the handoff to the next writer. -/
+theorem SegmentedRotationRecoveryReport.installs {directory : DiskDirectory} {before : SegmentedWriterState}
+    {descriptor newDescriptor : Nat} (report : SegmentedRotationRecoveryReport directory before newDescriptor)
+    (ready : before.Ready directory descriptor) :
+    ∃ writer, SegmentedRotationReopened directory newDescriptor before writer report.run ∧
+      writer.Ready directory newDescriptor := by
+  obtain ⟨writer, endpoint, reopened⟩ := report.toSegmentedRotationReopenReport.installs ready
+    (ready.rotationInput report.failure.nonempty) (report.failure.handoff ready).1 report.attempts
+  exact ⟨writer, ⟨endpoint, ⟨report, rfl⟩⟩, reopened⟩
+
+theorem SegmentedRotationReopened.unique {directory descriptor before left right result}
+    (a : SegmentedRotationReopened directory descriptor before left result)
+    (b : SegmentedRotationReopened directory descriptor before right result) : left = right :=
+  a.toSegmentedRotationReopenEndpoint.unique b.toSegmentedRotationReopenEndpoint
 
 /-- Re-establish the full ready invariant by executing the certified report
 from the preceding ready writer. Its returned endpoint is deterministic. -/
