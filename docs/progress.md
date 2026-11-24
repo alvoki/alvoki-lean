@@ -420,6 +420,8 @@ One theorem now covers healthy retry after empty bootstrap, legacy adoption, a s
 
 For any mixed database trace, active pins at the same sequence at the beginning and end return the same point and ordered range reads. The proof splits the canonical replay at the original history and shows each later write, including a tombstone, has a greater sequence and cannot affect those reads. The two pins may belong to different sessions. [Stable snapshot reads](../lean/Alvoki/Storage/Disk/MarkedDatabaseTrace.lean)
 
+If the old pin's sequence is still at or above the final retention floor, the same trace guarantees `acquireAt` succeeds and the returned pin reads the original values and range. The committed clock can only grow with the retained history. [Reacquisition proof](../lean/Alvoki/Storage/Disk/MarkedDatabaseTrace.lean)
+
 ## Native lock release on owner death
 
 A native fixture stops a write at the staged-marker sync command, confirms a competing open receives the live owner's lock error, and kills only the owner. A new process obtains the lock and recovers the exact acknowledged WAL and marker while the same sync child is still alive. The Linux syscall trace also observes the lock descriptor opened with `O_CLOEXEC`. The fixture concerns process death while a child is alive. The power-loss behavior of completed sync calls remains part of the filesystem contract. [Native process-death fixture](../scripts/check-disk-process-death.py)

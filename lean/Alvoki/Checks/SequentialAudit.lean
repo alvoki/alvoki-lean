@@ -226,6 +226,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseTrace.refines
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseTrace.canonicalReads
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseTrace.pinnedReadsStable
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseTrace.reacquireReadsStable
 #check_axioms Alvoki.WAL.Boundary.reopenAfterWriteError_completes
 #check_axioms Alvoki.WAL.Boundary.RecoveryBoundary.completes
 #check_axioms Alvoki.Storage.DiskTable.open_fileTargets

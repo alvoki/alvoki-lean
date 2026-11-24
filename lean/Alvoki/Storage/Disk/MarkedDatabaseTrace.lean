@@ -284,4 +284,37 @@ theorem MarkedDatabaseTrace.pinnedReadsStable {initial after : ObservedMarkedSta
   · intro start stop
     rw [oldRange, newRange, sameSequence, Sequential.Table.range_of_visibleEntry_eq start stop _ visible]
 
+/-- A previously active sequence at or above the final floor can be
+acquired again. The resulting pin returns the original point and range reads. -/
+theorem MarkedDatabaseTrace.reacquireReadsStable {initial after : ObservedMarkedState}
+    {sessions : List MarkedSessionWrites} (path : MarkedDatabaseTrace initial sessions after)
+    (valid : initial.Valid) {oldPin : SnapshotPin} (oldActive : oldPin ∈ initial.writer.table.pins.active)
+    (retained : after.writer.table.pins.floor ≤ oldPin.sequence) :
+    ∃ newPin table, after.writer.table.acquireAt oldPin.sequence = some (newPin, table) ∧
+      newPin.sequence = oldPin.sequence ∧
+      (∀ key, table.lookup newPin.handle key = initial.writer.table.lookup oldPin.handle key) ∧
+      ∀ start stop, table.range newPin.handle start stop = initial.writer.table.range oldPin.handle start stop := by
+  obtain ⟨suffix, ready, history, _⟩ := path.refines valid
+  have committed : oldPin.sequence ≤ after.writer.table.committed := by
+    obtain ⟨_, _, old⟩ := valid
+    obtain ⟨_, _, current⟩ := ready
+    obtain ⟨model, refined, _⟩ := old.live
+    have active := model.pins_committed oldPin (refined.pins ▸ oldActive)
+    rw [← refined.committed, UInt64.le_iff_toNat_le, ← old.ready.count] at active
+    change oldPin.sequence.toNat ≤ initial.writer.history.length at active
+    rw [UInt64.le_iff_toNat_le, ← current.ready.count, history, List.length_append]
+    omega
+  have canAcquire := (Sequential.SnapshotPins.acquire_iff after.writer.table.pins _ _).mpr ⟨retained, committed⟩
+  have canPin : (after.writer.table.acquireAt oldPin.sequence).isSome = true := by
+    simpa only [PackedTable.acquireAt, Option.isSome_map] using canAcquire
+  obtain ⟨⟨newPin, table⟩, acquired⟩ := Option.isSome_iff_exists.mp canPin
+  obtain ⟨⟨found, pins⟩, recorded, same⟩ := Option.map_eq_some_iff.mp acquired
+  cases same
+  obtain ⟨_, _, sequence, _, active, _, _⟩ := Sequential.SnapshotPins.acquire_spec recorded
+  have newActive : newPin ∈ pins.active := by
+    rw [active]
+    exact List.mem_cons_self ..
+  let extended := path.step (.acquireAt acquired)
+  exact ⟨newPin, _, acquired, sequence, extended.pinnedReadsStable valid oldActive newActive sequence⟩
+
 end Alvoki.WAL.Boundary
