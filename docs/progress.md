@@ -1,5 +1,7 @@
 # Current handoff
 
+Checkpoint retries after a reported publication error or power loss share a named installation contract for the selected manifest generation, keeper layout and healthy bounded-open reports. [Checkpoint retry](../lean/Alvoki/Storage/Disk/CheckpointRetrySession.lean)
+
 Append, checkpoint and rotation failure proofs now share the lock handoff for their reached file images. Collection uses the same successful-close lemma. [Proof techniques and reuse](proof-index.md)
 
 The packed table uses a shared memtable contract over the existing ordered history. The reference list and the ordered tree implement the same insert, snapshot lookup, range, and flush guarantees. Disk replay uses the tree, and differential traces exercise both backends. [Memtable contract](../lean/Alvoki/Storage/Table/MemTableContract.lean)
