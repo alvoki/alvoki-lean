@@ -132,9 +132,10 @@ theorem references_insert (inventory : DescriptorInventory) (slot : DescriptorSl
       else inventory.references description := by
   by_cases same : slot.description = description <;> simp [insert, references, same]
 
-/-- The cooperating opener can receive the old numeric address while
-acquiring and installing the database under a fresh description. The
-successful raw open, lock and recovery reports are explicit hypotheses. -/
+/-- Given an observed raw allocation into the still-live private table,
+the cooperating opener can receive the old numeric address and install
+under its distinct description. The lock binding and recovery result are
+reported separately. -/
 theorem reopenOnReusedSlot (inventory : DescriptorInventory) (drops : List LockReferenceDrop)
     {image : Type} {directory : DiskDirectory} {before : LockedFileState image}
     {owner nextRef : Nat} {previous : LockReference} (present : previous ∈ inventory.references owner)
@@ -142,7 +143,8 @@ theorem reopenOnReusedSlot (inventory : DescriptorInventory) (drops : List LockR
     (ended : (inventory.afterDrops drops).references owner = [])
     (openedSlot : DescriptorSlot) (address : openedSlot.address = (previous.process, previous.fd))
     (fresh : openedSlot.description ≠ owner)
-    (newOpen : (inventory.afterDrops drops).references openedSlot.description = [])
+    (allocation : LockReferenceDrop.exited openedSlot.reference.process ∉ drops ∧
+      (inventory.afterDrops drops).references openedSlot.description = [])
     (bindings : FilePath → Option Nat)
     (object : bindings (directory.file .lock) = some (inventory.inode openedSlot.description))
     (sameLock : inventory.inode openedSlot.description = inventory.inode owner)
@@ -165,7 +167,7 @@ theorem reopenOnReusedSlot (inventory : DescriptorInventory) (drops : List LockR
     (inventory.held owner ownerLive) ownership last unlock recovered
   refine ⟨?_, ?_, sameLock ▸ object, acquires, reopened⟩
   · simp [reached, references_insert, fresh, ended]
-  · simp [reached, references_insert, newOpen]
+  · simp [reached, references_insert, allocation.2]
 
 /-- Construct the delayed directory observation from the issuing slot in
 the reached table. Its description and object are the ones observed in
