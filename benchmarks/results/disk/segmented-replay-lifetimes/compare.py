@@ -126,7 +126,9 @@ def deep(directory, count, watermark, keeper, newer):
         if status != 0:
             raise RuntimeError(f"{mode} rejected deep fixture: {output}")
         summary, rows, plan = output.splitlines()
-        if rows != expected or plan != f"{watermark},{newer}" or int(summary.split(",")[5]) != keeper:
+        observed_keeper, retained_bytes = map(int, summary.split(",")[5:7])
+        if (rows != expected or plan != f"{watermark},{newer}" or observed_keeper != keeper or
+                retained_bytes != (count - keeper) * frame_size):
             raise RuntimeError(f"{mode} returned an unexpected exact range or keeper plan: {output}")
 
 
