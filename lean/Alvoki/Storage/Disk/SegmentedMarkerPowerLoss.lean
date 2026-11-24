@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.RetainedAppendRecovery
+import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentMarkerPowerLoss
 
 namespace Alvoki.Storage.DiskSession
@@ -217,6 +218,50 @@ theorem installsRetained (report : SegmentedMarkerPowerLossReport directory befo
   have samePair : report.retry.image.directory.active = report.pair := fixedAppendPair report.attempts rfl
   have exactMarker := (congrArg DirectoryPublication.Bindings.walBoundary samePair).symm.trans marker
   exact ⟨after, ⟨endpoint, observed.powerLoss, exactMarker, checkpoint, generation⟩, next⟩
+
+/-- The exact cached reads for whichever history the visible marker
+selects. The keeper's reported extent includes its unselected tail. -/
+def CachedReads (report : SegmentedMarkerPowerLossReport directory before writer descriptor)
+    (recover : EStateM IO.Error FileImage Reopened) : Prop :=
+  ∀ history, ∀ selected : CanonicalKeeperLayout report.retry.image history,
+    (history = before.history ∨ history = before.history ++ [report.event]) →
+    selected.target.first = before.wal.active.first →
+    let wal := before.wal.appendSelectedView report.retry.image.directory.active history
+    ∃ raw : HealthyBoundedWalReports directory (report.retry.owners.set (directory.file .lock) (some descriptor))
+        descriptor wal report.retry.image.directory.active selected.range.watermark before.published.durable selected.tail,
+      ∃ sizes : SizedCheckpointRunReports directory raw.reports report.retry.image.directory.active.manifest
+          before.published.durable,
+        ∃ cached : CachedWalFileReports directory raw.reports wal selected.range.watermark selected.tail,
+          recover = raw.reopenCached sizes cached report.reopen.removeFile report.reopen.write report.reopen.sync
+            report.reopen.renameFile
+
+/-- Recover from the reached marker publication cut and any admitted
+retry prefix. The actual cached action installs the history selected by
+the surviving marker and preserves the exact prior checkpoint. -/
+theorem installsRetainedCached (report : SegmentedMarkerPowerLossReport directory before writer descriptor)
+    (observed : report.Valid) (ready : before.RetainedReady directory writer)
+    (recover : EStateM IO.Error FileImage Reopened) (reads : report.CachedReads recover) :
+    ∃ after, AppendRetryEndpoint directory before report.event report.retry descriptor
+      (runOpenWithInstallation directory report.reopen.descriptor report.reopen.nextRef report.reopen.acquired
+        report.reopen.unlock recover report.retry) after ∧
+      after.RetainedReady directory descriptor ∧
+      report.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64) ∧
+      after.checkpoint = before.checkpoint ∧ after.installed.generation = before.installed.generation := by
+  let effects := report.cut.writeEffects report.appendCrashTails (before.wal.directory.staged .walBoundary)
+  have ⟨_, extended, fits⟩ := observed.preparedHistory ready
+  have lineage := observed.modeledRetries.lineage (fun a b pair => AppendRetryTarget.unique a b pair)
+  obtain ⟨after, endpoint, next, marker, checkpoint, generation⟩ := lineage.reopensRetainedAppendWith
+    ready report.event extended fits effects report.reopen report.descriptorEq report.acquired report.acquisition
+    report.liveRefs report.fresh recover (by
+      intro history selected survived first wal layout valid oldCheckpoint
+      obtain ⟨raw, sizes, cached, reported⟩ := reads history selected survived first
+      have chosen : wal.Selects report.retry.image.directory.active := List.mem_cons_self ..
+      exact ⟨raw, reported.trans (raw.reopenCached_eq sizes cached layout valid chosen selected.decoded rfl
+        selected.through oldCheckpoint report.reopen.removeFile report.reopen.write report.reopen.sync
+        report.reopen.renameFile)⟩) report.settles report.healthy
+  have samePair : report.retry.image.directory.active = report.pair := fixedAppendPair report.attempts rfl
+  exact ⟨after, endpoint, next, (congrArg DirectoryPublication.Bindings.walBoundary samePair).symm.trans marker,
+    checkpoint, generation⟩
 
 theorem Installs.unique {report : SegmentedMarkerPowerLossReport directory before writer descriptor}
     {left right : SegmentedWriterState} (a : report.Installs left) (b : report.Installs right) : left = right :=
