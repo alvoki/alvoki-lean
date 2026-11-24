@@ -113,4 +113,54 @@ theorem runOpenWithInstallation_cachedRetryCompletes
     distinct, freshPhase, freshSession, exactImage ▸ durable, exactImage ▸ trace, selected, replay, generation, bytes,
     keeper, committed, bounds, refines, represents, noPins⟩
 
+private theorem selectedCheckpointUnique {durable : CheckpointPublication.RunFiles}
+    {binding left right}
+    (first : SelectedIntegrityCheckpoint durable binding left)
+    (second : SelectedIntegrityCheckpoint durable binding right) : left = right := by
+  cases first with
+  | absent => cases second; rfl
+  | @present bytes manifest files table decoded stored loaded =>
+    cases second with
+    | @present _ otherManifest otherFiles otherTable otherDecoded otherStored otherLoaded =>
+      obtain rfl := Except.ok.inj (decoded.symm.trans otherDecoded)
+      obtain rfl := Option.some.inj (stored.symm.trans otherStored)
+      obtain rfl := Except.ok.inj (loaded.symm.trans otherLoaded)
+      rfl
+
+/-- Once both retries choose the same physical checkpoint binding and
+the same WAL history and keeper, their installed data agree. Descriptor
+and reference identities can still differ between the two opens. -/
+theorem CachedRetryInstalled.sameInstalled {directory : DiskDirectory} {history : List WAL.Write}
+    {leftBefore rightBefore : LockedFileState FileImage}
+    {leftLayout : CanonicalKeeperLayout leftBefore.image history}
+    {rightLayout : CanonicalKeeperLayout rightBefore.image history}
+    {leftReports : CachedRetryReadReports directory leftLayout}
+    {rightReports : CachedRetryReadReports directory rightLayout}
+    {leftDescriptors rightDescriptors : DescriptorInventory} {leftSlot rightSlot : DescriptorSlot}
+    {leftBindings rightBindings : FilePath → Option Nat} {leftRefs rightRefs : List Nat}
+    {published : CheckpointPublication.Image}
+    {leftResult rightResult : EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession}
+    (left : CachedRetryInstalled (before := leftBefore) leftReports leftDescriptors leftSlot
+      leftBindings published leftRefs leftResult)
+    (right : CachedRetryInstalled (before := rightBefore) rightReports rightDescriptors rightSlot
+      rightBindings published rightRefs rightResult)
+    (sameManifest : leftBefore.image.directory.active.manifest = rightBefore.image.directory.active.manifest)
+    (sameKeeper : leftLayout.keeper.first = rightLayout.keeper.first) :
+    ∃ leftSession leftFinal rightSession rightFinal installed,
+      leftResult = .ok leftSession leftFinal ∧ rightResult = .ok rightSession rightFinal ∧
+      leftSession.phase = .ready installed ∧ rightSession.phase = .ready installed := by
+  obtain ⟨leftOpen, leftCheckpoint, _, leftSession, leftFinal, ranLeft, _, _, leftPhase,
+    _, _, _, _, _, _, _, _, _, _, leftSelected, leftReplay, leftGeneration, leftBytes, leftKeeper, _⟩ := left
+  obtain ⟨rightOpen, rightCheckpoint, _, rightSession, rightFinal, ranRight, _, _, rightPhase,
+    _, _, _, _, _, _, _, _, _, _, rightSelected, rightReplay, rightGeneration, rightBytes, rightKeeper, _⟩ := right
+  have checkpoint : leftCheckpoint = rightCheckpoint := selectedCheckpointUnique leftSelected (sameManifest.symm ▸ rightSelected)
+  have table : leftOpen.table = rightOpen.table := by
+    rw [checkpoint, rightReplay] at leftReplay
+    exact (Except.ok.inj leftReplay).symm
+  have equal : leftOpen.installed = rightOpen.installed := by
+    simp only [WalSegmentRepair.Reopened.installed, table, leftGeneration, rightGeneration,
+      checkpoint, leftBytes, rightBytes, leftKeeper, rightKeeper, sameKeeper]
+  exact ⟨leftSession, leftFinal, rightSession, rightFinal, rightOpen.installed, ranLeft, ranRight,
+    leftPhase.trans (congrArg DiskSession.Phase.ready equal), rightPhase⟩
+
 end Alvoki.Storage.DiskSession
