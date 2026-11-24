@@ -784,6 +784,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.AppendCutReady.writerRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.openAfterCollection
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.collectionOffsets_exact
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.pinnedReads
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.acquireReads
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.reacquireReadsStable
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.segmentedCheckpointView_retained
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.segmentedCheckpointView_settledRetained
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.runPaths

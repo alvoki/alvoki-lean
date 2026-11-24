@@ -2,7 +2,7 @@ import Alvoki.Storage.Disk.WalSegmentCollectionMetadata
 
 namespace Alvoki.Storage.DiskSession
 
-open WalSegmentRepair
+open WalSegmentRepair WAL.Boundary Sequential
 
 /-- Readiness for the same installed writer when covered segment files
 can have been removed. The selected WAL suffix still covers every frame
@@ -54,5 +54,62 @@ theorem SegmentedWriterState.RetainedReady.collectionOffsets_exact {directory de
   exact raw.collectionOffsets_exact (retry.readLayout ready.layout) (pair.trans ready.walPair)
     (by rw [settled, ready.walPair]) state.target.decoded physical
     (fun _ member => ready.spans _ (retry.sealedSublist.subset member))
+
+theorem SegmentedWriterState.RetainedReady.pinnedReads {directory descriptor state}
+    (ready : SegmentedWriterState.RetainedReady directory descriptor state) :
+    ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty state.history reference ∧
+      ∀ pin ∈ state.installed.table.pins.active,
+        (∀ key, state.installed.table.lookup pin.handle key = some (reference.table.lookup key pin.sequence)) ∧
+        ∀ start stop, state.installed.table.range pin.handle start stop =
+          some (reference.table.range start stop pin.sequence) := by
+  obtain ⟨_, refined, represented⟩ := ready.resumed.canonical
+  obtain ⟨reference, replayed⟩ := SnapshotWalReplay.fromEmpty state.history ready.resumed.ordered
+  exact ⟨reference, replayed, fun _ active => represented.packedPinnedReads refined replayed active⟩
+
+/-- A supported snapshot of a retained writer, including one returned
+by recovery, has the same reads as replay of the full logical history. -/
+theorem SegmentedWriterState.RetainedReady.acquireReads {directory descriptor state}
+    (ready : SegmentedWriterState.RetainedReady directory descriptor state) {snapshot : UInt64}
+    (retained : state.installed.table.pins.floor ≤ snapshot) (committed : snapshot ≤ state.installed.table.committed) :
+    ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty state.history reference ∧
+      ∃ pin pinned, state.installed.table.acquireAt snapshot = some (pin, pinned) ∧
+        (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+        ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) := by
+  obtain ⟨_, refined, represented⟩ := ready.resumed.canonical
+  obtain ⟨reference, replayed⟩ := SnapshotWalReplay.fromEmpty state.history ready.resumed.ordered
+  have available : (state.installed.table.acquireAt snapshot).isSome = true := by
+    simpa only [PackedTable.acquireAt, Option.isSome_map] using
+      (SnapshotPins.acquire_iff state.installed.table.pins _ _).mpr ⟨retained, committed⟩
+  obtain ⟨⟨pin, pinned⟩, acquired⟩ := Option.isSome_iff_exists.mp available
+  obtain ⟨_, refined, represented⟩ := represented.acquireAt refined ready.resumed.bounds acquired
+  have pinSpec := PackedTable.acquireAt_spec acquired
+  exact ⟨reference, replayed, pin, pinned, acquired,
+    by simpa only [pinSpec.sequence] using represented.packedPinnedReads refined replayed pinSpec.active⟩
+
+/-- A sequence still above the retention floor has the same reads after
+reacquisition, even if collection removed physical files covering it. -/
+theorem SegmentedWriterState.RetainedReady.reacquireReadsStable {directory initialDescriptor descriptor initial last}
+    (initialReady : SegmentedWriterState.RetainedReady directory initialDescriptor initial)
+    (ready : SegmentedWriterState.RetainedReady directory descriptor last) {suffix : List WAL.Write}
+    (history : last.history = initial.history ++ suffix) {oldPin : SnapshotPin}
+    (active : oldPin ∈ initial.installed.table.pins.active)
+    (retained : last.installed.table.pins.floor ≤ oldPin.sequence) :
+    ∃ newPin pinned, last.installed.table.acquireAt oldPin.sequence = some (newPin, pinned) ∧
+      newPin.sequence = oldPin.sequence ∧
+      (∀ key, pinned.lookup newPin.handle key = initial.installed.table.lookup oldPin.handle key) ∧
+      ∀ start stop, pinned.range newPin.handle start stop = initial.installed.table.range oldPin.handle start stop := by
+  obtain ⟨initialModel, initialRefines, previous⟩ := initialReady.resumed.canonical
+  obtain ⟨_, lastRefines, represented⟩ := ready.resumed.canonical
+  have oldCommitted := initialModel.pins_committed oldPin (initialRefines.pins ▸ active)
+  have nowCommitted : oldPin.sequence ≤ last.installed.table.committed := by
+    rw [UInt64.le_iff_toNat_le, previous.committed_count] at oldCommitted
+    rw [lastRefines.committed, UInt64.le_iff_toNat_le, represented.committed_count, history]
+    exact Nat.le_trans oldCommitted (by simp)
+  obtain ⟨_, replayed, newPin, pinned, acquired, _, _⟩ := ready.acquireReads retained nowCommitted
+  obtain ⟨_, refined, next⟩ := represented.acquireAt lastRefines ready.resumed.bounds acquired
+  have pinSpec := PackedTable.acquireAt_spec acquired
+  rw [history] at next replayed
+  exact ⟨newPin, pinned, acquired, pinSpec.sequence,
+    previous.packedPinnedReadsAfterAppend next initialRefines refined replayed active pinSpec.active pinSpec.sequence⟩
 
 end Alvoki.Storage.DiskSession

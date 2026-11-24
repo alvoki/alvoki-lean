@@ -191,11 +191,8 @@ theorem SegmentedDatabaseTrace.pinnedReads {directory initialDescriptor initial 
       ∀ pin ∈ last.installed.table.pins.active,
         (∀ key, last.installed.table.lookup pin.handle key = some (reference.table.lookup key pin.sequence)) ∧
         ∀ start stop, last.installed.table.range pin.handle start stop =
-          some (reference.table.range start stop pin.sequence) := by
-  have ready := (trace.preservesReady initialReady).1
-  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
-  obtain ⟨reference, replayed⟩ := SnapshotWalReplay.fromEmpty last.history ready.resumed.ordered
-  exact ⟨reference, replayed, fun _ active => represented.packedPinnedReads refined replayed active⟩
+          some (reference.table.range start stop pin.sequence) :=
+  (trace.preservesReady initialReady).1.toRetained.pinnedReads
 
 /-- Interpret the adapter's reported session comparison on the installed
 writer. A foreign token yields no result even if its handle number is in use. -/
@@ -229,18 +226,8 @@ theorem SegmentedDatabaseTrace.acquireReads {directory initialDescriptor initial
     ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty last.history reference ∧
       ∃ pin pinned, last.installed.table.acquireAt snapshot = some (pin, pinned) ∧
         (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
-        ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) := by
-  have ready := (trace.preservesReady initialReady).1
-  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
-  obtain ⟨reference, replayed⟩ := SnapshotWalReplay.fromEmpty last.history ready.resumed.ordered
-  have available : (last.installed.table.acquireAt snapshot).isSome = true := by
-    simpa only [PackedTable.acquireAt, Option.isSome_map] using
-      (SnapshotPins.acquire_iff last.installed.table.pins _ _).mpr ⟨retained, committed⟩
-  obtain ⟨⟨pin, pinned⟩, acquired⟩ := Option.isSome_iff_exists.mp available
-  obtain ⟨_, refined, represented⟩ := represented.acquireAt refined ready.resumed.bounds acquired
-  have pinSpec := PackedTable.acquireAt_spec acquired
-  exact ⟨reference, replayed, pin, pinned, acquired,
-    by simpa only [pinSpec.sequence] using represented.packedPinnedReads refined replayed pinSpec.active⟩
+        ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) :=
+  (trace.preservesReady initialReady).1.toRetained.acquireReads retained committed
 
 /-- An earlier pin's sequence reads the same values after reacquiring it
 in the final session, provided the final writer still retains it. -/
@@ -253,19 +240,7 @@ theorem SegmentedDatabaseTrace.reacquireReadsStable {directory initialDescriptor
       newPin.sequence = oldPin.sequence ∧
       (∀ key, pinned.lookup newPin.handle key = initial.installed.table.lookup oldPin.handle key) ∧
       ∀ start stop, pinned.range newPin.handle start stop = initial.installed.table.range oldPin.handle start stop := by
-  obtain ⟨ready, suffix, history, _⟩ := trace.preservesReady initialReady
-  obtain ⟨initialModel, initialRefines, previous⟩ := initialReady.resumed.canonical
-  obtain ⟨lastModel, lastRefines, represented⟩ := ready.resumed.canonical
-  have oldCommitted := initialModel.pins_committed oldPin (initialRefines.pins ▸ active)
-  have nowCommitted : oldPin.sequence ≤ last.installed.table.committed := by
-    rw [UInt64.le_iff_toNat_le, previous.committed_count] at oldCommitted
-    rw [lastRefines.committed, UInt64.le_iff_toNat_le, represented.committed_count, history]
-    exact Nat.le_trans oldCommitted (by simp)
-  obtain ⟨reference, replayed, newPin, pinned, acquired, _, _⟩ := trace.acquireReads initialReady retained nowCommitted
-  obtain ⟨_, refined, next⟩ := represented.acquireAt lastRefines ready.resumed.bounds acquired
-  have pinSpec := PackedTable.acquireAt_spec acquired
-  rw [history] at next replayed
-  exact ⟨newPin, pinned, acquired, pinSpec.sequence,
-    previous.packedPinnedReadsAfterAppend next initialRefines refined replayed active pinSpec.active pinSpec.sequence⟩
+  obtain ⟨ready, _, history, _⟩ := trace.preservesReady initialReady
+  exact initialReady.toRetained.reacquireReadsStable ready.toRetained history active retained
 
 end Alvoki.Storage.DiskSession
