@@ -90,7 +90,7 @@ theorem WriteFiles.reopenImage_manifest_eq (files : WriteFiles) (before : List W
   · obtain ⟨_, _, rfl⟩ := List.mem_map.mp survives
     rfl
 
-private def appendEffect (event : WAL.Write) (effects : WriteEffects) : EStateM Unit WriteFiles Unit :=
+def WriteEffects.appendFrame (effects : WriteEffects) (event : WAL.Write) : EStateM Unit WriteFiles Unit :=
   fun files =>
     let candidates := ByteArray.empty :: effects.appendCrashTails
     match effects.append with
@@ -117,7 +117,7 @@ private def WriteFiles.syncWal (files : WriteFiles) : WalSyncEffect → WriteFil
   | .complete => { files with crashTails := [files.visibleTail], crashPossible := by simp }
   | .incomplete tails => { files with crashTails := ByteArray.empty :: tails, crashPossible := by simp }
 
-private def perform (bytes : ByteArray) (effects : WriteEffects) :
+def WriteEffects.markerStep (effects : WriteEffects) (bytes : ByteArray) :
     Publication.Step → EStateM Unit WriteFiles Unit
   | .writeStaged => fun files =>
     match effects.stage with
@@ -135,18 +135,27 @@ private def perform (bytes : ByteArray) (effects : WriteEffects) :
   | .renameStaged => stepMarker bytes .renameStaged effects.rename
   | .syncDirectory => stepMarker bytes .syncDirectory effects.directorySync
 
+/-- The settled marker and empty appended tail at the start of one write. -/
+def WriteFiles.initial (before : List WAL.Write) (stagedMarker : Option (ByteArray × Bool)) : WriteFiles :=
+  WriteFiles.start { Publication.Image.settled (some (markerFor before)) with staged := stagedMarker }
+
 private def runWriteSchedule (before : List WAL.Write) (event : WAL.Write) (effects : WriteEffects)
-    (marker : Publication.Image) :
-    EStateM.Result Unit WriteFiles Unit :=
-  commit (appendEffect event effects)
-    (Publication.run (perform (markerFor (before ++ [event])) effects)) (WriteFiles.start marker)
+    (initial : WriteFiles) : EStateM.Result Unit WriteFiles Unit :=
+  commit (effects.appendFrame event)
+    (Publication.run (effects.markerStep (markerFor (before ++ [event])))) initial
 
 /-- Run the writable adapter's append/marker schedules from a settled WAL,
 retaining state even when an operation reports an error. -/
 def runWriteEffects (before : List WAL.Write) (event : WAL.Write) (effects : WriteEffects)
     (stagedMarker : Option (ByteArray × Bool) := none) : EStateM.Result Unit WriteFiles Unit :=
-  runWriteSchedule before event effects
-    { Publication.Image.settled (some (markerFor before)) with staged := stagedMarker }
+  runWriteSchedule before event effects (WriteFiles.initial before stagedMarker)
+
+theorem runWriteEffects_eq_commit (before : List WAL.Write) (event : WAL.Write) (effects : WriteEffects)
+    (stagedMarker : Option (ByteArray × Bool)) :
+    runWriteEffects before event effects stagedMarker =
+      commit (effects.appendFrame event)
+        (Publication.run (effects.markerStep (encode (WAL.encode (before ++ [event])).size.toUInt64)))
+        (WriteFiles.initial before stagedMarker) := rfl
 
 def writeFilesAfter : EStateM.Result Unit WriteFiles Unit → WriteFiles
   | .ok () files | .error () files => files
@@ -158,7 +167,7 @@ def runWriteEffectsFrom (before : List WAL.Write) (event : WAL.Write) (effects :
     (initial : ReopenImage) : EStateM.Result Unit ReopenImage Unit :=
   let toImage := fun files : WriteFiles => files.withPrefix initial.wal.active
     initial.directory.active.manifest (initial.directory.staged .manifest) initial.wal.staged
-  match runWriteSchedule before event effects (initial.directory.project .walBoundary) with
+  match runWriteSchedule before event effects (WriteFiles.start (initial.directory.project .walBoundary)) with
   | .ok () files => .ok () (toImage files)
   | .error () files => .error () (toImage files)
 
@@ -181,7 +190,7 @@ theorem runWriteEffectsFrom_eq {initial : ReopenImage} {manifest : Option ByteAr
       match runWriteEffects before event effects (initial.directory.staged .walBoundary) with
       | .ok () files => .ok () (toImage files)
       | .error () files => .error () (toImage files) := by
-  simp [runWriteEffectsFrom, runWriteEffects, WriteFiles.reopenImage, settled.marker_image,
+  simp [runWriteEffectsFrom, runWriteEffects, WriteFiles.initial, WriteFiles.reopenImage, settled.marker_image,
     settled.1, settled.2.2.1]
 
 /-- Recover the modeled write-cut image after a reported error from a
@@ -212,7 +221,7 @@ def WriteFiles.HasWriteCuts (files : WriteFiles) (before : List WAL.Write)
       markerImage.active = image.directory.active.walBoundary ∧
       ∀ pair ∈ image.directory.crashImages, pair.walBoundary ∈ markerImage.crashImages
 
-private theorem WriteFiles.candidate_from_tail (files : WriteFiles) (before : List WAL.Write)
+theorem WriteFiles.candidate_from_tail (files : WriteFiles) (before : List WAL.Write)
     (manifest : Option ByteArray) {stagedManifest stagedWal : Option (ByteArray × Bool)}
     {candidate : Option ByteArray}
     (chosen : candidate ∈ (files.reopenImage before manifest stagedManifest stagedWal).wal.active ::

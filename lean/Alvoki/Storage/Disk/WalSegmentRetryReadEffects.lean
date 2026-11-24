@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.WalSegmentRetryReads
+import Alvoki.Storage.Disk.WalSegmentOpenFastEffects
 
 namespace Alvoki.Storage.WalSegmentRepair
 
@@ -184,11 +185,11 @@ theorem EffectTrace.completesObservedRetry {directory : DiskDirectory} {target :
     (rename : FilePath → FilePath → EStateM IO.Error FileImage Unit)
     (settles : sync #[directory.path] retry = .ok () retry.syncDirectory)
     (healthy : ∀ plan, Prepared retry target plan → ∀ action before next,
-      ReachesAction target retry.syncDirectory plan.actions action before →
+      ReachesAction target retry.syncDirectory plan.finishActions action before →
         before.effect target action = some next →
           performPaths directory plan removeFile throw write sync rename action before = .ok () next) :
     ∃ plan after, Prepared retry target plan ∧ after.Ready target ∧
-      reopenMarkedWith directory
+      reopenMarkedFastWith directory
         (fun path => liftExcept (observed.listing.reports.readOptional path)) (fun _ => pure observed.entries)
         (fun path => pure (observed.listing.reports.lstat path))
         (fun path => liftExcept (observed.listing.reports.readBin path)) removeFile write sync rename retry =
@@ -205,7 +206,7 @@ theorem EffectTrace.completesObservedRetry {directory : DiskDirectory} {target :
   have lifted := prepareMarkedWith_liftReports (state := FileImage) directory readOptional list lstat readBin
   change prepareMarkedWith directory readOptional list lstat readBin = _ at reported
   rw [reported] at lifted
-  obtain ⟨after, opened, ready⟩ := reopenMarkedWith_completes prepared directory
+  obtain ⟨after, opened, ready⟩ := reopenMarkedFastWith_completes prepared directory
     (fun path => liftExcept (readOptional path)) (fun path => liftExcept (list path))
     (fun path => liftExcept (lstat path)) (fun path => liftExcept (readBin path)) removeFile write sync rename
     (congrFun lifted retry) settles (healthy plan prepared)

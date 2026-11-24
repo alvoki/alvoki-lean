@@ -19,6 +19,7 @@ import Alvoki.Storage.Disk.CheckpointFileDispatch
 import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.MarkedOpenControl
 import Alvoki.Storage.Disk.DiskLockLifecycle
+import Alvoki.Storage.Disk.LockDescriptionLifetime
 import Alvoki.Storage.Disk.RunGenerationCollection
 import Alvoki.Storage.Disk.RunUnlinkSchedule
 import Alvoki.Storage.Disk.LockedRunCollection
@@ -59,6 +60,7 @@ import Alvoki.Storage.Disk.WalSegmentReopenEffects
 import Alvoki.Storage.Disk.WalSegmentReplayStability
 import Alvoki.Storage.Disk.WalSegmentRetryReads
 import Alvoki.Storage.Disk.WalSegmentRetryReadEffects
+import Alvoki.Storage.Disk.WalSegmentCommitEffects
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
@@ -510,6 +512,17 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.prepareObservedRetry
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareMarkedWith_liftReports
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.completesObservedRetry
+#check_axioms Alvoki.Storage.WalSegmentRepair.finishMarkedOpen_safe
+#check_axioms Alvoki.Storage.WalSegmentRepair.finishMarkedOpen_completes
+#check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedFastWith_completes
+#check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_fileEffects
+#check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_reports
+#check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atReportedCut
+#check_axioms Alvoki.Storage.WalSegmentCommit.settledSegment_ofSuccess
+#check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.mem_remaining
+#check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.referenceDrops
+#check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenReports.whileReferenceSurvives
+#check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.ownerExit_thenChildExec
 #check_axioms Alvoki.Storage.OpenPathReadReports.readWalSegmentsWith_reports
 #check_axioms Alvoki.Storage.concatenateReadWalSegmentPayloads
 #check_axioms Alvoki.Storage.WalSegmentRecovery.recoversReadBytes
