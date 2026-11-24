@@ -18,6 +18,27 @@ failed. The first error determines the reported diagnostic. -/
       if failure.isNone then failure := some (syncError path error)
   if let some error := failure then throw error
 
+/-- A one-file barrier returns the reached state on both outcomes and
+adds the pathname to a reported failure. -/
+theorem run_single {σ : Type} (sync : FilePath → EStateM IO.Error σ Unit)
+    (path : FilePath) (initial : σ) :
+    run sync #[path] initial =
+      match sync path initial with
+      | .ok () after => .ok () after
+      | .error error after => .error (syncError path error) after := by
+  unfold run
+  rw [← Array.forIn_toList]
+  cases report : sync path initial with
+  | ok result after =>
+    cases result
+    simp [List.forIn_cons, List.forIn_nil, report, MonadExcept.tryCatch, MonadExceptOf.tryCatch,
+      StateT.pure, tryCatchThe, EStateM.tryCatch, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  | error cause after =>
+    simp [List.forIn_cons, List.forIn_nil, report, MonadExcept.tryCatch, MonadExceptOf.tryCatch,
+      StateT.pure, tryCatchThe, EStateM.tryCatch, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+      MonadExcept.throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+      EStateM.Backtrackable.restore, EStateM.dummyRestore]
+
 /-- The two-file WAL barrier attempts the staged marker against the exact
 state left by the keeper sync, including any effect left by a failed sync.
 The group succeeds only if both operations succeed. -/

@@ -4,6 +4,49 @@ namespace Alvoki.Storage.WalSegmentRepair
 
 open System DiskSession SyncHandleRouting
 
+/-- The directory barrier after an aligned keeper read uses the directory
+description already in the cache. Its observed live slot and inode binding
+identify the directory whose names settle. The syscall report distinguishes
+an error before settlement from one after settlement. The keeper entry stays
+pending in either case. -/
+theorem readWalKeeperWithChunks_syncCapturedDirectory
+    {reads : CheckpointRunChunkReads} (directory : DiskDirectory) (keeper : Nat)
+    {selectedBytes tail : ByteArray}
+    (seen : reads.ObservesFile (directory.file (.walSegment keeper)) (selectedBytes ++ tail))
+    (fits : selectedBytes.size < USize.size) (aligned : selectedBytes.size = seen.metadata.byteSize.toNat)
+    (cache : Cache (DescriptorInventory × DescriptorSlot × Nat))
+    (inventory : DescriptorInventory) (slot : DescriptorSlot) (offset : Nat)
+    (hasDirectory : cache.directory = some (inventory, slot, offset)) (drops : List LockReferenceDrop)
+    (issuing : slot.reference ∈ (inventory.afterDrops drops).references slot.description)
+    (bindings : FilePath → Option Nat) (boundAtSync : bindings directory.path = some (inventory.inode slot.description))
+    (outcome : DelayedDirectorySyncOutcome) (initial : LockedFileState FileImage)
+    (openRead : FilePath → EStateM IO.Error (LockedFileState FileImage) (DescriptorInventory × DescriptorSlot × Nat))
+    (fsync : (DescriptorInventory × DescriptorSlot × Nat) → EStateM IO.Error (LockedFileState FileImage) Unit) :
+    let path := directory.file (.walSegment keeper)
+    let remembered := cache.remember path (seen.inventory, seen.slot, 0)
+    let report := inventory.delayedDirectorySync drops directory slot.description slot.reference issuing
+      bindings boundAtSync outcome
+    fsync (inventory, slot, offset) initial = report.run initial →
+    readWalKeeperWithChunks reads path selectedBytes.size seen.metadata.byteSize.toNat (cache, initial) =
+        .ok selectedBytes (remembered, initial) ∧
+      sync directory.path openRead fsync directory.path (remembered, initial) =
+        withCache remembered (report.run initial) ∧
+      SyncPathGroup.run (sync directory.path openRead fsync) #[directory.path] (remembered, initial) =
+        SyncPathGroup.run (m := EStateM IO.Error (Cache _ × LockedFileState FileImage))
+          (fun _ (current, before) => withCache current (report.run before))
+          #[directory.path] (remembered, initial) := by
+  intro path remembered report effect
+  have routed : sync directory.path openRead fsync directory.path (remembered, initial) =
+      withCache remembered (report.run initial) := by
+    simp [sync, Cache.resolve, remembered, Cache.remember, hasDirectory, effect]
+  refine ⟨?_, routed, ?_⟩
+  · simpa [remembered, Cache.captureKeeper, aligned] using readWalKeeperWithChunks_exact seen fits cache initial
+  · rw [SyncPathGroup.run_single, routed]
+    let reportSync (_ : FilePath) :
+        EStateM IO.Error (Cache (DescriptorInventory × DescriptorSlot × Nat) × LockedFileState FileImage) Unit :=
+      fun (current, before) => withCache current (report.run before)
+    exact (SyncPathGroup.run_single reportSync directory.path (remembered, initial)).symm
+
 /-- A successful aligned keeper read records its exact open description.
 The directory barrier leaves that cache entry untouched. The keeper barrier
 uses the entry, consumes it on every result, and acts on the observed inode.

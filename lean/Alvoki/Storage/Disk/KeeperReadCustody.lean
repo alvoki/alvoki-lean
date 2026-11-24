@@ -67,10 +67,7 @@ private theorem file_ne_directory (dir : DiskDirectory) (file : DiskFile) : dir.
 private theorem runSingletonOk {σ : Type} (perform : FilePath → EStateM IO.Error σ Unit)
     (path : FilePath) {before after : σ} (outcome : perform path before = .ok () after) :
     SyncPathGroup.run perform #[path] before = .ok () after := by
-  unfold SyncPathGroup.run
-  rw [← Array.forIn_toList]
-  simp [List.forIn_cons, List.forIn_nil, outcome, MonadExcept.tryCatch, MonadExceptOf.tryCatch,
-    StateT.pure, tryCatchThe, EStateM.tryCatch, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  rw [SyncPathGroup.run_single, outcome]
 
 open WalSegmentRepair
 
