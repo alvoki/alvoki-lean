@@ -114,6 +114,17 @@ private theorem exactHistory_after_attempts {initial before : ReopenImage}
   have history := settled.exact
   exact history.retry fits (attempts.toRetry history.markerBound)
 
+/-- Reopen attempts starting from settled files keep the visible manifest,
+marker and exact WAL, even when reported errors allow more crash choices. -/
+theorem MarkedReopenAttempts.visible_of_settled {initial before : ReopenImage}
+    {manifest : Option ByteArray} {events : List WAL.Write}
+    (attempts : MarkedReopenAttempts initial before)
+    (settled : initial.SettledFor manifest events) (fits : (WAL.encode events).size < UInt64.size) :
+    before.directory.active = ⟨manifest, some (encode (WAL.encode events).size.toUInt64)⟩ ∧
+      before.wal.active = some (WAL.encode events) := by
+  have exactHistory := exactHistory_after_attempts settled fits attempts
+  exact ⟨exactHistory.1.activeValid, exactHistory.2.activeValid⟩
+
 /-- Reopening an already settled marked history after any sequence of modeled
 reopen attempts and crashes returns the deterministic result of the shared
 checkpoint loader and WAL replay. A successful attempt again settles the same

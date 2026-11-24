@@ -20,6 +20,7 @@ import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.MarkedOpenControl
 import Alvoki.Storage.Disk.DiskLockLifecycle
 import Alvoki.Storage.Disk.RunGenerationCollection
+import Alvoki.Storage.Disk.RecoveryProgress
 import Alvoki.Storage.Disk.LegacyBootstrapRetry
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.LegacyWalRecovery
@@ -219,6 +220,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseTrace.refines
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseTrace.canonicalReads
 #check_axioms Alvoki.WAL.Boundary.reopenAfterWriteError_completes
+#check_axioms Alvoki.WAL.Boundary.RecoveryBoundary.completes
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.guardedPinnedReads
 #check_axioms Alvoki.Storage.DiskSession.withLocalHandle_closed
 #check_axioms Alvoki.Storage.DiskSession.withLocalHandle_poisoned

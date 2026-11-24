@@ -411,3 +411,7 @@ A reported run write or sync error stops the modeled checkpoint before the run-d
 ## Recovery safety for obsolete run generation removal
 
 After checkpoint publication settles a healthy manifest, a different generation is eligible if nobody holds its files. The model also checks every possible crash manifest before allowing a removal. Repeated partial deletion and power-loss choices preserve the exact run bytes the loader selects, the replay result for the same WAL and all protected run bindings. The proof treats an omitted obsolete binding as a file whose durability is no longer guaranteed. Native enumeration, unlink and durable space reclamation still need an executable collector and its specification. [Generation-removal safety](../lean/Alvoki/Storage/Disk/RunGenerationCollection.lean)
+
+## Recovery progress at each admitted boundary
+
+One theorem now covers healthy retry after empty bootstrap, legacy adoption, a settled marked open, an interrupted checkpoint or an uncertain WAL write. Each case supplies its actual selected reads and required operation reports. The theorem derives successful installation, the selected manifest, the settled WAL and its exact byte count without assuming a successful open result. [Recovery progress](../lean/Alvoki/Storage/Disk/RecoveryProgress.lean)
