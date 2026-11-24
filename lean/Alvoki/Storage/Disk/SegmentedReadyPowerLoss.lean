@@ -257,6 +257,13 @@ theorem Installs.preservesRetained {report : SegmentedReadyPowerLossReport direc
   obtain ⟨_, exactEndpoint, next⟩ := report.installsRetained observed ready
   exact exactEndpoint.unique endpoint ▸ next
 
+theorem Installs.preservesChain {report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor}
+    {after : SegmentedWriterState} (endpoint : report.Installs after)
+    (chain : WalSegment.Chain before.history 0 before.wal.segments) :
+    WalSegment.Chain after.history 0 after.wal.segments := by
+  obtain ⟨_, _, _, _, _, rfl⟩ := endpoint.openEffect
+  exact chain
+
 theorem Installs.history {report : SegmentedReadyPowerLossReport directory before oldDescriptor nextDescriptor}
     {after : SegmentedWriterState} (endpoint : report.Installs after) : after.history = before.history := by
   obtain ⟨_, _, _, _, _, rfl⟩ := endpoint.openEffect

@@ -24,6 +24,13 @@ theorem SegmentedWriterState.Ready.toRetained {directory descriptor state}
   ⟨ready.resumed, ready.layout, ready.walValid, fun _ member => ready.chain.member_byteSize (List.mem_append_left _ member),
     ready.directoryFiles, ready.sealedFiles, ready.active, ready.manifestFiles, ready.held⟩
 
+/-- The full-chain theorem adds physical provenance to the shared readiness facts. -/
+theorem SegmentedWriterState.RetainedReady.withChain {directory descriptor} {state : SegmentedWriterState}
+    (ready : state.RetainedReady directory descriptor)
+    (chain : WalSegment.Chain state.history 0 state.wal.segments) : state.Ready directory descriptor :=
+  ⟨ready.resumed, ready.layout, chain, ready.directoryFiles, ready.sealedFiles,
+    ready.active, ready.manifestFiles, ready.held⟩
+
 theorem SegmentedWriterState.RetainedReady.walPair {directory descriptor state}
     (ready : SegmentedWriterState.RetainedReady directory descriptor state) :
     state.wal.directory.active = state.target.pair :=

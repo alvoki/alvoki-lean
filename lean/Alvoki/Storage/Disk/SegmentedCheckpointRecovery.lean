@@ -26,6 +26,14 @@ structure SegmentedCheckpointReopened (directory : DiskDirectory) (before : Segm
   targetBytes : after.target.trimmed = before.wal.active.bytes
   checkpoint : SelectedIntegrityCheckpoint after.published.durable after.target.pair.manifest after.checkpoint
 
+/-- Checkpoint recovery changes the selected directory, leaving the WAL chain intact. -/
+theorem SegmentedCheckpointReopened.preservesChain
+    (reopened : SegmentedCheckpointReopened directory before descriptor published retry attempt after)
+    (chain : WalSegment.Chain before.history 0 before.wal.segments) :
+    WalSegment.Chain after.history 0 after.wal.segments := by
+  rw [reopened.history, reopened.wal]
+  exact chain
+
 private theorem sameTarget {left right : Target} (pair : left.pair = right.pair) (first : left.first = right.first)
     (bytes : left.trimmed = right.trimmed) : left = right := by
   have range : left.range = right.range := Option.some.inj (left.decoded.symm.trans (pair ▸ right.decoded))

@@ -116,105 +116,111 @@ private theorem retainsInterruptedAppend {initial before after : List WAL.Write}
   · refine ⟨retained ++ [event], by rw [kept, history, List.append_assoc], ?_⟩
     exact submitted.append (Or.inr ⟨event, rfl, rfl⟩)
 
+/-- Thread readiness and acknowledged history once. When collection is
+disabled, the same steps also propagate evidence for the full chain. -/
+private theorem SegmentedDatabaseTrace.preservesReadiness {directory initialDescriptor initial allowCollection log descriptor last}
+    (trace : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
+    (ready : initial.RetainedReady directory initialDescriptor) :
+    last.RetainedReady directory descriptor ∧
+      (allowCollection = false → WalSegment.Chain initial.history 0 initial.wal.segments →
+        WalSegment.Chain last.history 0 last.wal.segments) ∧
+      ∃ retained, last.history = initial.history ++ retained ∧ MarkedSessionRetention log retained := by
+  induction trace with
+  | start => exact ⟨ready, fun _ chain => chain, [], by simp, .start⟩
+  | writes _ writer ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    obtain ⟨ready, appended⟩ := writer.preservesRetained before
+    refine ⟨ready, ?_, _, by rw [appended, history, List.append_assoc], submitted.append (Or.inl rfl)⟩
+    intro disabled initialChain
+    have full := before.withChain (fullChain disabled initialChain)
+    exact (writer.preservesReady full).1.chain
+  | rotate _ report selected ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    refine ⟨report.preservesRetainedReady before selected, ?_, retained, history, submitted⟩
+    intro disabled initialChain
+    have full := before.withChain (fullChain disabled initialChain)
+    exact (report.preservesReady full selected).chain
+  | close _ _ observed endpoint ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    refine ⟨endpoint.preservesRetained observed before, ?_, retained, endpoint.history.trans history, submitted⟩
+    intro disabled initialChain
+    exact endpoint.preservesChain (fullChain disabled initialChain)
+  | powerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    refine ⟨endpoint.preservesRetained observed before, ?_, retained, endpoint.history.trans history, submitted⟩
+    intro disabled initialChain
+    exact endpoint.preservesChain (fullChain disabled initialChain)
+  | appendError _ _ endpoint ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    refine ⟨endpoint.preservesRetained before, ?_, retainsInterruptedAppend history submitted endpoint.history⟩
+    intro disabled initialChain
+    have full := before.withChain (fullChain disabled initialChain)
+    exact (endpoint.preservesReady full).chain
+  | appendPowerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    refine ⟨endpoint.preservesRetained observed before, ?_, retainsInterruptedAppend history submitted (.inl endpoint.history)⟩
+    intro disabled initialChain
+    exact endpoint.preservesChain (fullChain disabled initialChain)
+  | markerPowerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    refine ⟨endpoint.preservesRetained observed before, ?_, retainsInterruptedAppend history submitted endpoint.history⟩
+    intro disabled initialChain
+    have full := before.withChain (fullChain disabled initialChain)
+    exact (endpoint.preservesReady observed full).chain
+  | checkpointError _ _ endpoint ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    refine ⟨endpoint.preservesRetained before, ?_, retained, endpoint.history.trans history, submitted⟩
+    intro disabled initialChain
+    exact endpoint.toSegmentedCheckpointReopened.preservesChain (fullChain disabled initialChain)
+  | checkpointPowerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    refine ⟨endpoint.preservesRetained observed before, ?_, retained, endpoint.history.trans history, submitted⟩
+    intro disabled initialChain
+    exact endpoint.toSegmentedCheckpointReopened.preservesChain (fullChain disabled initialChain)
+  | rotationError _ _ _ _ endpoint ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    refine ⟨endpoint.preservesRetainedReady before, ?_, retained, endpoint.history.trans history, submitted⟩
+    intro disabled initialChain
+    have full := before.withChain (fullChain disabled initialChain)
+    exact (endpoint.preservesReady full).chain
+  | rotationPowerLoss _ _ endpoint ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    refine ⟨endpoint.preservesRetainedReady before, ?_, retained, endpoint.history.trans history, submitted⟩
+    intro disabled initialChain
+    have full := before.withChain (fullChain disabled initialChain)
+    exact (endpoint.preservesReady full).chain
+  | collectionPowerLoss enabled _ _ observed endpoint ih =>
+    obtain ⟨before, _, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained observed before,
+      (fun disabled => by simp [disabled] at enabled), retained, endpoint.history.trans history, submitted⟩
+  | collection enabled _ _ endpoint ih =>
+    obtain ⟨before, _, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained before,
+      (fun disabled => by simp [disabled] at enabled), retained, endpoint.history.trans history, submitted⟩
+  | collectionRetry enabled _ failed report returned ih =>
+    obtain ⟨before, _, retained, history, submitted⟩ := ih
+    exact ⟨(failed.settles before report returned).2,
+      (fun disabled => by simp [disabled] at enabled), retained, history, submitted⟩
+  | collectionReopen enabled _ _ observed endpoint ih =>
+    obtain ⟨before, _, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained observed before,
+      (fun disabled => by simp [disabled] at enabled), retained, endpoint.history.trans history, submitted⟩
+
 theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initial log descriptor last}
     (trace : SegmentedDatabaseTrace directory initialDescriptor initial false log descriptor last)
     (ready : initial.Ready directory initialDescriptor) :
     last.Ready directory descriptor ∧
       ∃ retained, last.history = initial.history ++ retained ∧ MarkedSessionRetention log retained := by
-  induction trace with
-  | start => exact ⟨ready, [], by simp, .start⟩
-  | writes _ writer ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    obtain ⟨ready, appended, _, _⟩ := writer.preservesReady before
-    exact ⟨ready, _, by rw [appended, history, List.append_assoc], submitted.append (Or.inl rfl)⟩
-  | rotate _ report selected ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨report.preservesReady before selected, retained, history, submitted⟩
-  | close _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesReady observed before, retained, endpoint.history.trans history, submitted⟩
-  | powerLoss _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesReady observed before, retained, endpoint.history.trans history, submitted⟩
-  | appendError _ _ endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesReady before, retainsInterruptedAppend history submitted endpoint.history⟩
-  | appendPowerLoss _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesReady observed before, retainsInterruptedAppend history submitted (.inl endpoint.history)⟩
-  | markerPowerLoss _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesReady observed before, retainsInterruptedAppend history submitted endpoint.history⟩
-  | checkpointError _ _ endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
-  | checkpointPowerLoss _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesReady observed before, retained, endpoint.history.trans history, submitted⟩
-  | rotationError _ _ _ _ endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
-  | rotationPowerLoss _ _ endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
-  | collectionPowerLoss enabled => cases enabled
-  | collection enabled => cases enabled
-  | collectionRetry enabled => cases enabled
-  | collectionReopen enabled => cases enabled
+  obtain ⟨retained, fullChain, history⟩ := trace.preservesReadiness ready.toRetained
+  exact ⟨retained.withChain (fullChain rfl ready.chain), history⟩
 
 theorem SegmentedDatabaseTrace.preservesRetained {directory initialDescriptor initial allowCollection log descriptor last}
     (trace : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
     (ready : initial.RetainedReady directory initialDescriptor) :
     last.RetainedReady directory descriptor ∧
       ∃ retained, last.history = initial.history ++ retained ∧ MarkedSessionRetention log retained := by
-  induction trace with
-  | start => exact ⟨ready, [], by simp, .start⟩
-  | writes _ writer ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    obtain ⟨ready, appended⟩ := writer.preservesRetained before
-    exact ⟨ready, _, by rw [appended, history, List.append_assoc], submitted.append (Or.inl rfl)⟩
-  | rotate _ report selected ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨report.preservesRetainedReady before selected, retained, history, submitted⟩
-  | close _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
-  | powerLoss _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
-  | appendError _ _ endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetained before, retainsInterruptedAppend history submitted endpoint.history⟩
-  | appendPowerLoss _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetained observed before, retainsInterruptedAppend history submitted (.inl endpoint.history)⟩
-  | markerPowerLoss _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetained observed before, retainsInterruptedAppend history submitted endpoint.history⟩
-  | checkpointError _ _ endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetained before, retained, endpoint.history.trans history, submitted⟩
-  | checkpointPowerLoss _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
-  | rotationError _ _ _ _ endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetainedReady before, retained, endpoint.history.trans history, submitted⟩
-  | rotationPowerLoss _ _ endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetainedReady before, retained, endpoint.history.trans history, submitted⟩
-  | collectionPowerLoss _ _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
-  | collection _ _ _ endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetained before, retained, endpoint.history.trans history, submitted⟩
-  | collectionRetry _ _ failed report returned ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨(failed.settles before report returned).2, retained, history, submitted⟩
-  | collectionReopen _ _ _ observed endpoint ih =>
-    obtain ⟨before, retained, history, submitted⟩ := ih
-    exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
+  obtain ⟨retained, _, history⟩ := trace.preservesReadiness ready
+  exact ⟨retained, history⟩
 
 /-- A history from the first installed empty writer retains all
 acknowledgements in order. It may retain the uncertain append at a
