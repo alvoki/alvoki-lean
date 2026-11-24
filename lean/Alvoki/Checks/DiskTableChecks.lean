@@ -695,6 +695,29 @@ private def checkWalSegmentRotation (root : FilePath) : IO Unit := do
     rejects (WalSegmentRotation.runAt dir 1 readOptional unexpected unexpected) "rotation followed a successor symlink"
     check (!(← touched.get)) "rotation attempted durability operations on a successor symlink"
 
+private def checkWalCollectionPlan (root : FilePath) : IO Unit := do
+  let dir ← DiskDirectory.open root
+  let db ← DiskTable.open root
+  try
+    for key in [1, 2, 3] do
+      let _ ← db.write key (some key)
+      db.rotateWal
+    check ((← db.planWalCollection) == []) "the planner selected WAL without a checkpoint"
+    db.checkpoint
+    let _ ← db.write 4 (some 4)
+    -- Simulate an earlier collection that removed one covered seal.
+    IO.FS.removeFile (dir.file (.walSegment 1))
+    let alias := root / "WAL-segment-02"
+    IO.FS.writeBinFile alias (ByteArray.mk #[1, 2, 3])
+    let paths := [dir.file (.walSegment 0), dir.file (.walSegment 2),
+      dir.file (.walSegment 3), dir.file .manifest, dir.file .walBoundary, alias]
+    let before ← paths.mapM IO.FS.readBinFile
+    check ((← db.planWalCollection) == [0, 2])
+      "the planner selected the keeper or a noncanonical segment, or lost a covered seal"
+    check (decide ((← paths.mapM IO.FS.readBinFile) = before))
+      "planning WAL collection changed the observed files"
+  finally db.close
+
 private def checkWalSegmentReads (root : FilePath) : IO Unit := do
   let dir ← DiskDirectory.open root
   let lock ← IO.FS.Handle.mk (dir.file .lock) .append
@@ -1869,6 +1892,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkSnapshotSessions
     IO.FS.withTempDir checkMarkerlessRefusal
     IO.FS.withTempDir checkWalSegmentRotation
+    IO.FS.withTempDir checkWalCollectionPlan
     IO.FS.withTempDir checkWalSegmentReads
     IO.FS.withTempDir checkWalSegmentRepair
     for failDirectory in [false, true] do
