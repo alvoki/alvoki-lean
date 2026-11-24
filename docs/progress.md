@@ -190,4 +190,8 @@ The shared locked installer returns that exact replay table and checkpoint gener
 
 After healthy repair, a further admitted power loss preserves the selected checkpoint and marker bindings, sealed bytes and exact keeper bytes. The crashed layout is already ready, with no physical tail or later names to prune. A further native open still needs its own healthy I/O observations. [Durable crash layout](../lean/Alvoki/Storage/Disk/WalSegmentCachedRetryCompletion.lean)
 
+Per-open stat, inode and bounded chunk observations now derive the selected WAL payload reports as well as the checkpoint run reports. The seal read returns the entire selected file. The keeper returns only its selected prefix, and an aligned successful read puts its exact opened description into the modeled sync cache. Connecting that retained entry to the reached native sync still needs the handle and cache observations. [WAL chunk reports](../lean/Alvoki/Storage/Disk/CachedWalChunkReports.lean)
+
+At a power-loss cut during the first append callback of a batch, the shared writer names the exact keeper and full encoded batch. Any admitted surviving tail lies outside the old marker. The resulting retry starts from the prior checkpoint binding, sealed byte map and selected keeper prefix. The next step connects that cut to the healthy cached installation in the mixed batch trace. [Batch append cut](../lean/Alvoki/Storage/Disk/WalBatchAppendPowerLoss.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

@@ -7,6 +7,7 @@ import Alvoki.Storage.Disk.SegmentedBootstrapCompletion
 import Alvoki.Storage.Disk.AppendCutContinuation
 import Alvoki.Storage.Disk.AppendRetrySession
 import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
+import Alvoki.Storage.Disk.WalBatchAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentMarkerPowerLoss
 import Alvoki.Storage.Disk.SegmentedMarkerPowerLoss
 import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
@@ -143,6 +144,7 @@ import Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 import Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
 import Alvoki.Storage.Disk.CachedRetryInstallation
 import Alvoki.Storage.Disk.CachedMarkedRetryInstallation
+import Alvoki.Storage.Disk.CachedWalChunkReports
 import Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
@@ -785,6 +787,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.modeledFiles
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.startsRetry
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.selectsPriorHistory
+#check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.interruptsBatch
+#check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.batchPowerLoss
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.reopens
 #check_axioms Alvoki.WAL.Boundary.MarkerInterruption.actionAt
 #check_axioms Alvoki.WAL.Boundary.MarkerInterruption.matchesWriteEffects
@@ -1070,6 +1074,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.readExactPrefixWith_completesFile
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.runSizeFits
 #check_axioms Alvoki.Storage.WalSegmentRepair.CheckpointRunChunkReads.ObservesFile.readExact
+#check_axioms Alvoki.Storage.WalSegmentRepair.CheckpointRunChunkReads.ObservesFile.readOpenedExactPrefix
+#check_axioms Alvoki.Storage.WalSegmentRepair.readWalKeeperWithChunks_exact
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.ofChunkReads
 #check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.ofChunkReads
 #check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.readExact
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.readSelected
