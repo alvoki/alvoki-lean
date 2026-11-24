@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.LockDescriptionLifetime
 import Alvoki.Storage.Disk.BoundedReopenFailure
+import Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
 
 namespace Alvoki.Storage.WalSegmentRepair
 
@@ -191,6 +192,9 @@ inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Pr
       (attempt : BoundedReopenAttempt) (acquisition : TryLockObserves before.owners directory attempt.acquired)
       (localUnlock : attempt.unlock.LocalFlock) (reports : attempt.Reports directory before.image admits)
       (ran : attempt.run directory before = .error cause after) : BoundedReopenTrace directory admits initial after
+  | cachedMarkerRejected {before} (prior : BoundedReopenTrace directory admits initial before)
+      (rejection : CachedMarkerRejection directory before) :
+      BoundedReopenTrace directory admits initial rejection.after
   | referenceDrops {before description} (prior : BoundedReopenTrace directory admits initial before)
       (references : HeldLockReferences description) (drops : List LockReferenceDrop) :
       BoundedReopenTrace directory admits initial (references.afterFileDrops drops directory before)
@@ -201,6 +205,22 @@ inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Pr
       BoundedReopenTrace directory admits initial
         ⟨before.image.crash pair bytes names, before.owners.set (directory.file .lock) none⟩
 
+/-- After cleanup fails, dropping the rejected opener's last reference
+permits a subsequent cooperating opener to acquire the lock. -/
+theorem BoundedReopenTrace.afterCachedMarkerLastDrop {directory admits initial before}
+    (prior : BoundedReopenTrace directory admits initial before) (rejection : CachedMarkerRejection directory before)
+    {cause : IO.Error} (cleanup : rejection.unlock = .failure cause false)
+    (references : HeldLockReferences rejection.descriptor) (drops : List LockReferenceDrop)
+    (last : references.remaining drops = []) :
+    let released := references.afterFileDrops drops directory rejection.after
+    BoundedReopenTrace directory admits initial released ∧ TryLockObserves released.owners directory (.ok true) := by
+  dsimp only
+  have held : rejection.after.owners.Owns directory rejection.descriptor := by
+    simp [CachedMarkerRejection.after, cleanup, LockOwners.Owns, LockOwners.set]
+  refine ⟨.referenceDrops (.cachedMarkerRejected prior rejection) references drops, ?_⟩
+  rw [references.afterFileDrops_released held last]
+  simp [TryLockObserves, LockOwners.set]
+
 /-- The reached state of one retry trace is the starting state of the next. -/
 theorem BoundedReopenTrace.trans {directory admits initial middle after}
     (earlier : BoundedReopenTrace directory admits initial middle)
@@ -208,6 +228,7 @@ theorem BoundedReopenTrace.trans {directory admits initial middle after}
   induction later with
   | empty => exact earlier
   | failed _ attempt acquisition unlock reports ran ih => exact .failed ih attempt acquisition unlock reports ran
+  | cachedMarkerRejected _ rejection ih => exact .cachedMarkerRejected ih rejection
   | referenceDrops _ references drops ih => exact .referenceDrops ih references drops
   | powerLoss _ metadata keeper names ih => exact .powerLoss ih metadata keeper names
 
@@ -222,6 +243,7 @@ theorem BoundedReopenTrace.continuesLineage {directory : DiskDirectory} {admits 
   | empty => exact prior
   | failed _ attempt acquisition _ reports ran ih =>
     exact ih.afterFailure unique (attempt.errorFiles acquisition reports ran)
+  | cachedMarkerRejected _ _ ih => exact ih
   | referenceDrops _ _ _ ih => exact ih
   | powerLoss _ metadata keeper later ih => exact ih.afterPowerLoss metadata keeper later
 

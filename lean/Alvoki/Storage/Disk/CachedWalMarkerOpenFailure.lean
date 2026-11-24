@@ -100,4 +100,73 @@ theorem runOpenWithInstallation_cachedMarkerDecodeError {image : Type} (director
     subst released
     rfl
 
+/-- A cached retry that reads the actual visible malformed marker after
+taking the lock. Read-only callbacks cannot change the retry's file image. -/
+structure CachedMarkerRejection (directory : DiskDirectory) (before : LockedFileState FileImage) where
+  descriptor : Nat
+  nextRef : Nat
+  acquisition : TryLockObserves before.owners directory (.ok true)
+  unlock : UnlockReport
+  localUnlock : unlock.LocalFlock
+  readOptional : FilePath → EStateM IO.Error FileImage (Option ByteArray)
+  readRunSize : FilePath → EStateM IO.Error FileImage Nat
+  readRunPrefix : FilePath → Nat → EStateM IO.Error FileImage ByteArray
+  list : FilePath → EStateM IO.Error FileImage (Array IO.FS.DirEntry)
+  lstat : FilePath → EStateM IO.Error FileImage (Except IO.Error IO.FS.Metadata)
+  readSeal : FilePath → Nat → EStateM IO.Error FileImage ByteArray
+  readKeeper : FilePath → Nat → Nat → EStateM IO.Error FileImage ByteArray
+  removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit)
+  write : FilePath → ByteArray → EStateM IO.Error FileImage Unit
+  sync : Array FilePath → EStateM IO.Error FileImage Unit
+  renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit
+  reads : CachedWalMarkerRead directory readOptional readRunSize readRunPrefix before.image before.image
+  checkpointReadOnly : reads.afterCheckpoint = before.image
+  visibleMarker : before.image.directory.active.walBoundary = some reads.marker
+  message : String
+  malformed : WAL.Boundary.decode reads.marker = .error message
+
+namespace CachedMarkerRejection
+
+variable {directory : DiskDirectory} {before : LockedFileState FileImage}
+
+def run (rejection : CachedMarkerRejection directory before) :
+    EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession :=
+  runOpenWithInstallation directory rejection.descriptor rejection.nextRef (.ok true) rejection.unlock
+    (reopenMarkedBoundedWithCachedExtents directory rejection.readOptional rejection.readRunSize rejection.readRunPrefix
+      rejection.list rejection.lstat rejection.readSeal rejection.readKeeper rejection.removeFile rejection.write
+      rejection.sync rejection.renameFile) before
+
+def after (rejection : CachedMarkerRejection directory before) : LockedFileState FileImage :=
+  let owner := match rejection.unlock with
+    | .success => none
+    | .failure _ _ => some rejection.descriptor
+  { before with owners := before.owners.set (directory.file .lock) owner }
+
+def error (rejection : CachedMarkerRejection directory before) : IO.Error :=
+  match rejection.unlock with
+  | .success => IO.userError rejection.message
+  | .failure cleanup _ => cleanup
+
+/-- The actual cached callback run returns the computed error and owner.
+A prepared plan or completed repair is unnecessary for this retry edge. -/
+theorem run_error (rejection : CachedMarkerRejection directory before) :
+    rejection.run = .error rejection.error rejection.after := by
+  have failed := rejection.reads.reopen_decodeError rejection.list rejection.lstat rejection.readSeal
+    rejection.readKeeper rejection.removeFile rejection.write rejection.sync rejection.renameFile rejection.malformed
+  unfold run
+  rw [runOpenWithInstallation_acquiredRecoveryError _ _ _ _ _ _ failed]
+  cases observed : rejection.unlock with
+  | success => simp [after, error, observed]
+  | failure cleanup released =>
+    have retained : released = false := by simpa [UnlockReport.LocalFlock, observed] using rejection.localUnlock
+    simp [after, error, observed, retained]
+
+/-- The next cooperating open can acquire immediately exactly when the
+local cleanup released this attempt's lock. -/
+theorem immediateReacquire (rejection : CachedMarkerRejection directory before) :
+    TryLockObserves rejection.after.owners directory (.ok true) ↔ rejection.unlock = .success := by
+  cases observed : rejection.unlock <;> simp [TryLockObserves, after, observed, LockOwners.set]
+
+end CachedMarkerRejection
+
 end Alvoki.Storage.DiskSession
