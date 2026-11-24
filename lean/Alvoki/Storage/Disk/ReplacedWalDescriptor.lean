@@ -147,6 +147,17 @@ private theorem reportOldFileSync_crashSubset (image : WalInodeImage) (directory
       exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _
         (List.mem_flatMap.mpr ⟨inode, prior, oldContents⟩))
 
+/-- Delaying a sync on the old inode adds at most its visible bytes to the
+pre-rename survival choices, alongside the individually synced replacement. -/
+theorem reportOldFileSync_crashImages_subset (image : WalInodeImage) (directory : DirectoryPublication.Image)
+    {replacement : Nat} (bytes : ByteArray)
+    (distinct : image.active ≠ replacement) (fresh : replacement ∉ image.crashBindings)
+    (oldOutcomes : List ByteArray)
+    (allowed : ∀ contents ∈ oldOutcomes, contents = image.visible image.active ∨ contents ∈ image.crashBytes image.active) :
+    (((image.renameSynced replacement bytes).reportFileSync image.active oldOutcomes).project directory).wal.crashImages
+      ⊆ some bytes :: some (image.visible image.active) :: (image.project directory).wal.crashImages :=
+  image.reportOldFileSync_crashSubset directory bytes distinct fresh oldOutcomes allowed
+
 /-- A crash between rename and the directory barrier remains an admitted
 retry. The cover comes from the pre-rename file sync allowance and the
 authorized rename cut, while the physical effect occurs on the old inode. -/
