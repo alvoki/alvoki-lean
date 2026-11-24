@@ -11,6 +11,8 @@ import Alvoki.Storage.Disk.SegmentedCheckpointPowerLoss
 import Alvoki.Storage.Disk.RetainedAppendReports
 import Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
+import Alvoki.Storage.Disk.SegmentedKeeperSyncBeforeBarrier
+import Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
@@ -104,6 +106,7 @@ import Alvoki.Storage.Disk.SegmentedCollectionInventory
 import Alvoki.Storage.Disk.SegmentedRetainedWriter
 import Alvoki.Storage.Disk.WalSegmentRecoveryWork
 import Alvoki.Storage.Disk.WalSegmentReadWork
+import Alvoki.Storage.Disk.RecoverySizedReads
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -823,6 +826,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.keepsNamespace
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.keepsReadDescriptors
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.settles
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.close
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.keepsPendingCollectionBeforeBarrier
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionErrors.openAfterRelease
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.cleanReopenRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.Installs.preservesRetained
@@ -864,7 +870,17 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.continuesLineage
 #check_axioms Alvoki.Storage.DiskSession.DelayedDirectorySync.afterLastWriterDrop
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.continuesLineage
+#check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_crashImages_subset
+#check_axioms Alvoki.Storage.WalSegmentRepair.Prepared.allowVisibleKeeper
+#check_axioms Alvoki.Storage.WalSegmentRepair.FileImage.KeeperCrashCover.crash
+#check_axioms Alvoki.Storage.WalSegmentRepair.FileImage.KeeperCrashCover.crashLineage
+#check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.oldContentsCanSurvive
+#check_axioms Alvoki.Storage.WalSegmentRepair.DelayedKeeperSync.coversUnsettledReplacement
 #check_axioms Alvoki.Storage.WalSegmentRepair.recordWalReadCalls_exact
+#check_axioms Alvoki.Storage.readExactRecoveryFileWith_rejectsSize
+#check_axioms Alvoki.Storage.readExactRecoveryFileWith_accepts
+#check_axioms Alvoki.Storage.walRecoveryReadPlan_bytes
+#check_axioms Alvoki.Storage.walRecoveryReadPlan_ofCheckedSpans
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop
