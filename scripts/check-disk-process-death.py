@@ -77,8 +77,8 @@ def native_process(binary, operation, database, *args, env=None, sync_pid_file=N
             process.stderr.close()
 
 
-def run_probe(binary, operation, database, *args):
-    with native_process(binary, operation, database, *args) as process:
+def run_probe(binary, operation, database, *args, env=None):
+    with native_process(binary, operation, database, *args, env=env) as process:
         _, stderr = process.communicate(timeout=TIMEOUT)
         return process.returncode, stderr
 
@@ -162,6 +162,13 @@ def check_process_death(binary, root, after_rename, rotated):
     wrapper = root / "sync"
     wrapper.write_text('''#!/bin/sh
 set -eu
+if [ "$#" -eq 2 ] && [ "$1" = -- ] && [ "$2" = "$ALVOKI_CHECK_REOPEN_FAIL_AT" ]; then
+    if [ "$ALVOKI_CHECK_REOPEN_FAIL_PHASE" = after ]; then
+        "$ALVOKI_CHECK_REAL_SYNC" "$@"
+    fi
+    printf 'injected reopen %s-sync failure: %s\\n' "$ALVOKI_CHECK_REOPEN_FAIL_PHASE" "$2" >&2
+    exit 1
+fi
 if [ "$#" -eq "$ALVOKI_CHECK_SYNC_ARITY" ] && [ "$1" = -- ] &&
    [ "${3:-$2}" = "$ALVOKI_CHECK_HOLD_AT" ] &&
    { [ "$#" -eq 3 ] || cmp -s "$ALVOKI_CHECK_MARKER" "$ALVOKI_CHECK_SELECTED_MARKER"; }; then
@@ -183,9 +190,15 @@ fi
 exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
 ''')
     wrapper.chmod(0o700)
-    with native_process(binary, "--write-once", database, submitted_value, sync_pid_file=ready, env={
+    sync_env = {
         **os.environ,
         "PATH": os.pathsep.join([str(root), os.defpath]),
+        "ALVOKI_CHECK_REAL_SYNC": str(Path(real_sync).resolve()),
+        "ALVOKI_CHECK_REOPEN_FAIL_AT": "",
+        "ALVOKI_CHECK_SYNC_ARITY": "0",
+    }
+    with native_process(binary, "--write-once", database, submitted_value, sync_pid_file=ready, env={
+        **sync_env,
         "ALVOKI_CHECK_SYNC_ARITY": "2" if after_rename else "3",
         "ALVOKI_CHECK_HOLD_AT": str(database if after_rename else database / "WAL.commit.next"),
         "ALVOKI_CHECK_MARKER": str(marker),
@@ -193,15 +206,14 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
         "ALVOKI_CHECK_SYNC_PID": str(ready),
         "ALVOKI_CHECK_SYNC_RELEASE": str(release),
         "ALVOKI_CHECK_PYTHON": sys.executable,
-        "ALVOKI_CHECK_REAL_SYNC": str(Path(real_sync).resolve()),
     }) as owner:
         sync_pid = wait_for_sync(owner, ready)
         require(os.getpgid(sync_pid) == owner.pid, "sync child escaped the fixture process group")
         require(wal.read_bytes() == appended, "paused write did not leave the exact submitted frame")
         require(marker.read_bytes() == expected_marker, "paused write selected the wrong WAL marker")
+        original_wal = wal.stat()
         if not after_rename:
             held_wal = Path(f"/proc/{sync_pid}/fd/0")
-            original_wal = wal.stat()
             require(os.path.samestat(held_wal.stat(), original_wal),
                     "sync child did not open the original WAL")
         status, stderr = run_probe(binary, "--open-once", database)
@@ -211,6 +223,23 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
         owner.kill()
         require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "fixture owner was not killed")
         require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child did not outlive its owner")
+        # The old sync stays blocked across a directory failure and a retry
+        # whose file sync succeeds before the subprocess reports failure.
+        file_sync = wal if after_rename else database / "WAL.next"
+        for target, phase in ((database, "before"), (file_sync, "after")):
+            status, stderr = run_probe(binary, "--open-once", database, env={
+                **sync_env,
+                "ALVOKI_CHECK_REOPEN_FAIL_AT": str(target),
+                "ALVOKI_CHECK_REOPEN_FAIL_PHASE": phase,
+            })
+            require(status != 0 and f"injected reopen {phase}-sync failure: {target}\n" in stderr,
+                    f"reopen did not report the injected failure: {stderr}")
+            require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during failed reopen")
+            require(os.path.samestat(wal.stat(), original_wal) and wal.read_bytes() == appended
+                    and marker.read_bytes() == expected_marker, "failed reopen changed the WAL or its marker")
+            check_fixed_files()
+        if not after_rename:
+            require(file_sync.read_bytes() == acknowledged, "failed repair did not stage the exact prefix")
         status, stderr = run_probe(binary, "--check-recovered-table", database, *recovery_args)
         require(status == 0, f"reopen after owner death returned the wrong table: {stderr}")
         require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during recovery")
@@ -242,4 +271,4 @@ if __name__ == "__main__":
         for after_rename in (False, True):
             with tempfile.TemporaryDirectory(prefix="alvoki-process-death-") as directory:
                 check_process_death(binary, Path(directory).resolve(), after_rename, rotated)
-    print("Recovered and extended zero and rotated WAL keepers after owner death and delayed sync.")
+    print("Recovered and extended zero and rotated WAL keepers after owner death, failed opens, and delayed sync.")
