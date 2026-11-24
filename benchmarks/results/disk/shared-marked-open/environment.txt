@@ -1,0 +1,20 @@
+Baseline 8107ac3c1765cb7f4d5e65ffe692d22b23f829c5
+Candidate runtime 85c768f (same reopen source as the commit adding these results)
+Linux 6.18.57 x86_64, KVM AMD EPYC 9V74, overlay filesystem, pinned CPU 1
+Lean 4.36.0 Release, GNU Coreutils 9.7, Python 3.12.14
+
+Build the release targets in both checkouts using the pinned toolchain.
+  (cd lean && lake build alvoki-disk-replay alvoki-disk-checkpoint)
+
+For WAL-only cases, make a scratch directory and put copies or links of the
+alvoki-disk-replay executable from each build there named base and candidate.
+Copy benchmarks/results/disk/shared-reopen/compare.py there and run it with the
+absolute repository path. It writes trials.csv beside the driver.
+  python3 SCRATCH/compare.py REPO
+
+For checkpoint cases, run the archived driver with both executable paths.
+  python3 compare_checkpoint.py BASE_BIN CANDIDATE_BIN /tmp/checkpoint-trials.csv
+
+Each checkpoint trial times open after seeding and publishing a run set. It
+checks the recovered sequence and last key outside the timer. Each paired
+checkpoint batch contains three timed opens per build.

@@ -1,5 +1,5 @@
 Baseline 8107ac3c1765cb7f4d5e65ffe692d22b23f829c5
-Candidate source 388dc3541d6127f0dc68be82f5b960500839da19
+Candidate source 388dc3541d6127f0dc68be82f5b960500839da19, published as d23cb15
 Linux 6.18.57 x86_64, KVM AMD EPYC 9V74, overlay filesystem, pinned CPU 0
 Lean 4.36.0 (611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release), GNU Coreutils 9.7, Python 3.12.14
 

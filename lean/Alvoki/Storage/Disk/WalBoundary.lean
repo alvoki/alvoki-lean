@@ -37,6 +37,14 @@ def select (length : UInt64) (wal : ByteArray) : Except String ByteArray :=
   else if wal.size = count then .ok wal
   else .ok (wal.extract 0 count)
 
+/-- Validate the marked WAL and retain both its selected bytes and recovered table.
+The selected bytes are also used if reopen must repair the on-disk WAL. -/
+@[inline] def recoverMarked (base : Storage.PackedTable) (length : UInt64) (contents : ByteArray) :
+    Except String (ByteArray × Storage.PackedTable) := do
+  let selected ← select length contents
+  let table ← Storage.recoverSelected base selected
+  return (selected, table)
+
 private theorem select_eq_ok_iff {length : UInt64} {wal selected : ByteArray} :
     select length wal = .ok selected ↔
       length.toNat % frameSize = 0 ∧ length.toNat ≤ wal.size ∧

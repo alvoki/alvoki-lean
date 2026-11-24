@@ -53,6 +53,24 @@ private theorem read_ordered_runs (read : Nat → Option ByteArray) (first : Nat
       simpa [Nat.add_assoc, Nat.add_comm 1 index] using durable (index + 1) (by simpa using within)
     simp [List.range'_succ, List.mapM_cons, head, tail]
 
+/-- Read the known durable run names in the manifest's recovery order. -/
+def CheckpointPublication.Image.readDurableCheckpointRuns (image : CheckpointPublication.Image) :
+    Option ByteArray → Option (List ByteArray)
+  | none => some []
+  | some bytes => do
+    let header ← (Manifest.decode bytes).toOption
+    (List.range header.runCount.toNat).mapM (image.durable header.generation)
+
+private theorem read_durable_runs {image : CheckpointPublication.Image} {bytes : ByteArray}
+    {header : Manifest.Checkpoint} {files : List ByteArray}
+    (decoded : Manifest.decode bytes = .ok header) (count : header.runCount.toNat = files.length)
+    (durable : ∀ index, index < files.length → image.durable header.generation index = files[index]?) :
+    image.readDurableCheckpointRuns (some bytes) = some files := by
+  simp only [CheckpointPublication.Image.readDurableCheckpointRuns, decoded, Except.toOption]
+  change (List.range header.runCount.toNat).mapM (image.durable header.generation) = some files
+  rw [count, List.range_eq_range']
+  exact read_ordered_runs _ 0 files (by simpa using durable)
+
 /-- A manifest admitted by the publication model supplies the exact ordered
 run bytes for recovery, provided its published content has a checkpoint
 witness. The absent manifest uses the empty checkpoint. -/
@@ -61,24 +79,147 @@ theorem CheckpointForRecovery.of_durable_manifest {image : CheckpointPublication
     (accepted : image.Accepts walSequence (fun header files =>
       ∃ checkpoint, CheckpointForRecovery (some (Manifest.encode header)) files checkpoint) manifest) :
     ∃ files checkpoint, CheckpointForRecovery manifest files checkpoint ∧
-      (match manifest with
-      | none => some []
-      | some bytes => do
-        let header ← (Manifest.decode bytes).toOption
-        (List.range header.runCount.toNat).mapM (image.durable header.generation)) = some files := by
+      image.readDurableCheckpointRuns manifest = some files := by
   cases manifest with
   | none => exact ⟨[], .empty, .absent, rfl⟩
   | some bytes =>
     obtain ⟨header, files, decoded, ⟨checkpoint, witness⟩, _, count, durable⟩ := accepted
-    refine ⟨files, checkpoint, ?_, ?_⟩
-    · simpa only [Manifest.decode_reencode decoded] using witness
-    · change (do
-        let header ← (Manifest.decode bytes).toOption
-        (List.range header.runCount.toNat).mapM (image.durable header.generation)) = some files
-      rw [decoded]
-      change (List.range header.runCount.toNat).mapM (image.durable header.generation) = some files
-      rw [count, List.range_eq_range']
-      exact read_ordered_runs _ 0 files (by simpa using durable)
+    refine ⟨files, checkpoint, ?_, read_durable_runs decoded count durable⟩
+    simpa only [Manifest.decode_reencode decoded] using witness
+
+/-- The executable loop reads exactly the manifest's run indices in order. -/
+theorem readCheckpointRunBytes_eq_mapM [Monad m] [LawfulMonad m]
+    (read : UInt64 → Nat → m ByteArray) (header : Manifest.Checkpoint) :
+    readCheckpointRunBytes read header =
+      (List.range header.runCount.toNat).mapM (read header.generation) := by
+  simp [readCheckpointRunBytes, Std.Legacy.Range.size, ← List.range_eq_range']
+
+private theorem observed_ordered_runs {indices : List Nat} {durableFiles files : List ByteArray}
+    {durable : Nat → Option ByteArray} {read : Nat → Except String ByteArray}
+    (agrees : ∀ index bytes expected,
+      read index = .ok bytes → durable index = some expected → bytes = expected)
+    (known : indices.mapM durable = some durableFiles)
+    (observed : indices.mapM read = .ok files) :
+    files = durableFiles := by
+  induction indices generalizing durableFiles files with
+  | nil =>
+    cases known
+    cases observed
+    rfl
+  | cons index rest ih =>
+    cases durableHead : durable index with
+    | none => simp [List.mapM_cons, durableHead] at known
+    | some expected =>
+      cases durableRest : rest.mapM durable with
+      | none => simp [List.mapM_cons, durableHead, durableRest] at known
+      | some expectedRest =>
+        cases readHead : read index with
+        | error message => simp [List.mapM_cons, readHead, bind, Except.bind] at observed
+        | ok bytes =>
+          cases readRest : rest.mapM read with
+          | error message => simp [List.mapM_cons, readHead, bind, Except.bind, readRest] at observed
+          | ok tail =>
+            simp [List.mapM_cons, durableHead, durableRest] at known
+            simp [List.mapM_cons, readHead, readRest, bind, Except.bind, pure, Except.pure] at observed
+            rw [← observed, ← known, agrees index bytes expected readHead durableHead,
+              ih durableRest readRest]
+
+/-- Successful checkpoint reads under the database lock observe the selected
+manifest and the contents of the durable run files it names. Read errors are
+retained. An untracked run path is outside this part of the model. -/
+structure CheckpointReadObservations (image : CheckpointPublication.Image) (manifest : Option ByteArray) where
+  readManifest : Except String (Option ByteArray)
+  readRun : UInt64 → Nat → Except String ByteArray
+  manifestVisible : ∀ value, readManifest = .ok value → value = manifest
+  runDurable : ∀ generation index value expected, readRun generation index = .ok value →
+    image.durable generation index = some expected → value = expected
+
+def CheckpointReadObservations.result {image : CheckpointPublication.Image} {manifest : Option ByteArray}
+    (reads : CheckpointReadObservations image manifest) : Except String (Option (PackedTable × UInt64)) :=
+  readCheckpoint reads.readManifest reads.readRun (fun result => result)
+
+/-- A successful run of the native checkpoint read protocol obtains exactly
+the validated checkpoint and its manifest generation. The filesystem contract
+applies to each primitive read, including the optional manifest lookup. -/
+theorem CheckpointReadObservations.loaded {image : CheckpointPublication.Image}
+    {manifest : Option ByteArray} {files : List ByteArray} {loaded : Option (PackedTable × UInt64)}
+    (reads : CheckpointReadObservations image manifest)
+    (durable : image.readDurableCheckpointRuns manifest = some files)
+    (opened : reads.result = .ok loaded) :
+    (match manifest with
+      | none => Except.ok none
+      | some bytes => do
+        let header ← Manifest.decode bytes
+        let table ← loadRunSet header files
+        return some (table, header.generation)) = .ok loaded := by
+  cases observedManifest : reads.readManifest with
+  | error =>
+    simp [CheckpointReadObservations.result, readCheckpoint, observedManifest, bind, Except.bind] at opened
+  | ok value =>
+    have visible := reads.manifestVisible value observedManifest
+    subst manifest
+    cases value with
+    | none =>
+      simpa [CheckpointReadObservations.result, readCheckpoint, observedManifest, bind, Except.bind,
+        pure, Except.pure] using opened
+    | some bytes =>
+      simp only [CheckpointReadObservations.result, readCheckpoint, observedManifest, bind, Except.bind] at opened
+      cases decoded : Manifest.decode bytes with
+      | error => rw [decoded] at opened; contradiction
+      | ok header =>
+        simp only [CheckpointPublication.Image.readDurableCheckpointRuns, decoded, Except.toOption] at durable
+        rw [decoded] at opened
+        change (do
+          let observedFiles ← readCheckpointRunBytes reads.readRun header
+          let table ← loadRunSet header observedFiles
+          pure (some (table, header.generation))) = .ok loaded at opened
+        rw [readCheckpointRunBytes_eq_mapM] at opened
+        cases observedFiles : (List.range header.runCount.toNat).mapM (reads.readRun header.generation) with
+        | error => rw [observedFiles] at opened; contradiction
+        | ok runFiles =>
+          have same := observed_ordered_runs (reads.runDurable header.generation) durable observedFiles
+          subst runFiles
+          simpa only [decoded, observedFiles, bind, Except.bind] using opened
+
+private theorem CheckpointForRecovery.written_files {bytes : ByteArray} {files : List ByteArray}
+    {checkpoint : PackedTable} (written : CheckpointForRecovery (some bytes) files checkpoint) :
+    files = checkpoint.runs.map (·.run.bytes) := by
+  cases written
+  rfl
+
+private theorem CheckpointForRecovery.ordered_durable_runs {image : CheckpointPublication.Image}
+    {walSequence : UInt64} {manifest : Option ByteArray} {files : List ByteArray} {checkpoint : PackedTable}
+    (written : CheckpointForRecovery manifest files checkpoint)
+    (accepted : image.Accepts walSequence (fun header stored =>
+      CheckpointForRecovery (some (Manifest.encode header)) stored checkpoint) manifest) :
+    image.readDurableCheckpointRuns manifest = some files := by
+  cases manifest with
+  | none => cases written; rfl
+  | some bytes =>
+    obtain ⟨header, stored, decoded, witness, _, count, durable⟩ := accepted
+    have same := witness.written_files.trans written.written_files.symm
+    subst stored
+    exact read_durable_runs decoded count durable
+
+/-- Connecting the successful native read protocol to recovery's loading
+equation identifies the exact base table supplied to WAL replay. -/
+theorem CheckpointForRecovery.loaded_observation {image : CheckpointPublication.Image}
+    {walSequence : UInt64} {manifest : Option ByteArray} {files : List ByteArray} {checkpoint : PackedTable}
+    {loaded : Option (PackedTable × UInt64)}
+    (written : CheckpointForRecovery manifest files checkpoint)
+    (accepted : image.Accepts walSequence (fun header stored =>
+      CheckpointForRecovery (some (Manifest.encode header)) stored checkpoint) manifest)
+    (reads : CheckpointReadObservations image manifest)
+    (opened : reads.result = .ok loaded) :
+    (match manifest with
+    | none => Except.ok PackedTable.empty
+    | some bytes => do
+      let header ← Manifest.decode bytes
+      loadRunSet header files) = .ok (loaded.getD (.empty, 0)).1 := by
+  have exactLoaded := reads.loaded (written.ordered_durable_runs accepted) opened
+  have table := congrArg (fun (result : Except String (Option (PackedTable × UInt64))) =>
+    (fun checkpoint => (checkpoint.getD (.empty, 0)).1) <$> result) exactLoaded
+  cases manifest <;> simp [← bind_pure_comp, bind_assoc] at table <;> exact table
 
 private theorem ordinals_prefix {first : Nat} {initial suffix : List WAL.Write}
     (ordered : WAL.OrdinalsFrom first (initial ++ suffix)) : WAL.OrdinalsFrom first initial := by
@@ -256,10 +397,8 @@ theorem recoverWriteCutAfterReopenRetry {initial after : ReopenImage}
       | some bytes => do
         let header ← Manifest.decode bytes
         loadRunSet header files) = .ok base ∧
-      (do
-        let count ← decode marker
-        let selected ← select count contents
-        recoverSelected base selected) = .ok reopened ∧
+      (do let count ← decode marker; select count contents) = .ok (WAL.encode events) ∧
+      recoverSelected base (WAL.encode events) = .ok reopened ∧
       (events = covered ++ pending ∨ events = (covered ++ pending) ++ [event]) ∧
       reopened.committed.toNat = events.length ∧
       SnapshotWalReplay model (events.drop covered.length) abstract ∧
@@ -287,11 +426,11 @@ theorem recoverWriteCutAfterReopenRetry {initial after : ReopenImage}
   have expected : writeCutPrefix (covered ++ pending) event pair = WAL.encode events := by
     rw [decoded] at selected
     exact Except.ok.inj (accepted.symm.trans selected)
-  obtain ⟨marker, contents, bound, present, recoverAfter⟩ :=
-    ReopenImage.recover_chosen (reopenRetry_valid valid path) base metadataChosen walChosen
+  obtain ⟨marker, contents, bound, present, selectedAfter⟩ :=
+    ReopenImage.select_chosen (reopenRetry_valid valid path) metadataChosen walChosen
   obtain ⟨abstract, replayed, counted, reads⟩ := abstractReplay model represents
-  rw [expected, recovered] at recoverAfter
-  exact ⟨marker, contents, events, base, reopened, abstract, bound, present, loaded, recoverAfter,
-    history, sequence, replayed, counted, reads⟩
+  rw [expected] at selectedAfter
+  exact ⟨marker, contents, events, base, reopened, abstract, bound, present, loaded, selectedAfter,
+    recovered, history, sequence, replayed, counted, reads⟩
 
 end Alvoki.WAL.Boundary

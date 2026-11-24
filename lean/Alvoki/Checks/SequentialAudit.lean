@@ -69,6 +69,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.recoverRunSet_committedBoundary
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loads
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_durable_manifest
+#check_axioms Alvoki.Storage.readCheckpointRunBytes_eq_mapM
+#check_axioms Alvoki.Storage.CheckpointReadObservations.loaded
+#check_axioms Alvoki.Storage.CheckpointForRecovery.loaded_observation
 #check_axioms Alvoki.Storage.recoverWriteCutSelectedPair
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_cut_valid
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpoint_complete
@@ -99,12 +102,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.crash_valid
 #check_axioms Alvoki.WAL.Boundary.ReopenRetry.chosen_pair_from_initial
 #check_axioms Alvoki.WAL.Boundary.reopenRetry_valid
+#check_axioms Alvoki.WAL.Boundary.ReopenImage.select_chosen
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.recover_chosen
 #check_axioms Alvoki.WAL.Boundary.markedReopenPreflight_selected
 #check_axioms Alvoki.WAL.Boundary.runMarkedReopen_preflight_error
 #check_axioms Alvoki.WAL.Boundary.ReopenRetry.runMarkedReopen_effect
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.markerBound_of_write_cut
 #check_axioms Alvoki.WAL.Boundary.ReopenRetry.markerBound
+#check_axioms Alvoki.WAL.Boundary.MarkedReopenReads.success
 #check_axioms Alvoki.WAL.Boundary.MarkedReopenAttempts.toRetry
 #check_axioms Alvoki.WAL.Boundary.recoverWriteCutAfterReopenRetry
 #check_axioms Alvoki.WAL.Boundary.WriteFiles.reopenImage_crashWal_nonempty
@@ -113,6 +118,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.runWriteEffects_success
 #check_axioms Alvoki.WAL.Boundary.runWriteEffects_success_pair_marker
 #check_axioms Alvoki.WAL.Boundary.recoverPreparedWriteAfterReopenAttempts
+#check_axioms Alvoki.WAL.Boundary.reopenPreparedWrite_refines
 #check_axioms Alvoki.WAL.Boundary.commit_append_error
 #check_axioms Alvoki.WAL.Boundary.write_cut_selects_old_or_new
 #check_axioms Alvoki.WAL.Boundary.write_cut_active_bounds_marker

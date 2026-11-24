@@ -292,6 +292,23 @@ theorem reopenRetry_valid {initial after : ReopenImage} {expected : DirectoryPub
   | crash _ pairSurvives walSurvives earlier =>
     exact ReopenImage.crash_valid earlier pairSurvives walSurvives
 
+/-- Every selectable metadata pair and WAL binding selects its expected prefix. -/
+theorem ReopenImage.select_chosen {image : ReopenImage}
+    {expected : DirectoryPublication.Bindings → ByteArray} (valid : image.Valid expected)
+    {pair : DirectoryPublication.Bindings} {wal : Option ByteArray}
+    (metadataChosen : pair ∈ image.directory.active :: image.directory.crashImages)
+    (walChosen : wal ∈ image.wal.active :: image.wal.crashImages) :
+    ∃ marker contents, pair.walBoundary = some marker ∧ wal = some contents ∧
+      (do let length ← decode marker; select length contents) = .ok (expected pair) := by
+  have accepted : accepts image.directory expected wal := by
+    rcases List.mem_cons.mp walChosen with rfl | survives
+    · exact valid.activeValid
+    · exact valid.crashValid _ survives
+  obtain ⟨marker, contents, length, boundary, present, decoded, selected⟩ := accepted pair metadataChosen
+  refine ⟨marker, contents, boundary, present, ?_⟩
+  rw [decoded]
+  exact selected
+
 /-- Given the checkpoint that belongs to the chosen metadata pair, its replay
 input is unchanged by retries, even if the physical WAL name selects the old file. -/
 theorem ReopenImage.recover_chosen {image : ReopenImage}
@@ -304,15 +321,9 @@ theorem ReopenImage.recover_chosen {image : ReopenImage}
         let length ← decode marker
         let selected ← select length contents
         recoverSelected checkpoint selected) = recoverSelected checkpoint (expected pair) := by
-  have accepted : accepts image.directory expected wal := by
-    rcases List.mem_cons.mp walChosen with rfl | survives
-    · exact valid.activeValid
-    · exact valid.crashValid _ survives
-  obtain ⟨marker, contents, length, boundary, present, decoded, selected⟩ := accepted pair metadataChosen
+  obtain ⟨marker, contents, boundary, present, selected⟩ := ReopenImage.select_chosen valid metadataChosen walChosen
   refine ⟨marker, contents, boundary, present, ?_⟩
-  rw [decoded]
-  change (do let bytes ← select length contents; recoverSelected checkpoint bytes) = _
-  rw [selected]
+  rw [← bind_assoc, selected]
   rfl
 
 /-- An error may be reported before or after the modeled step takes effect.
@@ -421,24 +432,30 @@ private def performAlignedSync (walAlreadySynced : Bool) (report : AlignedSyncRe
       if walAlreadySynced || walSynced then image.syncDirectory else image.syncMetadata.allowVisibleWal
     else if walSynced then image.allowVisibleWal else image)
 
+/-- The validated WAL and the table computed before any reopen effects. -/
+structure MarkedPreflight where
+  contents : ByteArray
+  selected : ByteArray
+  table : PackedTable
+
 /-- Read-only preflight of an already marked database. The checkpoint input
 is the result of opening its manifest and run set, with an empty base on
 absence. The marker and WAL inputs include metadata and read errors. -/
 def markedReopenPreflight (checkpoint : Except String PackedTable)
-    (marker wal : Except String ByteArray) : Except String (ByteArray × ByteArray) := do
+    (marker wal : Except String ByteArray) : Except String MarkedPreflight := do
   let base ← checkpoint
   let count ← marker >>= decode
   let contents ← wal
-  let selected ← select count contents
-  let _ ← recoverSelected base selected
-  return (contents, selected)
+  let (selected, table) ← recoverMarked base count contents
+  return ⟨contents, selected, table⟩
 
 theorem markedReopenPreflight_selected {checkpoint : Except String PackedTable}
-    {marker wal : Except String ByteArray} {contents selected : ByteArray}
-    (ready : markedReopenPreflight checkpoint marker wal = .ok (contents, selected)) :
-    ∃ base markerBytes length recovered, checkpoint = .ok base ∧ marker = .ok markerBytes ∧
-      wal = .ok contents ∧ decode markerBytes = .ok length ∧
-      select length contents = .ok selected ∧ recoverSelected base selected = .ok recovered := by
+    {marker wal : Except String ByteArray} {validated : MarkedPreflight}
+    (ready : markedReopenPreflight checkpoint marker wal = .ok validated) :
+    ∃ base markerBytes length, checkpoint = .ok base ∧ marker = .ok markerBytes ∧
+      wal = .ok validated.contents ∧ decode markerBytes = .ok length ∧
+      select length validated.contents = .ok validated.selected ∧
+      recoverSelected base validated.selected = .ok validated.table := by
   cases checkpoint with
   | error => contradiction
   | ok base =>
@@ -448,9 +465,8 @@ theorem markedReopenPreflight_selected {checkpoint : Except String PackedTable}
       change (do
         let length ← decode markerBytes
         let bytes ← wal
-        let chosen ← select length bytes
-        let _ ← recoverSelected base chosen
-        pure (bytes, chosen)) = .ok (contents, selected) at ready
+        let (selected, table) ← recoverMarked base length bytes
+        pure (⟨bytes, selected, table⟩ : MarkedPreflight)) = .ok validated at ready
       cases decoded : decode markerBytes with
       | error => rw [decoded] at ready; contradiction
       | ok length =>
@@ -459,22 +475,22 @@ theorem markedReopenPreflight_selected {checkpoint : Except String PackedTable}
         | error => contradiction
         | ok bytes =>
           change (do
-            let chosen ← select length bytes
-            let _ ← recoverSelected base chosen
-            pure (bytes, chosen)) = .ok (contents, selected) at ready
+            let (selected, table) ← recoverMarked base length bytes
+            pure (⟨bytes, selected, table⟩ : MarkedPreflight)) = .ok validated at ready
+          simp only [recoverMarked, bind_assoc, pure_bind] at ready
           cases accepted : select length bytes with
           | error => rw [accepted] at ready; contradiction
-          | ok chosen =>
+          | ok selected =>
             rw [accepted] at ready
-            change ((fun _ : PackedTable => (bytes, chosen)) <$> recoverSelected base chosen) =
-              .ok (contents, selected) at ready
-            cases replayed : recoverSelected base chosen with
+            change (do
+              let table ← recoverSelected base selected
+              pure (⟨bytes, selected, table⟩ : MarkedPreflight)) = .ok validated at ready
+            cases replayed : recoverSelected base selected with
             | error => rw [replayed] at ready; contradiction
-            | ok recovered =>
+            | ok table =>
               rw [replayed] at ready
-              have pair := Prod.mk.inj (Except.ok.inj ready)
-              obtain ⟨rfl, rfl⟩ := pair
-              exact ⟨base, markerBytes, length, recovered, rfl, rfl, rfl, decoded, accepted, replayed⟩
+              cases Except.ok.inj ready
+              exact ⟨base, markerBytes, length, rfl, rfl, rfl, decoded, accepted, replayed⟩
 
 /-- Interpret the shared reopen decision in a state-and-error monad. The
 `walAlreadySynced` fact may be used only when the caller knows the current
@@ -482,15 +498,15 @@ visible inode's bytes are durable. A file-only effect allows the visible
 contents alongside prior crash choices. A directory-only effect settles
 metadata and permits both prior and visible contents unless the visible
 contents are known durable. -/
-def runMarkedReopen (preflight : Except String (ByteArray × ByteArray))
+def runMarkedReopen (preflight : Except String MarkedPreflight)
     (report : Publication.Step → RepairReport) (walAlreadySynced : Bool)
-    (aligned : AlignedSyncReport) : EStateM String ReopenImage Unit :=
+    (aligned : AlignedSyncReport) : EStateM String ReopenImage PackedTable :=
   match preflight with
   | .error message => fun image => .error message image
-  | .ok (contents, selected) =>
-    Publication.runReopen contents.size selected.size
-      (fun _ => Publication.run (performRepair report selected))
-      (fun _ => performAlignedSync walAlreadySynced aligned)
+  | .ok validated =>
+    Publication.finishReopen validated.contents.size validated.selected.size
+      (fun _ => Publication.run (performRepair report validated.selected))
+      (fun _ => performAlignedSync walAlreadySynced aligned) validated.table
 
 theorem runMarkedReopen_preflight_error {checkpoint : Except String PackedTable}
     {marker wal : Except String ByteArray} {message : String}
@@ -507,43 +523,51 @@ is returned after some effects. A successful reopen settles both metadata
 and WAL crash choices. The short branch requires the visible prefix to
 cover all still possible markers, as established from a write-cut witness. -/
 theorem ReopenRetry.runMarkedReopen_effect {initial before : ReopenImage}
-    (path : ReopenRetry initial before) (preflight : Except String (ByteArray × ByteArray))
+    (path : ReopenRetry initial before) (preflight : Except String MarkedPreflight)
     (report : Publication.Step → RepairReport) (walAlreadySynced : Bool) (aligned : AlignedSyncReport)
-    (repair : ∀ contents selected, preflight = .ok (contents, selected) →
-      selected.size < contents.size → ∃ length, before.RepairsTo length selected) :
+    (repair : ∀ validated, preflight = .ok validated →
+      validated.selected.size < validated.contents.size → ∃ length, before.RepairsTo length validated.selected) :
     match runMarkedReopen preflight report walAlreadySynced aligned before with
-    | .ok _ after => ReopenRetry initial after ∧ after.directory = before.directory.syncDirectory ∧
-        after.wal.crashImages = [after.wal.active]
+    | .ok table after => ReopenRetry initial after ∧ after.directory = before.directory.syncDirectory ∧
+        after.wal.crashImages = [after.wal.active] ∧
+        ∃ validated, preflight = .ok validated ∧ table = validated.table ∧
+          after.wal.active = if validated.selected.size < validated.contents.size then
+            some validated.selected else before.wal.active
     | .error _ after => ReopenRetry initial after := by
   cases preflight with
   | error message => exact path
-  | ok checked =>
-    obtain ⟨contents, selected⟩ := checked
-    by_cases shorter : selected.size < contents.size
-    · simp only [runMarkedReopen, Publication.runReopen_repair _ _ shorter]
-      obtain ⟨length, covers⟩ := repair contents selected rfl shorter
-      have outcome := repairSchedule_outcome report selected Publication.steps before
+  | ok validated =>
+    by_cases shorter : validated.selected.size < validated.contents.size
+    · simp only [runMarkedReopen, Publication.finishReopen,
+        Publication.runReopen_repair _ _ shorter]
+      obtain ⟨length, covers⟩ := repair validated rfl shorter
+      have outcome := repairSchedule_outcome report validated.selected Publication.steps before
       unfold Publication.run
-      cases result : (Publication.steps.forM (performRepair report selected)) before with
+      cases result : (Publication.steps.forM (performRepair report validated.selected)) before with
       | ok value after =>
         rw [result] at outcome
-        have completed : before.repairCut selected Publication.steps.length = some after := by
+        have completed : before.repairCut validated.selected Publication.steps.length = some after := by
           rw [← before.repairSteps_prefix]
           simpa only [List.take_length] using outcome
-        have ran := before.repair_complete selected
+        have ran := before.repair_complete validated.selected
         rw [ran] at completed
         cases completed
-        exact ⟨.repair path covers ran, rfl, rfl⟩
+        simp only [Bind.bind, EStateM.bind, result, Pure.pure, EStateM.pure]
+        exact ⟨.repair path covers ran, trivial, rfl, validated, rfl, rfl, by
+          simp [shorter, Publication.Image.settled]⟩
       | error message after =>
+        simp only [Bind.bind, EStateM.bind, result]
         rw [result] at outcome
         obtain ⟨cut, ran⟩ := outcome
         rw [before.repairSteps_prefix] at ran
         exact .repair path covers ran
-    · simp only [runMarkedReopen, Publication.runReopen_aligned _ _ shorter]
+    · simp only [runMarkedReopen, Publication.finishReopen,
+        Publication.runReopen_aligned _ _ shorter]
       cases aligned with
-      | success => exact ⟨.syncDirectory path, rfl, rfl⟩
+      | success =>
+        exact ⟨.syncDirectory path, rfl, rfl, validated, rfl, rfl, by simp [ReopenImage.syncDirectory, shorter]⟩
       | failure message walSynced directorySynced =>
-        simp only [performAlignedSync]
+        simp only [Bind.bind, EStateM.bind, performAlignedSync]
         split
         · split
           · exact .syncDirectory path
@@ -552,19 +576,33 @@ theorem ReopenRetry.runMarkedReopen_effect {initial before : ReopenImage}
           · exact .allowVisibleWal path
           · exact path
 
-/-- Reads under the database lock may fail. A successful marked read
-returns the visible marker or WAL bytes. Opening the checkpoint supplies
-its own observed result. -/
-structure MarkedReopenReads (image : ReopenImage) where
-  checkpoint : Except String PackedTable
+/-- Successful marked WAL reads under the database lock return the visible
+marker or WAL bytes. Errors need not expose either value. -/
+structure MarkedWalReads (image : ReopenImage) where
   marker : Except String ByteArray
   wal : Except String ByteArray
   markerVisible : ∀ bytes, marker = .ok bytes → image.directory.active.walBoundary = some bytes
   walVisible : ∀ bytes, wal = .ok bytes → image.wal.active = some bytes
 
+/-- Opening the checkpoint supplies its own observed result before recovery
+reads or repairs the WAL. -/
+structure MarkedReopenReads (image : ReopenImage) extends MarkedWalReads image where
+  checkpoint : Except String PackedTable
+
 def MarkedReopenReads.preflight {image : ReopenImage} (reads : MarkedReopenReads image) :
-    Except String (ByteArray × ByteArray) :=
+    Except String MarkedPreflight :=
   markedReopenPreflight reads.checkpoint reads.marker reads.wal
+
+private theorem MarkedReopenReads.repair {before : ReopenImage}
+    (reads : MarkedReopenReads before) (bound : MarkerBound before.directory)
+    {validated : MarkedPreflight} (ready : reads.preflight = .ok validated)
+    (shorter : validated.selected.size < validated.contents.size) :
+    ∃ length, before.RepairsTo length validated.selected := by
+  obtain ⟨_, marker, length, _, readMarker, readWal, decoded, accepted, _⟩ :=
+    markedReopenPreflight_selected (checkpoint := reads.checkpoint) (marker := reads.marker)
+      (wal := reads.wal) ready
+  exact ⟨length, ReopenImage.repairsTo_of_markerBound bound (reads.markerVisible marker readMarker)
+    (reads.walVisible validated.contents readWal) decoded accepted shorter⟩
 
 private theorem MarkedReopenReads.retry_effect {initial before : ReopenImage}
     (reads : MarkedReopenReads before) (path : ReopenRetry initial before)
@@ -573,15 +611,8 @@ private theorem MarkedReopenReads.retry_effect {initial before : ReopenImage}
     match runMarkedReopen reads.preflight report false aligned before with
     | .ok _ after => ReopenRetry initial after
     | .error _ after => ReopenRetry initial after := by
-  have repair : ∀ contents selected, reads.preflight = .ok (contents, selected) →
-      selected.size < contents.size → ∃ length, before.RepairsTo length selected := by
-    intro contents selected ready shorter
-    obtain ⟨_, marker, length, _, _, readMarker, readWal, decoded, accepted, _⟩ :=
-      markedReopenPreflight_selected (checkpoint := reads.checkpoint) (marker := reads.marker)
-        (wal := reads.wal) ready
-    exact ⟨length, ReopenImage.repairsTo_of_markerBound bound (reads.markerVisible marker readMarker)
-      (reads.walVisible contents readWal) decoded accepted shorter⟩
-  have effect := path.runMarkedReopen_effect reads.preflight report false aligned repair
+  have effect := path.runMarkedReopen_effect reads.preflight report false aligned
+    (fun _ => reads.repair bound)
   cases result : runMarkedReopen reads.preflight report false aligned before with
   | ok _ after =>
     rw [result] at effect
@@ -590,13 +621,59 @@ private theorem MarkedReopenReads.retry_effect {initial before : ReopenImage}
     rw [result] at effect
     exact effect
 
+private theorem select_unchanged {length : UInt64} {contents selected : ByteArray}
+    (accepted : select length contents = .ok selected)
+    (aligned : ¬ selected.size < contents.size) : selected = contents := by
+  have exactSize := select_size accepted
+  unfold select at accepted
+  dsimp only at accepted
+  split at accepted
+  · contradiction
+  · split at accepted
+    · contradiction
+    · have same : contents.size = length.toNat := by omega
+      rw [ite_eq_left same] at accepted
+      exact (Except.ok.inj accepted).symm
+
+/-- A successful attempt installs the exact replay result and settles both
+file choices. Repair installs its selected prefix, and the aligned path
+leaves the already exact prefix in place. -/
+theorem MarkedReopenReads.success {before after : ReopenImage}
+    (reads : MarkedReopenReads before) (bound : MarkerBound before.directory)
+    {report : Publication.Step → RepairReport} {aligned : AlignedSyncReport} {table : PackedTable}
+    (ran : runMarkedReopen reads.preflight report false aligned before = .ok table after) :
+    ∃ base marker contents selected length,
+      reads.checkpoint = .ok base ∧ before.directory.active.walBoundary = some marker ∧
+      before.wal.active = some contents ∧ decode marker = .ok length ∧
+      select length contents = .ok selected ∧ recoverSelected base selected = .ok table ∧
+      after.directory = before.directory.syncDirectory ∧ after.wal.active = some selected ∧
+      after.wal.crashImages = [some selected] := by
+  have effect := ReopenRetry.start.runMarkedReopen_effect reads.preflight report false aligned
+    (fun _ => reads.repair bound)
+  rw [ran] at effect
+  obtain ⟨_, directory, walChoices, validated, ready, rfl, walActive⟩ := effect
+  obtain ⟨base, marker, length, checkpoint, markerRead, walRead, decoded, selected, replayed⟩ :=
+    markedReopenPreflight_selected (checkpoint := reads.checkpoint) (marker := reads.marker)
+      (wal := reads.wal) ready
+  have contents := reads.walVisible validated.contents walRead
+  have settled : after.wal.active = some validated.selected := by
+    rw [walActive]
+    split
+    · rfl
+    · rename_i aligned
+      rw [select_unchanged selected aligned]
+      exact contents
+  exact ⟨base, marker, validated.contents, validated.selected, length,
+    checkpoint, reads.markerVisible marker markerRead, contents, decoded, selected, replayed,
+    directory, settled, walChoices.trans (congrArg List.singleton settled)⟩
+
 /-- A finite sequence of observed marked reopen attempts and crashes. The
 aligned model treats earlier WAL sync knowledge conservatively. -/
 inductive MarkedReopenAttempts (initial : ReopenImage) : ReopenImage → Prop where
   | start : MarkedReopenAttempts initial initial
   | success (path : MarkedReopenAttempts initial before) (reads : MarkedReopenReads before)
       (report : Publication.Step → RepairReport) (aligned : AlignedSyncReport)
-      (ran : runMarkedReopen reads.preflight report false aligned before = .ok () after) :
+      (ran : runMarkedReopen reads.preflight report false aligned before = .ok table after) :
       MarkedReopenAttempts initial after
   | failure (path : MarkedReopenAttempts initial before) (reads : MarkedReopenReads before)
       (report : Publication.Step → RepairReport) (aligned : AlignedSyncReport)

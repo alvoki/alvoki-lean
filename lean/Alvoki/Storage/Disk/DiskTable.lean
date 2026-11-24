@@ -236,15 +236,28 @@ private def readOptionalFile (path : FilePath) : IO (Option ByteArray) := do
     if osCode == 2 then return none else throw error
   | .error error => throw error
 
-private def openCheckpoint (dir : DiskDirectory) : IO (Option (PackedTable × UInt64)) := do
-  let manifestPath := dir.file .manifest
-  let some header ← readOptionalFile manifestPath | return none
-  let manifest ← IO.ofExcept (Manifest.decode header)
+/-- Read the manifest's run files in increasing index order. Grow the array
+as reads succeed since the run count comes from on-disk input. -/
+@[inline] def readCheckpointRunBytes [Monad m] (read : UInt64 → Nat → m ByteArray)
+    (manifest : Manifest.Checkpoint) : m (List ByteArray) := do
   let mut files : Array ByteArray := #[]
   for index in [:manifest.runCount.toNat] do
-    files := files.push (← IO.FS.readBinFile (dir.file (.run manifest.generation index)))
-  let table ← IO.ofExcept (loadRunSet manifest files.toList)
+    files := files.push (← read manifest.generation index)
+  return files.toList
+
+/-- Read and validate the selected checkpoint before inspecting the WAL. -/
+@[inline] def readCheckpoint [Monad m] (readManifest : m (Option ByteArray))
+    (readRun : UInt64 → Nat → m ByteArray) (validate : {α : Type} → Except String α → m α) :
+    m (Option (PackedTable × UInt64)) := do
+  let some header ← readManifest | return none
+  let manifest ← validate (Manifest.decode header)
+  let files ← readCheckpointRunBytes readRun manifest
+  let table ← validate (loadRunSet manifest files)
   return some (table, manifest.generation)
+
+private def openCheckpoint (dir : DiskDirectory) : IO (Option (PackedTable × UInt64)) :=
+  readCheckpoint (readOptionalFile (dir.file .manifest))
+    (fun generation index => IO.FS.readBinFile (dir.file (.run generation index))) IO.ofExcept
 
 private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTable := do
   let checkpoint ← openCheckpoint dir
@@ -259,15 +272,17 @@ private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTabl
         throw (IO.userError "installed checkpoint or boundary is missing its WAL")
       writeFlushed walPath ByteArray.empty
       pure ByteArray.empty
-  let selected ← match boundary with
-    | some count => IO.ofExcept (WAL.Boundary.select count bytes)
-    | none => pure ((WAL.repairPrefix bytes).getD bytes)
-  let table ← IO.ofExcept (recoverSelected checkpointTable selected)
+  let (selected, table) ← IO.ofExcept <| match boundary with
+    | some count => WAL.Boundary.recoverMarked checkpointTable count bytes
+    | none => do
+      let selected := (WAL.repairPrefix bytes).getD bytes
+      let table ← recoverSelected checkpointTable selected
+      return (selected, table)
   -- Both paths sync the directory to settle the visible checkpoint and WAL marker,
   -- including any rename reached by a prior process before its directory sync.
-  Publication.runReopen bytes.size selected.size
+  let table ← Publication.finishReopen bytes.size selected.size
     (fun _ => atomicReplace dir .stagedWal .wal selected)
-    (fun _ => syncPaths #[walPath, dir.path])
+    (fun _ => syncPaths #[walPath, dir.path]) table
   -- Bootstrap an empty or legacy WAL only after its selected prefix is durable.
   if boundary.isNone then
     unless selected.size < UInt64.size do throw (IO.userError "WAL byte count is too large")

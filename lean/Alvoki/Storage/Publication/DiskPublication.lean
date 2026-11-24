@@ -42,6 +42,14 @@ Delay both actions so the aligned path need not construct a staging path. -/
 @[inline] def runReopen (walSize selectedSize : Nat) (repair syncAligned : Unit → m Unit) : m Unit :=
   if selectedSize < walSize then repair () else syncAligned ()
 
+/-- Return the recovered state after the selected durability action succeeds.
+Inline before lowering the bind so native callers keep both actions delayed
+without allocating callbacks. -/
+@[macro_inline] def finishReopen [Monad m] {α : Type} (walSize selectedSize : Nat)
+    (repair syncAligned : Unit → m Unit) (recovered : α) : m α := do
+  runReopen walSize selectedSize repair syncAligned
+  pure recovered
+
 theorem runReopen_repair {walSize selectedSize : Nat} (repair syncAligned : Unit → m Unit)
     (shorter : selectedSize < walSize) :
     runReopen walSize selectedSize repair syncAligned = repair () := by

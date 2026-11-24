@@ -267,3 +267,7 @@ The stock correctness workflow runs the sequential storage checks with the pinne
 ## Write outcomes at the WAL boundary
 
 `DiskTable.writeWithOutcome` returns the acknowledged sequence on success. A rejected submission failed before append was attempted. A submission with an unknown commit outcome may appear after reopen. Both errors retain their `IO.Error`. The native checks cover a failed sync that leaves the write recoverable, a partial sync that leaves it unselected, and rejection before append on poisoned and closed handles. The existing `write` emits equivalent C and the median paired write time was 1.001× the baseline. [Write API](architecture.md#sequential-storage) · [Benchmark](benchmarks.md#typed-disk-write-outcomes)
+
+## Exact replay table after successful marked open
+
+The native adapter and model share checkpoint reads, marked WAL validation and the return of the recovered table after the durability action. The audited composed theorem identifies the table returned by successful modeled reopen, starting from one prepared write and a fixed matching checkpoint. It shows that the table and settled WAL agree with abstract replay and that an acknowledged write survives all admitted retries. The file read and sync assumptions remain explicit. Median paired reopen times were within 4% of the baseline across the six measured workloads and the checkpoint rerun. [Proof and assumptions](verification-status.md) · [Reopen timings](benchmarks.md#shared-marked-open)
