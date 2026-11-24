@@ -117,6 +117,8 @@ import Alvoki.Storage.Disk.IntegrityCheckpointSizedRead
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
 import Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
+import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
+import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -943,6 +945,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBoundedMarkedFromReaders_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_eq_of_wal
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_eq_of_selectedWal
+#check_axioms Alvoki.Storage.WalSegmentRepair.readWalSegmentExtentsWith_liftReports
+#check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reportedEffects
+#check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_reportedEffects
+#check_axioms Alvoki.Storage.readIntegrityRunBytesSized_rejectsExtent
+#check_axioms Alvoki.Storage.readIntegrityCheckpointSized_rejectsExtent
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_acquiredRecoveryError
+#check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_checkpointError
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedCheckpointError
 #check_axioms Alvoki.Storage.SyncPathGroup.run_pair
 #check_axioms Alvoki.Storage.SyncPathGroup.failedWalPublication
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.resolve_owned

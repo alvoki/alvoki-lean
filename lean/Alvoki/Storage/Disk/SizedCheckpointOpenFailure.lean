@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.BoundedOpenReadFailure
-import Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
+import Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
 
 namespace Alvoki.Storage.WalSegmentRepair
 
@@ -7,14 +7,14 @@ open System
 
 /-- The sized checkpoint stage runs before the marker, WAL selection and
 repair. When it fails, those callbacks cannot affect the returned image. -/
-theorem reopenMarkedBoundedWithSizedCheckpoint_checkpointError {image : Type} (directory : DiskDirectory)
+theorem reopenMarkedBoundedWithCachedExtents_checkpointError {image : Type} (directory : DiskDirectory)
     (readOptional : FilePath → EStateM IO.Error image (Option ByteArray))
     (readRunSize : FilePath → EStateM IO.Error image Nat)
     (readRunPrefix : FilePath → Nat → EStateM IO.Error image ByteArray)
     (list : FilePath → EStateM IO.Error image (Array IO.FS.DirEntry))
     (lstat : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata))
-    (readBin : FilePath → EStateM IO.Error image ByteArray)
-    (readPrefix : FilePath → Nat → EStateM IO.Error image KeeperPrefix)
+    (readSeal : FilePath → Nat → EStateM IO.Error image ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error image ByteArray)
     (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
     (write : FilePath → ByteArray → EStateM IO.Error image Unit)
     (sync : Array FilePath → EStateM IO.Error image Unit)
@@ -22,9 +22,9 @@ theorem reopenMarkedBoundedWithSizedCheckpoint_checkpointError {image : Type} (d
     {before reached : image} {cause : IO.Error}
     (failed : readIntegrityCheckpointSized directory (readOptional (directory.file .manifest))
       readRunSize readRunPrefix before = .error cause reached) :
-    reopenMarkedBoundedWithSizedCheckpoint directory readOptional readRunSize readRunPrefix list lstat
-      readBin readPrefix removeFile write sync renameFile before = .error cause reached := by
-  simp only [reopenMarkedBoundedWithSizedCheckpoint, prepareBoundedMarkedFromCheckpoint, Bind.bind, EStateM.bind, failed]
+    reopenMarkedBoundedWithCachedExtents directory readOptional readRunSize readRunPrefix list lstat
+      readSeal readKeeper removeFile write sync renameFile before = .error cause reached := by
+  simp only [reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, failed]
 
 end Alvoki.Storage.WalSegmentRepair
 
@@ -35,7 +35,7 @@ open System WalSegmentRepair
 /-- A rejected sized checkpoint reaches neither WAL acquisition nor
 repair. Successful cleanup clears ownership and returns the read error.
 A local flock cleanup error takes precedence and retains the owner. -/
-theorem runOpenWithInstallation_sizedCheckpointError {image : Type}
+theorem runOpenWithInstallation_cachedCheckpointError {image : Type}
     (directory : DiskDirectory) (descriptor nextRef : Nat) (acquired : Except IO.Error Bool)
     (unlock : UnlockReport) (localUnlock : unlock.LocalFlock)
     (readOptional : FilePath → EStateM IO.Error image (Option ByteArray))
@@ -43,8 +43,8 @@ theorem runOpenWithInstallation_sizedCheckpointError {image : Type}
     (readRunPrefix : FilePath → Nat → EStateM IO.Error image ByteArray)
     (list : FilePath → EStateM IO.Error image (Array IO.FS.DirEntry))
     (lstat : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata))
-    (readBin : FilePath → EStateM IO.Error image ByteArray)
-    (readPrefix : FilePath → Nat → EStateM IO.Error image KeeperPrefix)
+    (readSeal : FilePath → Nat → EStateM IO.Error image ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error image ByteArray)
     (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
     (write : FilePath → ByteArray → EStateM IO.Error image Unit)
     (sync : Array FilePath → EStateM IO.Error image Unit)
@@ -53,8 +53,8 @@ theorem runOpenWithInstallation_sizedCheckpointError {image : Type}
     (failed : acquired = .ok true →
       readIntegrityCheckpointSized directory (readOptional (directory.file .manifest))
         readRunSize readRunPrefix before.image = .error cause reached) :
-    let recover := reopenMarkedBoundedWithSizedCheckpoint directory readOptional readRunSize readRunPrefix list lstat
-      readBin readPrefix removeFile write sync renameFile
+    let recover := reopenMarkedBoundedWithCachedExtents directory readOptional readRunSize readRunPrefix list lstat
+      readSeal readKeeper removeFile write sync renameFile
     runOpenWithInstallation directory descriptor nextRef acquired unlock recover before =
       match acquired with
       | .error lockError => .error lockError before
@@ -68,8 +68,8 @@ theorem runOpenWithInstallation_sizedCheckpointError {image : Type}
   · rfl
   · rfl
   · have failedRecovery : recover before.image = .error cause reached :=
-      reopenMarkedBoundedWithSizedCheckpoint_checkpointError directory readOptional readRunSize readRunPrefix
-        list lstat readBin readPrefix removeFile write sync renameFile (failed rfl)
+      reopenMarkedBoundedWithCachedExtents_checkpointError directory readOptional readRunSize readRunPrefix
+        list lstat readSeal readKeeper removeFile write sync renameFile (failed rfl)
     rw [runOpenWithInstallation_acquiredRecoveryError directory descriptor nextRef unlock recover before failedRecovery]
     cases unlock with
     | success => rfl
