@@ -863,6 +863,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CollectionBarrierErrorEffect.keepsVisible
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.errorAtCollectionBarrier
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.errorAtCollectionKeeper
+#check_axioms Alvoki.Storage.DiskSession.PendingCollectionKeeperFailure.returned
 #check_axioms Alvoki.Storage.DiskSession.PendingCollectionBarrierFailure.returned
 #check_axioms Alvoki.Storage.DiskSession.PendingCollectionBarrierFailure.namespaceState
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.cleanReopenRetained
