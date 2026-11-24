@@ -80,6 +80,7 @@ import Alvoki.Storage.Disk.WalSegmentCheckpointRetryLayout
 import Alvoki.Storage.Disk.WalSegmentSerialReplay
 import Alvoki.Storage.Disk.CheckpointCutSession
 import Alvoki.Storage.Disk.CheckpointSuccessSession
+import Alvoki.Storage.Disk.SegmentedCheckpointStep
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
@@ -615,6 +616,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenAfterCheckpointFailure
 #check_axioms Alvoki.Storage.DiskSession.runPreparedCheckpoint_segmentedSuccess
 #check_axioms Alvoki.Storage.DiskSession.ResumedAppendReady.afterCheckpointPublication
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.unique
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.runCheckpointFailureHandoff
 #check_axioms Alvoki.Storage.WalSegmentCommit.forgetError_commitAt
 #check_axioms Alvoki.Storage.DiskSession.AppendCommitReports.run
