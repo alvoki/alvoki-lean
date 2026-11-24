@@ -463,3 +463,7 @@ Starting from a ready writer and a modeled failure of the shared checkpoint sche
 ## Versioned checkpoints retain exact run and table lineage
 
 The new read proof works with the bytes of the selected manifest in either on-disk format. Its file observations are restricted to the decoded generation and run indices. Given the trusted durable run map, it identifies the same ordered byte arrays used for both v2 integrity validation and structural decoding, as well as the returned table, generation and covered watermark. The next step is to establish this input invariant through versioned checkpoint publication and retry. [Versioned checkpoint lineage](../lean/Alvoki/Storage/Disk/VersionedCheckpointLineage.lean)
+
+## Successful versioned checkpoint publication
+
+The versioned plan uses the existing run write and sync steps, the run-directory barrier and the shared manifest replacement. For v1 it produces the same result as the existing evaluator at every cut. A fully executed v2 plan makes the exact ordered run array and the newly encoded integrity manifest durable. The complete-state proof verifies the manifest's run lengths and checksums and relates its watermark to the WAL. Recovery safety for interrupted v2 publication and retry remains open. [Versioned publication](../lean/Alvoki/Storage/Disk/VersionedCheckpointPublication.lean)

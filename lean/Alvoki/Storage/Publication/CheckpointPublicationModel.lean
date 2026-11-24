@@ -271,6 +271,39 @@ private theorem manifest_steps (state : Pending) (next : RunSet) (actions : List
       simp only [Option.map_some, Option.bind_some]
       exact ih { state with image := { state.image with manifest := manifest } }
 
+/-- After the run operations, the manifest suffix depends only on the
+remaining image and the manifest bytes. -/
+theorem Image.execute_split_manifest (initial : Image) (next : RunSet)
+    (runActions : List Step) (manifestActions : List Publication.Step) :
+    initial.execute next (runActions ++ manifestActions.map Step.manifest) = (do
+      let written ← initial.execute next runActions
+      let manifest ← written.manifest.execute (Manifest.encode next.header) manifestActions
+      return { written with manifest }) := by
+  unfold Image.execute
+  rw [Pending.execute_append]
+  cases wrote : Pending.execute ⟨initial, 0, false⟩ next runActions with
+  | none => rfl
+  | some state =>
+    simp only [Option.bind_some, Option.map_some, manifest_steps, Option.map_map]
+    cases replaced : state.image.manifest.execute (Manifest.encode next.header) manifestActions <;> simp [replaced]
+
+/-- Completing the run-directory barrier installs the new ordered files
+while the manifest and older generations retain their previous bindings. -/
+theorem checkpoint_runs_complete (initial : Image) (next : RunSet) :
+    ∃ written, initial.execute next (runSteps next.files.length ++ [.syncRunsDirectory]) = some written ∧
+      written.manifest = initial.manifest ∧
+      (∀ index, written.durable next.header.generation index = next.files[index]?) ∧
+      ∀ generation, generation ≠ next.header.generation →
+        ∀ index, written.durable generation index = initial.durable generation index := by
+  refine ⟨installRunNames initial next, ?_, rfl, ?_, ?_⟩
+  · unfold Image.execute
+    rw [promote_run_names]
+    rfl
+  · intro index
+    simp [installRunNames]
+  · intro generation disjoint index
+    simp [installRunNames, disjoint]
+
 private theorem old_names_preserved {old : Image} {next : RunSet} {walSequence : UInt64}
     {expected : Manifest.Checkpoint → List ByteArray → Prop}
     (fresh : old.Unreachable next.header.generation) {candidate : Option ByteArray}

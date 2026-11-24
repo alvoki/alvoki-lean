@@ -32,6 +32,7 @@ import Alvoki.Storage.Disk.LockedInterruptedCheckpoint
 import Alvoki.Storage.Disk.ManifestIntegritySingleByte
 import Alvoki.Storage.Disk.VersionedCheckpointRead
 import Alvoki.Storage.Disk.VersionedCheckpointLineage
+import Alvoki.Storage.Disk.VersionedCheckpointPublication
 import Alvoki.Storage.Disk.LegacyBootstrapRetry
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.LegacyWalRecovery
@@ -272,6 +273,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_integrity_iff
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_runs
 #check_axioms Alvoki.Storage.VersionedCheckpointFileReads.loaded_lineage
+#check_axioms Alvoki.Storage.CheckpointPublication.Image.executeVersioned_legacy
+#check_axioms Alvoki.Storage.CheckpointPublication.checkpointVersioned_complete
+#check_axioms Alvoki.Storage.CheckpointPublication.checkpointIntegrity_complete
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.reopenSettledWithLock
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.guardedPinnedReads_preserveLocks
 #check_axioms Alvoki.Storage.DiskSession.runGuardedRead_afterCloseAndReopen
