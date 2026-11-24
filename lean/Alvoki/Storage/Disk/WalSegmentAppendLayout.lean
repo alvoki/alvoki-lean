@@ -95,6 +95,25 @@ private theorem WalSegmentImage.ReadLayout.sealedEndsBeforeHistory
   exact Nat.le_trans ((List.pairwise_append.mp layout.ordered).2.2 segment member before.active
     (List.mem_singleton_self _)).2 starts
 
+private theorem WalSegmentImage.ReadLayout.extendActive
+    {before : WalSegmentImage} {history : List WAL.Write} (layout : before.ReadLayout history)
+    (pair : DirectoryPublication.Bindings) (event : WAL.Write) :
+    let selected := history ++ [event]
+    let wal := before.appendSelectedView pair selected
+    wal.ReadLayout selected ∧
+      wal.active = ⟨before.active.first, selected.length, before.active.bytes ++ WAL.encodeFrame event⟩ := by
+  intro selected wal
+  have starts : before.active.first ≤ history.length := by
+    rw [← layout.activeEnd]
+    exact layout.forward before.active (List.mem_append_right _ (by simp))
+  have wider : before.active.first ≤ selected.length := Nat.le_trans starts (by simp [selected])
+  refine ⟨layout.atSelectedHistory pair selected wider, ?_⟩
+  change (⟨before.active.first, selected.length,
+    WAL.encode ((history ++ [event]).drop before.active.first)⟩ : WalSegment) =
+    ⟨before.active.first, selected.length, before.active.bytes ++ WAL.encodeFrame event⟩
+  rw [List.drop_append_of_le_length starts, WAL.encode_append, layout.activeBytes]
+  simp [WAL.encode]
+
 /-- An acknowledged append extends the active segment by one canonical
 frame. All sealed descriptors and the active file's start stay exact. -/
 theorem WalSegmentImage.ReadLayout.afterAcknowledgedAppend
@@ -106,14 +125,61 @@ theorem WalSegmentImage.ReadLayout.afterAcknowledgedAppend
       wal.active = ⟨before.active.first, selected.length, before.active.bytes ++ WAL.encodeFrame event⟩ := by
   intro selected wal
   have starts := chain.startsWithin before.active (List.mem_append_right _ (List.mem_singleton_self _))
-  have wider : before.active.first ≤ selected.length := Nat.le_trans starts (by simp [selected])
-  refine ⟨layout.atSelectedHistory pair selected wider, chainAppend chain (layout.sealedEndsBeforeHistory starts)
-    [event], rfl, ?_⟩
-  change (⟨before.active.first, selected.length,
-    WAL.encode ((history ++ [event]).drop before.active.first)⟩ : WalSegment) =
-    ⟨before.active.first, selected.length, before.active.bytes ++ WAL.encodeFrame event⟩
-  rw [List.drop_append_of_le_length starts, WAL.encode_append, layout.activeBytes]
-  simp [WAL.encode]
+  have active := layout.extendActive pair event
+  exact ⟨active.1, chainAppend chain (layout.sealedEndsBeforeHistory starts) [event], rfl, active.2⟩
+
+private theorem WalSegmentImage.ReadLayout.readDescriptors_filter
+    {image : WalSegmentImage} {history : List WAL.Write} (layout : image.ReadLayout history) (watermark : Nat) :
+    image.readDescriptors watermark =
+      image.sealed.filter (fun segment => decide (watermark < segment.last)) ++ [image.active] := by
+  by_cases needed : watermark < image.active.last
+  · simp [WalSegmentImage.readDescriptors, WalSegmentImage.afterWatermark, List.filter_append, needed]
+  · have within := layout.forward image.active (List.mem_append_right _ (by simp))
+    have allCovered := layout.sealedEndsBeforeHistory (layout.activeEnd ▸ within)
+    have noSeals : image.sealed.filter (fun segment => decide (watermark < segment.last)) = [] := by
+      apply List.filter_eq_nil_iff.mpr
+      intro segment member
+      have covered : segment.last ≤ watermark :=
+        Nat.le_trans (allCovered segment member) (layout.activeEnd ▸ Nat.le_of_not_gt needed)
+      simp [Nat.not_lt_of_ge covered]
+    simp [WalSegmentImage.readDescriptors, needed, noSeals]
+
+/-- An append continues the selected gap-free chain after covered seals
+have been removed. The previous active descriptor is included even when
+the checkpoint covers its entire payload and there are no pending frames. -/
+theorem WalSegmentImage.ReadLayout.afterRetainedAppend
+    {before : WalSegmentImage} {history : List WAL.Write} (layout : before.ReadLayout history)
+    (valid : before.Valid history) {watermark : Nat}
+    (oldRange : before.directory.active.walRange = some ⟨watermark, history.length⟩)
+    (pair : DirectoryPublication.Bindings) (event : WAL.Write)
+    (newRange : pair.walRange = some ⟨watermark, (history ++ [event]).length⟩) :
+    let selected := history ++ [event]
+    let wal := before.appendSelectedView pair selected
+    wal.ReadLayout selected ∧ wal.Valid selected ∧ wal.sealed = before.sealed ∧
+      wal.active = ⟨before.active.first, selected.length, before.active.bytes ++ WAL.encodeFrame event⟩ := by
+  intro selected wal
+  have chosen : before.Selects before.directory.active := List.mem_cons_self ..
+  obtain ⟨first, covers, _, _, chain, _⟩ := layout.selects valid chosen oldRange
+  let sealed := before.sealed.filter (fun segment => decide (watermark < segment.last))
+  have retained : WalSegment.Chain history first (sealed ++ [before.active]) :=
+    layout.readDescriptors_filter watermark ▸ chain
+  have starts := retained.startsWithin before.active (List.mem_append_right _ (List.mem_singleton_self _))
+  have extended := chainAppend retained
+    (fun segment member => layout.sealedEndsBeforeHistory starts segment (List.mem_filter.mp member).1) [event]
+  have active := layout.extendActive pair event
+  have covered : watermark ≤ history.length := (DirectoryPublication.Bindings.walRange_accounting oldRange).2.1
+  have needsActive : watermark < selected.length := by simpa [selected] using Nat.lt_succ_of_le covered
+  have descriptors : wal.afterWatermark watermark = sealed ++ [before.active.atHistoryEnd selected] := by
+    change (before.sealed ++ [before.active.atHistoryEnd selected]).filter
+      (fun segment => decide (watermark < segment.last)) = _
+    simp [List.filter_append, WalSegment.atHistoryEnd, needsActive, sealed]
+  refine ⟨active.1, ?_, rfl, active.2⟩
+  intro candidate survives
+  have same : candidate = pair := by
+    simpa [WalSegmentImage.Selects, wal, WalSegmentImage.appendSelectedView, DirectoryPublication.Image.settled]
+      using survives
+  subst candidate
+  exact ⟨_, first, newRange, covers, Nat.le_refl _, descriptors.symm ▸ extended⟩
 
 /-- Use the exact directory left by a successful publication, including its
 staging bindings. Its new absolute marker covers the extended history and
