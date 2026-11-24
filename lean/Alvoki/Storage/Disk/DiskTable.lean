@@ -197,6 +197,15 @@ private def readExactPrefix (mismatch : IO.Error) (file : IO.FS.Handle) (remaini
     (bytes : ByteArray) : IO ByteArray :=
   readExactPrefixWith mismatch file.read remaining bytes
 
+private def readOptionalCachedOpenFile (directory : DiskDirectory) (path : FilePath) : IO (Option ByteArray) :=
+  if path == directory.file .walBoundary then
+    readOptionalDatabaseFile path.symlinkMetadata.toBaseIO (fun _ => do
+      let file ← IO.FS.Handle.mk path .read
+      readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") file.read
+        WAL.Boundary.acquisitionLimit ByteArray.empty)
+      (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
+  else readOptionalFile path
+
 private def readCheckpointRunSize (path : FilePath) : IO Nat := do
   return (← requiredRegularMetadata path).byteSize.toNat
 
@@ -297,7 +306,7 @@ theorem bootstrapSegmented_fileEffects (dir : DiskDirectory) : bootstrapSegmente
 
 private def recoverSegmentedWal (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentRepair.Reopened :=
   recoverSegmentedWalWith (rejectFlatWal dir) (optionalMetadata (dir.file .walBoundary))
-    (WalSegmentRepair.reopenMarkedBoundedWithCachedExtents dir readOptionalFile
+    (WalSegmentRepair.reopenMarkedBoundedWithCachedExtents dir (readOptionalCachedOpenFile dir)
       readCheckpointRunSize readCheckpointRunPrefix readDirectoryChecked inspectWalSegment readSealedWalPrefix
       (readKeeperPrefix files)
       (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename)
@@ -335,7 +344,7 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
         let opened ← (do
           rejectFlatWal dir
           if (← optionalMetadata (dir.file .walBoundary)).isSome then
-            WalSegmentRepair.reopenMarkedBoundedWithCachedExtents dir readOptionalFile
+            WalSegmentRepair.reopenMarkedBoundedWithCachedExtents dir (readOptionalCachedOpenFile dir)
               readCheckpointRunSize readCheckpointRunPrefix readDirectoryChecked inspectWalSegment readSealedWalPrefix
               (readKeeperPrefix files)
               (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename

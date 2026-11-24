@@ -38,6 +38,39 @@ theorem readExactPrefixWith_requestBound (mismatch : IO.Error)
 termination_by remaining
 decreasing_by omega
 
+/-- Count every reached read in a capped prefix, including the EOF witness
+and reads returning an error. Only positive chunks continue the loop. -/
+theorem readPrefixUntilEofWith_requestBound (mismatch : IO.Error)
+    (read : USize → EStateM IO.Error Nat ByteArray)
+    (charged : ∀ count calls, reached (read count calls) = calls + 1)
+    (remaining : Nat) (bytes : ByteArray) (before : Nat) :
+    reached (readPrefixUntilEofWith mismatch read remaining bytes before) ≤ before + remaining := by
+  rw [readPrefixUntilEofWith]
+  by_cases finished : remaining = 0
+  · simp [finished, Pure.pure, EStateM.pure, reached]
+  · have one := charged remaining.toUSize before
+    rw [ite_eq_right finished]
+    simp only [Bind.bind, EStateM.bind]
+    cases report : read remaining.toUSize before with
+    | error cause after =>
+      simp only [report, reached] at one
+      simp only [reached]
+      omega
+    | ok chunk after =>
+      simp only [report, reached] at one
+      by_cases empty : chunk.size = 0
+      · simp only [empty, ↓reduceIte, Pure.pure, EStateM.pure, reached]
+        omega
+      · by_cases fits : chunk.size ≤ remaining
+        · simp only [empty, ↓reduceIte, fits]
+          have rest := readPrefixUntilEofWith_requestBound mismatch read charged (remaining - chunk.size)
+            (if bytes.isEmpty then chunk else bytes ++ chunk) after
+          exact Nat.le_trans rest (by omega)
+        · simp only [empty, ↓reduceIte, fits, ↓reduceDIte, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached]
+          omega
+termination_by remaining
+decreasing_by omega
+
 end Alvoki.Storage
 
 namespace Alvoki.Storage.WalSegmentRepair

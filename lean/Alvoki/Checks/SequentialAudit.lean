@@ -367,6 +367,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DirectoryPublication.retry_preserves
 #check_axioms Alvoki.WAL.Boundary.decode_encode
 #check_axioms Alvoki.WAL.Boundary.decode_reencode
+#check_axioms Alvoki.WAL.Boundary.decode_acquisitionPrefix
 #check_axioms Alvoki.WAL.Boundary.withOpenWal_marked
 #check_axioms Alvoki.WAL.Boundary.select_encoded
 #check_axioms Alvoki.WAL.Boundary.select_size
@@ -1127,6 +1128,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.readExactPrefixWith_completes
 #check_axioms Alvoki.Storage.readExactPrefixWith_completesAtStart
 #check_axioms Alvoki.Storage.readExactPrefixWith_completesFile
+#check_axioms Alvoki.Storage.readPrefixUntilEofWith_completes
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.runSizeFits
 #check_axioms Alvoki.Storage.WalSegmentRepair.CheckpointRunChunkReads.ObservesFile.readExact
 #check_axioms Alvoki.Storage.WalSegmentRepair.CheckpointRunChunkReads.ObservesFile.readOpenedExactPrefix
@@ -1217,6 +1219,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_requestBound
 #check_axioms Alvoki.Storage.WalSegmentRepair.countCachedMarkedOpenRequests_bound
 #check_axioms Alvoki.Storage.readExactPrefixWith_requestBound
+#check_axioms Alvoki.Storage.readPrefixUntilEofWith_requestBound
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBoundedMarkedFromReaders_reported

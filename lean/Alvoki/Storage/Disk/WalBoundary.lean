@@ -20,6 +20,23 @@ def decode (bytes : ByteArray) : Except String UInt64 :=
     if word bytes 16 != checksumWords [magic, length] then .error "WAL boundary checksum mismatch"
     else .ok length
 
+/-- A marker has 24 bytes. One extra observed byte witnesses an oversized file. -/
+abbrev acquisitionLimit : Nat := 25
+
+/-- Reading past the first oversized-byte witness cannot change the strict
+marker decoder. Well-sized files still supply their complete bytes. -/
+theorem decode_acquisitionPrefix (bytes : ByteArray) :
+    decode (bytes.extract 0 (min acquisitionLimit bytes.size)) = decode bytes := by
+  by_cases covered : bytes.size ≤ acquisitionLimit
+  · simp [Nat.min_eq_right covered]
+  · have original : bytes.size ≠ 24 := by
+      unfold acquisitionLimit at covered
+      omega
+    have capped : min acquisitionLimit bytes.size ≠ 24 := by
+      rw [Nat.min_eq_left (Nat.le_of_not_ge covered)]
+      decide
+    simp [decode, original, capped]
+
 theorem decode_encode (length : UInt64) : decode (encode length) = .ok length := by
   let words := [magic, length, checksumWords [magic, length]]
   have version : word (encode length) 0 = magic := word_encodeWords words 0 (by simp [words])

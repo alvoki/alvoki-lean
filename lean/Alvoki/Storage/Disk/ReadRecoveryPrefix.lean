@@ -16,6 +16,20 @@ A zero or oversized chunk stops at the reached descriptor cursor. -/
   else throw mismatch
 termination_by remaining
 
+/-- Read up to the requested prefix, stopping at EOF or the limit. A
+positive short read is followed by another request for the remainder. -/
+@[specialize] def readPrefixUntilEofWith [Monad m] [MonadExceptOf IO.Error m]
+    (mismatch : IO.Error) (read : USize → m ByteArray) (remaining : Nat)
+    (bytes : ByteArray) : m ByteArray := do
+  if remaining = 0 then return bytes
+  let chunk ← read remaining.toUSize
+  if chunk.size = 0 then return bytes
+  if _within : chunk.size ≤ remaining then
+    let bytes := if bytes.isEmpty then chunk else bytes ++ chunk
+    readPrefixUntilEofWith mismatch read (remaining - chunk.size) bytes
+  else throw mismatch
+termination_by remaining
+
 /-- Interpret successful reads on one open file description. The state is
 the cursor of that description. The binding and immutability of the file
 are supplied by the caller. Error reports may advance the cursor. -/
@@ -137,5 +151,53 @@ theorem readExactPrefixWith_completesFile (mismatch : IO.Error)
     readExactPrefixWith mismatch read source.size ByteArray.empty 0 = .ok source source.size := by
   simpa only [ByteArray.extract_zero_size] using
     readExactPrefixWith_completesAtStart mismatch observes available source.size fits (Nat.le_refl _)
+
+/-- Healthy reads through the end of a stable file return at most the
+requested bytes. An empty report marks EOF. -/
+def PrefixChunksAvailableUntilEof (source : ByteArray) (read : USize → EStateM IO.Error Nat ByteArray) : Prop :=
+  ∀ offset count, 0 < count → count < USize.size → offset ≤ source.size →
+    ∃ chunk next, read count.toUSize offset = .ok chunk next ∧ chunk.size ≤ count ∧
+      (chunk.size = 0 → offset = source.size)
+
+/-- The bounded reader returns the exact prefix of the observed file and
+advances its cursor only through those bytes. -/
+theorem readPrefixUntilEofWith_completes (mismatch : IO.Error)
+    {source : ByteArray} {read : USize → EStateM IO.Error Nat ByteArray}
+    (observes : PrefixChunkObserves source read) (available : PrefixChunksAvailableUntilEof source read)
+    (remaining : Nat) (fits : remaining < USize.size) {offset : Nat} {bytes : ByteArray}
+    (withinFile : offset ≤ source.size) :
+    let stop := min (offset + remaining) source.size
+    readPrefixUntilEofWith mismatch read remaining bytes offset =
+      .ok (bytes ++ source.extract offset stop) stop := by
+  dsimp only
+  rw [readPrefixUntilEofWith]
+  by_cases finished : remaining = 0
+  · subst remaining
+    simp [Nat.min_eq_left withinFile, Pure.pure, EStateM.pure]
+  · obtain ⟨chunk, next, reported, within, ended⟩ := available offset remaining (by omega) fits withinFile
+    obtain ⟨cursor, payload⟩ := observes remaining.toUSize offset next chunk reported
+    by_cases empty : chunk.size = 0
+    · have eof := ended empty
+      have stop : min (offset + remaining) source.size = offset := by omega
+      simp [finished, empty, reported, stop, cursor, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+    · have nextWithin : next ≤ source.size := by
+        have length := congrArg ByteArray.size payload
+        rw [ByteArray.size_extract] at length
+        omega
+      have endAt : next + (remaining - chunk.size) = offset + remaining := by omega
+      have later := readPrefixUntilEofWith_completes mismatch observes available
+        (remaining - chunk.size) (by omega) (offset := next)
+        (bytes := if bytes.isEmpty then chunk else bytes ++ chunk) nextWithin
+      have joined : (if bytes.isEmpty then chunk else bytes ++ chunk) ++
+          source.extract next (min (offset + remaining) source.size) =
+          bytes ++ source.extract offset (min (offset + remaining) source.size) := by
+        rw [appendPrefixChunk, ByteArray.append_assoc, payload,
+          ← ByteArray.extract_eq_extract_append_extract next (by omega) (by omega)]
+      dsimp only at later
+      rw [endAt, joined] at later
+      simp only [finished, ↓reduceIte, Bind.bind, EStateM.bind, reported, empty, within, ↓reduceDIte]
+      exact later
+termination_by remaining
+decreasing_by omega
 
 end Alvoki.Storage

@@ -136,6 +136,29 @@ def check_flat_wal_before_lock(binary, database):
             "flat WAL refusal created LOCK or changed the dangling binding")
 
 
+def check_marker_length(binary, shim, database):
+    database.mkdir()
+    status, stderr = run_probe(binary, "--write-once", database)
+    require(status == 0, f"could not prepare WAL marker: {stderr}")
+    marker = database / "WAL.commit"
+    wal = database / "WAL-segment-0"
+    boundary = marker.read_bytes()
+    acknowledged = wal.read_bytes()
+    sync_log = database / "sync.log"
+    for malformed in (boundary[:-1], boundary + b"\0" * 1024):
+        marker.write_bytes(malformed)
+        status, stderr = run_probe(binary, "--open-once", database, env={
+            **os.environ, "LD_PRELOAD": str(shim), "ALVOKI_CHECK_SYNC_LOG": str(sync_log),
+        })
+        require(status != 0 and "invalid WAL boundary length" in stderr,
+                f"reopen did not reject the malformed marker length: {stderr}")
+        require(not sync_log.exists() and marker.read_bytes() == malformed and wal.read_bytes() == acknowledged,
+                "marker length refusal reached repair or changed the selected files")
+    marker.write_bytes(boundary)
+    status, stderr = run_probe(binary, "--check-recovered-table", database, "1", "99")
+    require(status == 0, f"reopen did not decode the exact-length marker: {stderr}")
+
+
 def check_fork_exec_lock(binary, shim, database):
     database.mkdir()
     status, stderr = run_probe(binary, "--write-once", database)
@@ -393,6 +416,7 @@ if __name__ == "__main__":
             check=True,
         )
         check_flat_wal_before_lock(binary, root / "flat-wal-admission")
+        check_marker_length(binary, shim, root / "marker-length")
         check_fork_exec_lock(binary, shim, root / "fork-exec")
         check_batch_append_cut(binary, shim, root / "batch-append-cut")
         for batch in (False, True):
@@ -403,6 +427,7 @@ if __name__ == "__main__":
                         case.mkdir()
                         check_process_death(binary, shim, case, after_rename, rotated, detached, batch)
     print("Rejected a dangling flat WAL before opening LOCK and preserved LOCK bytes across reopen.")
+    print("Rejected short and oversized WAL markers before repair and reopened an exact-length marker.")
     print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")
