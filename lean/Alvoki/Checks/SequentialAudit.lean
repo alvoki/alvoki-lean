@@ -931,6 +931,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.resolve_owned
 #check_axioms Alvoki.Storage.SyncHandleRouting.pendingSync
 #check_axioms Alvoki.Storage.SyncHandleRouting.groupedActivePending
+#check_axioms Alvoki.Storage.SyncHandleRouting.syncWithHandles_cache
+#check_axioms Alvoki.Storage.DiskTable.retainRunVersions_fileEffects
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.afterRunRetention
 #check_axioms Alvoki.Storage.RepresentsWalHistory.retainRunVersions
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
