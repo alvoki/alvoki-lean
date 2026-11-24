@@ -1,45 +1,36 @@
 # Alvoki
 
-Alvoki is a sequential storage engine in native Lean 4 with versioned packed runs, snapshot reads, a write-ahead log, and atomic checkpoints. Lean proofs connect its executable operations and modeled recovery to a logical database. Separate Lean and Rust experiments compare packed reads, merge, and byte-oriented writers. Verus verifies a sorted-key search core.
+Alvoki is an experimental embedded key-value storage engine written in Lean 4. The project explores how to build a fast native engine whose storage guarantees can be checked by Lean. The central goal is that after a crash, reopening the database returns the right table from the files that survived, with every acknowledged write accounted for.
 
-- [Engine API and I/O protocol](docs/architecture.md#sequential-storage)
-- [Binary formats and visibility](docs/specifications.md)
-- [Proof coverage and assumptions](docs/verification-status.md)
-- [Roadmap](docs/roadmap.md), [proof roadmap](docs/proof-roadmap.md), and [progress](docs/progress.md)
-- [Performance guide](docs/high-performance-lean.md) and [benchmarks](docs/benchmarks.md)
+## What you can use today
 
-## Stock Lean API
+The Linux `DiskTable` API stores unsigned 64-bit keys and values. It supports puts and deletes, point lookups, ordered range reads, and snapshots of retained history. It uses a segmented write-ahead log for durability and immutable sorted runs for checkpoints. WAL rotation, compaction, and collection of obsolete runs and covered WAL segments are explicit maintenance operations.
 
-Import `PackedRun` and use `Alvoki.Packed.parseRun` to validate a version-1 block. The returned run supports checked record access, lookup, and half-open range checksums. `Alvoki.Packed.merge` produces the version-1 right-biased union, and `Alvoki.Packed.scanMerged` folds it directly. Import `SpanMerge` for the proved span writer or `BlockCodec` for the round-trip-checked v1 encoder and decoder. [Implementation and proof boundaries](docs/verification-status.md)
+Alvoki is pre-release. The current API is sequential, expects a dedicated directory controlled by the engine, and is tested on Linux x86-64. On-disk formats may change during development.
 
-Import `Alvoki.Storage.Table.PackedTable` for a sequential snapshot table over packed v3 runs. Import `Alvoki.Storage.Disk.DiskTable` for the Linux adapter with a write-ahead log, checkpoints, and reopen. The adapter uses an existing dedicated directory. A snapshot handle belongs to its open session. Run `bash scripts/check-sequential.sh` from the root to build and exercise both APIs and audit the proofs. [Engine API and checkpoint protocol](docs/architecture.md#sequential-storage)
+## What Lean checks
+
+Lean checks the executable encoding, replay, and snapshot operations against logical models. Across the crash and recovery sequences covered by the proofs, every acknowledged write remains in order. A write whose outcome was uncertain can survive if the durable marker selects it, and supported snapshots agree with abstract replay.
+
+The recovery proofs use explicit assumptions about the filesystem, file identities, and the effects of native calls. Native fault tests exercise selected outcomes at the adapter boundary. The remaining end-to-end work connects the native execution continuously across all supported recovery paths. [Verification status](docs/verification-status.md#storage-engine-guarantees) · [Proof roadmap](docs/proof-roadmap.md)
 
 ## Reproduce on Linux x86-64
 
-Run from the repository root with Bash, curl, tar, unzip, sha256sum, Python 3, and a C compiler available as `cc`. The bootstrap script installs pinned tools in `../work/toolchains`. Set `ALVOKI_TOOLCHAINS` and pass the same directory to bootstrap to use a different location.
+From the repository root, install the pinned toolchains and run the storage checks. You'll need Bash, curl, tar, unzip, sha256sum, Python 3, and a C compiler available as `cc`.
 
 ```sh
 bash scripts/bootstrap.sh
-bash scripts/check.sh
 bash scripts/check-sequential.sh
-
-# Optional runtime prototypes and baseline timings.
-bash scripts/check.sh --runtime
-bash scripts/reproduce.sh --out /tmp/alvoki-trials.csv
-python3 benchmarks/summarize.py /tmp/alvoki-trials.csv
-bash scripts/environment.sh
 ```
 
-GitHub Actions runs both stock check commands. `check.sh` runs Lean, Rust, and Verus checks for the packed primitives. `check-sequential.sh` runs the storage-engine proofs, transitive axiom audit, differential tests, and native fault fixtures. The runtime option runs the opt-in C and linkage experiment fixtures. Benchmark drivers require Python assertions to be enabled. [Correctness workflow](.github/workflows/correctness.yml)
+The getting-started guide shows how to write a value, close the database, reopen it, and read the value in a Lean program. It also covers the packed storage checks, native fault fixtures, and reproducible benchmarks. [Getting started](docs/getting-started.md)
 
-The default reproduction builds the baseline Lean and Rust executables, checks the original Lean theorems and their axioms, runs Verus, and compares both baseline Lean variants and Rust with the Python reference. The `--out` flag additionally benchmarks all three configurations. Use `--sizes 1000 --trials 3` for a shorter run. The experiment reports give the commands for later workloads. [Experiment index](docs/benchmarks.md#packed-storage-experiments)
+## Explore the project
 
-## Storage engine replay benchmark
+- See how `DiskTable` writes, checkpoints, and recovers data. [Architecture](docs/architecture.md#sequential-storage)
+- Follow the storage engine and proof milestones. [Roadmap](docs/roadmap.md) · [Proof roadmap](docs/proof-roadmap.md)
+- Explore the Lean and Rust performance experiments and the separately verified Verus search core. [Benchmarks](docs/benchmarks.md) · [Documentation index](docs/README.md)
 
-```sh
-bash scripts/disk-replay.sh --out /tmp/alvoki-replay-before.csv
-bash scripts/disk-replay.sh --out /tmp/alvoki-replay-after.csv \
-  --baseline /tmp/alvoki-replay-before.csv
-```
+## License
 
-The native benchmark measures reopening databases with the same keys inserted in ascending, descending, and seeded shuffled order. Use `--segments 1 8 32` with a sufficient row count to compare multiple segment layouts, and `--repair-tail` to exercise keeper repair. It records individual samples and compares medians against a saved run on the same machine. Add `--max-slowdown 1.25` to fail a comparison when any median exceeds 125% of its baseline. [Workload and measurements](docs/benchmarks.md#disk-replay)
+Alvoki is licensed under the Apache License, Version 2.0. [License text](LICENSE)

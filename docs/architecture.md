@@ -1,6 +1,6 @@
-# Repository architecture
+# Alvoki architecture
 
-The sequential engine has a packed snapshot table and a Linux file adapter. Its logical table and filesystem models supply the reference behavior for proofs. The earlier v1 packed-block programs provide small benchmarks with independent fixture oracles. [Formats and behavior](specifications.md) · [Verification status](verification-status.md)
+Alvoki is a sequential embedded key-value store. The Linux `DiskTable` adapter manages the lock, write-ahead log and checkpoint files. Its in-memory `PackedTable` serves snapshots over a memtable and immutable sorted runs. The logical table and filesystem models specify the behavior of those components. [Getting started](getting-started.md) · [Verification status](verification-status.md)
 
 ## Lean paths
 
@@ -12,23 +12,6 @@ Use qualified module names to import the table and disk APIs.
 import Alvoki.Storage.Table.PackedTable
 import Alvoki.Storage.Disk.DiskTable
 ```
-
-| Path | What it does | Dependencies |
-|---|---|---|
-| [`Block`](../lean/Block.lean) and [`Main`](../lean/Main.lean) | Original packed parser, point and range access, and encode/decode comparisons. The baseline Lake executable uses this path. | `Std`. [`Proofs`](../lean/Proofs.lean) checks lower bound, lookup, ranges and word codec properties. |
-| [`PackedView`](../lean/PackedView.lean) | Machine-index view, checked record access and packed search and scan. The parser checks v1 interleaved or experimental v2 columnar data. | `Block` for the original word decoder. [`PackedViewProofs`](../lean/PackedViewProofs.lean) connects parser acceptance and native indexing to the logical record layout. The standalone [optimization driver](../lean/OptMain.lean) also exercises experimental owned-record codecs. |
-| [`PackedRun`](../lean/PackedRun.lean) | The validated v1 API and stock per-record materialized merge. Lake builds it by default alongside the baseline executable. | [`MergeModel`](../lean/MergeModel.lean) specifies the right-biased union over logical rows and their bytes. [`Packed`](../lean/Packed.lean) adds packed ownership and an experimental C encoder. |
-| [`ScopedBytes`](../lean/ScopedBytes.lean) | Independent append-only builder with slice bounds, exact source bytes and prefix contracts. | `Std`. [`ScopedBytesProofs`](../lean/ScopedBytesProofs.lean) checks the generic byte operations against this module. |
-| [`NativeTune`](../lean/NativeTune.lean) | Scalar and compiler-vectorized scans, span strategies, and packed transforms. | `PackedRun`. |
-| [`MergePhases`](../lean/MergePhases.lean) | Online selection, checked trace replay and emission variants. The trace checker checks keys as well as cursor consumption. | `NativeTune` and `ScopedBytes`. [`ReplayProofs`](../lean/ReplayProofs.lean) audits the streaming and prepared replay proofs. |
-| [`SpanMerge`](../lean/SpanMerge.lean) | Shared proved span writer with adaptive and bounded-window policies. | `PackedRun` and its merge model. The direct branching scan also lives in `PackedRun`. [`MergeProofs`](../lean/MergeProofs.lean) audits the implementations against the same union. |
-| [`BlockCodec`](../lean/BlockCodec.lean) | Checked v1 encoder and decoder with both round trips. | `PackedRun` for the executable parser and its accepted header and ordering facts. |
-| [`Compaction`](../lean/Compaction.lean) | Versioned runs with tombstones, snapshot retention and direct scans. | `PackedView` for the verified word reader and `ScopedBytes` for packed output. [Codec](../lean/CompactionCodec.lean) · [Refinements](../lean/CompactionProofs.lean) |
-| [`Alvoki.Storage.Table.SequentialModel`](../lean/Alvoki/Storage/Table/SequentialModel.lean) | Logical multi-run table, flush, adjacent run replacement, and snapshot pins. | [`CompactionModel`](../lean/CompactionModel.lean) for priority, visibility, and retention laws. |
-| [`Alvoki.Storage.Table.PackedTable`](../lean/Alvoki/Storage/Table/PackedTable.lean) | Sequential table with a verified memtable backend and immutable packed v3 runs. | [`CompactionRead`](../lean/Alvoki/Storage/Table/CompactionRead.lean) for validated packed lookup, range folds, flush and compaction. [`SnapshotTable`](../lean/Alvoki/Storage/Table/SnapshotTable.lean) provides the logical API. |
-| [`Alvoki.Storage.Disk.DiskTable`](../lean/Alvoki/Storage/Disk/DiskTable.lean) | File-backed sequential table for Linux with a WAL and atomic checkpoint publication. | [`Recovery`](../lean/Alvoki/Storage/Disk/Recovery.lean), [`WriteAheadLog`](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean), and [`ManifestIntegrity`](../lean/Alvoki/Storage/Disk/ManifestIntegrity.lean) for codecs and replay. |
-
-The build uses the standard Lean runtime, with small disk bindings for descriptor sync and checked Linux directory enumeration. The fixed-width copy and scoped fill experiments keep their C and link-time code in separate targets. [Lake build targets](../lean/lakefile.lean) · [Descriptor sync](../lean/native/fsync.c) · [Directory enumeration](../lean/native/read_dir_checked.c) · [Scoped runtime contract](scoped-builder.md#contract-and-checks)
 
 ## Sequential storage
 
@@ -54,10 +37,29 @@ The native append, run-file and staging writes explicitly call `IO.FS.Handle.flu
 
 The Linux adapter calls `fsync` on open descriptors through a small C binding to Lean 4.36 file handles. It retains the directory and active append handles across writes and syncs newly written files through their write handles. Rotation drops the previous append handle after the successor is durable. The durability proofs assume stable owned paths in an already durable directory, appends that preserve synced earlier bytes, file and directory syncs that persist their targets, and an old or new durable binding after a crash between same-directory rename and its directory barrier. Fault fixtures exercise process-visible operation and retry behavior. The native path reads the required sealed segment payloads and requests only the marker-selected prefix of the keeper. Checkpoint publication rewrites the run set. [Disk formats](specifications.md#wal-and-checkpoint-manifest) · [Strict recovery proof boundary](verification-status.md#disk-recovery-and-collection)
 
+## Source and experiment map
+
+| Path | What it does | Dependencies |
+|---|---|---|
+| [`Block`](../lean/Block.lean) and [`Main`](../lean/Main.lean) | Original packed parser, point and range access, and encode/decode comparisons. The baseline Lake executable uses this path. | `Std`. [`Proofs`](../lean/Proofs.lean) checks lower bound, lookup, ranges and word codec properties. |
+| [`PackedView`](../lean/PackedView.lean) | Machine-index view, checked record access and packed search and scan. The parser checks v1 interleaved or experimental v2 columnar data. | `Block` for the original word decoder. [`PackedViewProofs`](../lean/PackedViewProofs.lean) connects parser acceptance and native indexing to the logical record layout. The standalone [optimization driver](../lean/OptMain.lean) also exercises experimental owned-record codecs. |
+| [`PackedRun`](../lean/PackedRun.lean) | The validated v1 API and stock per-record materialized merge. Lake builds it by default alongside the baseline executable. | [`MergeModel`](../lean/MergeModel.lean) specifies the right-biased union over logical rows and their bytes. [`Packed`](../lean/Packed.lean) adds packed ownership and an experimental C encoder. |
+| [`ScopedBytes`](../lean/ScopedBytes.lean) | Independent append-only builder with slice bounds, exact source bytes and prefix contracts. | `Std`. [`ScopedBytesProofs`](../lean/ScopedBytesProofs.lean) checks the generic byte operations against this module. |
+| [`NativeTune`](../lean/NativeTune.lean) | Scalar and compiler-vectorized scans, span strategies, and packed transforms. | `PackedRun`. |
+| [`MergePhases`](../lean/MergePhases.lean) | Online selection, checked trace replay and emission variants. The trace checker checks keys as well as cursor consumption. | `NativeTune` and `ScopedBytes`. [`ReplayProofs`](../lean/ReplayProofs.lean) audits the streaming and prepared replay proofs. |
+| [`SpanMerge`](../lean/SpanMerge.lean) | Shared proved span writer with adaptive and bounded-window policies. | `PackedRun` and its merge model. The direct branching scan also lives in `PackedRun`. [`MergeProofs`](../lean/MergeProofs.lean) audits the implementations against the same union. |
+| [`BlockCodec`](../lean/BlockCodec.lean) | Checked v1 encoder and decoder with both round trips. | `PackedRun` for the executable parser and its accepted header and ordering facts. |
+| [`Compaction`](../lean/Compaction.lean) | Versioned runs with tombstones, snapshot retention and direct scans. | `PackedView` for the verified word reader and `ScopedBytes` for packed output. [Codec](../lean/CompactionCodec.lean) · [Refinements](../lean/CompactionProofs.lean) |
+| [`Alvoki.Storage.Table.SequentialModel`](../lean/Alvoki/Storage/Table/SequentialModel.lean) | Logical multi-run table, flush, adjacent run replacement, and snapshot pins. | [`CompactionModel`](../lean/CompactionModel.lean) for priority, visibility, and retention laws. |
+| [`Alvoki.Storage.Table.PackedTable`](../lean/Alvoki/Storage/Table/PackedTable.lean) | Sequential table with a verified memtable backend and immutable packed v3 runs. | [`CompactionRead`](../lean/Alvoki/Storage/Table/CompactionRead.lean) for validated packed lookup, range folds, flush and compaction. [`SnapshotTable`](../lean/Alvoki/Storage/Table/SnapshotTable.lean) provides the logical API. |
+| [`Alvoki.Storage.Disk.DiskTable`](../lean/Alvoki/Storage/Disk/DiskTable.lean) | File-backed sequential table for Linux with a WAL and atomic checkpoint publication. | [`Recovery`](../lean/Alvoki/Storage/Disk/Recovery.lean), [`WriteAheadLog`](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean), and [`ManifestIntegrity`](../lean/Alvoki/Storage/Disk/ManifestIntegrity.lean) for codecs and replay. |
+
+The build uses the standard Lean runtime, with small disk bindings for descriptor sync and checked Linux directory enumeration. The fixed-width copy and scoped fill experiments keep their C and link-time code in separate targets. [Lake build targets](../lean/lakefile.lean) · [Descriptor sync](../lean/native/fsync.c) · [Directory enumeration](../lean/native/read_dir_checked.c) · [Scoped runtime contract](scoped-builder.md#contract-and-checks)
+
 ## Comparisons and evidence
 
 - [Rust](../rust) holds the original borrowed-block implementation and focused packed controls with scalar, SIMD and scoped-output comparisons. [Verus](../verus/search.rs) checks a separate search core over logical sorted keys.
 - The Python fixture generator builds the little-endian binary data independently. Drivers share generation, oracles, subprocess and reporting helpers. The timed operations stay in each individual release executable. [Fixtures](../fixtures/generate.py) · [Shared benchmark support](../benchmarks/support.py)
-- The stock checks run the packed and sequential storage fixtures and proof audits. The optional runtime check exercises the separate prototypes. [Reproduction commands](../README.md#reproduce-on-linux-x86-64)
+- The stock checks run the packed and sequential storage fixtures and proof audits. The optional runtime check exercises the separate prototypes. [Reproduction commands](getting-started.md#build-test-and-reproduce)
 
 [Performance technique guide](high-performance-lean.md) · [Benchmarks and experiment reports](benchmarks.md)
