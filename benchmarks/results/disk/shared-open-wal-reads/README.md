@@ -31,7 +31,8 @@ indirect callback applications.
 ## Reproduce
 
 Build `alvoki-disk-replay` and `alvoki-disk-checkpoint` with the pinned
-toolchain in both checkouts.
+toolchain at the baseline commit and at `c2b076290f0f9cdc18b3c3a5d51b16625b40f857`,
+where the measured candidate's identical generated `DiskTable` C was integrated.
 
 ```sh
 (cd lean && lake build alvoki-disk-replay alvoki-disk-checkpoint)
