@@ -87,7 +87,7 @@ private theorem continuesAuthorized {initial final : LockedFileState FileImage} 
     have same := unique admitted admittedNext (valid.selected.symm.trans preparedNext.pair)
     subst next
     exact ih.trans applied
-  | cachedMarkerRejected _ _ ih => exact ih
+  | cachedRejected _ _ ih => exact ih
   | referenceDrops _ _ _ ih => exact ih
   | powerLoss _ metadata keeper later ih => exact .crash ih metadata keeper later
 

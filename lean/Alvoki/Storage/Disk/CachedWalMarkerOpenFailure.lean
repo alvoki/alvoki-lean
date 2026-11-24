@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
+import Alvoki.Storage.Disk.CachedOpenRejection
 
 namespace Alvoki.WAL.Boundary
 
@@ -26,6 +26,20 @@ structure CachedWalMarkerRead {image : Type} (directory : DiskDirectory)
   marker : ByteArray
   markerRead : readOptional (directory.file .walBoundary) afterCheckpoint = .ok (some marker) reached
 
+/-- The selected bytes reach the marker decoder before any WAL request. -/
+theorem CachedWalMarkerRead.prepare_decodeError {image : Type} {directory : DiskDirectory}
+    {readOptional : FilePath → EStateM IO.Error image (Option ByteArray)}
+    {readRunSize : FilePath → EStateM IO.Error image Nat}
+    {readRunPrefix : FilePath → Nat → EStateM IO.Error image ByteArray}
+    {before reached : image} (report : CachedWalMarkerRead directory readOptional readRunSize readRunPrefix before reached)
+    (readWal : Nat → UInt64 → EStateM IO.Error image (WalSegmentMarkerReads × Nat))
+    {message : String} (invalid : WAL.Boundary.decode report.marker = .error message) :
+    prepareBoundedMarkedFromReaders directory
+      (readIntegrityCheckpointSized directory (readOptional (directory.file .manifest)) readRunSize readRunPrefix)
+      readOptional readWal before = .error (IO.userError message) reached := by
+  simp [prepareBoundedMarkedFromReaders, report.checkpointRead, report.markerRead, invalid,
+    Bind.bind, EStateM.bind, liftExcept, Except.mapError, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+
 /-- A rejected present marker returns the actual decoder diagnostic and the
 reached image. No inventory, WAL payload, replay or repair action runs. -/
 theorem CachedWalMarkerRead.reopen_decodeError {image : Type} {directory : DiskDirectory}
@@ -44,9 +58,8 @@ theorem CachedWalMarkerRead.reopen_decodeError {image : Type} {directory : DiskD
     {message : String} (invalid : WAL.Boundary.decode report.marker = .error message) :
     reopenMarkedBoundedWithCachedExtents directory readOptional readRunSize readRunPrefix list lstat readSeal
       readKeeper removeFile write sync renameFile before = .error (IO.userError message) reached := by
-  simp [reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, report.checkpointRead,
-    report.markerRead, invalid, Bind.bind, EStateM.bind, liftExcept, Except.mapError, throw, throwThe,
-    MonadExceptOf.throw, EStateM.throw]
+  simp only [reopenMarkedBoundedWithCachedExtents, Bind.bind, EStateM.bind,
+    report.prepare_decodeError _ invalid]
 
 /-- Read-only checkpoint and marker reports preserve the file image. -/
 theorem CachedWalMarkerRead.reached_eq_of_readonly {image : Type} {directory : DiskDirectory}
@@ -102,23 +115,8 @@ theorem runOpenWithInstallation_cachedMarkerDecodeError {image : Type} (director
 
 /-- A cached retry that reads the actual visible malformed marker after
 taking the lock. Read-only callbacks cannot change the retry's file image. -/
-structure CachedMarkerRejection (directory : DiskDirectory) (before : LockedFileState FileImage) where
-  descriptor : Nat
-  nextRef : Nat
-  acquisition : TryLockObserves before.owners directory (.ok true)
-  unlock : UnlockReport
-  localUnlock : unlock.LocalFlock
-  readOptional : FilePath → EStateM IO.Error FileImage (Option ByteArray)
-  readRunSize : FilePath → EStateM IO.Error FileImage Nat
-  readRunPrefix : FilePath → Nat → EStateM IO.Error FileImage ByteArray
-  list : FilePath → EStateM IO.Error FileImage (Array IO.FS.DirEntry)
-  lstat : FilePath → EStateM IO.Error FileImage (Except IO.Error IO.FS.Metadata)
-  readSeal : FilePath → Nat → EStateM IO.Error FileImage ByteArray
-  readKeeper : FilePath → Nat → Nat → EStateM IO.Error FileImage ByteArray
-  removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit)
-  write : FilePath → ByteArray → EStateM IO.Error FileImage Unit
-  sync : Array FilePath → EStateM IO.Error FileImage Unit
-  renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit
+structure CachedMarkerRejection (directory : DiskDirectory) (before : LockedFileState FileImage)
+    extends CachedOpenAttempt directory before where
   reads : CachedWalMarkerRead directory readOptional readRunSize readRunPrefix before.image before.image
   checkpointReadOnly : reads.afterCheckpoint = before.image
   visibleMarker : before.image.directory.active.walBoundary = some reads.marker
@@ -129,43 +127,23 @@ namespace CachedMarkerRejection
 
 variable {directory : DiskDirectory} {before : LockedFileState FileImage}
 
-def run (rejection : CachedMarkerRejection directory before) :
-    EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession :=
-  runOpenWithInstallation directory rejection.descriptor rejection.nextRef (.ok true) rejection.unlock
-    (reopenMarkedBoundedWithCachedExtents directory rejection.readOptional rejection.readRunSize rejection.readRunPrefix
-      rejection.list rejection.lstat rejection.readSeal rejection.readKeeper rejection.removeFile rejection.write
-      rejection.sync rejection.renameFile) before
+def certified (rejection : CachedMarkerRejection directory before) : CachedOpenRejection directory before :=
+  ⟨rejection.toCachedOpenAttempt, IO.userError rejection.message,
+    rejection.reads.prepare_decodeError _ rejection.malformed⟩
 
-def after (rejection : CachedMarkerRejection directory before) : LockedFileState FileImage :=
-  let owner := match rejection.unlock with
-    | .success => none
-    | .failure _ _ => some rejection.descriptor
-  { before with owners := before.owners.set (directory.file .lock) owner }
+abbrev run (rejection : CachedMarkerRejection directory before) := rejection.toCachedOpenAttempt.run
+abbrev after (rejection : CachedMarkerRejection directory before) := rejection.certified.after
+abbrev error (rejection : CachedMarkerRejection directory before) := rejection.certified.error
 
-def error (rejection : CachedMarkerRejection directory before) : IO.Error :=
-  match rejection.unlock with
-  | .success => IO.userError rejection.message
-  | .failure cleanup _ => cleanup
-
-/-- The actual cached callback run returns the computed error and owner.
-A prepared plan or completed repair is unnecessary for this retry edge. -/
+/-- The acquired cached opener returns the exact marker or cleanup error. -/
 theorem run_error (rejection : CachedMarkerRejection directory before) :
-    rejection.run = .error rejection.error rejection.after := by
-  have failed := rejection.reads.reopen_decodeError rejection.list rejection.lstat rejection.readSeal
-    rejection.readKeeper rejection.removeFile rejection.write rejection.sync rejection.renameFile rejection.malformed
-  unfold run
-  rw [runOpenWithInstallation_acquiredRecoveryError _ _ _ _ _ _ failed]
-  cases observed : rejection.unlock with
-  | success => simp [after, error, observed]
-  | failure cleanup released =>
-    have retained : released = false := by simpa [UnlockReport.LocalFlock, observed] using rejection.localUnlock
-    simp [after, error, observed, retained]
+    rejection.run = .error rejection.error rejection.after :=
+  rejection.certified.run_error
 
-/-- The next cooperating open can acquire immediately exactly when the
-local cleanup released this attempt's lock. -/
+/-- The rejected marker read allows immediate retry on successful cleanup. -/
 theorem immediateReacquire (rejection : CachedMarkerRejection directory before) :
-    TryLockObserves rejection.after.owners directory (.ok true) ↔ rejection.unlock = .success := by
-  cases observed : rejection.unlock <;> simp [TryLockObserves, after, observed, LockOwners.set]
+    TryLockObserves rejection.after.owners directory (.ok true) ↔ rejection.unlock = .success :=
+  rejection.certified.immediateReacquire
 
 end CachedMarkerRejection
 

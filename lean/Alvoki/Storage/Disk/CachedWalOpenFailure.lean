@@ -104,6 +104,28 @@ structure CachedWalOpenExtentFailure {image : Type} (directory : DiskDirectory)
     CachedWalOpenSelection directory readOptional readRunSize readRunPrefix list lstat before where
   failed : CachedWalExtentFailure directory readSeal required afterScan reached
 
+/-- Selected payload rejection prevents preparation from reaching replay. -/
+theorem CachedWalOpenSelection.prepare_payloadError {image : Type} {directory : DiskDirectory}
+    {readOptional : FilePath → EStateM IO.Error image (Option ByteArray)}
+    {readRunSize : FilePath → EStateM IO.Error image Nat}
+    {readRunPrefix : FilePath → Nat → EStateM IO.Error image ByteArray}
+    {list : FilePath → EStateM IO.Error image (Array IO.FS.DirEntry)}
+    {lstat : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata)}
+    {readSeal : FilePath → Nat → EStateM IO.Error image ByteArray}
+    {before reached : image} {cause : IO.Error}
+    (report : CachedWalOpenSelection directory readOptional readRunSize readRunPrefix list lstat before)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error image ByteArray)
+    (payloads : readCachedWalPayloads directory (report.length.toNat / frameSize) readSeal readKeeper
+      report.required report.afterScan = .error cause reached) :
+    prepareBoundedMarkedFromReaders directory
+      (readIntegrityCheckpointSized directory (readOptional (directory.file .manifest)) readRunSize readRunPrefix)
+      readOptional (fun watermark length => readSelectedWithCachedExtents directory watermark length list lstat
+        readSeal readKeeper) before = .error cause reached := by
+  have wal := readSelectedWithCachedExtents_payloadError directory _ report.length list lstat readSeal readKeeper
+    report.checked report.listed report.scanned report.selected payloads
+  simp [prepareBoundedMarkedFromReaders, report.checkpointRead, report.markerRead, report.decoded, wal,
+    Bind.bind, EStateM.bind, liftExcept, Except.mapError, Pure.pure, EStateM.pure]
+
 /-- The cached marked opener returns a selected read error before repair. -/
 theorem CachedWalOpenSelection.reopen_payloadError {image : Type} {directory : DiskDirectory}
     {readOptional : FilePath → EStateM IO.Error image (Option ByteArray)}
@@ -123,10 +145,7 @@ theorem CachedWalOpenSelection.reopen_payloadError {image : Type} {directory : D
       report.required report.afterScan = .error cause reached) :
     reopenMarkedBoundedWithCachedExtents directory readOptional readRunSize readRunPrefix list lstat
       readSeal readKeeper removeFile write sync renameFile before = .error cause reached := by
-  have wal := readSelectedWithCachedExtents_payloadError directory _ report.length list lstat readSeal readKeeper
-    report.checked report.listed report.scanned report.selected payloads
-  simp [reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, report.checkpointRead,
-    report.markerRead, report.decoded, wal, Bind.bind, EStateM.bind, liftExcept, Except.mapError, Pure.pure, EStateM.pure]
+  simp only [reopenMarkedBoundedWithCachedExtents, Bind.bind, EStateM.bind, report.prepare_payloadError readKeeper payloads]
 
 /-- The cached native schedule stops at the invalid extent. The actual
 keeper reader, replay and repair callbacks do not enter the outcome. -/
