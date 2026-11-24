@@ -14,6 +14,8 @@ import Alvoki.Storage.Disk.MarkedDatabaseState
 import Alvoki.Storage.Disk.ObservedMarkedState
 import Alvoki.Storage.Disk.MarkedDatabaseTrace
 import Alvoki.Storage.Disk.OptionalFileRead
+import Alvoki.Storage.Disk.CheckpointFileDispatch
+import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.LegacyWalRecovery
 import Alvoki.Storage.Disk.LegacyMarkedBootstrap
@@ -101,6 +103,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.recoverSelected_encoded
 #check_axioms Alvoki.Storage.recoverSelected_encoded_complete
 #check_axioms Alvoki.Storage.recoverRunSet_committedBoundary
+#check_axioms Alvoki.Storage.run_performCheckpointFileStep
+#check_axioms Alvoki.Storage.run_performCheckpointFileStep_io
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loads
 #check_axioms Alvoki.Storage.CheckpointForRecovery.recoverSelected_rowBounds
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_flushForCheckpoint
@@ -202,6 +206,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseStep.refines
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseTrace.refines
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseTrace.canonicalReads
+#check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.guardedPinnedReads
+#check_axioms Alvoki.Storage.DiskSession.withLocalHandle_closed
+#check_axioms Alvoki.Storage.DiskSession.withLocalHandle_poisoned
+#check_axioms Alvoki.Storage.DiskSession.readWithHandle_foreign
+#check_axioms Alvoki.Storage.DiskSession.readWithHandle_inactive
+#check_axioms Alvoki.Storage.DiskSession.release_foreign
 #check_axioms Alvoki.WAL.Boundary.freshMarkedOpen_ready
 #check_axioms Alvoki.WAL.Boundary.emptyBootstrapOpen_ready
 #check_axioms Alvoki.WAL.Boundary.legacyMarkedOpen_ready

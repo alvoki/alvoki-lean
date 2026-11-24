@@ -30,8 +30,8 @@ private def visibleEmptyWal (image : ReopenImage) : ReopenImage :=
       active := some ByteArray.empty
       crashImages := some ByteArray.empty :: image.wal.crashImages } }
 
-private def createEmptyWal (report : Except String Unit) : FreshOpenM ByteArray :=
-  fun image => report.map fun () => (ByteArray.empty, visibleEmptyWal image)
+private def createEmptyWal (report : Except String Unit) : FreshOpenM Unit :=
+  fun image => report.map fun () => ((), visibleEmptyWal image)
 
 private def syncNewWal (report : Except String Unit) : FreshOpenM Unit :=
   fun image => report.map fun () => ((), image.syncDirectory)
@@ -51,20 +51,12 @@ def runFreshMarkedOpen (checkpoint : Except String (Option (PackedTable × UInt6
     (marker wal : Except String (Option ByteArray)) (reports : FreshOpenReports) :
     StateT ReopenImage (Except String) (PackedTable × UInt64 × Nat) := do
   let checkpoint ← observed checkpoint
-  let (base, generation) := checkpoint.getD (.empty, 0)
-  withOpenWal (observed marker) (observed wal) observed (fun boundary => do
-    if checkpoint.isSome || boundary.isSome then observed (.error missingOpenWal)
-    else createEmptyWal reports.createWal) fun boundary bytes => do
-    let (selected, table) ← observed <| match boundary with
-    | some count => recoverMarked base count bytes
-    | none => recoverLegacy base bytes
-    let table ← Publication.finishReopen bytes.size selected.size
-      (fun _ => observed (.error "unexpected repair of an empty WAL"))
-      (fun _ => syncNewWal reports.syncWalDirectory) table
-    if boundary.isNone then
-      unless selected.size < UInt64.size do observed (.error "WAL byte count is too large")
-      Publication.run (publishMarker reports.marker (encode selected.size.toUInt64))
-    return (table, generation, selected.size)
+  withRecoveredOpen checkpoint (observed marker) (observed wal) observed (fun message => observed (.error message))
+    (fun _ => createEmptyWal reports.createWal)
+    (fun _ => observed (.error "unexpected repair of an empty WAL"))
+    (fun _ => syncNewWal reports.syncWalDirectory)
+    (fun length => Publication.run (publishMarker reports.marker (encode length.toUInt64)))
+    (fun table generation length => pure (table, generation, length))
 
 private theorem emptyReplay : recoverSelected .empty ByteArray.empty = .ok .empty := by
   exact recoverSelected_encoded .empty [] [] trivial rfl
@@ -85,7 +77,7 @@ private theorem runFreshMarkedOpen_unmarked
       .ok ((.empty, 0, 0), afterFreshOpen before) := by
   rcases empty with rfl | rfl
   all_goals
-    simp [runFreshMarkedOpen, StateT.run, Bind.bind, StateT.bind, Except.bind,
+    simp [runFreshMarkedOpen, withRecoveredOpen, StateT.run, Bind.bind, StateT.bind, Except.bind,
       Pure.pure, StateT.pure, Except.pure, Except.map, observed, withOpenWal, Option.mapM,
       createEmptyWal, created, recoverLegacy, WAL.repairPrefix, emptyReplay, Publication.finishReopen,
       Publication.runReopen, syncNewWal, synced, published, Publication.run, Publication.steps,
@@ -113,7 +105,7 @@ private theorem runFreshMarkedOpen_marked (before : ReopenImage) (reports : Fres
   have recoverEmpty : recoverMarked .empty 0 ByteArray.empty = .ok (ByteArray.empty, .empty) := by
     have selected : select 0 ByteArray.empty = .ok ByteArray.empty := rfl
     simp [recoverMarked, selected, emptyReplay, Bind.bind, Except.bind, Pure.pure, Except.pure]
-  simp [runFreshMarkedOpen, StateT.run, Bind.bind, StateT.bind, Except.bind,
+  simp [runFreshMarkedOpen, withRecoveredOpen, StateT.run, Bind.bind, StateT.bind, Except.bind,
     Pure.pure, StateT.pure, Except.pure, Functor.map, StateT.map, Except.map,
     observed, withOpenWal, Option.mapM, decode_encode,
     recoverEmpty, Publication.finishReopen, Publication.runReopen, syncNewWal, synced]

@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.WalBoundary
 import Alvoki.Storage.Disk.Manifest
+import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Publication.CheckpointPublication
 
 namespace Alvoki.Storage
@@ -59,10 +60,7 @@ private structure Installed where
   generation : UInt64
   walBytes : Nat
 
-private inductive Phase where
-  | ready (installed : Installed)
-  | poisoned
-  | closed
+private abbrev Phase := DiskSession.Phase Installed
 
 /-- An opaque snapshot handle tied to the open disk session that issued it. -/
 structure DiskSnapshotHandle where
@@ -94,8 +92,6 @@ private def syncPaths (paths : Array FilePath) : IO Unit := do
   let result ← IO.Process.output { cmd := "sync", args := #["--"] ++ arguments }
   if result.exitCode ≠ 0 then
     throw (IO.userError s!"sync failed for {arguments}: {result.stderr}")
-
-private def syncPath (path : FilePath) : IO Unit := syncPaths #[path]
 
 private def writeFlushed (path : FilePath) (content : ByteArray) : IO Unit := do
   let file ← IO.FS.Handle.mk path .write
@@ -294,29 +290,41 @@ private def openCheckpoint (dir : DiskDirectory) : IO (Option (PackedTable × UI
   readCheckpoint (readOptionalFile (dir.file .manifest))
     (fun generation index => IO.FS.readBinFile (dir.file (.run generation index))) IO.ofExcept
 
+/-- After loading the checkpoint, read and validate the WAL, settle its
+selected prefix, and publish a missing marker before installing the session.
+Keep the file operations and the final installation in their callers. -/
+@[macro_inline] def withRecoveredOpen [Monad m] {α : Type}
+    (checkpoint : Option (PackedTable × UInt64)) (readMarker readWal : m (Option ByteArray))
+    (validate : {β : Type} → Except String β → m β) (fail : {β : Type} → String → m β)
+    (createWal : Unit → m Unit)
+    (repairWal : ByteArray → m Unit) (syncWal : Unit → m Unit) (publishMarker : Nat → m Unit)
+    (install : PackedTable → UInt64 → Nat → m α) : m α := do
+  let (base, generation) := checkpoint.getD (.empty, 0)
+  WAL.Boundary.withOpenWal readMarker readWal validate (fun boundary => do
+    if checkpoint.isSome || boundary.isSome then
+      fail WAL.Boundary.missingOpenWal
+    else
+      createWal ()
+      pure ByteArray.empty) fun boundary bytes => do
+    let (selected, table) ← validate <| match boundary with
+      | some count => WAL.Boundary.recoverMarked base count bytes
+      | none => recoverLegacy base bytes
+    -- Both paths settle the visible checkpoint and marker before installation.
+    let table ← Publication.finishReopen bytes.size selected.size
+      (fun _ => repairWal selected) syncWal table
+    if boundary.isNone then
+      unless selected.size < UInt64.size do fail "WAL byte count is too large"
+      publishMarker selected.size
+    install table generation selected.size
+
 private def openLocked (dir : DiskDirectory) (lock : IO.FS.Handle) : IO DiskTable := do
   let checkpoint ← openCheckpoint dir
-  let (checkpointTable, checkpointGeneration) := checkpoint.getD (.empty, 0)
   let walPath := dir.file .wal
-  WAL.Boundary.withOpenWal (readOptionalFile (dir.file .walBoundary)) (readOptionalFile walPath)
-    IO.ofExcept (fun boundary => do
-      if checkpoint.isSome || boundary.isSome then
-        throw (IO.userError WAL.Boundary.missingOpenWal)
-      writeFlushed walPath ByteArray.empty
-      pure ByteArray.empty) fun boundary bytes => do
-    let (selected, table) ← IO.ofExcept <| match boundary with
-      | some count => WAL.Boundary.recoverMarked checkpointTable count bytes
-      | none => recoverLegacy checkpointTable bytes
-    -- Both paths sync the directory to settle the visible checkpoint and WAL marker,
-    -- including any rename reached by a prior process before its directory sync.
-    let table ← Publication.finishReopen bytes.size selected.size
-      (fun _ => atomicReplace dir .stagedWal .wal selected)
-      (fun _ => syncPaths #[walPath, dir.path]) table
-    -- Bootstrap an empty or legacy WAL only after its selected prefix is durable.
-    if boundary.isNone then
-      unless selected.size < UInt64.size do throw (IO.userError "WAL byte count is too large")
-      publishWalBoundary dir selected.size
-    let installed : Installed := { table, generation := checkpointGeneration, walBytes := selected.size }
+  withRecoveredOpen checkpoint (readOptionalFile (dir.file .walBoundary)) (readOptionalFile walPath)
+    IO.ofExcept (fun message => throw (IO.userError message)) (fun _ => writeFlushed walPath ByteArray.empty)
+    (fun selected => atomicReplace dir .stagedWal .wal selected) (fun _ => syncPaths #[walPath, dir.path])
+    (fun length => publishWalBoundary dir length) fun table generation walBytes => do
+    let installed : Installed := { table, generation, walBytes }
     -- ST.Ref.ptrEq distinguishes allocations. Keeping a separate cell lets a
     -- stale handle retain its identity without retaining the database state.
     return ⟨dir, lock, ← IO.mkRef (.ready installed), ← IO.mkRef ()⟩
@@ -338,10 +346,7 @@ def DiskTable.close (db : DiskTable) : IO Unit := do
     db.phase.set .closed
 
 private def DiskTable.installed (db : DiskTable) : IO Installed := do
-  match ← db.phase.get with
-  | .ready value => pure value
-  | .poisoned => throw (IO.userError "publication failed; reopen the database")
-  | .closed => throw (IO.userError "database is closed")
+  (← db.phase.get).installed
 
 /-- The outcome of a failed write at the WAL mutation boundary. -/
 inductive DiskWriteError where
@@ -389,22 +394,19 @@ def DiskTable.acquire (db : DiskTable) : IO DiskSnapshotPin := do
   let state ← db.installed
   fromOption (← db.acquireAt state.table.committed) "cannot acquire the latest snapshot"
 
-def DiskTable.release (db : DiskTable) (handle : DiskSnapshotHandle) : IO Unit := do
-  let state ← db.installed
-  if ← handle.session.ptrEq db.session then
+def DiskTable.release (db : DiskTable) (handle : DiskSnapshotHandle) : IO Unit :=
+  DiskSession.withLocalHandle db.installed (handle.session.ptrEq db.session) () fun state =>
     db.phase.set (.ready { state with table := state.table.release handle.localHandle })
 
 def DiskTable.lookup (db : DiskTable) (handle : DiskSnapshotHandle) (key : UInt64) :
-    IO (Option (Option UInt64)) := do
-  let state ← db.installed
-  unless ← handle.session.ptrEq db.session do return none
-  return state.table.lookup handle.localHandle key
+    IO (Option (Option UInt64)) :=
+  DiskSession.withLocalHandle db.installed (handle.session.ptrEq db.session) none fun state =>
+    pure (state.table.lookup handle.localHandle key)
 
 def DiskTable.range (db : DiskTable) (handle : DiskSnapshotHandle) (lo hi : UInt64) :
-    IO (Option (List (Alvoki.Compaction.Model.Entry (Option UInt64)))) := do
-  let state ← db.installed
-  unless ← handle.session.ptrEq db.session do return none
-  return state.table.range handle.localHandle lo hi
+    IO (Option (List (Alvoki.Compaction.Model.Entry (Option UInt64)))) :=
+  DiskSession.withLocalHandle db.installed (handle.session.ptrEq db.session) none fun state =>
+    pure (state.table.range handle.localHandle lo hi)
 
 def DiskTable.advanceFloor (db : DiskTable) (floor : UInt64) : IO Bool := do
   let state ← db.installed
@@ -417,6 +419,22 @@ def DiskTable.compact (db : DiskTable) (index : Nat) : IO Bool := do
   let some table := state.table.compact index | return false
   db.phase.set (.ready { state with table })
   return true
+
+/-- Dispatch the checkpoint schedule to the exact run and manifest file
+operations. The native caller caches the run array and encoded manifest. -/
+@[macro_inline] def performCheckpointFileStep [Monad m] (dir : DiskDirectory)
+    (generation : UInt64) (runs : Array CheckedRun) (stagedManifest : FilePath)
+    (manifestBytes : ByteArray) (checkRun : Option CheckedRun → m CheckedRun)
+    (write : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
+    (renameFile : FilePath → FilePath → m Unit) : CheckpointPublication.Step → m Unit
+  | .writeRun index => do
+    let run ← checkRun runs[index]?
+    write (dir.file (.run generation index)) run.run.bytes
+  | .syncRun index => sync #[dir.file (.run generation index)]
+  | .syncRunsDirectory => sync #[dir.path]
+  | .manifest step =>
+    Publication.performReplacement (write · manifestBytes) sync renameFile
+      stagedManifest dir.path (fun _ => dir.file .manifest) #[] step
 
 /-- Flush pending writes and publish a fresh generation. All previous run
 files and WAL frames remain available through interrupted publication. -/
@@ -432,13 +450,9 @@ def DiskTable.checkpoint (db : DiskTable) : IO Unit := do
   let manifestBytes := Manifest.encode (checkpointHeader table generation)
   let stagedManifest := db.dir.file .stagedManifest
   db.phase.set .poisoned
-  CheckpointPublication.run runs.size fun
-    | .writeRun index => do
-      let run ← fromOption runs[index]? "checkpoint run index is out of bounds"
-      writeFlushed (db.dir.file (.run generation index)) run.run.bytes
-    | .syncRun index => syncPath (db.dir.file (.run generation index))
-    | .syncRunsDirectory => syncPath db.dir.path
-    | .manifest step => performReplacement db.dir stagedManifest .manifest manifestBytes #[] step
+  CheckpointPublication.run runs.size
+    (performCheckpointFileStep db.dir generation runs stagedManifest manifestBytes
+      (fromOption · "checkpoint run index is out of bounds") writeFlushed syncPaths IO.FS.rename)
   db.phase.set (.ready { state with table, generation })
 
 end Alvoki.Storage
