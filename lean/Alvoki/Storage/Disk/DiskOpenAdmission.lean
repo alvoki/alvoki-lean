@@ -43,6 +43,24 @@ theorem OpenAdmissionReports.admits {image result : Type} {input : FilePath} {di
     simp [Bind.bind, EStateM.bind, rejectFlatWalWith, optionalMetadataWith, checkPrivateRegularWith, absent,
       present, regular, single, fileKind, liftExcept, observed.opened, Pure.pure, EStateM.pure]
 
+def MarkedRetryChunkReports.runWithAdmission {files : Type} {input : FilePath}
+    {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout before.image history} {published : CheckpointPublication.Image}
+    (observed : MarkedRetryChunkReports files directory layout published)
+    (admission : OpenAdmissionReports input directory observed.slot) :
+    EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession :=
+  DiskTable.withOpenAdmission input (fun path => liftExcept (admission.realPath path))
+    (fun path => pure (admission.lookup path)) (fun path => liftExcept (admission.openAppend path))
+    observed.runAt before
+
+theorem MarkedRetryChunkReports.runWithAdmission_eq {files : Type} {input : FilePath}
+    {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout before.image history} {published : CheckpointPublication.Image}
+    (observed : MarkedRetryChunkReports files directory layout published)
+    (admission : OpenAdmissionReports input directory observed.slot) :
+    observed.runWithAdmission admission = observed.run :=
+  admission.admits observed.runAt before
+
 /-- Compose the pre-lock native admission projection with the marked
 installer. The chunk reports belong to the actual append-open slot and
 reported flock at the resolved directory, and the locked schedule probes
@@ -60,11 +78,8 @@ theorem runOpenWithAdmission_markedRetryFromChunks {files : Type} {input : FileP
       before.image.directory.active.manifest)
     (ordered : WAL.OrdinalsFrom 1 history) :
     CachedRetryInstalled (before := before) observed.reported observed.descriptors observed.slot observed.bindings
-      published observed.liveRefs
-      (DiskTable.withOpenAdmission input (fun path => liftExcept (admission.realPath path))
-        (fun path => pure (admission.lookup path)) (fun path => liftExcept (admission.openAppend path))
-        observed.runAt before) := by
-  rw [admission.admits]
+      published observed.liveRefs (observed.runWithAdmission admission) := by
+  rw [observed.runWithAdmission_eq admission]
   exact runOpenWithInstallation_markedRetryFromChunks observed keeperValid laterValid following accepted ordered
 
 end Alvoki.Storage.DiskSession

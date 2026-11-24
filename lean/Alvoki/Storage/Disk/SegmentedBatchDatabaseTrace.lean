@@ -171,9 +171,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history (.inl installed.history)⟩
 
-/-- Publish the observed checkpoint recovery as a step in the mixed trace.
-Checkpointing changes the reachable run map but adds no write submission. -/
-theorem SegmentedBatchDatabaseTrace.reopenAfterCheckpointPowerLossChunks {files : Type}
+/-- The admitted reopen after checkpoint recovery returns the exact next
+writer in the mixed trace. The run map can change without a write submission. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterCheckpointPowerLossChunks {files : Type} {input : System.FilePath}
     (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
     (ready : initial.RetainedReady directory initialDescriptor) (cut : CheckpointPowerCut directory before)
     (published : CheckpointPublication.Image)
@@ -186,21 +186,35 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterCheckpointPowerLossChunks {files 
     (observes : ∀ layout : CanonicalKeeperLayout retry.image before.history,
       layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
       layout.sealed ++ [layout.keeper] = (published.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark →
-      Nonempty (MarkedRetryChunkReports files directory layout published)) :
+      ∃ observed : MarkedRetryChunkReports files directory layout published,
+        Nonempty (OpenAdmissionReports input directory observed.slot)) :
     ∃ (layout : CanonicalKeeperLayout retry.image before.history)
       (observed : MarkedRetryChunkReports files directory layout published) (after : SegmentedWriterState),
       CheckpointChunkWriter directory before published observed after ∧
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after ∧
       after.target.pair = pair ∧
       ((after.installed.generation = before.installed.generation ∧ pair.manifest = before.wal.directory.active.manifest) ∨
-        (after.installed.generation = SegmentedCheckpointReport.generation before ∧ pair.manifest = some cut.checkpoint.manifest)) := by
+        (after.installed.generation = SegmentedCheckpointReport.generation before ∧ pair.manifest = some cut.checkpoint.manifest)) ∧
+      ∃ (admission : OpenAdmissionReports input directory observed.slot)
+        (session : SegmentedSession) (final : LockedFileState FileImage),
+        observed.runWithAdmission admission = .ok session final ∧
+        session.directory = directory ∧ session.descriptor = observed.slot.description ∧
+        session.phase = .ready after.installed ∧ final.owners.Owns directory session.descriptor ∧
+        final.image.directory.active = pair ∧ after.files = final.image ∧ after.owners = final.owners := by
   have beforeReady := (trace.preservesRetained ready).1
-  obtain ⟨_, layout, observed, _, _, _, _, _, _, _, _, _, _, _, selected, _, _, _, _, generation,
+  obtain ⟨_, layout, observed, admission, _, _, _, _, session, final, returned, path, lock, phase, held, selected,
+    finalPair, _, _, _, generation,
     _, _, _, _, _, _, _, after, installed, _, installedPayload⟩ :=
     cut.reopensFromChunks beforeReady published projected pair survives retry failures observes
+  obtain ⟨sameSession, sameFinal, installedReturn, _, _, _, afterFiles, afterOwners⟩ := installed.reopened
+  have same := EStateM.Result.ok.inj (installedReturn.symm.trans
+      ((observed.runWithAdmission_eq admission).symm.trans returned))
   exact ⟨layout, observed, after, installed,
     .checkpointPowerLossObserved trace cut projected survives failures selected installed,
-    (congrArg Target.pair installed.target).trans selected, installedPayload.symm ▸ generation⟩
+    (congrArg Target.pair installed.target).trans selected, installedPayload.symm ▸ generation,
+    admission, session, final, returned, path, lock, installedPayload.symm ▸ phase, held, finalPair,
+    afterFiles.trans (congrArg LockedFileState.image same.2),
+    afterOwners.trans (congrArg LockedFileState.owners same.2)⟩
 
 /-- Extend the trace using the actual failed commit, lock release and
 bounded reopen reports. Retained readiness is derived from the prior trace. -/

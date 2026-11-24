@@ -1,9 +1,10 @@
 import Alvoki.Storage.Disk.SegmentedCheckpointPowerLoss
-import Alvoki.Storage.Disk.CachedMarkedRetryInstallation
+import Alvoki.Storage.Disk.DiskOpenAdmission
 
 namespace Alvoki.Storage.DiskSession
 
 open WalSegmentRepair
+open System (FilePath)
 
 private theorem followingAfterSelection {offsets selected : List Nat} {watermark first : Nat}
     (chosen : selectWalSegmentReads offsets watermark = some (first, selected))
@@ -88,9 +89,10 @@ private theorem CachedRetryInstalled.appendCutReady
 result. At the final retry, the marked dispatcher reads the checkpoint
 selected by the surviving pair, then installs the replay of the same WAL.
 The callback packet is indexed by the physical selected layout at that
-retry. It supplies its chunk reads and successful reached repair effects. -/
+retry. It supplies the successful native admission reports for its exact lock
+slot, the chunk reads and the successful reached repair effects. -/
 theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDirectory}
-    {before : SegmentedWriterState} {writer : Nat} (cut : CheckpointPowerCut directory before)
+    {before : SegmentedWriterState} {writer : Nat} {input : FilePath} (cut : CheckpointPowerCut directory before)
     (ready : before.RetainedReady directory writer) (published : CheckpointPublication.Image)
     (projected : before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published)
     (pair : DirectoryPublication.Bindings) (survives : pair ∈ (published.segmentedCheckpointView before.wal).directory.crashImages)
@@ -101,16 +103,19 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
     (observes : ∀ layout : CanonicalKeeperLayout retry.image before.history,
       layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
       layout.sealed ++ [layout.keeper] = (published.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark →
-      Nonempty (MarkedRetryChunkReports files directory layout published)) :
+      ∃ observed : MarkedRetryChunkReports files directory layout published,
+        Nonempty (OpenAdmissionReports input directory observed.slot)) :
     BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
       ⟨physical before published, before.owners⟩ retry ∧
     ∃ (layout : CanonicalKeeperLayout retry.image before.history)
       (observed : MarkedRetryChunkReports files directory layout published)
+      (admission : OpenAdmissionReports input directory observed.slot)
       (sizes : SizedCheckpointRunReports directory observed.reported.inventory.reports
         retry.image.directory.active.manifest published.durable)
       (opened : Reopened) (checkpoint : Option (PackedTable × UInt64)) (model : Sequential.SnapshotTable UInt64)
       (session : SegmentedSession) (final : LockedFileState FileImage),
-      observed.run = .ok session final ∧ session.directory = directory ∧ session.descriptor = observed.slot.description ∧
+      observed.runWithAdmission admission = .ok session final ∧
+      session.directory = directory ∧ session.descriptor = observed.slot.description ∧
       session.phase = .ready opened.installed ∧ final.owners.Owns directory session.descriptor ∧
       retry.image.directory.active = pair ∧ final.image.directory.active = pair ∧ final.image.Ready layout.target ∧
       SelectedIntegrityCheckpoint published.durable pair.manifest checkpoint ∧
@@ -133,7 +138,7 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
     .crash survives
   obtain ⟨layout, chosenPair, keeper, tail, descriptors, offsets, prepared, _, accepted⟩ :=
     published.checkpointRetryLayout walLayout valid crashDirectory inputs lineage
-  obtain ⟨observed⟩ := observes layout keeper tail descriptors
+  obtain ⟨observed, ⟨admission⟩⟩ := observes layout keeper tail descriptors
   have ordered := (List.pairwise_append.mp (List.pairwise_append.mp observed.reported.ordered).1).2.1
   rw [← descriptors] at offsets
   have following := followingAfterSelection offsets ordered (headOfChain layout.chain (by simp))
@@ -171,7 +176,8 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
   have sameSession := (EStateM.Result.ok.inj (writerReturn.symm.trans returned)).1
   rw [sameSession] at writerPhase
   have sameInstalled := Phase.ready.inj (writerPhase.symm.trans phase)
-  exact ⟨loss.trans failures, layout, observed, sizes, opened, checkpoint, model, session, final, returned, directoryExact,
+  exact ⟨loss.trans failures, layout, observed, admission, sizes, opened, checkpoint, model, session, final,
+    (observed.runWithAdmission_eq admission).trans returned, directoryExact,
     lock.trans observed.inventoryDescription, phase, held, surviving, finalPair, repaired, selected, rfl,
     exactGeneration, exactBytes, exactKeeper, replayed, committed, bounds, refines, represents,
     after, writer, sameCheckpoint, sameInstalled⟩
