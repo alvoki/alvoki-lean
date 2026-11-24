@@ -129,7 +129,9 @@ import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
+import Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
+import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 import Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
@@ -977,6 +979,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.keeperReached_eq_of_readonly
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.reopen_keeperExtentError
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedKeeperExtentError
+#check_axioms Alvoki.WAL.Boundary.decode_lengthError
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalMarkerRead.reopen_decodeError
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalMarkerRead.reached_eq_of_readonly
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedMarkerDecodeError
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.selectedThroughEnd
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithPrefix_liftReports
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readSelectedCached
@@ -994,6 +1000,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.reopensRetainedCached
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalPayloadReports.byteCount
 #check_axioms Alvoki.Storage.WalSegmentRepair.countCachedWalReadCalls_bound
+#check_axioms Alvoki.Storage.readIntegrityCheckpointSized_requestBound
+#check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_requestBound
+#check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_requestBound
+#check_axioms Alvoki.Storage.WalSegmentRepair.countCachedMarkedOpenRequests_bound
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBoundedMarkedFromReaders_reported
