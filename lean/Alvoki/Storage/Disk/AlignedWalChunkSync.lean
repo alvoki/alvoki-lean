@@ -98,4 +98,87 @@ theorem readWalKeeperWithChunks_syncAligned
     change bindings path = some (seen.inventory.inode seen.slot.description)
     simpa only [seen.sameObject] using boundAtSync
 
+/-- A single aligned read supplies the byte callback used by WAL selection
+and the handle consumed by the actual bounded finisher. The directory
+barrier keeps that pending handle. Only a successful directory callback
+reaches the keeper callback, and each singleton barrier preserves its
+own reached success or failure state. -/
+theorem readWalKeeperWithChunks_finishAligned
+    {reads : CheckpointRunChunkReads} (directory : DiskDirectory) (plan : Plan) {tail : ByteArray}
+    (seen : reads.ObservesFile (directory.file (.walSegment plan.keeper)) (plan.keeperBytes ++ tail))
+    (valid : plan.valid = true) (bytes : plan.keeperBytes.size = plan.keeperSize) (noLater : plan.newer = [])
+    (fits : plan.keeperBytes.size < USize.size) (aligned : plan.keeperBytes.size = seen.metadata.byteSize.toNat)
+    (separate : directory.file (.walSegment plan.keeper) ≠ directory.path)
+    (cache : Cache (DescriptorInventory × DescriptorSlot × Nat))
+    (inventory : DescriptorInventory) (slot : DescriptorSlot) (offset : Nat)
+    (hasDirectory : cache.directory = some (inventory, slot, offset))
+    (directoryDrops : List LockReferenceDrop)
+    (directoryLive : slot.reference ∈ (inventory.afterDrops directoryDrops).references slot.description)
+    (directoryBindings : FilePath → Option Nat)
+    (directoryBound : directoryBindings directory.path = some (inventory.inode slot.description))
+    (directoryOutcome : DelayedDirectorySyncOutcome) (initial : LockedFileState FileImage)
+    (openRead : FilePath → EStateM IO.Error (LockedFileState FileImage) (DescriptorInventory × DescriptorSlot × Nat))
+    (fsync : (DescriptorInventory × DescriptorSlot × Nat) → EStateM IO.Error (LockedFileState FileImage) Unit)
+    (remove : FilePath → EStateM IO.Error (Cache (DescriptorInventory × DescriptorSlot × Nat) × LockedFileState FileImage)
+      (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error
+      (Cache (DescriptorInventory × DescriptorSlot × Nat) × LockedFileState FileImage) Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error
+      (Cache (DescriptorInventory × DescriptorSlot × Nat) × LockedFileState FileImage) Unit) :
+    let path := directory.file (.walSegment plan.keeper)
+    let captured := (seen.inventory, seen.slot, 0)
+    let remembered := cache.remember path captured
+    let report := inventory.delayedDirectorySync directoryDrops directory slot.description slot.reference directoryLive
+      directoryBindings directoryBound directoryOutcome
+    let grouped := SyncPathGroup.run (sync directory.path openRead fsync)
+    let directorySync (_ : FilePath) :
+        EStateM IO.Error (Cache (DescriptorInventory × DescriptorSlot × Nat) × LockedFileState FileImage) Unit :=
+      fun (current, files) => withCache current (report.run files)
+    let keeperSync (_ : FilePath) :
+        EStateM IO.Error (Cache (DescriptorInventory × DescriptorSlot × Nat) × LockedFileState FileImage) Unit :=
+      fun (_, files) => withCache (cache.consume path) (fsync captured files)
+    fsync (inventory, slot, offset) initial = report.run initial →
+    readWalKeeperBytes reads path plan.keeperBytes.size seen.metadata.byteSize.toNat = .ok plan.keeperBytes ∧
+      (do
+        let selected ← readWalKeeperWithChunks reads path plan.keeperBytes.size seen.metadata.byteSize.toNat
+        finishBoundedMarkedOpen directory plan seen.metadata.byteSize.toNat remove write grouped rename
+        pure selected : EStateM IO.Error _ ByteArray) (cache, initial) =
+      (do
+        SyncPathGroup.run directorySync #[directory.path]
+        SyncPathGroup.run keeperSync #[path]
+        pure plan.keeperBytes : EStateM IO.Error _ ByteArray) (remembered, initial) := by
+  intro path captured remembered report grouped directorySync keeperSync directoryEffect
+  obtain ⟨read, _, directoryGrouped⟩ := readWalKeeperWithChunks_syncCapturedDirectory
+    directory plan.keeper seen fits aligned cache inventory slot offset hasDirectory directoryDrops directoryLive
+    directoryBindings directoryBound directoryOutcome initial openRead fsync directoryEffect
+  have readExact : readWalKeeperWithChunks reads path plan.keeperBytes.size seen.metadata.byteSize.toNat
+      (cache, initial) = .ok plan.keeperBytes (remembered, initial) := read
+  have alignedSize : seen.metadata.byteSize.toNat = plan.keeperSize := aligned.symm.trans bytes
+  have finish : finishBoundedMarkedOpen directory plan seen.metadata.byteSize.toNat remove write grouped rename =
+      (do grouped #[directory.path]; grouped #[path]) := by
+    simp [finishBoundedMarkedOpen, valid, bytes, noLater, alignedSize, path]
+  refine ⟨?_, ?_⟩
+  · rw [← readWalKeeperWithChunks_project reads _ _ _ cache initial, readExact]
+  · have directoryRouted : grouped #[directory.path] (remembered, initial) =
+        SyncPathGroup.run directorySync #[directory.path] (remembered, initial) := directoryGrouped
+    have keeperGrouped (after : LockedFileState FileImage) :
+        grouped #[path] (remembered, after) = SyncPathGroup.run keeperSync #[path] (remembered, after) := by
+      have route : sync directory.path openRead fsync path (remembered, after) =
+          keeperSync path (remembered, after) := by
+        change sync directory.path openRead fsync path (cache.remember path captured, after) =
+          withCache (cache.consume path) (fsync captured after)
+        rw [syncRemembered separate captured openRead fsync after]
+        cases fsync captured after <;> rfl
+      have groupedReport := SyncPathGroup.run_single keeperSync path (remembered, after)
+      rw [← route] at groupedReport
+      exact (SyncPathGroup.run_single (sync directory.path openRead fsync) path (remembered, after)).trans
+        groupedReport.symm
+    simp only [finish, Bind.bind, EStateM.bind, readExact, directoryRouted]
+    rw [SyncPathGroup.run_single directorySync]
+    cases directoryRan : report.run initial with
+    | error cause reached => simp [directorySync, directoryRan, withCache]
+    | ok result reached =>
+      cases result
+      simp only [directorySync, directoryRan, withCache, keeperGrouped]
+
 end Alvoki.Storage.WalSegmentRepair

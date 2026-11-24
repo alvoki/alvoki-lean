@@ -41,13 +41,14 @@ theorem readWalKeeperWithChunks_exact
 
 /-- Project the payload result for the read-only file image. Keeper handle
 custody is available separately through `readWalKeeperWithChunks_exact`. -/
-private def readWalKeeperBytes (reads : CheckpointRunChunkReads)
+def readWalKeeperBytes (reads : CheckpointRunChunkReads)
     (path : FilePath) (count fileSize : Nat) : Except IO.Error ByteArray :=
   match readWalKeeperWithChunks reads path count fileSize (⟨none, none, []⟩, ()) with
   | .ok payload _ => .ok payload
   | .error cause _ => .error cause
 
-private theorem readWalKeeperWithChunks_project {state : Type} (reads : CheckpointRunChunkReads)
+/-- The reached cache and external state cannot change the payload result. -/
+theorem readWalKeeperWithChunks_project {state : Type} (reads : CheckpointRunChunkReads)
     (path : FilePath) (count fileSize : Nat) (cache : Cache (DescriptorInventory × DescriptorSlot × Nat))
     (initial : state) :
     (match readWalKeeperWithChunks reads path count fileSize (cache, initial) with
