@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.MarkedSessionTrace
+import Alvoki.Storage.Disk.SegmentedCollectionPowerLoss
 import Alvoki.Storage.Disk.SegmentedAppendRecovery
 import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
@@ -19,65 +20,73 @@ open scoped List
 
 /-- Completed stretches and reported reopenings of one directory. A
 recovered writer is the exact predecessor of its next operation. The log
-accounts for write submissions separately from ownership changes. -/
+accounts for write submissions separately from ownership changes.
+The collection-free specialization also preserves the full WAL chain. -/
 inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor : Nat)
-    (initial : SegmentedWriterState) : List MarkedSessionWrites → Nat → SegmentedWriterState → Prop where
-  | start : SegmentedDatabaseTrace directory initialDescriptor initial [] initialDescriptor initial
+    (initial : SegmentedWriterState) (allowCollection : Bool) : List MarkedSessionWrites → Nat → SegmentedWriterState → Prop where
+  | start : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection [] initialDescriptor initial
   | writes {log descriptor before after acknowledged checkpoints}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor before)
       (writer : SegmentedWriterTrace directory descriptor before acknowledged checkpoints after) :
-      SegmentedDatabaseTrace directory initialDescriptor initial (log ++ [⟨acknowledged, none⟩]) descriptor after
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection (log ++ [⟨acknowledged, none⟩]) descriptor after
   | rotate {log descriptor before target}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor before)
       (report : SegmentedRotationReport directory before) (selected : report.Selects target) :
-      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor (report.next target)
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor (report.next target)
   | close {log writer descriptor before after}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedCleanReopenReport directory before writer descriptor)
       (observed : report.Valid) (endpoint : report.Installs after) :
-      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
   | powerLoss {log writer descriptor before after}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedReadyPowerLossReport directory before writer descriptor)
       (observed : report.Valid) (endpoint : report.Installs after) :
-      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
   | appendError {log writer descriptor before after}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedAppendRecoveryReport directory before writer descriptor)
       (endpoint : report.Installs after) :
-      SegmentedDatabaseTrace directory initialDescriptor initial (log ++ [⟨[], some report.failure.event⟩]) descriptor after
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection (log ++ [⟨[], some report.failure.event⟩]) descriptor after
   | appendPowerLoss {log writer descriptor before after}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedAppendPowerLossReport directory before writer descriptor)
       (observed : report.Valid) (endpoint : report.Installs after) :
-      SegmentedDatabaseTrace directory initialDescriptor initial (log ++ [⟨[], some report.event⟩]) descriptor after
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection (log ++ [⟨[], some report.event⟩]) descriptor after
   | markerPowerLoss {log writer descriptor before after}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedMarkerPowerLossReport directory before writer descriptor)
       (observed : report.Valid) (endpoint : report.Installs after) :
-      SegmentedDatabaseTrace directory initialDescriptor initial (log ++ [⟨[], some report.event⟩]) descriptor after
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection (log ++ [⟨[], some report.event⟩]) descriptor after
   | checkpointError {log writer descriptor before after}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedCheckpointFailure directory before writer descriptor)
       (endpoint : report.Installs after) :
-      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
   | checkpointPowerLoss {log writer descriptor before after}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedCheckpointPowerLossReport directory before writer descriptor)
       (observed : report.Valid) (endpoint : report.Installs after) :
-      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
   | rotationError {log writer descriptor before after}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedRotationRecoveryReport directory before descriptor)
       (release : SegmentedFailureRelease writer)
       (observed : release.Observed (directory := directory) report.failure.poisoned report.failure.released)
       (endpoint : SegmentedRotationReopened directory descriptor before after report.run) :
-      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
   | rotationPowerLoss {log writer descriptor before after}
-      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (report : SegmentedRotationPowerLossReport directory before descriptor)
       (endpoint : report.Installs after) :
-      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
+
+  | collectionPowerLoss {log writer descriptor before after}
+      (enabled : allowCollection = true)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (report : SegmentedCollectionPowerLossReport directory before writer descriptor)
+      (observed : report.Valid) (endpoint : report.Installs after) :
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
 
 private theorem retainsInterruptedAppend {initial before after : List WAL.Write} {log retained event}
     (history : before = initial ++ retained) (submitted : MarkedSessionRetention log retained)
@@ -89,7 +98,7 @@ private theorem retainsInterruptedAppend {initial before after : List WAL.Write}
     exact submitted.append (Or.inr ⟨event, rfl, rfl⟩)
 
 theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initial log descriptor last}
-    (trace : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor last)
+    (trace : SegmentedDatabaseTrace directory initialDescriptor initial false log descriptor last)
     (ready : initial.Ready directory initialDescriptor) :
     last.Ready directory descriptor ∧
       ∃ retained, last.history = initial.history ++ retained ∧ MarkedSessionRetention log retained := by
@@ -129,18 +138,64 @@ theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initi
   | rotationPowerLoss _ _ endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesReady before, retained, endpoint.history.trans history, submitted⟩
+  | collectionPowerLoss enabled => cases enabled
+
+theorem SegmentedDatabaseTrace.preservesRetained {directory initialDescriptor initial allowCollection log descriptor last}
+    (trace : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
+    (ready : initial.RetainedReady directory initialDescriptor) :
+    last.RetainedReady directory descriptor ∧
+      ∃ retained, last.history = initial.history ++ retained ∧ MarkedSessionRetention log retained := by
+  induction trace with
+  | start => exact ⟨ready, [], by simp, .start⟩
+  | writes _ writer ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    obtain ⟨ready, appended⟩ := writer.preservesRetained before
+    exact ⟨ready, _, by rw [appended, history, List.append_assoc], submitted.append (Or.inl rfl)⟩
+  | rotate _ report selected ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨report.preservesRetainedReady before selected, retained, history, submitted⟩
+  | close _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
+  | powerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
+  | appendError _ _ endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained before, retainsInterruptedAppend history submitted endpoint.history⟩
+  | appendPowerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained observed before, retainsInterruptedAppend history submitted (.inl endpoint.history)⟩
+  | markerPowerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained observed before, retainsInterruptedAppend history submitted endpoint.history⟩
+  | checkpointError _ _ endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained before, retained, endpoint.history.trans history, submitted⟩
+  | checkpointPowerLoss _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
+  | rotationError _ _ _ _ endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetainedReady before, retained, endpoint.history.trans history, submitted⟩
+  | rotationPowerLoss _ _ endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetainedReady before, retained, endpoint.history.trans history, submitted⟩
+  | collectionPowerLoss _ _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesRetained observed before, retained, endpoint.history.trans history, submitted⟩
 
 /-- A history from the first installed empty writer retains all
 acknowledgements in order. It may retain the uncertain append at a
 session boundary, and every retained frame is one that was submitted. -/
-theorem SegmentedDatabaseTrace.fromBootstrap {directory initialDescriptor log descriptor last}
+theorem SegmentedDatabaseTrace.fromBootstrap {directory initialDescriptor allowCollection log descriptor last}
     {first : LockedFileState WalSegmentRotation.State} (bootstrap : BootstrapReady first.image)
     (held : first.owners.Owns directory initialDescriptor)
-    (trace : SegmentedDatabaseTrace directory initialDescriptor (bootstrap.writerState first.owners) log descriptor last) :
-    last.Ready directory descriptor ∧ MarkedSessionRetention log last.history ∧
+    (trace : SegmentedDatabaseTrace directory initialDescriptor (bootstrap.writerState first.owners) allowCollection log descriptor last) :
+    last.RetainedReady directory descriptor ∧ MarkedSessionRetention log last.history ∧
       log.flatMap MarkedSessionWrites.acknowledged <+ last.history ∧
       last.history <+ log.flatMap MarkedSessionWrites.submitted := by
-  obtain ⟨ready, retained, exactHistory, history⟩ := trace.preservesReady (bootstrap.writerReady held)
+  obtain ⟨ready, retained, exactHistory, history⟩ := trace.preservesRetained (bootstrap.writerReady held).toRetained
   change last.history = [] ++ retained at exactHistory
   simp only [List.nil_append] at exactHistory
   subst retained
@@ -170,9 +225,9 @@ theorem SegmentedDatabaseTrace.fromBootstrapRun (directory : DiskDirectory) (des
     runOpenWithInstallation directory descriptor nextRef acquired unlock recover before = .ok session after →
     ∃ bootstrap : BootstrapReady after.image,
       session = ⟨directory, descriptor, .ready (bootstrap.writerState after.owners).installed, nextRef, nextRef + 1⟩ ∧
-      ∀ {log next last},
-        SegmentedDatabaseTrace directory descriptor (bootstrap.writerState after.owners) log next last →
-        last.Ready directory next ∧ MarkedSessionRetention log last.history ∧
+      ∀ {allowCollection log next last},
+        SegmentedDatabaseTrace directory descriptor (bootstrap.writerState after.owners) allowCollection log next last →
+        last.RetainedReady directory next ∧ MarkedSessionRetention log last.history ∧
           log.flatMap MarkedSessionWrites.acknowledged <+ last.history ∧
           last.history <+ log.flatMap MarkedSessionWrites.submitted := by
   intro recover opened
@@ -184,21 +239,21 @@ theorem SegmentedDatabaseTrace.fromBootstrapRun (directory : DiskDirectory) (des
 
 /-- Reads with a pin belonging to the current writer match replay of the
 retained history from the empty abstract table. -/
-theorem SegmentedDatabaseTrace.pinnedReads {directory initialDescriptor initial log descriptor last}
-    (trace : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor last)
-    (initialReady : initial.Ready directory initialDescriptor) :
+theorem SegmentedDatabaseTrace.pinnedReads {directory initialDescriptor initial allowCollection log descriptor last}
+    (trace : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
+    (initialReady : initial.RetainedReady directory initialDescriptor) :
     ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty last.history reference ∧
       ∀ pin ∈ last.installed.table.pins.active,
         (∀ key, last.installed.table.lookup pin.handle key = some (reference.table.lookup key pin.sequence)) ∧
         ∀ start stop, last.installed.table.range pin.handle start stop =
           some (reference.table.range start stop pin.sequence) :=
-  (trace.preservesReady initialReady).1.toRetained.pinnedReads
+  (trace.preservesRetained initialReady).1.pinnedReads
 
 /-- Interpret the adapter's reported session comparison on the installed
 writer. A foreign token yields no result even if its handle number is in use. -/
-theorem SegmentedDatabaseTrace.guardedPinnedReads {directory initialDescriptor initial log descriptor last}
-    (trace : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor last)
-    (initialReady : initial.Ready directory initialDescriptor) {sameSession : Bool} {issuer current : Nat}
+theorem SegmentedDatabaseTrace.guardedPinnedReads {directory initialDescriptor initial allowCollection log descriptor last}
+    (trace : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
+    (initialReady : initial.RetainedReady directory initialDescriptor) {sameSession : Bool} {issuer current : Nat}
     (compared : sameSession = decide (issuer = current)) :
     ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty last.history reference ∧
       ∀ pin ∈ last.installed.table.pins.active,
@@ -219,28 +274,28 @@ theorem SegmentedDatabaseTrace.guardedPinnedReads {directory initialDescriptor i
 
 /-- After any covered reopen, every supported sequence can be acquired
 against the returned table and reads the same snapshot as abstract replay. -/
-theorem SegmentedDatabaseTrace.acquireReads {directory initialDescriptor initial log descriptor last}
-    (trace : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor last)
-    (initialReady : initial.Ready directory initialDescriptor) {snapshot : UInt64}
+theorem SegmentedDatabaseTrace.acquireReads {directory initialDescriptor initial allowCollection log descriptor last}
+    (trace : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
+    (initialReady : initial.RetainedReady directory initialDescriptor) {snapshot : UInt64}
     (retained : last.installed.table.pins.floor ≤ snapshot) (committed : snapshot ≤ last.installed.table.committed) :
     ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty last.history reference ∧
       ∃ pin pinned, last.installed.table.acquireAt snapshot = some (pin, pinned) ∧
         (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
         ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) :=
-  (trace.preservesReady initialReady).1.toRetained.acquireReads retained committed
+  (trace.preservesRetained initialReady).1.acquireReads retained committed
 
 /-- An earlier pin's sequence reads the same values after reacquiring it
 in the final session, provided the final writer still retains it. -/
-theorem SegmentedDatabaseTrace.reacquireReadsStable {directory initialDescriptor initial log descriptor last}
-    (trace : SegmentedDatabaseTrace directory initialDescriptor initial log descriptor last)
-    (initialReady : initial.Ready directory initialDescriptor) {oldPin : SnapshotPin}
+theorem SegmentedDatabaseTrace.reacquireReadsStable {directory initialDescriptor initial allowCollection log descriptor last}
+    (trace : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor last)
+    (initialReady : initial.RetainedReady directory initialDescriptor) {oldPin : SnapshotPin}
     (active : oldPin ∈ initial.installed.table.pins.active)
     (retained : last.installed.table.pins.floor ≤ oldPin.sequence) :
     ∃ newPin pinned, last.installed.table.acquireAt oldPin.sequence = some (newPin, pinned) ∧
       newPin.sequence = oldPin.sequence ∧
       (∀ key, pinned.lookup newPin.handle key = initial.installed.table.lookup oldPin.handle key) ∧
       ∀ start stop, pinned.range newPin.handle start stop = initial.installed.table.range oldPin.handle start stop := by
-  obtain ⟨ready, _, history, _⟩ := trace.preservesReady initialReady
-  exact initialReady.toRetained.reacquireReadsStable ready.toRetained history active retained
+  obtain ⟨ready, _, history, _⟩ := trace.preservesRetained initialReady
+  exact initialReady.reacquireReadsStable ready history active retained
 
 end Alvoki.Storage.DiskSession
