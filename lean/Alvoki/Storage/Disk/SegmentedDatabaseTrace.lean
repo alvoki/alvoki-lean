@@ -7,6 +7,7 @@ import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.SegmentedCheckpointPowerLoss
 import Alvoki.Storage.Disk.SegmentedCleanReopen
+import Alvoki.Storage.Disk.SegmentedDelayedAppendReopen
 import Alvoki.Storage.Disk.SegmentedDelayedKeeperPowerLoss
 import Alvoki.Storage.Disk.SegmentedMarkerPowerLoss
 import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
@@ -52,6 +53,20 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (report : SegmentedAppendRecoveryReport directory before writer descriptor)
       (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial allowCollection (log ++ [⟨[], some report.failure.event⟩]) descriptor after
+  | delayedDirectoryAppend {log writer descriptor before after}
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (failure : SegmentedAppendFailure directory before) (barrier : DelayedDirectorySync directory)
+      (references : HeldLockReferences writer) (last : references.remaining barrier.drops = [])
+      (handoff : barrier.AppendHandoff failure references last)
+      {retry : LockedFileState FileImage}
+      (attempts : BoundedReopenTrace directory (AppendRetryTarget before.history failure.event before.wal.active.first)
+        (barrier.after failure.released) retry)
+      {reopen : BoundedReopenAttempt} {recover : EStateM IO.Error FileImage Reopened}
+      (reads : DelayedDirectorySync.CachedAppendReads (descriptor := descriptor) failure retry reopen recover)
+      (endpoint : AppendRetryEndpoint directory before failure.event retry descriptor
+        (runOpenWithInstallation directory reopen.descriptor reopen.nextRef reopen.acquired reopen.unlock recover retry) after)
+      (ready : after.RetainedReady directory descriptor) :
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection (log ++ [⟨[], some failure.event⟩]) descriptor after
   | delayedKeeperPowerLoss {log writer descriptor before after}
       (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (failure : SegmentedAppendFailure directory before) (release : SegmentedFailureRelease writer)
@@ -200,6 +215,10 @@ private theorem SegmentedDatabaseTrace.preservesReadiness {directory initialDesc
     intro disabled initialChain
     have full := before.withChain (fullChain disabled initialChain)
     exact (endpoint.preservesReady full).chain
+  | delayedDirectoryAppend _ _ _ _ _ _ _ _ endpoint next ih =>
+    obtain ⟨before, fullChain, _, history, submitted⟩ := ih
+    exact ⟨next, fun disabled initialChain => endpoint.preservesChain before.layout (fullChain disabled initialChain),
+      retainsInterruptedAppend history submitted endpoint.history⟩
   | delayedKeeperPowerLoss _ _ _ _ _ _ _ endpoint _ next ih =>
     obtain ⟨before, fullChain, _, history, submitted⟩ := ih
     exact ⟨next, fun disabled initialChain => endpoint.preservesChain before.layout (fullChain disabled initialChain),
@@ -368,6 +387,46 @@ theorem SegmentedDatabaseTrace.appendPowerLossCached {directory initialDescripto
   obtain ⟨after, installed, session, final, ran, phase, image, owners⟩ :=
     report.installsRetainedCached observed ready sizes cached
   exact ⟨after, session, final, .appendPowerLoss prior report observed installed, ran, phase, image, owners⟩
+
+/-- Extend the mixed trace after the failed append, last reference drop,
+and delayed directory barrier. The next writer is the exact result of
+cached recovery from the reached retry image and owner map. -/
+theorem SegmentedDatabaseTrace.delayedDirectoryAppendCached
+    {directory initialDescriptor initial allowCollection log writer descriptor before}
+    (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (barrier : DelayedDirectorySync directory) (failure : SegmentedAppendFailure directory before)
+    (references : HeldLockReferences writer) (last : references.remaining barrier.drops = [])
+    (separate : barrier.captured.description ≠ writer) {retry : LockedFileState FileImage}
+    (attempts : BoundedReopenTrace directory (AppendRetryTarget before.history failure.event before.wal.active.first)
+      (barrier.after failure.released) retry)
+    (reopen : BoundedReopenAttempt) (descriptorEq : reopen.descriptor = descriptor)
+    (acquired : reopen.acquired = .ok true) (acquisition : TryLockObserves retry.owners directory (.ok true))
+    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < reopen.nextRef)
+    (recover : EStateM IO.Error FileImage Reopened)
+    (reads : DelayedDirectorySync.CachedAppendReads (descriptor := descriptor) failure retry reopen recover)
+    (settles : reopen.sync #[directory.path] retry.image = .ok () retry.image.syncDirectory)
+    (healthy : ∀ history, ∀ selected : CanonicalKeeperLayout retry.image history,
+      (history = before.history ∨ history = before.history ++ [failure.event]) →
+      selected.target.first = before.wal.active.first →
+      ∀ action prior next,
+        ReachesAction selected.target retry.image.syncDirectory selected.plan.finishActions action prior →
+        prior.effect selected.target action = some next →
+        performPaths directory selected.plan reopen.removeFile throw reopen.write reopen.sync reopen.renameFile action prior =
+          .ok () next) :
+    ∃ after,
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [⟨[], some failure.event⟩]) descriptor after ∧
+      AppendRetryEndpoint directory before failure.event retry descriptor
+        (runOpenWithInstallation directory reopen.descriptor reopen.nextRef reopen.acquired reopen.unlock recover retry) after ∧
+      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64) ∧
+      after.checkpoint = before.checkpoint ∧ after.installed.generation = before.installed.generation := by
+  have ready := (prior.preservesRetained initialReady).1
+  obtain ⟨handoff, after, endpoint, retained, marker, checkpoint, generation⟩ :=
+    barrier.reopensRetainedAppendErrorCached ready failure references last separate attempts reopen descriptorEq
+      acquired acquisition liveRefs fresh recover reads settles healthy
+  exact ⟨after, .delayedDirectoryAppend prior failure barrier references last handoff attempts reads endpoint retained,
+    endpoint, marker, checkpoint, generation⟩
 
 /-- Carry the cached writer returned after the delayed old keeper's effect,
 power loss and retries into the mixed history. Only the interrupted append

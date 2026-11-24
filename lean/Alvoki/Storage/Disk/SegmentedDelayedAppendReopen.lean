@@ -101,6 +101,21 @@ theorem DelayedDirectorySync.reopensRetainedAppendError {directory : DiskDirecto
     continued.reopensRetainedAppend ready failure.event extended fits failure.effects
       reopen descriptorEq acquired acquisition liveRefs fresh reads settles healthy⟩
 
+/-- The cached worker uses the raw path reports for the selected checkpoint,
+seals, and bounded keeper of the reached retry. -/
+abbrev DelayedDirectorySync.CachedAppendReads {directory : DiskDirectory} {before : SegmentedWriterState}
+    {descriptor : Nat} (failure : SegmentedAppendFailure directory before) (retry : LockedFileState FileImage)
+    (reopen : BoundedReopenAttempt) (recover : EStateM IO.Error FileImage Reopened) : Prop :=
+  ∀ history, ∀ selected : CanonicalKeeperLayout retry.image history,
+    (history = before.history ∨ history = before.history ++ [failure.event]) →
+    selected.target.first = before.wal.active.first →
+    let wal := before.wal.appendSelectedView retry.image.directory.active history
+    ∃ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
+        wal retry.image.directory.active selected.range.watermark before.published.durable selected.tail,
+      ∃ sizes : SizedCheckpointRunReports directory raw.reports retry.image.directory.active.manifest before.published.durable,
+        ∃ cached : CachedWalFileReports directory raw.reports wal selected.range.watermark selected.tail,
+          recover = raw.reopenCached sizes cached reopen.removeFile reopen.write reopen.sync reopen.renameFile
+
 /-- Following the same reported directory sync and retries, the cached
 reader installs the exact surviving marker and strict checkpoint. -/
 theorem DelayedDirectorySync.reopensRetainedAppendErrorCached
@@ -115,15 +130,7 @@ theorem DelayedDirectorySync.reopensRetainedAppendErrorCached
     (acquired : reopen.acquired = .ok true) (acquisition : TryLockObserves retry.owners directory (.ok true))
     (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < reopen.nextRef)
     (recover : EStateM IO.Error FileImage Reopened)
-    (reads : ∀ history, ∀ selected : CanonicalKeeperLayout retry.image history,
-      (history = before.history ∨ history = before.history ++ [failure.event]) →
-      selected.target.first = before.wal.active.first →
-      let wal := before.wal.appendSelectedView retry.image.directory.active history
-      ∃ raw : HealthyBoundedWalReports directory (retry.owners.set (directory.file .lock) (some descriptor)) descriptor
-          wal retry.image.directory.active selected.range.watermark before.published.durable selected.tail,
-        ∃ sizes : SizedCheckpointRunReports directory raw.reports retry.image.directory.active.manifest before.published.durable,
-          ∃ cached : CachedWalFileReports directory raw.reports wal selected.range.watermark selected.tail,
-            recover = raw.reopenCached sizes cached reopen.removeFile reopen.write reopen.sync reopen.renameFile)
+    (reads : CachedAppendReads (descriptor := descriptor) failure retry reopen recover)
     (settles : reopen.sync #[directory.path] retry.image = .ok () retry.image.syncDirectory)
     (healthy : ∀ history, ∀ selected : CanonicalKeeperLayout retry.image history,
       (history = before.history ∨ history = before.history ++ [failure.event]) →
