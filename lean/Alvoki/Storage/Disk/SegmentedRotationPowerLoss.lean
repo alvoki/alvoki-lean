@@ -1,5 +1,4 @@
 import Alvoki.Storage.Disk.SegmentedRotationRecovery
-import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 
 namespace Alvoki.Storage.DiskSession
@@ -72,36 +71,10 @@ theorem installsRetainedCached (report : SegmentedRotationPowerLossReport direct
       after.wal.active = (report.retry.image.visible before.wal).active := by
   have origin : WalSegmentRotation.Trace before.wal (report.cut.released report.pair report.present).image :=
     .crash report.cut.trace report.pair report.selected report.survives
-  have rotation := ready.rotationInput report.cut.nonempty
-  have trace := report.attempts.rotationTrace rotation ready.layout origin
-  have oldPair : report.retry.image.metadata.active = before.wal.directory.active := by
-    have chosen := trace.selectsOriginal (List.mem_cons_self ..)
-    simpa [WalSegmentImage.Selects, ready.walDirectorySettled] using chosen
-  have pair := oldPair.trans ready.walPair
-  have decoded : report.retry.image.metadata.active.walRange = some before.target.range :=
-    pair.symm ▸ before.target.decoded
-  obtain ⟨layout, valid, sameKeeper, settledPair, _⟩ :=
-    trace.settledReopenLayout rotation ready.layout ready.valid decoded ready.resumed.through
-  have exactPair := settledPair.trans pair
-  have exactDecoded : (report.retry.image.settledReopenImage before.wal).directory.active.walRange =
-      some before.target.range := exactPair.symm ▸ before.target.decoded
-  have checkpoint : SelectedIntegrityCheckpoint before.published.durable
-      (report.retry.image.settledReopenImage before.wal).directory.active.manifest before.checkpoint := by
-    rw [exactPair]
-    exact ready.resumed.selected
-  have chosen : (report.retry.image.settleForReopen.visible before.wal).Selects
-      (report.retry.image.settledReopenImage before.wal).directory.active := List.mem_cons_self ..
-  have sameAction := report.read.reopenCachedWithState_eq sizes cached layout valid chosen exactDecoded rfl
-    ready.resumed.through checkpoint report.removeFile report.write report.sync report.renameFile
-  obtain ⟨after, installed, next, settled⟩ := report.toSegmentedRotationReopenReport.installsRetainedSettled
-    ready rotation origin report.attempts
-  refine ⟨after, ⟨report.cut.startsRetry report.selected report.survives, installed⟩, ?_, next, ?_, ?_⟩
-  · rw [sameAction]
-    exact installed
-  · rw [settled]
-    exact report.retry.image.settleForReopen_segments before.wal
-  · rw [settled]
-    exact sameKeeper
+  obtain ⟨after, installed, endpoint, next, segments, active⟩ :=
+    report.toSegmentedRotationReopenReport.installsRetainedCached ready (ready.rotationInput report.cut.nonempty)
+      origin report.attempts sizes cached
+  exact ⟨after, ⟨report.cut.startsRetry report.selected report.survives, installed⟩, endpoint, next, segments, active⟩
 
 theorem Installs.preservesReady {report : SegmentedRotationPowerLossReport directory before descriptor}
     {after : SegmentedWriterState} (endpoint : report.Installs after)

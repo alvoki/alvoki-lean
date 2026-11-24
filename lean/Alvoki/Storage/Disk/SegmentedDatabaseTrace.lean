@@ -502,6 +502,31 @@ theorem SegmentedDatabaseTrace.checkpointPowerLossCached
   exact ⟨after, session, final, .checkpointPowerLoss prior report observed installed,
     selected, replay, ran, phase, files, owners⟩
 
+/-- Use the released writer's reached rotation files to extend the mixed
+history with the session installed by the cached opener. -/
+theorem SegmentedDatabaseTrace.rotationErrorCached
+    {directory initialDescriptor initial allowCollection log writer descriptor before}
+    (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (report : SegmentedRotationRecoveryReport directory before descriptor) (release : SegmentedFailureRelease writer)
+    (sizes : SizedCheckpointRunReports directory report.read.reports
+      (report.retry.image.settledReopenImage before.wal).directory.active.manifest before.published.durable)
+    (cached : CachedWalFileReports directory report.read.reports
+      (report.retry.image.settleForReopen.visible before.wal) before.target.range.watermark ByteArray.empty) :
+    release.Observed (directory := directory) report.failure.poisoned report.failure.released ∧
+    ∃ after,
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after ∧
+      SegmentedRotationReopenEndpoint directory descriptor before after
+        (runOpenWithInstallation directory descriptor report.nextRef (.ok true) report.unlock
+          (report.read.reopenCachedWithState sizes cached report.removeFile report.write report.sync report.renameFile)
+          report.retry) ∧
+      after.wal.segments = (report.retry.image.visible before.wal).segments ∧
+      after.wal.active = (report.retry.image.visible before.wal).active := by
+  have ready := (prior.preservesRetained initialReady).1
+  obtain ⟨_, released, after, installed, endpoint, _, segments, active⟩ :=
+    report.installsRetainedCached ready release sizes cached
+  exact ⟨released, after, .rotationError prior report release released installed, endpoint, segments, active⟩
+
 /-- Extend the history using the exact segment layout installed by the
 cached opener across a crash during WAL rotation. -/
 theorem SegmentedDatabaseTrace.rotationPowerLossCached

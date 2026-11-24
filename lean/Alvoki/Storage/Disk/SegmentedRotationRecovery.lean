@@ -1,6 +1,8 @@
 import Alvoki.Storage.Disk.RotationLockHandoff
+import Alvoki.Storage.Disk.SegmentedFailureRelease
 import Alvoki.Storage.Disk.SegmentedWriterEntry
 import Alvoki.Storage.Disk.SegmentedRotationStep
+import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 
 namespace Alvoki.Storage.DiskSession
 
@@ -218,6 +220,58 @@ theorem SegmentedRotationReopenReport.installsRetained {directory : DiskDirector
   obtain ⟨writer, endpoint, retained, _⟩ := report.installsRetainedSettled ready rotation origin attempts
   exact ⟨writer, endpoint, retained⟩
 
+/-- Read the visible files of a reached rotation lineage with cached extents.
+The healthy directory barrier settles the same segment names and bytes. -/
+theorem SegmentedRotationReopenReport.installsRetainedCached
+    {directory : DiskDirectory} {before : SegmentedWriterState} {oldDescriptor descriptor : Nat}
+    (report : SegmentedRotationReopenReport directory before descriptor)
+    (ready : before.RetainedReady directory oldDescriptor)
+    (rotation : CanRotate before.wal before.history)
+    {initial : LockedFileState WalSegmentRotation.State} (origin : Trace before.wal initial.image)
+    (attempts : RotationReopenFailures directory before.wal before.history initial report.retry)
+    (sizes : SizedCheckpointRunReports directory report.read.reports
+      (report.retry.image.settledReopenImage before.wal).directory.active.manifest before.published.durable)
+    (cached : CachedWalFileReports directory report.read.reports
+      (report.retry.image.settleForReopen.visible before.wal) before.target.range.watermark ByteArray.empty) :
+    ∃ after,
+      SegmentedRotationReopenEndpoint directory descriptor before after report.run ∧
+      SegmentedRotationReopenEndpoint directory descriptor before after
+        (runOpenWithInstallation directory descriptor report.nextRef (.ok true) report.unlock
+          (report.read.reopenCachedWithState sizes cached report.removeFile report.write report.sync report.renameFile)
+          report.retry) ∧
+      after.RetainedReady directory descriptor ∧
+      after.wal.segments = (report.retry.image.visible before.wal).segments ∧
+      after.wal.active = (report.retry.image.visible before.wal).active := by
+  have trace := attempts.rotationTrace rotation ready.layout origin
+  have oldPair : report.retry.image.metadata.active = before.wal.directory.active := by
+    have chosen := trace.selectsOriginal (List.mem_cons_self ..)
+    simpa [WalSegmentImage.Selects, ready.walDirectorySettled] using chosen
+  have pair := oldPair.trans ready.walPair
+  have decoded : report.retry.image.metadata.active.walRange = some before.target.range :=
+    pair.symm ▸ before.target.decoded
+  obtain ⟨layout, valid, sameKeeper, settledPair, _⟩ :=
+    trace.settledReopenLayout rotation ready.layout ready.valid decoded ready.resumed.through
+  have exactPair := settledPair.trans pair
+  have exactDecoded : (report.retry.image.settledReopenImage before.wal).directory.active.walRange =
+      some before.target.range := exactPair.symm ▸ before.target.decoded
+  have checkpoint : SelectedIntegrityCheckpoint before.published.durable
+      (report.retry.image.settledReopenImage before.wal).directory.active.manifest before.checkpoint := by
+    rw [exactPair]
+    exact ready.resumed.selected
+  have chosen : (report.retry.image.settleForReopen.visible before.wal).Selects
+      (report.retry.image.settledReopenImage before.wal).directory.active := List.mem_cons_self ..
+  have sameAction := report.read.reopenCachedWithState_eq sizes cached layout valid chosen exactDecoded rfl
+    ready.resumed.through checkpoint report.removeFile report.write report.sync report.renameFile
+  obtain ⟨after, installed, next, settled⟩ := report.installsRetainedSettled
+    ready rotation origin attempts
+  refine ⟨after, installed, ?_, next, ?_, ?_⟩
+  · rw [sameAction]
+    exact installed
+  · rw [settled]
+    exact report.retry.image.settleForReopen_segments before.wal
+  · rw [settled]
+    exact sameKeeper
+
 theorem SegmentedRotationReopenReport.installs {directory : DiskDirectory} {before : SegmentedWriterState}
     {descriptor newDescriptor : Nat} (report : SegmentedRotationReopenReport directory before newDescriptor)
     (ready : before.Ready directory descriptor)
@@ -323,6 +377,41 @@ theorem SegmentedRotationRecoveryReport.installsRetained {directory : DiskDirect
   obtain ⟨writer, endpoint, reopened⟩ := report.toSegmentedRotationReopenReport.installsRetained ready
     (ready.rotationInput report.failure.nonempty) (report.failure.handoffRetained ready).1 report.attempts
   exact ⟨writer, ⟨endpoint, ⟨report, rfl⟩⟩, reopened⟩
+
+/-- Run the reported rotation failure, release the poisoned writer, and
+install the visible segment layout through the actual cached worker. -/
+theorem SegmentedRotationRecoveryReport.installsRetainedCached
+    {directory : DiskDirectory} {before : SegmentedWriterState} {oldDescriptor descriptor : Nat}
+    (report : SegmentedRotationRecoveryReport directory before descriptor)
+    (ready : before.RetainedReady directory oldDescriptor) (release : SegmentedFailureRelease oldDescriptor)
+    (sizes : SizedCheckpointRunReports directory report.read.reports
+      (report.retry.image.settledReopenImage before.wal).directory.active.manifest before.published.durable)
+    (cached : CachedWalFileReports directory report.read.reports
+      (report.retry.image.settleForReopen.visible before.wal) before.target.range.watermark ByteArray.empty) :
+    let successor := before.installed.walBytes / frameSize
+    runPreparedRotation { before.installed with activeFirst := successor }
+      (runAt directory successor report.failure.read report.failure.create report.failure.sync)
+      (.ready before.installed, ⟨.initial before.wal, before.owners⟩) = .error report.failure.cause report.failure.poisoned ∧
+    release.Observed (directory := directory) report.failure.poisoned report.failure.released ∧
+    ∃ after,
+      SegmentedRotationReopened directory descriptor before after report.run ∧
+      SegmentedRotationReopenEndpoint directory descriptor before after
+        (runOpenWithInstallation directory descriptor report.nextRef (.ok true) report.unlock
+          (report.read.reopenCachedWithState sizes cached report.removeFile report.write report.sync report.renameFile)
+          report.retry) ∧
+      after.RetainedReady directory descriptor ∧
+      after.wal.segments = (report.retry.image.visible before.wal).segments ∧
+      after.wal.active = (report.retry.image.visible before.wal).active := by
+  intro successor
+  obtain ⟨origin, failure, closed, dropped⟩ := report.failure.handoffRetained ready
+  have released : release.Observed (directory := directory) report.failure.poisoned report.failure.released := by
+    cases release with
+    | closed => exact closed
+    | references held drops last => exact dropped held drops last
+  obtain ⟨after, installed, endpoint, next, segments, active⟩ :=
+    report.toSegmentedRotationReopenReport.installsRetainedCached ready (ready.rotationInput report.failure.nonempty)
+      origin report.attempts sizes cached
+  exact ⟨failure, released, after, ⟨installed, ⟨report, rfl⟩⟩, endpoint, next, segments, active⟩
 
 theorem SegmentedRotationReopened.unique {directory descriptor before left right result}
     (a : SegmentedRotationReopened directory descriptor before left result)
