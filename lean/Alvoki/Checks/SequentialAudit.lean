@@ -113,6 +113,7 @@ import Alvoki.Storage.Disk.WalSegmentReadWork
 import Alvoki.Storage.Disk.RecoverySizedReads
 import Alvoki.Storage.Disk.WalSegmentSizedOpen
 import Alvoki.Storage.Disk.IntegrityCheckpointSizedRead
+import Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -921,6 +922,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.readIntegrityRunBytesSized_compatible
 #check_axioms Alvoki.Storage.readIntegrityCheckpointSized_compatible
 #check_axioms Alvoki.Storage.countCheckpointRunBytes_bound
+#check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithSizedCheckpoint_eq_of_checkpoint
 #check_axioms Alvoki.Storage.SyncPathGroup.run_pair
 #check_axioms Alvoki.Storage.SyncPathGroup.failedWalPublication
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.resolve_owned
