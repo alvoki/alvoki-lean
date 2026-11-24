@@ -850,6 +850,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentImage.collectionOffsets_observed
 #check_axioms Alvoki.Storage.walCollectionEnd_covered
 #check_axioms Alvoki.Storage.DiskTable.planWalCollection_fileEffects
+#check_axioms Alvoki.Storage.DiskTable.collectCoveredWal_fileEffects
 #check_axioms Alvoki.Storage.OpenPathReadReports.walSegmentExtents_offsets
 #check_axioms Alvoki.Storage.planWalCollectionWith_reported
 #check_axioms Alvoki.Storage.walCollectionOffsetsFromExtents_approved
