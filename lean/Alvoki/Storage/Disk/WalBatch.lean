@@ -81,3 +81,33 @@ theorem encodeBatch_eq (events : List Write) : encodeBatch events = encode event
   simp [encodeBatch, encodeBatch_fold]
 
 end Alvoki.WAL
+
+
+namespace Alvoki.Storage
+
+/-- The batch marker counts precisely the old encoded history and all of the
+prepared batch frames. The new table follows the same logical writes as replay. -/
+theorem prepareBatch_extends_history {state next : PackedTable}
+    {rows : List (UInt64 × Option UInt64)} {history events : List WAL.Write}
+    (ordered : WAL.OrdinalsFrom 1 history) (count : history.length = state.committed.toNat)
+    (prepared : prepareBatch state rows = some (events, next)) :
+    next.committed.toNat = history.length + rows.length ∧
+      WAL.OrdinalsFrom 1 (history ++ events) ∧
+      WAL.encode (history ++ events) = WAL.encode history ++ WAL.encodeBatch events ∧
+      (WAL.encode (history ++ events)).size =
+        (WAL.encode history).size + WAL.frameSize * rows.length := by
+  obtain ⟨length, replayed, _, ordinals⟩ := prepareBatch_spec prepared
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · rw [replay_committed_count events replayed, count, length]
+  · apply (ordinals_append_iff 1 history events).mpr
+    exact ⟨ordered, by simpa only [count, Nat.add_comm 1] using ordinals⟩
+  · rw [WAL.encode_append, WAL.encodeBatch_eq]
+  · simp [List.length_append, Nat.mul_add, length]
+
+theorem prepareBatch_refines {state next : PackedTable} {model : Sequential.SnapshotTable UInt64}
+    {rows : List (UInt64 × Option UInt64)} {events : List WAL.Write}
+    (refines : state.Refines model) (prepared : prepareBatch state rows = some (events, next)) :
+    ∃ after, SnapshotWalReplay model events after ∧ next.Refines after :=
+  replay_refines refines (prepareBatch_spec prepared).2.1
+
+end Alvoki.Storage

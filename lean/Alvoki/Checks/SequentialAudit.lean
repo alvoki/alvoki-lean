@@ -616,6 +616,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishMarkedOpen_safe
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishMarkedOpen_completes
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedFastWith_completes
+#check_axioms Alvoki.Storage.prepareBatch_spec
+#check_axioms Alvoki.Storage.prepareBatch_extends_history
+#check_axioms Alvoki.Storage.prepareBatch_refines
+#check_axioms Alvoki.WAL.encodeBatch_eq
+#check_axioms Alvoki.Storage.DiskTable.writeBatchWithOutcome_fileEffects
 #check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_fileEffects
 #check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_reports
 #check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atReportedCut
