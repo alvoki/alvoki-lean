@@ -1,7 +1,44 @@
-import Alvoki.Storage.Disk.FirstVersionedCheckpoint
+import Alvoki.Storage.Disk.MarkedDatabaseTrace
+import Alvoki.Storage.Disk.VersionedCheckpointReopen
 
 namespace Alvoki.WAL.Boundary
 open Storage CheckpointPublication Manifest
+
+theorem CheckpointPreparation.decodeVersionedManifest {state : ObservedMarkedState}
+    (prepared : CheckpointPreparation state) (floor : prepared.runs.header.floor ≤ prepared.runs.header.committed) :
+    Manifest.VersionedCheckpoint.decode (VersionedRunSet.integrity prepared.runs).manifest.encode =
+      .ok (VersionedRunSet.integrity prepared.runs).manifest := by
+  let next := prepared.runs
+  let metadata := Manifest.IntegrityCheckpoint.fromRuns next.header next.files
+  have metadataCount : metadata.runs.length = metadata.header.runCount.toNat := by
+    change ((prepared.table.runs.map (·.run.bytes)).map Manifest.RunIntegrity.ofBytes).length =
+      prepared.table.runs.length.toUInt64.toNat
+    rw [List.length_map, List.length_map, UInt64.toNat_ofNat_of_lt' prepared.runCountFits]
+  exact Manifest.VersionedCheckpoint.decode_integrity
+    (Manifest.IntegrityCheckpoint.decode_encode metadata floor metadataCount)
+
+/-- Construct the reported attempt from the prepared writer's real ordered
+runs. Freshness is stated against both manifest formats. -/
+theorem CheckpointPreparation.versionedAttempt {state : ObservedMarkedState}
+    (prepared : CheckpointPreparation state) {manifest : Option ByteArray}
+    {model : Sequential.SnapshotTable UInt64}
+    (ready : state.writer.ReadyFor manifest) (refines : state.writer.table.Refines model)
+    (represents : RepresentsWalHistory state.writer.history model)
+    (fresh : state.publicationInput.UnreachableVersioned prepared.runs.header.generation)
+    (byteLengthsFit : ∀ bytes ∈ prepared.runs.files, bytes.size < UInt64.size)
+    {report : Step → StepReport} {result : EStateM.Result Unit Image Unit}
+    (reported : state.publicationInput.runVersionedWithReports (.integrity prepared.runs) report = some result) :
+    match result with
+    | .ok _ after | .error _ after => VersionedRetry state.writer.history.length.toUInt64
+        (CheckpointRepresentsPrefix state.writer.history) state.publicationInput after := by
+  let next := prepared.runs
+  obtain ⟨floor, count, covered, witness⟩ := checkpointPublicationWitness ready prepared.flushed refines
+    represents prepared.runCountFits next.header.generation
+  have decoded := prepared.decodeVersionedManifest floor
+  have checked := Manifest.IntegrityCheckpoint.validateRuns_fromRuns next.header next.files count byteLengthsFit
+  have retry := VersionedRetry.reported (.refl _) (.integrity next) fresh decoded count.symm checked
+    covered witness report reported
+  cases result <;> exact retry
 
 /-- A visible checkpoint is accepted by the strict v2 decoder. An absent
 manifest is admitted for a database before its first checkpoint. -/
