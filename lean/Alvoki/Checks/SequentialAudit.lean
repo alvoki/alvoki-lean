@@ -39,6 +39,7 @@ import Alvoki.Storage.Disk.VersionedMarkedRecovery
 import Alvoki.Storage.Disk.VersionedCheckpointReopen
 import Alvoki.Storage.Disk.FirstVersionedCheckpoint
 import Alvoki.Storage.Disk.RetainedWalSuffix
+import Alvoki.Storage.Disk.RetainedWalBoundary
 import Alvoki.Storage.Disk.LegacyBootstrapRetry
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.LegacyWalRecovery
@@ -323,6 +324,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.decodeOrdinals_append_encoded
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_eq_recoverSelected
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_refines
+#check_axioms Alvoki.Storage.recoverRetainedFrom_eq_recoverSelected
+#check_axioms Alvoki.Storage.recoverRetainedFrom_refines
+#check_axioms Alvoki.WAL.Boundary.selectRetained_eq_select
+#check_axioms Alvoki.WAL.Boundary.selectRetained_absoluteSize
+#check_axioms Alvoki.WAL.Boundary.selectRetained_shorter_after_trim
+#check_axioms Alvoki.WAL.Boundary.recoverRetainedMarked_eq_recoverMarked
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.reopenSettledWithLock
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.guardedPinnedReads_preserveLocks
 #check_axioms Alvoki.Storage.DiskSession.runGuardedRead_afterCloseAndReopen
