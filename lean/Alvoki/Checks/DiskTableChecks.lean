@@ -557,7 +557,7 @@ private inductive SyncFailureMode where
 
 private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation := "--open-once")
     (skipFailures : Nat := 0) (failureMode : SyncFailureMode := .beforeSync)
-    (extraArgs : Array String := #[]) :
+    (extraArgs : Array String := #[]) (extraEnv : Array (String × Option String) := #[]) :
     IO (Bool × List String) := do
   let log := bin / "sync.log"
   IO.FS.writeFile log ""
@@ -576,7 +576,7 @@ private def probeDisk (bin dir : FilePath) (failAt : Option FilePath) (operation
       ("ALVOKI_CHECK_SYNC_LOG", some log.toString),
       ("ALVOKI_CHECK_SYNC_FAIL", failAt.map FilePath.toString),
       ("ALVOKI_CHECK_SYNC_SKIP", some (toString skipFailures)),
-      ("ALVOKI_CHECK_SYNC_FAIL_MODE", some mode)] }
+      ("ALVOKI_CHECK_SYNC_FAIL_MODE", some mode)] ++ extraEnv }
   let paths := (← IO.FS.readFile log).splitOn "\n" |>.filter (!·.isEmpty)
   return (result.exitCode == 0, paths)
 
@@ -590,6 +590,54 @@ private def walReplacementSyncs (dir : FilePath) : List String :=
 
 private def alignedWalSyncs (dir active : FilePath) : List String :=
   [dir.toString, active.toString]
+
+private def checkDirectoryReadError (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let readLog := bin / "read-directory.log"
+  let probe := fun (dir : FilePath) (phase firstName : String) (skip : Nat) (expectedSyncs : List String) => do
+    IO.FS.writeFile readLog ""
+    let (reported, syncs) ← probeDisk bin dir none "--check-directory-read-error" (extraArgs := #[phase])
+      (extraEnv := #[("ALVOKI_CHECK_READDIR_DIR", some dir.toString),
+        ("ALVOKI_CHECK_READDIR_PARTIAL", some firstName), ("ALVOKI_CHECK_READDIR_SKIP", some (toString skip)),
+        ("ALVOKI_CHECK_READDIR_LOG", some readLog.toString)])
+    let observed := (← IO.FS.readFile readLog).splitOn "\n" |>.filter (!·.isEmpty)
+    check (observed == [s!"listed before error: {firstName}", s!"readdir error: {firstName}"])
+      s!"fixture did not deliver a partial {phase} listing"
+    check (reported && syncs == expectedSyncs) s!"partial {phase} listing did not stop at its EIO"
+  let empty := root / "empty"
+  IO.FS.createDir empty
+  probe empty "open" "LOCK" 0 []
+  check (!(← (empty / firstWalSegment).pathExists) && !(← (empty / "WAL.commit").pathExists))
+    "partial bootstrap listing created WAL files"
+
+  let dir := root / "marked"
+  IO.FS.createDir dir
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 7 (some 60)) == 1) "wrong first directory fixture write"
+    db.checkpoint
+    db.checkpoint
+    db.rotateWal
+  finally db.close
+  let sealed := dir / firstWalSegment
+  let successor := dir / "WAL-segment-1"
+  let marker := dir / "WAL.commit"
+  let oldRun := dir / "run-1-0.v3"
+  let expected ← [sealed, successor, marker, oldRun].mapM fun path => do
+    pure (path, ← IO.FS.readBinFile path)
+  probe dir "open" firstWalSegment 0 []
+  probe dir "wal" firstWalSegment 1 (alignedWalSyncs dir successor)
+  probe dir "runs" "run-1-0.v3" 1 (alignedWalSyncs dir successor)
+  for (path, bytes) in expected do
+    check (decide ((← IO.FS.readBinFile path) = bytes)) s!"partial listing changed '{path}'"
+  check (!(← (dir / "WAL.next").pathExists) && !(← (dir / "WAL.commit.next").pathExists))
+    "partial recovery listing reached repair or write staging"
+  let reopened ← DiskTable.open dir
+  try
+    check ((← reopened.write 7 (some 61)) == 2) "healthy listing did not resume the rotated writer"
+    check (decide ((← IO.FS.readBinFile successor) = WAL.encodeFrame ⟨2, 7, some 61⟩))
+      "healthy listing wrote outside the actual successor"
+  finally reopened.close
 
 private def checkMarkerlessRefusal (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
@@ -1859,6 +1907,25 @@ private def checkRecoveredProbe (path : FilePath) (sequence value : UInt64) (res
 def main (args : List String) : IO Unit := do
   match args with
   | ["--open-once", dir] => (← DiskTable.open ⟨dir⟩).close
+  | ["--check-directory-read-error", dir, phase] =>
+    let isReadError := fun result : Except IO.Error Unit =>
+      match result with
+      | .error (.hardwareFault 5 _) => true
+      | _ => false
+    if phase == "open" then
+      let attempted := do
+        let db ← DiskTable.open ⟨dir⟩
+        try
+          let _ ← db.write 7 (some 99)
+        finally db.close
+      check (isReadError (← attempted.toBaseIO)) "open did not return the readdir EIO"
+    else
+      let db ← DiskTable.open ⟨dir⟩
+      try
+        let collect := if phase == "wal" then db.collectCoveredWal else db.collectObsoleteRuns
+        check (isReadError (← collect.toBaseIO)) "collection did not return the readdir EIO"
+        let _ ← db.acquire
+      finally db.close
   | ["--collect-wal-once", dir] =>
     let db ← DiskTable.open ⟨dir⟩
     try db.collectCoveredWal finally db.close
@@ -1953,6 +2020,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkActiveWalGuard
     IO.FS.withTempDir checkCheckpointRunAliases
     IO.FS.withTempDir checkSnapshotSessions
+    IO.FS.withTempDir checkDirectoryReadError
     IO.FS.withTempDir checkMarkerlessRefusal
     IO.FS.withTempDir checkWalSegmentRotation
     IO.FS.withTempDir checkWalCollectionPlan

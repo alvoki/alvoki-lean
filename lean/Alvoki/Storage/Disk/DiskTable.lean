@@ -46,6 +46,11 @@ structure DiskSnapshotPin where
 @[extern "alvoki_fsync"]
 private opaque fsyncHandle : @& IO.FS.Handle → @& String → IO Unit
 
+/-- A successful directory listing ended at EOF. A readdir error
+discards the partial listing before planning any file mutations. -/
+@[extern "alvoki_read_dir_checked"]
+private opaque readDirectoryChecked : @& FilePath → IO (Array IO.FS.DirEntry)
+
 /-- Keep the directory and current append handle for the session. A pending
 handle belongs to a file opened by the current publication or recovery step
 and is consumed at its durability barrier, before any rename can rebind it. -/
@@ -269,7 +274,7 @@ private def rejectFlatWal (dir : DiskDirectory) : IO Unit := do
         install .empty 0 0
 
 private def bootstrapSegmented (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentRepair.Reopened :=
-  WalSegmentRepair.bootstrapSegmentedWith dir FilePath.readDir
+  WalSegmentRepair.bootstrapSegmentedWith dir readDirectoryChecked
     (readEmptyWalSegment · WAL.Boundary.missingOpenMarker) optionalMetadata
     files.create files.stage files.syncPaths IO.FS.rename
 
@@ -277,7 +282,7 @@ private def bootstrapSegmented (dir : DiskDirectory) (files : SyncFiles) : IO Wa
 then publish the zero marker through the staged replacement schedule. -/
 theorem bootstrapSegmented_fileEffects (dir : DiskDirectory) : bootstrapSegmented dir files = (do
     let empty ← (do
-      let entries ← dir.path.readDir
+      let entries ← readDirectoryChecked dir.path
       if entries.any (fun entry => WalSegmentRepair.conflictsWithBootstrap entry.fileName) then
         throw (IO.userError WAL.Boundary.missingOpenMarker)
       let empty ← readEmptyWalSegment (dir.file (.walSegment 0)) WAL.Boundary.missingOpenMarker
@@ -294,7 +299,7 @@ theorem bootstrapSegmented_fileEffects (dir : DiskDirectory) : bootstrapSegmente
 private def recoverSegmentedWal (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentRepair.Reopened := do
   rejectFlatWal dir
   if (← optionalMetadata (dir.file .walBoundary)).isSome then
-    WalSegmentRepair.reopenMarkedBoundedWith dir readOptionalFile FilePath.readDir inspectWalSegment
+    WalSegmentRepair.reopenMarkedBoundedWith dir readOptionalFile readDirectoryChecked inspectWalSegment
       readRequiredFile (readKeeperPrefix files)
       (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
   else
@@ -332,7 +337,7 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
         let opened ← (do
           rejectFlatWal dir
           if (← optionalMetadata (dir.file .walBoundary)).isSome then
-            WalSegmentRepair.reopenMarkedBoundedWith dir readOptionalFile FilePath.readDir inspectWalSegment
+            WalSegmentRepair.reopenMarkedBoundedWith dir readOptionalFile readDirectoryChecked inspectWalSegment
               readRequiredFile (readKeeperPrefix files)
               (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
           else bootstrapSegmented dir files : IO WalSegmentRepair.Reopened)
@@ -351,7 +356,7 @@ private def DiskTable.installed (db : DiskTable) : IO Installed := do
 
 private def DiskTable.planWalCollectionAt (db : DiskTable) (state : Installed) : IO (List Nat) :=
   planWalCollectionWith db.dir state.generation state.walBytes state.activeFirst
-    readOptionalFile FilePath.readDir inspectWalSegment
+    readOptionalFile readDirectoryChecked inspectWalSegment
 
 /-- Inspect which sealed WAL segments the current durable checkpoint covers.
 The result describes the inventory observed during this call. -/
@@ -362,7 +367,7 @@ theorem DiskTable.planWalCollection_fileEffects (db : DiskTable) :
     db.planWalCollection = (do
       let state ← (← db.phase.get).installed
       planWalCollectionWith db.dir state.generation state.walBytes state.activeFirst
-        readOptionalFile FilePath.readDir inspectWalSegment) := rfl
+        readOptionalFile readDirectoryChecked inspectWalSegment) := rfl
 
 /-- Reclaim sealed WAL segments covered by the current durable checkpoint.
 A failed preflight leaves the writer ready. An unlink or directory sync
@@ -382,7 +387,7 @@ theorem DiskTable.collectCoveredWal_fileEffects (db : DiskTable) :
     db.collectCoveredWal = (do
       let state ← (← db.phase.get).installed
       let selected ← planWalCollectionWith db.dir state.generation state.walBytes state.activeFirst
-        readOptionalFile FilePath.readDir inspectWalSegment
+        readOptionalFile readDirectoryChecked inspectWalSegment
       db.phase.set .poisoned
       RunCollection.run selected (RunCollection.performPaths (fun path => (IO.FS.removeFile path).toBaseIO)
         (fun path => db.files.syncPaths #[path]) throw (fun first => db.dir.file (.walSegment first)) db.dir.path)
@@ -614,7 +619,7 @@ def DiskTable.collectObsoleteRuns (db : DiskTable) (heldGenerations : List UInt6
   let state ← db.installed
   let manifest ← readOptionalFile (db.dir.file .manifest)
   let current ← IO.ofExcept (validateIntegrityRunCollectionGeneration state.generation manifest)
-  let entries ← db.dir.path.readDir
+  let entries ← readDirectoryChecked db.dir.path
   let names := entries.toList.map (·.fileName)
   let selected ← selectRunFilesWith db.dir current (retainRunGeneration state.generation heldGenerations)
     runCollectionKindAt names
@@ -633,7 +638,7 @@ theorem DiskTable.collectObsoleteRuns_fileEffects (db : DiskTable) (heldGenerati
         (fun _ => IO.FS.readBinFile manifestPath)
         (fun _ => IO.userError s!"expected a regular database file: '{manifestPath}'") throw
       let current ← IO.ofExcept (validateIntegrityRunCollectionGeneration state.generation manifest)
-      let entries ← db.dir.path.readDir
+      let entries ← readDirectoryChecked db.dir.path
       let selected ← selectRunFilesWith db.dir current (retainRunGeneration state.generation heldGenerations)
         (fun path => do
           match ← path.symlinkMetadata.toBaseIO with

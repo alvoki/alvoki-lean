@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -27,6 +28,57 @@ static void log_sync(const char *log, const char *prefix, const char *path) {
 static int fail_sync(void) {
     errno = EIO;
     return -1;
+}
+
+static DIR *partial_directory;
+static bool partial_delivered;
+
+DIR *opendir(const char *path) {
+    DIR *(*real_open)(const char *) = dlsym(RTLD_NEXT, "opendir");
+    if (real_open == NULL) {
+        errno = EIO;
+        return NULL;
+    }
+    DIR *directory = real_open(path);
+    if (directory != NULL && same(path, getenv("ALVOKI_CHECK_READDIR_DIR"))) {
+        static unsigned long matched;
+        const char *skip = getenv("ALVOKI_CHECK_READDIR_SKIP");
+        if (matched++ == (skip == NULL ? 0 : strtoul(skip, NULL, 10))) {
+            partial_directory = directory;
+            partial_delivered = false;
+        }
+    }
+    return directory;
+}
+
+struct dirent *readdir(DIR *directory) {
+    int incoming = errno;
+    struct dirent *(*real_read)(DIR *) = dlsym(RTLD_NEXT, "readdir");
+    if (real_read == NULL) {
+        errno = EIO;
+        return NULL;
+    }
+    errno = incoming;
+    if (directory != partial_directory) return real_read(directory);
+
+    const char *log = getenv("ALVOKI_CHECK_READDIR_LOG");
+    const char *partial = getenv("ALVOKI_CHECK_READDIR_PARTIAL");
+    if (!partial_delivered) {
+        // Directory order is unspecified. Deliver the requested entry first
+        // so the interrupted scan deterministically hides the other names.
+        struct dirent *entry;
+        while ((entry = real_read(directory)) != NULL) {
+            if (same(entry->d_name, partial)) {
+                partial_delivered = true;
+                log_sync(log, "listed before error: ", entry->d_name);
+                return entry;
+            }
+        }
+    }
+    partial_directory = NULL;
+    log_sync(log, "readdir error: ", partial == NULL ? "" : partial);
+    errno = EIO;
+    return NULL;
 }
 
 static void wait_for_release(const char *ready, const char *release, const char *pid, size_t length) {

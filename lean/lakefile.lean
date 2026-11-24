@@ -9,6 +9,12 @@ target fsyncO pkg : FilePath := do
   buildO (pkg.buildDir / "native" / "fsync.o") source #["-I", leanInclude.toString]
     #["-O2", "-fPIC", "-Wall", "-Wextra"] "cc"
 
+target readDirCheckedO pkg : FilePath := do
+  let source ← inputTextFile (pkg.dir / "native" / "read_dir_checked.c")
+  let leanInclude ← getLeanIncludeDir
+  buildO (pkg.buildDir / "native" / "read_dir_checked.o") source #["-I", leanInclude.toString]
+    #["-O2", "-fPIC", "-Wall", "-Wextra"] "cc"
+
 lean_lib Block
 
 lean_lib Proofs
@@ -65,7 +71,7 @@ lean_lib CodecVariants
 
 lean_lib Alvoki.Storage where
   globs := #[`Alvoki.Storage.+]
-  moreLinkObjs := #[fsyncO]
+  moreLinkObjs := #[fsyncO, readDirCheckedO]
 
 lean_lib Alvoki.Checks.AxiomPolicy
 
