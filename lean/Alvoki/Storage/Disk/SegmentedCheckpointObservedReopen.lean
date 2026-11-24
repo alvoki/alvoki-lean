@@ -36,6 +36,54 @@ private theorem headOfChain {history : List WAL.Write} {first : Nat} {segments :
   | endOfHistory => contradiction
   | cons => rfl
 
+/-- The writer reconstructed from the report's exact returned session and
+file image, with the unchanged WAL and the selected publication's run map. -/
+structure CheckpointChunkWriter {files : Type} (directory : DiskDirectory) (before : SegmentedWriterState)
+    {retry : LockedFileState FileImage} {layout : CanonicalKeeperLayout retry.image before.history}
+    (published : CheckpointPublication.Image) (observed : MarkedRetryChunkReports files directory layout published)
+    (after : SegmentedWriterState) : Prop where
+  reopened : ∃ session final, observed.run = .ok session final ∧ session.directory = directory ∧
+    session.descriptor = observed.slot.description ∧ session.phase = .ready after.installed ∧
+    after.files = final.image ∧ after.owners = final.owners
+  target : after.target = layout.target
+  keeper : layout.keeper = before.wal.active
+  aligned : layout.tail = ByteArray.empty
+  selectedSeals : layout.sealed ++ [layout.keeper] =
+    (published.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark
+  history : after.history = before.history
+  wal : after.wal = { before.wal with directory := after.files.directory }
+  durable : after.published.durable = published.durable
+  retained : after.RetainedReady directory observed.slot.description
+
+theorem CheckpointChunkWriter.preservesChain
+    (endpoint : CheckpointChunkWriter directory before published observed after)
+    (chain : WalSegment.Chain before.history 0 before.wal.segments) : WalSegment.Chain after.history 0 after.wal.segments := by
+  rw [endpoint.history, endpoint.wal]
+  exact chain
+
+/-- The cached callback and installation proof supplies the same exact
+inputs used to reconstruct a retained writer after a bounded reopen. -/
+private theorem CachedRetryInstalled.appendCutReady
+    {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout before.image history} {reported : CachedRetryReadReports directory layout}
+    {descriptors slot bindings published liveRefs result}
+    (installed : CachedRetryInstalled reported descriptors slot bindings published liveRefs result)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+      before.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ generation, AppendCutReady directory reported.inventory.descriptor liveRefs history published before.image
+      layout.target generation result := by
+  obtain ⟨opened, checkpoint, model, session, final, returned, path, descriptor, phase, _, _, _, _, held,
+    distinct, freshPhase, freshSession, ready, effects, selected, replay, generation, bytes, keeper, committed,
+    bounds, refines, represents, pins⟩ := installed
+  have exactBytes : opened.walBytes.toNat = (WAL.encode history).size := by
+    rw [bytes, WAL.encode_size, Nat.mul_comm]
+  have payload : session.phase = .ready ⟨opened.table, opened.generation, (WAL.encode history).size, layout.target.first⟩ := by
+    simpa only [Reopened.installed, exactBytes, keeper, CanonicalKeeperLayout.target] using phase
+  exact ⟨opened.generation, layout.through, layout.chain.keeperBytes, accepted, ordered, checkpoint, opened.table,
+    model, session, final, returned, selected, generation, replay, path, descriptor, payload, ready, effects.keepsSealed,
+    descriptor ▸ held, committed, bounds, refines, represents, pins, distinct, freshPhase, freshSession⟩
+
 /-- A reached checkpoint primitive can be interrupted without a returned
 result. At the final retry, the marked dispatcher reads the checkpoint
 selected by the surviving pair, then installs the replay of the same WAL.
@@ -72,7 +120,9 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
       opened.walBytes.toNat = before.installed.walBytes ∧ opened.keeper = before.installed.activeFirst ∧
       recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok opened.table ∧
       opened.table.committed.toNat = before.history.length ∧ opened.table.RowBounds ∧ opened.table.Refines model ∧
-      RepresentsWalHistory before.history model := by
+      RepresentsWalHistory before.history model ∧
+      ∃ after, CheckpointChunkWriter directory before published observed after ∧
+        after.checkpoint = checkpoint ∧ after.installed = opened.installed := by
   obtain ⟨reached, executed, walLayout, valid, inputs, crash⟩ := cut.selectsAcknowledgedHistory ready
   have exactPublished : reached = published := Option.some.inj (executed.symm.trans projected)
   subst reached
@@ -81,7 +131,7 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
   rw [physical_eq published ready] at lineage
   have crashDirectory : (published.segmentedCheckpointView before.wal).CheckpointReopenDirectory (.settled pair) :=
     .crash survives
-  obtain ⟨layout, _, keeper, tail, descriptors, offsets, prepared, _, accepted⟩ :=
+  obtain ⟨layout, chosenPair, keeper, tail, descriptors, offsets, prepared, _, accepted⟩ :=
     published.checkpointRetryLayout walLayout valid crashDirectory inputs lineage
   obtain ⟨observed⟩ := observes layout keeper tail descriptors
   have ordered := (List.pairwise_append.mp (List.pairwise_append.mp observed.reported.ordered).1).2.1
@@ -89,6 +139,12 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
   have following := followingAfterSelection offsets ordered (headOfChain layout.chain (by simp))
   have recovered := runOpenWithInstallation_markedRetryFromChunks observed prepared.keeperPrefix prepared.newer
     following accepted ready.resumed.ordered
+  obtain ⟨_, cutReady⟩ := recovered.appendCutReady accepted ready.resumed.ordered
+  have sealed : retry.image.kept = (before.wal.checkpointReopenFiles before.wal.directory none).kept :=
+    lineage.keepsSealed
+  obtain ⟨writerSession, writerFinal, after, writerReturn, writerPath, writerDescription, writerPhase, writerFiles,
+    writerOwners, writerWal, writerTarget, writerHistory, writerDurable, nextReady⟩ :=
+    cutReady.writerCheckpointRetained walLayout valid ready.spans chosenPair rfl (congrArg WalSegment.first keeper) sealed
   obtain ⟨opened, loaded, model, session, final, returned, directoryExact, lock, phase, _, _, _, _, held,
     _, _, _, repaired, _, chosen, replayed, generationRead, bytes, keeperRead, committed, bounds, refines,
     represents, _⟩ := recovered
@@ -104,8 +160,20 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
     keeperRead.trans ((congrArg WalSegment.first keeper).trans (ready.resumed.keeper.trans ready.active).symm)
   have finalPair := repaired.selected.trans surviving
   let sizes := SizedCheckpointRunReports.ofChunkReads selectedRetry observed.reads observed.metadata observed.chunks
+  have next : after.RetainedReady directory observed.slot.description := observed.inventoryDescription ▸ nextReady
+  have writer : CheckpointChunkWriter directory before published observed after :=
+    ⟨⟨writerSession, writerFinal, writerReturn, writerPath, writerDescription.trans observed.inventoryDescription,
+      writerPhase, writerFiles, writerOwners⟩, writerTarget, keeper, tail, descriptors, writerHistory,
+      by simpa only [writerFiles] using writerWal, writerDurable, next⟩
+  have writerSelected := next.resumed.selected
+  rw [writerTarget, writerDurable] at writerSelected
+  have sameCheckpoint := writerSelected.uniqueResult selectedRetry
+  have sameSession := (EStateM.Result.ok.inj (writerReturn.symm.trans returned)).1
+  rw [sameSession] at writerPhase
+  have sameInstalled := Phase.ready.inj (writerPhase.symm.trans phase)
   exact ⟨loss.trans failures, layout, observed, sizes, opened, checkpoint, model, session, final, returned, directoryExact,
     lock.trans observed.inventoryDescription, phase, held, surviving, finalPair, repaired, selected, rfl,
-    exactGeneration, exactBytes, exactKeeper, replayed, committed, bounds, refines, represents⟩
+    exactGeneration, exactBytes, exactKeeper, replayed, committed, bounds, refines, represents,
+    after, writer, sameCheckpoint, sameInstalled⟩
 
 end Alvoki.Storage.DiskSession
