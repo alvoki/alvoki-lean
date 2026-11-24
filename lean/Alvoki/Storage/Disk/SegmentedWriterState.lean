@@ -38,13 +38,20 @@ private theorem selectedGenerationRead {durable binding checkpoint}
   | absent => rfl
   | present decoded _ _ => rw [Option.mapM, decoded]; rfl
 
+theorem ResumedAppendReady.generationRead {installed files target history published checkpoint}
+    (ready : ResumedAppendReady installed files target history published checkpoint) :
+    ((target.pair.manifest.mapM fun bytes =>
+      (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
+      .ok installed.generation := by
+  rw [ready.generation]
+  exact selectedGenerationRead ready.selected
+
 theorem SegmentedWriterState.Ready.generationRead {directory descriptor state}
     (ready : SegmentedWriterState.Ready directory descriptor state) :
     ((state.target.pair.manifest.mapM fun bytes =>
       (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
-      .ok state.installed.generation := by
-  rw [ready.resumed.generation]
-  exact selectedGenerationRead ready.resumed.selected
+      .ok state.installed.generation :=
+  ready.resumed.generationRead
 
 theorem SegmentedWriterState.Ready.walDirectorySettled {directory descriptor state}
     (ready : SegmentedWriterState.Ready directory descriptor state) :

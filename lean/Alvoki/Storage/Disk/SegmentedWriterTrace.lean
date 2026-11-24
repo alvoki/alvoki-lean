@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.SegmentedAppendTrace
+import Alvoki.Storage.Disk.RetainedAppendReports
 import Alvoki.Storage.Disk.SegmentedCheckpointStep
 import Alvoki.Storage.Disk.SegmentedWriterEntry
 import Alvoki.Storage.Disk.SegmentedWriterMaintenance
@@ -46,6 +47,21 @@ theorem SegmentedWriterTrace.preservesReady {directory descriptor initial writes
   | table _ step ih =>
     obtain ⟨valid, history, owners, generation⟩ := ih
     exact ⟨step.preservesReady valid, history, owners, generation⟩
+
+/-- A retained writer can keep serving one owned session after collection,
+using the same actual reports and acknowledgment order. -/
+theorem SegmentedWriterTrace.preservesRetained {directory descriptor initial writes checkpoints last}
+    (trace : SegmentedWriterTrace directory descriptor initial writes checkpoints last)
+    (ready : initial.RetainedReady directory descriptor) :
+    last.RetainedReady directory descriptor ∧ last.history = initial.history ++ writes := by
+  induction trace with
+  | empty => exact ⟨ready, by simp⟩
+  | appends _ acknowledged ih =>
+    obtain ⟨next, appended⟩ := acknowledged.preservesRetained ih.1
+    exact ⟨next, by rw [appended, ih.2, List.append_assoc]⟩
+  | checkpoint _ _ observed installed ih =>
+    exact ⟨(installed.preservesRetained observed ih.1).1, installed.history.trans ih.2⟩
+  | table _ step ih => exact ⟨step.preservesRetained ih.1, ih.2⟩
 
 /-- Starting from the observed first open, the final live table represents
 the exact submitted writes, with one generation advance per publication. -/

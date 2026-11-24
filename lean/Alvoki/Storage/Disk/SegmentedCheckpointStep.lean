@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.CheckpointSuccessSession
-import Alvoki.Storage.Disk.SegmentedWriterState
+import Alvoki.Storage.Disk.RetainedWriterState
 
 namespace Alvoki.Storage.DiskSession
 
@@ -73,29 +73,17 @@ structure Installs (attempt : SegmentedCheckpointReport directory before) (after
 held lock. Its exact new manifest covers the full history, making the
 installed active segment the sole WAL read on recovery. -/
 theorem installsRetained (attempt : SegmentedCheckpointReport directory before) (observed : attempt.Valid)
-    (ready : ResumedAppendReady before.installed before.files before.target before.history
-      before.published before.checkpoint)
-    (layout : before.wal.ReadLayout before.history)
-    (directoryFiles : before.files.directory = before.wal.directory)
-    (sealedFiles : before.files.kept = (before.wal.checkpointReopenFiles before.wal.directory none).kept)
-    (active : before.target.first = before.wal.active.first)
-    (held : before.owners.Owns directory descriptor) :
-    ∃ after, attempt.Installs after ∧
-      ResumedAppendReady after.installed after.files after.target after.history after.published after.checkpoint ∧
-      after.wal.ReadLayout after.history ∧ after.wal.Valid after.history ∧
-      after.files.directory = after.wal.directory ∧
-      after.files.kept = (after.wal.checkpointReopenFiles after.wal.directory none).kept ∧
-      after.target.first = after.wal.active.first ∧
-      after.published.manifest = after.files.directory.project .manifest ∧
-      after.owners.Owns directory descriptor ∧ after.wal.readDescriptors after.history.length = [after.wal.active] := by
-  obtain ⟨model, refines, represents⟩ := ready.canonical
+    (ready : before.RetainedReady directory descriptor) :
+    ∃ after, attempt.Installs after ∧ after.RetainedReady directory descriptor ∧
+      after.wal.readDescriptors after.history.length = [after.wal.active] := by
+  obtain ⟨model, refines, represents⟩ := ready.resumed.canonical
   obtain ⟨_, _, _, count, _, _, counted⟩ := DirectoryPublication.Bindings.walRange_accounting before.target.decoded
   have bytes : (WAL.encode before.history).size = count.toNat := by
-    rw [counted, ready.through, WAL.encode_size, Nat.mul_comm]
-  have marker := congrArg Publication.Image.active ready.markerImage
+    rw [counted, ready.resumed.through, WAL.encode_size, Nat.mul_comm]
+  have marker := congrArg Publication.Image.active ready.resumed.markerImage
   change before.files.directory.active.walBoundary =
     some (WAL.Boundary.encode (WAL.encode before.history).size.toUInt64) at marker
-  rw [directoryFiles] at marker
+  rw [ready.directoryFiles] at marker
   have walFits : (WAL.encode before.history).size < UInt64.size := bytes.symm ▸ count.toNat_lt_size
   have runBytesFit : ∀ bytes ∈ attempt.table.runs.map (·.run.bytes), bytes.size < UInt64.size := by
     by_cases bounded : (attempt.table.runs.map (·.run.bytes)).all
@@ -108,12 +96,12 @@ theorem installsRetained (attempt : SegmentedCheckpointReport directory before) 
   obtain ⟨readyEffect, _, _, _, published, base, publication, settled, runs, others,
     _, crashes, projected, range, _, _, nextLayout, valid, keeperRead, accepted, selected, _, _, bounds, canonical⟩ :=
     runPreparedCheckpoint_segmentedSuccess (directory := directory) (owners := before.owners)
-      layout marker walFits before.published refines represents ready.bounds
+      ready.layout marker walFits before.published refines represents ready.resumed.bounds
       observed.flushed observed.generationFits observed.runCountFits runBytesFit
       attempt.writeRun attempt.writeStage attempt.sync attempt.renameFile attempt.report
       observed.encoded observed.reached complete
   let wal := published.segmentedCheckpointView before.wal
-  obtain ⟨target, keeper, resumed⟩ := ready.afterCheckpointPublication crashes range selected accepted bounds canonical
+  obtain ⟨target, keeper, resumed⟩ := ready.resumed.afterCheckpointPublication crashes range selected accepted bounds canonical
   let after : SegmentedWriterState := {
     installed := attempt.prepared
     wal := wal
@@ -125,23 +113,23 @@ theorem installsRetained (attempt : SegmentedCheckpointReport directory before) 
     owners := before.owners
   }
   have exactKeeper : target.trimmed = before.target.trimmed := by
-    rw [resumed.contents, keeper, ready.contents]
+    rw [resumed.contents, keeper, ready.resumed.contents]
   refine ⟨after, ⟨readyEffect, publication, settled, runs, others, rfl, rfl, rfl, rfl,
     resumed.ready.selected.symm, keeper, exactKeeper, selected, rfl⟩,
-    resumed, nextLayout, valid, rfl, sealedFiles, keeper.trans active, projected, held, keeperRead⟩
+    ⟨resumed, nextLayout, valid, ready.spans, rfl, ready.sealedFiles, keeper.trans ready.active, projected, ready.held⟩,
+    keeperRead⟩
 
 /-- The existing full-history writer retains its stronger inventory
 witness across the same successful checkpoint. -/
 theorem installs (attempt : SegmentedCheckpointReport directory before) (observed : attempt.Valid)
     (ready : before.Ready directory descriptor) :
     ∃ after, attempt.Installs after ∧ after.Ready directory descriptor := by
-  obtain ⟨after, installed, resumed, layout, _, files, sealed, active, manifest, held, _⟩ :=
-    attempt.installsRetained observed ready.resumed ready.layout ready.directoryFiles ready.sealedFiles
-      ready.active ready.held
+  obtain ⟨after, installed, retained, _⟩ := attempt.installsRetained observed ready.toRetained
   have chain : WalSegment.Chain after.history 0 after.wal.segments := by
     rw [installed.history, installed.wal]
     exact ready.chain
-  exact ⟨after, installed, ⟨resumed, layout, chain, files, sealed, active, manifest, held⟩⟩
+  exact ⟨after, installed, ⟨retained.resumed, retained.layout, chain, retained.directoryFiles, retained.sealedFiles,
+    retained.active, retained.manifestFiles, retained.held⟩⟩
 
 private theorem sameTarget {left right : Target} (pair : left.pair = right.pair) (first : left.first = right.first)
     (bytes : left.trimmed = right.trimmed) : left = right := by
@@ -199,6 +187,12 @@ theorem Installs.preservesReady {attempt : SegmentedCheckpointReport directory b
     after.Ready directory descriptor := by
   obtain ⟨next, exactEffect, nextReady⟩ := attempt.installs observed ready
   exact (exactEffect.unique endpoint) ▸ nextReady
+
+theorem Installs.preservesRetained {attempt : SegmentedCheckpointReport directory before} {after : SegmentedWriterState}
+    (endpoint : attempt.Installs after) (observed : attempt.Valid) (ready : before.RetainedReady directory descriptor) :
+    after.RetainedReady directory descriptor ∧ after.wal.readDescriptors after.history.length = [after.wal.active] := by
+  obtain ⟨next, exactEffect, nextReady, keeper⟩ := attempt.installsRetained observed ready
+  exact (exactEffect.unique endpoint) ▸ ⟨nextReady, keeper⟩
 
 end SegmentedCheckpointReport
 

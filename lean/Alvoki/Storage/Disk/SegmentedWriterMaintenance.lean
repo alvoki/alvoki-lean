@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedWriterState
+import Alvoki.Storage.Disk.RetainedWriterState
 
 namespace Alvoki.Storage.DiskSession
 
@@ -8,12 +8,6 @@ open WAL.Boundary Sequential
 checkpoint, WAL and owner exactly as observed. -/
 def SegmentedWriterState.withTable (state : SegmentedWriterState) (table : PackedTable) : SegmentedWriterState :=
   { state with installed := { state.installed with table } }
-
-private theorem SegmentedWriterState.Ready.withTable {directory descriptor state table model}
-    (ready : SegmentedWriterState.Ready directory descriptor state)
-    (bounds : table.RowBounds) (refines : table.Refines model) (represents : RepresentsWalHistory state.history model) :
-    (state.withTable table).Ready directory descriptor := by
-  exact { ready with resumed := { ready.resumed with bounds, canonical := ⟨model, refines, represents⟩ } }
 
 /-- Successful in-memory operations of the native writer. Release uses the
 reported session comparison through the same guard as the adapter. -/
@@ -28,25 +22,40 @@ inductive SegmentedTableStep (before : PackedTable) : PackedTable → Prop where
   | compact {index table} (compacted : before.compact index = some table) :
       SegmentedTableStep before table
 
-theorem SegmentedTableStep.preservesReady {directory descriptor} {state : SegmentedWriterState} {table : PackedTable}
-    (step : SegmentedTableStep state.installed.table table) (ready : state.Ready directory descriptor) :
-    (state.withTable table).Ready directory descriptor := by
-  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
-  have bounds := ready.resumed.bounds
+private theorem SegmentedTableStep.preservesResumed {installed files target history published checkpoint table}
+    (step : SegmentedTableStep installed.table table)
+    (ready : ResumedAppendReady installed files target history published checkpoint) :
+    ResumedAppendReady { installed with table } files target history published checkpoint := by
+  obtain ⟨model, refined, represented⟩ := ready.canonical
+  have bounds := ready.bounds
+  have withTable {table : PackedTable} {model : SnapshotTable UInt64} (bounded : table.RowBounds)
+      (refines : table.Refines model) (represents : RepresentsWalHistory history model) :
+      ResumedAppendReady { installed with table } files target history published checkpoint :=
+    { ready with bounds := bounded, canonical := ⟨model, refines, represents⟩ }
   cases step with
   | acquireAt acquired =>
     obtain ⟨_, refines, represents⟩ := represented.acquireAt refined bounds acquired
-    exact ready.withTable (bounds.acquireAt acquired) refines represents
+    exact withTable (bounds.acquireAt acquired) refines represents
   | release handle sameSession =>
     cases sameSession
     · exact ready
-    · exact ready.withTable (bounds.release handle) (PackedTable.release_refines refined handle)
+    · exact withTable (bounds.release handle) (PackedTable.release_refines refined handle)
         (represented.release handle)
   | advanceFloor advanced =>
     obtain ⟨_, _, refines, represents⟩ := represented.advanceFloor refined bounds advanced
-    exact ready.withTable (bounds.advanceFloor advanced) refines represents
+    exact withTable (bounds.advanceFloor advanced) refines represents
   | compact compacted =>
     obtain ⟨_, _, refines, represents⟩ := represented.compact refined bounds compacted
-    exact ready.withTable (bounds.compact compacted) refines represents
+    exact withTable (bounds.compact compacted) refines represents
+
+theorem SegmentedTableStep.preservesReady {directory descriptor} {state : SegmentedWriterState} {table : PackedTable}
+    (step : SegmentedTableStep state.installed.table table) (ready : state.Ready directory descriptor) :
+    (state.withTable table).Ready directory descriptor :=
+  { ready with resumed := step.preservesResumed ready.resumed }
+
+theorem SegmentedTableStep.preservesRetained {directory descriptor} {state : SegmentedWriterState} {table : PackedTable}
+    (step : SegmentedTableStep state.installed.table table) (ready : state.RetainedReady directory descriptor) :
+    (state.withTable table).RetainedReady directory descriptor :=
+  { ready with resumed := step.preservesResumed ready.resumed }
 
 end Alvoki.Storage.DiskSession

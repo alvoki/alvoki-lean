@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.SegmentedAppendTrace
+import Alvoki.Storage.Disk.RetainedWriterState
 
 namespace Alvoki.Storage.DiskSession
 
@@ -9,29 +10,19 @@ installed table through the retained WAL invariant. The earlier sealed
 files can have gaps strictly before the selected read suffix. -/
 theorem SegmentedAppendReport.preservesRetained {directory descriptor before}
     (report : SegmentedAppendReport directory before)
-    (ready : ResumedAppendReady before.installed before.files before.target before.history
-      before.published before.checkpoint)
-    (layout : before.wal.ReadLayout before.history) (valid : before.wal.Valid before.history)
-    (directoryFiles : before.files.directory = before.wal.directory)
-    (sealedFiles : before.files.kept = (before.wal.checkpointReopenFiles before.wal.directory none).kept)
-    (active : before.target.first = before.wal.active.first)
-    (held : before.owners.Owns directory descriptor) :
+    (ready : before.RetainedReady directory descriptor) :
     report.event.sequence.toNat = before.history.length + 1 ∧ ∃ target, report.Selects target ∧
       let after := report.next target
-      ResumedAppendReady after.installed after.files after.target after.history after.published after.checkpoint ∧
-      after.wal.ReadLayout after.history ∧ after.wal.Valid after.history ∧
-      after.files.directory = after.wal.directory ∧
-      after.files.kept = (after.wal.checkpointReopenFiles after.wal.directory none).kept ∧
-      after.target.first = after.wal.active.first ∧ after.owners.Owns directory descriptor ∧
+      after.RetainedReady directory descriptor ∧
       after.wal.sealed = before.wal.sealed ∧
       after.wal.active.bytes = before.wal.active.bytes ++ WAL.encodeFrame report.event ∧
       after.files.keeper.active = some after.wal.active.bytes ∧
       after.files.keeper.crashImages = [some after.wal.active.bytes] := by
   obtain ⟨_, ordinal, target, pair, range, resumed⟩ :=
-    ready.acknowledged directory report.prepared report.fits report.effects
+    ready.resumed.acknowledged directory report.prepared report.fits report.effects
       report.append report.write report.sync report.rename report.reports report.committed
   have oldRange : before.wal.directory.active.walRange = some ⟨before.target.range.watermark, before.history.length⟩ := by
-    rw [← directoryFiles, ready.ready.selected, ← ready.through]
+    rw [ready.walPair, ← ready.resumed.through]
     exact before.target.decoded
   have visible : report.files.directory.active = target.pair := resumed.ready.selected
   have settled : report.files.directory.crashImages = [report.files.directory.active] :=
@@ -41,7 +32,7 @@ theorem SegmentedAppendReport.preservesRetained {directory descriptor before}
     rw [visible, ← range]
     exact target.decoded
   obtain ⟨nextLayout, nextValid, sameSeals, nextActive⟩ :=
-    layout.afterRetainedAppend valid oldRange report.files.directory.active report.event newRange
+    ready.layout.afterRetainedAppend ready.valid oldRange report.files.directory.active report.event newRange
   let after := report.next target
   have retainedLayout : after.wal.ReadLayout after.history :=
     ⟨nextLayout.ordered, nextLayout.forward, nextLayout.activeEnd, nextLayout.activeBytes⟩
@@ -54,7 +45,8 @@ theorem SegmentedAppendReport.preservesRetained {directory descriptor before}
     change candidate ∈ report.files.directory.active :: [report.files.directory.active]
     rw [settled] at chosen
     exact chosen
-  have first : target.first = after.wal.active.first := resumed.keeper.symm.trans (ready.keeper.trans active)
+  have first : target.first = after.wal.active.first :=
+    resumed.keeper.symm.trans (ready.resumed.keeper.trans ready.active)
   have bytes : target.trimmed = after.wal.active.bytes := by
     rw [resumed.contents, first, retainedLayout.activeBytes]
     rfl
@@ -65,9 +57,28 @@ theorem SegmentedAppendReport.preservesRetained {directory descriptor before}
       after.published after.checkpoint :=
     ⟨resumed.ready, resumed.through, resumed.keeper, resumed.bytes, resumed.contents, resumed.generation,
       resumed.selected, resumed.accepted, resumed.ordered, resumed.bounds, resumed.canonical⟩
-  exact ⟨ordinal, target, selected, nextReady, retainedLayout, retainedValid, rfl, sealedFiles, first, held,
-    sameSeals, congrArg WalSegment.bytes nextActive,
+  have seals : after.wal.sealed = before.wal.sealed := sameSeals
+  have spans : ∀ segment ∈ after.wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize := by
+    rw [seals]
+    exact ready.spans
+  exact ⟨ordinal, target, selected,
+    ⟨nextReady, retainedLayout, retainedValid, spans, rfl, ready.sealedFiles, first, rfl, ready.held⟩,
+    seals, congrArg WalSegment.bytes nextActive,
     resumed.ready.keeper.trans (congrArg some bytes),
     resumed.ready.keeperDurable.trans (congrArg (fun payload => [some payload]) bytes)⟩
+
+/-- Continue with the existing append trace from a retained writer. All
+acknowledgments in the trace extend the history and preserve readiness. -/
+theorem SegmentedAppendTrace.preservesRetained {directory descriptor initial events last}
+    (trace : SegmentedAppendTrace directory descriptor initial events last)
+    (initialReady : initial.RetainedReady directory descriptor) :
+    last.RetainedReady directory descriptor ∧ last.history = initial.history ++ events := by
+  induction trace with
+  | empty => exact ⟨initialReady, by simp⟩
+  | append _ report selected ih =>
+    obtain ⟨_, target, chosen, next, _⟩ := report.preservesRetained ih.1
+    cases report.selectsUnique chosen selected
+    have history := ih.2
+    exact ⟨next, by change _ ++ [report.event] = _; rw [history, List.append_assoc]⟩
 
 end Alvoki.Storage.DiskSession

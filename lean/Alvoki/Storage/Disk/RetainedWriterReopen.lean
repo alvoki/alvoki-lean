@@ -1,4 +1,5 @@
-import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
+import Alvoki.Storage.Disk.RetainedWriterState
+import Alvoki.Storage.Disk.SegmentedRetainedWriter
 
 namespace Alvoki.Storage.DiskSession
 
@@ -9,6 +10,7 @@ layout. Settling the directory keeps the selected validated WAL suffix. -/
 theorem AppendCutReady.writerRetained {directory descriptor liveRefs history published initial target generation result}
     (opened : AppendCutReady directory descriptor liveRefs history published initial target generation result)
     {wal : WalSegmentImage} (layout : wal.ReadLayout history) (valid : wal.Valid history)
+    (spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize)
     (visible : wal.directory.active = target.pair) (keeper : target.first = wal.active.first)
     (sealed : initial.kept = (wal.checkpointReopenFiles wal.directory none).kept) :
     ∃ session final, ∃ writer : SegmentedWriterState,
@@ -17,11 +19,7 @@ theorem AppendCutReady.writerRetained {directory descriptor liveRefs history pub
       writer.wal = { wal with directory := final.image.directory } ∧ writer.target = target ∧
       writer.history = history ∧ writer.installed.generation = generation ∧
       writer.published.durable = published.durable ∧
-      ResumedAppendReady writer.installed writer.files writer.target writer.history writer.published writer.checkpoint ∧
-      writer.wal.ReadLayout writer.history ∧ writer.wal.Valid writer.history ∧
-      writer.files.directory = writer.wal.directory ∧
-      writer.files.kept = (writer.wal.checkpointReopenFiles writer.wal.directory none).kept ∧
-      writer.target.first = writer.wal.active.first ∧ writer.owners.Owns directory descriptor := by
+      writer.RetainedReady directory descriptor := by
   obtain ⟨through, trimmed, accepted, ordered, checkpoint, table, model, session, final, returned, selected,
     gen, _, path, lock, phase, durable, kept, held, _, bounds, refines, represents, _, _, _, _⟩ := opened
   let installed : Installed := ⟨table, generation, (WAL.encode history).size, target.first⟩
@@ -38,9 +36,9 @@ theorem AppendCutReady.writerRetained {directory descriptor liveRefs history pub
   have resumed : ResumedAppendReady writer.installed writer.files writer.target writer.history
       writer.published writer.checkpoint :=
     ⟨durable, through, rfl, rfl, trimmed, gen, selected, accepted, ordered, bounds, ⟨model, refines, represents⟩⟩
-  exact ⟨session, final, writer, returned, path, lock, phase, rfl, rfl, rfl, rfl, rfl, rfl, rfl, resumed,
-    ⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩,
-    retained, rfl, kept.trans sealed, keeper, held⟩
+  exact ⟨session, final, writer, returned, path, lock, phase, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+    ⟨resumed, ⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩,
+      retained, spans, rfl, kept.trans sealed, keeper, rfl, held⟩⟩
 
 private theorem reachesKeeperSync {target : Target} {initial before : FileImage} {action : Step}
     (reaches : ReachesAction target initial [.syncKeeper] action before) :
@@ -56,8 +54,8 @@ private theorem reachesKeeperSync {target : Target} {initial before : FileImage}
 /-- After covered collection, the healthy locked inventory feeds the
 native bounded reader. The keeper is still aligned, so only the directory
 and keeper barriers are reached before the retained writer is installed. -/
-theorem SegmentedWriterState.Ready.openAfterCollection {directory descriptor state after}
-    (ready : SegmentedWriterState.Ready directory descriptor state)
+theorem SegmentedWriterState.RetainedReady.openAfterCollection {directory descriptor state after}
+    (ready : SegmentedWriterState.RetainedReady directory descriptor state)
     (retry : WalSegmentCollectionRetry state.wal after)
     {owners : LockOwners} {readerDescriptor nextRef : Nat}
     (raw : HealthyBoundedWalReports directory (owners.set (directory.file .lock) (some readerDescriptor))
@@ -80,17 +78,12 @@ theorem SegmentedWriterState.Ready.openAfterCollection {directory descriptor sta
       writer.wal = { after with directory := final.image.directory } ∧ writer.target.pair = state.target.pair ∧
       writer.history = state.history ∧ writer.installed.generation = state.installed.generation ∧
       writer.published.durable = state.published.durable ∧
-      ResumedAppendReady writer.installed writer.files writer.target writer.history writer.published writer.checkpoint ∧
-      writer.wal.ReadLayout writer.history ∧ writer.wal.Valid writer.history ∧
-      writer.files.directory = writer.wal.directory ∧
-      writer.files.kept = (writer.wal.checkpointReopenFiles writer.wal.directory none).kept ∧
-      writer.target.first = writer.wal.active.first ∧ writer.owners.Owns directory readerDescriptor := by
+      writer.RetainedReady directory readerDescriptor := by
   intro files syncDirectory syncKeeper
-  have chosen : after.Selects after.directory.active := List.mem_cons_self ..
-  have pair := (ready.collectionReadPlan retry chosen).1
+  have pair := (retry.keepsSettledPair ready.walDirectorySettled).1.trans ready.walPair
   have decoded : after.directory.active.walRange = some state.target.range := pair.symm ▸ state.target.decoded
   have layout := retry.readLayout ready.layout
-  have valid := retry.valid ready.walValid
+  have valid := retry.valid ready.valid
   obtain ⟨selected, range, keeper, tail, descriptors, offsets, _, choices, keeperPrefix, later⟩ :=
     layout.checkpointReopenLayout valid .visible decoded ready.resumed.through scratch
   have prepared := selected.prepared choices keeperPrefix (range.symm ▸ later)
@@ -125,18 +118,17 @@ theorem SegmentedWriterState.Ready.openAfterCollection {directory descriptor sta
       (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
       .ok state.installed.generation := by
     rw [pair]
-    exact ready.generationRead
+    exact ready.resumed.generationRead
   have watermark := congrArg MarkedWalRange.watermark range
   have opened := runOpenWithInstallation_appendLayout layout ready.resumed.ordered selected keeper
     (watermark.symm ▸ descriptors) (watermark.symm ▸ offsets) prepared rfl accepted generation reports
     liveRefs fresh acquisition unlock removeFile write sync renameFile syncDirectory healthy
-  obtain ⟨session, final, writer, returned, path, lock, phase, image, owners, wal, target, history, gen, durable, resumed,
-    ordered, retained, directoryFiles, sealedFiles, active, held⟩ :=
-    opened.writerRetained layout valid rfl (congrArg WalSegment.first keeper) rfl
+  obtain ⟨session, final, writer, returned, path, lock, phase, image, owners, wal, target, history, gen, durable, next⟩ :=
+    opened.writerRetained layout valid (fun _ member => ready.spans _ (retry.sealedSublist.subset member))
+      rfl (congrArg WalSegment.first keeper) rfl
   have samePair : writer.target.pair = state.target.pair := by
     rw [target]
     exact pair
-  exact ⟨session, final, writer, returned, path, lock, phase, image, owners, wal, samePair, history, gen, durable, resumed,
-    ordered, retained, directoryFiles, sealedFiles, active, held⟩
+  exact ⟨session, final, writer, returned, path, lock, phase, image, owners, wal, samePair, history, gen, durable, next⟩
 
 end Alvoki.Storage.DiskSession
