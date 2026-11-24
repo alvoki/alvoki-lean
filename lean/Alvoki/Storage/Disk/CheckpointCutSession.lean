@@ -123,6 +123,90 @@ theorem runOpenWithInstallation_checkpointCut {directory : DiskDirectory} {owner
   exact ⟨checkpoint, table, model, count, session, final, result, exactCheckpoint, path, lock, phase, atEnd ▸ absolute,
     committed, bounds, refines, represents, noPins, image, held, distinct, phaseFresh, sessionFresh⟩
 
+/-- Interpret the reported checkpoint error under the writer lock, then
+expose the unchanged WAL and the admitted manifest/marker choices for
+subsequent opens. Both explicit close and a final reference drop hand off
+the same file cut. -/
+theorem runCheckpointFailureHandoff {directory : DiskDirectory} {owners : LockOwners}
+    {writerDescriptor : Nat} (ownership : owners.Owns directory writerDescriptor)
+    {before : WalSegmentImage} {history : List WAL.Write}
+    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
+    (settled : before.directory.crashImages = [before.directory.active])
+    (marker : before.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
+    (walFits : (WAL.encode history).size < UInt64.size)
+    (initial : CheckpointPublication.Image) (projected : initial.manifest = before.directory.project .manifest)
+    (previous : initial.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      before.directory.active.manifest)
+    (installed : Installed) (model : Sequential.SnapshotTable UInt64)
+    (installedGeneration : ((before.directory.active.manifest.mapM fun bytes =>
+      (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
+      .ok installed.generation)
+    (refines : installed.table.Refines model) (represents : RepresentsWalHistory history model)
+    (rowBounds : installed.table.RowBounds) (checkpoint : PackedTable)
+    (flushed : (flushForCheckpoint installed.table id : Except String PackedTable) = .ok checkpoint)
+    (generationFits : installed.generation.toNat + 1 < UInt64.size)
+    (runCountFits : checkpoint.runs.length < UInt64.size)
+    (runBytesFit : ∀ bytes ∈ checkpoint.runs.map (·.run.bytes), bytes.size < UInt64.size)
+    (checkpointWrite checkpointStage : FilePath → ByteArray → EStateM IO.Error Nat Unit)
+    (checkpointSync : Array FilePath → EStateM IO.Error Nat Unit)
+    (checkpointRename : FilePath → FilePath → EStateM IO.Error Nat Unit)
+    (report : CheckpointPublication.Step → CheckpointPublication.StepReport)
+    {manifest : ByteArray} {cause : IO.Error} {cut : Nat} :
+    let generation := (installed.generation.toNat + 1).toUInt64
+    let plan := CheckpointPublication.VersionedRunSet.integrity
+      ⟨checkpointHeader checkpoint generation, checkpoint.runs.map (·.run.bytes)⟩
+    let perform := performCheckpointFileStep directory generation checkpoint.runs.toArray
+      (directory.file .stagedManifest) manifest
+      (fun found => match found with
+        | some run => pure run
+        | none => throw (IO.userError "checkpoint run index is out of bounds"))
+      checkpointWrite checkpointStage checkpointSync checkpointRename
+    let poisoned : Phase Installed × LockedFileState Nat := (.poisoned, ⟨cut, owners⟩)
+    let released : LockedFileState Nat := ⟨cut, owners.set (directory.file .lock) none⟩
+    initial.UnreachableVersioned generation →
+    encodeCheckpointIntegrityManifest checkpoint generation = .ok manifest →
+    CheckpointPublication.ReachedFileReports report perform (CheckpointPublication.steps checkpoint.runs.length) 0 →
+    CheckpointPublication.run checkpoint.runs.toArray.size perform 0 = .error cause cut →
+    generation.toNat = installed.generation.toNat + 1 ∧ manifest = plan.manifest.encode ∧
+    runPreparedCheckpoint { installed with table := checkpoint, generation := generation }
+        perform (.ready installed, ⟨0, owners⟩) = .error cause poisoned ∧
+    runCloseWithFiles directory writerDescriptor .success poisoned = .ok () (.closed, released) ∧
+    (∀ (references : HeldLockReferences writerDescriptor) (drops : List LockReferenceDrop),
+      references.remaining drops = [] → references.afterFileDrops drops directory poisoned.2 = released) ∧
+    TryLockObserves released.owners directory (.ok true) ∧
+    ∃ published, initial.executeVersioned plan cut = some published ∧
+      let wal := published.segmentedCheckpointView before
+      wal.ReadLayout history ∧ wal.Valid history ∧
+      ∀ pair, wal.Selects pair →
+        pair.walBoundary = before.directory.active.walBoundary ∧
+        (pair.manifest = before.directory.active.manifest ∨ pair.manifest = some manifest) ∧
+        published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history) pair.manifest ∧
+        ∃ range, pair.walRange = some range ∧ range.through = history.length := by
+  intro generation plan perform poisoned released freshGeneration encoded reported failed
+  obtain ⟨exactManifest, published, projectedCut, publication⟩ :=
+    CheckpointPublication.observedIntegrityCheckpointFileFailure initial directory checkpoint generation encoded
+      checkpointWrite checkpointStage checkpointSync checkpointRename report reported failed
+  have runFailed : CheckpointPublication.run checkpoint.runs.length perform 0 = .error cause cut := by
+    simpa only [List.size_toArray] using failed
+  obtain ⟨poison, close, drops, canAcquire⟩ := runPreparedCheckpoint_failure_handoff
+    (before := ⟨0, owners⟩) installed { installed with table := checkpoint, generation := generation }
+    perform runFailed ownership
+  refine ⟨UInt64.toNat_ofNat_of_lt' generationFits, exactManifest, poison, close, drops, canAcquire, published, projectedCut, ?_⟩
+  have strict (bytes : ByteArray) (binding : before.directory.active.manifest = some bytes) :
+      ∃ parsed, Manifest.IntegrityCheckpoint.decode bytes = .ok parsed := by
+    have matched := installedGeneration
+    rw [binding] at matched
+    cases decodedBytes : Manifest.IntegrityCheckpoint.decode bytes with
+    | error cause => simp [decodedBytes, Option.mapM, Functor.map, Except.map] at matched
+    | ok parsed => exact ⟨parsed, rfl⟩
+  obtain ⟨walLayout, walValid, inputs⟩ := CheckpointPublication.segmentedCheckpoint_reportedCut
+    layout chain settled marker walFits projected previous strict refines represents rowBounds flushed runCountFits
+    generation freshGeneration runBytesFit report publication
+  refine ⟨walLayout, walValid, ?_⟩
+  intro pair selects
+  obtain ⟨sameMarker, chosen, accepted, _, range, _, decoded, through, _⟩ := inputs pair selects
+  exact ⟨sameMarker, by simpa only [exactManifest] using chosen, accepted, range, decoded, through⟩
+
 /-- From a ready writer with settled segment files and a complete WAL,
 follow a reported checkpoint file error through release and the next
 healthy bounded open. The visible cut retains all manifest choices until
@@ -207,32 +291,20 @@ theorem runOpenAfterCheckpointFailure {directory : DiskDirectory} {owners : Lock
               (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
                 (recoverCheckpointCut raw removeFile write sync renameFile) ⟨files, released.owners⟩) := by
   intro generation plan perform poisoned released freshGeneration encoded reported failed
-  obtain ⟨exactManifest, published, projectedCut, publication⟩ :=
-    CheckpointPublication.observedIntegrityCheckpointFileFailure initial directory checkpoint generation encoded
-      checkpointWrite checkpointStage checkpointSync checkpointRename report reported failed
-  have runFailed : CheckpointPublication.run checkpoint.runs.length perform 0 = .error cause cut := by
-    simpa only [List.size_toArray] using failed
-  obtain ⟨poison, close, drops, canAcquire⟩ := runPreparedCheckpoint_failure_handoff
-    (before := ⟨0, owners⟩) installed { installed with table := checkpoint, generation := generation }
-    perform runFailed ownership
-  refine ⟨UInt64.toNat_ofNat_of_lt' generationFits, exactManifest, poison, close, drops, published, projectedCut, ?_⟩
-  have strict (bytes : ByteArray) (binding : before.directory.active.manifest = some bytes) :
-      ∃ parsed, Manifest.IntegrityCheckpoint.decode bytes = .ok parsed := by
-    have matched := installedGeneration
-    rw [binding] at matched
-    cases decodedBytes : Manifest.IntegrityCheckpoint.decode bytes with
-    | error cause => simp [decodedBytes, Option.mapM, Functor.map, Except.map] at matched
-    | ok parsed => exact ⟨parsed, rfl⟩
-  obtain ⟨walLayout, walValid, inputs⟩ := CheckpointPublication.segmentedCheckpoint_reportedCut
-    layout chain settled marker walFits projected previous strict refines represents rowBounds flushed runCountFits
-    generation freshGeneration runBytesFit report publication
+  obtain ⟨exactGeneration, exactManifest, poison, close, drops, canAcquire, published, projectedCut,
+      walLayout, walValid, inputs⟩ :=
+    runCheckpointFailureHandoff ownership layout chain settled marker walFits initial projected previous
+      installed model installedGeneration refines represents rowBounds checkpoint flushed generationFits runCountFits
+      runBytesFit checkpointWrite checkpointStage checkpointSync checkpointRename report
+      freshGeneration encoded reported failed
+  refine ⟨exactGeneration, exactManifest, poison, close, drops, published, projectedCut, ?_⟩
   intro wal seen observed files
   obtain ⟨sameMarker, chosen, _⟩ := inputs seen.active observed.selectsActive
   obtain ⟨range, decoded, through, accepted, exactRuns⟩ :=
     published.checkpointReopenInputs observed scratch (fun pair selects => by
-      obtain ⟨_, _, accepted, _, range, _, decoded, through, _⟩ := inputs pair selects
+      obtain ⟨_, _, accepted, range, decoded, through⟩ := inputs pair selects
       exact ⟨accepted, range, decoded, through⟩)
-  refine ⟨by simpa only [exactManifest] using chosen, sameMarker, range, decoded, through, exactRuns, ?_⟩
+  refine ⟨chosen, sameMarker, range, decoded, through, exactRuns, ?_⟩
   intro raw syncDirectory syncKeeper
   have keeper : installed.activeFirst = wal.active.first := installedKeeper
   rw [installedBytes, keeper]

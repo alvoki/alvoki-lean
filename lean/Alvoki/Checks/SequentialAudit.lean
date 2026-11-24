@@ -1,6 +1,7 @@
 import Alvoki.Checks.AxiomPolicy
 import Alvoki.Storage.Disk.AppendCutContinuation
 import Alvoki.Storage.Disk.AppendRetrySession
+import Alvoki.Storage.Disk.CheckpointRetrySession
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.FullWatermarkReopen
 import Alvoki.Storage.Disk.WalWritePublicationModel
@@ -595,6 +596,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runPreparedCheckpoint_failure_handoff
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_checkpointCut
 #check_axioms Alvoki.Storage.DiskSession.runOpenAfterCheckpointFailure
+#check_axioms Alvoki.Storage.DiskSession.runCheckpointFailureHandoff
 #check_axioms Alvoki.Storage.WalSegmentCommit.forgetError_commitAt
 #check_axioms Alvoki.Storage.DiskSession.AppendCommitReports.run
 #check_axioms Alvoki.Storage.DiskSession.runPreparedWrite_failure_handoff
@@ -620,6 +622,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.lineage
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_appendLayout
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterAppendError
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterCheckpointError
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop
