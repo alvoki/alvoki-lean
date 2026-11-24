@@ -2,6 +2,7 @@ import Alvoki.Checks.AxiomPolicy
 import Alvoki.Storage.Disk.AppendCutContinuation
 import Alvoki.Storage.Disk.AppendRetrySession
 import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
+import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.CheckpointRetrySession
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.DiskTable
@@ -669,6 +670,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.startsRetry
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.selectsPriorHistory
 #check_axioms Alvoki.Storage.DiskSession.FirstAppendCut.reopens
+#check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.Valid.submittedSequence
+#check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.Installs.unique
+#check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.Installs.preservesReady
+#check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.Installs.history
+#check_axioms Alvoki.Storage.DiskSession.SegmentedAppendPowerLossReport.Installs.generation
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterCheckpointError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.Installs.unique
