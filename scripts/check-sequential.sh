@@ -55,6 +55,9 @@ lake env leanchecker Alvoki.Storage.Disk.MarkedDatabaseTrace
 lake env leanchecker Alvoki.Storage.Disk.MarkedWriteReopenProgress
 lake env leanchecker Alvoki.Storage.Disk.OptionalFileRead
 lake env leanchecker Alvoki.Storage.Disk.CheckpointFileDispatch
+lake env leanchecker Alvoki.Storage.Disk.CheckpointObservedDispatch
+lake env leanchecker Alvoki.Storage.Disk.CheckpointLockHandoff
+lake env leanchecker Alvoki.Storage.Disk.CheckpointCutSession
 lake env leanchecker Alvoki.Storage.Disk.DiskSession
 lake env leanchecker Alvoki.Storage.Disk.SessionReadGuards
 lake env leanchecker Alvoki.Storage.Disk.MarkedOpenControl
@@ -137,6 +140,8 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentRotationReopen
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentBootstrapEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentBoundedOpenEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointPublication
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointReopen
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointOpenReports
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentSerialReplay
 lake env leanchecker Alvoki.Storage.Disk.FreshMarkedBootstrap
 lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointReopenProgress

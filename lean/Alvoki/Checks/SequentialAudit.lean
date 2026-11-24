@@ -72,6 +72,7 @@ import Alvoki.Storage.Disk.BootstrapAdmissionEffects
 import Alvoki.Storage.Disk.FirstMarkedSession
 import Alvoki.Storage.Disk.WalSegmentCheckpointPublication
 import Alvoki.Storage.Disk.WalSegmentSerialReplay
+import Alvoki.Storage.Disk.CheckpointCutSession
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
@@ -544,6 +545,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegment.Chain.startsWithin
 #check_axioms Alvoki.Storage.WalSegment.Chain.replaysMarked
 #check_axioms Alvoki.Storage.CheckpointPublication.segmentedCheckpoint_reportedCut
+#check_axioms Alvoki.Storage.CheckpointPublication.Image.runVersionedWithObservedFailure
+#check_axioms Alvoki.Storage.CheckpointPublication.observedIntegrityCheckpointFileFailure
+#check_axioms Alvoki.Storage.WalSegmentImage.CheckpointReopenDirectory.selectsActive
+#check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.checkpointReopenLayout
+#check_axioms Alvoki.Storage.CheckpointPublication.Image.checkpointReopenInputs
+#check_axioms Alvoki.Storage.WalSegmentRepair.HealthyCheckpointCutReports.scan
+#check_axioms Alvoki.Storage.WalSegmentRepair.HealthyCheckpointCutReports.readCheckpoint
+#check_axioms Alvoki.Storage.WalSegmentRepair.HealthyCheckpointCutReports.readSelectedBounded
 #check_axioms Alvoki.Storage.WalSegmentRepair.RetryInventory.prepareFirstMarked
 #check_axioms Alvoki.Storage.WalSegmentRotation.Trace.replaysAfterReopenCrash
 #check_axioms Alvoki.Storage.WalSegmentRotation.State.settleForReopen_survives
@@ -577,6 +586,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bounded
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterInterruptedRotation
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_firstMarked
+#check_axioms Alvoki.Storage.DiskSession.runCloseWithFiles_poisoned
+#check_axioms Alvoki.Storage.DiskSession.runPreparedCheckpoint_failure_handoff
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_checkpointCut
+#check_axioms Alvoki.Storage.DiskSession.runOpenAfterCheckpointFailure
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop
