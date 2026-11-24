@@ -53,6 +53,15 @@ private theorem chain_append_empty {history : List WAL.Write} {first : Nat} {sea
     | cons bounds emptyLast bytes tail =>
       exact .cons bounds (fun same => False.elim (by simpa using emptyLast same)) bytes (ih tail)
 
+/-- Sealing the unchanged nonempty keeper and adding an empty successor
+preserves the entire chain, including any segments below the watermark. -/
+theorem CanRotate.chain_rotated {image : WalSegmentImage} {history : List WAL.Write} {first : Nat}
+    (rotation : CanRotate image history)
+    (chain : WalSegment.Chain history first (image.sealed ++ [image.active])) :
+    WalSegment.Chain history first (image.rotated.sealed ++ [image.rotated.active]) := by
+  simpa [WalSegmentImage.rotated, rotation.atEnd, List.append_assoc] using
+    chain_append_empty chain rotation.nonempty
+
 private theorem rotated_tail (image : WalSegmentImage) (watermark : Nat) :
     image.rotated.afterWatermark watermark = image.afterWatermark watermark ++
       ([image.rotated.active].filter (fun segment => decide (watermark < segment.last))) := by

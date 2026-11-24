@@ -17,6 +17,18 @@ theorem State.settledReopenImage_sync (state : State) (image : WalSegmentImage) 
   simp only [State.settledReopenImage, State.visible_metadata, State.settleForReopen]
   rfl
 
+/-- The surviving empty successor preserves the original contiguous WAL
+from the same starting offset. Metadata changes have no effect on it. -/
+theorem State.visibleChain (state : State) {image : WalSegmentImage} {history : List WAL.Write}
+    {first : Nat} (rotation : CanRotate image history) (chain : WalSegment.Chain history first image.segments) :
+    WalSegment.Chain history first (state.visible image).segments := by
+  let current : WalSegmentImage := { image with directory := state.metadata }
+  have original : WalSegment.Chain history first current.segments := chain
+  have canRotate : CanRotate current history := ⟨rotation.nonempty, rotation.atEnd, rotation.sealedBefore⟩
+  by_cases absent : state.successor = .absent
+  · simpa only [State.visible, absent, ite_true] using original
+  · simpa only [State.visible, absent, ite_false, WalSegmentImage.segments] using canRotate.chain_rotated original
+
 /-- The surviving successor changes both the keeper and the sealed list.
 Project to the fixed file image only after selecting this layout. -/
 theorem State.crashReopenLayout (image : WalSegmentImage) (pair : DirectoryPublication.Bindings)

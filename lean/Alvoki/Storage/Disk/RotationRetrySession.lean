@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.RotationAuthorityRetry
 import Alvoki.Storage.Disk.RotationReopenTrace
+import Alvoki.Storage.Disk.ReopenedSegmentAppend
 
 namespace Alvoki.Storage.DiskSession
 
@@ -20,7 +21,15 @@ def RotationRetryReady (directory : DiskDirectory) (descriptor : Nat) (liveRefs 
     final.owners.Owns directory descriptor ∧
     table.committed.toNat = history.length ∧ table.RowBounds ∧ table.Refines model ∧
     RepresentsWalHistory history model ∧ table.pins.active = [] ∧
-    session.phaseRef ≠ session.sessionRef ∧ session.phaseRef ∉ liveRefs ∧ session.sessionRef ∉ liveRefs
+    session.phaseRef ≠ session.sessionRef ∧ session.phaseRef ∉ liveRefs ∧ session.sessionRef ∉ liveRefs ∧
+    let wal := final.image.visible original
+    let files := final.image.settledReopenImage original
+    ResumedAppendReady ⟨table, (checkpoint.getD (.empty, 0)).2, (WAL.encode history).size, target.first⟩
+      files target history published checkpoint ∧
+    wal.ReadLayout history ∧ wal.Valid history ∧
+    (WalSegment.Chain history 0 original.segments → WalSegment.Chain history 0 wal.segments) ∧
+    files.directory = wal.directory ∧ files.kept = (wal.checkpointReopenFiles wal.directory none).kept ∧
+    wal.active.first = target.first ∧ wal.active.bytes = target.trimmed
 
 /-- A rotation error leaves either the original keeper or a visible empty
 successor. After a finite prefix of failed opens and allowed successor
@@ -59,7 +68,7 @@ theorem RotationReopenFailures.installs {directory : DiskDirectory}
   intro wal fixed
   have trace := attempts.rotationTrace rotation layout origin
   obtain ⟨range, decoded, atEnd, accepted⟩ := originalPairs _ (trace.selectsOriginal (List.mem_cons_self ..))
-  obtain ⟨stableLayout, _, active, samePair, selected, sameRange, keeper, tail, descriptors, offsets, prepared⟩ :=
+  obtain ⟨stableLayout, stableValid, active, samePair, selected, sameRange, keeper, tail, descriptors, offsets, prepared⟩ :=
     trace.settledReopenLayout rotation layout valid decoded atEnd
   refine ⟨selected, keeper.trans active, ?_⟩
   intro raw metadata keeperSync attempt
@@ -107,8 +116,27 @@ theorem RotationReopenFailures.installs {directory : DiskDirectory}
   have fixedReady : fixed.Ready selected.target := ⟨prepared.pair,
     pairSettled.trans (congrArg (fun pair => [pair]) prepared.pair), exactKeeper,
     by rw [← exactKeeper]; rfl, ⟨rfl, rfl⟩⟩
-  exact ⟨checkpoint, table, model, session, final, returned, samePair ▸ loaded, replayed, path, lock,
+  have acceptedTarget : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      fixed.directory.active.manifest := samePair.symm ▸ accepted
+  have resume : ResumedAppendReady
+      ⟨table, (checkpoint.getD (.empty, 0)).2, (WAL.encode history).size, selected.target.first⟩
+      fixed selected.target history published checkpoint :=
+    ⟨fixedReady, selected.through, rfl, rfl, selected.chain.keeperBytes, rfl, loaded, acceptedTarget,
+      ordered, bounds, ⟨model, refines, represents⟩⟩
+  have finalWal : final.image.visible image = wal :=
+    congrArg (fun state : WalSegmentRotation.State => state.visible image) settled
+  refine ⟨checkpoint, table, model, session, final, returned, samePair ▸ loaded, replayed, path, lock,
     by simpa only [opened, count, CanonicalKeeperLayout.target] using ready, settled, finalProjection.symm ▸ fixedReady,
-    held, committed, bounds, refines, represents, pins, separate, freshPhase, freshSession⟩
+    held, committed, bounds, refines, represents, pins, separate, freshPhase, freshSession,
+    finalProjection.symm ▸ resume, finalWal.symm ▸ stableLayout, finalWal.symm ▸ stableValid,
+    final.image.visibleChain rotation, ?_, ?_, ?_, ?_⟩
+  · rw [finalProjection, finalWal]
+    rfl
+  · rw [finalProjection, finalWal]
+    rfl
+  · rw [finalWal, ← keeper]
+    rfl
+  · rw [finalWal, ← keeper]
+    rfl
 
 end Alvoki.Storage.DiskSession

@@ -597,6 +597,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runPreparedRotation_failure_handoff
 #check_axioms Alvoki.Storage.WalSegmentRotation.State.crashReopenLayout
 #check_axioms Alvoki.Storage.WalSegmentRotation.State.settledReopenImage_sync
+#check_axioms Alvoki.Storage.WalSegmentRotation.CanRotate.chain_rotated
+#check_axioms Alvoki.Storage.WalSegmentRotation.State.visibleChain
 #check_axioms Alvoki.Storage.WalSegmentRotation.Trace.settledReopenLayout
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.rotationErrorFiles
 #check_axioms Alvoki.Storage.DiskSession.RotationReopenFailures.rotationTrace
