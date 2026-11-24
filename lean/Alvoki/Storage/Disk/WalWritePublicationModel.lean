@@ -99,7 +99,8 @@ def WriteEffects.appendFrame (effects : WriteEffects) (event : WAL.Write) : ESta
     | .error visible => .error ()
       { files with visibleTail := visible, crashTails := candidates, crashPossible := by simp [candidates] }
 
-private def WriteFiles.stepMarker (files : WriteFiles) (bytes : ByteArray) (step : Publication.Step) :
+/-- Interpret one marker step on the reached write image. -/
+def WriteFiles.stepMarker (files : WriteFiles) (bytes : ByteArray) (step : Publication.Step) :
     Option WriteFiles :=
   (files.marker.step bytes step).map fun marker => { files with marker }
 
@@ -113,7 +114,8 @@ private def stepMarker (bytes : ByteArray) (step : Publication.Step) (report : O
     | none => .error () files
   | .errorAfterEffect => .error () ((files.stepMarker bytes step).getD files)
 
-private def WriteFiles.syncWal (files : WriteFiles) : WalSyncEffect → WriteFiles
+/-- Record the authorized survival choices of the observed keeper sync. -/
+def WriteFiles.syncWal (files : WriteFiles) : WalSyncEffect → WriteFiles
   | .complete => { files with crashTails := [files.visibleTail], crashPossible := by simp }
   | .incomplete tails => { files with crashTails := ByteArray.empty :: tails, crashPossible := by simp }
 
@@ -134,6 +136,36 @@ def WriteEffects.markerStep (effects : WriteEffects) (bytes : ByteArray) :
       .error () after
   | .renameStaged => stepMarker bytes .renameStaged effects.rename
   | .syncDirectory => stepMarker bytes .syncDirectory effects.directorySync
+
+/-- The successful grouped barrier commits both effects when the staged
+marker is present. -/
+theorem WriteEffects.markerStep_syncStaged_success (effects : WriteEffects) (bytes : ByteArray)
+    {before : WriteFiles} (staged : before.marker.staged = some (bytes, false))
+    (reported : effects.sync = .ok ()) :
+    let afterWal := before.syncWal .complete
+    effects.markerStep bytes .syncStaged before = .ok () ((afterWal.stepMarker bytes .syncStaged).getD afterWal) := by
+  simp [markerStep, reported, WAL.Boundary.stepMarker, WriteFiles.stepMarker, WriteFiles.syncWal,
+    Publication.Image.step, staged]
+
+/-- A completed append and marker stage supply exactly the prior crash
+choices and unsynced marker bytes for the next grouped barrier. -/
+theorem WriteEffects.reachedWriteGroup (effects : WriteEffects) (event : WAL.Write) (bytes : ByteArray)
+    {before appended staged : WriteFiles} (append : effects.appendFrame event before = .ok () appended)
+    (stage : effects.markerStep bytes .writeStaged appended = .ok () staged) :
+    staged.crashTails = ByteArray.empty :: effects.appendCrashTails ∧ staged.marker.staged = some (bytes, false) := by
+  cases appendResult : effects.append with
+  | error => simp [appendFrame, appendResult] at append
+  | ok result =>
+    cases result
+    simp [appendFrame, appendResult] at append
+    subst appended
+    cases stageResult : effects.stage with
+    | error => simp [markerStep, stageResult] at stage
+    | ok result =>
+      cases result
+      simp [markerStep, stageResult, WAL.Boundary.stepMarker, WriteFiles.stepMarker, Publication.Image.step] at stage
+      subst staged
+      exact ⟨rfl, rfl⟩
 
 /-- The settled marker and empty appended tail at the start of one write. -/
 def WriteFiles.initial (before : List WAL.Write) (stagedMarker : Option (ByteArray × Bool)) : WriteFiles :=
