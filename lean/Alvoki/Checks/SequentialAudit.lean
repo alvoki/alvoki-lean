@@ -684,6 +684,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.Installs.unique
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.Installs.preservesReady
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterAcknowledgedAppend
+#check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterRetainedAppend
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterSuccessfulAppend
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_noConflicts
 #check_axioms Alvoki.Storage.WalSegmentRepair.BootstrapReady.walRange
