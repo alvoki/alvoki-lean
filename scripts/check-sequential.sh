@@ -216,6 +216,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentSizedOpen
 lake env leanchecker Alvoki.Storage.Disk.IntegrityCheckpointSizedRead
 lake env leanchecker Alvoki.Storage.Disk.WalGroupSyncSchedule
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleRouting
+lake env leanchecker Alvoki.Storage.Disk.SyncHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 lake env leanchecker Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
 lake env leanchecker Alvoki.Storage.Disk.SegmentedKeeperSyncBeforeBarrier
