@@ -129,6 +129,26 @@ theorem Image.runVersionedWithReports_outcome (initial : Image) (next : Versione
     obtain ⟨after, applied, rfl⟩ := Option.map_eq_some_iff.mp ran
     exact ⟨cut, applied⟩
 
+/-- A successful run of the reported callbacks takes every effect in the
+shared schedule. The resulting image is the complete versioned checkpoint. -/
+theorem Image.runVersionedWithObservedSuccess (initial : Image) (next : VersionedRunSet)
+    (report : Step → StepReport) (perform : Step → EStateM IO.Error Nat Unit)
+    (observed : ReachedFileReports report perform (steps next.files.length) 0)
+    {cut : Nat} (succeeded : run next.files.length perform 0 = .ok () cut) :
+    cut = (steps next.files.length).length ∧
+      ∃ published, initial.executeVersioned next cut = some published ∧
+        initial.runVersionedWithReports next report = some (.ok () published) := by
+  have counted := reportsMatchSchedule report perform (steps next.files.length) 0 observed
+  change withoutCheckpointError (run next.files.length perform 0) =
+    run next.files.length (reportEffect report) 0 at counted
+  rw [succeeded] at counted
+  have length := reportEffect_success_length report (steps next.files.length) 0 counted.symm
+  obtain ⟨published, exactFiles⟩ := initial.executeVersioned_exists next cut
+  refine ⟨by simpa using length, published, exactFiles, ?_⟩
+  unfold runVersionedWithReports
+  rw [← counted]
+  simp [withoutCheckpointError, exactFiles]
+
 /-- Retry publication against a fixed synced WAL watermark. A failed attempt
 leaves its cut visible, a power loss chooses an admitted durable binding, and
 a successful reopen barrier settles the visible binding. -/

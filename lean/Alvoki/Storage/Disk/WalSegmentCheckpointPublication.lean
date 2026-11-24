@@ -33,6 +33,47 @@ private theorem walRange_of_reports {pair : DirectoryPublication.Bindings} {mark
   rw [size, Nat.mul_mod_left, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
   simp only [covered, and_self, ite_true]
 
+/-- A complete strict checkpoint settles the new manifest. Every selection
+pairs it with the same WAL marker and untouched segment chain. -/
+theorem Image.segmentedCheckpointView_settled
+    {published : Image} {before : WalSegmentImage} {history : List WAL.Write}
+    (layout : before.ReadLayout history) (chain : WalSegment.Chain history 0 before.segments)
+    (marker : before.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
+    (walFits : (WAL.encode history).size < UInt64.size)
+    {manifest : ByteArray} {metadata : IntegrityCheckpoint}
+    (settled : published.manifest = .settled (some manifest))
+    (decoded : IntegrityCheckpoint.decode manifest = .ok metadata)
+    (watermark : metadata.header.committed.toNat = history.length) :
+    let wal := published.segmentedCheckpointView before
+    wal.directory.active = ⟨some manifest, before.directory.active.walBoundary⟩ ∧
+    wal.directory.crashImages = [wal.directory.active] ∧
+    published.manifest = wal.directory.project .manifest ∧
+    wal.directory.active.walRange = some ⟨history.length, history.length⟩ ∧
+    wal.ReadLayout history ∧ wal.Valid history := by
+  intro wal
+  have active : wal.directory.active = ⟨some manifest, before.directory.active.walBoundary⟩ := by
+    simp [wal, Image.segmentedCheckpointView, Image.markedReopenImage, settled, Publication.Image.settled]
+  have crashes : wal.directory.crashImages = [wal.directory.active] := by
+    simp [wal, Image.segmentedCheckpointView, Image.markedReopenImage, settled, Publication.Image.settled]
+  have projected : published.manifest = wal.directory.project .manifest := by
+    simp [wal, Image.segmentedCheckpointView, Image.markedReopenImage, settled, Publication.Image.settled,
+      DirectoryPublication.Image.project, DirectoryPublication.Bindings.get]
+  have checkpoint : selectedCheckpointWatermark wal.directory.active.manifest = some history.length := by
+    rw [active]
+    exact selectedCheckpointWatermark_present_iff.mpr ⟨metadata, decoded, watermark⟩
+  have markerSize : (WAL.encode history).size.toUInt64.toNat = history.length * frameSize := by
+    rw [UInt64.toNat_ofNat_of_lt' walFits, WAL.encode_size, Nat.mul_comm]
+  have range : wal.directory.active.walRange = some ⟨history.length, history.length⟩ :=
+    walRange_of_reports checkpoint (by rw [active]; exact marker)
+      (WAL.Boundary.decode_encode _) markerSize (Nat.le_refl _)
+  refine ⟨active, crashes, projected, range, ⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩,
+    WalSegmentImage.Valid.of_chain chain ?_⟩
+  intro pair chosen
+  change pair ∈ wal.directory.active :: wal.directory.crashImages at chosen
+  rw [crashes] at chosen
+  obtain rfl : pair = wal.directory.active := by simpa using chosen
+  exact ⟨_, range, Nat.zero_le _, Nat.le_refl _⟩
+
 /-- The exact strict-v2 plan prepared by the writer produces this cut from
 the reported checkpoint schedule. Every selectable manifest remains tied
 to the same marker and immutable segment layout. Its exact durable run
