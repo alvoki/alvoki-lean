@@ -6,7 +6,7 @@ namespace Alvoki.Storage.WalSegmentRepair
 
 open System Manifest DiskSession
 
-/-- Observations for checkpoint run acquisition. A stat pairs the native
+/-- Observations for bounded file reads. A stat pairs the native
 metadata with its observed object identity. A successful open reports its
 reached inventory, slot and initial cursor. Separate opens can reuse a
 numeric slot with a different description. -/
@@ -16,15 +16,22 @@ structure CheckpointRunChunkReads where
   objectBytes : Nat → Option ByteArray
   readChunk : Nat → USize → EStateM IO.Error Nat ByteArray
 
-/-- Interpret the native open-then-read callback. The run reader discards
-the cursor after reading, while the primitive model retains it on errors. -/
-def CheckpointRunChunkReads.readPrefix (reads : CheckpointRunChunkReads) (path : FilePath)
-    (count : Nat) : Except IO.Error ByteArray := do
-  let (_, slot, offset) ← reads.openRead path
-  match readExactPrefixWith (IO.userError checkpointIntegrityMismatch)
+/-- Project the read result for the exact opened description. The payload
+callback discards its cursor, which the primitive model retains on error. -/
+def CheckpointRunChunkReads.readOpenedPrefix (reads : CheckpointRunChunkReads) (mismatch : IO.Error)
+    (opened : DescriptorInventory × DescriptorSlot × Nat) (count : Nat) : Except IO.Error ByteArray :=
+  let (_, slot, offset) := opened
+  match readExactPrefixWith mismatch
     (reads.readChunk slot.description) count ByteArray.empty offset with
-  | .ok bytes _ => return bytes
-  | .error cause _ => throw cause
+  | .ok bytes _ => .ok bytes
+  | .error cause _ => .error cause
+
+def CheckpointRunChunkReads.readFilePrefix (reads : CheckpointRunChunkReads) (mismatch : IO.Error)
+    (path : FilePath) (count : Nat) : Except IO.Error ByteArray :=
+  reads.openRead path >>= fun opened => reads.readOpenedPrefix mismatch opened count
+
+def CheckpointRunChunkReads.readPrefix (reads : CheckpointRunChunkReads) : FilePath → Nat → Except IO.Error ByteArray :=
+  reads.readFilePrefix (IO.userError checkpointIntegrityMismatch)
 
 /-- At one immutable run path, validate the connection to the known
 published bytes. Successful stat and open observations share an object
@@ -48,15 +55,23 @@ structure CheckpointRunChunkReads.ObservesFile (reads : CheckpointRunChunkReads)
   healthy : ∀ source, reads.objectBytes (inventory.inode slot.description) = some source →
     PrefixChunksAvailable source (reads.readChunk slot.description)
 
+theorem CheckpointRunChunkReads.ObservesFile.readOpenedExactPrefix
+    {reads : CheckpointRunChunkReads} {path : FilePath} {payload : ByteArray}
+    (seen : reads.ObservesFile path payload) (mismatch : IO.Error) (count : Nat)
+    (fits : count < USize.size) (covered : count ≤ payload.size) :
+    reads.readOpenedPrefix mismatch (seen.inventory, seen.slot, 0) count = .ok (payload.extract 0 count) := by
+  have source : reads.objectBytes (seen.inventory.inode seen.slot.description) = some payload := by
+    rw [seen.sameObject, seen.contents]
+  have read := readExactPrefixWith_completesAtStart mismatch
+    (seen.observes payload source) (seen.healthy payload source) count fits covered
+  simp [CheckpointRunChunkReads.readOpenedPrefix, read]
+
 theorem CheckpointRunChunkReads.ObservesFile.readExact
     {reads : CheckpointRunChunkReads} {path : FilePath} {payload : ByteArray}
     (seen : reads.ObservesFile path payload) (fits : payload.size < USize.size) :
     reads.readPrefix path payload.size = .ok payload := by
-  have source : reads.objectBytes (seen.inventory.inode seen.slot.description) = some payload := by
-    rw [seen.sameObject, seen.contents]
-  have read := readExactPrefixWith_completesFile (IO.userError checkpointIntegrityMismatch)
-    (seen.observes payload source) (seen.healthy payload source) fits
-  simp [CheckpointRunChunkReads.readPrefix, seen.opened, read, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  simp [CheckpointRunChunkReads.readPrefix, CheckpointRunChunkReads.readFilePrefix, seen.opened,
+    seen.readOpenedExactPrefix _ _ fits (Nat.le_refl _), Bind.bind, Except.bind]
 
 /-- Opened-file observations for precisely the runs selected by the manifest. -/
 abbrev CheckpointRunChunkReads.ObservesSelected (reads : CheckpointRunChunkReads) (directory : DiskDirectory)

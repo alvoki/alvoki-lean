@@ -5,10 +5,9 @@ namespace Alvoki.Storage.WalSegmentRepair
 open System DiskSession
 open WAL (frameSize)
 
-/-- Read-only observations from the held directory, including later names
-that only need metadata. Payload callbacks concern the selected seals and
-keeper, whose prefix and physical extent come from the file image. -/
-structure CachedRetryReadReports (directory : DiskDirectory) {image : FileImage} {history : List WAL.Write}
+/-- The complete observed held directory listing and regular-file metadata.
+Only the selected seals and keeper require a payload read. -/
+structure CachedRetryReadInventory (directory : DiskDirectory) {image : FileImage} {history : List WAL.Write}
     (layout : CanonicalKeeperLayout image history) where
   inventory : LockedWalSegmentInventory directory
   list : FilePath → Except IO.Error (Array IO.FS.DirEntry)
@@ -24,6 +23,11 @@ structure CachedRetryReadReports (directory : DiskDirectory) {image : FileImage}
   regular : ∀ first ∈ older ++ (layout.sealed ++ [layout.keeper]).map WalSegment.first ++ image.later.visible,
     ∃ metadata, inventory.reports.lstat (directory.file (.walSegment first)) = .ok metadata ∧
       metadata.type = .file ∧ metadata.numLinks = 1
+
+/-- Bounded payload callbacks for the selected seals and keeper identified
+by the held inventory. The keeper's tail contributes to its extent only. -/
+structure CachedRetryReadReports (directory : DiskDirectory) {image : FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout image history) extends CachedRetryReadInventory directory layout where
   readSeal : FilePath → Nat → Except IO.Error ByteArray
   readKeeper : FilePath → Nat → Nat → Except IO.Error ByteArray
   seals : ∀ segment ∈ layout.sealed, ∀ metadata,
