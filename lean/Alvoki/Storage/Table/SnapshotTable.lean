@@ -43,6 +43,12 @@ theorem SnapshotTable.exists_reboundPins (state : SnapshotTable α) (pins : Snap
       rebound.committed = state.committed ∧ rebound.pins = pins :=
   ⟨⟨state.table, state.committed, pins, floor.symm ▸ state.floor_committed, committed⟩, rfl, rfl, rfl⟩
 
+/-- Replace the immutable runs while keeping the memtable, clock and pins. -/
+theorem SnapshotTable.exists_replaceRuns (state : SnapshotTable α) (runs : List (History α)) :
+    ∃ result : SnapshotTable α, result.table = ⟨runs, state.table.memory⟩ ∧
+      result.committed = state.committed ∧ result.pins = state.pins :=
+  ⟨{ state with table := { state.table with runs } }, rfl, rfl, rfl⟩
+
 def SnapshotTable.acquireAt (state : SnapshotTable α) (snapshot : UInt64) :
     Option (SnapshotPin × SnapshotTable α) :=
   match h : state.pins.acquire state.committed snapshot with

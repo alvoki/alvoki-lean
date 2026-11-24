@@ -208,6 +208,28 @@ theorem RepresentsWalHistory.compact {before after : PackedTable}
   simp only [Table.visibleEntry]
   rw [Table.compactAt_winner changed retained key]
 
+/-- Retaining versions within one run changes the represented run history
+while preserving the committed clock and every supported winning put. -/
+theorem RepresentsWalHistory.retainRunVersions {before after : PackedTable}
+    {model : SnapshotTable UInt64} {history : List WAL.Write} {index : Nat}
+    (represented : RepresentsWalHistory history model) (refines : before.Refines model)
+    (bounded : before.RowBounds) (retained : before.retainRunVersions index = some after) :
+    ∃ result, after.Refines result ∧ RepresentsWalHistory history result := by
+  obtain ⟨memory, clock, pins, _⟩ := PackedTable.retainRunVersions_spec retained
+  obtain ⟨result, table, modelClock, modelPins⟩ := model.exists_replaceRuns after.describe.runs
+  have sameMemory : after.describe.memory = model.table.memory :=
+    memory.trans (congrArg Table.memory refines.table)
+  have described : after.describe = result.table := by
+    rw [table, ← sameMemory]
+  have refined : after.Refines result :=
+    ⟨described, clock.trans (refines.committed.trans modelClock.symm), pins.trans (refines.pins.trans modelPins.symm)⟩
+  refine ⟨result, refined, represented.preserve modelClock (by rw [modelPins]; exact UInt64.le_refl _)
+    (refined.rowsBounded (bounded.retainRunVersions retained)) ?_⟩
+  intro snapshot supported key
+  have aboveFloor : before.pins.floor ≤ snapshot := by rwa [refines.pins, ← modelPins]
+  rw [← refined.table, ← refines.table]
+  exact PackedTable.retainRunVersions_visibleEntry retained aboveFloor key
+
 namespace CheckpointPublication
 open WAL.Boundary
 

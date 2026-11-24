@@ -9,8 +9,8 @@ checkpoint, WAL and owner exactly as observed. -/
 def SegmentedWriterState.withTable (state : SegmentedWriterState) (table : PackedTable) : SegmentedWriterState :=
   { state with installed := { state.installed with table } }
 
-/-- Successful in-memory operations of the native writer. Release uses the
-reported session comparison through the same guard as the adapter. -/
+/-- Successful in-memory table operations. Release uses the reported
+session comparison through the same guard as the native adapter. -/
 inductive SegmentedTableStep (before : PackedTable) : PackedTable → Prop where
   | acquireAt {snapshot pin table} (acquired : before.acquireAt snapshot = some (pin, table)) :
       SegmentedTableStep before table
@@ -20,6 +20,8 @@ inductive SegmentedTableStep (before : PackedTable) : PackedTable → Prop where
   | advanceFloor {floor table} (advanced : before.advanceFloor floor = some table) :
       SegmentedTableStep before table
   | compact {index table} (compacted : before.compact index = some table) :
+      SegmentedTableStep before table
+  | retainRunVersions {index table} (retained : before.retainRunVersions index = some table) :
       SegmentedTableStep before table
 
 private theorem SegmentedTableStep.preservesResumed {installed files target history published checkpoint table}
@@ -47,6 +49,9 @@ private theorem SegmentedTableStep.preservesResumed {installed files target hist
   | compact compacted =>
     obtain ⟨_, _, refines, represents⟩ := represented.compact refined bounds compacted
     exact withTable (bounds.compact compacted) refines represents
+  | retainRunVersions retained =>
+    obtain ⟨_, refines, represents⟩ := represented.retainRunVersions refined bounds retained
+    exact withTable (bounds.retainRunVersions retained) refines represents
 
 theorem SegmentedTableStep.preservesReady {directory descriptor} {state : SegmentedWriterState} {table : PackedTable}
     (step : SegmentedTableStep state.installed.table table) (ready : state.Ready directory descriptor) :
