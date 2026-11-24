@@ -10,7 +10,7 @@ import Alvoki.Storage.Disk.SegmentedWriterTrace
 
 namespace Alvoki.Storage.DiskSession
 
-open WAL.Boundary WalSegmentRepair Sequential
+open System WAL.Boundary WalSegmentRepair Sequential
 open scoped List
 
 /-- Completed stretches and reported reopenings of one directory. A
@@ -113,6 +113,42 @@ theorem SegmentedDatabaseTrace.fromBootstrap {directory initialDescriptor log de
   simp only [List.nil_append] at exactHistory
   subst retained
   exact ⟨ready, history, history.orderedSubmissions⟩
+
+/-- Start the mixed history from the actual shared bootstrap attempt and
+its returned session, using only the reached native callback reports. -/
+theorem SegmentedDatabaseTrace.fromBootstrapRun (directory : DiskDirectory) (descriptor nextRef : Nat)
+    (before : LockedFileState WalSegmentRotation.State) (valid : BootstrapValid before.image)
+    (acquired : Except IO.Error Bool) (acquisition : TryLockObserves before.owners directory acquired)
+    (unlock : UnlockReport) (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (readEmpty : FilePath → Except IO.Error (Option ByteArray))
+    (metadata : FilePath → Except IO.Error (Option IO.FS.Metadata))
+    (seen : ∀ empty, readEmpty (directory.file (.walSegment 0)) = .ok empty → before.image.observeSuccessor = empty)
+    (createEmpty : FilePath → EStateM IO.Error WalSegmentRotation.State Unit)
+    (write : FilePath → ByteArray → EStateM IO.Error WalSegmentRotation.State Unit)
+    (sync : Array FilePath → EStateM IO.Error WalSegmentRotation.State Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error WalSegmentRotation.State Unit)
+    (rotation : WalSegmentRotation.EffectReports
+      (WalSegmentRotation.performPaths directory 0 createEmpty (fun path => sync #[path])))
+    (marker : BootstrapMarkerReports (Publication.performReplacement (write · (WAL.Boundary.encode 0))
+      sync renameFile (directory.file .stagedWalBoundary) directory.path (fun _ => directory.file .walBoundary) #[]))
+    {session : SegmentedSession} {after : LockedFileState WalSegmentRotation.State} :
+    let recover := bootstrapSegmentedWith directory
+      (fun path => liftExcept (list path)) (fun path => liftExcept (readEmpty path))
+      (fun path => liftExcept (metadata path)) createEmpty write sync renameFile
+    runOpenWithInstallation directory descriptor nextRef acquired unlock recover before = .ok session after →
+    ∃ bootstrap : BootstrapReady after.image,
+      session = ⟨directory, descriptor, .ready (bootstrap.writerState after.owners).installed, nextRef, nextRef + 1⟩ ∧
+      ∀ {log next last},
+        SegmentedDatabaseTrace directory descriptor (bootstrap.writerState after.owners) log next last →
+        last.Ready directory next ∧ MarkedSessionRetention log last.history ∧
+          log.flatMap MarkedSessionWrites.acknowledged <+ last.history ∧
+          last.history <+ log.flatMap MarkedSessionWrites.submitted := by
+  intro recover opened
+  obtain ⟨returned, _, owners, _, bootstrap⟩ := runOpenWithInstallation_bootstrapReady directory descriptor nextRef
+    before valid acquired acquisition unlock list readEmpty metadata seen createEmpty write sync renameFile rotation
+    marker opened
+  refine ⟨bootstrap, returned, fun trace => trace.fromBootstrap bootstrap ?_⟩
+  simp [owners, LockOwners.Owns, LockOwners.set]
 
 /-- Reads with a pin belonging to the current writer match replay of the
 retained history from the empty abstract table. -/
