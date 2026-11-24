@@ -129,11 +129,9 @@ private theorem SegmentedDatabaseTrace.preservesReadiness {directory initialDesc
   | start => exact ⟨ready, fun _ chain => chain, [], by simp, .start⟩
   | writes _ writer ih =>
     obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
-    obtain ⟨ready, appended⟩ := writer.preservesRetained before
-    refine ⟨ready, ?_, _, by rw [appended, history, List.append_assoc], submitted.append (Or.inl rfl)⟩
-    intro disabled initialChain
-    have full := before.withChain (fullChain disabled initialChain)
-    exact (writer.preservesReady full).1.chain
+    obtain ⟨ready, appended, _, _, appendedChain⟩ := writer.preservesRetainedWithChain before
+    exact ⟨ready, fun disabled chain => appendedChain (fullChain disabled chain),
+      _, by rw [appended, history, List.append_assoc], submitted.append (Or.inl rfl)⟩
   | rotate _ report selected ih =>
     obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
     refine ⟨report.preservesRetainedReady before selected, ?_, retained, history, submitted⟩
