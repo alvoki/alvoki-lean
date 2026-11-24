@@ -124,8 +124,8 @@ private theorem installsRetained_exact (report : SegmentedCheckpointPowerLossRep
         after.target.pair.manifest = some report.cut.checkpoint.manifest) := by
     rw [generation, surviving]
     exact generationChoice
-  obtain ⟨checkpoint, table, _, replaySession, replayFinal, replayResult, selectedRuns, _, replay, _, _, replayPhase,
-    _⟩ := opened.2.2.2.2
+  obtain ⟨_, _, _, _, checkpoint, table, _, replaySession, replayFinal, replayResult, selectedRuns, _, replay, _, _,
+    replayPhase, _⟩ := opened
   have sameSession := (EStateM.Result.ok.inj (replayResult.symm.trans returned)).1
   rw [sameSession] at replayPhase
   have sameTable : table = after.installed.table :=

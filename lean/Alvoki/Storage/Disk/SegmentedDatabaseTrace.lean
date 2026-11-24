@@ -340,6 +340,27 @@ theorem SegmentedDatabaseTrace.markerPowerLossCached {directory initialDescripto
     simpa only [BoundedReopenAttempt.run, sameAttempt] using endpoint
   exact ⟨after, .markerPowerLoss prior report observed installed, endpoint, marker, checkpoint⟩
 
+/-- Extend the trace with the installed table from the exact durable runs
+of the surviving checkpoint and replay of the unchanged WAL history. -/
+theorem SegmentedDatabaseTrace.checkpointPowerLossCached
+    {directory initialDescriptor initial allowCollection log writer descriptor before}
+    (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (report : SegmentedCheckpointPowerLossReport directory before writer descriptor) (observed : report.Valid)
+    (recover : EStateM IO.Error FileImage Reopened) (reads : report.CachedReads recover) :
+    ∃ after session final,
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after ∧
+      SelectedIntegrityCheckpoint report.published.durable report.survivingPair.manifest after.checkpoint ∧
+      recoverSelected (after.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table ∧
+      runOpenWithInstallation directory report.reopen.descriptor report.reopen.nextRef report.reopen.acquired
+        report.reopen.unlock recover report.retry = .ok session final ∧
+      session.phase = .ready after.installed ∧ after.files = final.image ∧ after.owners = final.owners := by
+  have ready := (prior.preservesRetained initialReady).1
+  obtain ⟨after, session, final, installed, _, selected, replay, ran, phase, files, owners⟩ :=
+    report.installsRetainedCached observed ready recover reads
+  exact ⟨after, session, final, .checkpointPowerLoss prior report observed installed,
+    selected, replay, ran, phase, files, owners⟩
+
 /-- Reads with a pin belonging to the current writer match replay of the
 retained history from the empty abstract table. -/
 theorem SegmentedDatabaseTrace.pinnedReads {directory initialDescriptor initial allowCollection log descriptor last}
