@@ -202,7 +202,7 @@ theorem readCheckpointRunBytes_eq_mapM [Monad m] [LawfulMonad m]
 
 private theorem observed_ordered_runs {indices : List Nat} {durableFiles files : List ByteArray}
     {durable : Nat → Option ByteArray} {read : Nat → Except String ByteArray}
-    (agrees : ∀ index bytes expected,
+    (agrees : ∀ index ∈ indices, ∀ bytes expected,
       read index = .ok bytes → durable index = some expected → bytes = expected)
     (known : indices.mapM durable = some durableFiles)
     (observed : indices.mapM read = .ok files) :
@@ -227,19 +227,21 @@ private theorem observed_ordered_runs {indices : List Nat} {durableFiles files :
           | ok tail =>
             simp [List.mapM_cons, durableHead, durableRest] at known
             simp [List.mapM_cons, readHead, readRest, bind, Except.bind, pure, Except.pure] at observed
-            rw [← observed, ← known, agrees index bytes expected readHead durableHead,
-              ih durableRest readRest]
+            rw [← observed, ← known, agrees index (List.mem_cons_self ..) bytes expected readHead durableHead,
+              ih (fun index member => agrees index (List.mem_cons_of_mem _ member)) durableRest readRest]
 
 /-- Successful checkpoint reads under the database lock observe the selected
-manifest and the contents of the durable run files it names. Read errors are
-retained. An untracked run path is outside this part of the model. -/
+manifest and the durable runs it names. Run-byte agreement applies only to
+the generation and indices read by the manifest loader. -/
 structure CheckpointFileReads (durable : UInt64 → Nat → Option ByteArray)
     (manifest : Option ByteArray) where
   readManifest : Except String (Option ByteArray)
   readRun : UInt64 → Nat → Except String ByteArray
   manifestVisible : ∀ value, readManifest = .ok value → value = manifest
-  runDurable : ∀ generation index value expected, readRun generation index = .ok value →
-    durable generation index = some expected → value = expected
+  runDurable : ∀ bytes header, manifest = some bytes → Manifest.decode bytes = .ok header →
+    ∀ index, index < header.runCount.toNat → ∀ value expected,
+      readRun header.generation index = .ok value → durable header.generation index = some expected →
+      value = expected
 
 abbrev CheckpointReadObservations (image : CheckpointPublication.Image) (manifest : Option ByteArray) :=
   CheckpointFileReads image.durable manifest
@@ -287,7 +289,9 @@ theorem CheckpointReadObservations.loaded {image : CheckpointPublication.Image}
         cases observedFiles : (List.range header.runCount.toNat).mapM (reads.readRun header.generation) with
         | error => rw [observedFiles] at opened; contradiction
         | ok runFiles =>
-          have same := observed_ordered_runs (reads.runDurable header.generation) durable observedFiles
+          have same := observed_ordered_runs
+            (fun index member => reads.runDurable bytes header rfl decoded index (List.mem_range.mp member))
+            durable observedFiles
           subst runFiles
           simpa only [decoded, observedFiles, bind, Except.bind] using opened
 
@@ -353,7 +357,9 @@ theorem CheckpointReadObservations.completes {image : CheckpointPublication.Imag
       simp only [CheckpointPublication.Image.readDurableCheckpointRuns, decoded, Except.toOption] at durable
       obtain ⟨readFiles, observed⟩ := readList_succeeds (indices := List.range header.runCount.toNat)
         (fun index present => runReads bytes header rfl decoded index (List.mem_range.mp present))
-      have same := observed_ordered_runs (reads.runDurable header.generation) durable observed
+      have same := observed_ordered_runs
+        (fun index member => reads.runDurable bytes header rfl decoded index (List.mem_range.mp member))
+        durable observed
       subst readFiles
       have readRuns : readCheckpointRunBytes reads.readRun header = .ok files := by
         rwa [readCheckpointRunBytes_eq_mapM]

@@ -60,8 +60,10 @@ private theorem OptionalPathRead.resultVisibleString {visible : Option ByteArray
 def CheckpointFileReads.ofOptionalManifest {durable : CheckpointPublication.RunFiles}
     {active : Option ByteArray} (manifest : OptionalPathRead active) (directory : DiskDirectory)
     (runs : UInt64 → Nat → Except String ByteArray)
-    (runVisible : ∀ generation index value expected, runs generation index = .ok value →
-      durable generation index = some expected → value = expected) :
+    (runVisible : ∀ bytes header, active = some bytes → Manifest.decode bytes = .ok header →
+      ∀ index, index < header.runCount.toNat → ∀ value expected,
+        runs header.generation index = .ok value → durable header.generation index = some expected →
+        value = expected) :
     CheckpointFileReads durable active :=
   ⟨(manifest.result (directory.file .manifest)).mapError toString, runs,
     fun _ accepted => (manifest.resultVisibleString _ accepted).symm, runVisible⟩

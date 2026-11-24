@@ -423,3 +423,7 @@ For any mixed database trace, active pins at the same sequence at the beginning 
 ## Native lock release on owner death
 
 A native fixture stops a write at the staged-marker sync command, confirms a competing open receives the live owner's lock error, and kills only the owner. A new process obtains the lock and recovers the exact acknowledged WAL and marker while the same sync child is still alive. The Linux syscall trace also observes the lock descriptor opened with `O_CLOEXEC`. The fixture concerns process death while a child is alive. The power-loss behavior of completed sync calls remains part of the filesystem contract. [Native process-death fixture](../scripts/check-disk-process-death.py)
+
+## Concrete native checkpoint paths under the database lock
+
+The native open equation names the resolved lock, manifest, marker and WAL paths and every ordered run callback. The path-indexed proof reconstructs the checkpoint reading observations from those same path reports under the lock. Only the decoded manifest's generation and in-range indices require run byte agreement. Given those successful reads and exact durable bytes, the shared loader returns the corresponding base table. The emitted `DiskTable` C and native object remain byte-identical. [Native open equation](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Locked checkpoint reads](../lean/Alvoki/Storage/Disk/LockedOpenFileReads.lean)

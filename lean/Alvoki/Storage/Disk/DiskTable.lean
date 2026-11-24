@@ -336,6 +336,28 @@ def DiskTable.open (path : FilePath) : IO DiskTable := do
   DiskSession.openWithLock lock.tryLock (fun _ => IO.userError s!"database already open: {dir.path}")
     (fun _ => lock.unlock) (fun _ => openLocked dir lock)
 
+/-- The native lock and every recovery read use names from the same resolved
+directory. Optional reads use lstat and the subsequent read of that same path.
+The checkpoint decoder selects the exact generation and run indices. -/
+theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
+    let dir ← openDirectory path
+    let lock ← IO.FS.Handle.mk (dir.file .lock) .append
+    DiskSession.openWithLock (lock.tryLock (exclusive := true))
+      (fun _ => IO.userError s!"database already open: {dir.path}") (fun _ => lock.unlock) fun _ => do
+        let readOptional : FilePath → IO (Option ByteArray) := fun target =>
+          readOptionalDatabaseFile target.symlinkMetadata.toBaseIO (fun _ => IO.FS.readBinFile target)
+            (fun _ => IO.userError s!"expected a regular database file: '{target}'") throw
+        let checkpoint ← readCheckpoint (readOptional (dir.file .manifest))
+          (fun generation index => IO.FS.readBinFile (dir.file (.run generation index))) IO.ofExcept
+        withRecoveredOpen checkpoint (readOptional (dir.file .walBoundary)) (readOptional (dir.file .wal))
+          IO.ofExcept (fun message => throw (IO.userError message))
+          (fun _ => writeFlushed (dir.file .wal) ByteArray.empty)
+          (fun selected => atomicReplace dir .stagedWal .wal selected)
+          (fun _ => syncPaths #[dir.file .wal, dir.path]) (fun length => publishWalBoundary dir length)
+          fun table generation walBytes => do
+            let installed : Installed := { table, generation, walBytes }
+            return ⟨dir, lock, ← IO.mkRef (.ready installed), ← IO.mkRef ()⟩) := rfl
+
 def DiskTable.close (db : DiskTable) : IO Unit := do
   (← db.phase.get).close (fun _ => db.lock.unlock) (fun _ => db.phase.set .closed)
 
