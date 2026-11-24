@@ -163,6 +163,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.PackedTable.lookupAt_eq
 #check_axioms Alvoki.Sequential.Table.range_congr
 #check_axioms Alvoki.Storage.PackedTable.rangeAt_eq
+#check_axioms Alvoki.Storage.PackedTable.write_iff
+#check_axioms Alvoki.Storage.PackedTable.write_spec
 #check_axioms Alvoki.Storage.PackedTable.write_refines
 #check_axioms Alvoki.Storage.PackedTable.acquireAt_spec
 #check_axioms Alvoki.Storage.PackedTable.acquireAt_refines
@@ -171,8 +173,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.PackedTable.lookup_refines
 #check_axioms Alvoki.Storage.PackedTable.range_refines
 #check_axioms Alvoki.Storage.PackedTable.SameData.acquireAt_reads
+#check_axioms Alvoki.Storage.PackedTable.flush_spec
 #check_axioms Alvoki.Storage.PackedTable.flush_refines
+#check_axioms Alvoki.Storage.PackedTable.compact_spec
 #check_axioms Alvoki.Storage.PackedTable.compact_refines
+#check_axioms Alvoki.Sequential.replaceSuffix_at_prefix
 #check_axioms Alvoki.Sequential.replaceSuffix_spec_at
 #check_axioms Alvoki.Compaction.CheckedRun.retainVersions_spec
 #check_axioms Alvoki.Compaction.CheckedRun.retainVersions_complete

@@ -200,6 +200,13 @@ def replaceSuffix (replace : List β → Option (List β)) :
   | _ + 1, [] => none
   | n + 1, head :: rows => (replaceSuffix replace n rows).map (head :: ·)
 
+theorem replaceSuffix_at_prefix {replace : List β → Option (List β)}
+    (prefixRows : List β) {suffix replacement : List β} (changed : replace suffix = some replacement) :
+    replaceSuffix replace prefixRows.length (prefixRows ++ suffix) = some (prefixRows ++ replacement) := by
+  induction prefixRows with
+  | nil => exact changed
+  | cons row rest ih => simp [replaceSuffix, ih]
+
 theorem replaceSuffix_spec_at {replace : List β → Option (List β)}
     {index : Nat} {rows result : List β} (changed : replaceSuffix replace index rows = some result) :
     ∃ prefixRows suffix replacement, prefixRows.length = index ∧ rows = prefixRows ++ suffix ∧
