@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.AppendLockHandoff
 import Alvoki.Storage.Disk.WalSegmentAppendLayout
-import Alvoki.Storage.Disk.WalSegmentBoundedOpenReports
+import Alvoki.Storage.Disk.WalSegmentBoundedRetry
 import Alvoki.Storage.Disk.VersionedReadyWriter
 
 namespace Alvoki.Storage.DiskSession
@@ -37,7 +37,7 @@ private theorem selectedCheckpoint_generation {durable binding checkpoint genera
     rw [Option.mapM, decoded] at generationRead
     exact Except.ok.inj generationRead
 
-private theorem runOpenWithInstallation_appendLayout {directory : DiskDirectory} {owners : LockOwners}
+theorem runOpenWithInstallation_appendLayout {directory : DiskDirectory} {owners : LockOwners}
     {descriptor nextRef : Nat} {wal : WalSegmentImage} {history : List WAL.Write} {files : FileImage}
     (layout : wal.ReadLayout history) (ordered : WAL.OrdinalsFrom 1 history)
     (selected : CanonicalKeeperLayout files history) (sameKeeper : selected.keeper = wal.active)
@@ -68,68 +68,26 @@ private theorem runOpenWithInstallation_appendLayout {directory : DiskDirectory}
     AppendCutReady directory descriptor liveRefs history published files selected.target generation
       (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
         (raw.reopen removeFile write sync renameFile) ⟨files, owners⟩) := by
-  obtain ⟨watermark, covered, marker, count, markerVisible, markerDecoded, absolute⟩ :=
-    DirectoryPublication.Bindings.walRange_accounting selected.decoded
-  have byteCount : (WAL.encode history).size = count.toNat := by
-    rw [absolute, selected.through, WAL.encode_size, Nat.mul_comm]
-  obtain ⟨checkpoint, table, model, exactCheckpoint, replayed, committed, bounds, refines, represents, noPins⟩ :=
-    selectedCheckpoint_replays watermark accepted (byteCount ▸ count.toNat_lt_size) ordered
-  have clock := Option.some.inj (exactCheckpoint.watermark.symm.trans watermark)
-  have checkpointRead := raw.readCheckpoint exactCheckpoint
-  have walRead := raw.readSelectedBounded layout selected.through covered absolute offsets
-  have covers : selected.first ≤ (checkpoint.getD (.empty, 0)).1.committed.toNat := clock.symm ▸ selected.covers
-  have counted : count.toNat / frameSize = selected.range.through := by
-    rw [absolute, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
-  have recovered := selected.chain.replaysMarked ByteArray.empty (selected.through ▸ absolute) covers ordered replayed
-  rw [ByteArray.append_empty] at recovered
-  have sameFiles : selected.sealed.map (fun segment => (segment.first, segment.bytes)) ++
-      [(selected.keeper.first, selected.keeper.bytes)] =
-        (wal.readDescriptors selected.range.watermark).map (fun segment => (segment.first, segment.bytes)) := by
-    rw [← descriptors, List.map_append]
-    rfl
-  rw [sameFiles] at recovered
-  have keeperRead : ((wal.readDescriptors selected.range.watermark).map
-      (fun segment => (segment.first, segment.bytes))).getLast? =
-    some (selected.keeper.first, selected.keeper.bytes) := by rw [← descriptors, List.map_append]; simp
-  have bounded := prepareBoundedMarkedWith_reported directory raw.reports.readOptional raw.list
-    (fun path => .ok (raw.reports.lstat path)) raw.reports.readBin raw.readPrefix checkpointRead
-    (raw.marker.trans (congrArg Except.ok markerVisible)) markerDecoded
-    (by rw [clock]; exact walRead) recovered keeperRead
-  let keptBytes := selected.plan.keeperBytes.extract 0 selected.plan.keeperSize
-  let boundedPlan : Plan := { selected.plan with keeperBytes := keptBytes }
-  let opened : Reopened := ⟨table, (checkpoint.getD (.empty, 0)).2, count, selected.keeper.first⟩
-  have keeperPrefix : boundedPlan.keeperBytes = selected.keeper.bytes := by
-    change (selected.keeper.bytes ++ selected.tail).extract 0 selected.plan.keeperSize = _
-    have size : selected.plan.keeperSize = selected.keeper.bytes.size := selected.target.trimmedSize.symm
-    rw [size, ByteArray.extract_append_eq_left rfl]
-  have exactBounded : prepareBoundedMarkedWith directory raw.reports.readOptional raw.list
-      (fun path => .ok (raw.reports.lstat path)) raw.reports.readBin raw.readPrefix =
-        .ok (boundedPlan, opened, selected.plan.keeperBytes.size) := by
-    rw [bounded]
-    change Except.ok ((⟨count.toNat / frameSize, selected.keeper.first, [], selected.keeper.bytes⟩ : Plan), opened,
-      (wal.active.bytes ++ selected.tail).size) =
-      (Except.ok (boundedPlan, opened, selected.plan.keeperBytes.size) : Except IO.Error (Plan × Reopened × Nat))
-    rw [← sameKeeper, counted]
-    have plan : boundedPlan = ⟨selected.range.through, selected.keeper.first, [], selected.keeper.bytes⟩ := by
-      dsimp only [boundedPlan, CanonicalKeeperLayout.plan] at keeperPrefix ⊢
-      rw [keeperPrefix, emptyLater]
-    rw [plan]
-    rfl
+  obtain ⟨checkpoint, table, model, exactCheckpoint, replayed, bounded, count, committed, bounds,
+    refines, represents, noPins⟩ :=
+    selected.prepareBoundedReports layout sameKeeper descriptors offsets emptyLater accepted ordered raw
+  let opened : Reopened :=
+    ⟨table, (checkpoint.getD (.empty, 0)).2, (WAL.encode history).size.toUInt64, selected.keeper.first⟩
   obtain ⟨after, finished, settled, trace⟩ := finishMarkedOpen_completes prepared directory removeFile write sync
     renameFile settles healthy
-  have finish : finishBoundedMarkedOpen directory boundedPlan selected.plan.keeperBytes.size removeFile write sync
-      renameFile files = .ok () after := by
-    rw [finishBoundedMarkedOpen_eq_full directory selected.plan prepared.valid, finished]
+  have finish : finishBoundedMarkedOpen directory selected.boundedPlan selected.plan.keeperBytes.size removeFile
+      write sync renameFile files = .ok () after := by
+    rw [selected.boundedPlan_eq_extract, finishBoundedMarkedOpen_eq_full directory selected.plan prepared.valid, finished]
   have installed : raw.reopen removeFile write sync renameFile files = .ok opened after := by
     dsimp only [HealthyBoundedWalReports.reopen, reopenMarkedBoundedWith]
-    rw [prepareBoundedMarkedWith_liftReports, exactBounded]
-    simp only [liftExcept, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, finish]
+    rw [prepareBoundedMarkedWith_liftReports, bounded]
+    simp only [liftExcept, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, finish, opened]
   obtain ⟨session, final, result, path, lock, ready, image, _, held, separate, phaseFresh, sessionFresh⟩ :=
     runOpenWithInstallation_ready liveRefs fresh (before := ⟨files, owners⟩) acquisition (unlock := unlock) installed
   have sameGeneration := selectedCheckpoint_generation exactCheckpoint generationRead
   exact ⟨selected.through, selected.chain.keeperBytes, accepted, ordered, checkpoint, table, model, session, final,
     result, exactCheckpoint, sameGeneration.symm, replayed, path, lock,
-    by simpa only [opened, ← byteCount, CanonicalKeeperLayout.target, sameGeneration] using ready,
+    by simpa only [opened, count, CanonicalKeeperLayout.target, sameGeneration] using ready,
     image ▸ settled, image ▸ trace.keepsSealed, held, committed, bounds, refines, represents, noPins, separate,
     phaseFresh, sessionFresh⟩
 

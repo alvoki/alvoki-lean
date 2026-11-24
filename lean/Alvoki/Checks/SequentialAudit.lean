@@ -1,5 +1,6 @@
 import Alvoki.Checks.AxiomPolicy
 import Alvoki.Storage.Disk.AppendCutContinuation
+import Alvoki.Storage.Disk.AppendRetrySession
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.FullWatermarkReopen
 import Alvoki.Storage.Disk.WalWritePublicationModel
@@ -603,6 +604,19 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ResumedAppendReady.markerImage
 #check_axioms Alvoki.Storage.DiskSession.ResumedAppendReady.acknowledged
 #check_axioms Alvoki.Storage.DiskSession.AppendCutReady.acknowledgeNext
+#check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWith_readOutcome
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_boundedPreparationError
+#check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_safe
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_boundedSegmented
+#check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.emptyLater
+#check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.canonicalRetryLayout
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.boundedPlan_eq_extract
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.prepareBoundedFromReplay
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.prepareBoundedReports
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.errorFiles
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.lineage
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_appendLayout
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterAppendError
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop

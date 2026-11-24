@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.LockDescriptionLifetime
-import Alvoki.Storage.Disk.WalSegmentOpenFastEffects
+import Alvoki.Storage.Disk.BoundedReopenFailure
 
 namespace Alvoki.Storage.WalSegmentRepair
 
@@ -106,6 +106,81 @@ def BoundedReopenAttempt.run (attempt : BoundedReopenAttempt) (directory : DiskD
   runOpenWithInstallation directory attempt.descriptor attempt.nextRef attempt.acquired attempt.unlock
     (attempt.recover directory)
 
+def BoundedReopenAttempt.prepare (attempt : BoundedReopenAttempt) (directory : DiskDirectory) :
+    Except IO.Error (Plan × Reopened × Nat) :=
+  prepareBoundedMarkedWith directory attempt.readOptional attempt.list attempt.lstat attempt.readBin attempt.readPrefix
+
+def BoundedReopenAttempt.Reports (attempt : BoundedReopenAttempt) (directory : DiskDirectory)
+    (before : FileImage) (admits : Target → Prop) : Prop :=
+  attempt.acquired = .ok true → match attempt.prepare directory with
+  | .error _ => True
+  | .ok (bounded, _, physicalSize) => ∃ target full,
+    admits target ∧ Prepared before target full ∧
+    bounded = { full with keeperBytes := full.keeperBytes.extract 0 full.keeperSize } ∧
+    physicalSize = full.keeperBytes.size ∧ MetadataReport before (attempt.sync #[directory.path]) ∧
+    EffectReports target before.syncDirectory full.finishActions
+      (performPaths directory full attempt.removeFile throw attempt.write attempt.sync attempt.renameFile)
+
+/-- Derive the exact file transition from the bounded worker and its
+primitive read and reached repair reports. -/
+theorem BoundedReopenAttempt.errorFiles {directory : DiskDirectory} {admits : Target → Prop}
+    {before after : LockedFileState FileImage} {cause : IO.Error} (attempt : BoundedReopenAttempt)
+    (acquisition : TryLockObserves before.owners directory attempt.acquired)
+    (reports : attempt.Reports directory before.image admits)
+    (ran : attempt.run directory before = .error cause after) :
+    after.image = before.image ∨ ∃ target plan, admits target ∧ Prepared before.image target plan ∧
+      EffectTrace target before.image after.image := by
+  by_cases took : attempt.acquired = .ok true
+  · cases reading : attempt.prepare directory with
+    | error error =>
+      have native := runOpenWithInstallation_boundedPreparationError directory attempt.descriptor attempt.nextRef
+        attempt.acquired attempt.unlock attempt.readOptional attempt.list attempt.lstat attempt.readBin
+        attempt.readPrefix attempt.removeFile attempt.write attempt.sync attempt.renameFile before (cause := error)
+        (fun _ => reading)
+      change attempt.run directory before = _ at native
+      rw [ran, took] at native
+      cases released : attempt.unlock <;> rw [released] at native <;>
+        obtain ⟨_, same⟩ := EStateM.Result.error.inj native <;>
+        exact Or.inl (congrArg (fun state => state.image) same)
+    | ok report =>
+      obtain ⟨bounded, opened, physicalSize⟩ := report
+      have observed := reports took
+      rw [reading] at observed
+      obtain ⟨target, full, admitted, prepared, exactBounded, size, metadata, effects⟩ := observed
+      have contract := runOpenWithImage_boundedSegmented directory attempt.descriptor before target attempt.acquired
+        acquisition attempt.unlock attempt.readOptional attempt.list attempt.lstat attempt.readBin attempt.readPrefix
+        attempt.removeFile attempt.write attempt.sync attempt.renameFile (fun _ => by
+          change (match attempt.prepare directory with
+            | .error _ => True
+            | .ok (plan, _, length) => ∃ full, Prepared before.image target full ∧
+              plan = { full with keeperBytes := full.keeperBytes.extract 0 full.keeperSize } ∧
+              length = full.keeperBytes.size ∧ MetadataReport before.image (attempt.sync #[directory.path]) ∧
+              EffectReports target before.image.syncDirectory full.finishActions
+                (performPaths directory full attempt.removeFile throw attempt.write attempt.sync attempt.renameFile))
+          rw [reading]
+          exact ⟨full, prepared, exactBounded, size, metadata, effects⟩)
+      rw [BoundedReopenAttempt.run, runOpenWithInstallation_outcome] at ran
+      cases native : runOpenWithImage directory attempt.descriptor attempt.acquired attempt.unlock
+          (attempt.recover directory) before with
+      | ok session state => rw [native] at ran; contradiction
+      | error error state =>
+        rw [native] at ran
+        obtain ⟨rfl, rfl⟩ := EStateM.Result.error.inj ran
+        rw [show runOpenWithImage directory attempt.descriptor attempt.acquired attempt.unlock
+          (reopenMarkedBoundedWith directory (fun path => liftExcept (attempt.readOptional path))
+            (fun path => liftExcept (attempt.list path)) (fun path => liftExcept (attempt.lstat path))
+            (fun path => liftExcept (attempt.readBin path)) (fun path n => liftExcept (attempt.readPrefix path n))
+            attempt.removeFile attempt.write attempt.sync attempt.renameFile) before = .error error state from native]
+          at contract
+        rcases contract with ⟨denied, _⟩ | ⟨_, _, unchanged | trace, _⟩
+        · exact False.elim (denied took)
+        · exact Or.inl unchanged
+        · exact Or.inr ⟨target, full, admitted, prepared, trace⟩
+  · obtain ⟨error, denied⟩ := runOpenWithImage_notAcquired directory attempt.descriptor attempt.acquired
+      attempt.unlock (attempt.recover directory) before took
+    rw [BoundedReopenAttempt.run, runOpenWithInstallation_outcome, denied] at ran
+    exact Or.inl (congrArg LockedFileState.image (EStateM.Result.error.inj ran).2.symm)
+
 /-- A finite retry can cross failed opens, observed drops of lock references,
 and power losses. Failed opens record their exact returned image and owner.
 The callback contract determines whether the directory barrier took effect. -/
@@ -114,12 +189,12 @@ inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Pr
   | empty : BoundedReopenTrace directory admits initial initial
   | failed {before after cause} (prior : BoundedReopenTrace directory admits initial before)
       (attempt : BoundedReopenAttempt) (acquisition : TryLockObserves before.owners directory attempt.acquired)
-      (localUnlock : attempt.unlock.LocalFlock) (ran : attempt.run directory before = .error cause after)
-      (files : after.image = before.image ∨ ∃ target plan, admits target ∧ Prepared before.image target plan ∧
-        EffectTrace target before.image after.image) : BoundedReopenTrace directory admits initial after
+      (localUnlock : attempt.unlock.LocalFlock) (reports : attempt.Reports directory before.image admits)
+      (ran : attempt.run directory before = .error cause after) : BoundedReopenTrace directory admits initial after
   | referenceDrops {before description} (prior : BoundedReopenTrace directory admits initial before)
       (references : HeldLockReferences description) (drops : List LockReferenceDrop) :
       BoundedReopenTrace directory admits initial (references.afterFileDrops drops directory before)
+  -- Machine power loss ends every reference to the observed local lock.
   | powerLoss {before pair bytes names} (prior : BoundedReopenTrace directory admits initial before)
       (metadata : pair ∈ before.image.directory.crashImages) (keeper : bytes ∈ before.image.keeper.crashImages)
       (later : names ∈ before.image.later.crashImages) :
@@ -132,7 +207,8 @@ theorem BoundedReopenTrace.lineage {directory : DiskDirectory} {admits : Target 
     ReopenLineage initial.image admits after.image := by
   induction ran with
   | empty => exact .before .live
-  | failed _ _ _ _ _ files ih => exact ih.afterFailure unique files
+  | failed _ attempt acquisition _ reports ran ih =>
+    exact ih.afterFailure unique (attempt.errorFiles acquisition reports ran)
   | referenceDrops _ _ _ ih => exact ih
   | powerLoss _ metadata keeper later ih => exact ih.afterPowerLoss metadata keeper later
 
