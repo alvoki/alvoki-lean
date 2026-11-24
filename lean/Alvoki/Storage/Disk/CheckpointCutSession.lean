@@ -31,7 +31,8 @@ def CheckpointCutReady (directory : DiskDirectory) (descriptor : Nat) (liveRefs 
     count.toNat = walBytes ∧ table.committed.toNat = history.length ∧
     table.RowBounds ∧ table.Refines model ∧ RepresentsWalHistory history model ∧ table.pins.active = [] ∧
     final.image = files.syncDirectory.syncKeeper ∧ final.owners.Owns directory descriptor ∧
-    session.phaseRef ≠ session.sessionRef ∧ session.phaseRef ∉ liveRefs ∧ session.sessionRef ∉ liveRefs
+    session.phaseRef ≠ session.sessionRef ∧ session.phaseRef ∉ liveRefs ∧ session.sessionRef ∉ liveRefs ∧
+    recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok table
 
 /-- An accepted checkpoint cut uses the actual bounded worker. Its held
 listing, run reads and keeper prefix are supplied by one directory owner.
@@ -122,7 +123,7 @@ theorem runOpenWithInstallation_checkpointCut {directory : DiskDirectory} {owner
   obtain ⟨session, final, result, path, lock, phase, image, _, held, distinct, phaseFresh, sessionFresh⟩ :=
     runOpenWithInstallation_ready liveRefs fresh (before := ⟨files, owners⟩) acquisition (unlock := unlock) installed
   exact ⟨checkpoint, table, model, count, session, final, result, exactCheckpoint, path, lock, phase, atEnd ▸ absolute,
-    committed, bounds, refines, represents, noPins, image, held, distinct, phaseFresh, sessionFresh⟩
+    committed, bounds, refines, represents, noPins, image, held, distinct, phaseFresh, sessionFresh, replayed⟩
 
 /-- Interpret the reported checkpoint error under the writer lock, then
 expose the unchanged WAL and the admitted manifest/marker choices for

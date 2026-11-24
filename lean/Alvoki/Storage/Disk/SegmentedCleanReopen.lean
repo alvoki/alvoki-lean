@@ -95,7 +95,9 @@ theorem SegmentedWriterState.RetainedReady.cleanReopenRetained {directory : Disk
       session.directory = directory ∧ session.descriptor = nextDescriptor ∧ session.phase = .ready next.installed ∧
       session.phaseRef = nextRef ∧ session.sessionRef = nextRef + 1 ∧
       session.phaseRef ≠ session.sessionRef ∧ session.phaseRef ∉ liveRefs ∧ session.sessionRef ∉ liveRefs ∧
-      table.pins.active = [] ∧ next.RetainedReady directory nextDescriptor := by
+      table.pins.active = [] ∧
+      recoverSelected (state.checkpoint.getD (.empty, 0)).1 (WAL.encode state.history) = .ok table ∧
+      next.RetainedReady directory nextDescriptor := by
   intro released attempt
   have closed : runCloseWithFiles directory descriptor .success (.ready state.installed, ⟨state.files, state.owners⟩) =
       .ok () (.closed, released) := by
@@ -116,7 +118,7 @@ theorem SegmentedWriterState.RetainedReady.cleanReopenRetained {directory : Disk
     (by simpa only [source, directoryFixed] using syncDirectory)
     (by simpa only [source, directoryFixed, keeperFixed] using syncKeeper)
   obtain ⟨checkpoint, table, model, count, session, final, returned, selected, path, lock, phase, countExact,
-    _, bounds, refines, history, pins, fileEffects, held, separate, freshPhase, freshSession⟩ := recovered
+    _, bounds, refines, history, pins, fileEffects, held, separate, freshPhase, freshSession, replayed⟩ := recovered
   have priorCheckpoint : SelectedIntegrityCheckpoint state.published.durable state.wal.directory.active.manifest
       state.checkpoint := samePair.symm ▸ ready.resumed.selected
   have sameCheckpoint : checkpoint = state.checkpoint :=
@@ -150,7 +152,7 @@ theorem SegmentedWriterState.RetainedReady.cleanReopenRetained {directory : Disk
       bounds, ⟨model, refines, history⟩⟩, ready.layout, ready.valid, ready.spans, ready.directoryFiles, ready.sealedFiles, ready.active,
       ready.manifestFiles, held⟩
   exact ⟨closed, session, final, table, reopened, filesAfter, identities.1, path, lock,
-    installed, identities.2.1, identities.2.2, separate, freshPhase, freshSession, pins, nextReady⟩
+    installed, identities.2.1, identities.2.2, separate, freshPhase, freshSession, pins, sameCheckpoint ▸ replayed, nextReady⟩
 
 theorem SegmentedWriterState.Ready.cleanReopen {directory : DiskDirectory} {descriptor nextDescriptor nextRef : Nat}
     {state : SegmentedWriterState} (ready : state.Ready directory descriptor)
@@ -175,12 +177,14 @@ theorem SegmentedWriterState.Ready.cleanReopen {directory : DiskDirectory} {desc
       session.directory = directory ∧ session.descriptor = nextDescriptor ∧ session.phase = .ready next.installed ∧
       session.phaseRef = nextRef ∧ session.sessionRef = nextRef + 1 ∧
       session.phaseRef ≠ session.sessionRef ∧ session.phaseRef ∉ liveRefs ∧ session.sessionRef ∉ liveRefs ∧
-      table.pins.active = [] ∧ next.Ready directory nextDescriptor := by
+      table.pins.active = [] ∧
+      recoverSelected (state.checkpoint.getD (.empty, 0)).1 (WAL.encode state.history) = .ok table ∧
+      next.Ready directory nextDescriptor := by
   obtain ⟨closed, session, final, table, opened, files, owners, path, lock, phase, phaseRef, sessionRef, separate,
-    freshPhase, freshSession, pins, next⟩ :=
+    freshPhase, freshSession, pins, replayed, next⟩ :=
     ready.toRetained.cleanReopenRetained liveRefs fresh unlock raw removeFile write sync renameFile syncDirectory syncKeeper
   exact ⟨closed, session, final, table, opened, files, owners, path, lock, phase, phaseRef, sessionRef, separate,
-    freshPhase, freshSession, pins, ⟨next.resumed, next.layout, ready.chain, next.directoryFiles, next.sealedFiles,
+    freshPhase, freshSession, pins, replayed, ⟨next.resumed, next.layout, ready.chain, next.directoryFiles, next.sealedFiles,
       next.active, next.manifestFiles, next.held⟩⟩
 
 /-- The read and effect reports used to reopen a settled writer after its
@@ -227,22 +231,23 @@ structure Installs (report : SegmentedCleanReopenReport directory before oldDesc
     report.attempt.run directory (released directory before) = .ok session final ∧
     final.image = before.files ∧ session.phase = .ready (reopenedWriter before table final.owners).installed ∧
     after = reopenedWriter before table final.owners
+  replay : recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table
 
 theorem installs (report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor)
     (observed : report.Valid) (ready : before.Ready directory oldDescriptor) :
     ∃ after, report.Installs after ∧ after.Ready directory nextDescriptor := by
-  obtain ⟨closed, session, final, table, opened, files, _, _, _, phase, _, _, _, _, _, _, next⟩ :=
+  obtain ⟨closed, session, final, table, opened, files, _, _, _, phase, _, _, _, _, _, _, replayed, next⟩ :=
     ready.cleanReopen report.liveRefs observed.fresh report.unlock report.raw report.removeFile report.write
       report.sync report.renameFile observed.syncDirectory observed.syncKeeper
-  exact ⟨reopenedWriter before table final.owners, ⟨closed, session, final, table, opened, files, phase, rfl⟩, next⟩
+  exact ⟨reopenedWriter before table final.owners, ⟨closed, ⟨session, final, table, opened, files, phase, rfl⟩, replayed⟩, next⟩
 
 theorem installsRetained (report : SegmentedCleanReopenReport directory before oldDescriptor nextDescriptor)
     (observed : report.Valid) (ready : before.RetainedReady directory oldDescriptor) :
     ∃ after, report.Installs after ∧ after.RetainedReady directory nextDescriptor := by
-  obtain ⟨closed, session, final, table, opened, files, _, _, _, phase, _, _, _, _, _, _, next⟩ :=
+  obtain ⟨closed, session, final, table, opened, files, _, _, _, phase, _, _, _, _, _, _, replayed, next⟩ :=
     ready.cleanReopenRetained report.liveRefs observed.fresh report.unlock report.raw report.removeFile report.write
       report.sync report.renameFile observed.syncDirectory observed.syncKeeper
-  exact ⟨reopenedWriter before table final.owners, ⟨closed, session, final, table, opened, files, phase, rfl⟩, next⟩
+  exact ⟨reopenedWriter before table final.owners, ⟨closed, ⟨session, final, table, opened, files, phase, rfl⟩, replayed⟩, next⟩
 
 /-- Closing the previous writer and reading the immutable checkpoint and
 WAL through the cached opener install the same next session. -/

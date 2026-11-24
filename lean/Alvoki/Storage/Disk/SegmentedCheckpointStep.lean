@@ -68,6 +68,10 @@ structure Installs (attempt : SegmentedCheckpointReport directory before) (after
   targetBytes : after.target.trimmed = before.target.trimmed
   checkpoint : SelectedIntegrityCheckpoint after.published.durable after.wal.directory.active.manifest after.checkpoint
   owners : after.owners = before.owners
+  decodedManifest : Manifest.IntegrityCheckpoint.decode attempt.manifest = .ok
+    (Manifest.IntegrityCheckpoint.fromRuns (checkpointHeader attempt.table (generation before)) attempt.plan.files)
+  restored : ∃ base, after.checkpoint = some (base, generation before) ∧
+    base.SameData attempt.table ∧ base.committed.toNat = after.history.length
 
 /-- Successful checkpointing keeps the available WAL inventory and its
 held lock. Its exact new manifest covers the full history, making the
@@ -93,8 +97,8 @@ theorem installsRetained (attempt : SegmentedCheckpointReport directory before) 
       simp [encodeCheckpointIntegrityManifest, bounded, Bind.bind, Except.bind] at encoded
   have complete : CheckpointPublication.run attempt.table.runs.toArray.size attempt.perform 0 = .ok () attempt.cut := by
     simpa only [List.size_toArray] using observed.succeeded
-  obtain ⟨readyEffect, _, _, _, published, base, publication, settled, runs, others,
-    _, crashes, projected, range, _, _, nextLayout, valid, keeperRead, accepted, selected, _, _, bounds, canonical⟩ :=
+  obtain ⟨readyEffect, _, _, decodedManifest, published, base, publication, settled, runs, others,
+    _, crashes, projected, range, _, _, nextLayout, valid, keeperRead, accepted, selected, sameData, committed, bounds, canonical⟩ :=
     runPreparedCheckpoint_segmentedSuccess (directory := directory) (owners := before.owners)
       ready.layout marker walFits before.published refines represents ready.resumed.bounds
       observed.flushed observed.generationFits observed.runCountFits runBytesFit
@@ -114,8 +118,11 @@ theorem installsRetained (attempt : SegmentedCheckpointReport directory before) 
   }
   have exactKeeper : target.trimmed = before.target.trimmed := by
     rw [resumed.contents, keeper, ready.resumed.contents]
+  have restored : base.committed.toNat = after.history.length := by
+    rw [sameData.committed]
+    exact committed
   refine ⟨after, ⟨readyEffect, publication, settled, runs, others, rfl, rfl, rfl, rfl,
-    resumed.ready.selected.symm, keeper, exactKeeper, selected, rfl⟩,
+    resumed.ready.selected.symm, keeper, exactKeeper, selected, rfl, decodedManifest, base, rfl, sameData, restored⟩,
     ⟨resumed, nextLayout, valid, ready.spans, rfl, ready.sealedFiles, keeper.trans ready.active, projected, ready.held⟩,
     keeperRead⟩
 
