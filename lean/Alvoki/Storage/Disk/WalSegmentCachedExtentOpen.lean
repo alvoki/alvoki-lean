@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.RecoverySizedReads
+import Alvoki.Storage.Disk.RecoveryRequestCount
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
 import Alvoki.Storage.Disk.WalSegmentCollectionPlan
 
@@ -356,13 +357,7 @@ theorem reopenMarkedBoundedWithCachedExtents_eq_of_wal [Monad m] [MonadExceptOf 
   unfold reopenMarkedBoundedWithCachedExtents reopenMarkedBoundedWithSizedCheckpoint prepareBoundedMarkedFromCheckpoint
   rw [funext (fun watermark => funext (wal watermark))]
 
-private def counted {α : Type} (report : Except IO.Error α) : EStateM IO.Error Nat α :=
-  fun count => match report with
-    | .ok value => .ok value (count + 1)
-    | .error cause => .error cause (count + 1)
-
-private def callsAfter {α : Type} : EStateM.Result IO.Error Nat α → Nat
-  | .ok _ count | .error _ count => count
+open RecoveryRequestCount renaming issued → counted, reached → callsAfter
 
 private theorem countedExtent (dir : DiskDirectory) (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata))
     (name : String) (before : Nat) :
@@ -512,6 +507,74 @@ noncomputable def countCachedWalReadCalls (dir : DiskDirectory) (watermark : Nat
     (fun path count => counted (readSeal path count))
     (fun path count size => counted (readKeeper path count size)) 0)
 
+/-- The number of canonical WAL filenames in a successful listing. -/
+noncomputable def listedWalNames : Except IO.Error (Array IO.FS.DirEntry) → Nat
+  | .ok entries => ((entries.toList.map (·.fileName)).filterMap parseWalSegmentName).length
+  | .error _ => 0
+
+/-- A successful selection leaves one possible unlink for each later name. -/
+noncomputable def pendingWalUnlinks : EStateM.Result IO.Error Nat (WalSegmentMarkerReads × Nat) → Nat
+  | .ok (reads, _) _ => reads.newer.length
+  | .error _ _ => 0
+
+/-- The cached reader budgets one listing, one probe per canonical name,
+and either a payload read or a later repair unlink per selected name. -/
+theorem readSelectedWithCachedExtents_requestBound (dir : DiskDirectory) (watermark : Nat) (length : UInt64)
+    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata))
+    (readSeal : FilePath → Nat → Except IO.Error ByteArray)
+    (readKeeper : FilePath → Nat → Nat → Except IO.Error ByteArray) (before : Nat) :
+    let observed := readSelectedWithCachedExtents dir watermark length
+      (fun path => counted (list path)) (fun path => counted (lstat path))
+      (fun path count => counted (readSeal path count))
+      (fun path count size => counted (readKeeper path count size)) before
+    callsAfter observed + pendingWalUnlinks observed ≤ before + (1 + 2 * listedWalNames (list dir.path)) := by
+  dsimp only
+  unfold readSelectedWithCachedExtents
+  by_cases valid : length.toNat % frameSize = 0 ∧ watermark ≤ length.toNat / frameSize
+  · cases listed : list dir.path with
+    | error cause =>
+      simp [valid, listed, counted, Bind.bind, EStateM.bind, callsAfter, pendingWalUnlinks, listedWalNames]
+    | ok entries =>
+      let names := entries.toList.map IO.FS.DirEntry.fileName
+      let scan := readWalSegmentExtentsWith dir (fun path => counted (lstat path)) names
+      have measured := countedExtentScan dir lstat names (before + 1)
+      simp only [ite_eq_left valid, Bind.bind, EStateM.bind, Pure.pure, counted, listed]
+      rw [show readWalSegmentExtentsWith dir (fun path => counted (lstat path)) names (before + 1) =
+        scan (before + 1) from rfl]
+      change _ ≤ before + (1 + 2 * (names.filterMap parseWalSegmentName).length)
+      cases scanned : scan (before + 1) with
+      | error cause reached =>
+        have spent : reached ≤ before + 1 + (names.filterMap parseWalSegmentName).length := by
+          simpa [scan, scanned, callsAfter] using measured.1
+        simp only [callsAfter, pendingWalUnlinks]
+        omega
+      | ok extents reached =>
+        have spent : reached ≤ before + 1 + (names.filterMap parseWalSegmentName).length := by
+          simpa [scan, scanned, callsAfter] using measured.1
+        have size := measured.2 extents reached scanned
+        cases selected : selectWalExtentsThrough extents watermark (length.toNat / frameSize) with
+        | none =>
+          simp only [selected, throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter, pendingWalUnlinks]
+          omega
+        | some selection =>
+          obtain ⟨required, newer⟩ := selection
+          have selectedCount : required.length + newer.length ≤ extents.length := by
+            unfold selectWalExtentsThrough at selected
+            cases found : ((extents.map Prod.fst).filter (fun offset => decide (offset ≤ watermark))).max? with
+            | none => simp [found, Bind.bind, Option.bind] at selected
+            | some first =>
+              simp only [found, Bind.bind, Option.bind, Pure.pure, Option.some.injEq, Prod.mk.injEq] at selected
+              rw [← selected.1, ← selected.2, List.length_map, ← List.length_append, List.takeWhile_append_dropWhile]
+              exact List.filter_sublist.length_le
+          have payloads := countedCachedWalPayloads dir (length.toNat / frameSize) readSeal readKeeper required [] reached
+          simp only [selected, readCachedWalPayloads, EStateM.bind]
+          cases payload : readCachedWalPayloadsFrom dir (length.toNat / frameSize)
+              (fun path count => counted (readSeal path count))
+              (fun path count size => counted (readKeeper path count size)) required [] reached <;>
+            rw [payload] at payloads <;> simp only [EStateM.pure, callsAfter, pendingWalUnlinks] at payloads ⊢ <;> omega
+  · simp [valid, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter, pendingWalUnlinks]
+
 /-- The cached WAL reader issues at most one directory listing, one metadata probe
 per canonical name, and one payload request per selected segment. Both the successful
 result and error exits satisfy this combined bound on requests to the filesystem adapter. -/
@@ -520,52 +583,10 @@ theorem countCachedWalReadCalls_bound (dir : DiskDirectory) (watermark : Nat) (l
     (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata))
     (readSeal : FilePath → Nat → Except IO.Error ByteArray)
     (readKeeper : FilePath → Nat → Nat → Except IO.Error ByteArray) :
-    countCachedWalReadCalls dir watermark length list lstat readSeal readKeeper ≤
-      1 + 2 * (match list dir.path with
-        | .ok entries => ((entries.toList.map (·.fileName)).filterMap parseWalSegmentName).length
-        | .error _ => 0) := by
-  unfold countCachedWalReadCalls readSelectedWithCachedExtents
-  by_cases valid : length.toNat % frameSize = 0 ∧ watermark ≤ length.toNat / frameSize
-  · cases listed : list dir.path with
-    | error cause =>
-      simp [valid, listed, counted, Bind.bind, EStateM.bind, callsAfter]
-    | ok entries =>
-      let names := entries.toList.map IO.FS.DirEntry.fileName
-      let scan := readWalSegmentExtentsWith dir (fun path => counted (lstat path)) names
-      have measured := countedExtentScan dir lstat names 1
-      simp only [ite_eq_left valid, Bind.bind, EStateM.bind, Pure.pure, counted, listed, Nat.zero_add]
-      rw [show readWalSegmentExtentsWith dir (fun path => counted (lstat path)) names 1 = scan 1 from rfl]
-      change _ ≤ 1 + 2 * (names.filterMap parseWalSegmentName).length
-      cases scanned : scan 1 with
-      | error cause reached =>
-        have spent : reached ≤ 1 + (names.filterMap parseWalSegmentName).length := by
-          simpa [scan, scanned, callsAfter] using measured.1
-        simp only [callsAfter]
-        omega
-      | ok extents reached =>
-        have spent : reached ≤ 1 + (names.filterMap parseWalSegmentName).length := by
-          simpa [scan, scanned, callsAfter] using measured.1
-        have size := measured.2 extents reached scanned
-        cases selected : selectWalExtentsThrough extents watermark (length.toNat / frameSize) with
-        | none =>
-          simp only [selected, throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter]
-          omega
-        | some selection =>
-          obtain ⟨required, newer⟩ := selection
-          have selectedCount : required.length ≤ extents.length := by
-            unfold selectWalExtentsThrough at selected
-            cases found : ((extents.map Prod.fst).filter (fun offset => decide (offset ≤ watermark))).max? with
-            | none => simp [found, Bind.bind, Option.bind] at selected
-            | some first =>
-              simp only [found, Bind.bind, Option.bind, Pure.pure, Option.some.injEq, Prod.mk.injEq] at selected
-              rw [← selected.1]
-              exact Nat.le_trans (List.takeWhile_sublist _).length_le List.filter_sublist.length_le
-          have payloads := countedCachedWalPayloads dir (length.toNat / frameSize) readSeal readKeeper required [] reached
-          simp only [selected, readCachedWalPayloads, EStateM.bind]
-          cases payload : readCachedWalPayloadsFrom dir (length.toNat / frameSize)
-              (fun path count => counted (readSeal path count))
-              (fun path count size => counted (readKeeper path count size)) required [] reached <;>
-            rw [payload] at payloads <;> simp only [EStateM.pure, callsAfter] at payloads ⊢ <;> omega
-  · simp [valid, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter]
+    countCachedWalReadCalls dir watermark length list lstat readSeal readKeeper ≤ 1 + 2 * listedWalNames (list dir.path) := by
+  have bounded := readSelectedWithCachedExtents_requestBound dir watermark length list lstat readSeal readKeeper 0
+  dsimp only at bounded
+  unfold countCachedWalReadCalls
+  omega
 
 end Alvoki.Storage.WalSegmentRepair

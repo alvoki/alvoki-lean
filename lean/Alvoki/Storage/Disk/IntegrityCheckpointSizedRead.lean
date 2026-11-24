@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.DiskPaths
 import Alvoki.Storage.Disk.IntegrityCheckpointRead
 import Alvoki.Storage.Disk.RecoverySizedReads
+import Alvoki.Storage.Disk.RecoveryRequestCount
 
 namespace Alvoki.Storage
 
@@ -274,5 +275,79 @@ theorem countCheckpointRunBytes_bound (dir : DiskDirectory) {manifest : Integrit
   have bound := checkpointRequests_le dir manifest readSize readPrefix (List.range manifest.header.runCount.toNat) 0
   rw [runRequestSizes_exact manifest (IntegrityCheckpoint.decode_spec decoded).2.2, Nat.zero_add] at bound
   exact bound
+
+open RecoveryRequestCount in
+private theorem issuedStampedRun_bound (dir : DiskDirectory) (manifest : IntegrityCheckpoint)
+    (readSize : FilePath → Except IO.Error Nat) (readPrefix : FilePath → Nat → Except IO.Error ByteArray)
+    (index before : Nat) :
+    RecoveryRequestCount.reached (readStampedRun dir manifest.runs.toArray
+      (fun path => RecoveryRequestCount.issued (readSize path))
+      (fun path count => RecoveryRequestCount.issued (readPrefix path count)) manifest.header.generation index before)
+      ≤ before + 2 := by
+  unfold readStampedRun
+  cases declared : manifest.runs.toArray[index]? with
+  | none => simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached]
+  | some stamp =>
+    dsimp only
+    unfold readExactRecoveryFileWith
+    apply bind_bound (first := 1) (second := 1)
+    · simp [reached_issued]
+    · intro actual after _
+      by_cases extent : actual = stamp.byteCount.toNat ∧ stamp.byteCount.toNat < USize.size
+      · simp only [ite_eq_left extent]
+        apply bind_bound (first := 1) (second := 0)
+        · simp [reached_issued]
+        · intro payload final _
+          by_cases size : payload.size = stamp.byteCount.toNat <;>
+            simp [size, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, throw, throwThe,
+              MonadExceptOf.throw, EStateM.throw, reached]
+      · simp [extent, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached]
+
+/-- An absent or rejected manifest selects no checkpoint runs. -/
+noncomputable def decodedCheckpointRunCount : Except IO.Error (Option ByteArray) → Nat
+  | .ok (some bytes) => ((IntegrityCheckpoint.decode bytes).toOption.map (·.header.runCount.toNat)).getD 0
+  | _ => 0
+
+open RecoveryRequestCount in
+/-- At most one manifest read and two requests for each run in the decoded
+manifest. An absent, rejected, or unreadable manifest opens no run. -/
+theorem readIntegrityCheckpointSized_requestBound (dir : DiskDirectory)
+    (readManifest : Except IO.Error (Option ByteArray)) (readSize : FilePath → Except IO.Error Nat)
+    (readPrefix : FilePath → Nat → Except IO.Error ByteArray) (before : Nat) :
+    RecoveryRequestCount.reached (readIntegrityCheckpointSized dir (RecoveryRequestCount.issued readManifest)
+      (fun path => RecoveryRequestCount.issued (readSize path))
+      (fun path count => RecoveryRequestCount.issued (readPrefix path count)) before) ≤
+      before + (1 + 2 * decodedCheckpointRunCount readManifest) := by
+  unfold readIntegrityCheckpointSized decodedCheckpointRunCount
+  cases report : readManifest with
+  | error cause => simp [issued, Bind.bind, EStateM.bind, reached]
+  | ok value =>
+    cases value with
+    | none => simp [issued, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, reached]
+    | some bytes =>
+      cases decoded : IntegrityCheckpoint.decode bytes with
+      | error cause =>
+        simp [issued, liftExcept, Except.mapError, decoded, Bind.bind, EStateM.bind, reached,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw, Except.toOption]
+      | ok manifest =>
+        simp only [issued, Bind.bind, EStateM.bind, decoded, Except.mapError, liftExcept, Pure.pure,
+          EStateM.pure, Except.toOption, Option.map_some, Option.getD_some]
+        have runs : reached (readIntegrityRunBytesSized dir manifest (fun path => issued (readSize path))
+            (fun path count => issued (readPrefix path count)) (before + 1)) ≤
+            before + 1 + 2 * manifest.header.runCount.toNat := by
+          unfold readIntegrityRunBytesSized
+          rw [readCheckpointRunBytes_eq_mapM]
+          simpa only [List.length_range] using mapM_bound _ (List.range manifest.header.runCount.toNat) (before + 1) 2
+            (issuedStampedRun_bound dir manifest readSize readPrefix)
+        cases outcome : readIntegrityRunBytesSized dir manifest (fun path => issued (readSize path))
+            (fun path count => issued (readPrefix path count)) (before + 1) with
+        | error cause count =>
+          rw [outcome] at runs
+          simp only [reached] at runs ⊢
+          omega
+        | ok files count =>
+          rw [outcome] at runs
+          cases loaded : loadIntegrityRunSet manifest files <;>
+            simp only [loaded, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached] at runs ⊢ <;> omega
 
 end Alvoki.Storage

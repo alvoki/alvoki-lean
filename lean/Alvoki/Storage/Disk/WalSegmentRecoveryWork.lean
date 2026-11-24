@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.WalSegmentBoundedOpen
+import Alvoki.Storage.Disk.RecoveryRequestCount
 
 namespace Alvoki.Storage.WalSegmentRepair
 
@@ -70,5 +71,54 @@ theorem countBoundedRepairCallbacks_bound (directory : DiskDirectory) (plan : Pl
   split
   · omega
   · split <;> omega
+
+open RecoveryRequestCount in
+private theorem repairStep_requestBound (dir : DiskDirectory) (plan : Plan)
+    (removeFile : FilePath → Except IO.Error (Except IO.Error Unit)) (write : FilePath → ByteArray → Except IO.Error Unit)
+    (sync : Array FilePath → Except IO.Error Unit) (renameFile : FilePath → FilePath → Except IO.Error Unit)
+    (step : Step) (before : Nat) :
+    reached (performPaths dir plan (fun path => issued (removeFile path)) throw
+      (fun path bytes => issued (write path bytes)) (fun paths => issued (sync paths))
+      (fun source dest => issued (renameFile source dest)) step before) ≤ before + 1 := by
+  cases step with
+  | unlink first =>
+    unfold performPaths RunCollection.performPaths
+    change reached (((issued (removeFile (dir.file (.walSegment first)))) >>= _) before) ≤ _
+    rw [show before + 1 = before + (1 + 0) from rfl]
+    apply bind_bound (by simp only [reached_issued, Nat.le_refl])
+    intro report count _
+    cases RunCollection.ownedUnlinkResult report <;> exact Nat.le_refl _
+  | syncPruned | syncKeeper => simp [performPaths, reached_issued]
+  | replace step => cases step <;> simp [performPaths, Publication.performReplacement, reached_issued]
+
+open RecoveryRequestCount in
+/-- The shared repair issues at most one unlink per later WAL name and six
+further requests. A rejecting plan or error exit obeys the same budget. -/
+theorem finishBoundedMarkedOpen_requestBound (dir : DiskDirectory) (plan : Plan) (physicalSize : Nat)
+    (removeFile : FilePath → Except IO.Error (Except IO.Error Unit)) (write : FilePath → ByteArray → Except IO.Error Unit)
+    (sync : Array FilePath → Except IO.Error Unit) (renameFile : FilePath → FilePath → Except IO.Error Unit)
+    (before : Nat) :
+    reached (finishBoundedMarkedOpen dir plan physicalSize (fun path => issued (removeFile path))
+      (fun path bytes => issued (write path bytes)) (fun paths => issued (sync paths))
+      (fun source dest => issued (renameFile source dest)) before) ≤ before + (plan.newer.length + 6) := by
+  unfold finishBoundedMarkedOpen
+  by_cases valid : (plan.valid && plan.keeperBytes.size == plan.keeperSize && decide (plan.keeperSize ≤ physicalSize)) = true
+  · simp only [ite_eq_left valid]
+    split
+    · have counted : reached (((issued (sync #[dir.path])) >>= fun _ =>
+          issued (sync #[dir.file (.walSegment plan.keeper)])) before) ≤ before + (1 + 1) :=
+        bind_bound (by simp only [reached_issued, Nat.le_refl]) (fun _ _ _ => by simp only [reached_issued, Nat.le_refl])
+      exact Nat.le_trans counted (by omega)
+    · unfold runRepairPlan
+      rw [show plan.newer.length + 6 = 1 + (plan.newer.length + 5) by omega]
+      apply bind_bound (first := 1) (second := plan.newer.length + 5)
+      · simp only [reached_issued, Nat.le_refl]
+      · intro _ after _
+        have bounded := forM_bound _ (steps plan.newer (decide (plan.keeperSize < physicalSize))) after 1
+          (repairStep_requestBound dir plan removeFile write sync renameFile)
+        have total : (steps plan.newer (decide (plan.keeperSize < physicalSize))).length ≤ plan.newer.length + 5 := by
+          by_cases clipped : plan.keeperSize < physicalSize <;> simp [steps, Publication.steps, clipped] <;> omega
+        exact Nat.le_trans bounded (by omega)
+  · simp [valid, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached]
 
 end Alvoki.Storage.WalSegmentRepair
