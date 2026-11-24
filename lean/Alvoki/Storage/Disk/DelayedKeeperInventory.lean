@@ -19,10 +19,66 @@ def DescriptorInventory.delayedKeeperSync (inventory : DescriptorInventory) (dro
   sameTarget := rfl
   outcomes := outcomes
 
-/-- One census links the poisoned writer's final lock drop, the retained
-keeper descriptor, and the repairing opener's live lock slot. The census
-already includes the repair description when the drop interval starts.
-The filesystem supplies the object bindings at the observed rename cut. -/
+/-- The repair descriptor survives the drop interval or is opened after
+it. The successful open supplies a free slot in a live process epoch and
+a fresh description of the same lock inode. The table records the repair
+slot through the observed rename cut. -/
+inductive KeeperRepairSlot (inventory : DescriptorInventory) (drops : List LockReferenceDrop)
+    (writer repair : Nat) where
+  | retained (reference : LockReference)
+      (live : reference ∈ (inventory.afterDrops drops).references repair)
+  | opened (slot : DescriptorSlot) (identity : slot.description = repair)
+      (free : ∀ old ∈ (inventory.afterDrops drops).slots, old.address ≠ slot.address)
+      (running : LockReferenceDrop.exited slot.reference.process ∉ drops)
+      (fresh : inventory.references repair = []) (sameLock : inventory.inode repair = inventory.inode writer)
+
+namespace KeeperRepairSlot
+
+variable {inventory : DescriptorInventory} {drops : List LockReferenceDrop} {writer repair : Nat}
+
+def census : KeeperRepairSlot inventory drops writer repair → DescriptorInventory
+  | .retained .. => inventory.afterDrops drops
+  | .opened slot _ free .. => (inventory.afterDrops drops).insert slot free
+
+def reference : KeeperRepairSlot inventory drops writer repair → LockReference
+  | .retained reference _ => reference
+  | .opened slot .. => slot.reference
+
+theorem keepsInodes (slot : KeeperRepairSlot inventory drops writer repair) :
+    slot.census.inode = inventory.inode := by
+  cases slot <;> rfl
+
+theorem live (slot : KeeperRepairSlot inventory drops writer repair) :
+    slot.reference ∈ slot.census.references repair := by
+  cases slot with
+  | retained _ live => exact live
+  | opened _ identity _ _ _ _ => simp [reference, census, DescriptorInventory.references_insert, identity]
+
+theorem keepsExistingReferences (slot : KeeperRepairSlot inventory drops writer repair)
+    {description : Nat} (present : inventory.references description ≠ []) :
+    slot.census.references description = (inventory.afterDrops drops).references description := by
+  cases slot with
+  | retained _ _ => rfl
+  | opened opened identity _ _ fresh _ =>
+    have different : opened.description ≠ description := fun same => present ((identity.symm.trans same) ▸ fresh)
+    simp [census, DescriptorInventory.references_insert, different]
+
+/-- A newly opened repair lock has exactly its returned slot in the
+reached census, and its object is the original lock inode. -/
+theorem openedCensus (slot : DescriptorSlot) (identity : slot.description = repair)
+    (free : ∀ old ∈ (inventory.afterDrops drops).slots, old.address ≠ slot.address)
+    (running : LockReferenceDrop.exited slot.reference.process ∉ drops)
+    (fresh : inventory.references repair = []) (sameLock : inventory.inode repair = inventory.inode writer) :
+    let reached := (KeeperRepairSlot.opened slot identity free running fresh sameLock).census
+    reached.references repair = [slot.reference] ∧ reached.inode repair = inventory.inode writer := by
+  refine ⟨?_, sameLock⟩
+  simp [census, DescriptorInventory.references_insert, identity, DescriptorInventory.references_afterDrops, fresh]
+
+end KeeperRepairSlot
+
+/-- The original census supplies the writer release and retained keeper.
+The repair slot is observed in the table at the rename cut, along with
+the filesystem's lock and replacement bindings. -/
 structure KeeperReplacementDropObservation {directory : DiskDirectory} {source : LockedFileState FileImage}
     {admits : Target → Prop} (cut : DelayedKeeperReplacementPowerLoss directory source admits) (writer : Nat) where
   inventory : DescriptorInventory
@@ -30,8 +86,7 @@ structure KeeperReplacementDropObservation {directory : DiskDirectory} {source :
   writerEnded : (inventory.afterDrops cut.report.drops).references writer = []
   issuing : cut.report.issuer ∈ (inventory.afterDrops cut.report.drops).references cut.report.captured.description
   oldKeeper : inventory.inode cut.report.captured.description = cut.previous.active
-  repairSlot : LockReference
-  repairLive : repairSlot ∈ (inventory.afterDrops cut.report.drops).references cut.attempt.descriptor
+  repair : KeeperRepairSlot inventory cut.report.drops writer cut.attempt.descriptor
   bindings : FilePath → Option Nat
   lockBinding : bindings (directory.file .lock) = some (inventory.inode cut.attempt.descriptor)
   replacementBinding : bindings (directory.file (.walSegment cut.bounded.keeper)) = some cut.replacement
@@ -91,20 +146,27 @@ theorem sameReachedStates (observed : KeeperReplacementDropObservation cut write
 retained keeper's effect targets the old object, while the canonical
 keeper pathname already names the replacement. -/
 theorem effectTime (observed : KeeperReplacementDropObservation cut writer) :
-    let census := observed.inventory.afterDrops cut.report.drops
+    let census := observed.repair.census
     let effect := observed.report.effectTarget
     let repair := cut.attempt.descriptor
     let current := cut.previous.renameSynced cut.replacement cut.bounded.keeperBytes
     cut.report.issuer ∈ census.references effect.description ∧
       effect.description ≠ writer ∧ effect.inode = cut.previous.active ∧ effect.inode ≠ current.active ∧
       observed.bindings (directory.file (.walSegment cut.bounded.keeper)) = some current.active ∧
-      observed.repairSlot ∈ census.references repair ∧
+      observed.repair.reference ∈ census.references repair ∧ census.references writer = [] ∧
       repair ≠ writer ∧
       observed.bindings (directory.file .lock) = some (census.inode repair) ∧
       observed.observedCut.during.owners.Owns directory repair ∧
       ∃ (target : Target) (full : Plan), admits target ∧ cut.bounded.keeperBytes = target.trimmed ∧
         ReachesAction target source.image.syncDirectory full.finishActions (.replace .syncDirectory) cut.reached := by
   intro census effect repair current
+  have ended : census.references writer = [] :=
+    (observed.repair.keepsExistingReferences observed.writerLive).trans observed.writerEnded
+  have keeperRefs : census.references effect.description =
+      (observed.inventory.afterDrops cut.report.drops).references cut.report.captured.description :=
+    observed.repair.keepsExistingReferences (DescriptorInventory.wasLive observed.issuing)
+  have issuer : cut.report.issuer ∈ census.references effect.description := keeperRefs.symm ▸ observed.issuing
+  have repairLive : observed.repair.reference ∈ census.references repair := observed.repair.live
   have separate : cut.report.captured.description ≠ writer := by
     intro same
     have issuing := observed.issuing
@@ -112,14 +174,16 @@ theorem effectTime (observed : KeeperReplacementDropObservation cut writer) :
     exact List.not_mem_nil issuing
   have repairSeparate : repair ≠ writer := by
     intro same
-    have live : observed.repairSlot ∈ census.references repair := observed.repairLive
-    rw [same, show census.references writer = [] from observed.writerEnded] at live
-    exact List.not_mem_nil live
-  refine ⟨observed.issuing, separate, observed.oldKeeper, ?_, observed.replacementBinding,
-    observed.repairLive, repairSeparate, observed.lockBinding, ?_, ?_⟩
+    rw [same, ended] at repairLive
+    exact List.not_mem_nil repairLive
+  refine ⟨issuer, separate, observed.oldKeeper, ?_, observed.replacementBinding,
+    repairLive, ended, repairSeparate, ?_, ?_, ?_⟩
   · change observed.inventory.inode cut.report.captured.description ≠ cut.replacement
     rw [observed.oldKeeper]
     exact cut.distinct
+  · change observed.bindings (directory.file .lock) = some (observed.repair.census.inode repair)
+    rw [observed.repair.keepsInodes]
+    exact observed.lockBinding
   · simp [LockOwners.Owns, DelayedKeeperReplacementPowerLoss.during, observedCut, LockOwners.set, repair]
   · obtain ⟨target, full, _, _, admitted, bytes, reaches, _, _, _, _, _, _⟩ :=
       observed.report.atBoundedReplacementBarrier cut.attempt directory source.image cut.previous cut.replacement
