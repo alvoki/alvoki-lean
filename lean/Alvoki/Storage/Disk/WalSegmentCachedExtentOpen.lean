@@ -138,7 +138,7 @@ theorem readCachedWalPayloads_extentFailure {state : Type} {dir : DiskDirectory}
       simp [readCachedWalPayloadsFrom, forward, Bind.bind, EStateM.bind, Pure.pure, admitted, ih]
   exact loop []
 
-/-- Read-only prefix reports leave the file image as it was before acquisition. -/
+/-- Read-only prefix reports preserve the file image from before the first selected seal read. -/
 theorem CachedWalExtentFailure.reached_eq_of_readonly {state : Type} {dir : DiskDirectory}
     {readSeal : FilePath → Nat → EStateM IO.Error state ByteArray}
     {required : List (Nat × IO.FS.Metadata)} {initial reached : state}

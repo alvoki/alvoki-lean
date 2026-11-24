@@ -120,6 +120,7 @@ import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
 import Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
+import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRepair
@@ -947,6 +948,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.AppendCutReady.withSizedCheckpoint
 #check_axioms Alvoki.Storage.WalSegmentRepair.selectWalExtentsThrough_offsets
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_rejectsSeal
+#check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_extentFailure
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalExtentFailure.reached_eq_of_readonly
+#check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_extentFailure
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenExtentFailure.reopen_error
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenExtentFailure.reached_eq_of_readonly
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedSealExtentError
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalPayloadReports.byteCount
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_reported
