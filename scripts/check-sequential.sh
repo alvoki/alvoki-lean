@@ -206,6 +206,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalBatchCommitEffects
 lake env leanchecker Alvoki.Storage.Disk.WalBatchMarkerPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.SegmentedBatchPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
+lake env leanchecker Alvoki.Storage.Disk.SegmentedBatchAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.WalBatchCommitReports
 lake env leanchecker Alvoki.Storage.Disk.WalBatchSession
 lake env leanchecker Alvoki.Storage.Disk.WalBatchRecovery
@@ -241,6 +242,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
 lake env leanchecker Alvoki.Storage.Disk.CachedRetryInstallation
 lake env leanchecker Alvoki.Storage.Disk.CachedMarkedRetryInstallation
 lake env leanchecker Alvoki.Storage.Disk.CachedWalChunkReports
+lake env leanchecker Alvoki.Storage.Disk.AlignedWalChunkSync
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadWork
