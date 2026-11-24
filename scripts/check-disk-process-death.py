@@ -98,10 +98,10 @@ def wait_for_sync_success(pid):
     while time.monotonic() < deadline:
         exited, status = os.waitpid(pid, os.WNOHANG)
         if exited:
-            require(os.waitstatus_to_exitcode(status) == 0, "released directory sync failed")
+            require(os.waitstatus_to_exitcode(status) == 0, "released sync failed")
             return
         time.sleep(0.01)
-    raise RuntimeError("timed out waiting for the released directory sync")
+    raise RuntimeError("timed out waiting for the released sync")
 
 
 def check_process_death(binary, root, after_rename):
@@ -135,6 +135,8 @@ def check_process_death(binary, root, after_rename):
 set -eu
 if [ "$#" -eq "$ALVOKI_CHECK_SYNC_ARITY" ] && [ "$1" = -- ] &&
    [ "${3:-$2}" = "$ALVOKI_CHECK_HOLD_AT" ]; then
+    # The grouped write sync opens its first target before the repair can replace it.
+    if [ "$#" -eq 3 ]; then exec < "$2"; fi
     printf '%s\\n' "$$" > "$ALVOKI_CHECK_SYNC_PID"
     tries=0
     until [ -e "$ALVOKI_CHECK_SYNC_RELEASE" ]; do
@@ -142,6 +144,10 @@ if [ "$#" -eq "$ALVOKI_CHECK_SYNC_ARITY" ] && [ "$1" = -- ] &&
         tries=$((tries + 1))
         sleep 0.05
     done
+    # Finish just the in-flight WAL fsync through the descriptor, without reopening the path.
+    if [ "$#" -eq 3 ]; then
+        exec "$ALVOKI_CHECK_PYTHON" -c 'import os; os.fsync(0)'
+    fi
 fi
 exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
 ''')
@@ -154,12 +160,18 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
         "ALVOKI_CHECK_HOLD_AT": str(database if after_rename else database / "WAL.commit.next"),
         "ALVOKI_CHECK_SYNC_PID": str(ready),
         "ALVOKI_CHECK_SYNC_RELEASE": str(release),
+        "ALVOKI_CHECK_PYTHON": sys.executable,
         "ALVOKI_CHECK_REAL_SYNC": str(Path(real_sync).resolve()),
     }) as owner:
         sync_pid = wait_for_sync(owner, ready)
         require(os.getpgid(sync_pid) == owner.pid, "sync child escaped the fixture process group")
         require(wal.read_bytes() == appended, "paused write did not leave the exact submitted frame")
         require(marker.read_bytes() == expected_marker, "paused write selected the wrong WAL marker")
+        if not after_rename:
+            held_wal = Path(f"/proc/{sync_pid}/fd/0")
+            original_wal = wal.stat()
+            require(os.path.samestat(held_wal.stat(), original_wal),
+                    "sync child did not open the original WAL")
         status, stderr = run_probe(binary, "--open-once", database)
         require(status != 0 and f"database already open: {database}" in stderr,
                 f"open did not report the live owner's lock: {stderr}")
@@ -170,10 +182,16 @@ exec "$ALVOKI_CHECK_REAL_SYNC" "$@"
         status, stderr = run_probe(binary, "--open-once", database)
         require(status == 0, f"could not reopen after owner death: {stderr}")
         require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during recovery")
-        if after_rename:
-            # The old child execs the original directory sync only after the new opener succeeds.
-            release.touch()
-            wait_for_sync_success(sync_pid)
+        recovered_wal = wal.stat()
+        if not after_rename:
+            require(os.path.samestat(held_wal.stat(), original_wal), "held WAL descriptor changed inode")
+            require(not os.path.samestat(recovered_wal, original_wal), "repair did not replace the WAL inode")
+            require(held_wal.read_bytes() == appended and wal.read_bytes() == acknowledged,
+                    "repair did not separate the old append from the selected WAL bytes")
+        # Resume the old sync only after the successor's recovery has finished.
+        release.touch()
+        wait_for_sync_success(sync_pid)
+        require(os.path.samestat(wal.stat(), recovered_wal), "delayed sync changed the recovered WAL binding")
         require(wal.read_bytes() == expected_wal and marker.read_bytes() == expected_marker,
                 "recovery or delayed sync changed the selected WAL bytes")
         require(all((database / name).read_bytes() == data for name, data in checkpoint.items()),
@@ -186,4 +204,4 @@ if __name__ == "__main__":
     for after_rename in (False, True):
         with tempfile.TemporaryDirectory(prefix="alvoki-process-death-") as directory:
             check_process_death(binary, Path(directory).resolve(), after_rename)
-    print("Reopened after owner death both before the marker rename and with a delayed directory sync.")
+    print("Reopened after owner death with a delayed WAL descriptor sync or directory sync.")

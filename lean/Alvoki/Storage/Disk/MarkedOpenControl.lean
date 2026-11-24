@@ -79,6 +79,25 @@ theorem runSharedMarkedOpen_syncMetadata (checkpoint : Except String (Option (Pa
   rw [runMarkedReopen_syncMetadata]
   cases runMarkedReopen preflight repair false aligned before <;> rfl
 
+/-- A delayed fsync of the current WAL inode changes neither the inputs to
+marked open nor its successful installation or final file image. The extra
+file durability is represented by adding the visible WAL crash choice. -/
+theorem runSharedMarkedOpen_success_afterWalFileSync
+    {checkpoint : Except String (Option (PackedTable × UInt64))} {marker wal : Except String (Option ByteArray)}
+    (notAbsent : marker ≠ .ok none) {repair : Publication.Step → RepairReport} {aligned : AlignedSyncReport}
+    {before after : ReopenImage} {installed : PackedTable × UInt64 × Nat}
+    (opened : runSharedMarkedOpen checkpoint marker wal repair aligned before = .ok installed after) :
+    runSharedMarkedOpen checkpoint marker wal repair aligned before.allowVisibleWal = .ok installed after := by
+  rw [runSharedMarkedOpen_eq checkpoint marker wal notAbsent repair aligned before] at opened
+  rw [runSharedMarkedOpen_eq checkpoint marker wal notAbsent repair aligned before.allowVisibleWal]
+  let preflight := markedReopenPreflight (checkpoint.map fun loaded => (loaded.getD (.empty, 0)).1) marker wal
+  cases ran : runMarkedReopen preflight repair false aligned before with
+  | error _ _ => rw [ran] at opened; contradiction
+  | ok table image =>
+    rw [ran] at opened
+    rw [runMarkedReopen_success_afterWalFileSync ran]
+    exact opened
+
 /-- The locked visible marker contract supplies the branch condition. The
 checkpoint result comes from the shared manifest and ordered-run loader. -/
 theorem MarkedWalReads.runSharedMarkedOpen_eq {before : ReopenImage} (reads : MarkedWalReads before)

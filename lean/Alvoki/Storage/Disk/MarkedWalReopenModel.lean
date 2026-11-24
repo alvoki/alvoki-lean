@@ -121,6 +121,19 @@ binding is unresolved. Keep all earlier candidates as well. -/
 def ReopenImage.allowVisibleWal (image : ReopenImage) : ReopenImage :=
   { image with wal := { image.wal with crashImages := image.wal.active :: image.wal.crashImages } }
 
+/-- Primitive filesystem observations at the effect of a delayed fsync.
+Inode identifiers distinguish live file objects, including old objects still
+held by a descriptor. The current WAL binding includes its live contents. -/
+structure WalFileSyncTarget where
+  descriptorInode : Nat
+  liveWal : Option (Nat × ByteArray)
+
+/-- The fsync targets the inode currently bound at the WAL path, whose bytes
+are the model's visible WAL. Reopening the same path or having opened it
+earlier alone does not supply this witness. -/
+def WalFileSyncTarget.TargetsLiveWal (target : WalFileSyncTarget) (image : ReopenImage) : Prop :=
+  ∃ bytes, target.liveWal = some (target.descriptorInode, bytes) ∧ image.wal.active = some bytes
+
 def ReopenImage.crash (pair : DirectoryPublication.Bindings) (wal : Option ByteArray) : ReopenImage :=
   ⟨.settled pair, .settled wal⟩
 
@@ -584,6 +597,56 @@ theorem runMarkedReopen_durability_success (validated : MarkedPreflight)
       Publication.runReopen_aligned _ _ shorter, synced shorter]
     rfl
 
+private theorem repairReports_of_success {report : Publication.Step → RepairReport} {selected : ByteArray}
+    {actions : List Publication.Step} {before after : ReopenImage}
+    (ran : (actions.forM (performRepair report selected)) before = .ok () after) :
+    ∀ step ∈ actions, report step = .success := by
+  induction actions generalizing before with
+  | nil => simp
+  | cons step rest ih =>
+    simp only [List.forM_eq_forM, List.forM_cons, Bind.bind, EStateM.bind] at ran
+    cases reportStep : report step with
+    | failure _ tookEffect =>
+      simp [performRepair, reportStep] at ran
+    | success =>
+      cases applied : before.repairStep selected step with
+      | none => simp [performRepair, reportStep, applied] at ran
+      | some next =>
+        simp only [performRepair, reportStep, applied] at ran
+        intro action present
+        rcases List.mem_cons.mp present with rfl | later
+        · exact reportStep
+        · exact ih ran action later
+
+/-- With the same reports, adding the live WAL as an extra crash candidate
+does not change a successful reopen. Its own durability barrier settles the
+selected WAL and metadata, discarding the earlier crash choices. -/
+theorem runMarkedReopen_success_afterWalFileSync {preflight : Except String MarkedPreflight}
+    {report : Publication.Step → RepairReport} {aligned : AlignedSyncReport}
+    {before after : ReopenImage} {table : PackedTable}
+    (ran : runMarkedReopen preflight report false aligned before = .ok table after) :
+    runMarkedReopen preflight report false aligned before.allowVisibleWal = .ok table after := by
+  cases preflight with
+  | error => contradiction
+  | ok validated =>
+    have repaired (shorter : validated.selected.size < validated.contents.size) :
+        ∀ step, report step = .success := by
+      simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen_repair _ _ shorter,
+        Bind.bind, EStateM.bind, Publication.run] at ran
+      cases repair : (Publication.steps.forM (performRepair report validated.selected)) before with
+      | error _ _ => rw [repair] at ran; contradiction
+      | ok _ cut =>
+        intro step
+        exact repairReports_of_success repair step (by cases step <;> simp [Publication.steps])
+    have synced (notShorter : ¬ validated.selected.size < validated.contents.size) : aligned = .success := by
+      simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen_aligned _ _ notShorter] at ran
+      cases aligned with
+      | success => rfl
+      | failure _ _ _ => contradiction
+    rw [← ran, runMarkedReopen_durability_success validated report aligned before repaired synced,
+      runMarkedReopen_durability_success validated report aligned before.allowVisibleWal repaired synced]
+    rfl
+
 /-- Reported repair effects choose a prefix of the shared replacement
 schedule. The entire replacement must have completed on success. -/
 theorem runMarkedReopen_repair_outcome (validated : MarkedPreflight)
@@ -838,10 +901,10 @@ theorem MarkedReopenReads.success_afterDirectorySync {before after : ReopenImage
   simp [ReopenImage.syncMetadata, settled]
 
 /-- A finite sequence of observed marked reopen attempts and crashes.
-An extra fsync of the stable database directory can take effect between
-attempts, including a request made by an earlier process. It settles the
-current metadata pair. Staging and WAL crash choices remain as modeled by
-their own effects. -/
+An earlier process's fsync can take effect between attempts. A directory
+sync settles the visible metadata pair. A file-only sync on the inode
+currently named by the WAL permits its live contents to survive. Neither
+effect executes a later rename on behalf of the earlier process. -/
 inductive MarkedReopenAttempts (initial : ReopenImage) : ReopenImage → Prop where
   | start : MarkedReopenAttempts initial initial
   | success (path : MarkedReopenAttempts initial before) (reads : MarkedReopenReads before)
@@ -857,6 +920,9 @@ inductive MarkedReopenAttempts (initial : ReopenImage) : ReopenImage → Prop wh
       MarkedReopenAttempts initial (.crash pair wal)
   | delayedDirectorySync (path : MarkedReopenAttempts initial before) :
       MarkedReopenAttempts initial before.syncMetadata
+  | delayedWalFileSync (path : MarkedReopenAttempts initial before) {target : WalFileSyncTarget}
+      (bound : target.TargetsLiveWal before) :
+      MarkedReopenAttempts initial before.allowVisibleWal
 
 /-- The initial marker bound suffices for the whole trace. Each short branch
 derives its repair choice from the actual preflight bytes and current bound. -/
@@ -873,5 +939,6 @@ theorem MarkedReopenAttempts.toRetry {initial after : ReopenImage}
     rwa [ran] at effect
   | crash _ pairSurvives walSurvives earlier => exact .crash earlier pairSurvives walSurvives
   | delayedDirectorySync _ earlier => exact .syncMetadata earlier
+  | delayedWalFileSync _ _ earlier => exact .allowVisibleWal earlier
 
 end Alvoki.WAL.Boundary

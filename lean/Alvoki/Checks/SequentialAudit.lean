@@ -44,6 +44,7 @@ import Alvoki.Storage.Disk.CheckpointHistory
 import Alvoki.Storage.Publication.DiskPublicationModel
 import Alvoki.Storage.Disk.WalBoundaryModel
 import Alvoki.Storage.Disk.MarkedWalReopenModel
+import Alvoki.Storage.Disk.ReplacedWalDescriptor
 import Alvoki.Storage.Publication.CheckpointPublicationModel
 import Alvoki.Storage.Publication.DirectoryPublicationModel
 
@@ -216,6 +217,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.runMarkedReopen_syncMetadata
 #check_axioms Alvoki.WAL.Boundary.MarkedReopenReads.success_afterDirectorySync
 #check_axioms Alvoki.WAL.Boundary.runSharedMarkedOpen_syncMetadata
+#check_axioms Alvoki.WAL.Boundary.runMarkedReopen_success_afterWalFileSync
+#check_axioms Alvoki.WAL.Boundary.runSharedMarkedOpen_success_afterWalFileSync
+#check_axioms Alvoki.WAL.Boundary.WalInodeImage.project_renameSynced
+#check_axioms Alvoki.WAL.Boundary.WalInodeImage.oldBinding_canSurvive
+#check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_valid
+#check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_afterSettlement
 #check_axioms Alvoki.WAL.Boundary.recoverWriteCutAfterReopenRetry
 #check_axioms Alvoki.WAL.Boundary.WriteFiles.reopenImage_crashWal_nonempty
 #check_axioms Alvoki.WAL.Boundary.WriteFiles.reopenImage_manifest_eq
