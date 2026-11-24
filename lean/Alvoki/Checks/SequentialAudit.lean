@@ -1,4 +1,5 @@
 import Alvoki.Checks.AxiomPolicy
+import Alvoki.Storage.Disk.AppendCutContinuation
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.FullWatermarkReopen
 import Alvoki.Storage.Disk.WalWritePublicationModel
@@ -590,6 +591,18 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runPreparedCheckpoint_failure_handoff
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_checkpointCut
 #check_axioms Alvoki.Storage.DiskSession.runOpenAfterCheckpointFailure
+#check_axioms Alvoki.Storage.WalSegmentCommit.forgetError_commitAt
+#check_axioms Alvoki.Storage.DiskSession.AppendCommitReports.run
+#check_axioms Alvoki.Storage.DiskSession.runPreparedWrite_failure_handoff
+#check_axioms Alvoki.Storage.DiskSession.runPreparedWrite_success
+#check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterAppendCut
+#check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readCheckpoint
+#check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readVisibleKeeper
+#check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readSelectedBounded
+#check_axioms Alvoki.Storage.DiskSession.runOpenAfterAppendFailure
+#check_axioms Alvoki.Storage.DiskSession.ResumedAppendReady.markerImage
+#check_axioms Alvoki.Storage.DiskSession.ResumedAppendReady.acknowledged
+#check_axioms Alvoki.Storage.DiskSession.AppendCutReady.acknowledgeNext
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop

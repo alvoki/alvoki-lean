@@ -9,11 +9,14 @@ open System WalSegmentRepair WalSegmentCommit WAL.Boundary
 open WAL (frameSize)
 
 def AppendCutReady (directory : DiskDirectory) (descriptor : Nat) (liveRefs : List Nat)
-    (history : List WAL.Write) (durable : CheckpointPublication.RunFiles) (initial : FileImage) (target : Target)
+    (history : List WAL.Write) (published : CheckpointPublication.Image) (initial : FileImage) (target : Target)
     (generation : UInt64) (result : EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession) : Prop :=
+  target.range.through = history.length ∧ target.trimmed = WAL.encode (history.drop target.first) ∧
+  published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history) target.pair.manifest ∧
+  WAL.OrdinalsFrom 1 history ∧
   ∃ checkpoint table model, ∃ session final,
     result = .ok session final ∧
-    SelectedIntegrityCheckpoint durable target.pair.manifest checkpoint ∧
+    SelectedIntegrityCheckpoint published.durable target.pair.manifest checkpoint ∧
     generation = (checkpoint.getD (.empty, 0)).2 ∧
     recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok table ∧
     session.directory = directory ∧ session.descriptor = descriptor ∧
@@ -62,7 +65,7 @@ private theorem runOpenWithInstallation_appendLayout {directory : DiskDirectory}
       ReachesAction selected.target files.syncDirectory selected.plan.finishActions action prior →
       prior.effect selected.target action = some next →
       performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) :
-    AppendCutReady directory descriptor liveRefs history published.durable files selected.target generation
+    AppendCutReady directory descriptor liveRefs history published files selected.target generation
       (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
         (raw.reopen removeFile write sync renameFile) ⟨files, owners⟩) := by
   obtain ⟨watermark, covered, marker, count, markerVisible, markerDecoded, absolute⟩ :=
@@ -124,10 +127,11 @@ private theorem runOpenWithInstallation_appendLayout {directory : DiskDirectory}
   obtain ⟨session, final, result, path, lock, ready, image, _, held, separate, phaseFresh, sessionFresh⟩ :=
     runOpenWithInstallation_ready liveRefs fresh (before := ⟨files, owners⟩) acquisition (unlock := unlock) installed
   have sameGeneration := selectedCheckpoint_generation exactCheckpoint generationRead
-  exact ⟨checkpoint, table, model, session, final, result, exactCheckpoint, sameGeneration.symm, replayed, path, lock,
+  exact ⟨selected.through, selected.chain.keeperBytes, accepted, ordered, checkpoint, table, model, session, final,
+    result, exactCheckpoint, sameGeneration.symm, replayed, path, lock,
     by simpa only [opened, ← byteCount, CanonicalKeeperLayout.target, sameGeneration] using ready,
-    image ▸ settled, image ▸ trace.keepsSealed, held, committed, bounds,
-    refines, represents, noPins, separate, phaseFresh, sessionFresh⟩
+    image ▸ settled, image ▸ trace.keepsSealed, held, committed, bounds, refines, represents, noPins, separate,
+    phaseFresh, sessionFresh⟩
 
 /-- The installed writer and its complete, settled WAL agree just before
 the append. The no-follow active-file guard has already succeeded. -/
@@ -213,7 +217,7 @@ theorem runOpenAfterAppendFailure {directory : DiskDirectory} {owners : LockOwne
               ReachesAction selected.target files.syncDirectory selected.plan.finishActions action prior →
               prior.effect selected.target action = some next →
               performPaths directory selected.plan removeFile throw write sync renameFile action prior = .ok () next) →
-            AppendCutReady directory descriptor liveRefs selectedHistory published.durable files selected.target
+            AppendCutReady directory descriptor liveRefs selectedHistory published files selected.target
               installed.generation (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
                 (raw.reopen removeFile write sync renameFile) ⟨files, released.owners⟩) := by
   intro markerScratch commit next poisoned released cut

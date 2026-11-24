@@ -1,9 +1,10 @@
-import Alvoki.Storage.Disk.CheckpointCutSession
-import Alvoki.Storage.Disk.WalSegmentCommitEffects
+import Alvoki.Storage.Disk.AppendLockHandoff
+import Alvoki.Storage.Disk.VersionedReadyWriter
+import Alvoki.Storage.Disk.WalSegmentRetryReads
 
 namespace Alvoki.Storage.DiskSession
 
-open System WalSegmentRepair
+open System WalSegmentRepair WalSegmentCommit
 open WAL (frameSize)
 open WAL.Boundary
 
@@ -21,27 +22,6 @@ theorem resumedAppendFiles_retains (before : FileImage) (history : List WAL.Writ
     after.kept = before.kept ∧ after.later = before.later ∧
       after.directory.staged .manifest = before.directory.staged .manifest ∧ after.keeper.staged = before.keeper.staged :=
   ⟨rfl, rfl, rfl, rfl⟩
-
-/-- Reached callback reports for the append and marker replacement schedule.
-The count is absolute. The append targets the installed keeper. -/
-structure ResumedAppendReports (directory : DiskDirectory) (image : FileImage) (state : Installed)
-    (history : List WAL.Write) (event : WAL.Write) (effects : WriteEffects)
-    (append write : FilePath → ByteArray → EStateM Unit WriteFiles Unit)
-    (sync : Array FilePath → EStateM Unit WriteFiles Unit)
-    (rename : FilePath → FilePath → EStateM Unit WriteFiles Unit) : Prop where
-  appendReport :
-    let initial := WriteFiles.initial history (image.directory.staged .walBoundary)
-    append (directory.file (.walSegment state.activeFirst)) (WAL.encodeFrame event) initial =
-      effects.appendFrame event initial
-  markerReports :
-    let initial := WriteFiles.initial history (image.directory.staged .walBoundary)
-    let newBytes := state.walBytes + frameSize
-    let marker := WAL.Boundary.encode newBytes.toUInt64
-    ∀ appended, effects.appendFrame event initial = .ok () appended →
-      ∀ prior step remaining files, Publication.steps = prior ++ step :: remaining →
-      (prior.forM (effects.markerStep marker)) appended = .ok () files →
-      WalSegmentCommit.performMarkerAt directory state.activeFirst newBytes write sync rename step files =
-        effects.markerStep marker step files
 
 /-- The exact state available for a later append or checkpoint. The loaded
 checkpoint stays tied to its unchanged manifest and durable run map. -/
@@ -131,10 +111,11 @@ theorem ResumedAppendReady.acknowledged {state : Installed} {image : FileImage} 
     (directory : DiskDirectory) {key : UInt64} {value : Option UInt64} {event : WAL.Write} {table : PackedTable}
     (prepared : prepareWrite state.table key value = some (event, table))
     (fits : state.walBytes + frameSize < UInt64.size) (effects : WriteEffects)
-    (append write : FilePath → ByteArray → EStateM Unit WriteFiles Unit)
-    (sync : Array FilePath → EStateM Unit WriteFiles Unit)
-    (rename : FilePath → FilePath → EStateM Unit WriteFiles Unit)
-    (reports : ResumedAppendReports directory image state history event effects append write sync rename)
+    (append write : FilePath → ByteArray → EStateM IO.Error WriteFiles Unit)
+    (sync : Array FilePath → EStateM IO.Error WriteFiles Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error WriteFiles Unit)
+    (reports : AppendCommitReports directory state.activeFirst history event (state.walBytes + frameSize)
+      effects (image.directory.staged .walBoundary) append write sync rename)
     {written : WriteFiles}
     (committed : WalSegmentCommit.commitAt directory state.activeFirst event (state.walBytes + frameSize)
       append write sync rename (WriteFiles.initial history (image.directory.staged .walBoundary)) = .ok () written) :
@@ -155,10 +136,10 @@ theorem ResumedAppendReady.acknowledged {state : Installed} {image : FileImage} 
   have first : state.activeFirst ≤ history.length := by
     rw [before.keeper, ← before.through]
     exact target.firstCovered
-  have modeled := (WalSegmentCommit.commitAt_reports directory state.activeFirst history event _ count effects
-    (image.directory.staged .walBoundary) append write sync rename reports.appendReport reports.markerReports).symm.trans committed
+  have modeled := reports.run count
+  rw [forgetError, committed] at modeled
   obtain ⟨nextTarget, pair, range, start, contents, ready⟩ :=
-    resumedAppendTarget before.ready before.through first event _ count fits modeled
+    resumedAppendTarget before.ready before.through first event _ count fits modeled.symm
   have replayed : replay state.table [event] = .ok table := by
     change (replayWrite state.table event >>= fun table => Except.ok table) = .ok table
     rw [replay_prepared prepared]
