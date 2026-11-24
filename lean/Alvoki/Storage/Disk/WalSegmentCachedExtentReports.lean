@@ -25,7 +25,8 @@ structure CachedWalFileReports (dir : DiskDirectory) (reports : OpenPathReadRepo
     readKeeper (dir.file (.walSegment wal.active.first)) wal.active.bytes.size metadata.byteSize.toNat =
       .ok wal.active.bytes
 
-private theorem selectedExtent_mem {extents required : List (Nat × IO.FS.Metadata)}
+/-- Every selected extent retains its metadata from the input scan. -/
+theorem selectWalExtentsThrough_required_subset {extents required : List (Nat × IO.FS.Metadata)}
     {watermark through : Nat} {newer : List Nat}
     (selected : selectWalExtentsThrough extents watermark through = some (required, newer)) :
     required ⊆ extents := by
@@ -39,7 +40,9 @@ private theorem selectedExtent_mem {extents required : List (Nat × IO.FS.Metada
     rw [← kept]
     exact fun _ member => (List.mem_filter.mp (List.takeWhile_subset _ member)).1
 
-private theorem CachedWalPayloadReports.of_spans {dir : DiskDirectory} {through : Nat}
+/-- Checked spans and their bound-matched payload callbacks build the report
+consumed by the cached reader's effect proof. -/
+theorem CachedWalPayloadReports.of_spans {dir : DiskDirectory} {through : Nat}
     {readSeal : FilePath → Nat → Except IO.Error ByteArray}
     {readKeeper : FilePath → Nat → Nat → Except IO.Error ByteArray}
     {required : List (Nat × IO.FS.Metadata)} {files : List (Nat × ByteArray)}
@@ -137,7 +140,7 @@ theorem HealthyBoundedWalReports.readSelectedCachedWithState {directory owners d
     rw [counted, layout.activeBytes, WAL.encode_size, List.length_drop, atEnd, Nat.mul_comm]
   have metadata (entry) (member : entry ∈ required) :
       raw.reports.lstat (directory.file (.walSegment entry.1)) = .ok entry.2 :=
-    OpenPathReadReports.walSegmentExtents_metadata scanned (selectedExtent_mem selected member)
+    OpenPathReadReports.walSegmentExtents_metadata scanned (selectWalExtentsThrough_required_subset selected member)
   have payloads : CachedWalPayloadReports directory (count.toNat / frameSize) cached.readSeal cached.readKeeper
       required files (wal.active.bytes ++ tail).size := by
     apply CachedWalPayloadReports.of_spans spans listedNames last keeperWidth

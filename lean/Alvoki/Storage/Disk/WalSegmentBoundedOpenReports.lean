@@ -105,6 +105,29 @@ private theorem scanRegularSegmentNames
         OpenPathReadReports.probeWalSegment, classifyWalSegmentLookup, observed, kind, further,
         Bind.bind, Except.bind, Pure.pure, Except.pure] <;> rfl⟩
 
+/-- A complete listing with successful regular-file probes determines the
+ordered offsets, independently of any payload callback. -/
+theorem _root_.Alvoki.Storage.LockedWalSegmentInventory.scanRegular
+    {directory : DiskDirectory} (inventory : LockedWalSegmentInventory directory) {expected : List Nat}
+    (unique : inventory.names.Nodup) (ordered : expected.Pairwise (· < ·))
+    (names : ∀ first, renderWalSegmentName first ∈ inventory.names ↔ first ∈ expected)
+    (regular : ∀ first ∈ expected, ∃ metadata,
+      inventory.reports.lstat (directory.file (.walSegment first)) = .ok metadata ∧ metadata.type = .file) :
+    inventory.offsets = .ok expected := by
+  obtain ⟨offsets, scanned⟩ := scanRegularSegmentNames inventory.reports directory inventory.names (by
+    intro name listed first parsed
+    rw [parseWalSegmentName_eq_some_iff.mp parsed] at listed
+    exact regular first ((names first).mp listed))
+  have exactOffsets := inventory.offsets_eq scanned unique ordered (by
+    intro first
+    constructor
+    · intro member
+      obtain ⟨metadata, observed, kind⟩ := regular first member
+      exact ⟨(names first).mpr member, metadata, observed, kind⟩
+    · exact fun present => (names first).mp present.1)
+  change inventory.offsets = .ok offsets at scanned
+  rw [scanned, exactOffsets]
+
 /-- Complete raw listing and regular metadata identify the exact sorted
 segment addresses without assuming success of a preparation worker. -/
 theorem HealthyBoundedWalReports.scan {directory owners descriptor wal pair watermark durable tail}
@@ -112,23 +135,12 @@ theorem HealthyBoundedWalReports.scan {directory owners descriptor wal pair wate
     {history : List WAL.Write} (layout : wal.ReadLayout history) :
     raw.reports.walSegmentOffsets directory (raw.entries.toList.map (·.fileName)) =
       .ok (wal.segments.map WalSegment.first) := by
-  obtain ⟨offsets, scanned⟩ := scanRegularSegmentNames raw.reports directory _ (by
-    intro name listed first parsed
-    rw [parseWalSegmentName_eq_some_iff.mp parsed] at listed
-    obtain ⟨metadata, observed, kind, _⟩ := raw.regular first ((raw.names first).mp listed)
-    exact ⟨metadata, observed, kind⟩)
   let inventory : LockedWalSegmentInventory directory :=
     ⟨owners, descriptor, raw.held, raw.entries.toList.map (·.fileName), raw.reports⟩
-  have exactOffsets := inventory.offsets_eq scanned raw.unique
-    (layout.ordered.map WalSegment.first (fun _ _ ordered => ordered.1)) (by
-      intro first
-      constructor
-      · intro member
-        obtain ⟨metadata, observed, kind, _⟩ := raw.regular first member
-        exact ⟨(raw.names first).mpr member, metadata, observed, kind⟩
-      · intro present
-        exact (raw.names first).mp present.1)
-  rw [scanned, exactOffsets]
+  exact inventory.scanRegular raw.unique (layout.ordered.map WalSegment.first (fun _ _ order => order.1))
+    raw.names fun first member => by
+      obtain ⟨metadata, read, kind, _⟩ := raw.regular first member
+      exact ⟨metadata, read, kind⟩
 
 private theorem readSealedSegmentReports (reports : OpenPathReadReports) (directory : DiskDirectory)
     (sealed : List WalSegment)
