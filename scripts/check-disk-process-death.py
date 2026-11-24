@@ -145,18 +145,36 @@ def check_marker_length(binary, shim, database):
     boundary = marker.read_bytes()
     acknowledged = wal.read_bytes()
     sync_log = database / "sync.log"
+    reads = database.with_suffix(".reads")
+    env = {
+        **os.environ, "LD_PRELOAD": str(shim), "ALVOKI_CHECK_SYNC_LOG": str(sync_log),
+        "ALVOKI_CHECK_MARKER_READ": str(marker), "ALVOKI_CHECK_MARKER_READ_LOG": str(reads),
+    }
+
+    def check_reads(expected):
+        require(reads.exists(), "did not observe a read from the marker inode")
+        sizes = [tuple(map(int, line.split())) for line in reads.read_text().splitlines()]
+        consumed = 0
+        for requested, received in sizes:
+            require(0 < requested <= 25 - consumed and 0 <= received <= min(requested, 7),
+                    f"marker read exceeded the remaining byte budget: {sizes}")
+            consumed += received
+        require(len(sizes) > 1 and consumed == expected,
+                f"expected {expected} marker bytes in several short reads, got {sizes}")
+        reads.unlink()
+
     for malformed in (boundary[:-1], boundary + b"\0" * 1024):
         marker.write_bytes(malformed)
-        status, stderr = run_probe(binary, "--open-once", database, env={
-            **os.environ, "LD_PRELOAD": str(shim), "ALVOKI_CHECK_SYNC_LOG": str(sync_log),
-        })
+        status, stderr = run_probe(binary, "--open-once", database, env=env)
         require(status != 0 and "invalid WAL boundary length" in stderr,
                 f"reopen did not reject the malformed marker length: {stderr}")
+        check_reads(min(len(malformed), 25))
         require(not sync_log.exists() and marker.read_bytes() == malformed and wal.read_bytes() == acknowledged,
                 "marker length refusal reached repair or changed the selected files")
     marker.write_bytes(boundary)
-    status, stderr = run_probe(binary, "--check-recovered-table", database, "1", "99")
+    status, stderr = run_probe(binary, "--check-recovered-table", database, "1", "99", env=env)
     require(status == 0, f"reopen did not decode the exact-length marker: {stderr}")
+    check_reads(len(boundary))
 
 
 def check_fork_exec_lock(binary, shim, database):
@@ -427,7 +445,7 @@ if __name__ == "__main__":
                         case.mkdir()
                         check_process_death(binary, shim, case, after_rename, rotated, detached, batch)
     print("Rejected a dangling flat WAL before opening LOCK and preserved LOCK bytes across reopen.")
-    print("Rejected short and oversized WAL markers before repair and reopened an exact-length marker.")
+    print("Reopened a marker across short reads and rejected malformed lengths before repair within the read cap.")
     print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")
