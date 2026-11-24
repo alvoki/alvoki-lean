@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -48,6 +49,53 @@ int open(const char *path, int flags, ...) {
         return real_open(path, flags, mode);
     }
     return real_open(path, flags);
+}
+
+static _Noreturn void exit_with_inherited_lock(int fd) {
+    int flags = fcntl(fd, F_GETFD);
+    if (fd <= STDERR_FILENO || flags < 0 || !(flags & FD_CLOEXEC)) _exit(125);
+
+    pid_t child = fork();
+    if (child < 0) _exit(125);
+    if (child == 0) {
+        // Lean may have other threads. Only async-signal-safe operations
+        // run here, and the inherited lock descriptor is left untouched.
+        char signal;
+        ssize_t count;
+        do count = read(STDIN_FILENO, &signal, 1); while (count < 0 && errno == EINTR);
+        if (count != 1 || signal != 'E') _exit(125);
+        // The first echo proves exec reached its new image. The command pipe
+        // stays open so the test can reopen while this image is still alive.
+        char *const args[] = {"cat", NULL};
+        char *const env[] = {NULL};
+        execve("/bin/cat", args, env);
+        _exit(125);
+    }
+
+    int32_t notice[] = {child, fd};
+    const char *bytes = (const char *)notice;
+    size_t left = sizeof(notice);
+    while (left > 0) {
+        ssize_t sent = write(STDOUT_FILENO, bytes, left);
+        if (sent < 0 && errno == EINTR) continue;
+        if (sent <= 0) _exit(125);
+        bytes += sent;
+        left -= (size_t)sent;
+    }
+    // Skip explicit LOCK_UN. Process exit drops only the parent's reference.
+    _exit(0);
+}
+
+int flock(int fd, int operation) {
+    int (*real_flock)(int, int) = dlsym(RTLD_NEXT, "flock");
+    if (real_flock == NULL) return fail_sync();
+    const char *target = getenv("ALVOKI_CHECK_FORK_LOCK");
+    if (target != NULL && operation == LOCK_UN) {
+        struct stat lock, held;
+        if (stat(target, &lock) < 0 || fstat(fd, &held) < 0) _exit(125);
+        if (held.st_dev == lock.st_dev && held.st_ino == lock.st_ino) exit_with_inherited_lock(fd);
+    }
+    return real_flock(fd, operation);
 }
 
 static DIR *partial_directory;

@@ -1,6 +1,7 @@
 import ctypes
 import os
 from pathlib import Path
+import select
 import shutil
 import signal
 import struct
@@ -14,6 +15,7 @@ from contextlib import contextmanager, suppress
 TIMEOUT = 10
 PR_SET_CHILD_SUBREAPER = 36
 SYNC_OBJECT = struct.Struct("=QQ")
+FORK_NOTICE = struct.Struct("=ii")
 
 
 def require(condition, message):
@@ -65,10 +67,11 @@ def clean_up(process, sync_pid_file):
 
 
 @contextmanager
-def native_process(binary, operation, database, *args, env=None, sync_pid_file=None):
+def native_process(binary, operation, database, *args, env=None, sync_pid_file=None,
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL):
     process = subprocess.Popen(
         [binary, operation, database, *args], env=env, start_new_session=True,
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        stdin=stdin, stdout=stdout, stderr=subprocess.PIPE, text=True,
     )
     try:
         yield process
@@ -76,7 +79,9 @@ def native_process(binary, operation, database, *args, env=None, sync_pid_file=N
         try:
             clean_up(process, sync_pid_file)
         finally:
-            process.stderr.close()
+            for pipe in (process.stdin, process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
 
 
 def run_probe(binary, operation, database, *args, env=None):
@@ -95,15 +100,61 @@ def wait_for_sync(owner, ready):
     raise RuntimeError("timed out waiting for the WAL sync child")
 
 
-def wait_for_sync_success(pid):
+def wait_for_child_success(pid, stage):
     deadline = time.monotonic() + TIMEOUT
     while time.monotonic() < deadline:
         exited, status = os.waitpid(pid, os.WNOHANG)
         if exited:
-            require(os.waitstatus_to_exitcode(status) == 0, "released sync failed")
+            require(os.waitstatus_to_exitcode(status) == 0, f"{stage} failed")
             return
         time.sleep(0.01)
-    raise RuntimeError("timed out waiting for the released sync")
+    raise RuntimeError(f"timed out waiting for {stage}")
+
+
+def read_pipe(fd, size):
+    deadline = time.monotonic() + TIMEOUT
+    received = bytearray()
+    while len(received) < size:
+        ready, _, _ = select.select([fd], [], [], max(0, deadline - time.monotonic()))
+        require(ready, "timed out waiting for the fork fixture pipe")
+        chunk = os.read(fd, size - len(received))
+        require(chunk, "fork fixture pipe closed before reporting the event")
+        received.extend(chunk)
+    return received
+
+
+def check_fork_exec_lock(binary, shim, database):
+    database.mkdir()
+    status, stderr = run_probe(binary, "--write-once", database)
+    require(status == 0, f"could not prepare acknowledged write: {stderr}")
+    lock = database / "LOCK"
+    original = lock.stat()
+    with native_process(binary, "--open-once", database, env={
+        **os.environ,
+        "LD_PRELOAD": str(shim),
+        "ALVOKI_CHECK_FORK_LOCK": str(lock),
+    }, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as owner:
+        reply = owner.stdout.fileno()
+        child, fd = FORK_NOTICE.unpack(read_pipe(reply, FORK_NOTICE.size))
+        require(owner.wait(timeout=TIMEOUT) == 0, "owner failed to exit after fork")
+        require(os.getpgid(child) == owner.pid, "lock holder escaped the fixture process group")
+        inherited = Path(f"/proc/{child}/fd/{fd}")
+        require(os.path.samestat(inherited.stat(), original), "child did not inherit the original LOCK inode")
+        status, stderr = run_probe(binary, "--open-once", database)
+        require(status != 0 and f"database already open: {database}" in stderr,
+                f"inherited lock did not block a cooperating opener: {stderr}")
+
+        # The forked child consumes E, then cat echoes the next byte.
+        require(os.write(owner.stdin.fileno(), b"E!") == 2, "could not release the child to exec")
+        require(read_pipe(reply, 1) == b"!", "did not receive an echo from the exec'd process")
+        with suppress(FileNotFoundError):
+            require(not os.path.samestat(inherited.stat(), original), "exec retained the LOCK descriptor")
+        status, stderr = run_probe(binary, "--check-recovered-table", database, "1", "99")
+        require(status == 0, f"open after the child's exec did not recover the acknowledged write: {stderr}")
+        require(os.waitpid(child, os.WNOHANG) == (0, 0), "lock holder exited before the post-exec open")
+        require(os.path.samestat(lock.stat(), original), "reopening changed the LOCK inode")
+        owner.stdin.close()
+        wait_for_child_success(child, "exec child")
 
 
 def check_process_death(binary, shim, root, after_rename, rotated, detached, batch):
@@ -235,7 +286,7 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached, bat
         if detached:
             # Resume the old sync only after the successor's recovery has finished.
             release.touch()
-            wait_for_sync_success(sync_pid)
+            wait_for_child_success(sync_pid, "released sync")
             synced_object = SYNC_OBJECT.unpack(identity.read_bytes())
             require(synced_object == (original_target.st_dev, original_target.st_ino),
                     "delayed fsync used a different filesystem object")
@@ -262,6 +313,7 @@ if __name__ == "__main__":
             ["cc", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", source, "-o", shim, "-ldl"],
             check=True,
         )
+        check_fork_exec_lock(binary, shim, root / "fork-exec")
         for batch in (False, True):
             for rotated in (False, True):
                 for after_rename in (False, True):
@@ -269,4 +321,5 @@ if __name__ == "__main__":
                         case = root / f"{int(batch)}-{int(rotated)}-{int(after_rename)}-{int(detached)}"
                         case.mkdir()
                         check_process_death(binary, shim, case, after_rename, rotated, detached, batch)
+    print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")
