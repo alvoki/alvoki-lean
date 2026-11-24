@@ -45,6 +45,8 @@ Use `writeWithOutcome` when the caller needs to distinguish a rejected submissio
 
 WAL, marker, and manifest replacements create their staging files exclusively. Retry can detach a stale regular staging name before creating a fresh file. A nonregular staging name causes the operation to fail. [Staging implementation](../lean/Alvoki/Storage/Disk/StagingFile.lean)
 
+The native append, run-file and staging writes explicitly call `IO.FS.Handle.flush` and propagate its error before continuing publication. Keep this flush when changing the adapter. Lean's `writeBinFile` and `writeFile` can lose buffered write errors when finalization performs the flush. Publication uses separate checked file and directory syncs to establish durability. [Linux write paths](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Lean issue #16685](https://github.com/leanprover/lean4/issues/16685)
+
 The adapter uses GNU Coreutils `sync` through the standard Lean process API. The durability proofs assume stable owned paths in an already durable directory, appends that preserve synced earlier bytes, file and directory syncs that persist their targets, and an old or new durable binding after a crash between same-directory rename and its directory barrier. Fault fixtures exercise process-visible operation and retry behavior. The native path reads the required sealed segment payloads and requests only the marker-selected prefix of the keeper. Checkpoint publication rewrites the run set. [Disk formats](specifications.md#wal-and-checkpoint-manifest) · [Strict recovery proof boundary](verification-status.md#disk-recovery-and-collection)
 
 ## Comparisons and evidence

@@ -9,7 +9,7 @@ private theorem WalSegmentDeletion.sublist {eligible : WalSegment → Prop} {bef
   | keep _ rest => exact rest.cons_cons _
   | remove _ _ rest => exact rest.cons _
 
-private theorem WalSegmentCollectionRetry.sealedSublist {initial after : WalSegmentImage}
+theorem WalSegmentCollectionRetry.sealedSublist {initial after : WalSegmentImage}
     (retry : WalSegmentCollectionRetry initial after) : after.sealed.Sublist initial.sealed := by
   induction retry with
   | start => exact List.Sublist.refl _
