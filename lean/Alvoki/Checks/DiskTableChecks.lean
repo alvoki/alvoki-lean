@@ -17,6 +17,11 @@ private def rejects (action : IO α) (message : String) : IO Unit := do
   catch _ => pure true
   check rejected message
 
+private def expectRejectedWrite (db : DiskTable) (cause : String) : IO Unit := do
+  let .error (.rejected (.userError message)) ← (db.writeWithOutcome 12 (some 120)).toBaseIO
+    | throw (IO.userError "write did not report a pre-append rejection")
+  check (message == cause) "write rejection changed the cause"
+
 private def expectManifest (dir : FilePath) (generation watermark floor runCount : UInt64) :
     IO Unit := do
   let header ← IO.FS.readBinFile (dir / "MANIFEST")
@@ -51,7 +56,9 @@ private def checkReopen (dir : FilePath) : IO Unit := do
   let maxKey := UInt64.ofNat (UInt64.size - 1)
   let db ← DiskTable.open dir
   rejects (DiskTable.open dir) "two handles opened one database for writes"
-  check ((← db.write 4 (some 40)) == 1) "first write sequence"
+  let .ok first ← (db.writeWithOutcome 4 (some 40)).toBaseIO
+    | throw (IO.userError "typed write did not acknowledge a successful commit")
+  check (first == 1) "first write sequence"
   check ((← db.write 7 (some 70)) == 2) "second write sequence"
   check ((← db.write maxKey (some 99)) == 3) "third write sequence"
   let old ← db.acquire
@@ -74,6 +81,11 @@ private def checkReopen (dir : FilePath) : IO Unit := do
   rejects (db.acquire) "closed database accepted reads"
   let wal := dir / "WAL"
   let complete ← IO.FS.readBinFile wal
+  let marker := dir / "WAL.commit"
+  let boundary ← IO.FS.readBinFile marker
+  expectRejectedWrite db "database is closed"
+  check (decide ((← IO.FS.readBinFile wal) = complete ∧ (← IO.FS.readBinFile marker) = boundary))
+    "rejected write changed the WAL or its marker"
   let next := (WAL.encodeFrame ⟨7, 9, some 90⟩).extract 0 11
   IO.FS.writeBinFile wal (complete ++ next)
   let reopened ← DiskTable.open dir
@@ -290,6 +302,7 @@ if [ "$mode" = second-only ] && [ "$#" -eq 3 ] && [ "$1" = -- ] &&
   printf '%s\n' "$2" "$3" >> "$ALVOKI_CHECK_SYNC_LOG"
   command -p sync -- "$3"
   printf 'synced second target before error: %s\n' "$3" >> "$ALVOKI_CHECK_SYNC_LOG"
+  printf 'injected sync failure: %s\n' "$3" >&2
   exit 1
 fi
 for path do
@@ -304,6 +317,7 @@ for path do
         command -p sync -- "$path"
         printf 'synced before error: %s\n' "$path" >> "$ALVOKI_CHECK_SYNC_LOG"
       fi
+      printf 'injected sync failure: %s\n' "$path" >&2
       exit 1
     fi
   fi
@@ -412,11 +426,12 @@ private def checkWriteSyncErrorAfterEffect (root : FilePath) : IO Unit := do
   let marker := dir / "WAL.commit"
   let staged := dir / "WAL.commit.next"
   -- The first directory target belongs to the grouped sync during open.
-  let (written, syncs) ← probeDisk bin dir (some dir) (operation := "--write-once")
+  let (classified, syncs) ← probeDisk bin dir (some dir) (operation := "--check-write-outcome")
     (skipFailures := 1) (failureMode := .afterSync)
   let expectedSyncs := [wal.toString, dir.toString, wal.toString, staged.toString, dir.toString,
     s!"synced before error: {dir}"]
-  check (!written && syncs == expectedSyncs) "write did not fail after the final directory sync succeeded"
+  check (classified && syncs == expectedSyncs)
+    "write did not report an unknown commit after the final directory sync succeeded"
   expectManifest dir 1 2 2 1
   let events : List WAL.Write := [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩, ⟨4, 7, some 99⟩]
   let expectedWal := WAL.encode events
@@ -456,11 +471,11 @@ private def checkGroupedSyncPartialEffects (root : FilePath) : IO Unit := do
     "aligned reopen did not fail after syncing only the directory"
   check (decide ((← IO.FS.readBinFile wal) = acknowledged ∧ (← IO.FS.readBinFile marker) = oldMarker))
     "failed aligned reopen changed the acknowledged WAL"
-  let (written, syncs) ← probeDisk bin dir (some staged) (operation := "--write-once")
+  let (classified, syncs) ← probeDisk bin dir (some staged) (operation := "--check-write-outcome")
     (failureMode := .secondOnly)
-  check (!written && syncs == [wal.toString, dir.toString, wal.toString, staged.toString,
+  check (classified && syncs == [wal.toString, dir.toString, wal.toString, staged.toString,
     s!"synced second target before error: {staged}"])
-    "write did not fail after syncing only the staged marker"
+    "write did not report an unknown commit after syncing only the staged marker"
   let appended := acknowledged ++ WAL.encodeFrame ⟨3, 7, some 99⟩
   check (decide ((← IO.FS.readBinFile wal) = appended ∧
     (← IO.FS.readBinFile staged) = WAL.Boundary.encode appended.size.toUInt64))
@@ -695,6 +710,17 @@ def main (args : List String) : IO Unit := do
     let db ← DiskTable.open ⟨dir⟩
     try
       let _ ← db.write 7 (some 99)
+    finally db.close
+  | ["--check-write-outcome", dir] =>
+    let some target ← IO.getEnv "ALVOKI_CHECK_SYNC_FAIL"
+      | throw (IO.userError "missing sync fault target")
+    let db ← DiskTable.open ⟨dir⟩
+    try
+      let .error (.commitUnknown (.userError message)) ← (db.writeWithOutcome 7 (some 99)).toBaseIO
+        | throw (IO.userError "sync error did not report an unknown commit outcome")
+      check (message.startsWith "sync failed for " && message.endsWith s!"injected sync failure: {target}\n")
+        "unknown commit outcome changed the sync error"
+      expectRejectedWrite db "publication failed; reopen the database"
     finally db.close
   | ["--checkpoint-once", dir] =>
     let db ← DiskTable.open ⟨dir⟩

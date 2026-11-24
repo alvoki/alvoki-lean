@@ -299,20 +299,39 @@ private def DiskTable.installed (db : DiskTable) : IO Installed := do
   | .poisoned => throw (IO.userError "publication failed; reopen the database")
   | .closed => throw (IO.userError "database is closed")
 
-/-- Acknowledgement follows the WAL sync and durable publication of the byte boundary. -/
-def DiskTable.write (db : DiskTable) (key : UInt64) (value : Option UInt64) : IO UInt64 := do
-  let state ← db.installed
-  let (event, table) ← fromOption (prepareWrite state.table key value) "write sequence space exhausted"
+/-- The outcome of a failed write at the WAL mutation boundary. -/
+inductive DiskWriteError where
+  /-- This submission was rejected before attempting to append a WAL frame. -/
+  | rejected (cause : IO.Error)
+  /-- WAL mutation was attempted. The write may be recovered after reopening. -/
+  | commitUnknown (cause : IO.Error)
+
+@[inline] private def DiskTable.writeWith (db : DiskTable) (key : UInt64) (value : Option UInt64)
+    (onRejected onCommitUnknown : IO.Error → ε) : EIO ε UInt64 := do
+  let state ← db.installed.adapt onRejected
+  let (event, table) ← (fromOption (prepareWrite state.table key value)
+    "write sequence space exhausted").adapt onRejected
   let walBytes := state.walBytes + WAL.frameSize
-  unless walBytes < UInt64.size do throw (IO.userError "WAL byte count is too large")
+  unless walBytes < UInt64.size do throw (onRejected (IO.userError "WAL byte count is too large"))
   db.phase.set .poisoned
   let walPath := db.dir.file .wal
-  WAL.Boundary.commit (do
+  let commit : IO Unit := WAL.Boundary.commit (do
     let wal ← IO.FS.Handle.mk walPath .append
     wal.write (WAL.encodeFrame event)
     wal.flush) (publishWalBoundary db.dir walBytes #[walPath])
+  commit.adapt onCommitUnknown
   db.phase.set (.ready { state with table, walBytes })
   return event.sequence
+
+/-- Acknowledgement follows the WAL sync and durable publication of the byte boundary. -/
+def DiskTable.write (db : DiskTable) (key : UInt64) (value : Option UInt64) : IO UInt64 :=
+  db.writeWith key value id id
+
+/-- Submit a write and report its sequence after durable publication. If the
+commit outcome is unknown, close and reopen the database before further use. -/
+def DiskTable.writeWithOutcome (db : DiskTable) (key : UInt64) (value : Option UInt64) :
+    EIO DiskWriteError UInt64 :=
+  db.writeWith key value .rejected .commitUnknown
 
 def DiskTable.acquireAt (db : DiskTable) (snapshot : UInt64) : IO (Option DiskSnapshotPin) := do
   let state ← db.installed

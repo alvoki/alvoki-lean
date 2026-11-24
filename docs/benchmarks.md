@@ -115,6 +115,10 @@ Add `--reopen` to time `DiskTable.open` with an installed run set and a WAL full
 
 The native adapter and proof use the same decision between staged tail repair and a grouped sync of the already aligned WAL and directory. On the same VM and CPU, 14 interleaved pairs per workload timed a marked WAL with 32 or 2,048 records in each branch. Median paired ratios ranged from 0.992× to 1.031× in the first run and 0.947× to 1.053× when reproducing the experiment with the same binaries. Generated C inlines branch selection and calls the existing replacement and sync paths. [Raw samples, driver and environment](../benchmarks/results/disk/shared-reopen)
 
+### Typed disk write outcomes
+
+The existing `DiskTable.write` path measured 3.158 ms per acknowledged write before the typed outcome API and 3.089 ms after it. The median paired ratio was 1.001× across 14 samples of 64 writes per build. Generated C for `write` differs in generated names. Both bodies use the same state transitions and durability calls. [Samples and reproduction](../benchmarks/results/disk/typed-write-outcomes)
+
 ### Shared publication file and sync targets
 
 The shared dispatcher passes the exact native write, grouped sync, rename and directory sync targets to the adapter callbacks. Generated C inlines the dispatch. Native measurements comparing this refactor gave median paired ratios of 0.999× for write, 1.012× for checkpoint and 0.992× to 1.038× across four reopen workloads. Both builds use the same acknowledgement barriers. [Raw samples, driver and environment](../benchmarks/results/disk/shared-publication-effects)

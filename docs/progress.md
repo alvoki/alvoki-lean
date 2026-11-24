@@ -263,3 +263,7 @@ The composed theorem starts from one actual prepared write, an already durable m
 ## Sequential storage checks on GitHub
 
 The stock correctness workflow runs the sequential storage checks with the pinned Lean toolchain. The suite rechecks the disk and table proofs in Lean's kernel, enforces the axiom allowlist with a negative control, and runs the packed and disk regressions. Both stock workflow commands passed locally. [Workflow](../.github/workflows/correctness.yml) · [Sequential checks](../scripts/check-sequential.sh)
+
+## Write outcomes at the WAL boundary
+
+`DiskTable.writeWithOutcome` returns the acknowledged sequence on success. A rejected submission failed before append was attempted. A submission with an unknown commit outcome may appear after reopen. Both errors retain their `IO.Error`. The native checks cover a failed sync that leaves the write recoverable, a partial sync that leaves it unselected, and rejection before append on poisoned and closed handles. The existing `write` emits equivalent C and the median paired write time was 1.001× the baseline. [Write API](architecture.md#sequential-storage) · [Benchmark](benchmarks.md#typed-disk-write-outcomes)
