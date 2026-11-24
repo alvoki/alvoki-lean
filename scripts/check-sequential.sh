@@ -201,6 +201,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentOpenFast
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentOpenFastEffects
 lake env leanchecker Alvoki.Storage.Disk.WalBatch
 lake env leanchecker Alvoki.Storage.Disk.WalBatchCommitEffects
+lake env leanchecker Alvoki.Storage.Disk.WalBatchMarkerPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.WalBatchCommitReports
 lake env leanchecker Alvoki.Storage.Disk.WalBatchSession
 lake env leanchecker Alvoki.Storage.Disk.WalBatchRecovery
