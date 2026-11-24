@@ -253,6 +253,7 @@ lake env leanchecker Alvoki.Storage.Disk.DiskCleanReopenAdmission
 lake env leanchecker Alvoki.Storage.Disk.CachedWalChunkReports
 lake env leanchecker Alvoki.Storage.Disk.AlignedWalChunkSync
 lake env leanchecker Alvoki.Storage.Disk.LongWalStagedCustody
+lake env leanchecker Alvoki.Storage.Disk.LongWalBindingPublication
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadWork
