@@ -20,7 +20,7 @@ theorem runPreparedWrite_success {image : Type} {before : LockedFileState image}
     (committed : commit before.image = .ok () after) :
     runPreparedWrite next sequence commit (.ready previous, before) =
       .ok sequence (.ready next, { before with image := after }) := by
-  simp only [runPreparedWrite, publishPreparedWrite, Bind.bind, EStateM.bind,
+  simp only [runPreparedWrite, publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind,
     modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet, committed, Pure.pure, EStateM.pure]
 
 theorem runPreparedWrite_failure_handoff {image : Type} {directory : DiskDirectory}
@@ -36,7 +36,7 @@ theorem runPreparedWrite_failure_handoff {image : Type} {directory : DiskDirecto
       TryLockObserves released.owners directory (.ok true) := by
   dsimp only
   refine ⟨?_, ?_, ?_, ?_⟩
-  · simp only [runPreparedWrite, publishPreparedWrite, Bind.bind, EStateM.bind,
+  · simp only [runPreparedWrite, publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind,
       modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet, failed]
   · exact runCloseWithFiles_poisoned (before := ⟨after, before.owners⟩)
       (unlock := .success) ownership trivial

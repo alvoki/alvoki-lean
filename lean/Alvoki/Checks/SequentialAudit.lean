@@ -71,6 +71,8 @@ import Alvoki.Storage.Disk.WalSegmentFirstOpen
 import Alvoki.Storage.Disk.WalSegmentRotationReopen
 import Alvoki.Storage.Disk.BoundedSegmentSession
 import Alvoki.Storage.Disk.RotationSessionHandoff
+import Alvoki.Storage.Disk.RotationLockHandoff
+import Alvoki.Storage.Disk.RotationRetrySession
 import Alvoki.Storage.Disk.BootstrapAdmissionEffects
 import Alvoki.Storage.Disk.FirstMarkedSession
 import Alvoki.Storage.Disk.WalSegmentCheckpointPublication
@@ -591,6 +593,16 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrap
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bounded
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterInterruptedRotation
+#check_axioms Alvoki.Storage.WalSegmentRotation.Trace.afterRunAt
+#check_axioms Alvoki.Storage.DiskSession.runPreparedRotation_failure_handoff
+#check_axioms Alvoki.Storage.WalSegmentRotation.State.crashReopenLayout
+#check_axioms Alvoki.Storage.WalSegmentRotation.State.settledReopenImage_sync
+#check_axioms Alvoki.Storage.WalSegmentRotation.Trace.settledReopenLayout
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.rotationErrorFiles
+#check_axioms Alvoki.Storage.DiskSession.RotationReopenFailures.rotationTrace
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.effectsAfterFixedAuthority
+#check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.installsAfterFixedAuthority
+#check_axioms Alvoki.Storage.DiskSession.RotationReopenFailures.installs
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_firstMarked
 #check_axioms Alvoki.Storage.DiskSession.runCloseWithFiles_poisoned
 #check_axioms Alvoki.Storage.DiskSession.runPreparedCheckpoint_failure_handoff

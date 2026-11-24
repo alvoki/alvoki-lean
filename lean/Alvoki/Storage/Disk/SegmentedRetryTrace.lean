@@ -79,7 +79,7 @@ open System WalSegmentRepair
 
 /-- One attempt at the bounded marked route, after native path admission.
 Read reports are read-only. Repair callbacks receive the reached image. -/
-structure BoundedReopenAttempt where
+structure BoundedReopenAttempt (image : Type := FileImage) where
   descriptor : Nat
   nextRef : Nat
   acquired : Except IO.Error Bool
@@ -89,24 +89,24 @@ structure BoundedReopenAttempt where
   lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)
   readBin : FilePath → Except IO.Error ByteArray
   readPrefix : FilePath → Nat → Except IO.Error KeeperPrefix
-  removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit)
-  write : FilePath → ByteArray → EStateM IO.Error FileImage Unit
-  sync : Array FilePath → EStateM IO.Error FileImage Unit
-  renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit
+  removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit)
+  write : FilePath → ByteArray → EStateM IO.Error image Unit
+  sync : Array FilePath → EStateM IO.Error image Unit
+  renameFile : FilePath → FilePath → EStateM IO.Error image Unit
 
-def BoundedReopenAttempt.recover (attempt : BoundedReopenAttempt) (directory : DiskDirectory) :
-    EStateM IO.Error FileImage Reopened :=
+def BoundedReopenAttempt.recover {image : Type} (attempt : BoundedReopenAttempt image) (directory : DiskDirectory) :
+    EStateM IO.Error image Reopened :=
   reopenMarkedBoundedWith directory (fun path => liftExcept (attempt.readOptional path))
     (fun path => liftExcept (attempt.list path)) (fun path => liftExcept (attempt.lstat path))
     (fun path => liftExcept (attempt.readBin path)) (fun path count => liftExcept (attempt.readPrefix path count))
     attempt.removeFile attempt.write attempt.sync attempt.renameFile
 
-def BoundedReopenAttempt.run (attempt : BoundedReopenAttempt) (directory : DiskDirectory) :
-    EStateM IO.Error (LockedFileState FileImage) SegmentedSession :=
+def BoundedReopenAttempt.run {image : Type} (attempt : BoundedReopenAttempt image) (directory : DiskDirectory) :
+    EStateM IO.Error (LockedFileState image) SegmentedSession :=
   runOpenWithInstallation directory attempt.descriptor attempt.nextRef attempt.acquired attempt.unlock
     (attempt.recover directory)
 
-def BoundedReopenAttempt.prepare (attempt : BoundedReopenAttempt) (directory : DiskDirectory) :
+def BoundedReopenAttempt.prepare {image : Type} (attempt : BoundedReopenAttempt image) (directory : DiskDirectory) :
     Except IO.Error (Plan × Reopened × Nat) :=
   prepareBoundedMarkedWith directory attempt.readOptional attempt.list attempt.lstat attempt.readBin attempt.readPrefix
 

@@ -47,12 +47,6 @@ theorem State.visibleReadLayout (state : State) {image : WalSegmentImage} {histo
   · simpa only [visible, absent, ite_true] using observed
   · simpa only [visible, absent, ite_false] using canRotate.readLayout observed
 
-/-- Reopen's first barrier persists the names it has just read. An empty
-successor needs zero bytes from the newly settled binding. The caller
-still performs the keeper sync before reporting success. -/
-def State.settleForReopen (state : State) : State :=
-  ⟨state.metadata.syncDirectory, if state.successor = .absent then .absent else .durable⟩
-
 theorem State.settleForReopen_keeper (state : State) (image : WalSegmentImage) :
     (state.settleForReopen.visible image).active = (state.visible image).active := by
   by_cases absent : state.successor = .absent <;> simp [settleForReopen, visible, absent] <;> rfl

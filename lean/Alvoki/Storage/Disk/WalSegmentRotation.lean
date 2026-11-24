@@ -114,6 +114,12 @@ def State.visible (state : State) (image : WalSegmentImage) : WalSegmentImage :=
   let withMetadata := { image with directory := state.metadata }
   if state.successor = .absent then withMetadata else withMetadata.rotated
 
+/-- Reopen's first barrier persists the names it has just read. An empty
+successor needs zero bytes from the newly settled binding. The caller
+still performs the keeper sync before reporting success. -/
+def State.settleForReopen (state : State) : State :=
+  ⟨state.metadata.syncDirectory, if state.successor = .absent then .absent else .durable⟩
+
 /-- Before directory settlement, a power loss can retain or lose a created
 successor. If it retains the file, its bytes still describe the empty
 successor. A durable binding cannot be absent after a crash. -/
@@ -210,6 +216,7 @@ conservatively independent. The shared barrier settles both. -/
 inductive Trace (initial : WalSegmentImage) : State → Prop where
   | start : Trace initial (.initial initial)
   | effect (prior : Trace initial before) (applied : before.step action = some after) : Trace initial after
+  | reopenBarrier (prior : Trace initial before) : Trace initial before.settleForReopen
   | crash (prior : Trace initial before) (pair : DirectoryPublication.Bindings)
       (selected : pair ∈ before.metadata.crashImages) {present : Bool} (allowed : before.successor.MaySurvive present) :
       Trace initial ⟨.settled pair, if present then .durable else .absent⟩
@@ -267,6 +274,10 @@ theorem Trace.selectsOriginal {initial : WalSegmentImage} {state : State} (trace
     · rw [settled] at chosen
       have live := (by simpa [DirectoryPublication.Image.syncDirectory, List.mem_cons] using chosen : pair = _)
       exact prior (List.mem_cons.mpr (.inl live))
+  | reopenBarrier _ prior =>
+    have live := (by simpa [State.settleForReopen, DirectoryPublication.Image.syncDirectory, List.mem_cons]
+      using chosen : pair = _)
+    exact prior (List.mem_cons.mpr (.inl live))
   | crash _ _ selected _ prior =>
     have retained := (by simpa [DirectoryPublication.Image.settled, List.mem_cons] using chosen : pair = _)
     exact prior (List.mem_cons.mpr (.inr (retained.symm ▸ selected)))

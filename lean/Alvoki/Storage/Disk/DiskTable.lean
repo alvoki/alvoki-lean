@@ -297,11 +297,11 @@ def DiskTable.rotateWal (db : DiskTable) : IO Unit := do
   let successor := state.walBytes / WAL.frameSize
   if state.activeFirst < successor then
     checkActiveSegment db.dir state
-    db.phase.set .poisoned
-    WalSegmentRotation.runAt db.dir successor
-      (fun path => readEmptyWalSegment path "WAL segment successor is not empty")
-      WalSegmentRotation.createEmptyExclusive (fun path => syncPaths #[path])
-    db.phase.set (.ready { state with activeFirst := successor })
+    DiskSession.publishPrepared db.phase.set
+      (WalSegmentRotation.runAt db.dir successor
+        (fun path => readEmptyWalSegment path "WAL segment successor is not empty")
+        WalSegmentRotation.createEmptyExclusive (fun path => syncPaths #[path]))
+      (db.phase.set (.ready { state with activeFirst := successor }))
 
 /-- The new active start is installed only after the shared empty-segment
 creation and both synchronization steps complete. -/
