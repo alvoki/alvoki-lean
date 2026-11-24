@@ -102,13 +102,6 @@ theorem across_append_empty (runs : List (History α)) (key snapshot : UInt64) :
   | nil => rfl
   | cons a runs ih => simp only [List.cons_append, across, ih]
 
-private theorem Table.range_preserved {before after : Table α} (start stop snapshot : UInt64)
-    (same : ∀ key, across key snapshot after.histories = across key snapshot before.histories) :
-    after.range start stop snapshot = before.range start stop snapshot := by
-  unfold Table.range
-  rw [visibleRows_congr (combined after.histories).ordered (combined before.histories).ordered
-    snapshot Option.isSome (fun key => by simpa only [combined_winner] using same key)]
-
 /-- The winning put with its original sequence, if the key is visible. -/
 def Table.visibleEntry (table : Table α) (key snapshot : UInt64) : Option (Entry (Option α)) :=
   (across key snapshot table.histories).filter (fun row => row.payload.isSome)
@@ -120,12 +113,44 @@ theorem Table.lookup_eq_visibleEntry (table : Table α) (key snapshot : UInt64) 
   | none => rfl
   | some row => cases h : row.payload <;> simp [Option.filter, h]
 
+/-- A range is determined by the visible entries inside its half-open key interval. -/
+theorem Table.range_congr {before after : Table α} (start stop snapshot : UInt64)
+    (same : ∀ key, start ≤ key ∧ key < stop →
+      after.visibleEntry key snapshot = before.visibleEntry key snapshot) :
+    after.range start stop snapshot = before.range start stop snapshot := by
+  have exactEntry (table : Table α) (row : Entry (Option α)) :
+      row ∈ table.range start stop snapshot ↔
+        table.visibleEntry row.key snapshot = some row ∧ (start ≤ row.key ∧ row.key < stop) := by
+    rw [Table.range_exact, Table.visibleEntry, Option.filter_eq_some_iff]
+  have afterOrdered := after.range_ordered start stop snapshot
+  have beforeOrdered := before.range_ordered start stop snapshot
+  have distinct {a b : Entry (Option α)} (lt : a.key < b.key) : a ≠ b :=
+    fun eq => UInt64.lt_irrefl a.key (eq ▸ lt)
+  have members (row : Entry (Option α)) :
+      row ∈ after.range start stop snapshot ↔ row ∈ before.range start stop snapshot := by
+    rw [exactEntry, exactEntry]
+    constructor
+    · rintro ⟨entry, within⟩
+      exact ⟨(same row.key within).symm.trans entry, within⟩
+    · rintro ⟨entry, within⟩
+      exact ⟨(same row.key within).trans entry, within⟩
+  have perm := (List.perm_ext_iff_of_nodup
+    (afterOrdered.imp distinct) (beforeOrdered.imp distinct)).mpr members
+  exact perm.eq_of_pairwise (fun _ _ _ _ lt gt => (UInt64.lt_asymm lt gt).elim)
+    afterOrdered beforeOrdered
+
 theorem Table.range_of_visibleEntry_eq {before after : Table α} (start stop snapshot : UInt64)
     (same : ∀ key, after.visibleEntry key snapshot = before.visibleEntry key snapshot) :
+    after.range start stop snapshot = before.range start stop snapshot :=
+  Table.range_congr start stop snapshot (fun key _ => same key)
+
+private theorem Table.range_preserved {before after : Table α} (start stop snapshot : UInt64)
+    (same : ∀ key, across key snapshot after.histories = across key snapshot before.histories) :
     after.range start stop snapshot = before.range start stop snapshot := by
-  unfold Table.range
-  rw [visibleRows_congr_visible (combined after.histories).ordered (combined before.histories).ordered
-    snapshot Option.isSome (fun key => by simpa only [combined_winner, Table.visibleEntry] using same key)]
+  apply Table.range_of_visibleEntry_eq
+  intro key
+  unfold Table.visibleEntry
+  rw [same key]
 
 theorem Table.flush_lookup (table : Table α) (key snapshot : UInt64) :
     table.flush.lookup key snapshot = table.lookup key snapshot := by

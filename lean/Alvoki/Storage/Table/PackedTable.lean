@@ -337,27 +337,6 @@ private theorem across_clip (runs : List (History UInt64)) (start stop key snaps
   | cons run rest ih =>
     simp only [List.map_cons, Sequential.across, ih, winner_clip _ _ _ _ _ within]
 
-private theorem range_eq_of_winner {before after : Sequential.Table UInt64} (start stop snapshot : UInt64)
-    (agrees : ∀ key, start ≤ key ∧ key < stop →
-      Sequential.across key snapshot after.histories = Sequential.across key snapshot before.histories) :
-    after.range start stop snapshot = before.range start stop snapshot := by
-  let left := after.range start stop snapshot
-  let right := before.range start stop snapshot
-  have lo := after.range_ordered start stop snapshot
-  have ro := before.range_ordered start stop snapshot
-  have distinct {a b : Entry (Option UInt64)} (lt : a.key < b.key) (eq : a = b) : False :=
-    UInt64.lt_irrefl a.key (eq ▸ lt)
-  have same (row : Entry (Option UInt64)) : row ∈ left ↔ row ∈ right := by
-    change (row ∈ after.range start stop snapshot ↔ row ∈ before.range start stop snapshot)
-    rw [Sequential.Table.range_exact, Sequential.Table.range_exact]
-    constructor
-    · rintro ⟨⟨winner, put⟩, within⟩
-      exact ⟨⟨(agrees row.key within).symm.trans winner, put⟩, within⟩
-    · rintro ⟨⟨winner, put⟩, within⟩
-      exact ⟨⟨(agrees row.key within).trans winner, put⟩, within⟩
-  have perm := (List.perm_ext_iff_of_nodup (lo.imp distinct) (ro.imp distinct)).mpr same
-  exact perm.eq_of_pairwise (fun a _ _ _ lt gt => (UInt64.lt_irrefl a.key (UInt64.lt_trans lt gt)).elim) lo ro
-
 private def rangeSources (state : PackedTable) (start stop : UInt64) : Sequential.Table UInt64 :=
   ⟨state.runs.map (fun run => run.rangeHistory start stop), state.memtable.range start stop⟩
 
@@ -369,7 +348,7 @@ def PackedTable.rangeAt (state : @& PackedTable) (start stop snapshot : UInt64) 
 theorem PackedTable.rangeAt_eq (state : PackedTable) (start stop snapshot : UInt64) :
     state.rangeAt start stop snapshot = state.describe.range start stop snapshot := by
   unfold PackedTable.rangeAt
-  apply range_eq_of_winner
+  apply Sequential.Table.range_congr
   intro key within
   have hist (run : CheckedRun) : run.rangeHistory start stop = clip run.history start stop := by
     apply History.ext_rows
@@ -381,8 +360,8 @@ theorem PackedTable.rangeAt_eq (state : PackedTable) (start stop snapshot : UInt
     rw [List.map_congr_left]
     intro run _
     exact hist run
-  rw [sources]
-  exact across_clip _ start stop key snapshot within
+  rw [Sequential.Table.visibleEntry, Sequential.Table.visibleEntry, sources,
+    across_clip _ start stop key snapshot within]
 
 def PackedTable.range (state : @& PackedTable) (handle : SnapshotHandle)
     (start stop : UInt64) : Option (List (Entry (Option UInt64))) :=
