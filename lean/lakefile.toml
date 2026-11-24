@@ -135,3 +135,9 @@ root = "DiskWriteBench"
 [[lean_exe]]
 name = "alvoki-disk-checkpoint"
 root = "DiskCheckpointBench"
+
+[[lean_exe]]
+name = "alvoki-wide-accessors"
+root = "WideAccessorBench"
+srcDir = "runtime-experiment/wide-accessors"
+moreLeancArgs = ["-include", "runtime-experiment/wide-accessors/accessors.h"]

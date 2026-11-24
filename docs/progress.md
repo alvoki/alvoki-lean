@@ -283,3 +283,7 @@ The opt-in whole-loop lowering selects and copies retained 32-byte rows into a s
 ## Stock Lean exact-size encoding
 
 Pre-extending a destination and writing through a cursor sped up encoding of owned v3 rows by 4.59–5.27× from an array and 3.36–3.71× from a prebuilt list compared with append on stock Lean. For packed compaction, counting the retained rows and initializing the exact output size cost more than one-pass append or span coalescing. A mixed-order rerun confirmed the advantage of the scoped row writer across four v3 profiles. [Exact-size cursor](../benchmarks/results/packed/stock-v3-cursor) · [Mixed-order comparison](../benchmarks/results/packed/v3-writer-comparison)
+
+## Wide accessors and published toolchain controls
+
+Unchanged packed writer code passed exact fixtures on Lean 4.36, the 23 November nightly, and the official build of PR #14053. Alternating replay on the three toolchains differed by about 2% in the repeated run. In a separate benchmark that uses the draft accessors, the preallocated owned v3 encoder took 4.13 ms at one million rows, down from 14.65 ms with stock byte stores. The fixed-size `memcpy` variant further cut alternating replay, while the post-store exclusivity assumption changed generated checks with mixed timing effects. Both timing scopes and the exact external toolchain revisions are archived. [Published toolchains](../benchmarks/results/packed/upstream-toolchains) · [Accessor timings and code generation](../benchmarks/results/packed/wide-accessors)

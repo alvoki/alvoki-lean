@@ -19,7 +19,7 @@ The generated C uses 32 scalar `uset` calls per row. Clang inlines those calls a
 
 ### Encoding from a list
 
-The paired Lean follow-up starts with a prebuilt `List RawEntry`. Both variants count its length inside the timer. The cursor then initializes the exact destination, writes the header and traverses the list with the same bounds-checked row writer. This measures traversal and raw encoding for a list-shaped input. Production flush also converts logical entries to v3 fields and validates the encoded run. [Flush path](../../../../lean/Alvoki/Storage/Table/CompactionRead.lean)
+The paired Lean follow-up starts with a prebuilt `List RawEntry`. Both variants count its length inside the timer. The append control reserves the full capacity. The cursor initializes the exact destination, writes the header and traverses the list with the same bounds-checked row writer. Production flush starts from an encoded header and grows the buffer as it converts logical entries to v3 fields. It then validates the encoded run. [Flush path](../../../../lean/Alvoki/Storage/Table/CompactionRead.lean)
 
 Medians in milliseconds at 666,666 rows.
 

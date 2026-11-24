@@ -41,6 +41,7 @@ LIST_ENCODERS = {
 
 def check_output(variants, expected, paths, floor, snapshot):
     for name, (executable, mode) in variants.items():
+        paths[2].unlink(missing_ok=True)
         suite.invoke(executable, "check-" + mode, paths, floor, snapshot)
         if paths[2].read_bytes() != expected:
             raise RuntimeError(f"{name} output differs from the v3 oracle")
