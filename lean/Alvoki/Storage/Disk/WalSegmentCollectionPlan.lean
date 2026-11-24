@@ -57,8 +57,8 @@ def checkWalCollectionInventory (extents : List (Nat × IO.FS.Metadata)) (keeper
     checkWalCollectionSuffix range.through keeper (extents.dropWhile fun entry => entry.1 < start)
   | _ => false
 
-/-- Observe a strict pair and its physical inventory while the caller holds
-the existing sequential writer session. No callback can change a file.
+/-- Observe a strict pair and its physical inventory using read-only
+callbacks while the caller holds the existing sequential writer session.
 Exact completeness depends on the native directory enumeration contract. -/
 def planWalCollectionWith [Monad m] [MonadExceptOf IO.Error m] (directory : DiskDirectory)
     (generation : UInt64) (walBytes keeper : Nat)

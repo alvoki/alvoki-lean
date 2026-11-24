@@ -843,6 +843,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.collectionOffsets_approved
 #check_axioms Alvoki.Storage.WalSegmentImage.collectionOffsets_observed
 #check_axioms Alvoki.Storage.walCollectionEnd_covered
+#check_axioms Alvoki.Storage.DiskTable.planWalCollection_fileEffects
+#check_axioms Alvoki.Storage.OpenPathReadReports.walSegmentExtents_offsets
+#check_axioms Alvoki.Storage.planWalCollectionWith_reported
+#check_axioms Alvoki.Storage.walCollectionOffsetsFromExtents_approved
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.reportedCollectionPlan
 #check_axioms Alvoki.Storage.WalSegment.Chain.member_byteSize
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.collectionOffsets_exact
 #check_axioms Alvoki.Storage.WalSealedUnlinkTrace.projects

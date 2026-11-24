@@ -55,6 +55,42 @@ theorem SegmentedWriterState.RetainedReady.collectionOffsets_exact {directory de
     (by rw [settled, ready.walPair]) state.target.decoded physical
     (fun _ member => ready.spans _ (retry.sealedSublist.subset member))
 
+/-- The observed manifest's strict checkpoint and installed generation
+provide the generation check in the executable WAL planner. -/
+private theorem SelectedIntegrityCheckpoint.collectionGeneration {durable binding checkpoint}
+    (selected : SelectedIntegrityCheckpoint durable binding checkpoint) :
+    let generation := (checkpoint.getD (.empty, 0)).2
+    validateIntegrityRunCollectionGeneration generation binding = .ok (binding.map fun _ => generation) := by
+  cases selected with
+  | absent => rfl
+  | present decoded _ _ =>
+    exact validateIntegrityRunCollectionGeneration_some.mpr ⟨_, decoded, rfl, rfl⟩
+
+/-- Accepted, complete observations on the executable planner's callbacks
+give the complete unlink plan for this exact retained writer. -/
+theorem SegmentedWriterState.RetainedReady.reportedCollectionPlan {directory descriptor state tail}
+    (ready : SegmentedWriterState.RetainedReady directory descriptor state)
+    (raw : HealthyBoundedWalReports directory state.owners descriptor state.wal state.target.pair
+      state.target.range.watermark state.published.durable tail)
+    (physical : ∀ segment ∈ state.wal.sealed, ∀ metadata,
+      raw.reports.lstat (directory.file (.walSegment segment.first)) = .ok metadata →
+        metadata.byteSize.toNat = segment.bytes.size)
+    {extents : List (Nat × IO.FS.Metadata)}
+    (scan : readWalSegmentExtentsWith (m := Except IO.Error) directory
+      (fun path => .ok (raw.reports.lstat path)) (raw.entries.toList.map (·.fileName)) = .ok extents)
+    (healthy : checkWalCollectionInventory extents state.installed.activeFirst state.target.range = true) :
+    planWalCollectionWith directory state.installed.generation state.installed.walBytes
+      state.installed.activeFirst raw.reports.readOptional raw.list (fun path => .ok (raw.reports.lstat path)) =
+        .ok state.wal.collectionOffsets := by
+  have generation := SelectedIntegrityCheckpoint.collectionGeneration ready.resumed.selected
+  dsimp only at generation
+  rw [← ready.resumed.generation] at generation
+  have count : state.installed.walBytes = state.target.range.through * WAL.frameSize := by
+    rw [ready.resumed.bytes, ready.resumed.through, WAL.encode_size, Nat.mul_comm]
+  exact (planWalCollectionWith_reported raw.reports directory _ _ _ raw.list raw.manifest raw.marker
+    generation state.target.decoded count raw.listing scan healthy).trans
+      (ready.collectionOffsets_exact .start raw physical)
+
 theorem SegmentedWriterState.RetainedReady.pinnedReads {directory descriptor state}
     (ready : SegmentedWriterState.RetainedReady directory descriptor state) :
     ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty state.history reference ∧

@@ -98,6 +98,7 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionStep
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionRetry
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionPlan
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionMetadata
 lake env leanchecker Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRetryTrace
