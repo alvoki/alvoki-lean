@@ -63,7 +63,8 @@ structure Installs (report : SegmentedCheckpointPowerLossReport directory before
     (after.installed.generation = SegmentedCheckpointReport.generation before ∧
       after.target.pair.manifest = some report.cut.checkpoint.manifest)
 
-private theorem keepsSelectedPair {origin current : FileImage} {admits : Target → Prop}
+/-- A retry and every admitted crash keep the binding of an already settled directory. -/
+theorem keepsSelectedPair {origin current : FileImage} {admits : Target → Prop}
     {pair : DirectoryPublication.Bindings} (settled : origin.directory = .settled pair)
     (lineage : ReopenLineage origin admits current) : current.directory.active = pair := by
   have beforeBarrier {image : FileImage} (observed : BeforeReopenBarrier origin image) :

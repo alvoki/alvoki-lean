@@ -16,6 +16,7 @@ import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.CheckpointRetrySession
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.SegmentedCheckpointPowerLoss
+import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
 import Alvoki.Storage.Disk.RetainedAppendReports
 import Alvoki.Storage.Disk.SegmentedKeeperDescriptor
 import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
@@ -1123,6 +1124,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.installsRetainedCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.markerPowerLossCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointPowerLossReport.installsRetainedCached
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.reopensFromChunks
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.checkpointPowerLossCached
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.readSelectedCachedWithState
 #check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.reopenSizedCheckpointWithState_eq
