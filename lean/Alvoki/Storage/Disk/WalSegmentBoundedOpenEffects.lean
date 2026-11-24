@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.WalSegmentBoundedOpen
 import Alvoki.Storage.Disk.WalSegmentReplayStability
+import Alvoki.Storage.Disk.WalSegmentRetryReadEffects
 
 namespace Alvoki.Storage.WalSegmentRepair
 
@@ -69,5 +70,118 @@ theorem finishBoundedMarkedOpen_eq_full [Monad m] [LawfulMonad m] [MonadExceptOf
   split
   · rfl
   · simp only [runAt, pure_bind, valid, ite_true, runRepairPlan, samePaths, names]
+
+private theorem readSelectedWithPrefix_liftReports {state : Type} (dir : DiskDirectory)
+    (watermark : Nat) (length : UInt64) (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (readBin : FilePath → Except IO.Error ByteArray)
+    (readPrefix : FilePath → Nat → Except IO.Error KeeperPrefix) :
+    (readSelectedWithPrefix dir watermark length (fun path => liftExcept (list path))
+      (fun path => liftExcept (lstat path)) (fun path => liftExcept (readBin path))
+      (fun path count => liftExcept (readPrefix path count)) : EStateM IO.Error state (WalSegmentMarkerReads × Nat)) =
+      liftExcept (readSelectedWithPrefix dir watermark length list lstat readBin readPrefix) := by
+  unfold readSelectedWithPrefix
+  dsimp only
+  by_cases valid : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize
+  · simp only [ite_eq_left valid]
+    rw [← bind_readReport (list dir.path)]
+    congr 1
+    funext entries
+    rw [scanWalSegmentOffsets_liftReports, ← bind_readReport
+      (scanWalSegmentOffsets (probeWalSegmentWith dir lstat) (entries.toList.map (·.fileName)))]
+    congr 1
+    funext offsets
+    cases selectWalSegmentReadsThrough offsets watermark (length.toNat / WAL.frameSize) with
+    | none => rfl
+    | some selection =>
+      obtain ⟨required, newer⟩ := selection
+      dsimp only
+      cases required.getLast? with
+      | none => rfl
+      | some keeper =>
+        simp only [readWalSegmentPayloadsWith, mapM_readReport]
+        rw [← bind_readReport (required.dropLast.mapM (fun item => readBin (dir.file (.walSegment item))))]
+        congr 1
+        funext files
+        rw [← bind_readReport (readPrefix (dir.file (.walSegment keeper))
+          ((length.toNat / WAL.frameSize - keeper) * WAL.frameSize))]
+        congr 1
+        funext kept
+        by_cases enough : kept.bytes.size = (length.toNat / WAL.frameSize - keeper) * WAL.frameSize ∧
+            (length.toNat / WAL.frameSize - keeper) * WAL.frameSize ≤ kept.fileSize
+        · rw [ite_eq_left enough, ite_eq_left enough]; rfl
+        · rw [ite_eq_right enough, ite_eq_right enough]; rfl
+  · simp only [ite_eq_right valid]
+    rfl
+
+/-- The bounded preparation phase merely reports the read-only observations.
+It does not discard or update the repair interpreter state on error. -/
+theorem prepareBoundedMarkedWith_liftReports {state : Type} (dir : DiskDirectory)
+    (readOptional : FilePath → Except IO.Error (Option ByteArray)) (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (readBin : FilePath → Except IO.Error ByteArray)
+    (readPrefix : FilePath → Nat → Except IO.Error KeeperPrefix) :
+    (prepareBoundedMarkedWith dir (fun path => liftExcept (readOptional path)) (fun path => liftExcept (list path))
+      (fun path => liftExcept (lstat path)) (fun path => liftExcept (readBin path))
+      (fun path count => liftExcept (readPrefix path count)) : EStateM IO.Error state (Plan × Reopened × Nat)) =
+      liftExcept (prepareBoundedMarkedWith dir readOptional list lstat readBin readPrefix) := by
+  unfold prepareBoundedMarkedWith
+  rw [readCheckpoint_liftReports]
+  · rw [← bind_readReport]
+    congr 1
+    funext checkpoint
+    generalize checkpoint.getD (.empty, 0) = loaded
+    obtain ⟨base, generation⟩ := loaded
+    dsimp only
+    rw [← bind_readReport (readOptional (dir.file .walBoundary))]
+    congr 1
+    funext marker
+    cases marker with
+    | none => rfl
+    | some marker =>
+      dsimp only
+      generalize WAL.Boundary.decode marker = decoded
+      cases decoded with
+      | error cause => rfl
+      | ok length =>
+        simp only [readSelectedWithPrefix_liftReports]
+        let reported := readSelectedWithPrefix dir base.committed.toNat length list lstat readBin readPrefix
+        change ((liftExcept reported : EStateM IO.Error state (WalSegmentMarkerReads × Nat)) >>= _) =
+          liftExcept (reported >>= _)
+        rw [← bind_readReport reported]
+        congr 1
+        funext result
+        obtain ⟨reads, keeperFileSize⟩ := result
+        dsimp only
+        generalize recoverMarkedWalSegments base length reads.files = recovered
+        cases recovered with
+        | error cause => rfl
+        | ok recovered =>
+          cases recovered
+          cases reads.files.getLast? <;> rfl
+  · intro α report
+    cases report <;> rfl
+
+/-- When the full and bounded read-only preparations report the same
+selected layout (with exactly the keeper prefix loaded), the actual marked
+worker has the same effectful result, including failures after effects. -/
+theorem reopenMarkedBoundedWith_eq_full {σ : Type} (dir : DiskDirectory)
+    (readOptional : FilePath → Except IO.Error (Option ByteArray)) (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (readBin : FilePath → Except IO.Error ByteArray)
+    (readPrefix : FilePath → Nat → Except IO.Error KeeperPrefix)
+    (removeFile : FilePath → EStateM IO.Error σ (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error σ Unit)
+    (sync : Array FilePath → EStateM IO.Error σ Unit) (renameFile : FilePath → FilePath → EStateM IO.Error σ Unit)
+    {plan : Plan} {opened : Reopened} (valid : plan.valid = true)
+    (fullRead : prepareMarkedWith dir readOptional list lstat readBin = .ok (plan, opened))
+    (boundedRead : prepareBoundedMarkedWith dir readOptional list lstat readBin readPrefix =
+      .ok ({ plan with keeperBytes := plan.keeperBytes.extract 0 plan.keeperSize }, opened, plan.keeperBytes.size)) :
+    reopenMarkedBoundedWith dir (fun path => liftExcept (readOptional path)) (fun path => liftExcept (list path))
+        (fun path => liftExcept (lstat path)) (fun path => liftExcept (readBin path))
+        (fun path count => liftExcept (readPrefix path count)) removeFile write sync renameFile =
+      reopenMarkedFastWith dir (fun path => liftExcept (readOptional path)) (fun path => liftExcept (list path))
+        (fun path => liftExcept (lstat path)) (fun path => liftExcept (readBin path)) removeFile write sync renameFile := by
+  unfold reopenMarkedBoundedWith reopenMarkedFastWith
+  rw [prepareBoundedMarkedWith_liftReports, prepareMarkedWith_liftReports, fullRead, boundedRead]
+  simp only [liftExcept, pure_bind]
+  rw [finishBoundedMarkedOpen_eq_full dir plan valid]
 
 end Alvoki.Storage.WalSegmentRepair

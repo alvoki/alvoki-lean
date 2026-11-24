@@ -5,16 +5,16 @@ namespace Alvoki.Storage.WalSegmentRepair
 
 open System
 
-private theorem bind_readReport {ε σ α β : Type} (report : Except ε α) (next : α → Except ε β) :
+theorem bind_readReport {ε σ α β : Type} (report : Except ε α) (next : α → Except ε β) :
     ((liftExcept report : EStateM ε σ α) >>= fun value => liftExcept (next value)) =
       liftExcept (report >>= next) := by
   cases report <;> rfl
 
-private theorem map_readReport {ε σ α β : Type} (report : Except ε α) (transform : α → β) :
+theorem map_readReport {ε σ α β : Type} (report : Except ε α) (transform : α → β) :
     transform <$> (liftExcept report : EStateM ε σ α) = liftExcept (transform <$> report) := by
   cases report <;> rfl
 
-private theorem mapM_readReport {ε σ α β : Type} (items : List α) (read : α → Except ε β) :
+theorem mapM_readReport {ε σ α β : Type} (items : List α) (read : α → Except ε β) :
     (items.mapM (fun item => liftExcept (read item)) : EStateM ε σ (List β)) =
       liftExcept (items.mapM read) := by
   induction items with
@@ -34,7 +34,7 @@ private theorem filterMapM_readReport {ε σ α β : Type} (items : List α) (re
     funext result
     cases result <;> rfl
 
-private theorem readCheckpoint_liftReports {state : Type}
+theorem readCheckpoint_liftReports {state : Type}
     (manifest : Except IO.Error (Option ByteArray)) (readRun : UInt64 → Nat → Except IO.Error ByteArray)
     {validateState : {α : Type} → Except String α → EStateM IO.Error state α}
     {validateReport : {α : Type} → Except String α → Except IO.Error α}
@@ -58,13 +58,10 @@ private theorem readCheckpoint_liftReports {state : Type}
     rw [← bind_readReport (validateReport (loadIntegrityRunSet manifest files))]
     rfl
 
-private theorem readWalSegments_liftReports {state : Type} (dir : DiskDirectory) (watermark : Nat) (length : UInt64)
-    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
-    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (readBin : FilePath → Except IO.Error ByteArray) :
-    (readWalSegmentsThroughWith dir watermark length (fun path => liftExcept (list path))
-      (fun path => liftExcept (lstat path)) (fun path => liftExcept (readBin path)) :
-      EStateM IO.Error state WalSegmentMarkerReads) =
-      liftExcept (readWalSegmentsThroughWith dir watermark length list lstat readBin) := by
+theorem scanWalSegmentOffsets_liftReports {state : Type} (dir : DiskDirectory)
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (names : List String) :
+    (scanWalSegmentOffsets (probeWalSegmentWith dir (fun path => liftExcept (lstat path))) names :
+      EStateM IO.Error state (List Nat)) = liftExcept (scanWalSegmentOffsets (probeWalSegmentWith dir lstat) names) := by
   have probe (offset : Nat) :
       (probeWalSegmentWith dir (fun path => liftExcept (lstat path)) offset : EStateM IO.Error state (Option Nat)) =
         liftExcept (probeWalSegmentWith dir lstat offset) := by
@@ -74,21 +71,26 @@ private theorem readWalSegments_liftReports {state : Type} (dir : DiskDirectory)
       EStateM IO.Error state (Except IO.Error IO.FS.Metadata)) >>= next)
     funext metadata
     cases classifyWalSegmentLookup (dir.file (.walSegment offset)) offset metadata <;> rfl
-  have scan (names : List String) :
-      (scanWalSegmentOffsets (probeWalSegmentWith dir (fun path => liftExcept (lstat path))) names :
-        EStateM IO.Error state (List Nat)) = liftExcept (scanWalSegmentOffsets (probeWalSegmentWith dir lstat) names) := by
-    have listed (name : String) :
-        (probeListedWalSegment (probeWalSegmentWith dir (fun path => liftExcept (lstat path))) name :
-          EStateM IO.Error state (Option Nat)) =
-        liftExcept (probeListedWalSegment (probeWalSegmentWith dir lstat) name) := by
-      unfold probeListedWalSegment
-      cases parseWalSegmentName name with
-      | none => rfl
-      | some offset => exact probe offset
-    simp only [scanWalSegmentOffsets, show
-      probeListedWalSegment (probeWalSegmentWith dir (fun path => liftExcept (lstat path))) =
-        (fun name => liftExcept (probeListedWalSegment (probeWalSegmentWith dir lstat) name)) from funext listed,
-      filterMapM_readReport, map_readReport]
+  have listed (name : String) :
+      (probeListedWalSegment (probeWalSegmentWith dir (fun path => liftExcept (lstat path))) name :
+        EStateM IO.Error state (Option Nat)) =
+      liftExcept (probeListedWalSegment (probeWalSegmentWith dir lstat) name) := by
+    unfold probeListedWalSegment
+    cases parseWalSegmentName name with
+    | none => rfl
+    | some offset => exact probe offset
+  simp only [scanWalSegmentOffsets, show
+    probeListedWalSegment (probeWalSegmentWith dir (fun path => liftExcept (lstat path))) =
+      (fun name => liftExcept (probeListedWalSegment (probeWalSegmentWith dir lstat) name)) from funext listed,
+    filterMapM_readReport, map_readReport]
+
+private theorem readWalSegments_liftReports {state : Type} (dir : DiskDirectory) (watermark : Nat) (length : UInt64)
+    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)) (readBin : FilePath → Except IO.Error ByteArray) :
+    (readWalSegmentsThroughWith dir watermark length (fun path => liftExcept (list path))
+      (fun path => liftExcept (lstat path)) (fun path => liftExcept (readBin path)) :
+      EStateM IO.Error state WalSegmentMarkerReads) =
+      liftExcept (readWalSegmentsThroughWith dir watermark length list lstat readBin) := by
   unfold readWalSegmentsThroughWith
   dsimp only
   by_cases allowed : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize
@@ -96,7 +98,7 @@ private theorem readWalSegments_liftReports {state : Type} (dir : DiskDirectory)
     rw [← bind_readReport (list dir.path)]
     congr 1
     funext entries
-    rw [scan, ← bind_readReport (scanWalSegmentOffsets (probeWalSegmentWith dir lstat) (entries.toList.map (·.fileName)))]
+    rw [scanWalSegmentOffsets_liftReports, ← bind_readReport (scanWalSegmentOffsets (probeWalSegmentWith dir lstat) (entries.toList.map (·.fileName)))]
     congr 1
     funext offsets
     cases selectWalSegmentReadsThrough offsets watermark (length.toNat / WAL.frameSize) with

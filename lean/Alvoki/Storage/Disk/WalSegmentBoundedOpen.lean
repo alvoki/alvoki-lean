@@ -11,7 +11,7 @@ structure KeeperPrefix where
   bytes : ByteArray
   fileSize : Nat
 
-private def readSelectedWithPrefix [Monad m] [MonadExceptOf IO.Error m]
+def readSelectedWithPrefix [Monad m] [MonadExceptOf IO.Error m]
     (dir : DiskDirectory) (watermark : Nat) (length : UInt64)
     (list : FilePath → m (Array IO.FS.DirEntry)) (lstat : FilePath → m (Except IO.Error IO.FS.Metadata))
     (readBin : FilePath → m ByteArray) (readPrefix : FilePath → Nat → m KeeperPrefix) :
