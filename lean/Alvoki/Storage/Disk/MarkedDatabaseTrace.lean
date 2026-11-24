@@ -253,4 +253,35 @@ theorem MarkedDatabaseTrace.canonicalReads {initial after : ObservedMarkedState}
   exact ⟨suffix, history, retained, ready, reference, replayed,
     fun _ active => ready.pinnedReads replayed active⟩
 
+/-- A snapshot that is still supported after later writes, maintenance or
+reopen has the same point and ordered range reads. After reopen the caller
+uses a fresh local pin at the original sequence. -/
+theorem MarkedDatabaseTrace.pinnedReadsStable {initial after : ObservedMarkedState}
+    {sessions : List MarkedSessionWrites} (path : MarkedDatabaseTrace initial sessions after)
+    (valid : initial.Valid) {oldPin newPin : SnapshotPin}
+    (oldActive : oldPin ∈ initial.writer.table.pins.active)
+    (newActive : newPin ∈ after.writer.table.pins.active) (sameSequence : newPin.sequence = oldPin.sequence) :
+    (∀ key, after.writer.table.lookup newPin.handle key = initial.writer.table.lookup oldPin.handle key) ∧
+    ∀ start stop, after.writer.table.range newPin.handle start stop = initial.writer.table.range oldPin.handle start stop := by
+  obtain ⟨_, history, _, _, _, replayed, reads⟩ := path.canonicalReads valid
+  rw [history] at replayed
+  obtain ⟨base, original, continued⟩ := replayed.split
+  obtain ⟨oldLookup, oldRange⟩ := valid.pinnedReads original oldActive
+  obtain ⟨_, _, initialValid⟩ := valid
+  obtain ⟨model, refined, represented⟩ := initialValid.live
+  have clock : model.committed = base.committed := by
+    apply UInt64.toNat_inj.mp
+    rw [represented.committed_count, original.committed_count]
+    exact (Nat.zero_add _).symm
+  have supported : oldPin.sequence ≤ base.committed :=
+    clock ▸ model.pins_committed oldPin (refined.pins ▸ oldActive)
+  have visible := continued.visibleEntry_before_suffix supported
+  obtain ⟨newLookup, newRange⟩ := reads newPin newActive
+  refine ⟨?_, ?_⟩
+  · intro key
+    rw [oldLookup, newLookup, sameSequence, Sequential.Table.lookup_eq_visibleEntry,
+      Sequential.Table.lookup_eq_visibleEntry, visible key]
+  · intro start stop
+    rw [oldRange, newRange, sameSequence, Sequential.Table.range_of_visibleEntry_eq start stop _ visible]
+
 end Alvoki.WAL.Boundary

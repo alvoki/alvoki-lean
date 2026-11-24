@@ -415,3 +415,7 @@ After checkpoint publication settles a healthy manifest, a different generation 
 ## Recovery progress at each admitted boundary
 
 One theorem now covers healthy retry after empty bootstrap, legacy adoption, a settled marked open, an interrupted checkpoint or an uncertain WAL write. Each case supplies its actual selected reads and required operation reports. The theorem derives successful installation, the selected manifest, the settled WAL and its exact byte count without assuming a successful open result. [Recovery progress](../lean/Alvoki/Storage/Disk/RecoveryProgress.lean)
+
+## Retained snapshots stay stable across disk maintenance and reopen
+
+For any mixed database trace, active pins at the same sequence at the beginning and end return the same point and ordered range reads. The proof splits the canonical replay at the original history and shows each later write, including a tombstone, has a greater sequence and cannot affect those reads. The two pins may belong to different sessions. [Stable snapshot reads](../lean/Alvoki/Storage/Disk/MarkedDatabaseTrace.lean)

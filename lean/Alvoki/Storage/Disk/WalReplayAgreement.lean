@@ -85,6 +85,22 @@ end Alvoki.Sequential
 namespace Alvoki.Storage
 open Sequential
 
+/-- A replay suffix is invisible at any snapshot the base had committed. -/
+theorem SnapshotWalReplay.visibleEntry_before_suffix {before after : SnapshotTable UInt64}
+    {events : List WAL.Write} (replayed : SnapshotWalReplay before events after)
+    {snapshot : UInt64} (committed : snapshot ≤ before.committed) (key : UInt64) :
+    after.table.visibleEntry key snapshot = before.table.visibleEntry key snapshot := by
+  induction replayed with
+  | nil => rfl
+  | @cons before next _ event _ written _ _ ih =>
+    obtain ⟨sequence, _, table⟩ := SnapshotTable.write_spec written
+    have advances : before.committed < next.committed := by
+      rw [UInt64.lt_iff_toNat_lt, sequence]
+      omega
+    have earlier := UInt64.lt_of_le_of_lt committed advances
+    rw [ih (UInt64.le_of_lt earlier), table, Table.visibleEntry, Table.visibleEntry,
+      Table.write_winner_before _ _ _ earlier]
+
 /-- Transfer the bounds on the packed runs and memtable to the rows of
 their abstract interpretation. -/
 theorem PackedTable.Refines.rowsBounded {state : PackedTable} {model : SnapshotTable UInt64}

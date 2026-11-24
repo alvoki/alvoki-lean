@@ -15,6 +15,17 @@ theorem append {before middle after : SnapshotTable UInt64} {prefixWrites suffix
   | nil => exact second
   | cons written sequence _ ih => exact .cons written sequence (ih second)
 
+theorem split {before after : SnapshotTable UInt64} {prefixWrites suffix : List WAL.Write}
+    (replayed : SnapshotWalReplay before (prefixWrites ++ suffix) after) :
+    ∃ middle, SnapshotWalReplay before prefixWrites middle ∧ SnapshotWalReplay middle suffix after := by
+  induction prefixWrites generalizing before with
+  | nil => exact ⟨before, .nil _, replayed⟩
+  | cons _ _ ih =>
+    cases replayed with
+    | cons written sequence remaining =>
+      obtain ⟨middle, first, second⟩ := ih remaining
+      exact ⟨middle, .cons written sequence first, second⟩
+
 theorem committed_count {before after : SnapshotTable UInt64} {events : List WAL.Write}
     (played : SnapshotWalReplay before events after) :
     after.committed.toNat = before.committed.toNat + events.length := by
