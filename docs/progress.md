@@ -275,3 +275,7 @@ The native adapter and model share checkpoint reads, marked WAL validation and t
 ## Packed writer ownership diagnostic
 
 Native `markLinear` checks completed 75 exact workload and mode combinations across replay, v3 compaction and dense rewrite. The test deliberately retained an alias to confirm that the diagnostic detects sharing in both overwrite and grow paths. The sampled writer destinations stayed unique during mutation after marking. [Checks and reproduction](../benchmarks/results/packed/linearity)
+
+## Scoped v3 compaction
+
+The opt-in whole-loop lowering selects and copies retained 32-byte rows into a single private buffer. The branching row writer was faster than the existing Rust writer on the five comparison profiles. Row and span pipelines include output validation and a snapshot scan. Both selector variants passed exact byte and snapshot checks, and the build verifies the generated ABI and its borrowed inputs. [Results and trust boundary](compaction.md#whole-loop-v3-writer)

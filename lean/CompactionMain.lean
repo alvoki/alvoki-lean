@@ -27,6 +27,9 @@ def main (args : List String) : IO Unit := do
       | "pipeline" =>
         let parsed ← checked (Compaction.parse (compactSpans left right floor))
         pure (ByteArray.empty, parsed.scan snapshot)
+      | "pipeline-rows" =>
+        let parsed ← checked (Compaction.parse (compact left right floor))
+        pure (ByteArray.empty, parsed.scan snapshot)
       | _ => throw (IO.userError "invalid compaction mode")
     let elapsed := (← IO.monoNanosNow) - start
     if mode.startsWith "check-" then IO.FS.writeBinFile output bytes

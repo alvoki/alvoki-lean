@@ -149,6 +149,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let output = compact::<true>(a, b, floor);
                 (Vec::new(), scan(Run::parse(&output)?, Run(&[]), snapshot))
             }
+            "pipeline-rows" => {
+                let output = compact::<false>(a, b, floor);
+                (Vec::new(), scan(Run::parse(&output)?, Run(&[]), snapshot))
+            }
             _ => return Err("invalid compaction mode".into()),
         };
         black_box(&bytes);

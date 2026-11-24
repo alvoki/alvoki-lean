@@ -3,7 +3,7 @@
 
 import argparse
 import csv
-from itertools import groupby
+from itertools import chain, groupby
 import os
 from pathlib import Path
 import random
@@ -53,6 +53,12 @@ def workloads(size):
         yield profile, left, right, floor, snapshot
 
 
+def alternating_workload(size):
+    rng = random.Random(1851)
+    rows = [(key, key + 1, 0, rng.getrandbits(64)) for key in range(size)]
+    return "alternating", rows[::2], rows[1::2], size, size
+
+
 def oracle(left, right, floor, snapshot):
     entries = {}
     for side, rows in enumerate((left, right)):
@@ -93,22 +99,23 @@ def invoke(binary, mode, paths, floor, snapshot, reps=1, check=True):
     )
 
 
-def check_case(paths, left, right, floor, snapshot):
+def check_case(paths, left, right, floor, snapshot, *, pipeline_rows=False):
     paths[0].write_bytes(encoded(left))
     paths[1].write_bytes(encoded(right))
     kept, checksum, visible, spans, singleton = oracle(left, right, floor, snapshot)
     expected = encoded(kept)
+    scans = ("direct", "pipeline", "pipeline-rows") if pipeline_rows else ("direct", "pipeline")
     for binary in BINARIES.values():
         for mode in ("rows", "spans"):
             invoke(binary, "check-" + mode, paths, floor, snapshot)
             assert paths[2].read_bytes() == expected, (binary, mode, floor)
-        for mode in ("direct", "pipeline"):
+        for mode in scans:
             measured = int(invoke(binary, mode, paths, floor, snapshot).stdout.split()[1])
             assert measured == checksum, (binary, mode, floor, snapshot)
     return expected, checksum, visible, spans, singleton
 
 
-def checks(paths):
+def checks(paths, *, pipeline_rows=False, alternating=False):
     l = [(0, 19, 1, 0), (0, 8, 0, 2), (0, 3, 0, 90),
          (2, 12, 0, 3), (WORD_MASK, WORD_MASK, 0, 25)]
     r = [(0, 21, 0, 4), (0, 8, 1, 0), (1, 10, 1, 0), (1, 1, 0, 8),
@@ -116,8 +123,10 @@ def checks(paths):
     cases = [([], [], 0, 0), (l, [], 5, 10), ([], r, 0, 9)]
     cases += [(l, r, 7, snapshot) for snapshot in (7, 8, 10, 12, 14, 19, 21, WORD_MASK)]
     cases += [(a, b, floor, snapshot) for _, a, b, floor, snapshot in workloads(1031)]
+    if alternating:
+        cases.append(alternating_workload(1031)[1:])
     for a, b, floor, snapshot in cases:
-        check_case(paths, a, b, floor, snapshot)
+        check_case(paths, a, b, floor, snapshot, pipeline_rows=pipeline_rows)
     paths[1].write_bytes(encoded([]))
     bad = [
         b"", encoded([]) + b"\x00", HEADER.pack(1, 3), HEADER.pack(0, 1),
@@ -137,7 +146,7 @@ def checks(paths):
     print(f"Passed {len(cases)} versioned compaction fixtures and {len(bad)} malformed runs.")
 
 
-def run(paths, out, sizes, trials):
+def run(paths, out, sizes, trials, *, pipeline_rows=False, alternating=False):
     cpu = min(os.sched_getaffinity(0))
     os.sched_setaffinity(0, {cpu})
     rng = random.Random(443)
@@ -145,16 +154,22 @@ def run(paths, out, sizes, trials):
         writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(("records", "workload", "variant", "trial", "ns", "checksum", "cpu",
                          "floor", "snapshot", "retained", "visible", "spans", "singletons"))
+        modes = ("rows", "spans", "direct", "pipeline")
+        if pipeline_rows:
+            modes += ("pipeline-rows",)
         for size in sizes:
-            for profile, left, right, floor, snapshot in workloads(size):
+            cases = workloads(size)
+            if alternating:
+                cases = chain(cases, (alternating_workload(size),))
+            for profile, left, right, floor, snapshot in cases:
                 expected, checksum, visible, spans, singleton = check_case(
-                    paths, left, right, floor, snapshot)
+                    paths, left, right, floor, snapshot, pipeline_rows=pipeline_rows)
                 retained = (len(expected) - HEADER.size) // ROW.size
                 compacted = paths[0].with_name("compacted")
                 empty = paths[0].with_name("empty")
                 compacted.write_bytes(expected)
                 empty.write_bytes(encoded([]))
-                jobs = [(lang, mode) for lang in BINARIES for mode in ("rows", "spans", "direct", "pipeline")]
+                jobs = [(lang, mode) for lang in BINARIES for mode in modes]
                 jobs += [(lang, "read") for lang in BINARIES if lang != "lean-fixed"]
                 rng.shuffle(jobs)
                 for lang, mode in jobs:
@@ -162,7 +177,7 @@ def run(paths, out, sizes, trials):
                     result = invoke(BINARIES[lang], *args, floor, snapshot, trials + 1)
                     lines = result.stdout.splitlines()
                     assert len(lines) == trials + 1, (lang, mode)
-                    wanted = checksum if mode in ("direct", "pipeline", "read") else tag(expected)
+                    wanted = tag(expected) if mode in ("rows", "spans") else checksum
                     for index, line in enumerate(lines[1:], 1):
                         ns, seen = map(int, line.split())
                         assert seen == wanted, (profile, lang, mode)
@@ -185,6 +200,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--fixed-copy", action="store_true")
+    parser.add_argument("--pipeline-rows", action="store_true", help="also measure pipelines with row emission")
+    parser.add_argument("--alternating", action="store_true", help="also measure singleton spans that alternate sides")
     parser.add_argument("--summarize", type=Path)
     parser.add_argument("--sizes", nargs="+", type=int, default=[100_000, 1_000_000])
     parser.add_argument("--trials", type=int, default=9)
@@ -198,9 +215,10 @@ def main():
         BINARIES["lean-fixed"] = ROOT / "lean/.lake/build/bin/alvoki-compaction-fixed"
     with tempfile.TemporaryDirectory() as runner:
         paths = tuple(Path(runner) / name for name in ("left", "right", "out"))
-        checks(paths)
+        checks(paths, pipeline_rows=args.pipeline_rows, alternating=args.alternating)
         if args.out:
-            run(paths, args.out, args.sizes, args.trials)
+            run(paths, args.out, args.sizes, args.trials,
+                pipeline_rows=args.pipeline_rows, alternating=args.alternating)
 
 
 if __name__ == "__main__":

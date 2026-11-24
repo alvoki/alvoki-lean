@@ -1,0 +1,53 @@
+Alvoki baseline: d29eb1ab05f4e2923f91a278a1909a9f13144442
+UTC 2026-11-24 05:46:56
+Linux 6.18.57 x86_64 GNU/Linux
+CPU(s):                                  5
+Model name:                              AMD EPYC 9V74 80-Core Processor
+Hypervisor vendor:                       KVM
+Virtualization type:                     full
+cpu.max: 400000 100000
+Python 3.12.14
+Lake version 5.0.0-src+611c117 (Lean version 4.36.0)
+Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)
+clang version 23.1.1 (https://github.com/llvm/llvm-project 6dfe1677ab8dffbc6ec13d53a1e0215d75147689)
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /workspace/work/toolchains/elan/toolchains/leanprover--lean4---v4.36.0/bin
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+cargo 1.100.0 (3acc79c0c 2026-11-05)
+
+Commands from the Alvoki root
+# Branching-only pilot at 85c844a, while other builds ran on the VM.
+ALVOKI_TOOLCHAINS=/workspace/work/toolchains taskset -c 3 bash scripts/scoped-compaction.sh --sizes 100000 1000000 --trials 9 --out benchmarks/results/packed/scoped-v3/trials.csv
+# Follow-up with both C selectors, the row pipeline and alternating input.
+ALVOKI_TOOLCHAINS=/workspace/work/toolchains taskset -c 3 bash scripts/scoped-compaction.sh --pipeline-rows --alternating --sizes 100000 1000000 --trials 9 --out benchmarks/results/packed/scoped-v3/comparison-trials.csv
+python3 benchmarks/scoped_compaction.py --summarize benchmarks/results/packed/scoped-v3/comparison-trials.csv
+ALVOKI_TOOLCHAINS=/workspace/work/toolchains bash scripts/reproduce.sh
+
+The Lean and C measurements use the pinned compiler with -O3 -DNDEBUG. The
+guarded copy uses the existing generated-code specialization. The Rust
+control uses the repository's Cargo release build. Each profile and size
+uses the same validated inputs across variants. The existing scheduler
+randomizes the variant and mode order, discards one warm-up per process,
+and records the checksum and CPU on every sample.
+
+Rows and spans both include selector, allocation and materialization in one
+traversal. Each pipeline includes its writer, validation and a snapshot
+scan. The alternating profile splits strictly increasing keys between the
+two runs, so every retained row comes from the opposite side of the previous
+one. The direct scan and read controls use the stock implementation in the
+scoped binaries. The exact Python byte oracle, snapshot checksum and
+malformed input checks run on all binaries. The pilot was kept because the
+1M uniform-mix rows and spans timings had large trial-to-trial variation.
+
+The C variants borrow parsed input runs under the pinned representation
+and allocate their destination once. The ABI guard checks the generated
+parser layout and the ownership convention at the linked call sites. They
+remain native experiments with differential evidence against the Lean and
+Python references. The Lean refinement theorems cover the stock writers.
+
+To inspect the specialized loops use objdump with the symbol
+__wrap_lp_alvoki_Alvoki_Compaction_compact on the two scoped executables.
+Both copy a 32-byte row with two unaligned vector loads and stores. The
+branchless selection build uses conditional moves for the selected row
+and the selected key and sequence when both inputs have pending rows.
