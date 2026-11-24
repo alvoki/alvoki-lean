@@ -4,6 +4,36 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+/-- The locked prefix of `DiskTable.open` selects the markerless installer
+after directory setup and ENOENT at the exact flat WAL and marker paths.
+The three reports are read-only on the reached file image. This equality
+transports `SegmentedDatabaseTrace.fromHealthyBootstrap` to the shared
+native branch without assuming a result from either recovery worker. -/
+theorem runOpenWithInstallation_markerlessBranch {image files : Type}
+    (directory : DiskDirectory) (descriptor nextRef : Nat)
+    (before : LockedFileState image) (unlock : UnlockReport)
+    (openFiles : EStateM IO.Error image files) (lookup : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata))
+    (marked bootstrap : files → EStateM IO.Error image Reopened)
+    (opened : files) (initialized : openFiles before.image = .ok opened before.image)
+    (flatName flatMessage markerName markerMessage : String)
+    (flatAbsent : lookup (directory.file .wal) before.image =
+      .ok (.error (.noFileOrDirectory flatName 2 flatMessage)) before.image)
+    (markerAbsent : lookup (directory.file .walBoundary) before.image =
+      .ok (.error (.noFileOrDirectory markerName 2 markerMessage)) before.image) :
+    let recover := do
+      let files ← openFiles
+      recoverSegmentedWalWith (rejectFlatWalWith directory (optionalMetadataWith (lookup (directory.file .wal))))
+        (optionalMetadataWith (lookup (directory.file .walBoundary))) (marked files) (bootstrap files)
+    runOpenWithInstallation directory descriptor nextRef (.ok true) unlock recover before =
+    runOpenWithInstallation directory descriptor nextRef (.ok true) unlock (bootstrap opened) before := by
+  intro recover
+  have selected : recover before.image = bootstrap opened before.image := by
+    simp only [recover, recoverSegmentedWalWith, rejectFlatWalWith, optionalMetadataWith, Bind.bind, EStateM.bind,
+      initialized, flatAbsent, markerAbsent, Pure.pure, EStateM.pure, Option.isSome_none, Bool.false_eq_true,
+      ↓reduceIte]
+  rw [runOpenWithInstallation_outcome, runOpenWithInstallation_outcome,
+    runOpenWithImage_acquired, runOpenWithImage_acquired, selected]
+
 /-- Successful admission reads and reached durability callbacks start the
 mixed trace with the exact empty session installed by markerless open. -/
 theorem SegmentedDatabaseTrace.fromHealthyBootstrap (directory : DiskDirectory) (descriptor nextRef : Nat)

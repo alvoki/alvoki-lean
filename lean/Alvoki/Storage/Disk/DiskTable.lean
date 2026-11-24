@@ -165,11 +165,16 @@ private def readOptionalFile (path : FilePath) : IO (Option ByteArray) :=
   readOptionalDatabaseFile path.symlinkMetadata.toBaseIO (fun _ => IO.FS.readBinFile path)
     (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
 
-private def optionalMetadata (path : FilePath) : IO (Option IO.FS.Metadata) := do
-  match ← path.symlinkMetadata.toBaseIO with
+/-- Only a no-follow lookup's ENOENT denotes an absent directory entry. -/
+@[macro_inline] def optionalMetadataWith [Monad m] [MonadExceptOf IO.Error m]
+    (lookup : m (Except IO.Error IO.FS.Metadata)) : m (Option IO.FS.Metadata) := do
+  match ← lookup with
   | .ok metadata => pure (some metadata)
   | .error (.noFileOrDirectory _ 2 _) => pure none
   | .error error => throw error
+
+private def optionalMetadata (path : FilePath) : IO (Option IO.FS.Metadata) :=
+  optionalMetadataWith path.symlinkMetadata.toBaseIO
 
 private def checkPrivateRegular (path : FilePath) (metadata : IO.FS.Metadata) : IO Unit := do
   unless metadata.type == .file && metadata.numLinks == 1 do
@@ -223,9 +228,13 @@ private def readEmptyWalSegment (path : FilePath) (nonempty : String) : IO (Opti
   unless metadata.byteSize == 0 do throw (IO.userError nonempty)
   return some ByteArray.empty
 
-private def rejectFlatWal (dir : DiskDirectory) : IO Unit := do
-  if (← optionalMetadata (dir.file .wal)).isSome then
+@[macro_inline] def rejectFlatWalWith [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
+    (metadata : m (Option IO.FS.Metadata)) : m Unit := do
+  if (← metadata).isSome then
     throw (IO.userError s!"unsupported flat WAL binding: '{dir.file .wal}'")
+
+private def rejectFlatWal (dir : DiskDirectory) : IO Unit :=
+  rejectFlatWalWith dir (optionalMetadata (dir.file .wal))
 
 /-- Recover the historical whole-file layout in the publication models. -/
 @[macro_inline] def withRecoveredOpen [Monad m] {α : Type}
@@ -280,15 +289,19 @@ theorem bootstrapSegmented_fileEffects (dir : DiskDirectory) : bootstrapSegmente
       files.syncPaths IO.FS.rename (dir.file .stagedWalBoundary) dir.path (fun _ => dir.file .walBoundary) #[])
     return ⟨.empty, 0, 0, 0⟩) := rfl
 
-private def recoverSegmentedWal (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentRepair.Reopened := do
-  rejectFlatWal dir
-  if (← optionalMetadata (dir.file .walBoundary)).isSome then
-    WalSegmentRepair.reopenMarkedBoundedWithCachedExtents dir readOptionalFile
+/-- Under the writer lock, choose recovery using the visible marker binding. -/
+@[macro_inline] def recoverSegmentedWalWith [Monad m] (rejectFlat : m Unit) (marker : m (Option IO.FS.Metadata))
+    (marked bootstrap : m WalSegmentRepair.Reopened) : m WalSegmentRepair.Reopened := do
+  rejectFlat
+  if (← marker).isSome then marked else bootstrap
+
+private def recoverSegmentedWal (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentRepair.Reopened :=
+  recoverSegmentedWalWith (rejectFlatWal dir) (optionalMetadata (dir.file .walBoundary))
+    (WalSegmentRepair.reopenMarkedBoundedWithCachedExtents dir readOptionalFile
       readCheckpointRunSize readCheckpointRunPrefix readDirectoryChecked inspectWalSegment readSealedWalPrefix
       (readKeeperPrefix files)
-      (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
-  else
-    bootstrapSegmented dir files
+      (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename)
+    (bootstrapSegmented dir files)
 
 private def installReopened (dir : DiskDirectory) (lock : IO.FS.Handle)
     (files : SyncFiles) (opened : WalSegmentRepair.Reopened) : IO DiskTable :=
