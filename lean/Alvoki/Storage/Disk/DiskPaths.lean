@@ -81,4 +81,25 @@ def DiskDirectory.open (input : FilePath) : IO DiskDirectory := do
   else
     throw (IO.userError s!"database path is not absolute: {path}")
 
+/-- The absolute-path check in `DiskDirectory.open`, with reported realpath. -/
+@[macro_inline] def DiskDirectory.openWith [Monad m] [MonadExceptOf IO.Error m]
+    (realPath : FilePath → m FilePath) (input : FilePath) : m DiskDirectory := do
+  let path ← realPath input
+  if absolute : path.toString.startsWith '/' then
+    return ⟨path, absolute⟩
+  else
+    throw (IO.userError s!"database path is not absolute: {path}")
+
+theorem DiskDirectory.open_resolved (input : FilePath) :
+    DiskDirectory.open input = DiskDirectory.openWith IO.FS.realPath input := rfl
+
+/-- The constructor proof is independent of which observation supplied the
+same absolute path. -/
+theorem DiskDirectory.openWith_reported {α : Type}
+    (realPath : FilePath → EStateM IO.Error α FilePath) {input : FilePath} {before : α}
+    (directory : DiskDirectory) (resolved : realPath input before = .ok directory.path before) :
+    DiskDirectory.openWith realPath input before = .ok directory before := by
+  rcases directory with ⟨path, absolute⟩
+  simp [DiskDirectory.openWith, Bind.bind, EStateM.bind, resolved, absolute, Pure.pure, EStateM.pure]
+
 end Alvoki.Storage

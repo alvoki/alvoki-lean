@@ -343,6 +343,35 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
         DiskSession.installReady opened.installed (fun phase => IO.mkRef phase) (fun _ => IO.mkRef ())
           fun phase session => pure ⟨dir, lock, files, phase, session⟩) := rfl
 
+@[macro_inline] def checkPrivateRegularWith [Monad m] [MonadExceptOf IO.Error m]
+    (path : FilePath) (metadata : IO.FS.Metadata) : m Unit := do
+  unless metadata.type == .file && metadata.numLinks == 1 do
+    throw (IO.userError s!"expected a regular database file with one link: '{path}'")
+
+/-- Project the concrete pre-lock admission schedule onto supplied
+primitive callbacks. Successful append-open identifies the handle passed to
+acquisition, including when the lock file has just been created. -/
+@[macro_inline] def DiskTable.withOpenAdmission [Monad m] [MonadExceptOf IO.Error m] {handle result : Type}
+    (input : FilePath) (realPath : FilePath → m FilePath)
+    (lookup : FilePath → m (Except IO.Error IO.FS.Metadata)) (openAppend : FilePath → m handle)
+    (acquire : DiskDirectory → handle → m result) : m result := do
+  let directory ← DiskDirectory.openWith realPath input
+  rejectFlatWalWith directory (optionalMetadataWith (lookup (directory.file .wal)))
+  if let some metadata ← optionalMetadataWith (lookup (directory.file .lock)) then
+    checkPrivateRegularWith (directory.file .lock) metadata
+  let lock ← openAppend (directory.file .lock)
+  acquire directory lock
+
+/-- The native opener is the same admission projection at the concrete IO
+operations, followed by its existing exclusive flock and recovery. -/
+theorem DiskTable.open_admission (input : FilePath) :
+    DiskTable.open input = DiskTable.withOpenAdmission input IO.FS.realPath
+      (fun path => path.symlinkMetadata.toBaseIO) (IO.FS.Handle.mk · .append) (fun directory lock =>
+        DiskSession.openWithLock lock.tryLock
+          (fun _ => IO.userError s!"database already open: {directory.path}") (fun _ => lock.unlock) fun _ => do
+            let files ← SyncFiles.open directory.path
+            installReopened directory lock files (← recoverSegmentedWal directory files)) := rfl
+
 def DiskTable.close (db : DiskTable) : IO Unit := do
   (← db.phase.get).close (fun _ => db.lock.unlock) fun _ => do
     db.files.active.set none
