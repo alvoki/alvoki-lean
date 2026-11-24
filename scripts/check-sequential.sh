@@ -41,6 +41,7 @@ lake env leanchecker Alvoki.Storage.Disk.MarkedAdapterRefinement
 lake env leanchecker Alvoki.Storage.Disk.MarkedWriteTrace
 lake env leanchecker Alvoki.Storage.Disk.MarkedReopenStability
 lake env leanchecker Alvoki.Storage.Disk.MarkedSessionTrace
+lake env leanchecker Alvoki.Storage.Disk.MarkedCheckpointPublication
 lake env leanchecker Alvoki.Storage.Publication.DiskPublication
 lake env leanchecker Alvoki.Storage.Publication.DiskPublicationModel
 lake env leanchecker Alvoki.Storage.Disk.WalBoundary

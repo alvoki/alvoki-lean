@@ -1,0 +1,7 @@
+# Shared checkpoint preparation
+
+The baseline is `bec9690`. The candidate applies the checkpoint preparation change from the commit adding this benchmark to `bec9690`. The preceding proof and fixture commits leave the benchmark executable unchanged. Both builds used Lean `v4.36.0` on Linux 6.18.57 x86-64, an AMD EPYC 9V74 VM, and the overlay filesystem under `/tmp`. The driver and its children were pinned to CPU 1.
+
+Build each checkout by running `lake build alvoki-disk-checkpoint` from `lean/` with the repository's pinned Lean toolchain. From each checkout's `lean/`, invoke `taskset -c 1 .lake/build/bin/alvoki-disk-checkpoint 4 32 3`. Run 12 pairs, alternating baseline first and candidate first. Each invocation does one untimed warm-up and emits three timed trials. The benchmark installs four runs of 32 rows and measures publishing the checkpoint after open. Open, manifest checks and post-checkpoint reopen checks are outside the timer.
+
+`trials.csv` records every emitted sample with its pair and position. The pooled baseline and candidate medians are 10.067 ms and 10.032 ms. For each pair, divide the candidate's three-trial median by the baseline's three-trial median. The median of those ratios is 0.996×. The timing workload starts with an empty memtable. A comparison of `DiskTable.checkpoint` in the builds' `.lake/build/ir/Alvoki/Storage/Disk/DiskTable.c` matched after normalizing local names and the symbol of the newly public `checkpointHeader`, including the branch for pending rows.

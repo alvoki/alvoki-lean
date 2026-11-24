@@ -114,8 +114,15 @@ private def atomicReplace (dir : DiskDirectory) (staged active : DiskFile) (byte
 private def publishWalBoundary (dir : DiskDirectory) (bytes : Nat) (alsoSync : Array FilePath := #[]) : IO Unit :=
   atomicReplace dir .stagedWalBoundary .walBoundary (WAL.Boundary.encode bytes.toUInt64) alsoSync
 
-private def checkpointHeader (table : PackedTable) (generation : UInt64) : Manifest.Checkpoint :=
+/-- The manifest fields for the exact run order published by a checkpoint. -/
+def checkpointHeader (table : PackedTable) (generation : UInt64) : Manifest.Checkpoint :=
   ⟨generation, table.committed, table.pins.floor, table.runs.length.toUInt64⟩
+
+/-- Flush pending rows when preparing a checkpoint, keeping an already
+flushed table's run order and avoiding an extra empty run. -/
+@[macro_inline] def flushForCheckpoint [Monad m] (table : PackedTable)
+    (validate : Except String PackedTable → m PackedTable) : m PackedTable :=
+  if table.memory.rows.isEmpty then pure table else validate table.flush
 
 private def installRuns (runs : List CheckedRun) (header : Manifest.Checkpoint) :
     Except String PackedTable :=
@@ -390,7 +397,7 @@ def DiskTable.compact (db : DiskTable) (index : Nat) : IO Bool := do
 files and WAL frames remain available through interrupted publication. -/
 def DiskTable.checkpoint (db : DiskTable) : IO Unit := do
   let state ← db.installed
-  let table ← if state.table.memory.rows.isEmpty then pure state.table else IO.ofExcept state.table.flush
+  let table ← flushForCheckpoint state.table IO.ofExcept
   let count := table.runs.length
   let next := state.generation.toNat + 1
   unless next < UInt64.size ∧ count < UInt64.size do
