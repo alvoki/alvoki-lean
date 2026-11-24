@@ -303,3 +303,7 @@ The native and modeled adapters share the marker read, marker decode and WAL rea
 ## Clean session closure and opposite write outcomes
 
 A session with only acknowledged writes can close or crash and recover to another ready session with the exact durable history and abstract snapshot reads. The native regression now exercises opposite unknown write outcomes in consecutive sessions. It checks the original checkpoint and exact WAL bytes, discards a complete frame outside the active marker, and writes a different key at the reused ordinal. [Clean recovery proof](../lean/Alvoki/Storage/Disk/MarkedReopenStability.lean) · [Native fixture](../lean/Alvoki/Checks/DiskTableChecks.lean)
+
+## Recovery across writing sessions
+
+`MarkedSessionTrace.refines` passes the table returned by the modeled reopen and the settled file image into the next writing session. With a fixed matching checkpoint, the recovered history contains the original prefix and all acknowledged writes in order. Each session either drops its final ambiguous write or retains its complete submitted frame. A later submission can reuse an ordinal from a dropped write. After at least one reopen, the recovered table agrees with abstract point and range reads at every supported snapshot. [Session trace proof](../lean/Alvoki/Storage/Disk/MarkedSessionTrace.lean)

@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.WalWritePublicationModel
 import Alvoki.Storage.Disk.DiskRecoveryModel
 import Alvoki.Storage.Disk.MarkedAdapterRefinement
 import Alvoki.Storage.Disk.MarkedReopenStability
+import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Publication.DiskPublicationModel
 import Alvoki.Storage.Disk.WalBoundaryModel
 import Alvoki.Storage.Disk.MarkedWalReopenModel
@@ -128,6 +129,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.reopenAfterAcknowledgedWrites_refines
 #check_axioms Alvoki.WAL.Boundary.reopenSettledHistory_refines
 #check_axioms Alvoki.WAL.Boundary.reopenAfterSettledWrites_refines
+#check_axioms Alvoki.WAL.Boundary.MarkedSessionTrace.refines
+#check_axioms Alvoki.WAL.Boundary.MarkedSessionStep.refines
+#check_axioms Alvoki.WAL.Boundary.MarkedSessionRetention.orderedSubmissions
 #check_axioms Alvoki.WAL.Boundary.reopenSettledHistory_completes
 #check_axioms Alvoki.Storage.CheckpointForRecovery.marked_reopen_metadata
 #check_axioms Alvoki.WAL.Boundary.commit_append_error
