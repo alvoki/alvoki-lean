@@ -276,6 +276,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.executeVersioned_legacy
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointVersioned_complete
 #check_axioms Alvoki.Storage.CheckpointPublication.checkpointIntegrity_complete
+#check_axioms Alvoki.Storage.CheckpointPublication.checkpointVersioned_cut_valid
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.reopenSettledWithLock
 #check_axioms Alvoki.WAL.Boundary.ObservedMarkedState.Valid.guardedPinnedReads_preserveLocks
 #check_axioms Alvoki.Storage.DiskSession.runGuardedRead_afterCloseAndReopen

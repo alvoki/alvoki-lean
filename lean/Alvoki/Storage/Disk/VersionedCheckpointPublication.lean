@@ -85,4 +85,91 @@ theorem checkpointIntegrity_complete {walSequence : UInt64} {expected : Checkpoi
   exact ⟨next.header, next.files, Manifest.decode_encode next.header floor, ⟨witness, checked⟩,
     covered, count.symm, fun index _ => durable index⟩
 
+/-- Freshness checks the actual raw bindings and recognizes both manifest versions. -/
+def Image.UnreachableVersioned (image : Image) (generation : UInt64) : Prop :=
+  ∀ bytes, (image.manifest.active = some bytes ∨ some bytes ∈ image.manifest.crashImages) →
+    ∀ selected, VersionedCheckpoint.decode bytes = .ok selected → selected.header.generation ≠ generation
+
+def Image.ValidVersioned (image : Image) (walSequence : UInt64)
+    (expected : Checkpoint → List ByteArray → Prop) : Prop :=
+  image.manifest.Valid (image.AcceptsVersioned walSequence expected)
+
+private theorem keeps_versioned_acceptance {before written : Image} {walSequence : UInt64}
+    {expected : Checkpoint → List ByteArray → Prop} {generation : UInt64}
+    (preserved : ∀ other, other ≠ generation → ∀ index, written.durable other index = before.durable other index)
+    (fresh : before.UnreachableVersioned generation) {binding : Option ByteArray}
+    (selectable : before.manifest.active = binding ∨ binding ∈ before.manifest.crashImages)
+    (accepted : before.AcceptsVersioned walSequence expected binding) :
+    written.AcceptsVersioned walSequence expected binding := by
+  cases binding with
+  | none => trivial
+  | some bytes =>
+    obtain ⟨selected, decoded, witness⟩ := accepted
+    obtain ⟨header, files, canonical, good, covered, count, names⟩ := witness
+    have sameHeader := Except.ok.inj
+      (canonical.symm.trans (Manifest.decode_encode _ (VersionedCheckpoint.decoded_floor decoded)))
+    have different : header.generation ≠ generation := by
+      rw [sameHeader]
+      exact fresh bytes selectable selected decoded
+    exact ⟨selected, decoded, header, files, canonical, good, covered, count,
+      fun index inside => (preserved _ different index).trans (names index inside)⟩
+
+/-- Every cut of the shared publication schedule preserves recoverability
+for both versions. The new files are durable before the manifest suffix can
+select them, and no previously selectable manifest uses the new generation. -/
+theorem checkpointVersioned_cut_valid {initial after : Image} {next : VersionedRunSet} {walSequence : UInt64}
+    {expected : Checkpoint → List ByteArray → Prop}
+    (valid : initial.ValidVersioned walSequence expected)
+    (fresh : initial.UnreachableVersioned next.manifest.header.generation)
+    (decoded : VersionedCheckpoint.decode next.manifest.encode = .ok next.manifest)
+    (count : next.manifest.header.runCount.toNat = next.files.length)
+    (checked : next.manifest.ValidatesFiles next.files)
+    (covered : next.manifest.header.committed ≤ walSequence)
+    (witness : expected next.manifest.header next.files)
+    (cut : Nat) (ran : initial.executeVersioned next cut = some after) : after.ValidVersioned walSequence expected := by
+  by_cases early : cut < (runBarrier next.files.length).length
+  · have beforeRuns : cut ≤ (runSteps next.files.length).length := by
+      simp [runBarrier] at early
+      omega
+    have onlyRuns : (runBarrier next.files.length).take cut = (runSteps next.files.length).take cut := by
+      rw [runBarrier, List.take_append, Nat.sub_eq_zero_of_le beforeRuns, List.take_zero, List.append_nil]
+    have noManifest := Nat.sub_eq_zero_of_le (Nat.le_of_lt early)
+    cases written : initial.execute next.runSet ((runSteps next.files.length).take cut) with
+    | none => simp [Image.executeVersioned, onlyRuns, written] at ran
+    | some fileImage =>
+      have imageEq : fileImage = initial := Image.execute_run_cut_unchanged written
+      have same : some fileImage = some after := by
+        simpa [Image.executeVersioned, onlyRuns, noManifest, written, Publication.Image.execute] using ran
+      have afterEq := (Option.some.inj same).symm.trans imageEq
+      simpa [afterEq] using valid
+  · have allRuns : (runBarrier next.files.length).take cut = runBarrier next.files.length :=
+      List.take_of_length_le (Nat.le_of_not_lt early)
+    obtain ⟨written, ready, sameManifest, durable, preserved⟩ := checkpoint_runs_complete initial next.runSet
+    have allSteps : initial.execute next.runSet (runBarrier next.files.length) = some written := ready
+    have earlier : written.ValidVersioned walSequence expected := by
+      unfold Image.ValidVersioned
+      rw [sameManifest]
+      exact ⟨valid.hasCrashImage,
+        keeps_versioned_acceptance preserved fresh (.inl rfl) valid.activeValid,
+        fun _ survives => keeps_versioned_acceptance preserved fresh (.inr survives) (valid.crashValid _ survives)⟩
+    have installed : written.AcceptsVersioned walSequence expected (some next.manifest.encode) :=
+      ⟨next.manifest, decoded, next.manifest.header, next.files,
+        Manifest.decode_encode _ (VersionedCheckpoint.decoded_floor decoded),
+        ⟨witness, checked⟩, covered, count, fun index _ => durable index⟩
+    let actions := Publication.steps.take (cut - (runBarrier next.files.length).length)
+    change (do
+      let files ← initial.execute next.runSet ((runBarrier next.files.length).take cut)
+      let manifest ← files.manifest.execute next.manifest.encode actions
+      pure { files with manifest }) = some after at ran
+    rw [allRuns, allSteps] at ran
+    cases applied : written.manifest.execute next.manifest.encode actions with
+    | none => simp [applied, bind, Option.bind] at ran
+    | some manifest =>
+      have imageEq : { written with manifest := manifest } = after := by
+        simpa [applied, bind, Option.bind] using ran
+      subst after
+      have path : Publication.Retry (fun _ bytes => written.AcceptsVersioned walSequence expected (some bytes))
+          written.manifest manifest := .attempt (.refl _) installed _ applied
+      exact Publication.retry_preserves (fun _ _ _ validReplacement => validReplacement) earlier path
+
 end Alvoki.Storage.CheckpointPublication

@@ -304,6 +304,13 @@ theorem checkpoint_runs_complete (initial : Image) (next : RunSet) :
   · intro generation disjoint index
     simp [installRunNames, disjoint]
 
+/-- A cut of the run-file operations alone leaves published bindings intact. -/
+theorem Image.execute_run_cut_unchanged {initial after : Image} {next : RunSet} {cut : Nat}
+    (ran : initial.execute next ((runSteps next.files.length).take cut) = some after) : after = initial := by
+  obtain ⟨pending, applied, rfl⟩ := Option.map_eq_some_iff.mp ran
+  exact run_only_does_not_publish _ _ _
+    (fun _ member => runSteps_only _ (List.mem_of_mem_take member)) applied
+
 private theorem old_names_preserved {old : Image} {next : RunSet} {walSequence : UInt64}
     {expected : Manifest.Checkpoint → List ByteArray → Prop}
     (fresh : old.Unreachable next.header.generation) {candidate : Option ByteArray}
