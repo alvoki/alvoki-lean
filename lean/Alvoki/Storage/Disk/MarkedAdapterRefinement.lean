@@ -8,7 +8,9 @@ private theorem appendEncoding_grows (before : List WAL.Write) (event : WAL.Writ
     (WAL.encode before).size < (WAL.encode (before ++ [event])).size := by
   simp [WAL.frameSize, Nat.mul_add]
 
-private theorem writeEffects_reopenMarkerBound (before : List WAL.Write) (event : WAL.Write)
+/-- The admissible marker lengths after a write cut satisfy the bound needed
+by every subsequent repair attempt. -/
+theorem writeEffects_reopenMarkerBound (before : List WAL.Write) (event : WAL.Write)
     (effects : WriteEffects) (manifest : Option ByteArray)
     {stagedMarker stagedManifest stagedWal : Option (ByteArray × Bool)}
     (fits : (WAL.encode (before ++ [event])).size < UInt64.size) :
@@ -267,16 +269,7 @@ theorem reopenAfterAcknowledgedWrites_refines {initial writer : MarkedWriterStat
   let stagedMarker := writer.image.directory.staged .walBoundary
   let stagedManifest := writer.image.directory.staged .manifest
   let stagedWal := writer.image.wal.staged
-  have cutImage : (writeFilesAfter (runWriteEffects writer.history event effects stagedMarker)).reopenImage
-      writer.history manifest stagedManifest stagedWal = cut := by
-    rw [runWriteEffectsFrom_eq current.settled] at failed
-    dsimp only at failed
-    cases result : runWriteEffects writer.history event effects stagedMarker with
-    | ok value files => cases value; rw [result] at failed; contradiction
-    | error error files =>
-      cases error
-      rw [result] at failed
-      exact (EStateM.Result.error.inj failed).2
+  have cutImage := runWriteEffectsFrom_failed_image current.settled failed
   have stableAttempts : MarkedReopenAttempts
       ((writeFilesAfter (runWriteEffects (covered ++ (pending ++ submitted)) event effects stagedMarker)).reopenImage
         (covered ++ (pending ++ submitted)) manifest stagedManifest stagedWal) before := by

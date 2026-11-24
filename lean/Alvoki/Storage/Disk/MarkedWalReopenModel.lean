@@ -613,6 +613,31 @@ def MarkedReopenReads.preflight {image : ReopenImage} (reads : MarkedReopenReads
     Except String MarkedPreflight :=
   markedReopenPreflight reads.checkpoint reads.marker reads.wal
 
+/-- Successful primitive reads, selection and pure replay produce the exact
+preflight used by the shared open. Durability is checked by its own reports. -/
+theorem MarkedReopenReads.preflight_succeeds {before : ReopenImage}
+    (reads : MarkedReopenReads before) {base table : PackedTable} {length : UInt64}
+    {marker contents selected : ByteArray}
+    (checkpointRead : reads.checkpoint = .ok base)
+    (markerRead : reads.marker = .ok (some marker)) (walRead : reads.wal = .ok (some contents))
+    (decoded : decode marker = .ok length) (selection : select length contents = .ok selected)
+    (replay : recoverSelected base selected = .ok table) :
+    reads.preflight = .ok ⟨contents, selected, table⟩ := by
+  have recovered : recoverMarked base length contents = .ok (selected, table) := by
+    unfold recoverMarked
+    rw [selection]
+    change (recoverSelected base selected >>= fun loaded => Except.ok (selected, loaded)) = _
+    rw [replay]
+    rfl
+  unfold MarkedReopenReads.preflight markedReopenPreflight
+  rw [checkpointRead]
+  change (withOpenWal reads.marker reads.wal id _ _) = _
+  rw [markerRead, withOpenWal_marked, decoded, walRead]
+  change (recoverMarked base length contents >>= fun (chosen, loaded) =>
+    Except.ok (⟨contents, chosen, loaded⟩ : MarkedPreflight)) = _
+  rw [recovered]
+  rfl
+
 private theorem MarkedReopenReads.repair {before : ReopenImage}
     (reads : MarkedReopenReads before) (bound : MarkerBound before.directory)
     {validated : MarkedPreflight} (ready : reads.preflight = .ok validated)

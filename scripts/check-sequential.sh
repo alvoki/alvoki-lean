@@ -50,6 +50,7 @@ lake env leanchecker Alvoki.Storage.Disk.MarkedDatabaseState
 lake env leanchecker Alvoki.Storage.Disk.ObservedMarkedState
 lake env leanchecker Alvoki.Storage.Disk.MarkedDatabaseCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.MarkedDatabaseTrace
+lake env leanchecker Alvoki.Storage.Disk.MarkedWriteReopenProgress
 lake env leanchecker Alvoki.Storage.Disk.OptionalFileRead
 lake env leanchecker Alvoki.Storage.Disk.CheckpointFileDispatch
 lake env leanchecker Alvoki.Storage.Disk.DiskSession

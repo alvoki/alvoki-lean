@@ -184,6 +184,23 @@ theorem runWriteEffectsFrom_eq {initial : ReopenImage} {manifest : Option ByteAr
   simp [runWriteEffectsFrom, runWriteEffects, WriteFiles.reopenImage, settled.marker_image,
     settled.1, settled.2.2.1]
 
+/-- Recover the modeled write-cut image after a reported error from a
+settled writer. The marker, WAL and other staging names come from that image. -/
+theorem runWriteEffectsFrom_failed_image {initial cut : ReopenImage}
+    {manifest : Option ByteArray} {before : List WAL.Write}
+    (settled : initial.SettledFor manifest before) {event : WAL.Write} {effects : WriteEffects}
+    (failed : runWriteEffectsFrom before event effects initial = .error () cut) :
+    (writeFilesAfter (runWriteEffects before event effects (initial.directory.staged .walBoundary))).reopenImage
+      before manifest (initial.directory.staged .manifest) initial.wal.staged = cut := by
+  rw [runWriteEffectsFrom_eq settled] at failed
+  dsimp only at failed
+  cases result : runWriteEffects before event effects (initial.directory.staged .walBoundary) with
+  | ok value files => cases value; rw [result] at failed; contradiction
+  | error error files =>
+    cases error
+    rw [result] at failed
+    exact (EStateM.Result.error.inj failed).2
+
 /-- Each physical WAL outcome has its own write-cut witness. The witness
 agrees on the visible marker and covers every marker of a surviving pair. -/
 def WriteFiles.HasWriteCuts (files : WriteFiles) (before : List WAL.Write)

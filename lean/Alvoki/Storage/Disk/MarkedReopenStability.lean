@@ -287,21 +287,8 @@ theorem MarkedReopenReads.completes_exactWal {before : ReopenImage}
   have selected : select bytes.size.toUInt64 bytes = .ok bytes := by
     simpa [bytes] using select_encoded (covered ++ pending) ByteArray.empty fits
   obtain ⟨table, replayed, count⟩ := recoverSelected_encoded_complete base covered pending ordered watermark
-  have recovered : recoverMarked base bytes.size.toUInt64 bytes = .ok (bytes, table) := by
-    unfold recoverMarked
-    rw [selected]
-    change (recoverSelected base bytes >>= fun loaded => Except.ok (bytes, loaded)) = _
-    rw [replayed]
-    rfl
-  have preflight : reads.preflight = .ok ⟨bytes, bytes, table⟩ := by
-    unfold MarkedReopenReads.preflight markedReopenPreflight
-    rw [checkpointRead]
-    change (withOpenWal reads.marker reads.wal id _ _) = _
-    rw [markerRead, withOpenWal_marked, decode_encode, walRead]
-    change (recoverMarked base bytes.size.toUInt64 bytes >>= fun (selected, loaded) =>
-      Except.ok (⟨bytes, selected, loaded⟩ : MarkedPreflight)) = _
-    rw [recovered]
-    rfl
+  have preflight : reads.preflight = .ok ⟨bytes, bytes, table⟩ :=
+    reads.preflight_succeeds checkpointRead markerRead walRead (decode_encode _) selected replayed
   refine ⟨table, ?_, by simpa only [List.length_append] using count⟩
   rw [preflight]
   simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen, Nat.lt_irrefl, ↓reduceIte]

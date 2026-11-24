@@ -399,3 +399,7 @@ The native disk fixture traced with `strace -f -e trace=flock` observes exclusiv
 ## Healthy reopen from each legacy retry image
 
 Once the selected files are readable and the required durability operations succeed, either admitted marker observation completes through the shared open control. The resulting writer has the validated checkpoint plus its exact WAL suffix, a settled copy of the canonical WAL, the expected generation and byte count, and an empty pin registry. Comparing that recovered table to replay from empty requires the older checkpoint to represent its covered prefix. [Legacy retry completion](../lean/Alvoki/Storage/Disk/LegacyBootstrapRetry.lean)
+
+## Healthy reopen after an uncertain marked WAL write
+
+After the write reports an error, its actual publication report and the subsequent modeled reopen attempts determine the visible WAL and checkpoint. Once the selected reads and required durability calls succeed, the shared marked open returns the expected table, generation and byte count. The settled history contains every previously acknowledged frame, optionally followed by the exact frame submitted by the failed call. The selected checkpoint remains fixed across this transition. [Uncertain-write retry](../lean/Alvoki/Storage/Disk/MarkedWriteReopenProgress.lean)
