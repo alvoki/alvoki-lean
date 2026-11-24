@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.MarkedDatabaseCheckpoint
 import Alvoki.Storage.Disk.ObservedMarkedState
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
+import Alvoki.Storage.Disk.MarkedOpenControl
 
 namespace Alvoki.WAL.Boundary
 open Storage
@@ -59,6 +60,42 @@ inductive MarkedDatabaseStep (state : ObservedMarkedState) : MarkedSessionWrites
       (observed : MarkedWriterState.observeReopen table after = some writer)
       {loaded : Option (PackedTable × UInt64)} (read : checkpointReads.result = .ok loaded) :
       MarkedDatabaseStep state ⟨[], none⟩ ⟨writer, (loaded.getD (.empty, 0)).2, published.durable⟩
+
+/-- The shared open control supplies the successful reopen in a fixed
+checkpoint session from its exact reported table and file image. -/
+theorem MarkedSessionOpen.ofSharedOpen {durable : CheckpointPublication.RunFiles}
+    {cut before after : ReopenImage} {table : PackedTable} {generation : UInt64} {walBytes : Nat}
+    (attempts : MarkedReopenAttempts cut before) (marked : before.directory.active.walBoundary ≠ none)
+    (checkpointReads : CheckpointFileReads durable before.directory.active.manifest)
+    (walReads : MarkedWalReads before) {report : Publication.Step → RepairReport} {aligned : AlignedSyncReport}
+    (opened : runSharedMarkedOpen checkpointReads.result walReads.marker walReads.wal report aligned before =
+      .ok (table, generation, walBytes) after) :
+    MarkedSessionOpen durable cut table after := by
+  let image : CheckpointPublication.Image := ⟨before.directory.project .manifest, durable⟩
+  obtain ⟨_, _, _, _, recovered, _, _⟩ :=
+    walReads.runSharedMarkedOpen_success (image := image) marked checkpointReads opened
+  exact .observed attempts checkpointReads walReads recovered
+
+/-- After a reported checkpoint error, the shared open control supplies the
+returned writer and the generation that was read from the selected files. -/
+theorem MarkedDatabaseStep.interruptedCheckpointFromOpen {state : ObservedMarkedState}
+    (prepared : CheckpointPreparation state) {published : CheckpointPublication.Image}
+    {checkpointReport : CheckpointPublication.Step → CheckpointPublication.StepReport}
+    (reported : state.publicationInput.runWithReports prepared.runs checkpointReport = .error () published)
+    {before after : ReopenImage} {table : PackedTable} {writer : MarkedWriterState}
+    {generation : UInt64} {walBytes : Nat}
+    (attempts : MarkedReopenAttempts (published.markedReopenImage state.writer.image) before)
+    (marked : before.directory.active.walBoundary ≠ none)
+    (checkpointReads : CheckpointReadObservations published before.directory.active.manifest)
+    (walReads : MarkedWalReads before) {report : Publication.Step → RepairReport} {aligned : AlignedSyncReport}
+    (opened : runSharedMarkedOpen checkpointReads.result walReads.marker walReads.wal report aligned before =
+      .ok (table, generation, walBytes) after)
+    (observed : MarkedWriterState.observeReopen table after = some writer) :
+    MarkedDatabaseStep state ⟨[], none⟩ ⟨writer, generation, published.durable⟩ := by
+  obtain ⟨loaded, _, read, _, recovered, installed, _⟩ :=
+    walReads.runSharedMarkedOpen_success marked checkpointReads opened
+  subst generation
+  exact .interruptedCheckpoint prepared reported attempts checkpointReads walReads recovered observed read
 
 private theorem samePublicationInput {state : ObservedMarkedState} {fixed : FixedMarkedCheckpoint}
     (durable : fixed.image.durable = state.durable) :

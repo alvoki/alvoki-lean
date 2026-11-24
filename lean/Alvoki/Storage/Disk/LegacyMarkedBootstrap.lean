@@ -61,6 +61,25 @@ def runLegacyMarkedOpen (checkpoint : Except String (Option (PackedTable × UInt
     Publication.run (performLegacyMarker reports.marker (encode validated.selected.size.toUInt64))
     return (table, generation, validated.selected.size)
 
+/-- The observed existing-WAL, absent-marker branch and the executable open
+schedule interpret the same callbacks. The equality includes the file image
+returned after any reported effect, including an effect before an error. -/
+theorem runLegacyMarkedOpen_eq_shared (checkpoint : Option (PackedTable × UInt64))
+    (bytes : ByteArray) (reports : LegacyOpenReports) :
+    runLegacyMarkedOpen (.ok checkpoint) (.ok none) (.ok (some bytes)) reports =
+      withRecoveredOpen (m := EStateM String ReopenImage) checkpoint (pure none) (pure (some bytes))
+        (fun result => match result with | .ok value => pure value | .error message => throw message)
+        (fun message => throw message) (fun _ => throw "expected an existing legacy WAL")
+        (fun selected => Publication.run (performRepair reports.repair selected))
+        (fun _ => performAlignedSync false reports.aligned)
+        (fun length => Publication.run (performLegacyMarker reports.marker (encode length.toUInt64)))
+        (fun table generation length => pure (table, generation, length)) := by
+  funext before
+  cases recovered : recoverLegacy (checkpoint.getD (.empty, 0)).1 bytes <;>
+    simp [runLegacyMarkedOpen, legacyPreflight, withRecoveredOpen, withOpenWal, Option.mapM,
+      recovered, Bind.bind, Except.bind, EStateM.bind, Pure.pure, Except.pure, EStateM.pure,
+      runMarkedReopen, Publication.finishReopen] <;> rfl
+
 private def afterLegacyMarker (before : ReopenImage) (bytes : ByteArray) : ReopenImage :=
   let bindings := before.directory.active.replace .walBoundary bytes
   { before with directory := ⟨bindings, [bindings], fun entry =>

@@ -354,7 +354,8 @@ private theorem ReopenImage.repairSteps_prefix (image : ReopenImage) (trimmed : 
     rw [List.take_of_length_le complete, repairCut, List.take_of_length_le complete, ite_eq_left complete]
     rfl
 
-private def performRepair (report : Publication.Step → RepairReport) (trimmed : ByteArray)
+/-- Interpret one reported operation of the shared WAL replacement schedule. -/
+def performRepair (report : Publication.Step → RepairReport) (trimmed : ByteArray)
     (action : Publication.Step) : EStateM String ReopenImage Unit := fun image =>
   match report action with
   | .success =>

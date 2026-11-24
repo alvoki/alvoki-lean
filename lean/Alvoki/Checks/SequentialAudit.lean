@@ -16,6 +16,7 @@ import Alvoki.Storage.Disk.MarkedDatabaseTrace
 import Alvoki.Storage.Disk.OptionalFileRead
 import Alvoki.Storage.Disk.CheckpointFileDispatch
 import Alvoki.Storage.Disk.SessionReadGuards
+import Alvoki.Storage.Disk.MarkedOpenControl
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.LegacyWalRecovery
 import Alvoki.Storage.Disk.LegacyMarkedBootstrap
@@ -215,6 +216,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.freshMarkedOpen_ready
 #check_axioms Alvoki.WAL.Boundary.emptyBootstrapOpen_ready
 #check_axioms Alvoki.WAL.Boundary.legacyMarkedOpen_ready
+#check_axioms Alvoki.WAL.Boundary.runLegacyMarkedOpen_eq_shared
+#check_axioms Alvoki.WAL.Boundary.runSharedMarkedOpen_eq
+#check_axioms Alvoki.WAL.Boundary.MarkedWalReads.runSharedMarkedOpen_eq
+#check_axioms Alvoki.WAL.Boundary.MarkedWalReads.runSharedMarkedOpen_success
+#check_axioms Alvoki.WAL.Boundary.MarkedSessionOpen.ofSharedOpen
+#check_axioms Alvoki.WAL.Boundary.MarkedDatabaseStep.interruptedCheckpointFromOpen
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.LegacyBootstrapValid.adoptReport
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.LegacyBootstrapValid.crash
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.LegacyBootstrapValid.replay
