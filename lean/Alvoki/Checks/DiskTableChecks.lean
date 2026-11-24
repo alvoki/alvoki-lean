@@ -40,6 +40,19 @@ private def expectManifest (dir : FilePath) (generation watermark floor runCount
   let files ← (List.range runCount.toNat).mapM fun index => IO.FS.readBinFile (dir / s!"run-{generation}-{index}.v3")
   check (manifest.validateRuns files) "manifest does not identify the exact ordered run files"
 
+private def expectSnapshot (db : DiskTable) (sequence : UInt64)
+    (expected : List (UInt64 × Option UInt64)) : IO Unit := do
+  let some pin ← db.acquireAt sequence
+    | throw (IO.userError s!"missing retained snapshot at sequence {sequence}")
+  try
+    let rows := (← db.range pin.handle 0 8).map (List.map fun row => (row.key, row.payload))
+    check (rows == some expected) s!"unexpected retained range at sequence {sequence}"
+    for key in [:8] do
+      let value := (expected.find? (·.1 == key.toUInt64)).bind (·.2)
+      check ((← db.lookup pin.handle key.toUInt64) == some value)
+        s!"unexpected point read of key {key} at sequence {sequence}"
+  finally db.release pin.handle
+
 private def checkCodecs : IO Unit := do
   let first : WAL.Write := ⟨1, 4, some 40⟩
   let second : WAL.Write := ⟨2, 7, none⟩
@@ -1000,6 +1013,104 @@ private def checkPublicSparsePruneRetry (root : FilePath) : IO Unit := do
   finally recovered.close
   expectFiles (WAL.encode [second, replacement]) (WAL.Boundary.encode (3 * WAL.frameSize).toUInt64)
 
+private def checkFirstBoundedCheckpointOpen (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "db"
+  IO.FS.createDir dir
+  let dir := (← DiskDirectory.open dir).path
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 4 (some 40)) == 1) "unexpected first checkpoint ordinal"
+    db.checkpoint
+    db.rotateWal
+    check ((← db.write 7 (some 70)) == 2) "unexpected second checkpoint ordinal"
+    check (← db.advanceFloor 1) "could not set the retained checkpoint floor"
+    db.checkpoint
+    -- The checkpoint covers one frame in the first selected sealed span.
+    check ((← db.write 4 (some 41)) == 3) "unexpected first replay ordinal"
+    db.rotateWal
+    check ((← db.write 7 none) == 4) "unexpected second replay ordinal"
+    db.rotateWal
+    check ((← db.write 6 (some 60)) == 5) "unexpected keeper ordinal"
+  finally db.close
+  let runFirst := dir / "run-2-0.v3"
+  let runSecond := dir / "run-2-1.v3"
+  let firstRun := Compaction.encodeV3 [⟨4, 1, (0, 40)⟩]
+  let secondRun := Compaction.encodeV3 [⟨7, 2, (0, 70)⟩]
+  check (firstRun.size == secondRun.size && firstRun != secondRun)
+    "reordered run fixture requires distinct equal-length payloads"
+  let manifest := dir / "MANIFEST"
+  let checkpoint := (Manifest.IntegrityCheckpoint.fromRuns ⟨2, 2, 1, 2⟩ [firstRun, secondRun]).encode
+  let sealed := dir / "WAL-segment-1"
+  let sealedBytes := WAL.encode [⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩]
+  let keeper := dir / "WAL-segment-4"
+  let keeperWrite : WAL.Write := ⟨5, 6, some 60⟩
+  let retained := WAL.encodeFrame keeperWrite
+  let excess := retained ++ WAL.encodeFrame ⟨6, 4, none⟩ ++ ByteArray.mk #[12, 34]
+  let later := dir / "WAL-segment-6"
+  let laterBytes := ByteArray.mk #[255]
+  let marker := dir / "WAL.commit"
+  let boundary := fun (sequence : Nat) => WAL.Boundary.encode (sequence * WAL.frameSize).toUInt64
+  let fixed := [(dir / firstWalSegment, WAL.encodeFrame ⟨1, 4, some 40⟩),
+    (dir / "WAL-segment-3", WAL.encodeFrame ⟨4, 7, none⟩)]
+  let expectFiles := fun (files : List (FilePath × ByteArray)) => do
+    for (path, bytes) in fixed ++ files do
+      check ((← IO.FS.readBinFile path) == bytes) s!"unexpected bounded reopen bytes in {path}"
+    check (!(← (dir / "WAL.next").pathExists) && !(← (dir / "WAL.commit.next").pathExists))
+      "bounded reopen left a WAL staging file"
+  let selected := [(manifest, checkpoint), (runFirst, firstRun), (runSecond, secondRun), (sealed, sealedBytes)]
+  expectFiles (selected ++ [(keeper, retained), (marker, boundary 5)])
+  IO.FS.writeBinFile keeper excess
+  IO.FS.writeBinFile later laterBytes
+  let expectInvalidOpen := fun (cause : String) (files : List (FilePath × ByteArray)) => do
+    match ← (DiskTable.open dir).toBaseIO with
+    | .error (.userError message) => check (message == cause) s!"unexpected bounded open error {message}"
+    | .error error => throw error
+    | .ok opened =>
+      opened.close
+      throw (IO.userError s!"bounded open accepted invalid data expected to report {cause}")
+    let (opened, syncs) ← probeDisk bin dir none
+    check (!opened && syncs.isEmpty) "invalid bounded open reached the WAL sync protocol"
+    expectFiles (files ++ [(manifest, checkpoint), (keeper, excess), (later, laterBytes), (marker, boundary 5)])
+  IO.FS.writeBinFile runFirst secondRun
+  IO.FS.writeBinFile runSecond firstRun
+  expectInvalidOpen checkpointIntegrityMismatch
+    [(runFirst, secondRun), (runSecond, firstRun), (sealed, sealedBytes)]
+  IO.FS.writeBinFile runFirst firstRun
+  IO.FS.writeBinFile runSecond secondRun
+  let corrupt := sealedBytes.set! 40 (sealedBytes[40]! ^^^ 1)
+  IO.FS.writeBinFile sealed corrupt
+  expectInvalidOpen "WAL checksum mismatch" [(runFirst, firstRun), (runSecond, secondRun), (sealed, corrupt)]
+  IO.FS.writeBinFile sealed sealedBytes
+
+  let recovered ← DiskTable.open dir
+  try
+    expectFiles (selected ++ [(keeper, retained), (marker, boundary 5)])
+    check (!(← later.pathExists)) "bounded reopen kept an unselected later segment"
+    check ((← recovered.acquireAt 0).isNone) "bounded reopen lost the checkpoint floor"
+    expectSnapshot recovered 1 [(4, some 40)]
+    expectSnapshot recovered 2 [(4, some 40), (7, some 70)]
+    expectSnapshot recovered 3 [(4, some 41), (7, some 70)]
+    expectSnapshot recovered 4 [(4, some 41)]
+    expectSnapshot recovered 5 [(4, some 41), (6, some 60)]
+    let latest ← recovered.acquire
+    check (latest.sequence == 5) "bounded reopen installed the wrong last sequence"
+    recovered.release latest.handle
+    let appended : WAL.Write := ⟨6, 7, some 71⟩
+    check ((← recovered.write appended.key appended.value) == appended.sequence)
+      "bounded reopen appended at the wrong ordinal"
+    let activeBytes := WAL.encode [keeperWrite, appended]
+    expectFiles (selected ++ [(keeper, activeBytes), (marker, boundary 6)])
+    expectSnapshot recovered 6 [(4, some 41), (6, some 60), (7, some 71)]
+    recovered.checkpoint
+    expectManifest dir 3 6 1 3
+    let suffixRun := Compaction.encodeV3 [⟨4, 3, (0, 41)⟩, ⟨6, 5, (0, 60)⟩,
+      ⟨7, 6, (0, 71)⟩, ⟨7, 4, (1, 0)⟩]
+    expectFiles [(runFirst, firstRun), (runSecond, secondRun), (sealed, sealedBytes),
+      (keeper, activeBytes), (marker, boundary 6), (dir / "run-3-0.v3", firstRun),
+      (dir / "run-3-1.v3", secondRun), (dir / "run-3-2.v3", suffixRun)]
+  finally recovered.close
+
 private def checkRetrySync (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
@@ -1098,18 +1209,6 @@ private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
       (← IO.FS.readBinFile marker) = WAL.Boundary.encode encoded.size.toUInt64))
       "write and reopen trace changed the selected WAL history"
     expectCheckpoint
-  let expectSnapshot := fun (db : DiskTable) (sequence : UInt64)
-      (expected : List (UInt64 × Option UInt64)) => do
-    let some pin ← db.acquireAt sequence
-      | throw (IO.userError s!"missing retained snapshot at sequence {sequence}")
-    try
-      let rows := (← db.range pin.handle 0 8).map (List.map fun row => (row.key, row.payload))
-      check (rows == some expected) s!"unexpected retained range at sequence {sequence}"
-      for key in [:8] do
-        let value := (expected.find? (·.1 == key.toUInt64)).bind (·.2)
-        check ((← db.lookup pin.handle key.toUInt64) == some value)
-          s!"unexpected point read of key {key} at sequence {sequence}"
-    finally db.release pin.handle
   let acknowledged : List WAL.Write := [⟨1, 4, some 40⟩, ⟨2, 7, some 70⟩, ⟨3, 4, some 41⟩,
     ⟨4, 7, none⟩, ⟨5, 6, some 60⟩]
   expectFiles acknowledged
@@ -1734,6 +1833,7 @@ def main (args : List String) : IO Unit := do
     for failDirectory in [false, true] do
       IO.FS.withTempDir (checkProductionWalRotation · failDirectory)
     IO.FS.withTempDir checkPublicSparsePruneRetry
+    IO.FS.withTempDir checkFirstBoundedCheckpointOpen
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkWritesAcrossReopens
     IO.FS.withTempDir checkGroupedSyncPartialEffects
