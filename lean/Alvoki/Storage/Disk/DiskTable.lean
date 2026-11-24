@@ -209,32 +209,23 @@ private def rejectFlatWal (dir : DiskDirectory) : IO Unit := do
         publishMarker 0
         install .empty 0 0
 
-private def conflictsWithBootstrap (name : String) : Bool :=
-  name == "MANIFEST" || name == "MANIFEST.next" || name == "WAL.next" ||
-    (name.startsWith "WAL-segment-" && name != renderWalSegmentName 0) ||
-    (parseRunFileName name).isSome
-
-private def bootstrapSegmented (dir : DiskDirectory) : IO WalSegmentRepair.Reopened := do
-  let entries ← dir.path.readDir
-  if entries.any (fun entry => conflictsWithBootstrap entry.fileName) then
-    throw (IO.userError WAL.Boundary.missingOpenMarker)
-  let empty ← readEmptyWalSegment (dir.file (.walSegment 0)) WAL.Boundary.missingOpenMarker
-  if let some staged ← optionalMetadata (dir.file .stagedWalBoundary) then
-    unless staged.type == .file && empty.isSome do
-      throw (IO.userError WAL.Boundary.missingOpenMarker)
-  WalSegmentRepair.bootstrapEmptyWith dir empty WalSegmentRotation.createEmptyExclusive
-    writeFreshStagedFile syncPaths IO.FS.rename
+private def bootstrapSegmented (dir : DiskDirectory) : IO WalSegmentRepair.Reopened :=
+  WalSegmentRepair.bootstrapSegmentedWith dir FilePath.readDir
+    (readEmptyWalSegment · WAL.Boundary.missingOpenMarker) optionalMetadata
+    WalSegmentRotation.createEmptyExclusive writeFreshStagedFile syncPaths IO.FS.rename
 
 /-- Check the markerless layout before creating or syncing segment zero,
 then publish the zero marker through the staged replacement schedule. -/
 theorem bootstrapSegmented_fileEffects (dir : DiskDirectory) : bootstrapSegmented dir = (do
-    let entries ← dir.path.readDir
-    if entries.any (fun entry => conflictsWithBootstrap entry.fileName) then
-      throw (IO.userError WAL.Boundary.missingOpenMarker)
-    let empty ← readEmptyWalSegment (dir.file (.walSegment 0)) WAL.Boundary.missingOpenMarker
-    if let some staged ← optionalMetadata (dir.file .stagedWalBoundary) then
-      unless staged.type == .file && empty.isSome do
+    let empty ← (do
+      let entries ← dir.path.readDir
+      if entries.any (fun entry => WalSegmentRepair.conflictsWithBootstrap entry.fileName) then
         throw (IO.userError WAL.Boundary.missingOpenMarker)
+      let empty ← readEmptyWalSegment (dir.file (.walSegment 0)) WAL.Boundary.missingOpenMarker
+      if let some staged ← optionalMetadata (dir.file .stagedWalBoundary) then
+        unless staged.type == .file && empty.isSome do
+          throw (IO.userError WAL.Boundary.missingOpenMarker)
+      pure empty : IO (Option ByteArray))
     WalSegmentRotation.runAt dir 0 (fun _ => pure empty)
       WalSegmentRotation.createEmptyExclusive (fun path => syncPaths #[path])
     Publication.run (Publication.performReplacement (writeFreshStagedFile · (WAL.Boundary.encode 0))
