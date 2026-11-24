@@ -5,8 +5,8 @@ import Alvoki.Storage.Disk.IntegrityCheckpointRead
 import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.RunFileSelection
 import Alvoki.Storage.Disk.StagingFile
+import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.WalSegmentCommit
-import Alvoki.Storage.Disk.WalGroupSyncSchedule
 import Alvoki.Storage.Disk.WalSegmentBootstrapIO
 import Alvoki.Storage.Disk.WalSegmentCollectionPlan
 import Alvoki.Storage.Disk.WalSegmentRotationIO
@@ -89,19 +89,9 @@ private def SyncFiles.append (files : SyncFiles) (path : FilePath) (bytes : Byte
     throw error
   files.active.set (some (path, wal))
 
-private def SyncFiles.sync (files : SyncFiles) (path : FilePath) : IO Unit := do
-  let file ← if path == files.dir then do
-    let some handle ← files.directory.get | throw (IO.userError "database is closed")
-    pure handle
-  else do
-    let pending ← files.pending.get
-    if let some (_, handle) := pending.find? (fun entry => entry.1 == path) then
-      files.pending.set (pending.filter (fun entry => entry.1 != path))
-      pure handle
-    else if let some (active, handle) ← files.active.get then
-      if active == path then pure handle else IO.FS.Handle.mk path .read
-    else IO.FS.Handle.mk path .read
-  fsyncHandle file
+private def SyncFiles.sync (files : SyncFiles) (path : FilePath) : IO Unit :=
+  SyncHandleRouting.syncWithHandles files.dir path files.directory.get files.pending.get
+    files.pending.set files.active.get (fun path => IO.FS.Handle.mk path .read) fsyncHandle
 
 /-- A failed member of a grouped barrier does not prevent attempts on the
 remaining members. Rename is allowed only if the entire barrier succeeds. -/

@@ -4,6 +4,26 @@ namespace Alvoki.Storage.SyncHandleRouting
 
 open System
 
+/-- Use only the cache fields required by this lookup. A pending match
+removes every entry for the path before the chosen handle is synced. -/
+@[macro_inline] def syncWithHandles [Monad m] [MonadExceptOf IO.Error m] {handle : Type}
+    (dir path : FilePath) (getDirectory : m (Option handle))
+    (getPending : m (List (FilePath × handle))) (setPending : List (FilePath × handle) → m Unit)
+    (getActive : m (Option (FilePath × handle))) (openRead : FilePath → m handle)
+    (fsync : handle → m Unit) : m Unit := do
+  let file ← if path == dir then do
+    let some handle ← getDirectory | throw (IO.userError "database is closed")
+    pure handle
+  else do
+    let pending ← getPending
+    if let some (_, handle) := pending.find? (fun entry => entry.1 == path) then
+      setPending (pending.filter (fun entry => entry.1 != path))
+      pure handle
+    else if let some (active, handle) ← getActive then
+      if active == path then pure handle else openRead path
+    else openRead path
+  fsync file
+
 /-- Each handle token identifies the captured open description. The
 external state records filesystem effects separately from the cache. -/
 structure Cache (handle : Type) where
@@ -49,6 +69,53 @@ def sync (dir : FilePath) (openRead : FilePath → EStateM IO.Error state handle
   match cache.resolve dir path openRead before with
   | .ok descriptor (cache, atEffect) => withCache cache (fsync descriptor atEffect)
   | .error cause after => .error cause after
+
+private def readCache (get : Cache handle → α) : EStateM IO.Error (Cache handle × state) α :=
+  fun before => .ok (get before.1) before
+
+private def setPending (pending : List (FilePath × handle)) :
+    EStateM IO.Error (Cache handle × state) Unit :=
+  fun (cache, before) => .ok () ({cache with pending}, before)
+
+private def onFiles (act : EStateM IO.Error state α) :
+    EStateM IO.Error (Cache handle × state) α :=
+  fun (cache, before) => withCache cache (act before)
+
+/-- The selector used by the adapter has the exact modeled schedule
+when ref reads and writes are interpreted as cache actions. The supplied
+open and fsync callbacks still determine object identity and file effects. -/
+theorem syncWithHandles_cache (dir path : FilePath) (cache : Cache handle) (before : state)
+    (openRead : FilePath → EStateM IO.Error state handle)
+    (fsync : handle → EStateM IO.Error state Unit) :
+    syncWithHandles dir path (readCache Cache.directory) (readCache Cache.pending)
+      setPending (readCache Cache.active) (fun path => onFiles (openRead path))
+      (fun handle => onFiles (fsync handle)) (cache, before) =
+        sync dir openRead fsync path (cache, before) := by
+  by_cases directory : path = dir
+  · cases found : cache.directory <;>
+      simp [syncWithHandles, sync, Cache.resolve, directory, found,
+        readCache, onFiles, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, throw, throwThe,
+        MonadExceptOf.throw, EStateM.throw]
+  · cases pending : cache.pending.find? (fun entry => entry.1 == path) with
+    | some entry =>
+      obtain ⟨_, captured⟩ := entry
+      simp [syncWithHandles, sync, Cache.resolve, directory, pending, readCache, setPending,
+        Cache.consume, onFiles, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+    | none =>
+      cases active : cache.active with
+      | none =>
+        cases report : openRead path before <;>
+          simp [syncWithHandles, sync, Cache.resolve, directory, pending, active,
+            readCache, onFiles, withCache, Bind.bind, EStateM.bind, report]
+      | some entry =>
+        obtain ⟨name, captured⟩ := entry
+        by_cases same : path = name
+        · subst name
+          simp [syncWithHandles, sync, Cache.resolve, directory, pending, active,
+            readCache, onFiles, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+        · cases report : openRead path before <;>
+            simp [syncWithHandles, sync, Cache.resolve, directory, pending, active, Ne.symm same,
+              readCache, onFiles, withCache, Bind.bind, EStateM.bind, report]
 
 /-- Under ownership, each selectable cached description names the inode
 currently bound to its recorded path. A handle may be used for delayed
