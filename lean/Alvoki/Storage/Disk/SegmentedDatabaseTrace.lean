@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.MarkedSessionTrace
 import Alvoki.Storage.Disk.SegmentedAppendRecovery
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.SegmentedCleanReopen
+import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
 import Alvoki.Storage.Disk.SegmentedRotationRecovery
 import Alvoki.Storage.Disk.SegmentedRotationStep
 import Alvoki.Storage.Disk.SegmentedWriterTrace
@@ -28,6 +29,11 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
   | close {log writer descriptor before after}
       (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
       (report : SegmentedCleanReopenReport directory before writer descriptor)
+      (observed : report.Valid) (endpoint : report.Installs after) :
+      SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
+  | powerLoss {log writer descriptor before after}
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial log writer before)
+      (report : SegmentedReadyPowerLossReport directory before writer descriptor)
       (observed : report.Valid) (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial log descriptor after
   | appendError {log writer descriptor before after}
@@ -63,6 +69,9 @@ theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initi
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨report.preservesReady before selected, retained, history, submitted⟩
   | close _ _ observed endpoint ih =>
+    obtain ⟨before, retained, history, submitted⟩ := ih
+    exact ⟨endpoint.preservesReady observed before, retained, endpoint.history.trans history, submitted⟩
+  | powerLoss _ _ observed endpoint ih =>
     obtain ⟨before, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesReady observed before, retained, endpoint.history.trans history, submitted⟩
   | appendError _ report endpoint ih =>

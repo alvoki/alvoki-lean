@@ -696,6 +696,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.cleanReopen
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCleanReopenReport.Installs.preservesReady
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.powerLossTrace
+#check_axioms Alvoki.Storage.DiskSession.SegmentedReadyPowerLossReport.installs
+#check_axioms Alvoki.Storage.DiskSession.SegmentedReadyPowerLossReport.Installs.unique
+#check_axioms Alvoki.Storage.DiskSession.SegmentedReadyPowerLossReport.Installs.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromBootstrap
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.pinnedReads
