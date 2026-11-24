@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.LockedMarkedReopenFailureTrace
+import Alvoki.Storage.Disk.SegmentedSessionInstall
 
 namespace Alvoki.Storage.DiskSession
 
@@ -46,14 +47,88 @@ theorem HeldLockReferences.mem_remaining {description : Nat}
       reference ∈ references.live ∧ ∀ event ∈ drops, event.removes reference = false := by
   simp only [remaining, List.mem_filter, List.all_eq_true, Bool.not_eq_true']
 
-/-- Release only the matching lock when the completed events consumed every
-reference. The owner map and file image need no other change. -/
+private def HeldLockReferences.ownersAfterDrops {description : Nat}
+    (references : HeldLockReferences description) (drops : List LockReferenceDrop)
+    (directory : DiskDirectory) (owners : LockOwners) : LockOwners :=
+  if (references.remaining drops).isEmpty then
+    owners.release (directory.file .lock) description
+  else owners
+
+/-- Apply observed reference drops to the whole-file reopen state. -/
 def HeldLockReferences.afterDrops {description : Nat}
     (references : HeldLockReferences description) (drops : List LockReferenceDrop)
     (directory : DiskDirectory) (before : LockedReopenState) : LockedReopenState :=
-  if (references.remaining drops).isEmpty then
-    ⟨before.image, before.owners.release (directory.file .lock) description⟩
-  else before
+  { before with owners := references.ownersAfterDrops drops directory before.owners }
+
+/-- Observed reference drops change only ownership of the matching lock.
+The file image survives even when the description's last reference is gone. -/
+def HeldLockReferences.afterFileDrops {image : Type} {description : Nat}
+    (references : HeldLockReferences description) (drops : List LockReferenceDrop)
+    (directory : DiskDirectory) (before : LockedFileState image) : LockedFileState image :=
+  { before with owners := references.ownersAfterDrops drops directory before.owners }
+
+theorem HeldLockReferences.afterFileDrops_surviving {image : Type} {description : Nat}
+    {directory : DiskDirectory} {before : LockedFileState image} {drops : List LockReferenceDrop}
+    (references : HeldLockReferences description) (retained : references.remaining drops ≠ []) :
+    references.afterFileDrops drops directory before = before := by
+  simp [afterFileDrops, ownersAfterDrops, List.isEmpty_eq_false_iff.mpr retained]
+
+theorem HeldLockReferences.afterFileDrops_released {image : Type} {description : Nat}
+    {directory : DiskDirectory} {before : LockedFileState image} {drops : List LockReferenceDrop}
+    (references : HeldLockReferences description) (ownership : before.owners.Owns directory description)
+    (last : references.remaining drops = []) :
+    references.afterFileDrops drops directory before =
+      ⟨before.image, before.owners.set (directory.file .lock) none⟩ := by
+  simp [afterFileDrops, ownersAfterDrops, last, LockOwners.release_owned ownership]
+
+/-- The shared open schedule reaches neither recovery nor ready installation
+while any observed reference keeps the exclusive lock description live. -/
+theorem runOpenWithInstallation_whileReferenceSurvives {image : Type}
+    {directory : DiskDirectory} {before : LockedFileState image} {description descriptor nextRef : Nat}
+    {drops : List LockReferenceDrop} {acquired : Except IO.Error Bool}
+    (references : HeldLockReferences description) (ownership : before.owners.Owns directory description)
+    (retained : references.remaining drops ≠ [])
+    (acquisition : TryLockObserves (references.afterFileDrops drops directory before).owners directory acquired)
+    (unlock : UnlockReport) (recover : EStateM IO.Error image WalSegmentRepair.Reopened) :
+    ∃ cause, runOpenWithInstallation directory descriptor nextRef acquired unlock recover
+      (references.afterFileDrops drops directory before) = .error cause before := by
+  rw [references.afterFileDrops_surviving retained] at acquisition ⊢
+  have denied : acquired ≠ .ok true := by
+    intro took
+    have lockHeld := ownership
+    change before.owners (directory.file .lock) = some description at lockHeld
+    rw [acquisition took] at lockHeld
+    contradiction
+  obtain ⟨cause, refused⟩ := runOpenWithImage_notAcquired directory descriptor acquired unlock recover before denied
+  exact ⟨cause, by rw [runOpenWithInstallation_outcome, refused]⟩
+
+/-- Once the last reference drops, the same lock admits a reported healthy
+open on the exact preceding image. Only its owner entry is replaced. -/
+theorem runOpenWithInstallation_afterLastReferenceDrop {image : Type}
+    {directory : DiskDirectory} {before : LockedFileState image} {description descriptor nextRef : Nat}
+    {drops : List LockReferenceDrop} {recover : EStateM IO.Error image WalSegmentRepair.Reopened}
+    {opened : WalSegmentRepair.Reopened} {after : image}
+    (references : HeldLockReferences description) (ownership : before.owners.Owns directory description)
+    (last : references.remaining drops = []) (unlock : UnlockReport)
+    (recovered : recover before.image = .ok opened after) :
+    let released := references.afterFileDrops drops directory before
+    TryLockObserves released.owners directory (.ok true) ∧
+      runOpenWithInstallation directory descriptor nextRef (.ok true) unlock recover released =
+        .ok ⟨directory, descriptor, .ready opened.installed, nextRef, nextRef + 1⟩
+          ⟨after, before.owners.set (directory.file .lock) (some descriptor)⟩ := by
+  dsimp only
+  rw [references.afterFileDrops_released ownership last]
+  constructor
+  · simp [TryLockObserves, LockOwners.set]
+  · rw [runOpenWithInstallation_outcome, runOpenWithImage_acquired]
+    dsimp only
+    rw [recovered]
+    have owners :
+        (before.owners.set (directory.file .lock) none).set (directory.file .lock) (some descriptor) =
+          before.owners.set (directory.file .lock) (some descriptor) := by
+      funext path
+      by_cases same : path = directory.file .lock <;> simp [LockOwners.set, same]
+    rw [owners]
 
 /-- The complete reference observation determines when the existing locked
 retry trace may take its last-reference transition. If any reference
@@ -72,12 +147,14 @@ theorem LockedMarkedReopenFailureTrace.referenceDrops
   by_cases last : references.remaining drops = []
   · have lengthZero : (references.remaining drops).length = 0 := by simp [last]
     have released := trace.lastReferenceClosed ⟨description, (references.remaining drops).length⟩ ownership lengthZero
-    refine ⟨by simpa [HeldLockReferences.afterDrops, last] using released, ?_, by simp [last]⟩
-    simp [HeldLockReferences.afterDrops, last, LockOwners.release_owned ownership, LockOwners.set]
+    refine ⟨by simpa [HeldLockReferences.afterDrops, HeldLockReferences.ownersAfterDrops, last]
+      using released, ?_, by simp [last]⟩
+    simp [HeldLockReferences.afterDrops, HeldLockReferences.ownersAfterDrops, last,
+      LockOwners.release_owned ownership, LockOwners.set]
   · have live : (references.remaining drops).isEmpty = false := List.isEmpty_eq_false_iff.mpr last
     have stillOwned := ownership
     change before.owners (directory.file .lock) = some description at stillOwned
-    simpa [HeldLockReferences.afterDrops, live, last, stillOwned] using trace
+    simpa [HeldLockReferences.afterDrops, HeldLockReferences.ownersAfterDrops, live, last, stillOwned] using trace
 
 /-- A surviving reference prevents the reported open from reaching recovery. -/
 theorem LockedMarkedReopenReports.whileReferenceSurvives
@@ -90,7 +167,7 @@ theorem LockedMarkedReopenReports.whileReferenceSurvives
     ∃ cause, reports.run = .error cause (references.afterDrops drops directory before) := by
   apply reports.whileHeld (owner := description)
   have live := List.isEmpty_eq_false_iff.mpr retained
-  simpa [HeldLockReferences.afterDrops, live] using ownership
+  simpa [HeldLockReferences.afterDrops, HeldLockReferences.ownersAfterDrops, live] using ownership
 
 /-- An inherited reference can keep the lock after owner exit, even when it
 is marked close-on-exec. A successful child exec then releases the lock if
