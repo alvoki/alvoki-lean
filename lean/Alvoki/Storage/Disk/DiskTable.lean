@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.CheckpointRead
 import Alvoki.Storage.Disk.IntegrityCheckpointRead
 import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.RunFileSelection
+import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Publication.CheckpointPublication
 import Alvoki.Storage.Publication.RunCollection
 
@@ -54,9 +55,13 @@ private def writeFlushed (path : FilePath) (content : ByteArray) : IO Unit := do
   file.write content
   file.flush
 
+/-- Detaching a stale inactive binding and creating its replacement are
+part of the staged-write callback. The rename changes the active binding.
+Publication reports about selected data abstract the possible absent or
+partial scratch contents of a failed staged write. -/
 private def performReplacement (dir : DiskDirectory) (stagedPath : FilePath) (active : DiskFile)
     (bytes : ByteArray) (alsoSync : Array FilePath) (step : Publication.Step) : IO Unit :=
-  Publication.performReplacement (writeFlushed · bytes) syncPaths IO.FS.rename
+  Publication.performReplacement (writeFreshStagedFile · bytes) syncPaths IO.FS.rename
     stagedPath dir.path (fun _ => dir.file active) alsoSync step
 
 private def atomicReplace (dir : DiskDirectory) (staged active : DiskFile) (bytes : ByteArray)
@@ -236,10 +241,7 @@ theorem commitWalWrite_fileEffects (dir : DiskDirectory) (event : WAL.Write) (wa
       wal.write (WAL.encodeFrame event)
       wal.flush) (do
       let stagedPath := dir.file .stagedWalBoundary
-      (do
-        let staged ← IO.FS.Handle.mk stagedPath .write
-        staged.write (WAL.Boundary.encode walBytes.toUInt64)
-        staged.flush)
+      writeFreshStagedFile stagedPath (WAL.Boundary.encode walBytes.toUInt64)
       syncPaths #[dir.file .wal, stagedPath]
       IO.FS.rename stagedPath (dir.file .walBoundary)
       syncPaths #[dir.path]
@@ -310,15 +312,15 @@ operations. The native caller caches the run array and encoded manifest. -/
 @[macro_inline] def performCheckpointFileStep [Monad m] (dir : DiskDirectory)
     (generation : UInt64) (runs : Array CheckedRun) (stagedManifest : FilePath)
     (manifestBytes : ByteArray) (checkRun : Option CheckedRun → m CheckedRun)
-    (write : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
+    (writeRun writeStaged : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
     (renameFile : FilePath → FilePath → m Unit) : CheckpointPublication.Step → m Unit
   | .writeRun index => do
     let run ← checkRun runs[index]?
-    write (dir.file (.run generation index)) run.run.bytes
+    writeRun (dir.file (.run generation index)) run.run.bytes
   | .syncRun index => sync #[dir.file (.run generation index)]
   | .syncRunsDirectory => sync #[dir.path]
   | .manifest step =>
-    Publication.performReplacement (write · manifestBytes) sync renameFile
+    Publication.performReplacement (writeStaged · manifestBytes) sync renameFile
       stagedManifest dir.path (fun _ => dir.file .manifest) #[] step
 
 /-- Encode lengths and checksums for the exact run payloads the writer uses. -/
@@ -352,7 +354,7 @@ def DiskTable.checkpoint (db : DiskTable) : IO Unit := do
   db.phase.set .poisoned
   CheckpointPublication.run runs.size
     (performCheckpointFileStep db.dir generation runs stagedManifest manifestBytes
-      (fromOption · "checkpoint run index is out of bounds") writeFlushed syncPaths IO.FS.rename)
+      (fromOption · "checkpoint run index is out of bounds") writeFlushed writeFreshStagedFile syncPaths IO.FS.rename)
   db.phase.set (.ready { state with table, generation })
 
 /-- The native writer publishes the computed v2 manifest and the exact run
@@ -368,7 +370,8 @@ theorem DiskTable.checkpoint_fileEffects (db : DiskTable) : db.checkpoint = (do
       db.phase.set .poisoned
       CheckpointPublication.run table.runs.length
         (performCheckpointFileStep db.dir generation table.runs.toArray (db.dir.file .stagedManifest)
-          manifestBytes (fromOption · "checkpoint run index is out of bounds") writeFlushed syncPaths IO.FS.rename)
+          manifestBytes (fromOption · "checkpoint run index is out of bounds")
+          writeFlushed writeFreshStagedFile syncPaths IO.FS.rename)
       db.phase.set (.ready { state with table, generation })) := by
   simp only [checkpoint, List.size_toArray]
 

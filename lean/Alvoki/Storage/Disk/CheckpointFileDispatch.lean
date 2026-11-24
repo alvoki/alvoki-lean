@@ -8,15 +8,15 @@ open System Alvoki.Compaction
 Each run is synced before the run directory barrier. The manifest is then
 staged, synced, renamed and settled by the final directory sync. -/
 def runCheckpointFilePlan [Monad m] (dir : DiskDirectory) (plan : CheckpointPublication.RunSet) (manifest : ByteArray)
-    (write : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
+    (writeRun writeStaged : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
     (renameFile : FilePath → FilePath → m Unit) : m Unit := do
   plan.files.zipIdx.forM fun (bytes, index) => do
     let path := dir.file (.run plan.header.generation index)
-    write path bytes
+    writeRun path bytes
     sync #[path]
   sync #[dir.path]
   let staged := dir.file .stagedManifest
-  write staged manifest
+  writeStaged staged manifest
   sync #[staged]
   renameFile staged (dir.file .manifest)
   sync #[dir.path]
@@ -25,16 +25,16 @@ def runCheckpointFilePlan [Monad m] (dir : DiskDirectory) (plan : CheckpointPubl
 private theorem runFileSteps_exact [Monad m] [LawfulMonad m]
     (dir : DiskDirectory) (generation : UInt64) (runs : Array CheckedRun)
     (staged : FilePath) (manifest : ByteArray) (checkRun : Option CheckedRun → m CheckedRun)
-    (write : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
+    (writeRun writeStaged : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
     (renameFile : FilePath → FilePath → m Unit) (checked : ∀ run, checkRun (some run) = pure run)
     (files : List ByteArray) (start : Nat)
     (bytesAt : ∀ offset, (runs[start + offset]?).map (·.run.bytes) = files[offset]?) :
     ((List.range' start files.length).flatMap fun index =>
       [CheckpointPublication.Step.writeRun index, .syncRun index]).forM
-        (performCheckpointFileStep dir generation runs staged manifest checkRun write sync renameFile) =
+        (performCheckpointFileStep dir generation runs staged manifest checkRun writeRun writeStaged sync renameFile) =
     (files.zipIdx start).forM (fun (bytes, index) => do
       let path := dir.file (.run generation index)
-      write path bytes
+      writeRun path bytes
       sync #[path]) := by
   induction files generalizing start with
   | nil => rfl
@@ -61,21 +61,21 @@ theorem run_performCheckpointFileStep [Monad m] [LawfulMonad m]
     (dir : DiskDirectory) (table : PackedTable) (generation : UInt64)
     (manifest : ByteArray)
     (checkRun : Option CheckedRun → m CheckedRun)
-    (write : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
+    (writeRun writeStaged : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
     (renameFile : FilePath → FilePath → m Unit) (checked : ∀ run, checkRun (some run) = pure run) :
     let plan : CheckpointPublication.RunSet :=
       ⟨checkpointHeader table generation, table.runs.map (·.run.bytes)⟩
     CheckpointPublication.run table.runs.toArray.size
       (performCheckpointFileStep dir generation table.runs.toArray (dir.file .stagedManifest)
-        manifest checkRun write sync renameFile) =
-      runCheckpointFilePlan dir plan manifest write sync renameFile := by
+        manifest checkRun writeRun writeStaged sync renameFile) =
+      runCheckpointFilePlan dir plan manifest writeRun writeStaged sync renameFile := by
   intro plan
   have bytesAt (offset : Nat) :
       (table.runs.toArray[0 + offset]?).map (·.run.bytes) = plan.files[offset]? := by
     simp [plan]
   have runSteps :=
     runFileSteps_exact dir generation table.runs.toArray (dir.file .stagedManifest)
-      manifest checkRun write sync renameFile checked plan.files 0 bytesAt
+      manifest checkRun writeRun writeStaged sync renameFile checked plan.files 0 bytesAt
   simp only [plan, List.length_map, ← List.range_eq_range', List.forM_eq_forM] at runSteps
   simp only [CheckpointPublication.run, CheckpointPublication.steps, List.forM_eq_forM, List.forM_append,
     List.size_toArray, CheckpointPublication.runSteps]
@@ -101,7 +101,7 @@ exact manifest and ordered run bytes to the shared file schedule. -/
 theorem run_performCheckpointFileStep_io
     (dir : DiskDirectory) (table : PackedTable) (generation : UInt64)
     {manifest : ByteArray} (encoded : encodeCheckpointIntegrityManifest table generation = .ok manifest)
-    (write : FilePath → ByteArray → IO Unit) (sync : Array FilePath → IO Unit)
+    (writeRun writeStaged : FilePath → ByteArray → IO Unit) (sync : Array FilePath → IO Unit)
     (renameFile : FilePath → FilePath → IO Unit) :
     let plan := CheckpointPublication.VersionedRunSet.integrity
       ⟨checkpointHeader table generation, table.runs.map (·.run.bytes)⟩
@@ -111,8 +111,8 @@ theorem run_performCheckpointFileStep_io
         (fun found => match found with
           | some run => pure run
           | none => throw (IO.userError "checkpoint run index is out of bounds"))
-        write sync renameFile) =
-      runCheckpointFilePlan dir plan.runSet plan.manifest.encode write sync renameFile := by
+        writeRun writeStaged sync renameFile) =
+      runCheckpointFilePlan dir plan.runSet plan.manifest.encode writeRun writeStaged sync renameFile := by
   let files := table.runs.map (·.run.bytes)
   have fits : ∀ bytes ∈ files, bytes.size < UInt64.size := by
     by_cases bounded : files.all (fun bytes => decide (bytes.size < UInt64.size)) = true
@@ -121,6 +121,6 @@ theorem run_performCheckpointFileStep_io
   have exactBytes := Except.ok.inj ((encodeCheckpointIntegrityManifest_exact generation fits).symm.trans encoded)
   subst manifest
   letI := checkpointIOLawful
-  exact run_performCheckpointFileStep dir table generation _ _ write sync renameFile (fun _ => rfl)
+  exact run_performCheckpointFileStep dir table generation _ _ writeRun writeStaged sync renameFile (fun _ => rfl)
 
 end Alvoki.Storage

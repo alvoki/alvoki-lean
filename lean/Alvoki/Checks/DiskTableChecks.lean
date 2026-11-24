@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.DiskTable
+import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Disk.WalSegmentReadIO
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.WalSegmentRepairIO
@@ -98,7 +99,7 @@ private def checkSegmentedCheckpointOpen (root : FilePath) : IO Unit := do
     let openMarked := WalSegmentRepair.reopenMarkedWith dir readOptional FilePath.readDir
       (fun path => path.symlinkMetadata.toBaseIO) IO.FS.readBinFile
       (fun path => do touched.set true; (IO.FS.removeFile path).toBaseIO)
-      (fun path bytes => do touched.set true; IO.FS.writeBinFile path bytes) sync
+      (fun path bytes => do touched.set true; writeFreshStagedFile path bytes) sync
       (fun source target => do touched.set true; IO.FS.rename source target)
     let runFile := dir.file (.run 1 0)
     let runBytes ← IO.FS.readBinFile runFile
@@ -339,6 +340,47 @@ private def checkDanglingFiles (dir : FilePath) : IO Unit := do
     let targetExists ← missing.pathExists
     check (!targetExists) s!"open created the target of a dangling {name}"
     IO.FS.removeFile linked
+
+private def checkStaleWalStaging (dir : FilePath) : IO Unit := do
+  let dir := (← DiskDirectory.open dir).path
+  let db ← DiskTable.open dir
+  try
+    check ((← db.write 7 (some 70)) == 1) "unexpected initial staging fixture sequence"
+  finally db.close
+  let wal := dir / "WAL"
+  let marker := dir / "WAL.commit"
+  let staged := dir / "WAL.next"
+  let other := dir / "unrelated-file"
+  let selected ← IO.FS.readBinFile wal
+  let boundary ← IO.FS.readBinFile marker
+  let torn := selected ++ (WAL.encodeFrame ⟨2, 7, some 99⟩).extract 0 11
+  let unrelated := ByteArray.mk (Array.replicate 100 120)
+  IO.FS.writeBinFile wal torn
+  IO.FS.writeBinFile other unrelated
+  let link := fun (symbolic : Bool) => do
+    let flags := if symbolic then #["-s"] else #[]
+    let result ← IO.Process.output {cmd := "ln", args := flags ++ #["--", other.toString, staged.toString]}
+    check (result.exitCode == 0) "could not create staging alias fixture"
+  link true
+  let .error (.userError cause) ← (DiskTable.open dir).toBaseIO
+    | throw (IO.userError "recovery accepted a symlink at the WAL staging path")
+  check (cause == s!"expected a regular database staging file: '{staged}'")
+    "recovery reported the wrong staging error"
+  check (decide ((← IO.FS.readBinFile wal) = torn ∧ (← IO.FS.readBinFile marker) = boundary ∧
+    (← IO.FS.readBinFile other) = unrelated)) "staging symlink refusal changed selected files or its target"
+  IO.FS.removeFile staged
+
+  -- A stale regular link may share an inode. Detach the inactive name before writing.
+  link false
+  let reopened ← DiskTable.open dir
+  try
+    let pin ← reopened.acquire
+    check (pin.sequence == 1 && (← reopened.lookup pin.handle 7) == some (some 70))
+      "staging retry returned a different committed table"
+    check (decide ((← IO.FS.readBinFile wal) = selected ∧ (← IO.FS.readBinFile marker) = boundary ∧
+      (← IO.FS.readBinFile other) = unrelated) && !(← staged.pathExists))
+      "staging retry reused the stale inode or changed selected files"
+  finally reopened.close
 
 private def checkSnapshotSessions (root : FilePath) : IO Unit := do
   let firstDir := root / "first"
@@ -683,7 +725,7 @@ private def checkWalSegmentRepair (root : FilePath) : IO Unit := do
             (fun file => report (.remove file) (IO.FS.removeFile file).toBaseIO (pure (.error (IO.userError injected))))
             (fun file bytes => run (.write file) do
               check (decide (bytes = replacement)) "WAL repair staged the wrong prefix"
-              IO.FS.writeBinFile file bytes)
+              writeFreshStagedFile file bytes)
             (fun paths => run (.sync paths) (syncPaths paths))
             (fun source target => run (.rename source target) (IO.FS.rename source target))
 
@@ -1393,6 +1435,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkBoundedRecovery
     IO.FS.withTempDir checkDirectoryIdentity
     IO.FS.withTempDir checkDanglingFiles
+    IO.FS.withTempDir checkStaleWalStaging
     IO.FS.withTempDir checkSnapshotSessions
     IO.FS.withTempDir checkMarkerlessRefusal
     IO.FS.withTempDir checkWalSegmentRotation

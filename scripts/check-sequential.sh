@@ -33,6 +33,7 @@ lake env leanchecker Alvoki.Storage.Disk.Recovery
 lake env leanchecker Alvoki.Storage.Disk.Manifest
 lake env leanchecker Alvoki.Storage.Disk.LegacyManifest
 lake env leanchecker Alvoki.Storage.Disk.VersionedManifest
+lake env leanchecker Alvoki.Storage.Disk.StagingFile
 lake env leanchecker Alvoki.Storage.Disk.DiskTable
 lake env leanchecker Alvoki.Storage.Disk.DiskPaths
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRead
