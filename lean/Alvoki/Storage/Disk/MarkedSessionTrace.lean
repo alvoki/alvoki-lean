@@ -80,7 +80,7 @@ def MarkedWriterState.observeReopen (table : PackedTable) (image : ReopenImage) 
   let history ← (WAL.decodeOrdinals bytes).toOption
   return ⟨table, bytes.size, image, history⟩
 
-private theorem MarkedWriterState.observeReopen_ready
+theorem MarkedWriterState.observeReopen_ready
     {table : PackedTable} {image : ReopenImage} {history : List WAL.Write} {manifest : Option ByteArray}
     (ready : (⟨table, (WAL.encode history).size, image, history⟩ : MarkedWriterState).ReadyFor manifest) :
     observeReopen table image = some ⟨table, (WAL.encode history).size, image, history⟩ := by

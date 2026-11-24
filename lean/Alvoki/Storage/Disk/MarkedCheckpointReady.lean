@@ -11,7 +11,7 @@ def FixedMarkedCheckpoint.publicationInput (checkpoint : FixedMarkedCheckpoint)
     (writer : MarkedWriterState) : CheckpointPublication.Image :=
   { checkpoint.image with manifest := writer.image.directory.project .manifest }
 
-private theorem checkpointSuccessorUnreachable {writer : MarkedWriterState} {manifest : Option ByteArray}
+theorem checkpointSuccessorUnreachable {writer : MarkedWriterState} {manifest : Option ByteArray}
     {initial : CheckpointPublication.Image} {installedGeneration : UInt64}
     (ready : writer.ReadyFor manifest)
     (projects : initial.manifest = writer.image.directory.project .manifest)
@@ -55,7 +55,7 @@ theorem CheckpointForRecovery.headerWatermark {bytes : ByteArray} {files : List 
     have same := Except.ok.inj (decoded.symm.trans (Manifest.decode_encode expected floor))
     simpa only [same] using watermark
 
-private theorem FixedMarkedCheckpoint.validPublicationInput (checkpoint : FixedMarkedCheckpoint)
+theorem FixedMarkedCheckpoint.validPublicationInput (checkpoint : FixedMarkedCheckpoint)
     {writer : MarkedWriterState} {pending : List WAL.Write} (ready : writer.ReadyFor checkpoint.manifest)
     (history : writer.history = checkpoint.covered ++ pending)
     (represents : RepresentsWalHistory checkpoint.covered checkpoint.model) :
@@ -93,6 +93,32 @@ private theorem FixedMarkedCheckpoint.validPublicationInput (checkpoint : FixedM
     rw [crashes] at survives
     exact (List.mem_singleton.mp survives).symm ▸ accepted
 
+/-- The adapter's flush produces the exact ordered run files and a checkpoint
+of the writer's acknowledged WAL, with the header bounds needed for publication. -/
+theorem checkpointPublicationWitness {writer : MarkedWriterState} {manifest : Option ByteArray}
+    {checkpoint : PackedTable} {model : Sequential.SnapshotTable UInt64}
+    (ready : writer.ReadyFor manifest)
+    (prepared : (flushForCheckpoint writer.table id : Except String PackedTable) = .ok checkpoint)
+    (refines : writer.table.Refines model) (represents : RepresentsWalHistory writer.history model)
+    (runCountFits : checkpoint.runs.length < UInt64.size) (generation : UInt64) :
+    let header := checkpointHeader checkpoint generation
+    let files := checkpoint.runs.map (·.run.bytes)
+    header.floor ≤ header.committed ∧ files.length = header.runCount.toNat ∧
+      header.committed ≤ writer.history.length.toUInt64 ∧ CheckpointRepresentsPrefix writer.history header files := by
+  intro header files
+  obtain ⟨abstract, written, relation, canonical⟩ := CheckpointForRecovery.of_flushForCheckpoint_history
+    prepared refines represents ready.rowBounds runCountFits generation
+  refine ⟨?_, ?_, ?_, checkpoint, abstract, written, relation, canonical⟩
+  · change checkpoint.pins.floor ≤ checkpoint.committed
+    rw [relation.pins, relation.committed]
+    exact abstract.floor_committed
+  · change (checkpoint.runs.map (·.run.bytes)).length = (checkpoint.runs.length.toUInt64).toNat
+    rw [List.length_map, UInt64.toNat_ofNat_of_lt' runCountFits]
+  · change checkpoint.committed ≤ writer.history.length.toUInt64
+    have clock : writer.history.length.toUInt64 = writer.table.committed := by rw [ready.count]; simp
+    rw [clock, UInt64.le_iff_toNat_le, relation.committed, canonical.committed_count, ← ready.count]
+    exact List.length_take_le' ..
+
 /-- The reports from the shared checkpoint schedule give an actual retry
 transition. The old checkpoint witness comes from the input state. The new
 one comes from the adapter's prepared runs and the live table's WAL history. -/
@@ -121,32 +147,19 @@ theorem checkpointMarked_reported {writer : MarkedWriterState} (old : FixedMarke
   refine ⟨old.validPublicationInput ready history oldRepresents, ?_⟩
   have fresh : initial.Unreachable next.header.generation :=
     checkpointSuccessorUnreachable ready rfl loadedGeneration generationFits
-  obtain ⟨abstract, written, relation, canonical⟩ := CheckpointForRecovery.of_flushForCheckpoint_history
-    prepared refines represents ready.rowBounds runCountFits next.header.generation
-  have committed : next.header.committed ≤ writer.history.length.toUInt64 := by
-    change checkpoint.committed ≤ writer.history.length.toUInt64
-    have clock : writer.history.length.toUInt64 = writer.table.committed := by rw [ready.count]; simp
-    rw [clock, UInt64.le_iff_toNat_le, relation.committed, canonical.committed_count, ← ready.count]
-    exact List.length_take_le' ..
-  have floor : next.header.floor ≤ next.header.committed := by
-    change checkpoint.pins.floor ≤ checkpoint.committed
-    rw [relation.pins, relation.committed]
-    exact abstract.floor_committed
-  have count : next.header.runCount.toNat = next.files.length := by
-    change (checkpoint.runs.length.toUInt64).toNat = (checkpoint.runs.map (·.run.bytes)).length
-    rw [List.length_map, UInt64.toNat_ofNat_of_lt' runCountFits]
-  have intent : expected next.header next.files := ⟨checkpoint, abstract, written, relation, canonical⟩
+  obtain ⟨floor, count, committed, intent⟩ :=
+    checkpointPublicationWitness ready prepared refines represents runCountFits next.header.generation
   have outcome := initial.runWithReports_outcome next report
   cases ran : initial.runWithReports next report with
   | ok _ after =>
     rw [ran] at outcome
-    apply CheckpointPublication.Retry.attempt (.refl _) next fresh committed floor count intent
+    apply CheckpointPublication.Retry.attempt (.refl _) next fresh committed floor count.symm intent
       (CheckpointPublication.steps next.files.length).length
     simpa using outcome
   | error _ after =>
     rw [ran] at outcome
     obtain ⟨cut, executed⟩ := outcome
-    exact CheckpointPublication.Retry.attempt (.refl _) next fresh committed floor count intent cut executed
+    exact CheckpointPublication.Retry.attempt (.refl _) next fresh committed floor count.symm intent cut executed
 
 /-- A successful checkpoint installs the prepared table and its exact run
 files at the successor generation. It leaves the marked WAL history and

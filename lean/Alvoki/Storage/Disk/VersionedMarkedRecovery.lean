@@ -77,6 +77,7 @@ theorem VersionedCheckpointFileReads.completes_marked
       runSharedMarkedOpen reads.result walReads.marker walReads.wal report .success before =
         .ok (table, selected.header.generation, (WAL.encode history).size) before.syncDirectory ∧
       before.syncDirectory.SettledFor (some bytes) history ∧ table.committed.toNat = history.length ∧
+      table.RowBounds ∧
       ∃ model, table.Refines model ∧ RepresentsWalHistory history model ∧ table.pins.active = [] := by
   obtain ⟨files, durable, ⟨checkpoint, baseModel, written, baseRefines, baseHistory⟩, validated, covered⟩ :=
     image.acceptsVersioned_runs accepted decoded
@@ -119,7 +120,7 @@ theorem VersionedCheckpointFileReads.completes_marked
   have bounded := replay_rowBounds (same.rowBounds written.rowBounds) exactReplay
   have represented := abstractHistory.preserve sameClock (UInt64.le_of_eq sameFloor.symm)
     (refined.rowsBounded bounded) (fun snapshot _ key => by rw [sameTable])
-  exact ⟨files, base, table, durable, validated, structural, loaded, exactReplay, installed, settled, total,
+  exact ⟨files, base, table, durable, validated, structural, loaded, exactReplay, installed, settled, total, bounded,
     model, refined, represented, by rw [refined.pins, fresh]⟩
 
 /-- If the first checkpoint was discarded, an absent manifest lets the
@@ -136,7 +137,7 @@ theorem VersionedCheckpointFileReads.completes_marked_absent
     ∃ table model, replay .empty history = .ok table ∧
       runSharedMarkedOpen reads.result walReads.marker walReads.wal report .success before =
         .ok (table, 0, (WAL.encode history).size) before.syncDirectory ∧
-      before.syncDirectory.SettledFor none history ∧ table.Refines model ∧
+      before.syncDirectory.SettledFor none history ∧ table.RowBounds ∧ table.Refines model ∧
       RepresentsWalHistory history model ∧ table.pins.active = [] := by
   have loaded : reads.result = .ok none := by
     simp [VersionedCheckpointFileReads.result, readVersionedCheckpoint, manifestRead, Bind.bind, Except.bind,
@@ -146,7 +147,8 @@ theorem VersionedCheckpointFileReads.completes_marked_absent
     simpa using (recoverSelected_encoded .empty [] history ordered rfl).trans applied
   have installed := runSharedMarkedOpen_exactAligned loaded walReads markerRead walRead fits replayed report
   obtain ⟨model, abstract, refined⟩ := replay_refines PackedTable.empty_refines applied
-  exact ⟨table, model, applied, installed, alignedSettledFor visible walReads markerRead walRead, refined,
+  exact ⟨table, model, applied, installed, alignedSettledFor visible walReads markerRead walRead,
+    replay_rowBounds PackedTable.empty_rowBounds applied, refined,
     List.nil_append history ▸ RepresentsWalHistory.empty.append abstract, by rw [replay_pins applied]; rfl⟩
 
 end Alvoki.WAL.Boundary

@@ -83,17 +83,17 @@ theorem VersionedRetry.completes_marked {initial published : Image} {before reop
       replay base (history.drop selected.header.committed.toNat) = .ok table ∧
       runSharedMarkedOpen reads.result walReads.marker walReads.wal report .success reopen =
         .ok (table, selected.header.generation, (WAL.encode history).size) reopen.syncDirectory ∧
-      reopen.syncDirectory.SettledFor (some bytes) history ∧ table.Refines model ∧
+      reopen.syncDirectory.SettledFor (some bytes) history ∧ table.RowBounds ∧ table.Refines model ∧
       RepresentsWalHistory history model ∧ table.pins.active = [] := by
   obtain ⟨accepted, marker, wal⟩ := checkpoints.markedReadInputs valid settled fits attempts
   rw [visible] at accepted
   have decodedWitness := accepted
   obtain ⟨selected, decoded, _⟩ := decodedWitness
-  obtain ⟨files, base, table, durable, checked, loaded, _, replayed, opened, next, _, model, refined, history, pins⟩ :=
+  obtain ⟨files, base, table, durable, checked, loaded, _, replayed, opened, next, _, bounded, model, refined, history, pins⟩ :=
     WAL.Boundary.VersionedCheckpointFileReads.completes_marked reads visible decoded accepted manifestRead
       (runReads selected decoded) walReads (marker ▸ markerRead) (wal ▸ walRead) fits ordered report
   exact ⟨selected, files, base, table, model, decoded, durable, checked, loaded, replayed, opened, next,
-    refined, history, pins⟩
+    bounded, refined, history, pins⟩
 
 /-- The installer uses the manifest that actually survived the retries. If
 the first checkpoint was lost, the entire WAL is replayed at generation zero. -/
@@ -119,20 +119,20 @@ theorem VersionedRetry.installs_marked {initial published : Image} {before reope
         (·.getD 0) : Except String UInt64) = .ok generation ∧
       runSharedMarkedOpen reads.result walReads.marker walReads.wal report .success reopen =
         .ok (table, generation, (WAL.encode history).size) reopen.syncDirectory ∧
-      reopen.syncDirectory.SettledFor selectedManifest history ∧ table.Refines model ∧
+      reopen.syncDirectory.SettledFor selectedManifest history ∧ table.RowBounds ∧ table.Refines model ∧
       RepresentsWalHistory history model ∧ table.pins.active = [] := by
   cases selectedManifest with
   | none =>
     obtain ⟨_, marker, wal⟩ := checkpoints.markedReadInputs valid settled fits attempts
-    obtain ⟨table, model, _, opened, next, refined, represented, pins⟩ :=
+    obtain ⟨table, model, _, opened, next, bounded, refined, represented, pins⟩ :=
       WAL.Boundary.VersionedCheckpointFileReads.completes_marked_absent reads visible manifestRead
         walReads (marker ▸ markerRead) (wal ▸ walRead) fits ordered report
-    exact ⟨table, 0, model, rfl, opened, next, refined, represented, pins⟩
+    exact ⟨table, 0, model, rfl, opened, next, bounded, refined, represented, pins⟩
   | some bytes =>
-    obtain ⟨selected, _, _, table, model, decoded, _, _, _, _, opened, next, refined, represented, pins⟩ :=
+    obtain ⟨selected, _, _, table, model, decoded, _, _, _, _, opened, next, bounded, refined, represented, pins⟩ :=
       checkpoints.completes_marked valid settled fits ordered attempts visible reads manifestRead
         (fun selected decoded => runReads bytes selected rfl decoded) walReads markerRead walRead report
-    refine ⟨table, selected.header.generation, model, ?_, opened, next, refined, represented, pins⟩
+    refine ⟨table, selected.header.generation, model, ?_, opened, next, bounded, refined, represented, pins⟩
     simp [Option.mapM, decoded, Functor.map, Except.map]
 
 /-- Use concrete locked path reports for the dual-format checkpoint read
@@ -171,7 +171,10 @@ theorem VersionedRetry.installs_marked_locked {initial published : Image} {befor
       DiskSession.runLockedMarkedOpen dir descriptor (.ok true) unlock cause recovered owners =
         .ok ((table, generation, (WAL.encode history).size), reopen.syncDirectory) acquiredOwners ∧
       owners (dir.file .lock) = none ∧ acquiredOwners.Owns dir descriptor ∧
-      reopen.syncDirectory.SettledFor reopen.directory.active.manifest history ∧
+      (⟨table, (WAL.encode history).size, reopen.syncDirectory, history⟩ : MarkedWriterState).ReadyFor
+        reopen.directory.active.manifest ∧
+      MarkedWriterState.observeReopen table reopen.syncDirectory =
+        some ⟨table, (WAL.encode history).size, reopen.syncDirectory, history⟩ ∧
       table.Refines model ∧ RepresentsWalHistory history model ∧ table.pins.active = [] := by
   intro acquiredOwners held checkpointReads walReads recovered
   refine ⟨initial.markedReopenImage_start settled projects, ?_⟩
@@ -183,7 +186,7 @@ theorem VersionedRetry.installs_marked_locked {initial published : Image} {befor
     observedOptional_success markerRead (fun value read => (walReads.markerVisible value read).symm)
   have observedWal : walReads.wal = .ok reopen.wal.active :=
     observedOptional_success walRead (fun value read => (walReads.walVisible value read).symm)
-  obtain ⟨table, generation, model, decoded, opened, next, refined, represented, pins⟩ :=
+  obtain ⟨table, generation, model, decoded, opened, next, bounded, refined, represented, pins⟩ :=
     checkpoints.installs_marked valid settled fits ordered attempts rfl checkpointReads
       observedManifest observedRuns walReads observedMarker observedWal report
   have outer : DiskSession.runOpen dir descriptor (.ok true)
@@ -196,6 +199,13 @@ theorem VersionedRetry.installs_marked_locked {initial published : Image} {befor
       (runSharedMarkedOpen checkpointReads.result walReads.marker walReads.wal report .success reopen) owners = _
     rw [opened]
     exact outer
-  exact ⟨table, generation, model, decoded, installed, previous, held, next, refined, represented, pins⟩
+  have count : history.length = table.committed.toNat := by
+    rw [refined.committed, represented.committed_count]
+  have ready : (⟨table, (WAL.encode history).size, reopen.syncDirectory, history⟩ : MarkedWriterState).ReadyFor
+      reopen.directory.active.manifest :=
+    ⟨next, ordered, count, rfl, fits, bounded⟩
+  exact ⟨table, generation, model, decoded, installed, previous, held, ready,
+    MarkedWriterState.observeReopen_ready ready,
+    refined, represented, pins⟩
 
 end Alvoki.Storage.CheckpointPublication
