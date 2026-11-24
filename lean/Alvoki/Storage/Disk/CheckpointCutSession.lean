@@ -24,14 +24,14 @@ def recoverCheckpointCut
 /-- The selected checkpoint and acknowledged history of a returned ready
 session, with its exact settled files and the acquired lock. -/
 def CheckpointCutReady (directory : DiskDirectory) (descriptor : Nat) (liveRefs : List Nat)
-    (history : List WAL.Write) (durable : CheckpointPublication.RunFiles) (keeper : Nat) (files : FileImage)
+    (history : List WAL.Write) (durable : CheckpointPublication.RunFiles) (walBytes keeper : Nat) (files : FileImage)
     (result : EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession) : Prop :=
   ∃ checkpoint table model, ∃ count : UInt64, ∃ session final,
     result = .ok session final ∧
     SelectedIntegrityCheckpoint durable files.directory.active.manifest checkpoint ∧
     session.directory = directory ∧ session.descriptor = descriptor ∧
     session.phase = .ready ⟨table, (checkpoint.getD (.empty, 0)).2, count.toNat, keeper⟩ ∧
-    count.toNat = history.length * frameSize ∧ table.committed.toNat = history.length ∧
+    count.toNat = walBytes ∧ table.committed.toNat = history.length ∧
     table.RowBounds ∧ table.Refines model ∧ RepresentsWalHistory history model ∧ table.pins.active = [] ∧
     final.image = files.syncDirectory.syncKeeper ∧ final.owners.Owns directory descriptor ∧
     session.phaseRef ≠ session.sessionRef ∧ session.phaseRef ∉ liveRefs ∧ session.sessionRef ∉ liveRefs
@@ -60,7 +60,8 @@ theorem runOpenWithInstallation_checkpointCut {directory : DiskDirectory} {owner
     sync #[directory.path] files = .ok () files.syncDirectory →
     sync #[directory.file (.walSegment wal.active.first)] files.syncDirectory =
       .ok () files.syncDirectory.syncKeeper →
-    CheckpointCutReady directory descriptor liveRefs history published.durable wal.active.first files
+    CheckpointCutReady directory descriptor liveRefs history published.durable (history.length * frameSize)
+      wal.active.first files
       (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
         (recoverCheckpointCut raw removeFile write sync renameFile) ⟨files, owners⟩) := by
   intro files syncDirectory syncKeeper
@@ -144,9 +145,12 @@ theorem runOpenAfterCheckpointFailure {directory : DiskDirectory} {owners : Lock
     (initial : CheckpointPublication.Image) (projected : initial.manifest = before.directory.project .manifest)
     (previous : initial.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
       before.directory.active.manifest)
-    (strict : ∀ bytes, before.directory.active.manifest = some bytes →
-      ∃ manifest, Manifest.IntegrityCheckpoint.decode bytes = .ok manifest)
     (installed : Installed) (model : Sequential.SnapshotTable UInt64)
+    (installedGeneration : ((before.directory.active.manifest.mapM fun bytes =>
+      (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
+      .ok installed.generation)
+    (installedBytes : installed.walBytes = history.length * frameSize)
+    (installedKeeper : installed.activeFirst = before.active.first)
     (refines : installed.table.Refines model) (represents : RepresentsWalHistory history model)
     (rowBounds : installed.table.RowBounds) (checkpoint : PackedTable)
     (flushed : (flushForCheckpoint installed.table id : Except String PackedTable) = .ok checkpoint)
@@ -204,7 +208,8 @@ theorem runOpenAfterCheckpointFailure {directory : DiskDirectory} {owners : Lock
             sync #[directory.path] files = .ok () files.syncDirectory →
             sync #[directory.file (.walSegment wal.active.first)] files.syncDirectory =
               .ok () files.syncDirectory.syncKeeper →
-            CheckpointCutReady directory descriptor liveRefs history published.durable wal.active.first files
+            CheckpointCutReady directory descriptor liveRefs history published.durable installed.walBytes
+              installed.activeFirst files
               (runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
                 (recoverCheckpointCut raw removeFile write sync renameFile) ⟨files, released.owners⟩) := by
   intro generation plan perform poisoned released freshGeneration encoded reported failed
@@ -217,6 +222,13 @@ theorem runOpenAfterCheckpointFailure {directory : DiskDirectory} {owners : Lock
     (before := ⟨0, owners⟩) installed { installed with table := checkpoint, generation := generation }
     perform runFailed ownership
   refine ⟨UInt64.toNat_ofNat_of_lt' generationFits, exactManifest, poison, close, drops, published, projectedCut, ?_⟩
+  have strict (bytes : ByteArray) (binding : before.directory.active.manifest = some bytes) :
+      ∃ parsed, Manifest.IntegrityCheckpoint.decode bytes = .ok parsed := by
+    have matched := installedGeneration
+    rw [binding] at matched
+    cases decodedBytes : Manifest.IntegrityCheckpoint.decode bytes with
+    | error cause => simp [decodedBytes, Option.mapM, Functor.map, Except.map] at matched
+    | ok parsed => exact ⟨parsed, rfl⟩
   obtain ⟨walLayout, walValid, inputs⟩ := CheckpointPublication.segmentedCheckpoint_reportedCut
     layout chain settled marker walFits projected previous strict refines represents rowBounds flushed runCountFits
     generation freshGeneration runBytesFit report publication
@@ -228,6 +240,8 @@ theorem runOpenAfterCheckpointFailure {directory : DiskDirectory} {owners : Lock
       exact ⟨accepted, range, decoded, through⟩)
   refine ⟨by simpa only [exactManifest] using chosen, sameMarker, range, decoded, through, exactRuns, ?_⟩
   intro raw syncDirectory syncKeeper
+  have keeper : installed.activeFirst = wal.active.first := installedKeeper
+  rw [installedBytes, keeper]
   exact runOpenWithInstallation_checkpointCut walLayout walValid ordered observed decoded through accepted
     raw scratch liveRefs freshRefs canAcquire unlock removeFile write sync renameFile syncDirectory syncKeeper
 
