@@ -87,6 +87,7 @@ import Alvoki.Storage.Disk.SegmentedCheckpointStep
 import Alvoki.Storage.Disk.SegmentedWriterTrace
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
+import Alvoki.Storage.Disk.SegmentedRetainedWriter
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
@@ -704,6 +705,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentCollectionRetry.keepsReadDescriptors
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.collectionReadPlan
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.collectionSelectsReads
+#check_axioms Alvoki.Storage.WalSegmentCollectionRetry.trans
+#check_axioms Alvoki.Storage.WalSegmentCollectionRetry.keepsSettledPair
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.collectionCanRemove
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.Ready.collectionSuffixBounds
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop
