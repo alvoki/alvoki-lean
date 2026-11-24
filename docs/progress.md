@@ -431,3 +431,5 @@ The native open equation names the resolved lock, manifest, marker and WAL paths
 ## Settled reopen and guarded session reads
 
 A shared reopen from a settled marked database returns a ready writer with the exact loaded generation, selected WAL byte count and a fresh pin registry. Running that successful recovery through the shared lock lifecycle also gives the opener ownership. A guarded read through an active local pin returns canonical replay data and preserves lock ownership. A closed session reports its closed error, and a distinct live session rejects the old pin. The proof uses file reports for the owned directory and live-reference identity for session comparison. [Locked marked reads](../lean/Alvoki/Storage/Disk/LockedMarkedRead.lean)
+
+Successful I/O reports at the acquired directory's exact manifest, selected run, marker and WAL paths now yield the read premises of the common recovery progress theorem. The proof derives the values of successful optional reads from the locked namespace observation, including absence. Unselected run paths have no success premise. [Recovery read composition](../lean/Alvoki/Storage/Disk/LockedRecoveryReads.lean)
