@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.DiskRecoveryModel
+import Alvoki.Storage.Disk.MarkedSessionTrace
 
 namespace Alvoki.WAL.Boundary
 open Storage
@@ -127,5 +127,35 @@ theorem MarkedWalReads.runSharedMarkedOpen_success {before after : ReopenImage} 
           simpa only [preflight, checkpoint] using accepted
         cases opened
         exact ⟨loaded, validated, rfl, acceptedLoaded, acceptedLoaded.symm ▸ ran, rfl, rfl⟩
+
+/-- The native installer and the observed next writer count the same WAL.
+Successful durability leaves the selected bytes at the live name and as
+the sole admitted durable choice. -/
+theorem MarkedWalReads.runSharedMarkedOpen_installedWal
+    {before after : ReopenImage} (reads : MarkedWalReads before)
+    (marked : before.directory.active.walBoundary ≠ none) {image : CheckpointPublication.Image}
+    (checkpointReads : CheckpointReadObservations image before.directory.active.manifest)
+    {repair : Publication.Step → RepairReport} {aligned : AlignedSyncReport}
+    {table : PackedTable} {generation : UInt64} {walBytes : Nat}
+    (opened : runSharedMarkedOpen checkpointReads.result reads.marker reads.wal repair aligned before =
+      .ok (table, generation, walBytes) after) :
+    let preflight := (MarkedReopenReads.mk reads
+      (checkpointReads.result.map fun loaded => (loaded.getD (.empty, 0)).1)).preflight
+    ∃ validated, preflight = .ok validated ∧ after.wal.active = some validated.selected ∧
+      after.wal.crashImages = [some validated.selected] ∧ walBytes = validated.selected.size ∧
+      ∀ writer, MarkedWriterState.observeReopen table after = some writer → walBytes = writer.walBytes := by
+  obtain ⟨_, validated, _, accepted, ran, _, count⟩ :=
+    reads.runSharedMarkedOpen_success marked checkpointReads opened
+  obtain ⟨active, durable⟩ := MarkedReopenReads.success_selectedWal _ accepted ran
+  refine ⟨validated, accepted, active, durable, count, ?_⟩
+  intro writer observed
+  unfold MarkedWriterState.observeReopen at observed
+  rw [active] at observed
+  cases decoded : WAL.decodeOrdinals validated.selected with
+  | error message => simp [decoded, Except.toOption] at observed
+  | ok history =>
+    simp [decoded, Except.toOption] at observed
+    subst writer
+    exact count
 
 end Alvoki.WAL.Boundary

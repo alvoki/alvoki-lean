@@ -355,6 +355,34 @@ inductive DiskWriteError where
   /-- WAL mutation was attempted. The write may be recovered after reopening. -/
   | commitUnknown (cause : IO.Error)
 
+/-- Commit the prepared frame to the WAL and publish the new byte count. -/
+@[macro_inline] def commitWalWrite (dir : DiskDirectory) (event : WAL.Write)
+    (walBytes : Nat) : IO Unit :=
+  let walPath := dir.file .wal
+  WAL.Boundary.commit (do
+    let wal ← IO.FS.Handle.mk walPath .append
+    wal.write (WAL.encodeFrame event)
+    wal.flush) (publishWalBoundary dir walBytes #[walPath])
+
+/-- The native commit uses the same append-first schedule and marker steps as
+the write-effects model. The sync callback covers the WAL and staged marker
+in one call. Filesystem reports determine which of those effects persisted. -/
+theorem commitWalWrite_fileEffects (dir : DiskDirectory) (event : WAL.Write) (walBytes : Nat) :
+    commitWalWrite dir event walBytes =
+    WAL.Boundary.commit (do
+      let wal ← IO.FS.Handle.mk (dir.file .wal) .append
+      wal.write (WAL.encodeFrame event)
+      wal.flush) (do
+      let stagedPath := dir.file .stagedWalBoundary
+      (do
+        let staged ← IO.FS.Handle.mk stagedPath .write
+        staged.write (WAL.Boundary.encode walBytes.toUInt64)
+        staged.flush)
+      syncPaths #[dir.file .wal, stagedPath]
+      IO.FS.rename stagedPath (dir.file .walBoundary)
+      syncPaths #[dir.path]
+      pure ()) := rfl
+
 @[inline] private def DiskTable.writeWith (db : DiskTable) (key : UInt64) (value : Option UInt64)
     (onRejected onCommitUnknown : IO.Error → ε) : EIO ε UInt64 := do
   let state ← db.installed.adapt onRejected
@@ -363,12 +391,7 @@ inductive DiskWriteError where
   let walBytes := state.walBytes + WAL.frameSize
   unless walBytes < UInt64.size do throw (onRejected (IO.userError "WAL byte count is too large"))
   db.phase.set .poisoned
-  let walPath := db.dir.file .wal
-  let commit : IO Unit := WAL.Boundary.commit (do
-    let wal ← IO.FS.Handle.mk walPath .append
-    wal.write (WAL.encodeFrame event)
-    wal.flush) (publishWalBoundary db.dir walBytes #[walPath])
-  commit.adapt onCommitUnknown
+  (commitWalWrite db.dir event walBytes).adapt onCommitUnknown
   db.phase.set (.ready { state with table, walBytes })
   return event.sequence
 

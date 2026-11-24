@@ -42,6 +42,13 @@ structure WriteFiles where
 private def markerFor (events : List WAL.Write) : ByteArray :=
   encode (WAL.encode events).size.toUInt64
 
+/-- The writer's byte count after one append produces the exact marker used
+by the model for the extended history. A ready writer supplies the old count. -/
+theorem markerFor_append_frame {before : List WAL.Write} {walBytes : Nat}
+    (event : WAL.Write) (count : walBytes = (WAL.encode before).size) :
+    encode (walBytes + WAL.frameSize).toUInt64 = markerFor (before ++ [event]) := by
+  simp [markerFor, count, WAL.encode_size, List.length_append, Nat.mul_add]
+
 /-- Both live names have one durable outcome. The write protocol owns the
 marker scratch name even when a previous attempt left contents there. -/
 def ReopenImage.SettledFor (image : ReopenImage) (manifest : Option ByteArray)

@@ -106,6 +106,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.recoverRunSet_committedBoundary
 #check_axioms Alvoki.Storage.run_performCheckpointFileStep
 #check_axioms Alvoki.Storage.run_performCheckpointFileStep_io
+#check_axioms Alvoki.Storage.commitWalWrite_fileEffects
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loads
 #check_axioms Alvoki.Storage.CheckpointForRecovery.recoverSelected_rowBounds
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_flushForCheckpoint
@@ -220,6 +221,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.runSharedMarkedOpen_eq
 #check_axioms Alvoki.WAL.Boundary.MarkedWalReads.runSharedMarkedOpen_eq
 #check_axioms Alvoki.WAL.Boundary.MarkedWalReads.runSharedMarkedOpen_success
+#check_axioms Alvoki.WAL.Boundary.MarkedReopenReads.success_selectedWal
+#check_axioms Alvoki.WAL.Boundary.MarkedWalReads.runSharedMarkedOpen_installedWal
 #check_axioms Alvoki.WAL.Boundary.MarkedSessionOpen.ofSharedOpen
 #check_axioms Alvoki.WAL.Boundary.MarkedDatabaseStep.interruptedCheckpointFromOpen
 #check_axioms Alvoki.WAL.Boundary.ReopenImage.LegacyBootstrapValid.adoptReport
@@ -237,3 +240,4 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.write_cut_active_bounds_marker
 #check_axioms Alvoki.WAL.Boundary.write_cut_replays_old_or_new
 #check_axioms Alvoki.WAL.Boundary.acknowledged_write_replays_new
+#check_axioms Alvoki.WAL.Boundary.markerFor_append_frame

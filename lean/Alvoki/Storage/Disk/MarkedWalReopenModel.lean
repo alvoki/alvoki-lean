@@ -655,6 +655,37 @@ private theorem select_unchanged {length : UInt64} {contents selected : ByteArra
       rw [ite_eq_left same] at accepted
       exact (Except.ok.inj accepted).symm
 
+/-- Successful marked reopen makes the selected bytes the live and durable
+WAL. This concerns the completed durability action. The stronger bound on
+other markers is needed when proving safety across interrupted repairs. -/
+theorem MarkedReopenReads.success_selectedWal {before after : ReopenImage}
+    (reads : MarkedReopenReads before) {validated : MarkedPreflight}
+    (ready : reads.preflight = .ok validated)
+    {report : Publication.Step → RepairReport} {aligned : AlignedSyncReport} {table : PackedTable}
+    (ran : runMarkedReopen reads.preflight report false aligned before = .ok table after) :
+    after.wal.active = some validated.selected ∧ after.wal.crashImages = [some validated.selected] := by
+  rw [ready] at ran
+  by_cases shorter : validated.selected.size < validated.contents.size
+  · have outcome := runMarkedReopen_repair_outcome validated report false aligned before shorter
+    rw [ran] at outcome
+    have complete := outcome.2
+    rw [before.repair_complete] at complete
+    cases complete
+    exact ⟨rfl, rfl⟩
+  · obtain ⟨_, _, _, _, _, readWal, _, selected, _⟩ :=
+      markedReopenPreflight_selected (checkpoint := reads.checkpoint) (marker := reads.marker)
+        (wal := reads.wal) ready
+    have exactWal : before.wal.active = some validated.selected := by
+      rw [select_unchanged selected shorter]
+      exact reads.walVisible _ readWal
+    simp only [runMarkedReopen, Publication.finishReopen, Publication.runReopen_aligned _ _ shorter] at ran
+    cases aligned with
+    | failure _ _ _ => contradiction
+    | success =>
+      change EStateM.Result.ok validated.table before.syncDirectory = .ok table after at ran
+      cases ran
+      exact ⟨exactWal, congrArg List.singleton exactWal⟩
+
 /-- A successful attempt installs the exact replay result and settles both
 file choices. Repair installs its selected prefix, and the aligned path
 leaves the already exact prefix in place. -/
