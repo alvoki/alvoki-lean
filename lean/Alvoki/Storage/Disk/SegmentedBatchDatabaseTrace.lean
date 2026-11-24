@@ -214,6 +214,26 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterCleanCloseAdmission {files : Type
     (trace.preservesRetained ready).1.closeWithAdmission closed observes
   exact ⟨layout, observed, admission, after, endpoint, .cleanReopenObserved trace closed endpoint⟩
 
+/-- A nonempty reported batch extends the mixed trace at the same ready
+writer and owner returned by the complete native batch schedule. The
+reported operations determine the next cache and the durable WAL selection. -/
+theorem SegmentedBatchDatabaseTrace.acknowledgeObservedBatch {handle : Type}
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (report : SegmentedBatchAppendReport directory before) (observed : ObservedBatchWrite report handle) :
+    ∃ target cacheAfter,
+      runBatchWrite directory report.rows observed.guard.lookup observed.append observed.stage observed.sync observed.rename
+        (.ready before.installed, ⟨(observed.cache, WriteFiles.initial before.history
+          (before.files.directory.staged .walBoundary)), before.owners⟩) =
+        .ok report.table.committed (.ready (report.next target).installed,
+          ⟨(cacheAfter, report.written), (report.next target).owners⟩) ∧
+      (report.next target).RetainedReady directory writer ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.acknowledgedBatch report.batch]) writer (report.next target) := by
+  obtain ⟨cacheAfter, returned⟩ := observed.acknowledges
+  obtain ⟨target, selected, ready⟩ := report.preservesRetained (trace.preservesRetained initialReady).1
+  exact ⟨target, cacheAfter, returned, ready, .acknowledgedBatch trace report selected⟩
+
 /-- The admitted reopen after checkpoint recovery returns the exact next
 writer in the mixed trace. The run map can change without a write submission. -/
 theorem SegmentedBatchDatabaseTrace.reopenAfterCheckpointPowerLossChunks {files : Type} {input : System.FilePath}

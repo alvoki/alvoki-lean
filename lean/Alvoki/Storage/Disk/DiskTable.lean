@@ -428,6 +428,18 @@ private def checkActiveSegment (dir : DiskDirectory) (state : Installed) : IO Un
   unless metadata.byteSize.toNat == state.walBytes - state.activeFirst * WAL.frameSize do
     throw (IO.userError s!"active WAL segment size disagrees with its durable marker: '{path}'")
 
+/-- The native no-follow active-file guard, interpreted over reported metadata. -/
+@[macro_inline] def checkActiveSegmentWith [Monad m] [MonadExceptOf IO.Error m]
+    (directory : DiskDirectory) (state : Installed) (lookup : FilePath → m IO.FS.Metadata) : m Unit := do
+  let path := directory.file (.walSegment state.activeFirst)
+  let metadata ← lookup path
+  checkPrivateRegularWith path metadata
+  unless metadata.byteSize.toNat == state.walBytes - state.activeFirst * WAL.frameSize do
+    throw (IO.userError s!"active WAL segment size disagrees with its durable marker: '{path}'")
+
+theorem checkActiveSegment_fileEffects (directory : DiskDirectory) (state : Installed) :
+    checkActiveSegment directory state = checkActiveSegmentWith directory state FilePath.symlinkMetadata := rfl
+
 /-- Roll over at the current absolute marker. An already empty active
 segment needs no rotation. A failed publication requires reopening. -/
 def DiskTable.rotateWal (db : DiskTable) : IO Unit := do
@@ -544,6 +556,41 @@ Close and reopen the session before attempting another operation. -/
 def DiskTable.writeBatchWithOutcome (db : DiskTable) (rows : List (UInt64 × Option UInt64)) :
     EIO DiskWriteError UInt64 :=
   db.writeBatchWith rows .rejected .commitUnknown
+
+/-- Project the complete batch schedule onto the reached phase, metadata and
+publication callbacks. The commit callback is reached only for a prepared
+nonempty batch that passed the active-file guard. -/
+@[macro_inline] def DiskSession.writeBatchSchedule [Monad m] [MonadExceptOf ε m]
+    (rows : List (UInt64 × Option UInt64)) (installed : m Installed) (reject : IO.Error → ε)
+    (requirePrepared : Option (List WAL.Write × PackedTable) → m (List WAL.Write × PackedTable))
+    (guard : Installed → m Unit) (setPhase : Phase Installed → m Unit)
+    (commit : Installed → List WAL.Write → Nat → m Unit) : m UInt64 := do
+  let state ← installed
+  if rows.isEmpty then return state.table.committed
+  let walBytes := state.walBytes + WAL.frameSize * rows.length
+  unless walBytes < UInt64.size do throw (reject (IO.userError "WAL byte count is too large"))
+  let (events, table) ← requirePrepared (prepareBatch state.table rows)
+  guard state
+  DiskSession.publishPreparedWrite { state with table, walBytes } table.committed setPhase
+    (commit state events walBytes)
+
+theorem DiskTable.writeBatchWithOutcome_schedule (db : DiskTable) (rows : List (UInt64 × Option UInt64)) :
+    db.writeBatchWithOutcome rows =
+      DiskSession.writeBatchSchedule (m := EIO DiskWriteError) rows
+        (db.installed.adapt DiskWriteError.rejected) DiskWriteError.rejected
+        (fun result => (fromOption result "write sequence space exhausted").adapt DiskWriteError.rejected)
+        (fun state => (checkActiveSegmentWith db.dir state FilePath.symlinkMetadata).adapt DiskWriteError.rejected)
+        db.phase.set
+        (fun state events bytes => (WalSegmentCommit.commitBytesAt db.dir state.activeFirst (WAL.encodeBatch events)
+          bytes db.files.append db.files.stage db.files.syncPaths IO.FS.rename).adapt DiskWriteError.commitUnknown) := rfl
+
+theorem DiskTable.writeBatch_schedule (db : DiskTable) (rows : List (UInt64 × Option UInt64)) :
+    db.writeBatch rows =
+      DiskSession.writeBatchSchedule (m := IO) rows (db.installed.adapt id) id
+        (fun result => (fromOption result "write sequence space exhausted").adapt id)
+        (fun state => (checkActiveSegmentWith db.dir state FilePath.symlinkMetadata).adapt id) db.phase.set
+        (fun state events bytes => (WalSegmentCommit.commitBytesAt db.dir state.activeFirst (WAL.encodeBatch events)
+          bytes db.files.append db.files.stage db.files.syncPaths IO.FS.rename).adapt id) := rfl
 
 /-- Batch acknowledgement follows the same publication schedule as a
 single write, with one appended byte string and one selected boundary. -/

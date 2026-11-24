@@ -693,6 +693,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.prepareBatch_refines
 #check_axioms Alvoki.WAL.encodeBatch_eq
 #check_axioms Alvoki.Storage.DiskTable.writeBatchWithOutcome_fileEffects
+#check_axioms Alvoki.Storage.DiskTable.writeBatchWithOutcome_schedule
+#check_axioms Alvoki.Storage.DiskTable.writeBatch_schedule
 #check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_fileEffects
 #check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_reports
 #check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atReportedCut
@@ -895,6 +897,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.withChain
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendReport.acknowledges
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendReport.preservesRetained
+#check_axioms Alvoki.Storage.DiskSession.runBatchWrite_empty
+#check_axioms Alvoki.Storage.DiskSession.ObservedBatchWrite.acknowledges
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.acknowledgeObservedBatch
 #check_axioms Alvoki.Storage.DiskSession.BatchCommitReports.run
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchFailure.retainedCut
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchRecoveryReport.installsRetained
