@@ -68,6 +68,10 @@ import Alvoki.Storage.Disk.WalSegmentFirstOpen
 import Alvoki.Storage.Disk.WalSegmentRotationReopen
 import Alvoki.Storage.Disk.BoundedSegmentSession
 import Alvoki.Storage.Disk.RotationSessionHandoff
+import Alvoki.Storage.Disk.BootstrapAdmissionEffects
+import Alvoki.Storage.Disk.FirstMarkedSession
+import Alvoki.Storage.Disk.WalSegmentCheckpointPublication
+import Alvoki.Storage.Disk.WalSegmentSerialReplay
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
@@ -426,6 +430,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.IntegrityRunCollectionReports.completePass
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_encode
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_append
+#check_axioms Alvoki.WAL.decodeOrdinalsFrom_length
 #check_axioms Alvoki.WAL.decodeOrdinals_append_encoded
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_eq_recoverSelected
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_refines
@@ -536,7 +541,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentCommit.settledSegment_ofSuccess
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareAfterAppendCut
 #check_axioms Alvoki.Storage.WalSegment.Chain.keeperBytes
+#check_axioms Alvoki.Storage.WalSegment.Chain.startsWithin
 #check_axioms Alvoki.Storage.WalSegment.Chain.replaysMarked
+#check_axioms Alvoki.Storage.CheckpointPublication.segmentedCheckpoint_reportedCut
 #check_axioms Alvoki.Storage.WalSegmentRepair.RetryInventory.prepareFirstMarked
 #check_axioms Alvoki.Storage.WalSegmentRotation.Trace.replaysAfterReopenCrash
 #check_axioms Alvoki.Storage.WalSegmentRotation.State.settleForReopen_survives
@@ -544,6 +551,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRotation.State.finishAfterRotation
 #check_axioms Alvoki.Storage.WalSegmentRepair.BootstrapValid.crash
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_safe
+#check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_readEmpty
+#check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_liftReports
+#check_axioms Alvoki.Storage.replay_drop_append
+#check_axioms Alvoki.Storage.replayWalChunks_eq_concat
+#check_axioms Alvoki.Storage.finishWalChunkReplay_eq_retained
+#check_axioms Alvoki.Storage.finishWalChunkReplay_eq_marked
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithPrefix_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBoundedMarkedWith_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareMarkedWith_readReports
@@ -553,6 +566,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_eq_full
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWith_eq_full
 #check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.mem_remaining
+#check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.afterFileDrops_surviving
+#check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.afterFileDrops_released
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_notAcquired
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_acquired
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_segmented
@@ -561,6 +576,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrap
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bounded
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterInterruptedRotation
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_firstMarked
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_whileReferenceSurvives
+#check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_afterLastReferenceDrop
 #check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.referenceDrops
 #check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenReports.whileReferenceSurvives
 #check_axioms Alvoki.Storage.DiskSession.LockedMarkedReopenFailureTrace.ownerExit_thenChildExec
