@@ -225,6 +225,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.WalInodeImage.oldBinding_canSurvive
 #check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_valid
 #check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_afterSettlement
+#check_axioms Alvoki.WAL.Boundary.WalInodeImage.syncTarget_targetsLiveWal_iff
+#check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportLiveFileSync_crashAttempt
+#check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_crashRetry
+#check_axioms Alvoki.WAL.Boundary.WalInodeImage.reportOldFileSync_afterSettlement_attempt
 #check_axioms Alvoki.WAL.Boundary.recoverWriteCutAfterReopenRetry
 #check_axioms Alvoki.WAL.Boundary.WriteFiles.reopenImage_crashWal_nonempty
 #check_axioms Alvoki.WAL.Boundary.WriteFiles.reopenImage_manifest_eq
