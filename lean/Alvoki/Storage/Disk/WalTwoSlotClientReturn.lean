@@ -150,6 +150,49 @@ theorem prepared_write_markerError {α σ : Type}
   · simp only [wrote, walBarrier, writeError]
   · simp only [wrote, walBarrier, slotWritten, syncError]
 
+/-- The callback that failed can be recovered from the reported client
+error. Installation is a cache update and is assumed to succeed. -/
+theorem prepared_write_errorStage {α σ : Type}
+    (next : α) (sequence : UInt64) (prior : DiskSession.Phase α)
+    (append syncWal writeSlot syncSlot install : EStateM IO.Error σ Unit)
+    {files reached : σ} {cause : IO.Error}
+    (installOk : ∀ state, ∃ installed, install state = .ok () installed)
+    (returned : DiskSession.publishPreparedWrite next sequence setPhase
+      (commitReports (publish append syncWal writeSlot syncSlot install)) (prior, files) =
+        .error (.commitUnknown cause) (.poisoned, reached)) :
+    (append files = .error cause reached ∨
+      ∃ appended, append files = .ok () appended ∧ syncWal appended = .error cause reached) ∨
+    ∃ appended durable, append files = .ok () appended ∧ syncWal appended = .ok () durable ∧
+      (writeSlot durable = .error cause reached ∨
+        ∃ written, writeSlot durable = .ok () written ∧ syncSlot written = .error cause reached) := by
+  rw [prepared_write_reports, publish_reports] at returned
+  cases wrote : append files with
+  | error error state =>
+    simp [wrote] at returned
+    obtain ⟨rfl, rfl⟩ := returned
+    exact .inl (.inl rfl)
+  | ok _ appended =>
+    cases walBarrier : syncWal appended with
+    | error error state =>
+      simp [wrote, walBarrier] at returned
+      obtain ⟨rfl, rfl⟩ := returned
+      exact .inl (.inr ⟨appended, rfl, walBarrier⟩)
+    | ok _ durable =>
+      cases slotWrite : writeSlot durable with
+      | error error state =>
+        simp [wrote, walBarrier, slotWrite] at returned
+        obtain ⟨rfl, rfl⟩ := returned
+        exact .inr ⟨appended, durable, rfl, walBarrier, .inl slotWrite⟩
+      | ok _ written =>
+        cases markerBarrier : syncSlot written with
+        | error error state =>
+          simp [wrote, walBarrier, slotWrite, markerBarrier] at returned
+          obtain ⟨rfl, rfl⟩ := returned
+          exact .inr ⟨appended, durable, rfl, walBarrier, .inr ⟨written, slotWrite, markerBarrier⟩⟩
+        | ok _ synced =>
+          obtain ⟨installed, completed⟩ := installOk synced
+          simp [wrote, walBarrier, slotWrite, markerBarrier, completed] at returned
+
 /-- A client acknowledgement supplies successful reports for all four
 file operations in execution order, including the marker barrier. -/
 theorem prepared_write_acknowledged {α σ : Type}

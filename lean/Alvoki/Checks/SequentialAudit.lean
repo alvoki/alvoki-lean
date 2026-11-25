@@ -2237,6 +2237,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.routedWalSync_survivor
 #check_axioms Alvoki.WAL.TwoSlot.prepared_write_markerError
 #check_axioms Alvoki.WAL.TwoSlot.prepared_write_walError
+#check_axioms Alvoki.WAL.TwoSlot.prepared_write_errorStage
 #check_axioms Alvoki.WAL.TwoSlot.prepared_write_acknowledged
 #check_axioms Alvoki.WAL.TwoSlot.uncertain_batch_selects_prefix
 #check_axioms Alvoki.WAL.TwoSlot.projectBinding_decodes
