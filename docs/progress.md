@@ -4,7 +4,9 @@ For ordered two-slot markers, the retry proof now connects the retained
 client submissions and fresh snapshot reads to the table returned by the
 shared open schedule. That schedule derives the ready session, lock
 ownership and a fresh session identity from successful preparation, marker
-sync and keeper repair reports. Once the marker is authorized, every
+sync and keeper repair reports. The marker barrier now derives its
+repair directory from the bounded read and sync of the same held
+marker inode and the reported crash bindings. Once authorized, every
 admitted keeper byte survivor after repair or another crash replays to the
 same installed table, and the earlier sealed bytes remain exact. The proof
 derives successful preparation from the selected manifest, ordered run
