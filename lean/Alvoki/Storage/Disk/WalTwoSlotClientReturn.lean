@@ -1460,6 +1460,19 @@ theorem ReportedMarkerRetries.refines {initial after : FileImage}
     · exact ih.settle selection observed
   | powerLoss _ metadata payload later ih => exact ih.crash metadata payload later
 
+/-- Run the marker sync with its physical image and the reached recovery
+state together. The continuation uses the recovery state returned by
+that very call, on either success or error. -/
+def projectMarkerSync {failure state result : Type}
+    (sync : KeeperDescriptorIdentity →
+      EStateM failure (WalInodeImage × state) result)
+    (marker : WalInodeImage) (handle : KeeperDescriptorIdentity) :
+    EStateM failure state result :=
+  fun reached =>
+    match sync handle (marker, reached) with
+    | .ok value (_, after) => .ok value after
+    | .error cause (_, after) => .error cause after
+
 /-- A machine stop during the reopen barrier never enters WAL repair.
 Whether the marker sync took effect or had yet to take effect, the
 surviving file choices start another attempt in the same retry lineage. -/
@@ -1467,39 +1480,36 @@ theorem reopenSyncInterrupted_preservesRetry {stop : Type}
     {initial before prepared reached : FileImage}
     (prepare : ExceptT IO.Error (EStateM stop FileImage)
       (WalSegmentRepair.Plan × WalSegmentRepair.Reopened × Nat))
-    (stabilize : ExceptT IO.Error (EStateM stop FileImage) Unit)
+    (sync : KeeperDescriptorIdentity → EStateM stop (WalInodeImage × FileImage) (Except IO.Error Unit))
+    (physical after : WalInodeImage) (handle : KeeperDescriptorIdentity)
     (finish : WalSegmentRepair.Plan → Nat → ExceptT IO.Error (EStateM stop FileImage) Unit)
     {plan : WalSegmentRepair.Plan} {opened : WalSegmentRepair.Reopened} {size : Nat}
     {stopped : stop} (read : prepare.run before = .ok (.ok (plan, opened, size)) prepared)
-    (cut : stabilize.run prepared = .error stopped reached)
+    (cut : sync handle (physical, prepared) = .error stopped (after, reached))
     (prior : ReportedMarkerRetries initial prepared) (selected : Selection)
     (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
-    (effect : reached = prepared ∨
-      reached = { prepared with directory := settleMarker prepared.directory selected })
+    (project : WalInodeImage → FileImage)
+    (source : project physical = prepared) (reachedImage : project after = reached)
+    (persisted : project (physical.completeFileSync handle.inode) =
+      { prepared with directory := settleMarker prepared.directory selected })
+    (effect : after = physical ∨ after = physical.completeFileSync handle.inode)
     {pair : DirectoryPublication.Bindings} {bytes : Option ByteArray} {names : List Nat}
     (metadata : pair ∈ reached.directory.crashImages)
     (keeper : bytes ∈ reached.keeper.crashImages) (later : names ∈ reached.later.crashImages) :
-    (reopenWith prepare stabilize finish).run before = .error stopped reached ∧
+    (reopenWith prepare (ExceptT.mk (projectMarkerSync sync physical handle)) finish).run before =
+      .error stopped reached ∧
       ReportedMarkerRetries initial (reached.crash pair bytes names) := by
   constructor
   · change prepare before = .ok (.ok (plan, opened, size)) prepared at read
-    change stabilize prepared = .error stopped reached at cut
     simp [reopenWith, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
-      EStateM.bind, read, cut]
-  · exact .powerLoss (.markerInterrupted prior selected observed effect) metadata keeper later
-
-/-- Run the marker sync with its physical image and the reached recovery
-state together. The continuation uses the recovery state returned by
-that very call, on either success or error. -/
-def projectMarkerSync {state : Type}
-    (sync : KeeperDescriptorIdentity →
-      EStateM IO.Error (WalInodeImage × state) Unit)
-    (marker : WalInodeImage) (handle : KeeperDescriptorIdentity) :
-    EStateM IO.Error state Unit :=
-  fun reached =>
-    match sync handle (marker, reached) with
-    | .ok () (_, after) => .ok () after
-    | .error cause (_, after) => .error cause after
+      EStateM.bind, read, projectMarkerSync, cut]
+  · have projectedEffect : reached = prepared ∨
+        reached = { prepared with directory := settleMarker prepared.directory selected } := by
+      rw [← reachedImage]
+      rcases effect with rfl | rfl
+      · exact Or.inl source
+      · exact Or.inr persisted
+    exact .powerLoss (.markerInterrupted prior selected observed projectedEffect) metadata keeper later
 
 /-- The descriptor's error report determines which retry image is
 reachable. A reported error after persistence settles only the marker. -/
