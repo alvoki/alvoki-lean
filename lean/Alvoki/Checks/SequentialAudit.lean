@@ -1033,6 +1033,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.effect
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.preparesFrom
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.rejectsFromOpenCell
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.publicationErrorViaOpenReferences
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.reachesIssue
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.stepCache
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.prefixKeepsRoutes

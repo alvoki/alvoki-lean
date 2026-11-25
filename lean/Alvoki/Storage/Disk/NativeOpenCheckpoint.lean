@@ -129,4 +129,74 @@ theorem NativeReadPosition.checkpointsViaOpenReferences {history log image}
     exact installed
   simp only [publishPrepared, Bind.bind, EStateM.bind, setPhase, phaseEffect, excluded, kept, installPrepared]
 
+private theorem CheckpointPreflight.returnedFileError {files : Type} {before : Phase Installed}
+    {next : Installed} {manifest : ByteArray}
+    (preflight : CheckpointPreflight before (.ok (next, manifest)))
+    (perform : Installed → ByteArray → Step → EStateM IO.Error files Unit)
+    {entry : LockedFileState files} {cause : IO.Error} {failed : files}
+    (returned : runCheckpointWithEffects perform (before, entry) =
+      .error cause (.poisoned, ⟨failed, entry.owners⟩)) :
+    CheckpointPublication.run next.table.runs.length (perform next manifest) entry.image = .error cause failed := by
+  rw [preflight.effect] at returned
+  change (match CheckpointPublication.run next.table.runs.length (perform next manifest) entry.image with
+    | .ok _ after => EStateM.Result.ok () (Phase.ready next, LockedFileState.mk after entry.owners)
+    | .error reason after => EStateM.Result.error reason ((.poisoned : Phase Installed), LockedFileState.mk after entry.owners)) =
+    .error cause (.poisoned, LockedFileState.mk failed entry.owners) at returned
+  cases reached : CheckpointPublication.run next.table.runs.length (perform next manifest) entry.image with
+  | ok value after =>
+    simp [reached] at returned
+  | error reason after =>
+    simpa [reached] using returned
+
+/-- An already verified checkpoint publication error determines the
+same file failure through the opened phase cell. The raw schedule
+reaches only the poison setter and the reported file sequence. -/
+theorem CheckpointPreflight.publicationErrorViaOpenReferences {image : Type}
+    {before : Phase Installed} {next : Installed} {manifest : ByteArray}
+    (preflight : CheckpointPreflight before (.ok (next, manifest)))
+    {db : DiskTable} {directory : DiskDirectory} {lock : IO.FS.Handle} {files : DiskTable.OpenSyncFiles}
+    {phase : IO.Ref (Phase Installed)} {token : IO.Ref Unit}
+    (uses : db.UsesOpenReferences directory lock files phase token)
+    {contents : heap → IO.Ref (Phase Installed) → Option (Phase Installed)}
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (effects : OpenPhaseCellEffects contents get set) {entry : heap}
+    (stored : contents entry phase = some before)
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle image)
+    {atEntry : LockedFileState (CensusDirectoryCache × image)} {cause : IO.Error} {failed : CensusDirectoryCache × image}
+    (returned : runCheckpointWithEffects (primitives.cached.perform directory) (before, atEntry) =
+      .error cause (.poisoned, ⟨failed, atEntry.owners⟩)) :
+    let load : EStateM IO.Error (heap × (CensusDirectoryCache × image)) Installed := do
+      (← phaseEffect (get phase)).installed
+    let setPhase := fun value => phaseEffect (set phase value)
+    let checkpoint := withPreparedCheckpoint load liftCheckpointExcept (fun next manifest =>
+      publishPrepared setPhase
+        (CheckpointPublication.run next.table.runs.length
+          (fun step => fileEffect (primitives.cached.perform directory next manifest step)))
+        (setPhase (.ready next)))
+    db.UsesOpenCheckpointSchedule directory files phase ∧
+    ∃ poisoned : heap,
+      get phase entry = .ok before entry ∧
+      set phase .poisoned entry = .ok () poisoned ∧ contents poisoned phase = some .poisoned ∧
+      checkpoint (entry, atEntry.image) = .error cause (poisoned, failed) := by
+  intro load setPhase checkpoint
+  have loaded := effects.reads entry phase before stored
+  obtain ⟨poisoned, excluded, poisonedPhase⟩ := effects.writes entry phase before .poisoned stored
+  refine ⟨uses.checkpoint, poisoned, loaded, excluded, poisonedPhase, ?_⟩
+  have same : load (entry, atEntry.image) =
+      before.installed (m := EStateM IO.Error _) (entry, atEntry.image) := by
+    simp only [load, phaseEffect, Bind.bind, EStateM.bind, loaded]
+  dsimp only [checkpoint]
+  rw [preflight.preparesFrom _ same]
+  have failedFiles := preflight.returnedFileError (primitives.cached.perform directory) returned
+  have exactError : CheckpointPublication.run next.table.runs.length
+      (fun step => fileEffect (primitives.cached.perform directory next manifest step))
+      (poisoned, atEntry.image) = .error cause (poisoned, failed) := by
+    unfold CheckpointPublication.run
+    rw [fileEffects_forM]
+    change fileEffect (CheckpointPublication.run next.table.runs.length (primitives.cached.perform directory next manifest))
+      (poisoned, atEntry.image) = _
+    simp only [fileEffect, failedFiles]
+  simp only [publishPrepared, Bind.bind, EStateM.bind, setPhase, phaseEffect, excluded, exactError]
+
 end Alvoki.Storage.DiskSession
