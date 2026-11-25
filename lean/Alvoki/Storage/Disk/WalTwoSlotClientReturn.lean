@@ -684,6 +684,37 @@ theorem reopenSync_repairPreservesFrontier
   subst directory
   exact repair_preserves_settledMarker initial selected bound trace pair keeper later chosen
 
+/-- A machine stop during the reopen barrier never enters WAL repair.
+Whether the marker sync took effect or had yet to take effect, the
+surviving file choices start another attempt in the same retry lineage. -/
+theorem reopenSyncInterrupted_preservesRetry {stop : Type}
+    {initial before prepared reached : FileImage}
+    (prepare : ExceptT IO.Error (EStateM stop FileImage)
+      (WalSegmentRepair.Plan × WalSegmentRepair.Reopened × Nat))
+    (stabilize : ExceptT IO.Error (EStateM stop FileImage) Unit)
+    (finish : WalSegmentRepair.Plan → Nat → ExceptT IO.Error (EStateM stop FileImage) Unit)
+    {plan : WalSegmentRepair.Plan} {opened : WalSegmentRepair.Reopened} {size : Nat}
+    {stopped : stop} (read : prepare.run before = .ok (.ok (plan, opened, size)) prepared)
+    (cut : stabilize.run prepared = .error stopped reached)
+    (prior : UnsettledRetries initial prepared) (selected : Selection)
+    (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
+    (effect : reached = prepared ∨
+      reached = { prepared with directory := settleMarker prepared.directory selected })
+    {pair : DirectoryPublication.Bindings} {bytes : Option ByteArray} {names : List Nat}
+    (metadata : pair ∈ reached.directory.crashImages)
+    (keeper : bytes ∈ reached.keeper.crashImages) (later : names ∈ reached.later.crashImages) :
+    (reopenWith prepare stabilize finish).run before = .error stopped reached ∧
+      UnsettledRetries initial (reached.crash pair bytes names) := by
+  constructor
+  · change prepare before = .ok (.ok (plan, opened, size)) prepared at read
+    change stabilize prepared = .error stopped reached at cut
+    simp [reopenWith, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
+      EStateM.bind, read, cut]
+  · apply UnsettledRetries.crash _ metadata keeper later
+    rcases effect with rfl | rfl
+    · exact prior
+    · exact .settle prior selected observed
+
 /-- The descriptor's error report determines which retry image is
 reachable. A reported error after persistence settles only the marker. -/
 theorem reopenSyncError_preservesRetry
