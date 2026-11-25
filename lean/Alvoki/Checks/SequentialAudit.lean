@@ -255,6 +255,7 @@ import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkPowerLoss
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkReopen
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
+import Alvoki.Storage.Disk.NativeCoveredWalUnlinkErrorReopen
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeReadyClose
 import Alvoki.Storage.Disk.NativeCloseAlignedReopen
@@ -1642,8 +1643,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.sameCensus
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.rejectsReads
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.retainsCustody
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.retainsLock
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.selects
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.returnsCoveredWalUnlinkError
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCoveredWalUnlinkError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPlan.plans
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPass.barrierCensus
@@ -1687,6 +1690,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.releasedVacant
 #check_axioms Alvoki.Storage.DiskSession.NativeCollectionCloseFiles.lock
 #check_axioms Alvoki.Storage.DiskSession.NativeCollectionAlignedReads.readsWal
+#check_axioms Alvoki.Storage.DiskSession.NativeCollectedWal.vacant
+#check_axioms Alvoki.Storage.DiskSession.CoveredWalRetrySelection.sameTarget
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensCollectedWal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensCollectionBarrierError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCollectionBarrier
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.rotationAtEnd

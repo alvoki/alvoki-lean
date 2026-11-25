@@ -166,6 +166,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeReadyWalCollectionError
 lake env leanchecker Alvoki.Storage.Disk.NativeCoveredWalUnlinkStop
 lake env leanchecker Alvoki.Storage.Disk.NativeCoveredWalUnlinkReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
+lake env leanchecker Alvoki.Storage.Disk.NativeCoveredWalUnlinkErrorReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeCollectionErrorReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyClose
 lake env leanchecker Alvoki.Storage.Disk.NativeCloseAlignedReopen
