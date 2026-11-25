@@ -2102,6 +2102,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WalCollectionReads.continueWithEffects_publicationFiles
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.publicationFiles_returns
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.collectsCoveredWal
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rejectsCoveredWalPlan
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.returned
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.runs
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsCustody

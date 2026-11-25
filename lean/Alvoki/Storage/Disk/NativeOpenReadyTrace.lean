@@ -117,6 +117,9 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
   | collectCoveredWal (observed : NativeReadyWalCollection start.current.ready.state)
       (completed : observed.barrier.outcome = .completed) :
       NativeOpenedReport start .collectCoveredWal
+  | rejectsCoveredWalPlan (observed : NativeWalPlanningObservation start.current.ready.state)
+      (cause : IO.Error) (rejected : observed.extents.result = .error cause) :
+      NativeOpenedReport start .collectCoveredWal
 
 namespace NativeOpenedReport
 
@@ -303,6 +306,12 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
       .ok () (next.reached, next.current.ready.state.cache, observed.barrier.after) ∧
     next.current.ready.state = observed.next completed ∧ next.pins = start.pins ∧
     event = .collectCoveredWal
+  | .rejectsCoveredWalPlan observed cause _ =>
+    opened.table.UsesOpenWalCollectionSchedule start.current.ready.state.session.directory opened.files opened.phase ∧
+    (∀ publication,
+      let entry := (start.reached, start.current.ready.state.cache, WalSealedUnlinkImage.start start.current.ready.state.writer.wal)
+      observed.calls.collectOnOpenPhase opened publication entry = .error cause entry) ∧
+    event = .coveredWalCollectionRejected cause ∧ next = start
 
 structure Reached (report : NativeOpenedReport start instruction) (event : NativeExecutionEvent)
     (next : NativeOpenedPosition opened) : Prop where
@@ -547,6 +556,9 @@ theorem reaches (report : NativeOpenedReport start instruction) :
   | collectCoveredWal observed completed =>
     obtain ⟨next, source, raw, state, pins, step⟩ := start.collectsCoveredWal observed completed
     exact ⟨_, next, step, source, raw, state, pins, rfl⟩
+  | rejectsCoveredWalPlan observed _ rejected =>
+    obtain ⟨source, raw, step⟩ := start.rejectsCoveredWalPlan observed rejected
+    exact ⟨_, start, step, source, raw, rfl, rfl⟩
 
 end NativeOpenedReport
 
