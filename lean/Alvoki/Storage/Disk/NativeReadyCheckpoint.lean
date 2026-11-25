@@ -306,8 +306,10 @@ structure Completed (report : NativeReadyCheckpoint state reports) (writer : Seg
   lock : report.bindings reports.observed.completed.2 (state.session.directory.file .lock) =
     some ((report.next writer).census.inode (report.next writer).owner.description)
 
-theorem completes (report : NativeReadyCheckpoint state reports) (valid : state.Valid) :
-    ∃ writer, report.Completed writer := by
+/-- The successful native return and the published checkpoint selection
+use one installed writer. -/
+theorem completesWithPublication (report : NativeReadyCheckpoint state reports) (valid : state.Valid) :
+    ∃ writer, report.Completed writer ∧ attempt.Installs writer := by
   have initialTrace : SegmentedBatchDatabaseTrace state.session.directory state.session.descriptor state.writer
       false [] state.session.descriptor state.writer := .start
   obtain ⟨writer, completed, _⟩ := initialTrace.checkpointFromObservedSteps valid.retained reports
@@ -338,10 +340,10 @@ theorem completes (report : NativeReadyCheckpoint state reports) (valid : state.
       have same : Except.ok (ε := String) state.writer.installed.table = .ok attempt.table := by
         simpa [flushForCheckpoint, empty, Pure.pure, Except.pure] using flushed
       exact congrArg PackedTable.pins (Except.ok.inj same).symm
-  refine ⟨writer, ?_, ready, files, settledManifest,
+  refine ⟨writer, ⟨?_, ready, files, settledManifest,
     physicalManifest.trans (congrArg Publication.Image.active settledManifest), ?_, ?_,
     completed.installed.installed, completed.installed.history, ?_, cache, census, completed.installed.owners,
-    returnedCustody.2.2.2.1, ?_⟩
+    returnedCustody.2.2.2.1, ?_⟩, completed.installed⟩
   · change runCheckpointWithEffects (report.primitives.cached.perform state.session.directory)
       (state.session.phase, ⟨(state.cache, (reports.observed.atRun 0).2), state.writer.owners⟩) =
         .ok () (.ready writer.installed, ⟨reports.observed.completed, writer.owners⟩)
@@ -358,6 +360,11 @@ theorem completes (report : NativeReadyCheckpoint state reports) (valid : state.
   · rw [completed.installed.installed]
     exact pins
   · simpa only [next, census] using returnedCustody.2.2.2.2
+
+theorem completes (report : NativeReadyCheckpoint state reports) (valid : state.Valid) :
+    ∃ writer, report.Completed writer := by
+  obtain ⟨writer, completed, _⟩ := report.completesWithPublication valid
+  exact ⟨writer, completed⟩
 
 end NativeReadyCheckpoint
 
