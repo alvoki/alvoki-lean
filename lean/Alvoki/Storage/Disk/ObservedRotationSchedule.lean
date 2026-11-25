@@ -57,6 +57,31 @@ theorem runObservedRotation_publishError {handle : Type} (directory : DiskDirect
   simp [runObservedRotation, rotateWalSchedule, Phase.installed, nonempty, onRotationFiles,
     checked, publishPrepared, failed, Bind.bind, EStateM.bind, Pure.pure, Except.pure]
 
+/-- An already present empty successor skips creation. Successful file and
+directory syncs still precede the active cache reset and ready phase. -/
+theorem runObservedRotation_present {handle : Type} (directory : DiskDirectory) (installed : Installed)
+    (before : LockedFileState (Cache handle × State))
+    (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+    (read : FilePath → EStateM IO.Error (Cache handle × State) (Option ByteArray))
+    (create sync : FilePath → EStateM IO.Error (Cache handle × State) Unit)
+    (nonempty : installed.activeFirst < installed.walBytes / WAL.frameSize)
+    (checked : checkActiveSegmentWith (m := EStateM IO.Error (Cache handle × State))
+      directory installed (fun path => liftExcept (lookup path)) before.image = .ok () before.image)
+    {fileSynced settled : Cache handle × State} :
+    let successor := installed.walBytes / WAL.frameSize
+    let path := directory.file (.walSegment successor)
+    read path before.image = .ok (some ByteArray.empty) before.image →
+    sync path before.image = .ok () fileSynced → sync directory.path fileSynced = .ok () settled →
+    runObservedRotation directory lookup read create sync (.ready installed, before) =
+      .ok () (.ready { installed with activeFirst := successor },
+        { before with image := ({ settled.1 with active := none }, settled.2) }) := by
+  intro successor path present file directorySync
+  have ran : WalSegmentRotation.runAt directory successor read create sync before.image = .ok () settled := by
+    rw [WalSegmentRotation.runAt_fileEffects]
+    simp [observeSuccessorWith, present, file, directorySync, path, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  simp [runObservedRotation, rotateWalSchedule, Phase.installed, nonempty, onRotationFiles, successor,
+    checked, publishPrepared, ran, Bind.bind, EStateM.bind, Pure.pure, Except.pure]
+
 /-- The successful local observations for an initially absent successor.
 Each cached callback starts in the exact state left by its predecessor.
 Its file component records the reached creation and durability effects. -/
