@@ -1751,8 +1751,7 @@ theorem installsAfterAcquiredRecovery_replays
     {batch : List WAL.Write}
     {image : WalSegmentImage}
     {base : PackedTable} {first : Nat}
-    (selected : WalSegmentRecovery image after.2.image.directory.active layout.range (prior.history ++ batch) base first
-      table)
+    (selected : WalSegmentRecovery image layout.target.pair layout.range (prior.history ++ batch) base first table)
     {interrupted firstRepair : FileImage}
     (beforeBarrier : UnsettledRetries interrupted retry.image)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
@@ -1796,8 +1795,14 @@ theorem installsAfterAcquiredRecovery_replays
     manifest runs checkpointSelected chronology selection decoded (sameFrontier.symm ▸ count) orderedLayout replay keeper
     seals offsets retained following later keepsMarker listingDrops keeperDrops
   obtain ⟨_, _, previous, _, _, _⟩ := trace.keyValueRefinement start.bootstrap start.held
+  have authorized := prepared_settleMarker preparedPlan selection observed
+  have ⟨validAfter, _⟩ := retries.preserves
+    (authorizedRepair.valid authorized.pair authorized.keeperPrefix authorized.newer)
+  have selectedAfter : WalSegmentRecovery image after.2.image.directory.active layout.range
+      (prior.history ++ batch) base first table :=
+    validAfter.selected.symm ▸ selected
   have whole := (recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
-    observations selection observed authorizedRepair preparedPlan retries previous oldSize selected).2.2
+    observations selection observed authorizedRepair preparedPlan retries previous oldSize selectedAfter).2.2
   obtain ⟨reference, replayed, retained, acknowledged, bounded, priorReads⟩ :=
     trace.replaysUncertainSubmission start whole (sameHistory ▸ orderedLayout)
   have projected := stabilizesAfterKeeperRead report keeper markerLive (sameInode.trans markerInode)
@@ -1816,8 +1821,8 @@ theorem installsAfterAcquiredRecovery_replays
   refine ⟨_, returned, reference, replayed, retained, acknowledged, bounded, priorReads, ?_⟩
   apply DiskSession.SegmentedSession.guardedAcquireReads rfl
   intro snapshot floor committed
-  exact selected.acquireReads replayed floor
-    (selected.count ▸ UInt64.le_iff_toNat_le.mp committed)
+  exact selectedAfter.acquireReads replayed floor
+    (selectedAfter.count ▸ UInt64.le_iff_toNat_le.mp committed)
 
 /-- After marker stabilization, a longer keeper uses the shared native
 replacement schedule once its first directory sync authorizes repair. -/

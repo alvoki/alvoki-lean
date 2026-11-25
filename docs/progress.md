@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The client theorem derives the returned directory's selected binding
+from the first repair and settled retries. It transports the canonical
+WAL recovery proof from the selected repair target to that returned
+binding. Constructing this canonical recovery witness from the exact
+segments and composing the native repair and retry outcomes remain open.
+
 The client theorem derives the selected frame count from the observed
 marker and the layout's decoded range. The pre- and post-barrier proofs
 also use that layout's repair target and plan, binding the retry evidence
