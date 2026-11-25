@@ -982,3 +982,9 @@ read reports with replay of the selected history. It returns the exact
 plan and table at the reached keeper cache and descriptor census, and
 proves the marker slot is live there. The next composition must use
 this state directly for marker stabilization and keeper repair.
+
+The two-slot marker barrier now derives its issuer and inode directly
+from the census returned by the bounded keeper read. Under the
+reported successful fsync and surviving bindings, it computes the
+exact directory image that authorizes repair. This route covers the
+barrier issued without additional descriptor drops after the read.

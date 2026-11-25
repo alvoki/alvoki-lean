@@ -1417,6 +1417,39 @@ theorem preparesFromHeldMarker
   rw [through] at prepared
   exact ⟨prepared, live⟩
 
+/-- Construct the marker barrier from the prepared keeper census and
+derive the exact directory image that enters repair. -/
+theorem stabilizesAfterKeeperRead
+    (report : CapturedMarkedReadReports admission layout published false)
+    (captured : CapturedKeeperOpenReports report)
+    {marker settled : WalInodeImage} {slot : DescriptorSlot}
+    (live : slot ∈ captured.afterRead.slots)
+    (current : admission.reached.inode slot.description = marker.active)
+    (effect : Storage.SyncHandleRouting.FsyncResult marker
+      (marker.completeFileSync marker.active) true (.ok () settled))
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selection : Selection} (decoded : decode (marker.visible marker.active) = .ok selection)
+    (bound : retry.image.directory.active.walBoundary.isSome = true)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = retry.image.directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode) :
+    projectRepairDirectory retry.image.directory (marker.visible marker.active) choices =
+      .ok (settleMarker retry.image.directory selection) := by
+  let handle : KeeperDescriptorIdentity := ⟨slot.description, marker.active⟩
+  have inode : captured.afterRead.inode handle.description = handle.inode :=
+    (congrFun captured.afterRead_inode slot.description).trans current
+  have liveReference : slot.reference ∈ (captured.afterRead.afterDrops []).references handle.description := by
+    rw [DescriptorInventory.references_afterDrops]
+    exact List.mem_filter.mpr ⟨(captured.afterRead.mem_references).mpr ⟨slot, live, rfl, rfl⟩, rfl⟩
+  have observed := FsyncObservation.ofInventory captured.afterRead []
+    KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode handle
+    slot.reference liveReference inode marker (fun object (files : WalInodeImage) => files.completeFileSync object)
+    (by rw [inode]; exact effect)
+  exact reopenSync_projectsRepairDirectory observed rfl sameBinding decoded
+    retry.image.directory bound choices enumerated presence physical
+
 end CapturedPreparation
 
 /-- The same retry-selected recovery explains the retained submissions and
