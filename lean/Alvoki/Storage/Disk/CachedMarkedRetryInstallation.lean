@@ -51,10 +51,65 @@ structure MarkedRetryChunkOperations (files : Type) (directory : DiskDirectory)
   write : files → FilePath → ByteArray → EStateM IO.Error FileImage Unit
   sync : files → Array FilePath → EStateM IO.Error FileImage Unit
   renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit
-  healthy : ∀ action prior next,
+
+namespace MarkedRetryChunkOperations
+
+variable {files : Type} {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+  {layout : CanonicalKeeperLayout before.image history}
+
+/-- The later effects needed only for a completed open. -/
+abbrev HealthyFinish (observed : MarkedRetryChunkOperations files directory layout) : Prop :=
+  ∀ action prior next,
     ReachesAction layout.target before.image.syncDirectory layout.plan.finishActions action prior →
     prior.effect layout.target action = some next →
-    performPaths directory layout.plan removeFile throw (write cache) (sync cache) renameFile action prior = .ok () next
+    performPaths directory layout.plan observed.removeFile throw (observed.write observed.cache)
+      (observed.sync observed.cache) observed.renameFile action prior = .ok () next
+
+def markedAt (observed : MarkedRetryChunkOperations files directory layout)
+    (resolved : DiskDirectory) (cache : files) :
+    EStateM IO.Error FileImage Reopened :=
+  reopenMarkedBoundedWithCachedExtents resolved
+    (fun path => liftExcept (observed.reported.inventory.reports.readOptional path))
+    (fun path => liftExcept (checkpointRunSizeReport observed.reported.inventory.reports path))
+    (fun path count => liftExcept (observed.reads.readPrefix path count))
+    (fun path => liftExcept (observed.reported.list path))
+    (fun path => liftExcept (.ok (observed.reported.inventory.reports.lstat path) : Except IO.Error _))
+    (fun path size => liftExcept (observed.reported.readSeal path size))
+    (fun path size physical => liftExcept (observed.readKeeper cache path size physical))
+    observed.removeFile (observed.write cache) (observed.sync cache) observed.renameFile
+
+def recoverAt (observed : MarkedRetryChunkOperations files directory layout) (resolved : DiskDirectory) :
+    EStateM IO.Error FileImage Reopened := do
+  let cache ← observed.openFiles
+  recoverSegmentedWalWith
+    (rejectFlatWalWith resolved (optionalMetadataWith (observed.lookup (resolved.file .wal))))
+    (optionalMetadataWith (observed.lookup (resolved.file .walBoundary)))
+    (observed.markedAt resolved cache) (observed.bootstrap cache)
+
+def runAt (observed : MarkedRetryChunkOperations files directory layout) (resolved : DiskDirectory)
+    (slot : DescriptorSlot) : EStateM IO.Error (LockedFileState FileImage) SegmentedSession :=
+  runOpenWithInstallation resolved slot.description observed.nextRef (observed.flock slot)
+    observed.unlock (observed.recoverAt resolved)
+
+def run (observed : MarkedRetryChunkOperations files directory layout) :
+    EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession :=
+  observed.runAt directory observed.slot before
+
+/-- A successfully acquired, initialized open with observed marker metadata
+uses the same marked worker regardless of the outcome of recovery. -/
+theorem run_selectsMarked (observed : MarkedRetryChunkOperations files directory layout) :
+    observed.run = runOpenWithInstallation directory observed.slot.description observed.nextRef (.ok true)
+      observed.unlock (observed.markedAt directory observed.cache) before := by
+  have checkedMarker : optionalMetadataWith (observed.lookup (directory.file .walBoundary)) before.image =
+      .ok (some observed.markerMetadata) before.image := by
+    simp only [optionalMetadataWith, Bind.bind, EStateM.bind, observed.markedPath, Pure.pure, EStateM.pure]
+  have branch := runOpenWithInstallation_recoveryBranch directory observed.slot.description observed.nextRef before
+    observed.unlock observed.openFiles observed.lookup (observed.markedAt directory) observed.bootstrap observed.cache
+    observed.initialized observed.flatName observed.flatMessage observed.flatAbsent (some observed.markerMetadata) checkedMarker
+  rw [run, runAt, recoverAt, observed.acquired, branch]
+  rfl
+
+end MarkedRetryChunkOperations
 
 /-- The observed callbacks and selected run read contracts of one held reopen. -/
 structure MarkedRetryChunkReports (files : Type) (directory : DiskDirectory)
@@ -63,6 +118,7 @@ structure MarkedRetryChunkReports (files : Type) (directory : DiskDirectory)
     extends MarkedRetryChunkOperations files directory layout where
   chunks : reads.ObservesSelected directory before.image.directory.active.manifest published.durable
   settles : sync cache #[directory.path] before.image = .ok () before.image.syncDirectory
+  healthy : toMarkedRetryChunkOperations.HealthyFinish
 
 namespace MarkedRetryChunkReports
 
@@ -79,35 +135,8 @@ theorem selectedAfterWatermark (observed : MarkedRetryChunkReports files directo
       layout.range.watermark < start :=
   observed.reported.selectedAfterWatermark chosen descriptors
 
-def markedAt (observed : MarkedRetryChunkReports files directory layout published)
-    (resolved : DiskDirectory) (cache : files) :
-    EStateM IO.Error FileImage Reopened :=
-  reopenMarkedBoundedWithCachedExtents resolved
-    (fun path => liftExcept (observed.reported.inventory.reports.readOptional path))
-    (fun path => liftExcept (checkpointRunSizeReport observed.reported.inventory.reports path))
-    (fun path count => liftExcept (observed.reads.readPrefix path count))
-    (fun path => liftExcept (observed.reported.list path))
-    (fun path => liftExcept (.ok (observed.reported.inventory.reports.lstat path) : Except IO.Error _))
-    (fun path size => liftExcept (observed.reported.readSeal path size))
-    (fun path size physical => liftExcept (observed.readKeeper cache path size physical))
-    observed.removeFile (observed.write cache) (observed.sync cache) observed.renameFile
-
-def recoverAt (observed : MarkedRetryChunkReports files directory layout published) (resolved : DiskDirectory) :
-    EStateM IO.Error FileImage Reopened := do
-  let cache ← observed.openFiles
-  recoverSegmentedWalWith
-    (rejectFlatWalWith resolved (optionalMetadataWith (observed.lookup (resolved.file .wal))))
-    (optionalMetadataWith (observed.lookup (resolved.file .walBoundary)))
-    (observed.markedAt resolved cache) (observed.bootstrap cache)
-
-def runAt (observed : MarkedRetryChunkReports files directory layout published) (resolved : DiskDirectory)
-    (slot : DescriptorSlot) : EStateM IO.Error (LockedFileState FileImage) SegmentedSession :=
-  runOpenWithInstallation resolved slot.description observed.nextRef (observed.flock slot)
-    observed.unlock (observed.recoverAt resolved)
-
-def run (observed : MarkedRetryChunkReports files directory layout published) :
-    EStateM.Result IO.Error (LockedFileState FileImage) SegmentedSession :=
-  observed.runAt directory observed.slot before
+abbrev run (observed : MarkedRetryChunkReports files directory layout published) :=
+  observed.toMarkedRetryChunkOperations.run
 
 end MarkedRetryChunkReports
 
@@ -134,19 +163,13 @@ theorem runOpenWithInstallation_markedRetryFromChunks {files : Type}
     selectedCheckpoint_replays watermark accepted (byteCount ▸ count.toNat_lt_size) ordered
   let sizes := SizedCheckpointRunReports.ofChunkReads (checkpoint := checkpoint) selected observed.reads
     observed.metadata observed.chunks
-  have checkedMarker : optionalMetadataWith (observed.lookup (directory.file .walBoundary)) before.image =
-      .ok (some observed.markerMetadata) before.image := by
-    simp only [optionalMetadataWith, Bind.bind, EStateM.bind, observed.markedPath, Pure.pure, EStateM.pure]
-  have branch := runOpenWithInstallation_recoveryBranch directory observed.slot.description observed.nextRef before
-    observed.unlock observed.openFiles observed.lookup (observed.markedAt directory) observed.bootstrap observed.cache
-    observed.initialized observed.flatName observed.flatMessage observed.flatAbsent (some observed.markerMetadata) checkedMarker
-  have sameWorker : observed.markedAt directory observed.cache = cachedRetryRecovery observed.reported sizes.readPrefix
-      observed.removeFile (observed.write observed.cache) (observed.sync observed.cache) observed.renameFile := by
-    simp only [MarkedRetryChunkReports.markedAt, observed.keeperReads, cachedRetryRecovery, sizes,
+  have sameWorker : observed.toMarkedRetryChunkOperations.markedAt directory observed.cache =
+      cachedRetryRecovery observed.reported sizes.readPrefix observed.removeFile (observed.write observed.cache)
+        (observed.sync observed.cache) observed.renameFile := by
+    simp only [MarkedRetryChunkOperations.markedAt, observed.keeperReads, cachedRetryRecovery, sizes,
       SizedCheckpointRunReports.ofChunkReads]
-  rw [MarkedRetryChunkReports.run, MarkedRetryChunkReports.runAt, MarkedRetryChunkReports.recoverAt,
-    observed.acquired, branch]
-  simp only [Option.isSome_some, ↓reduceIte, sameWorker]
+  unfold MarkedRetryChunkReports.run
+  rw [observed.toMarkedRetryChunkOperations.run_selectsMarked, sameWorker]
   have completed := runOpenWithInstallation_cachedRetryCompletes observed.reported observed.descriptors observed.slot
     observed.live observed.bindings observed.lockObject observed.flock observed.acquired observed.acquisition
     observed.inventoryDescription observed.inventoryOwners observed.nextRef observed.liveRefs observed.fresh

@@ -111,6 +111,7 @@ theorem settles (observed : ListedDirectoryAuthorization report) (completed : ob
 installer. No independent successful-settlement report is needed. -/
 theorem installs {input : FilePath} (observed : ListedDirectoryAuthorization report)
     (completed : observed.outcome = .completed)
+    (healthy : operations.HealthyFinish)
     (admission : OpenAdmissionReports input directory operations.slot)
     (keeperValid : before.image.keeper.Valid layout.target.Accepts)
     (laterValid : before.image.later.Beyond layout.range.through)
@@ -120,8 +121,8 @@ theorem installs {input : FilePath} (observed : ListedDirectoryAuthorization rep
       before.image.directory.active.manifest)
     (ordered : WAL.OrdinalsFrom 1 history) :
     CachedRetryInstalled (before := before) operations.reported operations.descriptors operations.slot operations.bindings
-      published operations.liveRefs ((report.toChunkReports (observed.settles completed)).runWithAdmission admission) :=
-  (report.installs (observed.settles completed) admission keeperValid laterValid following accepted ordered).2.2.2.2
+      published operations.liveRefs ((report.toChunkReports (observed.settles completed) healthy).runWithAdmission admission) :=
+  (report.installs (observed.settles completed) healthy admission keeperValid laterValid following accepted ordered).2.2.2.2
 
 end ListedDirectoryAuthorization
 end Alvoki.Storage.DiskSession

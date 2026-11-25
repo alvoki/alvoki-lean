@@ -182,6 +182,7 @@ import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.CheckedDirectoryRead
 import Alvoki.Storage.Disk.HeldDirectoryReadObservations
 import Alvoki.Storage.Disk.ListedDirectoryAuthorization
+import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
@@ -1343,6 +1344,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.syncResult
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.settles
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.installs
+#check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.continuesAfterError
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofDirectoryReadError
 #check_axioms Alvoki.Storage.readExactPrefixWith_requestBound
 #check_axioms Alvoki.Storage.readPrefixUntilEofWith_requestBound

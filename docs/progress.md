@@ -292,4 +292,6 @@ The selected checkpoint reads and checked WAL-directory listing now share the he
 
 The cached marked opener’s exact returned session now supplies the snapshot acquisition and guarded read proof. Its selected checkpoint and retained WAL explain every supported point and range read after acquisition. An unsupported acquisition leaves the same returned session unchanged. After a new pin is issued, earlier live tokens still reject every handle under the reported pointer comparison, even if a local number coincides. [Reads after marked reopen](../lean/Alvoki/Storage/Disk/CachedRetrySnapshotReads.lean)
 
+An error at the first directory barrier now follows the same admitted marked worker that handles success. The native timing chooses the reached pre- or post-effect directory image. The exact cleanup report supplies the returned error and owner, and the bounded retry starts at that same reached state. Preparation uses the checked file reads. The failure branch stops before later repair callbacks. [Authorization failure](../lean/Alvoki/Storage/Disk/ListedDirectoryAuthorizationFailure.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

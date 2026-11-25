@@ -1,0 +1,122 @@
+import Alvoki.Storage.Disk.ListedDirectoryAuthorization
+import Alvoki.Storage.Disk.SegmentedRetryTrace
+
+namespace Alvoki.Storage.DiskSession
+
+open System SyncHandleRouting WalSegmentRepair
+open WAL.Boundary (CheckpointRepresentsPrefix)
+
+variable {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+  {layout : CanonicalKeeperLayout before.image history}
+  {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
+  {published : CheckpointPublication.Image}
+  {report : HeldDirectoryMarkedRetryReports operations published}
+
+private def MarkedRetryChunkOperations.cachedAttempt
+    (operations : MarkedRetryChunkOperations files directory layout) (localUnlock : operations.unlock.LocalFlock) :
+    CachedOpenAttempt directory before :=
+  operations.reported.withReaders (m := EStateM IO.Error FileImage) operations.reads.readPrefix
+    fun optional runSize runPrefix list lstat readSeal readKeeper =>
+      { descriptor := operations.slot.description
+        nextRef := operations.nextRef
+        acquisition := operations.acquired ▸ operations.acquisition
+        unlock := operations.unlock
+        localUnlock := localUnlock
+        readOptional := optional
+        readRunSize := runSize
+        readRunPrefix := runPrefix
+        list := list
+        lstat := lstat
+        readSeal := readSeal
+        readKeeper := readKeeper
+        removeFile := operations.removeFile
+        write := operations.write operations.cache
+        sync := operations.sync operations.cache
+        renameFile := operations.renameFile }
+
+private theorem MarkedRetryChunkOperations.runWithAdmission_eq_cached
+    (operations : MarkedRetryChunkOperations files directory layout) {input : FilePath}
+    (admission : OpenAdmissionReports input directory operations.slot) (localUnlock : operations.unlock.LocalFlock) :
+    operations.runWithAdmission admission = (operations.cachedAttempt localUnlock).run := by
+  rw [operations.runWithAdmission_eq admission, operations.run_selectsMarked]
+  simp only [MarkedRetryChunkOperations.markedAt, operations.keeperReads]
+  rfl
+
+namespace ListedDirectoryAuthorization
+
+/-- A reported failure of the first grouped directory barrier returns
+through the actual admitted marked schedule. The sync observation
+determines the reached image before cleanup. Cleanup can replace the
+reported sync error with its own error and retain the acquired owner.
+This same failed attempt extends the retry lineage. -/
+theorem continuesAfterError {input : FilePath} {source : LockedFileState FileImage} {admits : Target → Prop}
+    (observed : ListedDirectoryAuthorization report) (failed : observed.outcome ≠ .completed)
+    (admission : OpenAdmissionReports input directory operations.slot)
+    (localUnlock : operations.unlock.LocalFlock)
+    (keeperValid : before.image.keeper.Valid layout.target.Accepts)
+    (laterValid : before.image.later.Beyond layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      before.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    (prior : BoundedReopenTrace directory admits source before) (admitted : admits layout.target) :
+    ∃ failure : CachedOpenAuthorizationFailure directory before,
+      operations.runWithAdmission admission = .error failure.error failure.after ∧
+      failure.attempt.descriptor = operations.slot.description ∧ failure.attempt.unlock = operations.unlock ∧
+      BoundedReopenTrace directory admits source failure.after ∧
+      (match observed.outcome with
+      | .completed => False
+      | .errorBeforeEffect cause =>
+        failure.cause = IO.userError s!"sync failed for '{directory.path}': {cause}" ∧
+        failure.after.image = before.image
+      | .errorAfterEffect cause =>
+        failure.cause = IO.userError s!"sync failed for '{directory.path}': {cause}" ∧
+        failure.after.image = before.image.syncDirectory) := by
+  obtain ⟨watermark, _, _, count, _, _, absolute⟩ := DirectoryPublication.Bindings.walRange_accounting layout.decoded
+  have byteCount : (WAL.encode history).size = count.toNat := by
+    rw [absolute, layout.through, WAL.encode_size, Nat.mul_comm]
+  obtain ⟨checkpoint, _, _, selected, _, _, _, _, _, _⟩ :=
+    selectedCheckpoint_replays watermark accepted (byteCount ▸ count.toNat_lt_size) ordered
+  let sizes := SizedCheckpointRunReports.ofChunkReads (checkpoint := checkpoint) selected operations.reads
+    operations.metadata report.chunkReads
+  obtain ⟨opened, _, _, prepared, _⟩ :=
+    operations.reported.prepares before.image laterValid following accepted ordered sizes operations.manifestRead
+      operations.markerRead
+  let attempt := operations.cachedAttempt localUnlock
+  have preparedRead : attempt.prepare before.image = .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size)
+      before.image := prepared
+  rw [layout.boundedPlan_eq_extract] at preparedRead
+  have valid : Prepared before.image layout.target layout.plan :=
+    ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
+  have cleanup {cause : IO.Error} {reached : FileImage}
+      (edge : attempt.sync #[directory.path] before.image = .error cause reached)
+      (metadata : reached = before.image ∨ reached = before.image.syncDirectory) :
+      ∃ failure : CachedOpenAuthorizationFailure directory before,
+        operations.runWithAdmission admission = .error failure.error failure.after ∧
+        failure.attempt.descriptor = operations.slot.description ∧ failure.attempt.unlock = operations.unlock ∧
+        BoundedReopenTrace directory admits source failure.after ∧ failure.cause = cause ∧
+        failure.after.image = reached := by
+    have reported : MetadataReport before.image (attempt.sync #[directory.path]) := by
+      unfold MetadataReport
+      rw [edge]
+      exact metadata
+    let failure : CachedOpenAuthorizationFailure directory before :=
+      ⟨attempt, layout.target, layout.plan, opened, valid, preparedRead, cause, reached, edge, reported⟩
+    exact ⟨failure, (operations.runWithAdmission_eq_cached admission localUnlock).trans failure.run_error,
+      rfl, rfl, .cachedAuthorizationFailed prior failure admitted, rfl, attempt.cleanupError_keepsFiles cause reached⟩
+  have sync := observed.syncResult
+  change attempt.sync #[directory.path] before.image = _ at sync
+  cases effect : observed.outcome with
+  | completed => exact False.elim (failed effect)
+  | errorBeforeEffect cause =>
+    rw [effect] at sync
+    obtain ⟨failure, result, descriptor, unlock, retries, exactCause, image⟩ := cleanup sync (.inl rfl)
+    exact ⟨failure, result, descriptor, unlock, retries, exactCause, image⟩
+  | errorAfterEffect cause =>
+    rw [effect] at sync
+    obtain ⟨failure, result, descriptor, unlock, retries, exactCause, image⟩ := cleanup sync (.inr rfl)
+    exact ⟨failure, result, descriptor, unlock, retries, exactCause, image⟩
+
+end ListedDirectoryAuthorization
+end Alvoki.Storage.DiskSession

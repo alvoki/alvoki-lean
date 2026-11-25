@@ -262,15 +262,20 @@ theorem lockedEntry (report : HeldDirectoryMarkedRetryReports operations publish
   refine ⟨report.lifetime.lock, report.lifetime.lockEntry, ?_⟩
   rw [report.lifetime.identifiesLock, operations.lockObject]
 
+theorem chunkReads (report : HeldDirectoryMarkedRetryReports operations published) :
+    operations.reads.ObservesSelected directory before.image.directory.active.manifest published.durable := by
+  intro bytes manifest visible decoded index within payload stored
+  obtain ⟨object, bound, contents⟩ := report.publishedBytes bytes manifest visible decoded index within payload stored
+  exact ⟨(report.runs bytes manifest visible decoded index within).observesFile bound contents⟩
+
 def toChunkReports (report : HeldDirectoryMarkedRetryReports operations published)
-    (settles : operations.sync operations.cache #[directory.path] before.image = .ok () before.image.syncDirectory) :
+    (settles : operations.sync operations.cache #[directory.path] before.image = .ok () before.image.syncDirectory)
+    (healthy : operations.HealthyFinish) :
     MarkedRetryChunkReports (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout published where
   toMarkedRetryChunkOperations := operations
   settles := settles
-  chunks := by
-    intro bytes manifest visible decoded index within payload stored
-    obtain ⟨object, bound, contents⟩ := report.publishedBytes bytes manifest visible decoded index within payload stored
-    exact ⟨(report.runs bytes manifest visible decoded index within).observesFile bound contents⟩
+  healthy := healthy
+  chunks := report.chunkReads
 
 /-- The selected checkpoint files occur in the exact WAL listing from the
 same directory. The later listing corroborates the earlier run resolutions. -/
@@ -331,6 +336,7 @@ theorem keeperRead_syncListedDirectory (report : HeldDirectoryMarkedRetryReports
 the same observed directory lifetime as the checked listing. -/
 theorem installs {input : FilePath} (report : HeldDirectoryMarkedRetryReports operations published)
     (settles : operations.sync operations.cache #[directory.path] before.image = .ok () before.image.syncDirectory)
+    (healthy : operations.HealthyFinish)
     (admission : OpenAdmissionReports input directory operations.slot)
     (keeperValid : before.image.keeper.Valid layout.target.Accepts)
     (laterValid : before.image.later.Beyond layout.range.through)
@@ -345,9 +351,9 @@ theorem installs {input : FilePath} (report : HeldDirectoryMarkedRetryReports op
     operations.reported.entries = report.listing.scan.entries directory.path ∧
     operations.reported.inventory.names.Perm (report.lifetime.namespaceView.names report.lifetime.root) ∧
     CachedRetryInstalled (before := before) operations.reported operations.descriptors operations.slot operations.bindings
-      published operations.liveRefs ((report.toChunkReports settles).runWithAdmission admission) :=
+      published operations.liveRefs ((report.toChunkReports settles healthy).runWithAdmission admission) :=
   ⟨report.initializedCache, report.listing.custody, report.checkedListing.1, report.checkedListing.2,
-    runOpenWithAdmission_markedRetryFromChunks (report.toChunkReports settles) admission keeperValid laterValid
+    runOpenWithAdmission_markedRetryFromChunks (report.toChunkReports settles healthy) admission keeperValid laterValid
       following accepted ordered⟩
 
 end HeldDirectoryMarkedRetryReports
