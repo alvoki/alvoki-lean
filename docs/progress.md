@@ -479,4 +479,6 @@ its response to that same client trace. The read uses the issued pin and agrees 
 
 A checkpoint interrupted during a run's write, flush or own file sync now has a physical safety proof. The shared callbacks derive the exact returned prefix and identify the issued operation at the cut. A partial or synced orphan can survive, while the prior manifest still selects the same inode bindings and byte payloads from each reported crash map. The proof requires local effect and survivor observations at the cut. It applies before any later reopen. [Interrupted run operation](../lean/Alvoki/Storage/Disk/Checkpoint/Run/Interruption.lean)
 
+The physical survivor of an interrupted checkpoint run now feeds the shared held-reopen proof. The completed checkpoint operations determine the counted prefix, and the survivor proof supplies the selected run bytes. With the reported retry and healthy open, the returned session preserves the prior checkpoint and WAL replay and continues both client ledgers. [Held reopen after an interrupted run](../lean/Alvoki/Storage/Disk/Checkpoint/Run/InterruptionReopen.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

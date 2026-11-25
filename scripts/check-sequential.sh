@@ -78,6 +78,7 @@ lake env leanchecker Alvoki.Storage.Disk.CheckpointRunGuardFailure
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunDataFailure
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.Run.Interruption
+lake env leanchecker Alvoki.Storage.Disk.Checkpoint.Run.InterruptionReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunErrorReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunErrorClientTrace
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestRenameCut
