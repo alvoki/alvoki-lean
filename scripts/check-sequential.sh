@@ -125,6 +125,7 @@ lake env leanchecker Alvoki.Storage.Disk.PendingAlignedReopen
 lake env leanchecker Alvoki.Storage.Disk.PendingFirstAppendReopen
 lake env leanchecker Alvoki.Storage.Disk.SnapshotReadHistoryBounds
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyReadPrefix
+lake env leanchecker Alvoki.Storage.Disk.NativeMarkedReadPrefix
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyClose
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.NativeReadRecoveryTrace
