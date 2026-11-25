@@ -7,12 +7,12 @@ open System WalSegmentRepair WalSegmentRotation CheckpointPublication
 open WAL (frameSize)
 open WAL.Boundary (CheckpointRepresentsPrefix)
 
-variable {state : NativeReadyState} {cause : IO.Error}
+variable {state : NativeReadyState} {diagnostic : Option IO.Error} {cause : IO.Error}
 
-/-- One reported reboot image of the exact returned rotation failure.
+/-- One reported reboot image at the reached final rotation barrier.
 Every selected child and its payload come from this same reached image.
 Other filesystem objects and crashes need separate observations. -/
-structure NativeRotationErrorCrash (failure : NativeRotationDirectoryFailure state (some cause)) where
+structure NativeRotationErrorCrash (failure : NativeRotationDirectoryFailure state diagnostic) where
   view : DirectoryReadNamespace
   objects : view.modelObject = failure.reported.after.view.modelObject
   chosen : ∀ name, view.child failure.parent.root name ∈ failure.reported.after.crashNames name
@@ -28,7 +28,7 @@ structure NativeRotationErrorCrash (failure : NativeRotationDirectoryFailure sta
 
 namespace NativeRotationErrorCrash
 
-variable {failure : NativeRotationDirectoryFailure state (some cause)}
+variable {failure : NativeRotationDirectoryFailure state diagnostic}
 
 private abbrev successorName (state : NativeReadyState) :=
   renderWalSegmentName (state.writer.installed.walBytes / frameSize)
@@ -68,13 +68,13 @@ theorem keeperPayload (crash : NativeRotationErrorCrash failure) :
   simpa only [crash.objects] using belongs
 
 def writer (crash : NativeRotationErrorCrash failure) (valid : state.Valid) : SegmentedWriterState :=
-  if crash.successor.isSome then (failure.liveState valid).writer else state.writer
+  if crash.successor.isSome then state.writer.rotated valid.retained.rotationTarget else state.writer
 
 theorem retained (crash : NativeRotationErrorCrash failure) (valid : state.Valid) :
     (crash.writer valid).RetainedReady state.session.directory state.session.descriptor := by
   unfold writer
   split
-  · exact failure.liveRetained valid
+  · exact valid.retained.rotates failure.parent.nonempty ⟨rfl, rfl, rfl⟩
   · exact valid.retained
 
 theorem pair (crash : NativeRotationErrorCrash failure) (valid : state.Valid) :
@@ -157,7 +157,7 @@ theorem alternatives (crash : NativeRotationErrorCrash failure) (valid : state.V
       exact .inl ⟨absent, by simpa [writer, absent] using bytes.symm⟩
     · have present : crash.successor = some failure.created.child.child := present
       have empty : crash.payload = state.writer.wal.rotated.active.bytes := by
-        simpa [writer, present, NativeRotationDirectoryFailure.liveState, SegmentedWriterState.rotated] using bytes.symm
+        simpa [writer, present, SegmentedWriterState.rotated] using bytes.symm
       exact .inr ⟨present, empty.trans rfl⟩
   · exact .inr (afterEffect effective)
 
@@ -176,8 +176,7 @@ theorem keeperBinding (crash : NativeRotationErrorCrash failure) (valid : state.
     simpa only [Option.isSome_none, Bool.false_eq_true, ↓reduceIte, oldFirst, Option.getD_none]
       using List.mem_singleton.mp old
   | some inode =>
-    simpa only [Option.isSome_some, ↓reduceIte, Option.getD_some, NativeRotationDirectoryFailure.liveState,
-      SegmentedWriterState.rotated, successor, newFirst] using choice
+    simpa only [Option.isSome_some, ↓reduceIte, Option.getD_some, SegmentedWriterState.rotated, successor, newFirst] using choice
 
 structure Plan (crash : NativeRotationErrorCrash failure) (valid : state.Valid) where
   layout : CanonicalKeeperLayout crash.retry.image (crash.writer valid).history
@@ -213,7 +212,7 @@ theorem prepares (crash : NativeRotationErrorCrash failure) (valid : state.Valid
 
 end NativeRotationErrorCrash
 
-variable {failure : NativeRotationDirectoryFailure state (some cause)}
+variable {failure : NativeRotationDirectoryFailure state diagnostic}
 
 /-- The final reported open uses the reboot census and the one picked
 namespace. Its read callbacks supply bytes from that same inode map. -/
@@ -335,12 +334,11 @@ theorem readsMetadata (seen : NativeRotationCrashReads crash input plan selected
 
 end NativeRotationCrashReads
 
-/-- The returned rotation error, reported physical crash and exact
-bound recovery callbacks continue at the selected old or new keeper. -/
-structure NativeRotationCrashReopen (current next : NativeReadPosition history log)
-    {failure : NativeRotationDirectoryFailure current.state (some cause)}
+/-- The same reboot preparation and aligned installation apply after
+an interrupted directory sync or its returned diagnostic. -/
+structure NativeRotationSurvivorReopen (current next : NativeReadPosition history log)
+    {failure : NativeRotationDirectoryFailure current.state diagnostic}
     (crash : NativeRotationErrorCrash failure) (input : FilePath) : Prop where
-  failed : NativeReturnedRotationError current cause failure
   loss : RotationReopenFailures current.state.session.directory current.state.writer.wal current.state.writer.history
     ⟨failure.reported.cut.image, current.state.writer.owners⟩
     (failure.reported.cut.released current.state.writer.wal.directory.active crash.successor.isSome)
@@ -375,16 +373,16 @@ structure NativeRotationCrashReopen (current next : NativeReadPosition history l
       read.object = crash.view.modelObject crash.keeperChild ∧ crash.payload = plan.layout.keeper.bytes
   replay : InstalledClientReplay log current.reads history next.state.writer.installed next.state.session
 
-theorem NativeReadPosition.recoversRotationPowerLoss (current : NativeReadPosition history log)
-    {failure : NativeRotationDirectoryFailure current.state (some cause)}
+private theorem NativeReadPosition.reopensRotationSurvivor (current : NativeReadPosition history log)
+    {failure : NativeRotationDirectoryFailure current.state diagnostic}
+    (reached : NativeRotationFailureState current failure)
     (crash : NativeRotationErrorCrash failure) {input : FilePath}
     (observe : ∀ plan : crash.Plan current.readPrefix.refines.1,
       ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
         crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
       Nonempty (NativeRotationCrashReads crash input plan selected)) :
-    ∃ next, NativeRotationCrashReopen current next crash input := by
+    ∃ next, NativeRotationSurvivorReopen current next crash input := by
   let valid := current.readPrefix.refines.1
-  let failed := current.rotationReturnsError cause failure
   let ready := crash.retained valid
   obtain ⟨loss, _, effective⟩ := crash.choosesKeeper valid
   obtain ⟨plan⟩ := crash.prepares valid
@@ -407,9 +405,9 @@ theorem NativeReadPosition.recoversRotationPowerLoss (current : NativeReadPositi
   let reads := current.reads
   have sameHistory := (crash.history valid).trans current.readPrefix.refines.2.1
   have pending : PendingClientReplay log reads (crash.writer valid).history :=
-    Eq.mpr (congrArg (PendingClientReplay log reads) sameHistory) failed.reads
+    Eq.mpr (congrArg (PendingClientReplay log reads) sameHistory) reached.reads
   have bounded : ∀ read ∈ reads, read.BoundedBy (crash.writer valid).history.length :=
-    Eq.mpr (congrArg (fun history : List WAL.Write => ∀ read ∈ reads, read.BoundedBy history.length) sameHistory) failed.bounded
+    Eq.mpr (congrArg (fun history : List WAL.Write => ∀ read ∈ reads, read.BoundedBy history.length) sameHistory) reached.bounded
   obtain ⟨next, seed, cache, census, owner, directorySlot, nextPair, durable, checkpoint, path, target, nextKept,
     phaseFresh, sessionFresh⟩ := finish.startsNativeReadPrefix seen.chronology opening.markerFound plan.prepared
       following accepted ready.resumed.ordered ready.layout ready.valid ready.spans
@@ -417,16 +415,16 @@ theorem NativeReadPosition.recoversRotationPowerLoss (current : NativeReadPositi
       pending bounded
   have continued : NativeReadyReadPrefix seen.run next history log reads next :=
     Eq.mp (congrArg (fun history => NativeReadyReadPrefix seen.run next history log reads next) sameHistory) seed
-  let reached : NativeReadPosition history log := ⟨seen.run, next, next, reads, continued⟩
+  let nextPosition : NativeReadPosition history log := ⟨seen.run, next, next, reads, continued⟩
   have active : next.writer.installed.activeFirst = plan.layout.keeper.first :=
     continued.refines.1.retained.resumed.keeper.trans (congrArg Target.first target)
   have lockAtCrash : crash.names (current.state.session.directory.file .lock) =
       some (current.state.census.inode current.state.owner.description) := by
     change crash.names ⟨current.state.session.directory.path.toString ++ "/" ++ "LOCK"⟩ = _
-    rw [crash.child, crash.lock, Option.map_some, crash.objects, failed.lockObject, failed.sameInodes]
+    rw [crash.child, crash.lock, Option.map_some, crash.objects, reached.lockObject, reached.sameInodes]
   have directoryAtCrash : crash.names current.state.session.directory.path =
       some (current.state.census.inode current.state.directorySlot.description) := by
-    rw [crash.directory, crash.objects, failed.directoryObject, failed.sameInodes]
+    rw [crash.directory, crash.objects, reached.directoryObject, reached.sameInodes]
   have objects := opening.reads.sameObjects
   have sameCensus : next.census.inode = opening.admission.reached.inode := by
     change next.census = opening.finish.census at census
@@ -434,7 +432,7 @@ theorem NativeReadPosition.recoversRotationPowerLoss (current : NativeReadPositi
     rfl
   have lock := Option.some.inj (objects.2.1.symm.trans (seen.lock.trans lockAtCrash))
   have directory := Option.some.inj (objects.1.symm.trans (seen.directory.trans directoryAtCrash))
-  refine ⟨reached, failed, loss, effective, crash.alternatives valid, rfl, fun same => sessionFresh (same.symm ▸ seen.earlierTokens.2),
+  refine ⟨nextPosition, loss, effective, crash.alternatives valid, rfl, fun same => sessionFresh (same.symm ▸ seen.earlierTokens.2),
     fun same => phaseFresh (same.symm ▸ seen.earlierTokens.1), ?_, ?_, nextPair.trans pair, checkpoint, durable,
     ⟨plan, selected, seen, rfl, continued.frames.1, cache, census, owner, directorySlot, seen.root, target, active, seen.readsMetadata pair valid, seen.readsWal,
       seen.readsKeeper⟩, continued.guardedReplay⟩
@@ -442,5 +440,45 @@ theorem NativeReadPosition.recoversRotationPowerLoss (current : NativeReadPositi
     exact lock
   · rw [directorySlot, sameCensus]
     exact directory
+
+/-- The ordinary diagnostic, selected keeper and returned session
+belong to the same reported execution. -/
+structure NativeRotationCrashReopen (current next : NativeReadPosition history log)
+    {failure : NativeRotationDirectoryFailure current.state (some cause)}
+    (crash : NativeRotationErrorCrash failure) (input : FilePath) : Prop
+    extends NativeRotationSurvivorReopen current next crash input where
+  failed : NativeReturnedRotationError current cause failure
+
+theorem NativeReadPosition.recoversRotationPowerLoss (current : NativeReadPosition history log)
+    {failure : NativeRotationDirectoryFailure current.state (some cause)}
+    (crash : NativeRotationErrorCrash failure) {input : FilePath}
+    (observe : ∀ plan : crash.Plan current.readPrefix.refines.1,
+      ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+        crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
+      Nonempty (NativeRotationCrashReads crash input plan selected)) :
+    ∃ next, NativeRotationCrashReopen current next crash input := by
+  have returned := current.rotationReturnsError cause failure
+  obtain ⟨next, reopened⟩ := current.reopensRotationSurvivor returned.toNativeRotationFailureState crash observe
+  exact ⟨next, reopened, returned⟩
+
+/-- The outer stop at the issued fsync is retained alongside the actual
+recovery return. The interrupted rotation has no ordinary result. -/
+structure NativeInterruptedRotationCrashReopen (current next : NativeReadPosition history log)
+    {stop : NativeRotationDirectoryStop current.state}
+    (crash : NativeRotationErrorCrash stop) (input : FilePath) : Prop
+    extends NativeRotationSurvivorReopen current next crash input where
+  interrupted : NativePendingRotation current stop
+
+theorem NativeReadPosition.recoversInterruptedRotation (current : NativeReadPosition history log)
+    {stop : NativeRotationDirectoryStop current.state}
+    (crash : NativeRotationErrorCrash stop) {input : FilePath}
+    (observe : ∀ plan : crash.Plan current.readPrefix.refines.1,
+      ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+        crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
+      Nonempty (NativeRotationCrashReads crash input plan selected)) :
+    ∃ next, NativeInterruptedRotationCrashReopen current next crash input := by
+  have interrupted := current.stopsDuringRotation stop
+  obtain ⟨next, reopened⟩ := current.reopensRotationSurvivor interrupted.toNativeRotationFailureState crash observe
+  exact ⟨next, reopened, interrupted⟩
 
 end Alvoki.Storage.DiskSession

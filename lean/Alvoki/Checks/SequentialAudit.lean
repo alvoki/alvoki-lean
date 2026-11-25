@@ -1651,6 +1651,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationCrashReads.readsKeeper
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationCrashReads.readsMetadata
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversRotationPowerLoss
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversInterruptedRotation
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationFailureState.selectsReportedSurvivor
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyClose.followsFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reachesClose
