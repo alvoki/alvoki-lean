@@ -1250,4 +1250,6 @@ A reported failure of the checked marked listing with an absent manifest now dir
 
 The exact last heap of a finite finalized rejection sequence can now supply a healthy aligned open. The reported selected reader starts from the same file image and inode map as before the failures. Its recovery and constructor yield the returned table and a fresh ready position under the earlier client ledger. [Aligned open after finalized retries](../lean/Alvoki/Storage/Disk/NativeFinalizedRetryAlignedOpen.lean)
 
+The selected WAL reader now classifies its ordinary result from fixed callbacks. The marker guard runs before the listing. A failed extent scan identifies the first failing canonical no-follow path, the successful prefix that supplied its entry heap and the exact reached heap and diagnostic. A completed scan determines the required payload continuation and later names. The payload worker's exact return is carried as one result at this boundary. [Selected WAL reader returns](../lean/Alvoki/Storage/Disk/NativeWalSelectionReturn.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
