@@ -871,3 +871,10 @@ between marker acquisition, preparation, marker fsync and repair.
 The converse takes those four callback reports to the same returned
 table, marker and state. The native reports for the middle states
 still need to be connected to the client replay theorem.
+
+The client recovery theorem now returns the result of the full modeled
+marked-reopen schedule alongside the installed session. The reported
+acquisition supplies the handle and selection, stabilization uses that
+handle, and the repaired image is the one installed in the session.
+Connecting the modeled acquisition and intermediate descriptor census
+to a single sequence of native callback reports remains open.

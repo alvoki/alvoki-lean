@@ -1354,7 +1354,6 @@ theorem recoveredRetries_installedReads
     (lstat : System.FilePath → EStateM IO.Error FileImage (Except IO.Error IO.FS.Metadata))
     (readSeal : System.FilePath → Nat → EStateM IO.Error FileImage ByteArray)
     (readKeeper : System.FilePath → Nat → Nat → EStateM IO.Error FileImage ByteArray)
-    {stabilize : EStateM IO.Error FileImage Unit}
     (removeFile : System.FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
     (write : System.FilePath → ByteArray → EStateM IO.Error FileImage Unit)
     (sync : Array System.FilePath → EStateM IO.Error FileImage Unit)
@@ -1416,12 +1415,15 @@ theorem recoveredRetries_installedReads
     (markerAvailable : PrefixChunksAvailableUntilEof (marker.visible markerHandle.inode)
       (markerReads.readChunk markerFile.calls.slot.description))
     (markerAccepted : decode (marker.visible markerHandle.inode) = .ok selected)
+    {stabilize : KeeperDescriptorIdentity → EStateM IO.Error FileImage Unit}
+    (acquireMarker : EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection))
+    (markerAcquired : acquireMarker openedFrom.image = .ok (markerHandle, selected) openedFrom.image)
     (markerChoices : List (DirectoryPublication.Bindings × Option ByteArray))
     (enumerated : markerChoices.map Prod.fst = prepared.directory.crashImages)
     (presence : ∀ choice ∈ markerChoices, choice.2.isSome = choice.1.walBoundary.isSome)
     (physicalChoices : ∀ choice ∈ markerChoices, ∀ bytes, choice.2 = some bytes →
       ∃ inode ∈ settledMarker.crashBindings, bytes ∈ settledMarker.crashBytes inode)
-    (stabilizeReport : stabilize prepared =
+    (stabilizeReport : stabilize markerHandle prepared =
       match projectRepairDirectory prepared.directory (marker.visible markerHandle.inode) markerChoices with
       | .ok directory => .ok () { prepared with directory }
       | .error cause => .error (IO.userError cause) prepared)
@@ -1461,10 +1463,23 @@ theorem recoveredRetries_installedReads
           (readIntegrityCheckpointSized directory readManifest
             (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
           (fun _ => pure (some (Boundary.encode selected.frontier))) (fun start length => WalSegmentRepair.readSelectedWithCachedExtents directory start length
-            list lstat readSeal readKeeper)) stabilize
+            list lstat readSeal readKeeper)) (stabilize markerHandle)
           (fun bounded size =>
             WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile))
         openedFrom = .ok session final ∧
+      (∃ opened,
+        reopenAcquiredWith acquireMarker
+          (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory
+            (readIntegrityCheckpointSized directory readManifest
+              (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
+            (fun _ => pure (some (Boundary.encode selection.frontier)))
+            (fun start length => WalSegmentRepair.readSelectedWithCachedExtents directory start length
+              list lstat readSeal readKeeper))
+          stabilize
+          (fun bounded size =>
+            WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
+          openedFrom.image = .ok (opened, markerHandle, selected) after ∧
+        session.phase = .ready opened.installed) ∧
       final.image = after ∧ final.image.Ready target ∧
       EffectTrace target { prepared with directory := settleMarker prepared.directory selected } final.image ∧
       final.owners.Owns directory descriptor ∧
@@ -1637,7 +1652,7 @@ theorem recoveredRetries_installedReads
   have markerBound : prepared.directory.active.walBoundary.isSome = true := by simp [observed]
   have projected := reopenSync_projectsRepairDirectory markerSync markerCurrent markerBinding
     markerAccepted prepared.directory markerBound markerChoices enumerated presence physicalChoices
-  have barrier : stabilize prepared = .ok ()
+  have barrier : stabilize markerHandle prepared = .ok ()
       { prepared with directory := settleMarker prepared.directory selected } := by
     rw [stabilizeReport, projected]
   have keeperPrefixBytes : plan.keeperBytes.extract 0 plan.keeperSize = target.trimmed := by
@@ -1659,6 +1674,13 @@ theorem recoveredRetries_installedReads
       (finish := fun bounded size =>
         WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
       liveRefs fresh acquisition read barrier boundedRepair
+  have fullReopen := (reopenAcquiredWith_success acquireMarker
+    (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
+      (fun _ => pure (some (Boundary.encode selection.frontier))) readWal)
+    stabilize
+    (fun bounded size =>
+      WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)).mpr
+      ⟨_, _, _, _, _, markerAcquired, read, barrier, boundedRepair⟩
   have physical bytes survives := retries.replayUnchanged authorizedRepair authorized base sealed
     sealedRead logicalMarker (Boundary.decode_encode selected.frontier) checked (bytes := bytes) survives
   have layoutPlan : layout.plan = plan := by
@@ -1682,7 +1704,7 @@ theorem recoveredRetries_installedReads
   obtain ⟨markerBytes, markerRead, markerDecode⟩ := decode_markerFromHeldDirectory markerFile markerAvailable
   refine ⟨⟨markerBytes, markerRead, markerDecode.trans markerAccepted⟩, ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
     retrySeals, retryKeeper, retryPlan, session, final, reference,
-    opened.installed, pin, pinned, returned, reached, reached.symm ▸ ready,
+    opened.installed, pin, pinned, returned, ⟨opened, fullReopen, installed⟩, reached, reached.symm ▸ ready,
     reached.symm ▸ authorizedRepair, owner, freshSession, replayed, installed, acquired, points, ranges⟩
   intro bytes survives
   obtain ⟨equalReplay, sealedBytes⟩ := physical bytes survives
