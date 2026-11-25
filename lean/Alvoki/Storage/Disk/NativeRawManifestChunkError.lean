@@ -13,6 +13,26 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {in
   {seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock}
   {fileCalls : MarkedTemporaryReadCalls heap}
 
+/-- The marked worker passes a checkpoint acquisition error through before
+the marker payload, listing or repairs. -/
+theorem RawOpenAdmissionCallbacks.stopsMarkedAtCheckpoint
+    {marker : IO.FS.Metadata} {cause : IO.Error} {reached : heap}
+    (flat : optionalMetadataWith (calls.lookup (directory.file .wal)) seed.afterPending = .ok none seed.afterPending)
+    (marked : optionalMetadataWith (calls.lookup (directory.file .walBoundary)) seed.afterPending =
+      .ok (some marker) seed.afterPending)
+    (rejected : readIntegrityCheckpointSized directory (fileCalls.readOptional directory (directory.file .manifest))
+      fileCalls.runSize fileCalls.runPrefix seed.afterPending = .error cause reached)
+    (directoryCalls : MarkedDirectoryReadCalls heap stream) (callbacks : AlignedKeeperCacheCallbacks heap)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit) (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (cache : DiskTable.OpenSyncFiles) :
+    calls.recoverMarkedWithCacheRefs fileCalls directoryCalls callbacks seed.directoryRef seed.activeRef seed.pendingRef
+      remove write rename bootstrap directory cache seed.afterPending = .error cause reached := by
+  simp only [RawOpenAdmissionCallbacks.recoverMarkedWithCacheRefs, recoverSegmentedWalWith, rejectFlatWalWith,
+    reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, flat, marked,
+    Option.isSome_none, Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure, rejected]
+
 /-- The marked route observes a present regular manifest before it
 attempts to open that child for the bounded reader. -/
 structure RawPresentManifestReadStat
@@ -43,8 +63,6 @@ theorem readEffects :
     simpa only [seen.sameLookup, seen.stat, Except.map] using seen.statRaw
   exact fileCalls.readOptionalManifest_effects directory stat seen.regular
 
-/-- The marked worker passes a checkpoint read error through before
-the marker payload, listing or repairs. -/
 theorem stopsMarkedWorker (report : RawPresentManifestReadStat (admitted := admitted) seed fileCalls)
     {cause : IO.Error} {reached : heap}
     (rejected : readIntegrityCheckpointSized directory (fileCalls.readOptional directory (directory.file .manifest))
@@ -55,10 +73,9 @@ theorem stopsMarkedWorker (report : RawPresentManifestReadStat (admitted := admi
     (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
     (cache : DiskTable.OpenSyncFiles) :
     calls.recoverMarkedWithCacheRefs fileCalls directoryCalls callbacks seed.directoryRef seed.activeRef seed.pendingRef
-      remove write rename bootstrap directory cache seed.afterPending = .error cause reached := by
-  simp only [RawOpenAdmissionCallbacks.recoverMarkedWithCacheRefs, recoverSegmentedWalWith, rejectFlatWalWith,
-    reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, report.flat, report.marked,
-    Option.isSome_none, Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure, rejected]
+      remove write rename bootstrap directory cache seed.afterPending = .error cause reached :=
+  RawOpenAdmissionCallbacks.stopsMarkedAtCheckpoint report.flat report.marked rejected directoryCalls callbacks
+    remove write rename bootstrap cache
 
 end RawPresentManifestReadStat
 
