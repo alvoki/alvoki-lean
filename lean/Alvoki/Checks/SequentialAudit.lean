@@ -269,6 +269,7 @@ import Alvoki.Storage.Disk.NativeAlignedCloseTableOpen
 import Alvoki.Storage.Disk.NativePrunedAlignedMarkedWorker
 import Alvoki.Storage.Disk.NativePrunedMarkedTableOpen
 import Alvoki.Storage.Disk.NativeLongKeeperReadHeap
+import Alvoki.Storage.Disk.NativeLongKeeperSuffixStageHeap
 import Alvoki.Storage.Disk.NativeAlignedOpenHeap
 import Alvoki.Storage.Disk.NativePrunedAlignedOpenHeap
 import Alvoki.Storage.Disk.NativeBootstrapCacheMutations
@@ -1743,6 +1744,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperReadHeap.readsBeforeRelease
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperReadHeap.readsAndReleases
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperAuthorizationHeap.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperSuffixHeap.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperFreshStageHeap.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperFreshStageHeap.reachesStageSync
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedCheckpointReadHeap.reachesScan
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedCheckpointReadHeap.reachesMarkedScan
 #check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadReport.returns
