@@ -171,7 +171,7 @@ theorem reachesMarker (seen : ReusedBootstrapKeeperHeap guards) :
     simp [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
       sync, next, seen.syncsKeeper, seen.directoryBarrier.returns]
   refine ⟨?_, ?_⟩
-  · simp [FreshBootstrapCacheCalls.run, bootstrapSegmentedWith, bootstrapEmptyWith, Bind.bind, EStateM.bind,
+  · simp [FreshBootstrapCacheCalls.run, bootstrapSegmentedWith, bootstrapEmptyWith, bootstrapEmptyWithMarker, Bind.bind, EStateM.bind,
       Pure.pure, EStateM.pure, guards.prepare, rotates, sync, FreshBootstrapCacheCalls.publishZeroMarker]
   · have cached := seen.directoryBarrier.frame.directory.trans seen.keptDirectory
     have active := seen.directoryBarrier.frame.activeUnchanged.trans seen.keptActive
