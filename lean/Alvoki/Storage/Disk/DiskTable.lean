@@ -917,4 +917,23 @@ theorem DiskTable.collectObsoleteRuns_fileEffects (db : DiskTable) (heldGenerati
         (fun path => db.files.syncPaths #[path]) throw (fun (generation, index) => db.dir.file (.run generation index))
         db.dir.path)) := rfl
 
+/-- The native cached metadata reader opens only after a regular no-follow
+lookup. The opened handle determines all subsequent reads. -/
+@[macro_inline] def readOptionalCachedOpenFileWith [Monad m] [MonadExceptOf IO.Error m]
+    (directory : DiskDirectory) (path : FilePath) (lookup : m (Except IO.Error IO.FS.Metadata))
+    (openRead : FilePath → m handle) (read : handle → USize → m ByteArray) : m (Option ByteArray) :=
+  readOptionalDatabaseFileWithMetadata lookup (fun metadata => do
+    let file ← openRead path
+    if path == directory.file .walBoundary then
+      readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (read file)
+        WAL.Boundary.acquisitionLimit ByteArray.empty
+    else
+      readIntegrityManifestPrefixWith (read file) metadata.byteSize.toNat)
+    (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
+
+theorem readOptionalCachedOpenFile_fileEffects (directory : DiskDirectory) (path : FilePath) :
+    readOptionalCachedOpenFile directory path =
+      readOptionalCachedOpenFileWith (m := IO) directory path path.symlinkMetadata.toBaseIO
+        (fun file => IO.FS.Handle.mk file .read) IO.FS.Handle.read := rfl
+
 end Alvoki.Storage

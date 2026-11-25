@@ -183,6 +183,7 @@ import Alvoki.Storage.Disk.CheckedDirectoryRead
 import Alvoki.Storage.Disk.HeldDirectoryReadObservations
 import Alvoki.Storage.Disk.ListedDirectoryAuthorization
 import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
+import Alvoki.Storage.Disk.HeldMetadataReadObservations
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
@@ -1345,6 +1346,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.settles
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.installs
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.continuesAfterError
+#check_axioms Alvoki.Storage.readOptionalCachedOpenFile_fileEffects
+#check_axioms Alvoki.Storage.DiskSession.runCachedMetadataRead_missing
+#check_axioms Alvoki.Storage.DiskSession.HeldMetadataFile.manifestPrefix
+#check_axioms Alvoki.Storage.DiskSession.HeldMetadataFile.markerPrefix
+#check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.manifestRead
+#check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.markerRead
+#check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.manifestListed
+#check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.markerListed
+#check_axioms Alvoki.Storage.DiskSession.HeldDirectoryMarkedRetryReports.metadataReads
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofDirectoryReadError
 #check_axioms Alvoki.Storage.readExactPrefixWith_requestBound
 #check_axioms Alvoki.Storage.readPrefixUntilEofWith_requestBound
