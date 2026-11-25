@@ -1405,6 +1405,15 @@ theorem recoveredRetries_installedReads
     (keeperExtent : keeperMetadata.byteSize.toNat = plan.keeperBytes.size)
     (repaired : WalSegmentRepair.finishMarkedOpen directory plan removeFile write sync renameFile
       { prepared with directory := settleMarker prepared.directory selected } = .ok () after)
+    (settles : sync #[directory.path] { prepared with directory := settleMarker prepared.directory selected } =
+      .ok () ({ prepared with directory := settleMarker prepared.directory selected } : FileImage).syncDirectory)
+    (healthy : ∀ action state next,
+      WalSegmentRepair.ReachesAction target
+        ({ prepared with directory := settleMarker prepared.directory selected } : FileImage).syncDirectory
+        plan.finishActions action state →
+      state.effect target action = some next →
+      WalSegmentRepair.performPaths directory plan removeFile throw write sync renameFile action state =
+        .ok () next)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
     (sealedRead : ∀ file ∈ sealed, prepared.kept file.1 = some file.2)
     (layout : DiskSession.CanonicalKeeperLayout prepared ((history ++ batch).take range.through))
@@ -1432,7 +1441,9 @@ theorem recoveredRetries_installedReads
           (fun bounded size =>
             WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile))
         openedFrom = .ok session final ∧
-      final.image = after ∧ final.owners.Owns directory descriptor ∧
+      final.image = after ∧ final.image.Ready target ∧
+      EffectTrace target { prepared with directory := settleMarker prepared.directory selected } final.image ∧
+      final.owners.Owns directory descriptor ∧
       session.sessionRef ∉ liveRefs ∧
       SnapshotWalReplay .empty ((history ++ batch).take range.through) reference ∧
       session.phase = .ready state ∧
@@ -1580,6 +1591,9 @@ theorem recoveredRetries_installedReads
   have boundedPlan : (⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩ :
       WalSegmentRepair.Plan) = { plan with keeperBytes := plan.keeperBytes.extract 0 plan.keeperSize } := by
     rw [through, ← preparedPlan.through, ← preparedPlan.start, laterNames, ← preparedPlan.names, keeperPrefixBytes]
+  obtain ⟨repairedFiles, finishSeen, ready, repairTrace⟩ :=
+    WalSegmentRepair.finishMarkedOpen_completes authorized directory removeFile write sync renameFile settles healthy
+  have repairedImage := (EStateM.Result.ok.inj (finishSeen.symm.trans repaired)).2
   have boundedRepair : WalSegmentRepair.finishBoundedMarkedOpen directory
       ⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩
       keeperMetadata.byteSize.toNat removeFile write sync renameFile
@@ -1612,7 +1626,8 @@ theorem recoveredRetries_installedReads
       (layoutTarget.symm ▸ authorizedRepair) (layoutTarget.symm ▸ retries)
   refine ⟨ledger.1, ?_, retry, retryTarget.trans layoutTarget, retryStart.trans layoutStart,
     retrySeals, retryKeeper, layoutTarget ▸ retryPrepared, session, final, reference,
-    opened.installed, pin, pinned, returned, reached, owner, freshSession, replayed, installed, acquired, points, ranges⟩
+    opened.installed, pin, pinned, returned, reached, reached.symm ▸ (repairedImage ▸ ready),
+    reached.symm ▸ (repairedImage ▸ repairTrace), owner, freshSession, replayed, installed, acquired, points, ranges⟩
   intro bytes survives
   obtain ⟨equalReplay, sealedBytes⟩ := physical bytes survives
   exact ⟨equalReplay.trans selectedReplay, sealedBytes⟩
