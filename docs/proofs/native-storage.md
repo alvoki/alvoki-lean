@@ -64,14 +64,21 @@ heap reached by the last barrier. Rejected metadata and uncertain publication pr
 errors and heaps. The raw success projects to the classified dispatcher's exact returned phase,
 sequence, cache and file image. The same publication projection serves the existing cache-erasure
 proof and this raw interpreter. It uses the per-callback laws only on the actual reached steps,
-including a returned error with its reached state. The existing replay builder consumes the
-classified result when its publication evidence and descriptor custody are derived.
+including a returned error with its reached state. The same projection identifies the checked
+request and its exact commit result. The acknowledgement proof consumes publication evidence for
+that one request and keeps the prepared batch, sequence, installed phase and earlier reads together.
+A frame across the ready-cell update carries the published bytes and jointly settled names to
+that return. The remaining composition derives the publication evidence and descriptor custody
+from the reached raw callbacks.
 [Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean) · [Raw return projection](../../lean/Alvoki/Storage/Disk/NativeRawWriteProjection.lean)
 
 At a stopped staged-manifest fsync the returned prefix and pending-cache update identify the same
 live descriptor. Its private inode effect leaves the previously selected checkpoint and WAL intact
-in each joint crash map. The temporary manifest may change. The later installer still needs to
-use a file projection that keeps those scratch effects explicit. For a selected run read that
+in each joint crash map. Reboot carries the selected names and bytes and the exact census. The
+normalized selected image is independent of the reached staging metadata. A surviving
+`MANIFEST.next` contributes no extent probe or read to the marked WAL selector, at any listing
+position. Raw admission and the canonical selected reads still supply the observations for
+installation. For a selected run read that
 returns an ordinary error after a short chunk, the shared retry proof carries the selected names
 and bytes through temporary, cache and lock disposal. It starts the aligned open from the reached
 failure heap with the original callbacks.

@@ -2414,6 +2414,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncUsesWrittenHandle
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncIssuesRawSync
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncPreservesSelected
+#check_axioms Alvoki.Storage.DiskSession.readSelectedWithCachedExtents_ignoresStagedManifest
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.powerLossFiles_stagedMetadata
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.phaseAtStop
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.runFileUsesWrittenHandle
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.runsDirectoryUsesCachedHandle
@@ -2598,6 +2600,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeWritePreflightObservation.returnsWithCache
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preflightsWrite
 #check_axioms Alvoki.Storage.DiskSession.BatchActiveGuard.ofChecked
+#check_axioms Alvoki.Storage.DiskSession.WriteCallPublication.acknowledgesReturnedCommit
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.classifiesReadyReturn
 #check_axioms Alvoki.Storage.DiskSession.ObservedBatchPublication.projectsReturn
 #check_axioms Alvoki.Storage.DiskSession.WriteCallPublication.projects
@@ -3804,6 +3807,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.frame
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.frame
 #check_axioms Alvoki.Storage.DiskSession.ClassifiedWriteAcknowledgement.readyStorage
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.acknowledgesStoredReturn
 #check_axioms Alvoki.Storage.DiskSession.checkActiveSegmentWith_rawResult
 #check_axioms Alvoki.Storage.DiskSession.BatchActiveGuard.ofRawChecked
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_afterPreparation

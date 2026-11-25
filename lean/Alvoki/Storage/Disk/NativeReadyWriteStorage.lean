@@ -3,7 +3,7 @@ import Alvoki.Storage.Disk.NativeCheckpointSourceCrash
 
 namespace Alvoki.Storage.DiskSession
 
-open WalSegmentRepair
+open WalSegmentRepair WalSegmentCommit
 
 /-- A nonempty acknowledged write changes the keeper and marker. The
 directory, lock, selected checkpoint and seals pass through one frame.
@@ -65,5 +65,58 @@ theorem ClassifiedWriteAcknowledgement.readyStorage {history log} {current : Nat
   · exact (settledWrite names allowed).2
   · exact (settledWrite names allowed).1
   · exact sameNames names allowed path ((paths path).mp kept)
+
+/-- The same checked request fixes the acknowledged rows, ready phase,
+and keeper and marker payloads. The final phase update frames the
+durable publication and the unchanged recovery footprint. -/
+theorem NativeReadPosition.acknowledgesStoredReturn {history log}
+    (current : NativeReadPosition history log) (request : WriteRequest)
+    (calls : WriteRequest.Calls (DescriptorInventory × DescriptorSlot × Nat))
+    (checked : CheckedWriteRequest request current.state.session.directory current.state.writer.installed calls.lookup)
+    (publication : WriteCallPublication calls checked)
+    {sequence : UInt64} {reached : OpenWriteFiles}
+    (committed : commitBytesAt current.state.session.directory current.state.writer.installed.activeFirst
+      (WAL.encodeBatch checked.batch) checked.next.walBytes calls.append calls.stage calls.sync calls.rename
+      (WriteRequest.readyCall current.state.writer calls.cache).2.image = .ok () reached)
+    (returned : calls.run request current.state.session.directory current.state.writer =
+      .ok sequence (.ready checked.next, ⟨reached, current.state.writer.owners⟩))
+    (custody : NativePendingWriteCensus current.state reached.1)
+    {entry published installed : CheckpointStorageObservation} (old : NativeReadyStorage current.state entry)
+    (framed : entry.Frames current.state.writeFramePath published)
+    (restored : published.Frames current.state.crashPath installed)
+    (keeper : published.files.Stored (current.state.session.directory.file (.walSegment current.state.writer.wal.active.first))
+      (current.state.writer.wal.active.bytes ++ WAL.encodeBatch checked.batch))
+    (marker : published.files.Stored (current.state.session.directory.file .walBoundary)
+      (WAL.Boundary.encode checked.next.walBytes.toUInt64))
+    (settled : ∀ names ∈ published.crashNames,
+      names (current.state.session.directory.file (.walSegment current.state.writer.wal.active.first)) =
+        published.files.names (current.state.session.directory.file (.walSegment current.state.writer.wal.active.first)) ∧
+      names (current.state.session.directory.file .walBoundary) = published.files.names (current.state.session.directory.file .walBoundary)) :
+    ∃ ack : ClassifiedWriteAcknowledgement current request calls sequence reached custody,
+      ack.report.batch = checked.batch ∧ ack.next.state.session.phase = .ready checked.next ∧
+      NativeReadyStorage ack.next.state installed := by
+  have classified := publication.acknowledgesReturnedCommit committed
+  obtain ⟨ack, phase⟩ := current.acknowledgesProjectedReturn request checked.nonempty calls classified returned custody
+  have prepared := ack.report.prepared
+  rw [← ack.rows, checked.prepared] at prepared
+  obtain ⟨batch, table⟩ := Prod.mk.inj (Option.some.inj prepared)
+  have next : ack.report.nextInstalled = checked.next := by
+    simp only [SegmentedBatchAppendReport.nextInstalled, CheckedWriteRequest.next, ← ack.rows, ← table]
+  have protectedFrame := framed.trans (restored.weaken fun _ kept =>
+    NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept)))
+  have keeperPath := NativeReadyState.crashPath_iff_write (state := current.state) |>.mpr (.inr (.inl rfl))
+  have markerPath := NativeReadyState.crashPath_iff_write (state := current.state) |>.mpr (.inl rfl)
+  have names := (restored.weaken
+    (scope := fun path =>
+      path = current.state.session.directory.file (.walSegment current.state.writer.wal.active.first) ∨
+      path = current.state.session.directory.file .walBoundary)
+    fun _ kept => kept.elim (fun same => same ▸ keeperPath) (fun same => same ▸ markerPath)).settledFrom
+    (fun names allowed _ kept => kept.elim (fun same => same ▸ (settled names allowed).1)
+      (fun same => same ▸ (settled names allowed).2))
+  refine ⟨ack, batch.symm, phase.symm, ack.readyStorage old protectedFrame ?_ ?_ ?_⟩
+  · simpa only [batch] using restored.visible.stored keeperPath keeper
+  · simpa only [next] using restored.visible.stored markerPath marker
+  · intro survivor possible
+    exact ⟨names survivor possible _ (.inl rfl), names survivor possible _ (.inr rfl)⟩
 
 end Alvoki.Storage.DiskSession
