@@ -201,6 +201,7 @@ import Alvoki.Storage.Disk.ClosedReadyReopen
 import Alvoki.Storage.Disk.ClientWriteTrace
 import Alvoki.Storage.Disk.ReturnedWriteRecovery
 import Alvoki.Storage.Disk.PendingClientReplay
+import Alvoki.Storage.Disk.PendingAlignedReopen
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.BatchGroupedWriteError
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
@@ -1340,6 +1341,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.RepresentsWalHistory.acquireReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.guardedAcquireReads
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryInstalled.refinesPendingClient
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensReturnedWriteAligned
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.replaysClient
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysClientAtManifestDirectory
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.keyValueRefinement
