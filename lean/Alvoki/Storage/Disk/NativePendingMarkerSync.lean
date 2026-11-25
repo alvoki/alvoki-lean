@@ -168,13 +168,13 @@ theorem selectsPrior (stop : NativeWriteKeeperSyncStop prepared) (valid : before
 
 end NativeWriteKeeperSyncStop
 
-namespace NativeReadyWriteStaging
+namespace NativeReadyWriteStageAllocation
 
 variable {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
 
 /-- The original held directory and keeper remain live alongside the
 staged marker from its observed open until that temporary slot closes. -/
-structure Custody (seen : NativeReadyWriteStaging prepared)
+structure Custody (seen : NativeReadyWriteStageAllocation prepared)
     (oldMarker : RunChildLookup seen.root "WAL.commit" seen.view) : Prop where
   inodeMap : seen.afterMarkerOpen.inode = before.census.inode
   keeperLive : seen.keeperSlot ∈ seen.afterMarkerOpen.slots
@@ -195,7 +195,7 @@ structure Custody (seen : NativeReadyWriteStaging prepared)
     seen.afterMarkerOpen.inode before.directorySlot.description
   separate : seen.afterMarkerOpen.inode seen.markerSlot.description ≠ seen.afterMarkerOpen.inode seen.keeperSlot.description
 
-theorem custody (seen : NativeReadyWriteStaging prepared) (valid : before.Valid)
+theorem custody (seen : NativeReadyWriteStageAllocation prepared) (valid : before.Valid)
     (oldMarker : RunChildLookup seen.root "WAL.commit" seen.view) : seen.Custody oldMarker := by
   obtain ⟨previous, inode, keeperLive, captured, checked⟩ := seen.selectsKeeper.custody
   obtain ⟨keeper, lock, staged⟩ := seen.stageBindings
@@ -211,7 +211,7 @@ theorem custody (seen : NativeReadyWriteStaging prepared) (valid : before.Valid)
     captured, seen.sameDirectoryInode.trans (congrFun inode _).symm,
     fun same => seen.differentFiles ((congrFun inode _).symm.trans (same.trans (congrFun inode _)))⟩
 
-end NativeReadyWriteStaging
+end NativeReadyWriteStageAllocation
 
 namespace NativeWriteKeeperSyncStop
 

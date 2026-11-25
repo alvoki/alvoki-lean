@@ -130,9 +130,9 @@ theorem cachedResult (observed : NativeReadyKeeperSelection prepared checked ope
 
 end NativeReadyKeeperSelection
 
-/-- The guarded append and stage write reach one inventory. The reported
-operations use the same held directory, with no concurrent rebinding. -/
-structure NativeReadyWriteStaging {before : NativeReadyState} (prepared : NativeReadyWritePreparation before) where
+/-- The guarded append and subsequent exclusive marker allocation use the
+same held directory and reached inventory. -/
+structure NativeReadyWriteStageAllocation {before : NativeReadyState} (prepared : NativeReadyWritePreparation before) where
   pendingEmpty : before.cache.pending = []
   directoryCapture : DescriptorInventory
   directoryCached : before.cache.directory = some (directoryCapture, before.directorySlot, 0)
@@ -165,14 +165,18 @@ structure NativeReadyWriteStaging {before : NativeReadyState} (prepared : Native
   differentFiles : before.census.inode markerSlot.description ≠ before.census.inode keeperHandle.2.1.description
   appendWrite : WriteHandle → ByteArray → EStateM IO.Error WriteFiles Unit
   appendFlush : WriteHandle → EStateM IO.Error WriteFiles Unit
+  buffered : WriteFiles
+  wrote : appendWrite keeperHandle (WAL.encodeBatch prepared.batch) prepared.initial = .ok () buffered
+  flushed : appendFlush keeperHandle buffered = .ok () prepared.appended
+
+/-- The returned staging write and flush remember that same marker handle. -/
+structure NativeReadyWriteStaging {before : NativeReadyState} (prepared : NativeReadyWritePreparation before)
+    extends NativeReadyWriteStageAllocation prepared where
   tryStage : FilePath → EStateM IO.Error WriteFiles (Except IO.Error WriteHandle)
   detachStale : FilePath → EStateM IO.Error WriteFiles Unit
   createStage : FilePath → EStateM IO.Error WriteFiles WriteHandle
   stageWrite : WriteHandle → ByteArray → EStateM IO.Error WriteFiles Unit
   stageFlush : WriteHandle → EStateM IO.Error WriteFiles Unit
-  buffered : WriteFiles
-  wrote : appendWrite keeperHandle (WAL.encodeBatch prepared.batch) prepared.initial = .ok () buffered
-  flushed : appendFlush keeperHandle buffered = .ok () prepared.appended
   staged : writeFreshStagedWith tryStage detachStale createStage stageWrite stageFlush prepared.stagedPath prepared.marker
     prepared.appended = .ok (afterSelect.insert markerSlot markerFree, markerSlot, markerOffset) prepared.staged
 
@@ -208,13 +212,13 @@ structure NativeReadyWriteReport {before : NativeReadyState} (prepared : NativeR
   directoryNames : ∀ name, settledView.child root name = publishedView.child root name
   syncedDirectory : fsync (directoryCapture, before.directorySlot, 0) prepared.renamed = .ok () prepared.settled
 
-namespace NativeReadyWriteStaging
+namespace NativeReadyWriteStageAllocation
 
 variable {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
 
 /-- The production active-file guard projects the metadata from the
 identity-bearing no-follow stat of the exact checked child. -/
-def activeGuard (seen : NativeReadyWriteStaging prepared) : BatchActiveGuard before.session.directory before.writer.installed where
+def activeGuard (seen : NativeReadyWriteStageAllocation prepared) : BatchActiveGuard before.session.directory before.writer.installed where
   lookup := fun path => (seen.lstat path).map Prod.fst
   metadata := seen.metadata
   reached := by rw [show before.session.directory.file (.walSegment before.writer.installed.activeFirst) = prepared.keeperPath from rfl,
@@ -223,32 +227,54 @@ def activeGuard (seen : NativeReadyWriteStaging prepared) : BatchActiveGuard bef
   privateFile := seen.privateFile
   extent := seen.extent
 
-abbrev keeperSlot (seen : NativeReadyWriteStaging prepared) : DescriptorSlot :=
+abbrev keeperSlot (seen : NativeReadyWriteStageAllocation prepared) : DescriptorSlot :=
   seen.keeperHandle.2.1
 
-abbrev afterMarkerOpen (seen : NativeReadyWriteStaging prepared) : DescriptorInventory :=
+abbrev afterMarkerOpen (seen : NativeReadyWriteStageAllocation prepared) : DescriptorInventory :=
   seen.afterSelect.insert seen.markerSlot seen.markerFree
 
-abbrev stageHandle (seen : NativeReadyWriteStaging prepared) : WriteHandle :=
+abbrev stageHandle (seen : NativeReadyWriteStageAllocation prepared) : WriteHandle :=
   (seen.afterMarkerOpen, seen.markerSlot, seen.markerOffset)
 
-abbrev appendCache (seen : NativeReadyWriteStaging prepared) : CensusDirectoryCache :=
+abbrev appendCache (seen : NativeReadyWriteStageAllocation prepared) : CensusDirectoryCache :=
   { before.cache with active := some (prepared.keeperPath, seen.keeperHandle) }
+
+def append (seen : NativeReadyWriteStageAllocation prepared) (path : FilePath) (bytes : ByteArray) :=
+  runAppendWithCache path bytes seen.openAppend seen.appendWrite seen.appendFlush
+
+theorem appendReturns (seen : NativeReadyWriteStageAllocation prepared) :
+    seen.append prepared.keeperPath (WAL.encodeBatch prepared.batch) (before.cache, prepared.initial) =
+      .ok () (seen.appendCache, prepared.appended) := by
+  simp only [append, runAppendWithCache_effect, seen.selectsKeeper.selects, seen.wrote, seen.flushed]
+
+theorem stageBindings (seen : NativeReadyWriteStageAllocation prepared) :
+    seen.stageView.child seen.root prepared.keeperName = some seen.checkedKeeper.child ∧
+    seen.stageView.child seen.root "LOCK" = some seen.lockLookup.child ∧
+    seen.stageView.child seen.root "WAL.commit.next" = some seen.openedMarker.child := by
+  have differentStage : prepared.keeperName ≠ "WAL.commit.next" := by
+    intro same
+    have samePrefix := congrArg (fun name : String => name.toList.take 4) same
+    simp [NativeReadyWritePreparation.keeperName, renderWalSegmentName, String.toList_append] at samePrefix
+  exact ⟨(seen.stageNames _ differentStage).trans (rootedChild seen.checkedKeeper),
+    (seen.stageNames _ (by decide)).trans (rootedChild seen.lockLookup), rootedChild seen.openedMarker⟩
+
+end NativeReadyWriteStageAllocation
+
+namespace NativeReadyWriteStaging
+
+open NativeReadyWriteStageAllocation
+
+variable {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
+
+abbrev appendCache (seen : NativeReadyWriteStaging prepared) : CensusDirectoryCache :=
+  seen.toNativeReadyWriteStageAllocation.appendCache
 
 abbrev groupCache (seen : NativeReadyWriteStaging prepared) : CensusDirectoryCache :=
   seen.appendCache.remember prepared.stagedPath seen.stageHandle
 
-def append (seen : NativeReadyWriteStaging prepared) (path : FilePath) (bytes : ByteArray) :=
-  runAppendWithCache path bytes seen.openAppend seen.appendWrite seen.appendFlush
-
 noncomputable def stage (seen : NativeReadyWriteStaging prepared) (path : FilePath) (bytes : ByteArray) :=
   stageFreshWithCache path bytes
     (writeFreshStagedWith seen.tryStage seen.detachStale seen.createStage seen.stageWrite seen.stageFlush)
-
-theorem appendReturns (seen : NativeReadyWriteStaging prepared) :
-    seen.append prepared.keeperPath (WAL.encodeBatch prepared.batch) (before.cache, prepared.initial) =
-      .ok () (seen.appendCache, prepared.appended) := by
-  simp only [append, runAppendWithCache_effect, seen.selectsKeeper.selects, seen.wrote, seen.flushed]
 
 theorem stageReturns (seen : NativeReadyWriteStaging prepared) :
     seen.stage prepared.stagedPath prepared.marker (seen.appendCache, prepared.appended) =
@@ -287,22 +313,11 @@ theorem selectsStageSync (seen : NativeReadyWriteStaging prepared)
     simp [Cache.remember, Cache.consume, pushPending, appendCache, seen.pendingEmpty]
   simp [Cache.resolve, distinct, hit, consumed]
 
-theorem stageBindings (seen : NativeReadyWriteStaging prepared) :
-    seen.stageView.child seen.root prepared.keeperName = some seen.checkedKeeper.child ∧
-    seen.stageView.child seen.root "LOCK" = some seen.lockLookup.child ∧
-    seen.stageView.child seen.root "WAL.commit.next" = some seen.openedMarker.child := by
-  have differentStage : prepared.keeperName ≠ "WAL.commit.next" := by
-    intro same
-    have samePrefix := congrArg (fun name : String => name.toList.take 4) same
-    simp [NativeReadyWritePreparation.keeperName, renderWalSegmentName, String.toList_append] at samePrefix
-  exact ⟨(seen.stageNames _ differentStage).trans (rootedChild seen.checkedKeeper),
-    (seen.stageNames _ (by decide)).trans (rootedChild seen.lockLookup), rootedChild seen.openedMarker⟩
-
 end NativeReadyWriteStaging
 
 namespace NativeReadyWriteFileSyncs
 
-open NativeReadyWriteStaging
+open NativeReadyWriteStaging NativeReadyWriteStageAllocation
 
 variable {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
 
@@ -385,7 +400,7 @@ end NativeReadyWriteRenamed
 
 namespace NativeReadyWriteReport
 
-open NativeReadyWriteStaging NativeReadyWriteFileSyncs
+open NativeReadyWriteStaging NativeReadyWriteStageAllocation NativeReadyWriteFileSyncs
 
 variable {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
 
@@ -448,7 +463,7 @@ theorem bindingFrames (seen : NativeReadyWriteReport prepared) : seen.BindingFra
 noncomputable def calls (seen : NativeReadyWriteReport prepared) : WriteRequest.Calls WriteHandle where
   cache := before.cache
   lookup := seen.activeGuard.lookup
-  append := seen.toNativeReadyWriteStaging.append
+  append := seen.toNativeReadyWriteStageAllocation.append
   stage := seen.toNativeReadyWriteStaging.stage
   sync := seen.toNativeReadyWriteFileSyncs.sync
   rename := seen.toNativeReadyWriteRenamed.replace
@@ -456,7 +471,7 @@ noncomputable def calls (seen : NativeReadyWriteReport prepared) : WriteRequest.
 private theorem appendReturns (seen : NativeReadyWriteReport prepared) :
     seen.calls.append prepared.keeperPath (WAL.encodeBatch prepared.batch) (before.cache, prepared.initial) =
       .ok () (seen.appendCache, prepared.appended) := by
-  exact seen.toNativeReadyWriteStaging.appendReturns
+  exact seen.toNativeReadyWriteStageAllocation.appendReturns
 
 private theorem stageReturns (seen : NativeReadyWriteReport prepared) :
     seen.calls.stage prepared.stagedPath prepared.marker (seen.appendCache, prepared.appended) =
@@ -479,7 +494,7 @@ private theorem directoryReturns (seen : NativeReadyWriteReport prepared) :
     seen.calls.sync #[before.session.directory.path] (seen.appendCache, prepared.renamed) =
       .ok () (seen.appendCache, prepared.settled) := by
   simp [calls, NativeReadyWriteFileSyncs.sync, SyncPathGroup.run_single, SyncHandleRouting.sync, Cache.resolve,
-    appendCache, seen.directoryCached, seen.syncedDirectory, withCache]
+    seen.directoryCached, seen.syncedDirectory, withCache]
 
 /-- The actual append-first schedule reaches every successful action in
 order. The returned cache still uses the original directory and the live
@@ -681,7 +696,7 @@ theorem acknowledgesAgain (previous : NativeReadyWriteReport prepared) (valid : 
     (previous.nextCacheBindings valid target).2.1
   obtain ⟨handle, census⟩ := current.selectsKeeper.cachedResult cacheHit
   have cache : current.appendCache = (previous.next target).cache := by
-    dsimp only [appendCache]
+    dsimp only [NativeReadyWriteStageAllocation.appendCache, NativeReadyWriteStaging.appendCache]
     rw [handle, ← cacheHit]
   obtain ⟨nextTarget, _, installed, returned, extended, _, _, _, _⟩ := current.acknowledges ready request rows
   exact ⟨current.checkedKeeper.child_eq keeperBound, handle, current.censusAfterClose.trans census, cache,
