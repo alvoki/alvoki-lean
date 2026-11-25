@@ -1393,6 +1393,10 @@ theorem recoveredRetries_installedReads
       recoverMarkedWalSegments base selected.frontier (sealed ++ [(target.first, bytes)]) =
         .ok (WAL.encode (((history ++ batch).take range.through).drop first), opened.table) ∧
       ∀ file ∈ sealed, after.kept file.1 = some file.2) ∧
+    ∃ retry : DiskSession.CanonicalKeeperLayout after ((history ++ batch).take range.through),
+      retry.target = target ∧ retry.first = first ∧
+      retry.sealed = layout.sealed ∧ retry.keeper = layout.keeper ∧
+      WalSegmentRepair.Prepared after target retry.plan ∧
     ∃ session final reference state pin pinned,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
         (reopenWith (WalSegmentRepair.prepareBoundedMarkedFromReaders directory
@@ -1539,8 +1543,27 @@ theorem recoveredRetries_installedReads
     reopenWith_installsPrepared (unlock := unlock) liveRefs fresh acquisition preparedRead barrier repaired
   have physical bytes survives := retries.replayUnchanged authorizedRepair authorized base sealed
     sealedRead markerRead (Boundary.decode_encode selected.frontier) checked (bytes := bytes) survives
-  exact ⟨ledger.1, fun bytes survives =>
-      ⟨(physical bytes survives).1.trans selectedReplay, (physical bytes survives).2⟩, session, final, reference, opened.installed, pin, pinned,
-    returned, reached, owner, freshSession, replayed, installed, acquired, points, ranges⟩
+  have layoutPlan : layout.plan = plan := by
+    have throughEq : layout.range.through = plan.through :=
+      (congrArg (fun t : Target => t.range.through) layoutTarget).trans preparedPlan.through.symm
+    have bytesEq : layout.keeper.bytes ++ layout.tail = plan.keeperBytes :=
+      Option.some.inj (layout.visible.symm.trans preparedPlan.keeperRead)
+    have startEq := keeperOffset.trans preparedPlan.start.symm
+    have namesEq := preparedPlan.names.symm
+    change (⟨layout.range.through, layout.keeper.first, prepared.later.visible,
+      layout.keeper.bytes ++ layout.tail⟩ : WalSegmentRepair.Plan) = plan
+    rw [throughEq, startEq, namesEq, bytesEq]
+  have layoutPrepared : WalSegmentRepair.Prepared prepared layout.target layout.plan := by
+    rw [layoutTarget, layoutPlan]
+    exact preparedPlan
+  obtain ⟨retry, retryTarget, retryStart, retrySeals, retryKeeper, _, retryPrepared⟩ :=
+    canonicalLayout_afterMarkerRetries layout selected observed layoutPrepared
+      (layoutTarget.symm ▸ authorizedRepair) (layoutTarget.symm ▸ retries)
+  refine ⟨ledger.1, ?_, retry, retryTarget.trans layoutTarget, retryStart.trans layoutStart,
+    retrySeals, retryKeeper, layoutTarget ▸ retryPrepared, session, final, reference,
+    opened.installed, pin, pinned, returned, reached, owner, freshSession, replayed, installed, acquired, points, ranges⟩
+  intro bytes survives
+  obtain ⟨equalReplay, sealedBytes⟩ := physical bytes survives
+  exact ⟨equalReplay.trans selectedReplay, sealedBytes⟩
 
 end Alvoki.WAL.TwoSlot

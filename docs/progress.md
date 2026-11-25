@@ -21,7 +21,9 @@ their common marker and a contiguous chain of selected segments. That
 chain now supplies the start offset, exact retained byte prefix and the
 executable segment span checks, including a keeper with a tail. After
 marker authorization, two-slot retries reuse the shared layout proof and
-reconstruct the same canonical segment chain at the latest retry state. The
+reconstruct the same canonical segment chain at the latest retry state.
+The client recovery theorem returns that layout and its prepared plan
+for exactly the same file image carried by the returned session. The
 remaining integration work is to derive the selected chain and primitive
 reports from one native descriptor chronology. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
 
