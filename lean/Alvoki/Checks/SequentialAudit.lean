@@ -1401,6 +1401,17 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.stageCallbacks
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.stageCustody
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.finishFromStage
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.renameTargets
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.publishesInode
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.lockAtRename
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.reachesRename
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.finishAfterError
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.settlementCustody
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.settledInode
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.syncResult
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.finishResult
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.healthyFinish
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.installs
 #check_axioms Alvoki.Storage.readOptionalCachedOpenFile_fileEffects
 #check_axioms Alvoki.Storage.DiskSession.runCachedMetadataRead_missing
 #check_axioms Alvoki.Storage.DiskSession.HeldMetadataFile.manifestPrefix
