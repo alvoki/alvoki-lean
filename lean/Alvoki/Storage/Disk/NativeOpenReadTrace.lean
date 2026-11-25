@@ -7,6 +7,15 @@ namespace Alvoki.Storage.DiskSession
 open System
 open Sequential (SnapshotPin)
 
+/-- Extend a reached trace on the left by its immediately preceding step. -/
+theorem NativeExecutionTrace.prepend
+    (first : NativeExecutionStep start event reached)
+    (rest : NativeExecutionTrace reached events last) :
+    NativeExecutionTrace start (event :: events) last := by
+  induction rest with
+  | empty => exact .step .empty first
+  | step _ next earlier => exact .step earlier next
+
 /-- Start acquisition with the reached phase cell, then use the exact
 issued pin and the resulting heap for the public lookup or range.
 The two reported calls produce the corresponding common trace. -/

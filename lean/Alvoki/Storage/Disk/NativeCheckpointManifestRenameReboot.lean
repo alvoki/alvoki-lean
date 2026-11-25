@@ -256,11 +256,11 @@ theorem plans (crash : NativeCheckpointManifestRenameCrash report) (valid : stat
 end NativeCheckpointManifestRenameCrash
 
 
-/-- Actual marked reads and aligned installation start at the empty
-reboot census and use the chosen post-error namespace. -/
+/-- Actual marked reads and aligned installation use the chosen
+post-error namespace and the descriptor inventory at admission. -/
 structure NativeCheckpointManifestRenameReads (crash : NativeCheckpointManifestRenameCrash report)
-    (input : FilePath) (plan : crash.Plan) where
-  opening : CheckpointBarrierAlignedReports input state.session.directory crash.reboot crash.retry plan.layout
+    (input : FilePath) (plan : crash.Plan) (inventory : DescriptorInventory := crash.reboot) where
+  opening : CheckpointBarrierAlignedReports input state.session.directory inventory crash.retry plan.layout
     crash.publication crash.vacant plan.selected crash.names
   chronology : CapturedMarkedReadCensus opening.reads opening.finish.readCustody
   directoryObject : opening.reads.bindings state.session.directory.path = crash.names state.session.directory.path
@@ -270,16 +270,17 @@ structure NativeCheckpointManifestRenameReads (crash : NativeCheckpointManifestR
 namespace NativeCheckpointManifestRenameReads
 
 variable {crash : NativeCheckpointManifestRenameCrash report} {input : FilePath} {plan : crash.Plan}
+  {inventory : DescriptorInventory}
 
-noncomputable def run (seen : NativeCheckpointManifestRenameReads crash input plan) :
+noncomputable def run (seen : NativeCheckpointManifestRenameReads crash input plan inventory) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
   seen.opening.finish.runFromCensus seen.chronology.metadataRelease seen.chronology.runs.released seen.chronology.sealRelease
 
-def ReadsSurvivor (seen : NativeCheckpointManifestRenameReads crash input plan) (path : FilePath) (payload : ByteArray) : Prop :=
+def ReadsSurvivor (seen : NativeCheckpointManifestRenameReads crash input plan inventory) (path : FilePath) (payload : ByteArray) : Prop :=
   ∃ read : seen.opening.reads.reads.ObservesFile path payload,
     crash.names path = some read.object ∧ (report.synced.settled.runs.inodes report.after).crashBytes read.object = [payload]
 
-private theorem readsFile (seen : NativeCheckpointManifestRenameReads crash input plan)
+private theorem readsFile (seen : NativeCheckpointManifestRenameReads crash input plan inventory)
     {path : FilePath} {name : String} {child : DeviceInode} {payload : ByteArray}
     (same : CheckpointCrashChild crash.names seen.opening.admission path name)
     (bound : seen.opening.admission.view.child seen.opening.admission.root name = some child)
@@ -291,7 +292,7 @@ private theorem readsFile (seen : NativeCheckpointManifestRenameReads crash inpu
   have observed := same.sameObject calls bound contents
   exact ⟨read, observed, (Option.some.inj (observed.symm.trans named)).symm ▸ durable⟩
 
-structure SelectedReads (seen : NativeCheckpointManifestRenameReads crash input plan) : Prop where
+structure SelectedReads (seen : NativeCheckpointManifestRenameReads crash input plan inventory) : Prop where
   manifestAbsent : crash.pair.manifest = none → crash.names (state.session.directory.file .manifest) = none ∧
     ∃ name message, seen.opening.reads.reads.stat (state.session.directory.file .manifest) =
       .error (.noFileOrDirectory name 2 message)
@@ -306,7 +307,7 @@ structure SelectedReads (seen : NativeCheckpointManifestRenameReads crash input 
   wal : ∀ segment ∈ plan.layout.sealed ++ [plan.layout.keeper],
     seen.ReadsSurvivor (state.session.directory.file (.walSegment segment.first)) segment.bytes
 
-theorem readsSelected (seen : NativeCheckpointManifestRenameReads crash input plan) (valid : state.Valid) :
+theorem readsSelected (seen : NativeCheckpointManifestRenameReads crash input plan inventory) (valid : state.Valid) :
     seen.SelectedReads := by
   let opening := seen.opening
   have marker : crash.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) := by
@@ -354,7 +355,8 @@ the exact fresh session of its chronological aligned open. -/
 structure NativeCheckpointManifestRenameReopened (current : NativeReadPosition history log)
     {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
     {report : NativeCheckpointManifestRenameError (image := image) current.state cut}
-    (crash : NativeCheckpointManifestRenameCrash report) (input : FilePath) (next : NativeReadPosition history log) : Prop where
+    (crash : NativeCheckpointManifestRenameCrash report) (input : FilePath) (next : NativeReadPosition history log)
+    (inventory : DescriptorInventory := crash.reboot) : Prop where
   failed : NativeReturnedCheckpointManifestRenameError current report
   lost : BoundedReopenTrace current.state.session.directory
     (CheckpointRetryTarget current.state.writer.history current.state.writer.wal.active.first)
@@ -373,7 +375,7 @@ structure NativeCheckpointManifestRenameReopened (current : NativeReadPosition h
     (next.state.writer.installed.generation = SegmentedCheckpointReport.generation current.state.writer ∧
       crash.pair.manifest = some cut.checkpoint.manifest)
   seals : next.state.files.image.kept = current.state.files.image.kept
-  exactOpen : ∃ (plan : crash.Plan) (seen : NativeCheckpointManifestRenameReads crash input plan),
+  exactOpen : ∃ (plan : crash.Plan) (seen : NativeCheckpointManifestRenameReads crash input plan inventory),
     seen.run = .ok next.state.session (next.state.census, next.state.files) ∧
     next.opened = seen.run ∧ next.initial = next.state ∧
     next.state.owner = seen.opening.admission.owner ∧ next.state.directorySlot = seen.opening.admission.cached ∧
@@ -382,12 +384,13 @@ structure NativeCheckpointManifestRenameReopened (current : NativeReadPosition h
     next.state.writer.published.durable = crash.publication.durable ∧ seen.SelectedReads
   replay : InstalledClientReplay log current.reads history next.state.writer.installed next.state.session
 
-theorem NativeReadPosition.recoversCheckpointManifestRenamePowerLoss (current : NativeReadPosition history log)
+/-- Use the exact admission inventory supplied by the restart route. -/
+theorem NativeReadPosition.reopensCheckpointManifestRenameAt (current : NativeReadPosition history log)
     {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
     {report : NativeCheckpointManifestRenameError (image := image) current.state cut}
-    (crash : NativeCheckpointManifestRenameCrash report) {input : FilePath}
-    (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointManifestRenameReads crash input plan)) :
-    ∃ next, NativeCheckpointManifestRenameReopened current crash input next := by
+    (crash : NativeCheckpointManifestRenameCrash report) {input : FilePath} {inventory : DescriptorInventory}
+    (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointManifestRenameReads crash input plan inventory)) :
+    ∃ next, NativeCheckpointManifestRenameReopened current crash input next inventory := by
   obtain ⟨valid, sameHistory, replay⟩ := current.readPrefix.refines
   have failed := current.checkpointManifestRenameError report
   have pending : PendingClientReplay log current.reads current.state.writer.history := sameHistory.symm ▸ replay
@@ -438,5 +441,14 @@ theorem NativeReadPosition.recoversCheckpointManifestRenamePowerLoss (current : 
     exact Option.some.inj (objects.2.1.symm.trans (seen.lockObject.trans (crash.lock.trans failed.lockObject)))
   · exact plan.generations.imp (fun old => ⟨generation.trans old.1, old.2⟩)
       (fun fresh => ⟨generation.trans fresh.1, fresh.2⟩)
+
+/-- The direct restart begins with the empty reboot inventory. -/
+theorem NativeReadPosition.recoversCheckpointManifestRenamePowerLoss (current : NativeReadPosition history log)
+    {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
+    {report : NativeCheckpointManifestRenameError (image := image) current.state cut}
+    (crash : NativeCheckpointManifestRenameCrash report) {input : FilePath}
+    (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointManifestRenameReads crash input plan)) :
+    ∃ next, NativeCheckpointManifestRenameReopened current crash input next :=
+  current.reopensCheckpointManifestRenameAt crash observe
 
 end Alvoki.Storage.DiskSession
