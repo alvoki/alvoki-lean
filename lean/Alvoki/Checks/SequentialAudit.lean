@@ -320,6 +320,7 @@ import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeReadyUncertainWrite
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
+import Alvoki.Storage.Disk.NativeUncertainWriteTableOpen
 import Alvoki.Storage.Disk.NativeExecutionPendingWrite
 import Alvoki.Storage.Disk.NativePendingFirstAppend
 import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
@@ -1958,12 +1959,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeUncertainWriteCrash.reported
+#check_axioms Alvoki.Storage.DiskSession.NativeUncertainWriteCrash.plans
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteCrashReads.readsManifest
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteCrashReads.readsRun
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteCrashReads.readsMarker
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteCrashReads.readsKeeper
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteCrashReads.readsSeal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversUncertainWriteAfterPowerLoss
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.classifiesReportedUncertainWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteFailure.returnsUnknown
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.rejectsReads
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.custody
