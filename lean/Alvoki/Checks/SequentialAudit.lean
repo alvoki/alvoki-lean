@@ -253,6 +253,7 @@ import Alvoki.Storage.Disk.NativeOpenCheckpoint
 import Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
 import Alvoki.Storage.Disk.NativeOpenReadyTrace
 import Alvoki.Storage.Disk.NativeOpenCacheReferences
+import Alvoki.Storage.Disk.NativeRawOpenAdmission
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
 import Alvoki.Storage.Disk.NativeAlignedOpenHeap
 import Alvoki.Storage.Disk.NativeBootstrapCacheMutations
@@ -1693,6 +1694,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.close
 #check_axioms Alvoki.Storage.DiskTable.openSyncCacheReferences
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheAllocations.installs
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.admitsWithCache
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.keeperCacheSchedules
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.returns
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromAlignedCache
