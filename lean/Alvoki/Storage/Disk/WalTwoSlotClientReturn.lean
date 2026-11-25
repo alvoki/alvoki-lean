@@ -1687,11 +1687,12 @@ private theorem selectedCheckpoint_represents
     (accepted : published.AcceptsVersioned history.length.toUInt64
       (Boundary.CheckpointRepresentsPrefix history) binding) :
     ∃ model, (loaded.getD (.empty, 0)).1.Refines model ∧ (loaded.getD (.empty, 0)).1.RowBounds ∧
+      (loaded.getD (.empty, 0)).1.committed.toNat ≤ history.length ∧
       RepresentsWalHistory (history.take (loaded.getD (.empty, 0)).1.committed.toNat) model := by
   cases selected with
-  | absent => exact ⟨.empty, PackedTable.empty_refines, PackedTable.empty_rowBounds, RepresentsWalHistory.empty⟩
+  | absent => exact ⟨.empty, PackedTable.empty_refines, PackedTable.empty_rowBounds, Nat.zero_le _, RepresentsWalHistory.empty⟩
   | @present bytes manifest files table decoded stored loaded =>
-    obtain ⟨acceptedFiles, durable, spec, _, _⟩ :=
+    obtain ⟨acceptedFiles, durable, spec, _, covered⟩ :=
       published.acceptsVersioned_runs accepted (Manifest.VersionedCheckpoint.decode_integrity decoded)
     have sameFiles : acceptedFiles = files := Option.some.inj (durable.symm.trans stored)
     subst acceptedFiles
@@ -1704,7 +1705,10 @@ private theorem selectedCheckpoint_represents
     obtain ⟨rebound, baseRefines, sameTable, sameClock, sameFloor⟩ :=
       same.refines_rebindPins refined (by simp [fresh])
     have bounds := same.rowBounds written.rowBounds
-    refine ⟨rebound, baseRefines, bounds, ?_⟩
+    have ceiling : table.committed.toNat ≤ history.length := by
+      rw [same.committed, ← written.watermark]
+      exact Nat.le_trans (UInt64.le_iff_toNat_le.mp covered) (Nat.mod_le ..)
+    refine ⟨rebound, baseRefines, bounds, ceiling, ?_⟩
     change RepresentsWalHistory (history.take table.committed.toNat) rebound
     rw [same.committed]
     exact historyPrefix.preserve sameClock (UInt64.le_of_eq sameFloor.symm)
@@ -1779,8 +1783,8 @@ theorem installsAfterAcquiredRecovery_replays
     (start : BootstrapClientStart directory bootstrapFirst initial)
     (trace : SegmentedClientReadTrace directory bootstrapFirst start.writer allowCollection log reads writer prior)
     {batch : List WAL.Write}
-    (acceptedCheckpoint : published.AcceptsVersioned history.length.toUInt64
-      (Boundary.CheckpointRepresentsPrefix history) retry.image.directory.active.manifest)
+    (acceptedCheckpoint : published.AcceptsVersioned prior.history.length.toUInt64
+      (Boundary.CheckpointRepresentsPrefix prior.history) retry.image.directory.active.manifest)
     {interrupted firstRepair : FileImage}
     (beforeBarrier : UnsettledRetries interrupted retry.image)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
@@ -1850,9 +1854,15 @@ theorem installsAfterAcquiredRecovery_replays
   have split : covered ++ suffix = history := List.take_append_drop ..
   have baseClock := Option.some.inj (checkpointSelected.watermark.symm.trans
     (DirectoryPublication.Bindings.walRange_accounting layout.decoded).1)
-  obtain ⟨_, baseRefines, baseBounds, baseHistory⟩ :=
+  obtain ⟨_, baseRefines, baseBounds, coveredBeforeBatch, baseHistory⟩ :=
     selectedCheckpoint_represents checkpointSelected acceptedCheckpoint
-  rw [baseClock] at baseHistory
+  rw [baseClock] at coveredBeforeBatch baseHistory
+  have sameCovered : covered = prior.history.take layout.range.watermark := by
+    rcases whole with old | all
+    · exact congrArg (List.take layout.range.watermark) (sameHistory.trans old)
+    · exact (congrArg (List.take layout.range.watermark) (sameHistory.trans all)).trans
+        (List.take_append_of_le_length coveredBeforeBatch)
+  rw [← sameCovered] at baseHistory
   have coveredLength : covered.length = (loaded.getD (.empty, 0)).1.committed.toNat := by
     have watermark := (DirectoryPublication.Bindings.walRange_accounting layout.decoded).2.1
     simp [covered, baseClock, ← layout.through, Nat.min_eq_left watermark]

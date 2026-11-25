@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+Checkpoint acceptance for the marked-open client theorem is now against
+the history before the uncertain submission. The accepted manifest bounds
+the loaded checkpoint's watermark by that prior history. Both permitted
+WAL selections therefore use the same checkpoint prefix. The proof still
+needs to construct the native repair and retry reports.
+
 The marked-open client proof derives the checkpoint clock, table
 refinement, row bounds and covered history from the accepted manifest
 and exact durable run bytes. The loaded pin registry is accounted for
