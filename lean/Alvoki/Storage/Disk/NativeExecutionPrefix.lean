@@ -18,6 +18,7 @@ import Alvoki.Storage.Disk.NativeCoveredWalUnlinkStop
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
 import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryError
 import Alvoki.Storage.Disk.NativeCheckpointRunFileError
+import Alvoki.Storage.Disk.NativeCheckpointRunDataError
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 
@@ -96,6 +97,9 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
   | checkpointRunDirectoryError {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointRunDirectoryError (image := image) current.ready.state cut)
+  | checkpointRunDataError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointRunDataError (image := image) current.ready.state cut)
   | checkpointRunFileError {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointRunFileError (image := image) current.ready.state cut)
@@ -131,7 +135,8 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .rejectedOpensAfterClose sequence => .closeThenOpenAttempts sequence.inputs
   | .interruptedClose _ _ => .close
   | .interruptedCloseAfterUncertainWrite pending _ _ => .writeThenClose pending.write.request
-  | .checkpointError _ _ | .checkpointRunDirectoryError _ | .checkpointRunFileError _ => .checkpoint
+  | .checkpointError _ _ | .checkpointRunDirectoryError _ | .checkpointRunFileError _
+  | .checkpointRunDataError _ => .checkpoint
   | .interruptedCheckpoint _ => .checkpoint
   | .collectionError _ _ _ => .collectCoveredWal
   | .interruptedCoveredWalUnlink _ | .coveredWalUnlinkError _ => .collectCoveredWal
@@ -222,6 +227,7 @@ def Reached : NativeExecutionEnd current → Prop
         cut.PendingReplay (physical.runs reported.after) pair.manifest current.submissions current.ready.reads
   | .checkpointRunDirectoryError reported => NativeReturnedCheckpointRunDirectoryError current.ready reported
   | .checkpointRunFileError reported => NativeReturnedCheckpointRunFileError current.ready reported
+  | .checkpointRunDataError reported => NativeReturnedCheckpointRunDataError current.ready reported
   | .interruptedCheckpoint stop => NativePendingCheckpoint current.ready stop
   | .collectionError reported cause _ =>
       reported.run = .error (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}")
@@ -299,6 +305,7 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   | checkpointError reported physical => exact current.ready.readPrefix.checkpointDirectoryError reported physical
   | checkpointRunDirectoryError reported => exact current.ready.checkpointRunDirectoryError reported
   | checkpointRunFileError reported => exact current.ready.checkpointRunFileError reported
+  | checkpointRunDataError reported => exact current.ready.checkpointRunDataError reported
   | interruptedCheckpoint stop => exact current.ready.stopsDuringCheckpoint stop
   | collectionError reported _ failed =>
     obtain ⟨returned, _, _, _, _, _, _, _, _, _, _, _, _, survivors, _⟩ :=
@@ -383,7 +390,7 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
   | ready | close | callsAfterReadyClose | rejectedOpensAfterClose | interruptedClose | checkpointError | interruptedCheckpoint
-  | checkpointRunDirectoryError | checkpointRunFileError | collectionError | coveredWalUnlinkError | interruptedCoveredWalUnlink
+  | checkpointRunDirectoryError | checkpointRunFileError | checkpointRunDataError | collectionError | coveredWalUnlinkError | interruptedCoveredWalUnlink
   | interruptedObsoleteRunUnlink | interruptedRotation | rotationError =>
     refine ⟨current.history, .inl rfl, ?_, current.ready.readPrefix.readsBounded⟩
     all_goals simpa [submissions, uncertainBatch] using current.ready.readPrefix.refines.2.2
@@ -450,6 +457,9 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
   | checkpointRunDirectoryError {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointRunDirectoryError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
+  | checkpointRunDataError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointRunDataError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
   | checkpointRunFileError {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointRunFileError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
@@ -517,6 +527,7 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
   | checkpointError reported physical => exact ⟨.checkpointError reported physical, rfl, NativeExecutionEnd.reached _⟩
   | checkpointRunDirectoryError reported => exact ⟨.checkpointRunDirectoryError reported, rfl, NativeExecutionEnd.reached _⟩
   | checkpointRunFileError reported => exact ⟨.checkpointRunFileError reported, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointRunDataError reported => exact ⟨.checkpointRunDataError reported, rfl, NativeExecutionEnd.reached _⟩
   | interruptedCheckpoint stop => exact ⟨.interruptedCheckpoint stop, rfl, NativeExecutionEnd.reached _⟩
   | collectionError reported cause failed => exact ⟨.collectionError reported cause failed, rfl, NativeExecutionEnd.reached _⟩
   | coveredWalUnlinkError reported => exact ⟨.coveredWalUnlinkError reported, rfl, NativeExecutionEnd.reached _⟩
