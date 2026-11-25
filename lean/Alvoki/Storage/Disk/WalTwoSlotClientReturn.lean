@@ -1254,7 +1254,7 @@ theorem recoveredRetries_retainUncertainBatch
   · exact recoveredBatch_retains prior recovery binding (.inr (newFrontier ▸ newSize))
 
 /-- The same retry-selected recovery explains the retained submissions and
-fresh snapshot reads on a session with that recovered table installed. -/
+fresh snapshot reads on the session installed by the shared open schedule. -/
 theorem recoveredRetries_installedReads
     {initial prepared firstRepair after : FileImage} {target : Target}
     (beforeBarrier : UnsettledRetries initial prepared)
@@ -1277,15 +1277,26 @@ theorem recoveredRetries_installedReads
     (retries : SettledRetries target firstRepair after)
     {image : WalSegmentImage} {range : MarkedWalRange}
     {base : PackedTable} {opened : WalSegmentRepair.Reopened}
-    {session : DiskSession.SegmentedSession} {first : Nat} {log : List DatabaseSubmissions}
+    {first : Nat} {log : List DatabaseSubmissions}
+    {directory : DiskDirectory} {descriptor nextRef : Nat} {unlock : DiskSession.UnlockReport}
+    {openedFrom : LockedFileState FileImage}
+    {prepare : EStateM IO.Error FileImage (WalSegmentRepair.Plan × WalSegmentRepair.Reopened × Nat)}
+    {stabilize : EStateM IO.Error FileImage Unit}
+    {finish : WalSegmentRepair.Plan → Nat → EStateM IO.Error FileImage Unit}
     (prior : DatabaseBatchRetention log history)
     (oldSize : current.frontier.toNat = (WAL.encode history).size)
-    (installed : session.phase = .ready opened.installed)
+    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : DiskSession.TryLockObserves openedFrom.owners directory (.ok true))
+    (reopened : reopenWith prepare stabilize finish openedFrom.image = .ok opened after)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
     {snapshot : UInt64} (retained : opened.table.pins.floor ≤ snapshot)
     (within : snapshot.toNat ≤ range.through) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
-    ∃ reference state pin pinned,
+    ∃ session final reference state pin pinned,
+      DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+        (reopenWith prepare stabilize finish) openedFrom = .ok session final ∧
+      final.image = after ∧ final.owners.Owns directory descriptor ∧
+      session.sessionRef ∉ liveRefs ∧
       SnapshotWalReplay .empty ((history ++ batch).take range.through) reference ∧
       session.phase = .ready state ∧
       state.table.acquireAt snapshot = some (pin, pinned) ∧
@@ -1296,6 +1307,9 @@ theorem recoveredRetries_installedReads
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2
   obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
-  exact ⟨ledger.1, reference, opened.installed, pin, pinned, replayed, installed, acquired, points, ranges⟩
+  obtain ⟨session, final, returned, _, _, installed, reached, _, owner, _, _, freshSession⟩ :=
+    DiskSession.runOpenWithInstallation_ready (unlock := unlock) liveRefs fresh acquisition reopened
+  exact ⟨ledger.1, session, final, reference, opened.installed, pin, pinned,
+    returned, reached, owner, freshSession, replayed, installed, acquired, points, ranges⟩
 
 end Alvoki.WAL.TwoSlot

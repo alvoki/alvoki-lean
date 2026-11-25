@@ -3,10 +3,11 @@
 For ordered two-slot markers, the retry-selected recovery now supplies both
 the retained client submission ledger and a canonical replay for fresh point
 and range reads at any supported snapshot of the installed table. The proof
-uses the same recovered WAL prefix for both conclusions. It takes the
-segmented recovery and the ready-session phase as premises. The native
-descriptor chronology and its handoff to that ready session remain to be
-connected. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
+uses the same recovered WAL prefix for both conclusions. Given the
+segmented recovery and a successful shared reopen report, the existing
+installer derives the ready session, lock ownership and a fresh session
+identity. The native descriptor chronology still needs to supply that
+reopen report and the physical WAL image behind the segmented recovery. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
 
 A single write or batch stopped during its first append now connects to the captured healthy marked open. The submitted interface reaches the exact append path, payload, poisoned phase and file cut. The reported process exit or power loss and subsequent retries preserve the earlier marker. It selects the same checkpoint and acknowledged history before the held open uses the reported reads. With no later names, both an aligned keeper and a longer keeper yield the exact returned session. The longer case uses the reported replacement. One replay explains the old responses and guarded reads after reopening. The proof uses a reported vacant lock at the final attempt and the native callback reports of the selected finish. [First append to returned table](../lean/Alvoki/Storage/Disk/PendingFirstAppendReopen.lean)
 
