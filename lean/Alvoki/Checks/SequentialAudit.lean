@@ -665,6 +665,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.executeVersioned_atManifestRename
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.atManifestRename
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.plannedManifestBytes
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.preparedManifestWatermark
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.selectedManifestWatermark
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestRenamePrefix.returns
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCalls.syncDirectorySelected
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestRenamePrefix.runNamesSettled
