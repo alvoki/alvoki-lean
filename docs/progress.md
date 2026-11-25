@@ -1064,6 +1064,12 @@ the exact reached cache. The sync result identifies the descriptor
 whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
+The full sequential suite passed at `265f4e8b`, including the
+axiom audit, differential checks, native disk and process-death tests,
+and aligned and repaired replay smoke runs. The following proof change
+uses the shared fsync observation on the exact marker descriptor to
+derive the successful persistence effect for client recovery.
+
 The held client recovery proof now takes the marker sync's exact
 successful callback return and its directory observation. Lean derives
 that the observed directory is the settled marker image from the sync

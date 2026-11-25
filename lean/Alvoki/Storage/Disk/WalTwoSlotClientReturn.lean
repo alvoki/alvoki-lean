@@ -2354,8 +2354,9 @@ theorem installsAfterAcquiredRecovery_replays
     {markerImage settledMarker : WalInodeImage}
     (markerInode : file.calls.inventory.inode file.calls.slot.description = markerImage.active)
     (markerBytes : payload = markerImage.visible markerImage.active)
-    (effect : Storage.SyncHandleRouting.FsyncResult markerImage
-      (markerImage.completeFileSync markerImage.active) true (.ok () settledMarker))
+    (markerSync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      (⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩ : KeeperDescriptorIdentity)
+      markerImage (fun inode files => files.completeFileSync inode) (.ok () settledMarker))
     (sameBinding : ∀ inode ∈ markerImage.crashBindings, inode = markerImage.active)
     (choices : List (DirectoryPublication.Bindings × Option ByteArray))
     (enumerated : choices.map Prod.fst = retry.image.directory.crashImages)
@@ -2563,6 +2564,14 @@ theorem installsAfterAcquiredRecovery_replays
     (split.symm ▸ orderedLayout) coveredLength).symm.trans (by simpa only [split] using replay)
   obtain ⟨model, playedModel, refined⟩ := replay_refines baseRefines played
   have represented := sameHistory ▸ (split ▸ baseHistory.append playedModel)
+  have effect : Storage.SyncHandleRouting.FsyncResult markerImage
+      (markerImage.completeFileSync markerImage.active) true (.ok () settledMarker) := by
+    have observed := markerSync.effect
+    have target : markerSync.effectInode = markerImage.active := markerSync.sameInode.trans markerInode
+    rw [target] at observed
+    generalize markerSync.effective = effective at observed
+    cases observed
+    exact .completed
   have projected := stabilizesAfterKeeperRead report keeper markerLive (sameInode.trans markerInode)
     effect sameBinding (markerBytes ▸ decoded) (by rw [observed]; rfl) choices enumerated presence physical
   have recovery : reopenWith (prepare directory selection)
