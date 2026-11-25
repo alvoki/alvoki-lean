@@ -260,6 +260,7 @@ import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkPowerLoss
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkReopen
+import Alvoki.Storage.Disk.NativeCoveredWalDirectoryStop
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkErrorReopen
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
@@ -1655,6 +1656,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsCustody
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsLock
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.stops
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionInterruption.runsCompleted
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionInterruption.stopsFromReady
+#check_axioms Alvoki.Storage.DiskSession.WalUnlinkInvariant.afterDirectoryEffect
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalDirectoryStop.stops
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalDirectoryStop.sameCensus
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalDirectoryStop.retainsCustody
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalDirectoryStop.settled
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalDirectoryStop.selections
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtCoveredWalDirectory
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.framesWal
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.member
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.intact

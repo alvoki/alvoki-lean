@@ -4,9 +4,78 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
 
-private abbrev UnlinkFiles := DescriptorInventory × WalSealedUnlinkImage
-private abbrev CollectionState := Phase Installed × LockedFileState (CensusDirectoryCache × UnlinkFiles)
-private abbrev CollectionM := ExceptT IO.Error (EStateM FilePath CollectionState)
+namespace WalCollectionInterruption
+
+abbrev UnlinkFiles := DescriptorInventory × WalSealedUnlinkImage
+abbrev CollectionState := Phase Installed × LockedFileState (CensusDirectoryCache × UnlinkFiles)
+abbrev CollectionM := ExceptT IO.Error (EStateM FilePath CollectionState)
+
+def atFiles (state : NativeReadyState) (inventory : DescriptorInventory) (image : WalSealedUnlinkImage) : CollectionState :=
+  (.poisoned, ⟨(state.cache, inventory, image), state.files.owners⟩)
+
+private def setPhase (phase : Phase Installed) : CollectionM Unit :=
+  ExceptT.mk fun (_, files) => .ok (.ok ()) (phase, files)
+
+def unlink (remove : FilePath → EStateM FilePath UnlinkFiles (Except IO.Error Unit)) (path : FilePath) :
+    CollectionM (Except IO.Error Unit) :=
+  ExceptT.mk fun (phase, files) =>
+    match remove path files.image.2 with
+    | .ok value reached => .ok (.ok value) (phase, ⟨(files.image.1, reached), files.owners⟩)
+    | .error atPath reached => .error atPath (phase, ⟨(files.image.1, reached), files.owners⟩)
+
+def perform (directory : DiskDirectory) (remove : FilePath → EStateM FilePath UnlinkFiles (Except IO.Error Unit))
+    (barrier : FilePath → CollectionM Unit) : RunCollection.Step Nat → CollectionM Unit :=
+  RunCollection.performPaths (unlink remove) barrier throw (fun first => directory.file (.walSegment first)) directory.path
+
+/-- Lift the exact ordered sequence of returned unlinks into the outer
+interruption model without changing their reached census or visibility. -/
+theorem runsCompleted (state : NativeReadyState) (inventory : DescriptorInventory)
+    (rawRemove : FilePath → EStateM FilePath UnlinkFiles (Except IO.Error Unit)) (barrier : FilePath → CollectionM Unit)
+    {removeFile : FilePath → EStateM IO.Error WalSealedUnlinkImage (Except IO.Error Unit)}
+    (returned : ∀ path before result after, removeFile path before = .ok result after →
+      rawRemove path (inventory, before) = .ok result (inventory, after))
+    {root : DeviceInode} {offsets pending removed : List Nat} {view afterView : DirectoryReadNamespace}
+    {before after : WalSealedUnlinkImage} {failure : Option IO.Error}
+    (completed : WalUnlinkPrefix state.session.directory root removeFile offsets view
+      before pending failure afterView after removed) (success : failure = none) :
+    (RunCollection.run offsets (perform state.session.directory rawRemove barrier)).run (atFiles state inventory before) =
+      (RunCollection.run pending (perform state.session.directory rawRemove barrier)).run (atFiles state inventory after) := by
+  induction completed with
+  | pause => rfl
+  | next call _ accepted _ ih =>
+    have raw := returned _ _ _ _ call
+    simpa only [RunCollection.run, RunCollection.steps, List.map_cons, List.cons_append, List.forM_eq_forM,
+      List.forM_cons, perform, RunCollection.performPaths, unlink, atFiles, Bind.bind, ExceptT.bind,
+      ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure, raw,
+      accepted] using ih success
+  | failed | failedWithoutEffect => contradiction
+
+/-- The checked plan and publication phase of the actual collector,
+viewed with a separate channel for a callback that has not returned. -/
+def run (state : NativeReadyState) (calls : WalCollectionReads) (inventory : DescriptorInventory)
+    (action : RunCollection.Step Nat → CollectionM Unit) : EStateM.Result FilePath CollectionState (Except IO.Error Unit) :=
+  (do
+    let installed ← state.session.phase.installed
+    let selected ← (ExceptT.mk (fun (phase, files) => .ok (calls.plan state.session.directory installed)
+      (phase, ⟨(files.image.1, inventory, files.image.2.2), files.owners⟩)) : CollectionM (List Nat))
+    publishPrepared setPhase (RunCollection.run selected action) (setPhase (.ready installed))).run
+    (state.session.phase, ⟨(state.cache, state.census, .start state.writer.wal), state.files.owners⟩)
+
+theorem stopsFromReady (state : NativeReadyState) (calls : WalCollectionReads) (inventory : DescriptorInventory)
+    (action : RunCollection.Step Nat → CollectionM Unit) (valid : state.Valid)
+    (planned : calls.plan state.session.directory state.writer.installed = .ok state.writer.wal.collectionOffsets)
+    {path : FilePath} {after : CollectionState}
+    (stopped : (RunCollection.run state.writer.wal.collectionOffsets action).run
+      (atFiles state inventory (.start state.writer.wal)) = .error path after) :
+    run state calls inventory action = .error path after := by
+  change RunCollection.run state.writer.wal.collectionOffsets action (atFiles state inventory (.start state.writer.wal)) = _ at stopped
+  unfold atFiles at stopped
+  simp [run, valid.phase, Phase.installed, planned, publishPrepared, setPhase, Bind.bind, ExceptT.bind,
+    ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure, stopped]
+
+end WalCollectionInterruption
+
+open WalCollectionInterruption (UnlinkFiles CollectionState CollectionM)
 
 /-- An issued covered WAL unlink stops before returning after any
 completed prefix. Earlier returns and the stop use one raw callback. -/
@@ -65,10 +134,11 @@ theorem framesWal {directory : DiskDirectory} {root : DeviceInode} {removeFile}
     {failure : Option IO.Error}
     (reported : WalUnlinkPrefix directory root removeFile offsets view before pending failure afterView after removed) :
     after.visible.directory = before.visible.directory ∧ after.visible.active = before.visible.active := by
+  refine ⟨reported.keepsDirectory, ?_⟩
   induction reported with
-  | pause | failedWithoutEffect => exact ⟨rfl, rfl⟩
-  | next _ effect _ _ ih => exact ⟨ih.1.trans effect.metadata, ih.2.trans effect.keeper⟩
-  | failed _ effect _ => exact ⟨effect.metadata, effect.keeper⟩
+  | pause | failedWithoutEffect => rfl
+  | next _ effect _ _ ih => exact ih.trans effect.keeper
+  | failed _ effect _ => exact effect.keeper
 
 end WalUnlinkPrefix
 
@@ -82,63 +152,24 @@ def path (stop : NativeCoveredWalUnlinkStop state) : FilePath :=
 def census (stop : NativeCoveredWalUnlinkStop state) : DescriptorInventory :=
   stop.inventory.listing.afterClose.afterDrops stop.drops
 
-private def setPhase (phase : Phase Installed) : CollectionM Unit :=
-  ExceptT.mk fun (_, files) => .ok (.ok ()) (phase, files)
-
-private def unlink (stop : NativeCoveredWalUnlinkStop state) (path : FilePath) : CollectionM (Except IO.Error Unit) :=
-  ExceptT.mk fun (phase, files) =>
-    match stop.remove path files.image.2 with
-    | .ok value reached => .ok (.ok value) (phase, ⟨(files.image.1, reached), files.owners⟩)
-    | .error atPath reached => .error atPath (phase, ⟨(files.image.1, reached), files.owners⟩)
-
-private def perform (stop : NativeCoveredWalUnlinkStop state) (barrier : FilePath → CollectionM Unit) :=
-  RunCollection.performPaths stop.unlink barrier throw
-    (fun first => state.session.directory.file (.walSegment first)) state.session.directory.path
-
-private def atFiles (stop : NativeCoveredWalUnlinkStop state) (image : WalSealedUnlinkImage) : CollectionState :=
-  (.poisoned, ⟨(state.cache, stop.inventory.listing.afterClose, image), state.files.owners⟩)
-
-private theorem runsCompleted (stop : NativeCoveredWalUnlinkStop state) (barrier : FilePath → CollectionM Unit)
-    {offsets pending removed : List Nat} {view afterView : DirectoryReadNamespace} {before after : WalSealedUnlinkImage}
-    {failure : Option IO.Error}
-    (completed : WalUnlinkPrefix state.session.directory stop.inventory.lifetime.root stop.completedRemove offsets view
-      before pending failure afterView after removed) (success : failure = none) :
-    (RunCollection.run offsets (stop.perform barrier)).run (stop.atFiles before) =
-      (RunCollection.run pending (stop.perform barrier)).run (stop.atFiles after) := by
-  induction completed with
-  | pause => rfl
-  | next call _ accepted _ ih =>
-    have returned := stop.returned _ _ _ _ call
-    simpa only [RunCollection.run, RunCollection.steps, List.map_cons, List.cons_append, List.forM_eq_forM,
-      List.forM_cons, perform, RunCollection.performPaths, unlink, atFiles, Bind.bind, ExceptT.bind,
-      ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure, returned,
-      accepted] using ih success
-  | failed | failedWithoutEffect => contradiction
-
-/-- Use the production collector's checked plan, publication phase and
-shared dispatcher with an outer no-return channel for raw callbacks. -/
 def run (stop : NativeCoveredWalUnlinkStop state) (barrier : FilePath → CollectionM Unit) :
     EStateM.Result FilePath CollectionState (Except IO.Error Unit) :=
-  (do
-    let installed ← state.session.phase.installed
-    let selected ← (ExceptT.mk (fun (phase, files) => .ok (stop.calls.plan state.session.directory installed)
-      (phase, ⟨(files.image.1, stop.inventory.listing.afterClose, files.image.2.2), files.owners⟩)) : CollectionM (List Nat))
-    publishPrepared setPhase (RunCollection.run selected (stop.perform barrier)) (setPhase (.ready installed))).run
-    (state.session.phase, ⟨(state.cache, state.census, .start state.writer.wal), state.files.owners⟩)
+  WalCollectionInterruption.run state stop.calls stop.inventory.listing.afterClose
+    (WalCollectionInterruption.perform state.session.directory stop.remove barrier)
 
 theorem stops (stop : NativeCoveredWalUnlinkStop state) (valid : state.Valid) (barrier : FilePath → CollectionM Unit) :
     stop.run barrier = .error stop.path (.poisoned, ⟨(state.cache, stop.census, stop.after), state.files.owners⟩) := by
+  let inventory := stop.inventory.listing.afterClose
+  let action := WalCollectionInterruption.perform state.session.directory stop.remove barrier
   have planned := valid.retained.completeObservedWalPlan stop.calls stop.inventory stop.manifest stop.marker
-  have stopped : (RunCollection.run (stop.first :: stop.rest) (stop.perform barrier)).run (stop.atFiles stop.issue) =
-      .error stop.path (.poisoned, ⟨(state.cache, stop.census, stop.after), state.files.owners⟩) := by
-    simp [RunCollection.run, RunCollection.steps, perform, RunCollection.performPaths, unlink, atFiles, List.forM_eq_forM,
-      List.forM_cons, Bind.bind, ExceptT.bind, ExceptT.mk, ExceptT.run, EStateM.bind,
-      stop.stopped, path, census]
-  have physical := (stop.runsCompleted barrier stop.completed rfl).trans stopped
-  change RunCollection.run state.writer.wal.collectionOffsets (stop.perform barrier) (stop.atFiles (.start state.writer.wal)) = _ at physical
-  unfold atFiles at physical
-  simp [run, valid.phase, Phase.installed, planned, publishPrepared, setPhase, Bind.bind, ExceptT.bind,
-    ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure, physical]
+  have stopped : (RunCollection.run (stop.first :: stop.rest) action).run
+      (WalCollectionInterruption.atFiles state inventory stop.issue) =
+        .error stop.path (.poisoned, ⟨(state.cache, stop.census, stop.after), state.files.owners⟩) := by
+    simp [action, inventory, RunCollection.run, RunCollection.steps, WalCollectionInterruption.perform,
+      RunCollection.performPaths, WalCollectionInterruption.unlink, WalCollectionInterruption.atFiles, List.forM_eq_forM,
+      List.forM_cons, Bind.bind, ExceptT.bind, ExceptT.mk, ExceptT.run, EStateM.bind, stop.stopped, path, census]
+  exact WalCollectionInterruption.stopsFromReady state stop.calls inventory action valid planned
+    ((WalCollectionInterruption.runsCompleted state inventory stop.remove barrier stop.returned stop.completed rfl).trans stopped)
 
 theorem member (stop : NativeCoveredWalUnlinkStop state) : stop.first ∈ state.writer.wal.collectionOffsets := by
   obtain ⟨done, order, _⟩ := stop.completed.completedOrder rfl

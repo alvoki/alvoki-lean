@@ -137,18 +137,17 @@ theorem syncReturns (report : WalCollectionDirectoryFsync directory root entryVi
 
 end WalCollectionDirectoryFsync
 
-/-- The final barrier composes with the existing sealed-unlink trace.
-Both outcomes keep the ordered bindings. An effective fsync narrows
-the crash namespace to the exact visible names. -/
-theorem WalUnlinkInvariant.afterDirectoryFsync {initial : WalSegmentImage} {root : DeviceInode}
-    {view : DirectoryReadNamespace} {before projected after : WalSealedUnlinkImage}
-    {outcome : DelayedDirectorySyncOutcome}
+/-- The directory effect is shared by returned and interrupted calls.
+It preserves visible bindings and can settle the crash namespace. -/
+theorem WalUnlinkInvariant.afterDirectoryEffect {initial : WalSegmentImage} {root : DeviceInode}
+    {view : DirectoryReadNamespace} {before projected : WalSealedUnlinkImage}
     (prior : WalUnlinkInvariant initial root view before projected)
-    (effect : WalCollectionDirectoryEffect before after outcome) :
-    WalUnlinkInvariant initial root view after (if outcome.effective then projected.syncDirectory else projected) := by
-  rw [effect.exactImage]
-  by_cases effective : outcome.effective = true
-  · simp only [effective, ite_true]
+    (effective : Bool) :
+    WalUnlinkInvariant initial root view (if effective then before.syncDirectory else before)
+      (if effective then projected.syncDirectory else projected) := by
+  cases effective
+  · exact prior
+  · simp only [ite_true]
     refine ⟨.sync prior.trace, ?_, ?_, ?_⟩
     · exact congrArg (fun image => image.applyCollectionStep .syncDirectory) prior.visible
     · intro sealed member
@@ -157,8 +156,14 @@ theorem WalUnlinkInvariant.afterDirectoryFsync {initial : WalSegmentImage} {root
       rw [← prior.visible]
       exact member
     · exact prior.sealedNames
-  · simp only [effective]
-    exact prior
+
+theorem WalUnlinkInvariant.afterDirectoryFsync {initial : WalSegmentImage} {root : DeviceInode}
+    {view : DirectoryReadNamespace} {before projected after : WalSealedUnlinkImage}
+    {outcome : DelayedDirectorySyncOutcome}
+    (prior : WalUnlinkInvariant initial root view before projected)
+    (effect : WalCollectionDirectoryEffect before after outcome) :
+    WalUnlinkInvariant initial root view after (if outcome.effective then projected.syncDirectory else projected) :=
+  effect.exactImage.symm ▸ prior.afterDirectoryEffect outcome.effective
 
 /-- Before the barrier, every reported unlink frames the full metadata
 image, including pending staged entries. -/
