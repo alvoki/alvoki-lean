@@ -52,6 +52,7 @@ import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
 import Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
 import Alvoki.Storage.Disk.WalSealedInodeLifetime
+import Alvoki.Storage.Disk.WalHiddenSealRetry
 import Alvoki.Storage.Disk.RetainedCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.ReadRecoveryPrefix
@@ -1170,6 +1171,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WalSealedInodeLinks.noLinks
 #check_axioms Alvoki.Storage.DiskSession.WalSealedInodeReferences.noSlots
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.selectedSealInodeAfterBarrier
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.reclaimsOnSuccess
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAndCollectHiddenSeal
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionPowerLoss.reopensAdmitted
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.collectObsoleteRunsPowerLoss
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.collectObsoleteRuns

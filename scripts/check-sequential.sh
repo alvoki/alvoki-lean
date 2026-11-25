@@ -154,6 +154,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionPlan
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionMetadata
 lake env leanchecker Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
 lake env leanchecker Alvoki.Storage.Disk.WalSealedInodeLifetime
+lake env leanchecker Alvoki.Storage.Disk.WalHiddenSealRetry
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRetryTrace
 lake env leanchecker Alvoki.Storage.Disk.BoundedOpenReadFailure
 lake env leanchecker Alvoki.Storage.Disk.BoundedReopenFailure

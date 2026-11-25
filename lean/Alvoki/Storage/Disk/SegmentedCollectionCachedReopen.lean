@@ -79,7 +79,8 @@ theorem installsCachedWithNamespace (report : SegmentedCollectionReopenReport di
       after.wal.readDescriptors before.target.range.watermark = before.wal.readDescriptors before.target.range.watermark ∧
       after.target = before.target ∧ after.history = before.history ∧
       after.published.durable = before.published.durable ∧ after.checkpoint = before.checkpoint ∧
-      after.installed.generation = before.installed.generation ∧ after.RetainedReady directory descriptor := by
+      after.installed.generation = before.installed.generation ∧ after.RetainedReady directory descriptor ∧
+      final.image.2 = WalSealedUnlinkImage.start after.wal ∧ session.descriptor = descriptor := by
   have reached := report.attempts.continues (report.failed.keepsNamespace ready).1
   have retry := (reached.projects ready.layout).1
   have pair := (retry.keepsSettledPair ready.walDirectorySettled).1.trans ready.walPair
@@ -165,7 +166,7 @@ theorem installsCachedWithNamespace (report : SegmentedCollectionReopenReport di
   have sameCheckpoint : after.checkpoint = before.checkpoint := by rw [exactWriter]; rfl
   have generation := next.resumed.generation.trans (sameCheckpoint.symm ▸ ready.resumed.generation.symm)
   refine ⟨reached.sync, after, openedSession, finalWithNamespace, installed, installedCache, ?_, ?_, ?_, rfl, ?_,
-    keptReads, ?_, installed.history, ?_, sameCheckpoint, generation, next⟩ <;>
+    keptReads, ?_, installed.history, ?_, sameCheckpoint, generation, next, ?_, observed.descriptorEq⟩ <;>
     rw [exactWriter] <;> first | exact phase | rfl
 
 end SegmentedCollectionReopenReport

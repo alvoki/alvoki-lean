@@ -414,4 +414,6 @@ A returned manifest rename error now stops the checkpoint schedule before the fi
 
 A checkpoint run's guarded write now has an exact rejected prefix. A reported no-follow error other than ENOENT or an unsuitable present entry stops before the write-open, file sync and publication. The writer is poisoned with the cache and files left by the preceding pairs. The released image still selects the old physical checkpoint and the admitted retry replays the same WAL into the returned session. [Run guard failure](../lean/Alvoki/Storage/Disk/CheckpointRunGuardFailure.lean)
 
+A covered WAL seal hidden by a failed collection is durably absent after the first directory barrier in a healthy bounded reopen. The next successful collection starts from that exact returned WAL namespace. It omits the hidden seal and leaves its name durably absent. The same writer session retains its checkpoint and acknowledged history, and the client replay covers its supported snapshot reads. [WAL seal absence through retry](../lean/Alvoki/Storage/Disk/WalHiddenSealRetry.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

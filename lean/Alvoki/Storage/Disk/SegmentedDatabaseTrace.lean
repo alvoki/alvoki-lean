@@ -360,7 +360,7 @@ theorem SegmentedDatabaseTrace.collectionReopenCachedWithNamespace
       final.image.2.crashSealed = [after.wal.sealed] ∧
       after.history = before.history ∧ after.checkpoint = before.checkpoint := by
   have ready := (prior.preservesRetained initialReady).1
-  obtain ⟨_, after, session, final, installed, ran, phase, files, owners, _, seals, _, _, history, _, checkpoint, _, _⟩ :=
+  obtain ⟨_, after, session, final, installed, ran, phase, files, owners, _, seals, _, _, history, _, checkpoint, _, _, _, _⟩ :=
     report.installsCachedWithNamespace observed ready sizes cached
   exact ⟨after, session, final, .collectionReopen rfl prior report observed installed,
     ran, phase, files, owners, seals, history, checkpoint⟩
