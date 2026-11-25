@@ -1,5 +1,7 @@
 # Current handoff
 
+A bounded marker read failure after an absent manifest now reaches the caller-visible open result. The same selected marker inode supplies the reported positive short read and failing remainder. The raw finalizers retire the marker handle before disposing the cache and unlocking and dropping the original lock. Linux traces checked a real one-byte result followed by an injected EIO on the 24-byte remainder and both unlock outcomes. No WAL payload or repair ran. A normal retry on the unchanged files recovered sequence 1 and key 7 at value 83. [Finalized marker chunk error](../lean/Alvoki/Storage/Disk/NativeRawMarkerChunkError.lean)
+
 A covered-WAL collection can now return the observed extent error in the finite trace. The actual planner still runs on the original phase cell. The error returns before either phase store, any unlink or directory sync. The table, projected phase heap, issued pins and earlier client ledger remain available for the next operation. [Covered WAL collection on an opened table](../lean/Alvoki/Storage/Disk/NativeOpenedWalCollection.lean)
 
 The completion checklist now follows the existing finite execution induction. Remaining work starts at production dispatch and ordered primitive effects, then follows the uncovered calls and failure paths to the exact next table or terminal state. Recovery progress and physical space have separate conditions. [Current proof obligations](proof-roadmap.md#completion-checklist-for-native-key-value-refinement)

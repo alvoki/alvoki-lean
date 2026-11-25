@@ -66,6 +66,23 @@ theorem MarkedTemporaryReadCalls.readOptionalMissing (calls : MarkedTemporaryRea
     calls.readOptional directory path before = .ok none before := by
   simp [readOptional, readOptionalDatabaseFileWithMetadata, stat, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
 
+/-- Project either result of the bounded read on the admitted marker. -/
+theorem MarkedTemporaryReadCalls.readOptionalMarker_effects (calls : MarkedTemporaryReadCalls heap)
+    (directory : DiskDirectory) {before : heap} {metadata : IO.FS.Metadata}
+    (stat : calls.stat (directory.file .walBoundary) before = .ok (.ok metadata) before)
+    (regular : metadata.type = .file) :
+    calls.readOptional directory (directory.file .walBoundary) before =
+      ((calls.readWith (directory.file .walBoundary) fun file =>
+        readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
+          WAL.Boundary.acquisitionLimit ByteArray.empty) >>= fun bytes => pure (some bytes)) before := by
+  have schedule : calls.readMetadata directory (directory.file .walBoundary) metadata =
+      fun file => readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
+        WAL.Boundary.acquisitionLimit ByteArray.empty := by
+    funext file
+    simp [MarkedTemporaryReadCalls.readMetadata]
+  simp [readOptional, schedule, readOptionalDatabaseFileWithMetadata, stat, regular,
+    show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
 theorem MarkedTemporaryReadCalls.readOptionalMarker (calls : MarkedTemporaryReadCalls heap)
     (directory : DiskDirectory) {before after : heap} {metadata : IO.FS.Metadata} {bytes : ByteArray}
     (stat : calls.stat (directory.file .walBoundary) before = .ok (.ok metadata) before)
@@ -74,13 +91,8 @@ theorem MarkedTemporaryReadCalls.readOptionalMarker (calls : MarkedTemporaryRead
       (fun file => readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
         WAL.Boundary.acquisitionLimit ByteArray.empty) before = .ok bytes after) :
     calls.readOptional directory (directory.file .walBoundary) before = .ok (some bytes) after := by
-  have schedule : calls.readMetadata directory (directory.file .walBoundary) metadata =
-      fun file => readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
-        WAL.Boundary.acquisitionLimit ByteArray.empty := by
-    funext file
-    simp [MarkedTemporaryReadCalls.readMetadata]
-  simp [readOptional, schedule, readOptionalDatabaseFileWithMetadata, stat, regular,
-    read, show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  rw [calls.readOptionalMarker_effects directory stat regular]
+  simp only [Bind.bind, EStateM.bind, read, Pure.pure, EStateM.pure]
 
 def MarkedTemporaryReadCalls.runSize (calls : MarkedTemporaryReadCalls heap) (path : FilePath) :
     EStateM IO.Error heap Nat := do

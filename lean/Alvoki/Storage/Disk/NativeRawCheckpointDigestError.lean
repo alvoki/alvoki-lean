@@ -204,12 +204,9 @@ variable {admission : CensusOpenAdmissionReports input directory (view.descripto
   {seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock}
   {release : IO.FS.Handle → heap → heap}
 
-/-- A read-only checkpoint rejection uses the ordinary cache disposal,
-unlock, and final close of the exact acquired slot. -/
-noncomputable def RawCheckpointRunPrefix.finalizedAttempt {stop : IntegrityCheckpoint → Nat} {cause : IO.Error} {reached : heap}
-    (seen : RawCheckpointRunPrefix (admitted := admitted) seed fileCalls stop)
-    (rejected : readIntegrityCheckpointSized directory (fileCalls.readOptional directory (directory.file .manifest))
-      fileCalls.runSize fileCalls.runPrefix seed.afterPending = .error cause reached)
+/-- A read-only marked worker's return uses the ordinary cache
+disposal, unlock, and final drop of the exact acquired lock slot. -/
+noncomputable def RawFinalizedOpenAttempt.ofMarkedRejection {cause : IO.Error} {reached : heap}
     (frame : MarkedReadCacheFrame seed seed.afterPending reached)
     (inodes : (view.descriptors reached).inode = admission.reached.inode)
     (disposal : RawOpenCacheDisposal (admitted := admitted) seed reached)
@@ -218,6 +215,8 @@ noncomputable def RawCheckpointRunPrefix.finalizedAttempt {stop : IntegrityCheck
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit) (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
     (install : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap DiskTable)
+    (rejected : ∀ cache, calls.recoverMarkedWithCacheRefs fileCalls directoryCalls callbacks seed.directoryRef
+      seed.activeRef seed.pendingRef remove write rename bootstrap directory cache seed.afterPending = .error cause reached)
     (finalized : RawOpenErrorLockFinalization view directory release admitted.lock admission.owner disposal.reached) :
     RawFinalizedOpenAttempt view directory calls init release input entry where
   admission := admission
@@ -233,9 +232,28 @@ noncomputable def RawCheckpointRunPrefix.finalizedAttempt {stop : IntegrityCheck
     obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, files, _⟩ := seed.installs
     refine disposal.returns _ _ ?_ (frame.files.trans files)
     intro cache
-    simp only [Bind.bind, EStateM.bind, seen.stopsMarkedWorker rejected directoryCalls callbacks remove write rename bootstrap]
+    simp only [Bind.bind, EStateM.bind, rejected cache]
   workerInodes := inodes
   finalized := finalized
+
+/-- A read-only checkpoint rejection uses the ordinary cache disposal,
+unlock, and final close of the exact acquired slot. -/
+noncomputable def RawCheckpointRunPrefix.finalizedAttempt {stop : IntegrityCheckpoint → Nat} {cause : IO.Error} {reached : heap}
+    (seen : RawCheckpointRunPrefix (admitted := admitted) seed fileCalls stop)
+    (rejected : readIntegrityCheckpointSized directory (fileCalls.readOptional directory (directory.file .manifest))
+      fileCalls.runSize fileCalls.runPrefix seed.afterPending = .error cause reached)
+    (frame : MarkedReadCacheFrame seed seed.afterPending reached)
+    (inodes : (view.descriptors reached).inode = admission.reached.inode)
+    (disposal : RawOpenCacheDisposal (admitted := admitted) seed reached)
+    (directoryCalls : MarkedDirectoryReadCalls heap stream) (callbacks : AlignedKeeperCacheCallbacks heap)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit) (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (install : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap DiskTable)
+    (finalized : RawOpenErrorLockFinalization view directory release admitted.lock admission.owner disposal.reached) :
+    RawFinalizedOpenAttempt view directory calls init release input entry :=
+  RawFinalizedOpenAttempt.ofMarkedRejection frame inodes disposal directoryCalls callbacks remove write rename bootstrap install
+    (seen.stopsMarkedWorker rejected directoryCalls callbacks remove write rename bootstrap) finalized
 
 /-- Finalize a digest rejection of the original selected checkpoint. -/
 noncomputable def RawCheckpointDigestRead.finalizedAttempt
