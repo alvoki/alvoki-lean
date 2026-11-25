@@ -2167,3 +2167,5 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.decode_initial
 #check_axioms Alvoki.WAL.TwoSlot.projectBinding_initial
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWithMarker_completesAt
+#check_axioms Alvoki.Storage.TwoSlotDiskTable.write_eq_adaptOutcome
+#check_axioms Alvoki.Storage.TwoSlotDiskTable.writeBatch_eq_adaptOutcome

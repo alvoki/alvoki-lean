@@ -101,6 +101,7 @@ Under the slot survivor contract, recovery chooses the old or new frontier
 for an uncertain write, chooses the new frontier after acknowledgment, and
 rejects an unavailable WAL at the selected frontier.
 
+The plain and typed write APIs share the same publication and failure effects.
 The callback model keeps the exact reached file state when publication
 poisons the session, and the old-or-whole selection feeds exact WAL bytes
 to replay. Reopen validates before its file barrier, then calls the shared

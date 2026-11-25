@@ -1291,6 +1291,23 @@ def writeBatchWithOutcome (db : TwoSlotDiskTable) (rows : List (UInt64 × Option
 def writeBatch (db : TwoSlotDiskTable) (rows : List (UInt64 × Option UInt64)) : IO UInt64 :=
   db.writeBatchWith rows id id
 
+/-- Both public write APIs execute the same slot publication. The plain
+API erases the outcome tag while preserving the diagnostic. -/
+theorem write_eq_adaptOutcome (db : TwoSlotDiskTable) (key : UInt64) (value : Option UInt64) :
+    db.write key value = (db.writeWithOutcome key value).adapt DiskWriteError.cause := by
+  simp only [write, writeWithOutcome, writeWith, publish, DiskSession.withPreparedSingleWrite,
+    DiskSession.publishPreparedWrite, DiskSession.publishPrepared, adaptWriteBind, adaptWriteAdapt,
+    adaptWritePure, adaptWriteThrow, adaptWriteIf]
+  rfl
+
+/-- The plain batch API erases the outcome tag after the same native
+publication, including the empty batch case. -/
+theorem writeBatch_eq_adaptOutcome (db : TwoSlotDiskTable) (rows : List (UInt64 × Option UInt64)) :
+    db.writeBatch rows = (db.writeBatchWithOutcome rows).adapt DiskWriteError.cause := by
+  simp only [writeBatch, writeBatchWithOutcome, writeBatchWith, publish, DiskSession.publishPreparedWrite,
+    DiskSession.publishPrepared, adaptWriteBind, adaptWriteAdapt, adaptWritePure, adaptWriteThrow, adaptWriteIf]
+  rfl
+
 def acquire (db : TwoSlotDiskTable) : IO DiskSnapshotPin := db.table.acquire
 def acquireAt (db : TwoSlotDiskTable) := db.table.acquireAt
 def release (db : TwoSlotDiskTable) := db.table.release
