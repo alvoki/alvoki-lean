@@ -128,6 +128,8 @@ The healthy long-keeper route with an empty visible suffix now carries the same 
 
 A healthy aligned keeper with visible later WAL names now uses the same descriptor inventory from admitted reading through repair. The captured keeper stays pending through both directory barriers, with the ordered unlinks between them. The second directory barrier makes the suffix durably absent. The grouped keeper sync consumes the pending handle and uses the same live inode. The reported descriptor events end with a close of that same slot. Within that drop-only interval, the close leaves the lock and cached directory live in the returned session. The returned table replays the exact selected checkpoint runs and WAL. This completes the successful chronological marked-open cases under the reported primitive effects. [Aligned keeper after chronological pruning](../lean/Alvoki/Storage/Disk/CapturedPrunedAlignedInstallation.lean)
 
+The native read and quiet-recovery trace is a first finite execution invariant for a fixed acknowledged history. It permits any number of supported local snapshot reads and observed settled power losses with healthy aligned reopens. Each next event starts from the exact reached session and its earlier read ledger. The final table uses the same checkpoint and WAL and explains the exact accumulated responses. [Native read and recovery trace](../lean/Alvoki/Storage/Disk/NativeReadRecoveryTrace.lean)
+
 Prove a single invariant for every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and

@@ -214,6 +214,7 @@ import Alvoki.Storage.Disk.PendingFirstAppendReopen
 import Alvoki.Storage.Disk.NativeReadyReadPrefix
 import Alvoki.Storage.Disk.NativeReadyClose
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
+import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeReadyWrite
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
@@ -1384,6 +1385,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyRestartReads.readsKeeper
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyRestartReads.readsSeal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.restartsAfterPowerLoss
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.readAt
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.restart
+#check_axioms Alvoki.Storage.DiskSession.NativeReadRecoveryStep.frames
+#check_axioms Alvoki.Storage.DiskSession.NativeReadRecoveryTrace.frames
+#check_axioms Alvoki.Storage.DiskSession.NativeReadRecoveryTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.runBatchWrite_acknowledges
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.censusAfterClose
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.physicalCustody
