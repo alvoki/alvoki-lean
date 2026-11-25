@@ -41,6 +41,13 @@ def keeperChild (route : BootstrapZeroKeeperRoute listed) : DeviceInode :=
   | .fresh observed => observed.child.child
   | .reused observed => observed.statChild.child
 
+/-- Both routes use the capture's object identities through settlement. -/
+theorem keeperObjects (route : BootstrapZeroKeeperRoute listed) :
+    route.keeperView.modelObject = captured.view.modelObject := by
+  cases route with
+  | fresh observed => exact observed.sameObjects
+  | reused _ => rfl
+
 /-- Either route reaches the barrier with the same raw keeper, captured
 directory and lock identities used by its corresponding native reports. -/
 theorem settledCustody (route : BootstrapZeroKeeperRoute listed) :

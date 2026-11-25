@@ -209,6 +209,7 @@ import Alvoki.Storage.Disk.BootstrapMarkerSyncError
 import Alvoki.Storage.Disk.BootstrapMarkerRenameError
 import Alvoki.Storage.Disk.BootstrapMarkerDirectoryError
 import Alvoki.Storage.Disk.BootstrapMarkerFlushError
+import Alvoki.Storage.Disk.BootstrapMarkerOpenError
 import Alvoki.Storage.Disk.ObservedBootstrapFailure
 import Alvoki.Storage.Disk.ObservedBootstrapRetry
 import Alvoki.Storage.Disk.MarkerlessBootstrapRetryInstallation
@@ -1519,6 +1520,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCustody.publishedImage
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCustody.installs
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.settledCustody
+#check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.keeperObjects
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.settledVisible
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.heldAtStage
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.preservesKeeper
@@ -1565,6 +1567,17 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerFlushError.physicalKeeper
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerFlushError.worker
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerFlushError.returns
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerExclusiveEffect.keepsReferences
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerExclusiveEffect.keepsKeeper
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerExclusiveEffect.rawSlot
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerExclusiveEffect.image
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerExclusiveEffect.scratch
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerOpenError.stageError
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerOpenError.physicalPrefix
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerOpenError.physicalKeeper
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerOpenError.worker
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerOpenError.returns
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerOpenError.retryMarkerless
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.entries
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.canonicalLock
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.retained
@@ -1867,6 +1880,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.writeFreshStagedHandle_schedule
 #check_axioms Alvoki.Storage.SyncHandleRouting.stageFreshWithCache_error
 #check_axioms Alvoki.Storage.SyncHandleRouting.withDataErrorDrop_error
+#check_axioms Alvoki.Storage.SyncHandleRouting.writeFreshStagedWith_openError
 #check_axioms Alvoki.Storage.SyncHandleRouting.stageFreshWithCache_owned
 #check_axioms Alvoki.Storage.SyncHandleRouting.stageFreshWithCache_sync
 #check_axioms Alvoki.Storage.SyncHandleRouting.sync_resolutionError
