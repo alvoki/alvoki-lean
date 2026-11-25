@@ -1020,6 +1020,12 @@ the exact reached cache. The sync result identifies the descriptor
 whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
+The client recovery theorem now returns both the replay certificate
+and the provenance of every surviving keeper payload when the marker
+image changed. The provenance uses the same interrupted writer report
+as the replay certificate and identifies the append that produced the
+bytes. It assumes the observed WAL persistence and marker-only effects.
+
 When the reached marker image differs from the initial one, the
 first reboot's surviving keeper payload equals the exact active bytes
 after the append. This uses the successful WAL barrier's persistence

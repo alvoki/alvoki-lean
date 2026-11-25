@@ -2297,6 +2297,16 @@ theorem installsAfterAcquiredRecovery_replays
     (advanced : advance current (WAL.encode (prior.history ++ batch)).size = .ok next)
     {interruptedMarker : WalInodeImage}
     (writeCut : InterruptedBatchMarkerPublication directory prior batch next (interrupted, interruptedMarker))
+    (writeKeepsKeeper : ∀ before (result : EStateM.Result writeCut.Stop
+        (FileImage × WalInodeImage) (Except IO.Error Unit)),
+      (writeCut.writeSlot writeCut.markerHandle (next.slot * stride).toUInt64 next.encode).run before = result →
+      (match result with | .ok _ after | .error _ after => after.1.keeper) = before.1.keeper)
+    (syncKeepsKeeper : ∀ before,
+      (writeCut.syncSlot writeCut.markerHandle).run before = .error writeCut.stopped (interrupted, interruptedMarker) →
+      interrupted.keeper = before.1.keeper)
+    (walPersists : ∀ {appended durable},
+      (writeCut.syncWal (directory.file (.walSegment prior.installed.activeFirst))).run appended =
+        .ok (.ok ()) durable → durable.1.keeper = appended.1.syncKeeper.keeper)
     (accepted : decode (writeCut.initialMarker.visible writeCut.initialMarker.active) = .ok current)
     (completedCounts : List Nat) (inFlightCount : Nat)
     (transfersFit : completedCounts.sum + inFlightCount ≤ 40)
@@ -2339,6 +2349,11 @@ theorem installsAfterAcquiredRecovery_replays
       InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take layout.range.through)
         opened.installed session ∧ after.2.image.directory.active = layout.target.pair ∧
       after.2.image.kept = interrupted.kept ∧
+      (interruptedMarker ≠ writeCut.initialMarker →
+        ∀ bytes ∈ interrupted.keeper.crashImages,
+          ∃ appended,
+            (writeCut.append (directory.file (.walSegment prior.installed.activeFirst)) (WAL.encode batch)).run
+              (prior.files, writeCut.initialMarker) = .ok (.ok ()) appended ∧ bytes = appended.1.keeper.active) ∧
       runBatchWriteWithInterruption directory writeCut.rows writeCut.lookup
         (fun _ _ _ => publish
           (writeCut.append (directory.file (.walSegment prior.installed.activeFirst)) (WAL.encode batch))
@@ -2463,10 +2478,16 @@ theorem installsAfterAcquiredRecovery_replays
   have returned := installsAfterAcquiredRecovery calls marker
     (fun resolved => acquireMarkerInCensus markerReads (resolved.file .walBoundary))
     prepare stabilize finish acquisition recovery
-  exact ⟨_, returned, pending.install rfl represented refined (recoverSelected_rowBounds baseBounds replay),
+  refine ⟨_, returned, pending.install rfl represented refined (recoverSelected_rowBounds baseBounds replay),
     validAfter.selected,
     effects.keepsSealed.trans (keptRetry.trans (authorizedRepair.keepsSealed.trans beforeBarrier.keepsSealed)),
-    writeCut.stops⟩
+    ?_, writeCut.stops⟩
+  intro changed bytes survived
+  obtain ⟨appended, _, wrote, _, exactBytes⟩ :=
+    writeCut.survivingKeeperOfMarkerChange (fun before result eq => by
+      cases result <;> exact writeKeepsKeeper before _ eq)
+      syncKeepsKeeper walPersists changed survived
+  exact ⟨appended, wrote, exactBytes⟩
 
 /-- After marker stabilization, a longer keeper uses the shared native
 replacement schedule once its first directory sync authorizes repair. -/
