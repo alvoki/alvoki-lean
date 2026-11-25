@@ -1719,6 +1719,42 @@ theorem interruptedMarker_retryChoices
     obtain ⟨manifest, boundary⟩ := projectBinding_oldOrNew survivor accepted offset newer projected
     exact ⟨manifest, .inr boundary⟩
 
+/-- Project an interrupted slot write and its reopen retries to the two
+frontiers allowed by the commit contract, independently of WAL replay. -/
+theorem recoveredRetries_frontier
+    {initial prepared firstRepair after : FileImage} {target : Target}
+    (beforeBarrier : UnsettledRetries initial prepared)
+    {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
+    {current : Selection} {next : Selection}
+    (accepted : decode before = .ok current)
+    (offset : current.slot = slotIndex active)
+    {history batch : List Write}
+    (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
+    (observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
+      pair = ⟨checkpoint, none⟩ ∨
+      ∃ bytes,
+        InterruptedSlotBytes before bytes active next ∧
+        projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
+    (selected : Selection)
+    (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
+    (authorizedRepair : EffectTrace target
+      { prepared with directory := settleMarker prepared.directory selected } firstRepair)
+    {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared prepared target plan)
+    (retries : SettledRetries target firstRepair after)
+    :
+    selected.frontier = current.frontier ∨ selected.frontier = next.frontier := by
+  obtain ⟨_, epoch, _, _, _⟩ := advance_fields advanced
+  have newer : current.toRecord.epoch < next.toRecord.epoch := by
+    change current.epoch.toNat < next.epoch.toNat
+    omega
+  have authorized := prepared_settleMarker preparedPlan selected observed
+  have choices := interruptedMarker_retryChoices accepted offset newer observations
+  obtain ⟨_, _, choice, _⟩ := retries_preservePublishedFrontier beforeBarrier checkpoint
+    current.frontier next.frontier
+    choices selected observed authorizedRepair authorized.pair authorized.keeperPrefix
+    authorized.newer retries (List.mem_cons_self ..)
+  exact choice
+
 /-- The retry trace supplies the actual frontier used by the recovered
 table. The retained client history follows from that retry-selected marker. -/
 theorem recoveredRetries_retainUncertainBatch
@@ -1750,16 +1786,9 @@ theorem recoveredRetries_retainUncertainBatch
     (∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model) ∧
     ((history ++ batch).take range.through = history ∨
       (history ++ batch).take range.through = history ++ batch) := by
-  obtain ⟨_, epoch, newSize, _, _⟩ := advance_fields advanced
-  have newer : current.toRecord.epoch < next.toRecord.epoch := by
-    change current.epoch.toNat < next.epoch.toNat
-    omega
-  have authorized := prepared_settleMarker preparedPlan selected observed
-  have choices := interruptedMarker_retryChoices accepted offset newer observations
-  obtain ⟨_, binding, choice, _⟩ := retries_preservePublishedFrontier beforeBarrier checkpoint
-    current.frontier next.frontier
-    choices selected observed authorizedRepair authorized.pair authorized.keeperPrefix
-    authorized.newer retries (List.mem_cons_self ..)
+  obtain ⟨_, _, newSize, _, _⟩ := advance_fields advanced
+  have choice := recoveredRetries_frontier beforeBarrier accepted offset advanced observations
+    selected observed authorizedRepair preparedPlan retries
   have whole : _ ∨ _ := choice.imp
     (fun oldFrontier => oldFrontier ▸ oldSize) (fun newFrontier => newFrontier ▸ newSize)
   have historyChoice := recoveredBatch_history (range := range) (batch := batch) counted whole

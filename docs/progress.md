@@ -2048,3 +2048,9 @@ history. The installation theorem no longer takes a separate segment
 collection witness, valid initial WAL image or selected pair for that
 image. The remaining native handoff must derive the canonical layout
 and accepted checkpoint from the reached execution.
+
+The interrupted two-slot retry proof now exposes the old-or-new
+frontier result independently of table replay. The client retention
+proof consumes it. The same result is available before replay to
+select a canonical WAL history for the crash image, which is the
+input needed by the shared segment layout construction.
