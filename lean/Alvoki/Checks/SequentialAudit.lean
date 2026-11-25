@@ -7,6 +7,7 @@ import Alvoki.Storage.Disk.SegmentedBatchAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
 import Alvoki.Storage.Disk.BatchAppendReopenAdmission
 import Alvoki.Storage.Disk.BatchCutReopenAdmission
+import Alvoki.Storage.Disk.BatchRecoveryPrefix
 import Alvoki.Storage.Disk.PoisonedBatchClose
 import Alvoki.Storage.Disk.CleanCachedClose
 import Alvoki.Storage.Disk.SegmentedBatchMarkerProcessExit
@@ -938,6 +939,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.selectsAfterBatchCut
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.installsAdmitted
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchMarkerWithAdmission
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.refinesReopenPrefix
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedBatchMarker
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.CachedReopenReports.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchPowerLoss
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendPowerLossReport.Valid.reachesInterruption

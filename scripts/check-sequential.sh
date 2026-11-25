@@ -266,6 +266,7 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedBatchAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
 lake env leanchecker Alvoki.Storage.Disk.BatchAppendReopenAdmission
 lake env leanchecker Alvoki.Storage.Disk.BatchCutReopenAdmission
+lake env leanchecker Alvoki.Storage.Disk.BatchRecoveryPrefix
 lake env leanchecker Alvoki.Storage.Disk.PoisonedBatchClose
 lake env leanchecker Alvoki.Storage.Disk.CleanCachedClose
 lake env leanchecker Alvoki.Storage.Disk.SegmentedBatchMarkerProcessExit
