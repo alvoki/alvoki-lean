@@ -83,6 +83,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointManifestRenameRetry
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpointOpenPhase
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpointRecovery
+lake env leanchecker Alvoki.Storage.Disk.NativeStoppedCheckpointTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointErrorReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointErrorPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.CheckpointCompletionClientTrace
@@ -165,6 +166,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeOpenedPosition
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedCheckpointRunFsync
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedCheckpointRenameError
+lake env leanchecker Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointManifestRenameTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace

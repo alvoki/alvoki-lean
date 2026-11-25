@@ -91,6 +91,21 @@ theorem chosenPublication (crash : NativeCheckpointCrashFiles physical) (valid :
   have same := congrArg (fun files : FileImage => files.directory.crashImages) (physical.fileProjection valid)
   exact same ▸ crash.chosen
 
+/-- The next reader uses the chosen directory binding with the same WAL
+segments. The selected layout remains valid at the reboot image. -/
+noncomputable def rebootWal (crash : NativeCheckpointCrashFiles physical) : WalSegmentImage :=
+  { physical.publication.segmentedCheckpointView state.writer.wal with directory := .settled crash.pair }
+
+theorem rebootWalSupport (crash : NativeCheckpointCrashFiles physical) (valid : state.Valid) :
+    crash.rebootWal.ReadLayout state.writer.history ∧ crash.rebootWal.Valid state.writer.history := by
+  obtain ⟨layout, retained, _⟩ := physical.retrySupport valid
+  refine ⟨⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩, ?_⟩
+  intro pair selected
+  change pair ∈ [crash.pair, crash.pair] at selected
+  have same : pair = crash.pair := by simpa only [List.mem_cons, List.not_mem_nil, or_false, or_self] using selected
+  cases same
+  exact retained _ (List.mem_cons_of_mem _ (crash.chosenPublication valid))
+
 /-- The chosen old or new manifest and the retained run bytes determine
 the retry plan before obtaining any healthy-open reports. -/
 structure Plan (crash : NativeCheckpointCrashFiles physical) where
@@ -286,7 +301,7 @@ structure NativeCheckpointRebootContinuation (current : NativeReadPosition histo
     next.state.writer.published.durable = physical.publication.durable ∧ seen.SelectedReads
   replay : InstalledClientReplay log current.reads history next.state.writer.installed next.state.session
 
-theorem NativeReadPosition.reopensCheckpointSurvivor (current : NativeReadPosition history log)
+theorem NativeReadPosition.reopensCheckpointSurvivorWith (current : NativeReadPosition history log)
     {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
     {barrier : NativeCheckpointFinalBarrier (image := image) current.state cut} {after : image}
     {physical : barrier.Physical after}
@@ -295,8 +310,11 @@ theorem NativeReadPosition.reopensCheckpointSurvivor (current : NativeReadPositi
       some (current.state.census.inode current.state.directorySlot.description))
     (lock : barrier.bindings after (current.state.session.directory.file .lock) =
       some (current.state.census.inode current.state.owner.description))
-    (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointCrashAlignedReads crash input plan)) :
-    ∃ next, NativeCheckpointRebootContinuation current crash input next := by
+    {plan : crash.Plan} (seen : NativeCheckpointCrashAlignedReads crash input plan) :
+    ∃ next, NativeCheckpointRebootContinuation current crash input next ∧
+      seen.run = next.opened ∧ next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
+      next.state.owner = seen.opening.admission.owner ∧ next.state.directorySlot = seen.opening.admission.cached ∧
+      next.state.cache = seen.opening.admission.cache := by
   obtain ⟨valid, exactHistory, replay⟩ := current.readPrefix.refines
   have ready := valid.retained
   have pending : PendingClientReplay log current.reads current.state.writer.history :=
@@ -304,23 +322,11 @@ theorem NativeReadPosition.reopensCheckpointSurvivor (current : NativeReadPositi
   have bounded : ∀ read ∈ current.reads, read.BoundedBy current.state.writer.history.length :=
     Eq.mpr (congrArg (fun rows : List WAL.Write => ∀ read ∈ current.reads, read.BoundedBy rows.length)
       exactHistory) current.readPrefix.readsBounded
-  obtain ⟨plan⟩ := crash.plans valid pending
-  obtain ⟨seen⟩ := observe plan
   let opening := seen.opening
   let finish : CapturedKeeperFinish opening.callbacks opening.reads crash.vacant plan.selected := .aligned opening.finish
-  let wal := physical.publication.segmentedCheckpointView current.state.writer.wal
-  let rebootWal := { wal with directory := DirectoryPublication.Image.settled crash.pair }
+  let rebootWal := crash.rebootWal
   have projected := crash.reachedFiles valid
-  obtain ⟨previousLayout, previousValid, _⟩ := physical.retrySupport valid
-  have layout : rebootWal.ReadLayout current.state.writer.history :=
-    ⟨previousLayout.ordered, previousLayout.forward, previousLayout.activeEnd, previousLayout.activeBytes⟩
-  have durableChoice := crash.chosenPublication valid
-  have retained : rebootWal.Valid current.state.writer.history := by
-    intro pair selected
-    change pair ∈ [crash.pair, crash.pair] at selected
-    have same : pair = crash.pair := by simpa only [List.mem_cons, List.not_mem_nil, or_false, or_self] using selected
-    cases same
-    exact previousValid _ (List.mem_cons_of_mem _ durableChoice)
+  obtain ⟨layout, retained⟩ := crash.rebootWalSupport valid
   have kept : crash.retry.image.kept = (rebootWal.checkpointReopenFiles rebootWal.directory none).kept :=
     congrArg FileImage.kept projected
   have pair : rebootWal.directory.active = plan.layout.target.pair := plan.prepared.pair
@@ -345,11 +351,12 @@ theorem NativeReadPosition.reopensCheckpointSurvivor (current : NativeReadPositi
     (congrArg (fun cp => (cp.getD (.empty, 0)).2) checkpoint)
   have recoveredSeals : state.files.image.kept = current.state.files.image.kept :=
     seals.trans (congrArg CheckpointWalView.kept physical.wal)
-  refine ⟨next, crash.losesPower, rfl, rfl,
+  refine ⟨next, ⟨crash.losesPower, rfl, rfl,
     directory, ?_, ?_, fun same => phaseFresh (same.symm ▸ seen.earlierTokens.1),
     fun same => sessionFresh (same.symm ▸ seen.earlierTokens.2), settled, (crash.classification valid).2.1,
     ?_, recoveredSeals, ⟨plan, seen, continued.frames.1, rfl, rfl, owner, directorySlot, cache, census, target,
-      checkpoint, runs, seen.readsSelected valid⟩, continued.guardedReplay⟩
+      checkpoint, runs, seen.readsSelected valid⟩, continued.guardedReplay⟩,
+    rfl, continued.frames.1, owner, directorySlot, cache⟩
   · change state.census.inode state.directorySlot.description = _
     rw [inodes, directorySlot]
     exact Option.some.inj (objects.1.symm.trans (seen.directoryObject.trans (crash.directory.trans root)))
@@ -358,6 +365,24 @@ theorem NativeReadPosition.reopensCheckpointSurvivor (current : NativeReadPositi
     exact Option.some.inj (objects.2.1.symm.trans (seen.lockObject.trans (crash.lock.trans lock)))
   · exact plan.generation.imp (fun old => ⟨generation.trans old.1, old.2⟩)
       (fun fresh => ⟨generation.trans fresh.1, fresh.2⟩)
+
+theorem NativeReadPosition.reopensCheckpointSurvivor (current : NativeReadPosition history log)
+    {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
+    {barrier : NativeCheckpointFinalBarrier (image := image) current.state cut} {after : image}
+    {physical : barrier.Physical after}
+    (crash : NativeCheckpointCrashFiles physical) {input : FilePath}
+    (root : barrier.bindings after current.state.session.directory.path =
+      some (current.state.census.inode current.state.directorySlot.description))
+    (lock : barrier.bindings after (current.state.session.directory.file .lock) =
+      some (current.state.census.inode current.state.owner.description))
+    (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointCrashAlignedReads crash input plan)) :
+    ∃ next, NativeCheckpointRebootContinuation current crash input next := by
+  obtain ⟨valid, sameHistory, replay⟩ := current.readPrefix.refines
+  have pending : PendingClientReplay log current.reads current.state.writer.history := sameHistory.symm ▸ replay
+  obtain ⟨plan⟩ := crash.plans valid pending
+  obtain ⟨seen⟩ := observe plan
+  obtain ⟨next, reopened, _⟩ := current.reopensCheckpointSurvivorWith crash root lock seen
+  exact ⟨next, reopened⟩
 
 /-- The returned-error route supplies the same observed crash files. -/
 abbrev NativeCheckpointErrorCrash
