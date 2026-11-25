@@ -75,6 +75,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRunDataError
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointManifestSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointManifestSyncReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointManifestDataError
+lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointManifestOpenError
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointErrorReopen
