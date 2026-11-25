@@ -205,6 +205,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapKeeperPhysical
 lake env leanchecker Alvoki.Storage.Disk.NativeReusedBootstrapKeeperHeap
 lake env leanchecker Alvoki.Storage.Disk.NativeReusedBootstrapTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerPhysical
+lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerCollision
 lake env leanchecker Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 lake env leanchecker Alvoki.Storage.Disk.NativeFreshTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenEarlyError

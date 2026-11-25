@@ -298,6 +298,7 @@ import Alvoki.Storage.Disk.NativeBootstrapKeeperPhysical
 import Alvoki.Storage.Disk.NativeReusedBootstrapKeeperHeap
 import Alvoki.Storage.Disk.NativeReusedBootstrapTableOpen
 import Alvoki.Storage.Disk.NativeBootstrapMarkerPhysical
+import Alvoki.Storage.Disk.NativeBootstrapMarkerCollision
 import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenEarlyError
@@ -1859,6 +1860,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.reachesFromHeld
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerPublicationHeap.returns
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerPublicationHeap.Physical.settles
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerStaging.stageReturns
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCollisionHeap.detaches
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCollisionHeap.returnsAtStage
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCollisionHeap.keepsKeeper
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCollisionHeap.replacesChild
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCollisionHeap.publishes
 #check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.MarkerPublication.returns
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.startFromValid
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.startsNativeReadPrefixFromValid
