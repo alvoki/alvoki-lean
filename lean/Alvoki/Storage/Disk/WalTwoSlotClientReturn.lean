@@ -632,6 +632,9 @@ theorem selectedBytes_retainBatch
     (whole : events = history ∨ events = history ++ batch)
     (acknowledged : Bool) (confirmed : acknowledged = true → events = history ++ batch) :
     Boundary.recoverMarked base decoded.frontier wal = .ok (WAL.encode events, table) ∧
+    Boundary.recoverRetainedMarked base first decoded.frontier
+      (WalSegment.concatenate (image.afterWatermark range.watermark)) =
+        .ok (WAL.encode (events.drop first), table) ∧
     (if acknowledged then
       DatabaseBatchRetention (log ++ [.acknowledgedBatch batch]) (history ++ batch) ∧
       ∃ model, table.Refines model ∧ RepresentsWalHistory (history ++ batch) model
@@ -658,7 +661,7 @@ theorem selectedBytes_retainBatch
       exact Boundary.select_encoded history (WAL.encode batch) (old ▸ fits)
     · rw [new]
       simpa using Boundary.select_encoded (history ++ batch) ByteArray.empty (new ▸ fits)
-  obtain ⟨markerRecord, length, _, readMarker, parsed, _, _, _, recovered⟩ := recovery.marked
+  obtain ⟨markerRecord, length, retained, readMarker, parsed, byteCount, retainedBytes, replayRetained, recovered⟩ := recovery.marked
   have sameRecord := Option.some.inj (binding.symm.trans readMarker)
   have sameLength : decoded.frontier = length :=
     Except.ok.inj ((Boundary.decode_encode decoded.frontier).symm.trans (sameRecord ▸ parsed))
@@ -667,7 +670,17 @@ theorem selectedBytes_retainBatch
     rw [← sameLength] at recovered
     simp only [Boundary.recoverMarked, Bind.bind, Except.bind, selected, canonical] at recovered ⊢
     cases replay : recoverSelected base (WAL.encode events) <;> simp_all [Pure.pure, Except.pure]
-  refine ⟨exactReplay, ?_⟩
+  have exactCount : range.through = events.length := by
+    rw [← sameLength, count, WAL.encode_size] at byteCount
+    unfold frameSize at byteCount
+    omega
+  have exactHistory : (history ++ batch).take range.through = events := by
+    rw [exactCount]
+    rcases whole with old | new
+    · rw [old, List.take_append_of_le_length (Nat.le_refl _), List.take_length]
+    · rw [new, List.take_length]
+  rw [← sameLength, retainedBytes, exactHistory] at replayRetained
+  refine ⟨exactReplay, replayRetained, ?_⟩
   cases acknowledged with
   | false =>
     apply recoveredBatch_retains prior recovery binding
