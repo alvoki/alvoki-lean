@@ -1671,6 +1671,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.readKeeperWith_rejectsExtent
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.read_error
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.reachesRead
+#check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_keeperSuccess
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.keeperReached_eq_of_readonly
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.reopen_keeperExtentError
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedKeeperExtentError
@@ -1987,10 +1988,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkerCensus.reads
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.beforeWalScan
 #check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.stat
+#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.sealPayload
 #check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.matchesExtents
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.guardedWalScan
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.selectedWalReachesKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.beforeKeeper
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.preparesFromCensus
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.liveAtRead
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.closedDescription
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.custody

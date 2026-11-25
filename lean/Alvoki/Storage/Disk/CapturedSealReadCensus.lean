@@ -146,6 +146,34 @@ theorem stat (chain : CapturedSealReadChain report released required initial dro
       rfl
     · exact ih _ later
 
+/-- A successful seal callback for its checked extent returns the bytes
+of that exact retained inode. The final keeper has its own callback. -/
+theorem sealPayload (chain : CapturedSealReadChain report released required initial drops) :
+    ∀ entry ∈ required.dropLast, ∀ {before after bytes},
+      readTemporarySeal report.reads released (directory.file (.walSegment entry.1)) entry.2.byteSize.toNat before =
+        .ok bytes after → retry.image.kept entry.1 = some bytes := by
+  induction chain with
+  | keeper => simp
+  | @sealed initial segment next nextMetadata rest drops member forward size custody remaining ih =>
+    intro entry chosen before after bytes returned
+    rw [List.dropLast_cons_cons] at chosen
+    rcases List.mem_cons.mp chosen with rfl | tail
+    · let file := report.wal.sealedFile segment member
+      let seen := file.observesFile
+      have exact := seen.readOpenedExactPrefix selectedWalSpanError segment.bytes.size (report.wal.sealFits segment member)
+        (Nat.le_refl _)
+      rw [ByteArray.extract_zero_size] at exact
+      have read : report.reads.readOpenedPrefix selectedWalSpanError (file.calls.inventory, file.calls.slot, 0)
+          segment.bytes.size = .ok segment.bytes := exact
+      rcases before with ⟨cache, census, files⟩
+      change readTemporarySeal report.reads released (directory.file (.walSegment segment.first))
+        file.calls.metadata.byteSize.toNat (cache, census, files) = _ at returned
+      have extent : file.calls.metadata.byteSize.toNat = segment.bytes.size := seen.extent
+      rw [extent] at returned
+      simp only [readTemporarySeal, readTemporaryPrefix, file.calls.opened, read] at returned
+      exact (EStateM.Result.ok.inj returned).1 ▸ report.wal.kept segment member
+    · exact ih entry tail returned
+
 /-- The chronological read reports and the executable extent scan select
 the same entries when their ordered offsets agree. Each lookup's own
 result fixes the accompanying metadata. -/
@@ -296,6 +324,7 @@ theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission l
     (readKeeper : FilePath → Nat → Nat → EStateM IO.Error ReadState ByteArray) :
     admission.owner ∈ captured.atOpen.slots ∧ admission.cached ∈ captured.atOpen.slots ∧
     ∃ earlier : List (Nat × ByteArray), earlier.map Prod.fst = required.dropLast.map Prod.fst ∧
+      (∀ entry ∈ earlier, retry.image.kept entry.1 = some entry.2) ∧
       readSelectedWithCachedExtents directory layout.range.watermark count report.scanWal
         report.inspectWal
         (readTemporarySeal report.reads released) readKeeper
@@ -310,10 +339,11 @@ theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission l
     refine List.mem_filter.mpr ⟨live, List.all_eq_true.mpr fun event member => ?_⟩
     rw [kept event member]
     rfl
-  obtain ⟨earlier, offsets, payloads⟩ := (seals.reaches admission.cache admission.held).reachesRead
+  obtain ⟨earlier, offsets, contents, payloads⟩ := (seals.reaches admission.cache admission.held).reachesRead
     (count.toNat / WAL.frameSize) readKeeper
+    (selected := fun first bytes => retry.image.kept first = some bytes) seals.sealPayload
   refine ⟨lives report.listing.custody.lockRetained (fun event member => (retained event member).1),
-    lives report.listing.custody.cacheRetained (fun event member => (retained event member).2), earlier, offsets, ?_⟩
+    lives report.listing.custody.cacheRetained (fun event member => (retained event member).2), earlier, offsets, contents, ?_⟩
   have listed := (CheckedDirectoryReadReport.scan_complete directory.path report.listing.eof report.listing.closed
     report.listing.complete).1
   have entries := Except.ok.inj (report.catalog.listed.symm.trans (report.listed.trans listed))
