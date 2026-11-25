@@ -386,10 +386,11 @@ int fsync(int fd) {
     static unsigned hold_hits;
     const char *hold_mode = getenv("ALVOKI_CHECK_SYNC_HOLD_MODE");
     int reopen_after = same(hold_mode, "reopen-after");
+    int hold_after = reopen_after || same(hold_mode, "publication-after");
     // Publication fixtures skip the first sync, which belongs to reopen.
     unsigned hold_at = (same(hold_mode, "reopen-before") || reopen_after) ? 1 : 2;
     if (same(path, hold) && ++hold_hits == hold_at) {
-        if (!reopen_after) return hold_sync(real_sync, fd);
+        if (!hold_after) return hold_sync(real_sync, fd);
         const char *ready = getenv("ALVOKI_CHECK_SYNC_PID");
         const char *release = getenv("ALVOKI_CHECK_SYNC_RELEASE");
         if (ready == NULL || release == NULL) return fail_sync();

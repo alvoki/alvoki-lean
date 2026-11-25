@@ -473,12 +473,16 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False,
     wal = database / f"WAL-segment-{int(rotated)}"
     old_marker = marker.read_bytes()
     old_wal = wal.read_bytes()
+    marker_sync_cut = cut in ("marker-sync", "marker-sync-after")
     with tempfile.TemporaryDirectory() as scratch:
         ready = Path(scratch) / "sync.pid"
         release = Path(scratch) / "release"
         hold = ({"ALVOKI_CHECK_SLOT_WRITE_HOLD": str(marker),
                   "ALVOKI_CHECK_SLOT_WRITE_PREFIX": str(prefix)} if cut == "slot-write" else
-                {"ALVOKI_CHECK_SYNC_HOLD": str(marker if cut == "marker-sync" else wal)})
+                {"ALVOKI_CHECK_SYNC_HOLD": str(marker if marker_sync_cut else wal)})
+        if cut == "marker-sync-after":
+            sync_log = Path(scratch) / "publish-after.log"
+            hold.update(ALVOKI_CHECK_SYNC_HOLD_MODE="publication-after", ALVOKI_CHECK_SYNC_LOG=str(sync_log))
         with native_process(binary, "--two-slot-submit-batch", database, sync_pid_file=ready, env={
             **os.environ,
             **hold,
@@ -490,7 +494,10 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False,
                     "two-slot batch sync paused in the wrong process")
             new_marker = marker.read_bytes()
             new_wal = wal.read_bytes()
-            if cut == "marker-sync":
+            if cut == "marker-sync-after":
+                require(sync_log.read_text().splitlines()[-1:] == [f"synced before hold: {marker}"],
+                        "writer paused before completing the marker fsync")
+            if marker_sync_cut:
                 require(new_marker[:40] != old_marker[:40] and new_marker[40:] == old_marker[40:],
                         "the positional write did not update only the inactive slot")
             elif cut == "slot-write":
@@ -554,7 +561,7 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False,
                     f"two-slot reopen went past the {failure} marker sync error")
             require(marker.read_bytes() == new_marker and wal.read_bytes() == new_wal,
                     "failed retry changed the marker or trimmed the WAL")
-    published = resume or cut == "marker-sync" or new_marker == full_marker
+    published = resume or marker_sync_cut or new_marker == full_marker
     status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "new" if published else "old")
     require(status == 0, f"could not recover and extend the two-slot batch: {stderr}")
     retained = new_wal if published else old_wal
@@ -739,6 +746,8 @@ if __name__ == "__main__":
             full_marker = check_two_slot_batch_cut(
                 binary, shim, root / f"two-slot-{int(rotated)}-marker-sync", "marker-sync", rotated
             )
+            check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-marker-sync-after",
+                                     "marker-sync-after", rotated)
             check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-wal-sync", "wal-sync", rotated)
             check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-short-write",
                                      "slot-write", rotated, resume=True, full_marker=full_marker)
