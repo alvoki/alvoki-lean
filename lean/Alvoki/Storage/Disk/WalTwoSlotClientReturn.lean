@@ -2600,6 +2600,62 @@ theorem InterruptedBatchMarkerPublication.survivingEncodedKeeper
     exact layout.forward _ (List.mem_append_right _ (by simp))
   rw [exactBytes, appendBytes wrote, List.drop_append_of_le_length starts, WAL.encode_append, layout.activeBytes]
 
+/-- Connect the selected frontier and physical keeper survivor to the
+segment plan used by the shared reader. Before the marker advances, the
+reported keeper can retain any tail after the previously durable prefix. -/
+theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
+    {directory : DiskDirectory} {prior : SegmentedWriterState} {batch : List WAL.Write}
+    {next : Selection} {reached : FileImage × WalInodeImage}
+    (report : InterruptedBatchMarkerPublication directory prior batch next reached)
+    (layout : prior.wal.ReadLayout prior.history)
+    (appendBytes : ∀ {appended},
+      (report.append (directory.file (.walSegment prior.installed.activeFirst)) (WAL.encode batch)).run
+        (prior.files, report.initialMarker) = .ok (.ok ()) appended →
+      appended.1.keeper.active = some (prior.wal.active.bytes ++ WAL.encode batch))
+    (writeKeepsKeeper : ∀ before (result : EStateM.Result report.Stop
+        (FileImage × WalInodeImage) (Except IO.Error Unit)),
+      (report.writeSlot report.markerHandle (next.slot * stride).toUInt64 next.encode).run before = result →
+      (match result with | .ok _ after | .error _ after => after.1.keeper) = before.1.keeper)
+    (syncKeepsKeeper : ∀ before,
+      (report.syncSlot report.markerHandle).run before = .error report.stopped reached →
+      reached.1.keeper = before.1.keeper)
+    (walPersists : ∀ {appended durable},
+      (report.syncWal (directory.file (.walSegment prior.installed.activeFirst))).run appended =
+        .ok (.ok ()) durable → durable.1.keeper = appended.1.syncKeeper.keeper)
+    {current selected : Selection} {watermark through : Nat} {retry : FileImage}
+    (valid : prior.wal.Valid prior.history)
+    (oldRange : prior.wal.directory.active.walRange = some ⟨watermark, prior.history.length⟩)
+    (choice : selected.frontier = current.frontier ∨ selected.frontier = next.frontier)
+    (oldSize : current.frontier.toNat = (WAL.encode prior.history).size)
+    (newSize : next.frontier.toNat = (WAL.encode (prior.history ++ batch)).size)
+    (counted : selected.frontier.toNat = through * frameSize)
+    (decoded : retry.directory.active.walRange = some ⟨watermark, through⟩)
+    (survives : retry.keeper.active ∈ reached.1.keeper.crashImages)
+    (oldPrefix : selected.frontier = current.frontier →
+      ∃ tail, retry.keeper.active = some (prior.wal.active.bytes ++ tail))
+    (advanced : selected.frontier ≠ current.frontier → reached.2 ≠ report.initialMarker) :
+    ∃ plan : DiskSession.CanonicalKeeperLayout retry ((prior.history ++ batch).take through),
+      plan.range.watermark = watermark ∧ plan.keeper.first = prior.wal.active.first := by
+  have visible : ∃ tail, retry.keeper.active = some
+      (WAL.encode (((prior.history ++ batch).take through).drop prior.wal.active.first) ++ tail) := by
+    by_cases old : selected.frontier = current.frontier
+    · have count := old ▸ oldSize
+      rw [counted, WAL.encode_size] at count
+      unfold frameSize at count
+      have throughOld : through = prior.history.length := by omega
+      rw [throughOld, List.take_append_of_le_length (Nat.le_refl _), List.take_length, ← layout.activeBytes]
+      exact oldPrefix old
+    · have newest := choice.resolve_left old
+      have count := newest ▸ newSize
+      rw [counted, WAL.encode_size] at count
+      unfold frameSize at count
+      have throughNew : through = (prior.history ++ batch).length := by omega
+      rw [throughNew, List.take_length]
+      exact ⟨ByteArray.empty, by
+        simpa using report.survivingEncodedKeeper layout appendBytes writeKeepsKeeper syncKeepsKeeper
+          walPersists (advanced old) survives⟩
+  exact canonicalLayout_of_twoSlotFrontier layout valid oldRange choice oldSize newSize counted decoded visible
+
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
 theorem installsAfterAcquiredRecovery_replays

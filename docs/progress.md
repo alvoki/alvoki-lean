@@ -2068,3 +2068,11 @@ canonical active segment bytes in each keeper crash choice. This uses
 the existing marker-only keeper preservation and the append report's
 byte effect. The crash-to-install composition still has to connect
 the selected marker to this branch or the old-prefix branch.
+
+The interrupted publication proof now composes the selected frontier
+and a reported keeper survivor with the shared canonical layout
+construction. The old frontier uses the preserved prior prefix and can
+leave an unselected tail. The new frontier uses the exact synced
+encoded batch. The native handoff still needs to derive the old-prefix
+preservation and to link an advanced selection to a changed marker
+image, then pass the resulting layout into the installed-read theorem.
