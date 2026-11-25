@@ -13,9 +13,8 @@ variable {heap : Type} {input : FilePath} {directory : DiskDirectory} {inventory
   {admitted : RawOpenAdmissionReport admission view calls entry}
 
 /-- The malformed selected manifest is acquired by the original bounded
-reader. A release report for that temporary handle supplies the heap
-used by the decoder and by the opener's local unlock. -/
-structure RawManifestDecodeFailure (fault : NativeManifestDecodeError admission)
+reader. Release of that same temporary handle supplies the decoder's heap. -/
+structure RawManifestDecodeRead (fault : NativeManifestDecodeError admission)
     (seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock)
     (fileCalls : MarkedTemporaryReadCalls heap) where
   flat : optionalMetadataWith (calls.lookup (directory.file .wal)) seed.afterPending = .ok none seed.afterPending
@@ -35,16 +34,14 @@ structure RawManifestDecodeFailure (fault : NativeManifestDecodeError admission)
   releasedRaw : fileCalls.release file finished = .ok () closed
   census : view.descriptors closed = (view.handle opened file).1.afterDrops (fault.release (directory.file .manifest))
   frame : MarkedReadCacheFrame seed seed.afterPending closed
-  cleanup : NativeOpenErrorUnlock admission fault.afterRead
-  unlock : RawHeldOpenCleanup (admitted := admitted) cleanup seed closed
 
-namespace RawManifestDecodeFailure
+namespace RawManifestDecodeRead
 
 variable {fault : NativeManifestDecodeError admission}
   {seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock}
   {fileCalls : MarkedTemporaryReadCalls heap}
 
-theorem readsSelected (seen : RawManifestDecodeFailure (admitted := admitted) fault seed fileCalls) :
+theorem readsSelected (seen : RawManifestDecodeRead (admitted := admitted) fault seed fileCalls) :
     fileCalls.readOptional directory (directory.file .manifest) seed.afterPending =
       .ok (some (fault.bytes.extract 0 (IntegrityCheckpoint.acquisitionSize fault.bytes))) seen.closed ∧
     view.handle seen.opened seen.file = (fault.manifest.calls.inventory, fault.manifest.calls.slot, 0) ∧
@@ -69,7 +66,7 @@ theorem readsSelected (seen : RawManifestDecodeFailure (admitted := admitted) fa
 /-- The source marked worker returns the exact decoder error after the
 temporary release, before every run, marker-payload or repair callback. -/
 theorem stopsBeforeWal {stream : Type}
-    (seen : RawManifestDecodeFailure (admitted := admitted) fault seed fileCalls)
+    (seen : RawManifestDecodeRead (admitted := admitted) fault seed fileCalls)
     (directoryCalls : MarkedDirectoryReadCalls heap stream) (callbacks : AlignedKeeperCacheCallbacks heap)
     (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
@@ -87,9 +84,24 @@ theorem stopsBeforeWal {stream : Type}
     ↓reduceIte, Pure.pure, EStateM.pure, seen.readsSelected.1, IntegrityCheckpoint.decode_acquisitionPrefix,
     fault.invalid, Except.mapError, liftExcept, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
 
+end RawManifestDecodeRead
+
+variable {fault : NativeManifestDecodeError admission}
+  {seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock}
+  {fileCalls : MarkedTemporaryReadCalls heap}
+
+/-- The earlier error view keeps the reported synchronization cache
+live through local unlock. The decoder itself needs only its read report. -/
+structure RawManifestDecodeFailure (fault : NativeManifestDecodeError admission)
+    (seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock)
+    (fileCalls : MarkedTemporaryReadCalls heap)
+    extends RawManifestDecodeRead (admitted := admitted) fault seed fileCalls where
+  cleanup : NativeOpenErrorUnlock admission fault.afterRead
+  unlock : RawHeldOpenCleanup (admitted := admitted) cleanup seed closed
+
 /-- The acquired lock is unlocked at that exact post-release heap. The
 open reports the decoder error or the error from unlocking the same lock. -/
-theorem returns {stream α : Type} (seen : RawManifestDecodeFailure (admitted := admitted) fault seed fileCalls)
+theorem RawManifestDecodeFailure.returns {stream α : Type} (seen : RawManifestDecodeFailure (admitted := admitted) fault seed fileCalls)
     (directoryCalls : MarkedDirectoryReadCalls heap stream) (callbacks : AlignedKeeperCacheCallbacks heap)
     (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
@@ -104,14 +116,13 @@ theorem returns {stream α : Type} (seen : RawManifestDecodeFailure (admitted :=
     (view.descriptors seen.unlock.reached).references fault.manifest.calls.slot.description = [] := by
   intro recover
   obtain ⟨_, _, _, _, _, _, _, _, _, _, _, cache, files, _⟩ := seed.installs
-  obtain ⟨_, _, _, _, census, released⟩ := seen.readsSelected
+  obtain ⟨_, _, _, _, census, released⟩ := seen.toRawManifestDecodeRead.readsSelected
   have returned := seen.unlock.returnsErrorAt recover (IO.userError fault.cause) (fun rawCache => by
-    simp only [recover, Bind.bind, EStateM.bind, seen.stopsBeforeWal directoryCalls callbacks remove write rename bootstrap])
+    simp only [recover, Bind.bind, EStateM.bind,
+      seen.toRawManifestDecodeRead.stopsBeforeWal directoryCalls callbacks remove write rename bootstrap])
     (seen.frame.files.trans files) census (seen.frame.keepsInitialCache.trans cache)
   refine ⟨returned, ?_, seen.unlock.census.symm ▸ released⟩
   have image := seen.unlock.image.trans (congrArg LockedFileState.image (seen.frame.files.trans files))
   exact (congrArg (fun image => image.directory.active.manifest) image).trans fault.selected
-
-end RawManifestDecodeFailure
 
 end Alvoki.Storage.DiskSession
