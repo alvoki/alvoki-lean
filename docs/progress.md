@@ -25,7 +25,9 @@ executable segment span checks, including a keeper with a tail. After
 marker authorization, two-slot retries reuse the shared layout proof and
 reconstruct the same canonical segment chain at the latest retry state.
 The client recovery theorem returns that layout and its prepared plan
-for exactly the same file image carried by the returned session. The
+for exactly the same file image carried by the returned session. For the
+successful final reopen, the modeled repair trace is derived from the
+reported directory sync and reached primitive repair actions. The
 remaining integration work is to derive the selected chain and primitive
 reports from one native descriptor chronology. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
 

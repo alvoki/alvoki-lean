@@ -1307,7 +1307,7 @@ private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × By
 /-- The same retry-selected recovery explains the retained submissions and
 fresh snapshot reads on the session installed by the shared open schedule. -/
 theorem recoveredRetries_installedReads
-    {initial prepared firstRepair after : FileImage} {target : Target}
+    {initial prepared after : FileImage} {target : Target}
     (beforeBarrier : UnsettledRetries initial prepared)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
     {current : Selection} {next : Selection}
@@ -1322,10 +1322,7 @@ theorem recoveredRetries_installedReads
         projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
     (selected : Selection)
     (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
-    (authorizedRepair : EffectTrace target
-      { prepared with directory := settleMarker prepared.directory selected } firstRepair)
     {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared prepared target plan)
-    (retries : SettledRetries target firstRepair after)
     {image : WalSegmentImage} {range : MarkedWalRange}
     {base : PackedTable} {opened : WalSegmentRepair.Reopened}
     {first : Nat} {log : List DatabaseSubmissions}
@@ -1451,10 +1448,6 @@ theorem recoveredRetries_installedReads
       (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
       ∀ start stop, pinned.range pin.handle start stop =
         some (reference.table.range start stop snapshot) := by
-  have ledger := recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
-    observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
-  obtain ⟨_, _, reference, replayed, _⟩ := ledger.2
-  obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
   let readWal := fun start length =>
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
   have logicalMarker : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
@@ -1492,6 +1485,17 @@ theorem recoveredRetries_installedReads
     Option.some.inj (preparedPlan.keeperRead.symm.trans fullKeeper)
   let payload := WAL.encode (((history ++ batch).take range.through).drop first)
   have authorized := prepared_settleMarker preparedPlan selected observed
+  obtain ⟨repairedFiles, finishSeen, ready, repairTrace⟩ :=
+    WalSegmentRepair.finishMarkedOpen_completes authorized directory removeFile write sync renameFile settles healthy
+  have repairedImage := (EStateM.Result.ok.inj (finishSeen.symm.trans repaired)).2
+  have authorizedRepair : EffectTrace target
+      { prepared with directory := settleMarker prepared.directory selected } after :=
+    repairedImage ▸ repairTrace
+  have retries : SettledRetries target after after := .start
+  have ledger := recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
+    observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
+  obtain ⟨_, _, reference, replayed, _⟩ := ledger.2
+  obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
   have liveMarker := (retries.preservesSelectedMarker prepared selected observed authorizedRepair
     authorized.pair authorized.keeperPrefix authorized.newer (List.mem_cons_self ..)).1
   obtain ⟨actualMarker, actualLength, recoveredBytes, marked, decodedLength, _, samePayload, physicalReplay, _⟩ :=
@@ -1591,9 +1595,6 @@ theorem recoveredRetries_installedReads
   have boundedPlan : (⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩ :
       WalSegmentRepair.Plan) = { plan with keeperBytes := plan.keeperBytes.extract 0 plan.keeperSize } := by
     rw [through, ← preparedPlan.through, ← preparedPlan.start, laterNames, ← preparedPlan.names, keeperPrefixBytes]
-  obtain ⟨repairedFiles, finishSeen, ready, repairTrace⟩ :=
-    WalSegmentRepair.finishMarkedOpen_completes authorized directory removeFile write sync renameFile settles healthy
-  have repairedImage := (EStateM.Result.ok.inj (finishSeen.symm.trans repaired)).2
   have boundedRepair : WalSegmentRepair.finishBoundedMarkedOpen directory
       ⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩
       keeperMetadata.byteSize.toNat removeFile write sync renameFile
