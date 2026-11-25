@@ -263,7 +263,8 @@ theorem runBatchWrite_rejected {image : Type} {directory : DiskDirectory}
       cases rejected
       exact ⟨rfl, rfl⟩
 
-private theorem runBatchWrite_acknowledges {image : Type} {directory : DiskDirectory}
+/-- Successful reached primitive callbacks determine the native write result. -/
+theorem runBatchWrite_acknowledges {image : Type} {directory : DiskDirectory}
     {before : LockedFileState image} {written : image} {installed : Installed}
     (guard : BatchActiveGuard directory installed)
     {rows : List (UInt64 × Option UInt64)} (nonempty : rows ≠ [])
