@@ -27,8 +27,9 @@ structure RawQuietRestartEffects (reader : NativeReadyRestartReads crash input l
     (before after : heap)
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
     (allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed)))
-    (allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)) (stream : Type) where
-  admission : RawQuietRestartAdmission reader view calls init names bytes before after
+    (allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)) (stream : Type)
+    (beforeCensus : DescriptorInventory := state.census) where
+  admission : RawQuietRestartAdmission reader view calls init names bytes before after beforeCensus
   fileCalls : MarkedTemporaryReadCalls heap
   directoryCalls : MarkedDirectoryReadCalls heap stream
   slotOf : heap → stream → DescriptorSlot
@@ -62,8 +63,9 @@ structure RawQuietRestartEffects (reader : NativeReadyRestartReads crash input l
 /-- The source open schedule, interpreted from the observed reboot heap
 with the actual admission and held worker callbacks. -/
 def RawQuietRestartEffects.openTable
+    {beforeCensus : DescriptorInventory}
     (seen : RawQuietRestartEffects reader view calls init names bytes before after phaseIdentity tokenIdentity
-      allocatePhase allocateToken stream)
+      allocatePhase allocateToken stream beforeCensus)
     (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
@@ -158,8 +160,9 @@ end
 The same marked callbacks and cache allocation produce the returned
 table used by the next public call. -/
 theorem RawQuietRestartEffects.installsAligned
+    {beforeCensus : DescriptorInventory}
     (seen : RawQuietRestartEffects reader view calls init names bytes before after phaseIdentity tokenIdentity
-      allocatePhase allocateToken stream)
+      allocatePhase allocateToken stream beforeCensus)
     (valid : state.Valid) (sameHistory : state.writer.history = history)
     (target : layout.target = state.writer.target) (keeper : layout.keeper = state.writer.wal.active)
     (descriptors : layout.sealed ++ [layout.keeper] = state.writer.wal.readDescriptors layout.range.watermark)

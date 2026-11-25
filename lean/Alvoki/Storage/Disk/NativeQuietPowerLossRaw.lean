@@ -11,8 +11,8 @@ chosen survivor's bindings and durable payloads at those paths. -/
 structure RawQuietRebootEntry {heap : Type} {state : NativeReadyState}
     (crash : NativeReadyQuietCrash state) (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray)
-    (before after : heap) : Prop where
-  previous : (view.descriptors before, view.files before) = (state.census, state.files)
+    (before after : heap) (beforeCensus : DescriptorInventory := state.census) : Prop where
+  previous : (view.descriptors before, view.files before) = (beforeCensus, state.files)
   liveNames : ∀ path, state.crashPath path → names before path = crash.live.names path
   survivorNames : ∀ path, state.crashPath path → names after path = crash.names path
   survivorBytes : ∀ path, checkpointSurvivorPath state.session.directory state.writer state.writer.target.pair.manifest path →
@@ -23,7 +23,8 @@ heap, with the same inode and durable bytes. -/
 theorem RawQuietRebootEntry.readsSurvivingFile {heap : Type} {state : NativeReadyState}
     {crash : NativeReadyQuietCrash state} {view : OpenCloseHeapView heap FileImage}
     {names : heap → FilePath → Option Nat} {bytes : heap → Nat → ByteArray} {before after : heap}
-    (entry : RawQuietRebootEntry crash view names bytes before after) {input : FilePath}
+    {beforeCensus : DescriptorInventory}
+    (entry : RawQuietRebootEntry crash view names bytes before after beforeCensus) {input : FilePath}
     {layout : CanonicalKeeperLayout crash.retry.image state.writer.history}
     {selected : SelectedIntegrityCheckpoint state.writer.published.durable
       crash.retry.image.directory.active.manifest state.writer.checkpoint}
@@ -46,8 +47,8 @@ structure RawQuietRestartAdmission {heap : Type} {state : NativeReadyState}
     (reader : NativeReadyRestartReads crash input layout selected) (view : OpenCloseHeapView heap FileImage)
     (calls : RawOpenAdmissionCallbacks heap) (init : OpenSyncCacheCallbacks heap)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray)
-    (before after : heap) where
-  reboot : RawQuietRebootEntry crash view names bytes before after
+    (before after : heap) (beforeCensus : DescriptorInventory := state.census) where
+  reboot : RawQuietRebootEntry crash view names bytes before after beforeCensus
   raw : RawOpenAdmissionReport reader.opening.admission view calls after
   seed : OpenSyncCacheAllocations reader.opening.admission.opened view init raw.afterFlock
 

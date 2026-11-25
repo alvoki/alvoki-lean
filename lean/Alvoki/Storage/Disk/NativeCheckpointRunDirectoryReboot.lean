@@ -8,7 +8,7 @@ open System CheckpointPublication SyncHandleRouting WalSegmentRepair
 variable {image : Type} {state : NativeReadyState} {cut : CheckpointPowerCut state.session.directory state.writer}
   {stop : NativeCheckpointRunDirectoryStop (image := image) state cut}
 
-private theorem fixedNameNeRun (directory : DiskDirectory) {file : DiskFile}
+theorem checkpointFixedNameNeRun (directory : DiskDirectory) {file : DiskFile}
     (fixed : file = .lock ∨ file = .manifest ∨ file = .walBoundary) (generation : UInt64) (index : Nat) :
     directory.file file ≠ directory.file (.run generation index) := by
   intro equal
@@ -25,34 +25,41 @@ private theorem fixedNameNeRun (directory : DiskDirectory) {file : DiskFile}
     change "WAL.commit".toList.take 4 = ("run-" ++ generation.toNat.repr ++ "-" ++ index.repr ++ ".v3").toList.take 4 at start
     simp [String.toList_append] at start
 
-private theorem segmentNameNeRun (directory : DiskDirectory) (first : Nat) (generation : UInt64) (index : Nat) :
+theorem checkpointSegmentNameNeRun (directory : DiskDirectory) (first : Nat) (generation : UInt64) (index : Nat) :
     directory.file (.walSegment first) ≠ directory.file (.run generation index) := by
   intro equal
   obtain ⟨_, impossible⟩ := DiskDirectory.walSegment_exclusive equal.symm
   contradiction
 
-/-- Returned run callbacks cannot change the binding of a different
-name whose crash choices already agreed at the entered state. -/
+/-- Returned run callbacks preserve an unrelated name that was already
+settled before the checkpoint. -/
+theorem NativeCheckpointRunObservations.settledNameAtEnd {count : Nat}
+    (runs : NativeCheckpointRunObservations (image := image) state cut count) {path : FilePath}
+    (separate : ∀ index < count, path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation index))
+    (known : ∀ names ∈ (runs.views 0).crashBindings, names path = (runs.views 0).visible path) :
+    ∀ names ∈ (runs.views count).crashBindings, names path = (runs.views count).visible path := by
+  have throughPrefix (through : Nat) (bound : through ≤ count) :
+      ∀ names ∈ (runs.views through).crashBindings, names path = (runs.views through).visible path := by
+    induction through with
+    | zero => exact known
+    | succ index previous =>
+      intro names possible
+      obtain ⟨_, _, _, _, _, _, _, frame⟩ := runs.runReports index bound
+      obtain ⟨earlier, allowed, kept⟩ := frame.crashNames names possible
+      have distinct := separate index bound
+      exact (kept path distinct).trans ((previous (Nat.le_of_lt bound) earlier allowed).trans
+        (frame.visibleNames path distinct).symm)
+  exact throughPrefix count (Nat.le_refl _)
+
 private theorem settledThroughRunPrefix {path : FilePath}
     (separate : ∀ index < cut.checkpoint.table.runs.length,
       path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation index))
     (known : ∀ names ∈ (stop.runs.views 0).crashBindings, names path = (stop.runs.views 0).visible path) :
     ∀ names ∈ stop.view.crashBindings, names path = stop.view.visible path := by
-  have throughPrefix (through : Nat) (bound : through ≤ cut.checkpoint.table.runs.length) :
-      ∀ names ∈ (stop.runs.views through).crashBindings, names path = (stop.runs.views through).visible path := by
-    induction through with
-    | zero => exact known
-    | succ index previous =>
-      intro names possible
-      obtain ⟨_, _, _, _, _, _, _, frame⟩ := stop.runs.runReports index bound
-      obtain ⟨earlier, allowed, kept⟩ := frame.crashNames names possible
-      have distinct := separate index bound
-      exact (kept path distinct).trans ((previous (Nat.le_of_lt bound) earlier allowed).trans
-        (frame.visibleNames path distinct).symm)
   intro names possible
   have effect := stop.survivingNames names possible
   cases took : cut.tookEffect <;> simp only [took, Bool.false_eq_true, ite_false, ite_true] at effect
-  · exact (throughPrefix _ (Nat.le_refl _) names effect).trans (congrFun stop.visibleNames path).symm
+  · exact (stop.runs.settledNameAtEnd separate known names effect).trans (congrFun stop.visibleNames path).symm
   · exact congrFun effect path
 
 /-- A single reboot choice for the reported stopped checkpoint effect.
@@ -84,14 +91,14 @@ private theorem markerStable : ∃ inode, stop.view.Stable (state.session.direct
     (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) := by
   obtain ⟨inode, prior⟩ := reboot.marker
   exact ⟨inode, stop.preservesStable (stop.runs.stablePath prior
-    (fun index _ => fixedNameNeRun _ (.inr (.inr rfl)) _ index) _ (Nat.le_refl _))⟩
+    (fun index _ => checkpointFixedNameNeRun _ (.inr (.inr rfl)) _ index) _ (Nat.le_refl _))⟩
 
 private theorem segmentStable {first : Nat} {bytes : ByteArray}
     (initial : ∃ inode, (stop.runs.views 0).Stable (state.session.directory.file (.walSegment first)) inode bytes) :
     ∃ inode, stop.view.Stable (state.session.directory.file (.walSegment first)) inode bytes := by
   obtain ⟨inode, stable⟩ := initial
   exact ⟨inode, stop.preservesStable (stop.runs.stablePath stable
-    (fun index _ => segmentNameNeRun _ first _ index) _ (Nat.le_refl _))⟩
+    (fun index _ => checkpointSegmentNameNeRun _ first _ index) _ (Nat.le_refl _))⟩
 
 /-- Project the stopped effect to the already supported marked-restart
 input. The selected files and reboot observations are from this cut. -/
@@ -127,10 +134,10 @@ def observed (valid : state.Valid) : NativeReadyQuietCrash state where
     rcases selected with rfl | rfl | selected
     · exact settledThroughRunPrefix (fun index _ => (file_ne_directory _ (.run _ index)).symm)
         (reboot.stableName _ (.inl rfl)) names possible
-    · exact settledThroughRunPrefix (fun index _ => fixedNameNeRun _ (.inl rfl) _ index)
+    · exact settledThroughRunPrefix (fun index _ => checkpointFixedNameNeRun _ (.inl rfl) _ index)
         (reboot.stableName _ (.inr (.inl rfl))) names possible
     rcases selected with rfl | wal | ⟨payload, metadata, index, bound, decoded, within, rfl⟩
-    · exact settledThroughRunPrefix (fun index _ => fixedNameNeRun _ (.inr (.inl rfl)) _ index)
+    · exact settledThroughRunPrefix (fun index _ => checkpointFixedNameNeRun _ (.inr (.inl rfl)) _ index)
         (reboot.stableName _ (.inr (.inr rfl))) names possible
     · rcases wal with rfl | rfl | ⟨segment, member, rfl⟩
       · obtain ⟨_, retained⟩ := reboot.markerStable

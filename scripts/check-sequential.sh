@@ -87,6 +87,8 @@ lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRunDirectoryCut
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRunDirectoryStop
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRunDirectoryReboot
 lake env leanchecker Alvoki.Storage.Disk.NativeStoppedRunDirectoryTableOpen
+lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRunFileReboot
+lake env leanchecker Alvoki.Storage.Disk.NativeStoppedRunFileTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpointOpenPhase
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeStoppedCheckpointTableOpen
