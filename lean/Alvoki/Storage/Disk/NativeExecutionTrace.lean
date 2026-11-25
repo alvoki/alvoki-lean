@@ -9,6 +9,7 @@ import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeReadyCloseRetries
 import Alvoki.Storage.Disk.NativePendingCloseRecovery
 import Alvoki.Storage.Disk.NativePendingClientRecovery
+import Alvoki.Storage.Disk.NativePendingWriteProcessExit
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeWritePreflight
@@ -87,6 +88,8 @@ inductive NativeExecutionEvent : Type 1 where
       (attempted retained : List WAL.Write)
   | uncertainWriteCloseRetriesRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (release : PendingCloseRelease) (errors : List IO.Error) (attempted retained : List WAL.Write)
+  | uncertainWriteExitRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
+      (rejected : List NativeInactiveRequest) (process : Nat) (attempted retained : List WAL.Write)
   | uncertainWriteClientCallsRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (calls : List NativePendingClientEvent) (attempted retained : List WAL.Write)
   | interruptedAppendRecovered (request : WriteRequest) (input : FilePath) (attempted : List WAL.Write)
@@ -106,7 +109,8 @@ def writes : NativeExecutionEvent → List WAL.Write
   | .uncertainWriteRecovered _ _ _ _ retained | .uncertainWriteCrashRecovered _ _ _ _ retained
   | .uncertainWriteInterruptedCloseRecovered _ _ _ _ retained | .interruptedMarkerRecovered _ _ _ retained
   | .uncertainWriteCloseRetriesRecovered _ _ _ _ _ _ retained
-  | .uncertainWriteClientCallsRecovered _ _ _ _ _ retained => retained
+  | .uncertainWriteClientCallsRecovered _ _ _ _ _ retained
+  | .uncertainWriteExitRecovered _ _ _ _ _ _ retained => retained
   | _ => []
 
 def submissions : NativeExecutionEvent → List DatabaseSubmissions
@@ -115,7 +119,8 @@ def submissions : NativeExecutionEvent → List DatabaseSubmissions
   | .uncertainWriteInterruptedCloseRecovered _ _ _ attempted _ | .interruptedAppendRecovered _ _ attempted
   | .interruptedMarkerRecovered _ _ attempted _ | .interruptedAppendCrashRecovered _ _ attempted
   | .uncertainWriteCloseRetriesRecovered _ _ _ _ _ attempted _
-  | .uncertainWriteClientCallsRecovered _ _ _ _ attempted _ =>
+  | .uncertainWriteClientCallsRecovered _ _ _ _ attempted _
+  | .uncertainWriteExitRecovered _ _ _ _ _ attempted _ =>
     [.uncertainBatch attempted]
   | _ => []
 
@@ -128,7 +133,8 @@ def uncertainBatchWhole : NativeExecutionEvent → Prop
   | .uncertainWriteRecovered _ _ _ attempted retained | .uncertainWriteCrashRecovered _ _ _ attempted retained
   | .uncertainWriteInterruptedCloseRecovered _ _ _ attempted retained | .interruptedMarkerRecovered _ _ attempted retained
   | .uncertainWriteCloseRetriesRecovered _ _ _ _ _ attempted retained
-  | .uncertainWriteClientCallsRecovered _ _ _ _ attempted retained =>
+  | .uncertainWriteClientCallsRecovered _ _ _ _ attempted retained
+  | .uncertainWriteExitRecovered _ _ _ _ _ attempted retained =>
     retained = [] ∨ retained = attempted
   | _ => True
 
@@ -392,6 +398,14 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
         (.uncertainWriteCloseRetriesRecovered pending.write.request input pending.write.failure.cause
           seen.release seen.errors pending.write.failure.batch retained)
         ⟨current.history ++ retained, pending.submissions, next⟩
+  | recoverUncertainWriteAfterExit (current : NativeExecutionPosition) {input : FilePath}
+      (pending : NativePendingWrite current.ready) (seen : NativePendingWriteProcessExit pending)
+      (retained : List WAL.Write) (next : NativeReadPosition (current.history ++ retained) pending.submissions)
+      (reopened : NativePendingWriteExitReopened seen input retained next) :
+      NativeExecutionStep current
+        (.uncertainWriteExitRecovered pending.write.request input pending.write.failure.cause
+          seen.requests current.ready.state.owner.reference.process pending.write.failure.batch retained)
+        ⟨current.history ++ retained, pending.submissions, next⟩
   | recoverUncertainWriteAfterClientCalls (current : NativeExecutionPosition) {input : FilePath}
       (pending : NativePendingWrite current.ready) (seen : NativePendingClientRecovery pending input)
       (retained : List WAL.Write) (next : NativeReadPosition (current.history ++ retained) pending.submissions)
@@ -546,6 +560,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
   case recoverUncertainWriteAfterCloseRetries =>
     rename_i pending seen next reopened
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using (seen.frames reopened).2⟩
+  case recoverUncertainWriteAfterExit reopened =>
+    exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWriteAfterClientCalls reopened =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverInterruptedAppendCrash reopened =>
@@ -570,6 +586,7 @@ theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep befo
   case recoverUncertainWriteCrash recovered => exact recovered.wholeOrNone
   case recoverUncertainWriteInterruptedClose recovered => exact recovered.wholeOrNone
   case recoverInterruptedMarker recovered => exact recovered.wholeOrNone
+  case recoverUncertainWriteAfterExit recovered => exact recovered.wholeOrNone
   case recoverUncertainWriteAfterClientCalls recovered => exact recovered.wholeOrNone
   case recoverUncertainWriteAfterCloseRetries =>
     rename_i pending seen next reopened
@@ -657,6 +674,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | interruptedAppendThenPowerLossAndReopen (request : WriteRequest) (input : FilePath)
   | writeThenCloseRetriesAndReopen (request : WriteRequest) (input : FilePath)
       (release : PendingCloseRelease) (failedAttempts : Nat)
+  | writeThenExitAndReopen (request : WriteRequest) (input : FilePath) (rejected : List NativeInactiveRequest)
   | writeThenClientCallsAndReopen (request : WriteRequest) (input : FilePath)
       (calls : List NativePendingClientInstruction)
   | interruptedMarkerThenReopen (request : WriteRequest) (input : FilePath)
@@ -716,6 +734,8 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .writeThenCloseRetriesAndReopen request input release failedAttempts,
       .uncertainWriteCloseRetriesRecovered submitted opened _ disposed errors _ _ =>
     submitted = request ∧ opened = input ∧ disposed = release ∧ errors.length = failedAttempts
+  | .writeThenExitAndReopen request input rejected, .uncertainWriteExitRecovered submitted opened _ calls _ _ _ =>
+    submitted = request ∧ opened = input ∧ calls = rejected
   | .writeThenClientCallsAndReopen request input calls,
       .uncertainWriteClientCallsRecovered submitted opened _ returned _ _ =>
     submitted = request ∧ opened = input ∧ returned.map (·.instruction) = calls
@@ -779,6 +799,13 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
         ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
           crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
         Nonempty (NativeMarkerPublicationCrashReads crash input layout selected))
+  | writeThenExitAndReopen (input : FilePath) (failedWrite : NativeReadyWriteFailure current.state)
+      (rejected : List NativeInactiveRequest)
+      (inspect : ∀ cache, failedWrite.returnedAt cache → Nonempty (NativePendingWriteCensus current.state cache))
+      (observe : ∀ pending : NativePendingWrite current, pending.write = failedWrite →
+        ∃ seen : NativePendingWriteProcessExit pending, seen.requests = rejected ∧
+          pending.write.ReleasedMarkedReports input seen.census
+            (pending.observed.bindings (current.state.session.directory.file .lock)))
   | writeThenClientCallsAndReopen (input : FilePath) (failedWrite : NativeReadyWriteFailure current.state)
       (calls : List NativePendingClientInstruction)
       (inspect : ∀ cache, failedWrite.returnedAt cache → Nonempty (NativePendingWriteCensus current.state cache))
@@ -875,6 +902,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .interruptedAppendThenReopen input stop _ _ => .interruptedAppendThenReopen stop.request input
   | .interruptedAppendThenPowerLossAndReopen (stop := stop) input _ _ =>
     .interruptedAppendThenPowerLossAndReopen stop.request input
+  | .writeThenExitAndReopen input failedWrite rejected _ _ => .writeThenExitAndReopen failedWrite.request input rejected
   | .writeThenClientCallsAndReopen input failedWrite calls _ _ =>
     .writeThenClientCallsAndReopen failedWrite.request input calls
   | .writeThenCloseRetriesAndReopen input failedWrite release failedAttempts _ _ =>
@@ -954,6 +982,12 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | interruptedMarkerThenReopen _ crash observe =>
     obtain ⟨retained, next, reopened⟩ := current.ready.recoversInterruptedMarker crash observe
     exact ⟨_, _, .recoverInterruptedMarker current crash retained next reopened, rfl, rfl⟩
+  | writeThenExitAndReopen _ failedWrite _ inspect observe =>
+    obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite failedWrite inspect
+    obtain ⟨seen, rejected, reports⟩ := observe pending same
+    obtain ⟨retained, next, reopened⟩ := pending.recoversAfterProcessExit seen reports
+    exact ⟨_, _, .recoverUncertainWriteAfterExit current pending seen retained next reopened,
+      congrArg NativeReadyWriteFailure.request same, rfl, rejected⟩
   | writeThenClientCallsAndReopen _ failedWrite _ inspect observe =>
     obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite failedWrite inspect
     obtain ⟨seen, calls⟩ := observe pending same
