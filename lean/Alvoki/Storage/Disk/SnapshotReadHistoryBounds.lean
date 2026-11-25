@@ -72,25 +72,47 @@ theorem RecordedSnapshotRead.agreesAfterSuffix {read : RecordedSnapshotRead}
     exact same.trans stable.symm
   | lookupDenied | rangeDenied => exact same
 
-/-- Extend the same ledger by its exact acknowledged batch. The replay
-prefix stays identical, so every bounded old response remains correct. -/
-theorem PendingClientReplay.appendAcknowledged
+/-- Extend the ledger by the retained part of the next submission. The
+old committed snapshots still resolve in the extended replay. -/
+theorem PendingClientReplay.appendSelection
     (prior : PendingClientReplay log reads history)
     (bounded : ∀ read ∈ reads, read.BoundedBy history.length)
-    (ordered : WAL.OrdinalsFrom 1 (history ++ batch)) :
-    PendingClientReplay (log ++ [.acknowledgedBatch batch]) reads (history ++ batch) ∧
-      ∀ read ∈ reads, read.BoundedBy (history ++ batch).length := by
+    (retains : submission.Retains suffix) (ordered : WAL.OrdinalsFrom 1 (history ++ suffix)) :
+    PendingClientReplay (log ++ [submission]) reads (history ++ suffix) ∧
+      ∀ read ∈ reads, read.BoundedBy (history ++ suffix).length := by
   obtain ⟨reference, replayed, kept, _, _, agrees⟩ := prior
   obtain ⟨after, replayedAfter⟩ := SnapshotWalReplay.fromEmpty _ ordered
   obtain ⟨previous, earlier, suffix⟩ := replayedAfter.split
   have selected := earlier.deterministic replayed
   subst previous
-  have retained : DatabaseBatchRetention (log ++ [.acknowledgedBatch batch]) (history ++ batch) :=
-    kept.append rfl
+  have retained := kept.append retains
   refine ⟨⟨after, replayedAfter, retained, retained.orderedSubmissions.1, retained.orderedSubmissions.2, ?_⟩, ?_⟩
   · intro read recorded
     exact read.agreesAfterSuffix replayed suffix (bounded read recorded) (agrees read recorded)
   · intro read recorded
     exact (bounded read recorded).mono (by simp)
+
+/-- Extend the same ledger by its exact acknowledged batch. -/
+theorem PendingClientReplay.appendAcknowledged
+    (prior : PendingClientReplay log reads history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy history.length)
+    (ordered : WAL.OrdinalsFrom 1 (history ++ batch)) :
+    PendingClientReplay (log ++ [.acknowledgedBatch batch]) reads (history ++ batch) ∧
+      ∀ read ∈ reads, read.BoundedBy (history ++ batch).length :=
+  prior.appendSelection bounded (submission := .acknowledgedBatch batch) rfl ordered
+
+/-- An uncertain submission retains either its whole group or none. -/
+theorem PendingClientReplay.appendUncertain
+    (prior : PendingClientReplay log reads history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy history.length)
+    (allowed : selected = history ∨ selected = history ++ batch)
+    (ordered : WAL.OrdinalsFrom 1 selected) :
+    PendingClientReplay (log ++ [.uncertainBatch batch]) reads selected ∧
+      ∀ read ∈ reads, read.BoundedBy selected.length := by
+  rcases allowed with rfl | rfl
+  · simpa only [List.append_nil] using prior.appendSelection bounded
+      (submission := .uncertainBatch batch) (.inl (show ([] : List WAL.Write) = [] from rfl))
+      (by simpa only [List.append_nil] using ordered)
+  · exact prior.appendSelection bounded (submission := .uncertainBatch batch) (.inr rfl) ordered
 
 end Alvoki.Storage.DiskSession

@@ -1,6 +1,5 @@
 import Alvoki.Storage.Disk.PendingClientReplay
-import Alvoki.Storage.Disk.NativeReadyReadPrefix
-import Alvoki.Storage.Disk.CapturedMarkedInstallation
+import Alvoki.Storage.Disk.NativeMarkedReadPrefix
 
 namespace Alvoki.Storage.DiskSession
 
@@ -13,23 +12,6 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
   {admission : CensusOpenAdmissionReports input directory inventory retry}
   {vacant : TryLockObserves retry.owners directory (.ok true)}
   {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
-
-/-- Reports for the final healthy held open. The retry prefix supplies the
-physical image and selects the checkpoint before these reports are used. -/
-structure FirstAppendReopenObservations (input : FilePath) (directory : DiskDirectory)
-    (inventory : DescriptorInventory) (retry : LockedFileState FileImage)
-    {history : List WAL.Write} (layout : CanonicalKeeperLayout retry.image history)
-    (published : CheckpointPublication.Image) (vacant : TryLockObserves retry.owners directory (.ok true))
-    {checkpoint : Option (PackedTable × UInt64)}
-    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) where
-  admission : CensusOpenAdmissionReports input directory inventory retry
-  callbacks : CapturedAlignedCallbacks admission
-  reads : CapturedMarkedReadReports admission layout published
-  finish : CapturedKeeperFinish callbacks reads vacant selected
-  chronology : CapturedMarkedReadCensus reads finish.reader
-  marker : IO.FS.Metadata
-  markerFound : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
-    .ok (.ok marker) (admission.reached, admission.held)
 
 /-- A stop during the first append leaves the earlier marker in charge
 after process exit or power loss. The exact retained prefix is replayed
@@ -50,7 +32,7 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
       BatchAppendInterruption.PreparedRetry before layout →
       ∀ selected : SelectedIntegrityCheckpoint before.published.durable
           retry.image.directory.active.manifest before.checkpoint,
-        Nonempty (FirstAppendReopenObservations input directory inventory retry layout before.published vacant selected)) :
+        Nonempty (MarkedReadyOpenObservations input directory inventory retry layout before.published vacant selected)) :
     let reached := report.cut.writeFiles before.history (before.files.directory.staged .walBoundary)
     report.runRequestUntilAppend request stage sync rename =
       .error report.appendCall (.poisoned, ⟨reached, before.owners⟩) ∧
@@ -59,7 +41,7 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
     ∃ (layout : CanonicalKeeperLayout retry.image before.history)
       (selected : SelectedIntegrityCheckpoint before.published.durable
         retry.image.directory.active.manifest before.checkpoint)
-      (observations : FirstAppendReopenObservations input directory inventory retry layout before.published vacant selected)
+      (observations : MarkedReadyOpenObservations input directory inventory retry layout before.published vacant selected)
       (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState),
       layout.target = before.target ∧
       observations.finish.run observations.chronology = .ok session (observations.finish.census, final) ∧

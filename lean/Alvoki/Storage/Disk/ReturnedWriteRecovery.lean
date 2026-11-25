@@ -9,7 +9,7 @@ open System WAL.Boundary WalSegmentCommit WalSegmentRepair SyncHandleRouting
 allowed target for each reached failed recovery. The observed prefix retains
 the manifest binding and prior seals even if recovery stops here. The
 starting owner comes from the caller’s observed lock state. -/
-theorem SegmentedBatchFailure.refinesReopenPrefix {directory : DiskDirectory} {before : SegmentedWriterState}
+theorem SegmentedBatchFailure.refinesReopenPrefixWithWal {directory : DiskDirectory} {before : SegmentedWriterState}
     {writer : Nat} {owners : LockOwners} {retry : LockedFileState FileImage}
     (failure : SegmentedBatchFailure directory before) (ready : before.RetainedReady directory writer)
     (reported : ReportedReopenPrefix directory before.wal.active.first ⟨failure.released.image, owners⟩ retry) :
@@ -19,8 +19,16 @@ theorem SegmentedBatchFailure.refinesReopenPrefix {directory : DiskDirectory} {b
     retry.image.directory.active.manifest = before.wal.directory.active.manifest ∧
     ∃ history, (history = before.history ∨ history = before.history ++ failure.batch) ∧
       retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) ∧
+      let wal := before.wal.appendSelectedView retry.image.directory.active history
+      wal.ReadLayout history ∧ wal.Valid history ∧
       ∃ layout : CanonicalKeeperLayout retry.image history,
-        layout.target.first = before.wal.active.first ∧ Prepared retry.image layout.target layout.plan := by
+        layout.target.first = before.wal.active.first ∧
+        layout.sealed ++ [layout.keeper] = wal.readDescriptors layout.range.watermark ∧
+        selectWalSegmentReads (wal.segments.map WalSegment.first) layout.range.watermark =
+          some (layout.first, (wal.readDescriptors layout.range.watermark).map WalSegment.first) ∧
+        Prepared retry.image layout.target layout.plan ∧
+        before.published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+          retry.image.directory.active.manifest ∧ WAL.OrdinalsFrom 1 history := by
   obtain ⟨fits, cut⟩ := failure.retainedCut ready
   have projected : BatchCutProjection failure.released.image
       ((writeFilesAfter (runBatchEffects before.history failure.batch failure.effects
@@ -47,8 +55,26 @@ theorem SegmentedBatchFailure.refinesReopenPrefix {directory : DiskDirectory} {b
       rw [← first]
       exact layout.chain.keeperBytes
     exact ⟨layout.target, layout.plan, ⟨first, history, allowed, marker, layout.through, bytes⟩, first, prepared⟩
-  obtain ⟨kept, manifest, history, allowed, marker, _, _, layout, _, first, _, _, _, prepared, _⟩ := select attempts
-  exact ⟨attempts, kept, manifest, history, allowed, marker, layout, first, prepared⟩
+  obtain ⟨kept, manifest, history, allowed, marker, walLayout, walValid, layout, _, first, _,
+    descriptors, offsets, prepared, _, accepted, ordered, _⟩ := select attempts
+  exact ⟨attempts, kept, manifest, history, allowed, marker, walLayout, walValid, layout, first,
+    descriptors, offsets, prepared, accepted, ordered⟩
+
+theorem SegmentedBatchFailure.refinesReopenPrefix {directory : DiskDirectory} {before : SegmentedWriterState}
+    {writer : Nat} {owners : LockOwners} {retry : LockedFileState FileImage}
+    (failure : SegmentedBatchFailure directory before) (ready : before.RetainedReady directory writer)
+    (reported : ReportedReopenPrefix directory before.wal.active.first ⟨failure.released.image, owners⟩ retry) :
+    BoundedReopenTrace directory (BatchRetryTarget before.history failure.batch before.wal.active.first)
+      ⟨failure.released.image, owners⟩ retry ∧
+    retry.image.kept = failure.released.image.kept ∧
+    retry.image.directory.active.manifest = before.wal.directory.active.manifest ∧
+    ∃ history, (history = before.history ∨ history = before.history ++ failure.batch) ∧
+      retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) ∧
+      ∃ layout : CanonicalKeeperLayout retry.image history,
+        layout.target.first = before.wal.active.first ∧ Prepared retry.image layout.target layout.plan := by
+  obtain ⟨bounded, kept, manifest, history, allowed, marker, _, _, layout, first, _, _, prepared, _⟩ :=
+    failure.refinesReopenPrefixWithWal ready reported
+  exact ⟨bounded, kept, manifest, history, allowed, marker, layout, first, prepared⟩
 
 /-- On the exact returned cache, the reported release is a successful
 unlock in the file-state projection or an observed last-reference drop.

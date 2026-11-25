@@ -216,6 +216,7 @@ import Alvoki.Storage.Disk.PendingFirstAppendReopen
 import Alvoki.Storage.Disk.SnapshotReadHistoryBounds
 import Alvoki.Storage.Disk.NativeReadyReadPrefix
 import Alvoki.Storage.Disk.NativeMarkedReadPrefix
+import Alvoki.Storage.Disk.NativeReadyUncertainWrite
 import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
 import Alvoki.Storage.Disk.NativeReadyClose
@@ -1362,6 +1363,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runReported_eq_batch
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.ReturnedReports.refinesClient
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchFailure.refinesReopenPrefix
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchFailure.refinesReopenPrefixWithWal
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedWrite
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.ReturnedReports.refinesPlainClient
 #check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.issuingHandles
@@ -1388,10 +1390,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.responsesBounded
 #check_axioms Alvoki.Storage.DiskSession.RecordedSnapshotRead.agreesAfterSuffix
 #check_axioms Alvoki.Storage.DiskSession.PendingClientReplay.appendAcknowledged
+#check_axioms Alvoki.Storage.DiskSession.PendingClientReplay.appendSelection
+#check_axioms Alvoki.Storage.DiskSession.PendingClientReplay.appendUncertain
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readsBounded
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.guardedReplay
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readAt
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperFinish.startsNativeReadPrefix
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.reachesBarrier
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.censusPreserved
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.returned

@@ -5,6 +5,23 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair WAL.Boundary
 
+/-- Reports for the final healthy held open. The retry prefix supplies the
+physical image and selects the checkpoint before these reports are used. -/
+structure MarkedReadyOpenObservations (input : FilePath) (directory : DiskDirectory)
+    (inventory : DescriptorInventory) (retry : LockedFileState FileImage)
+    {history : List WAL.Write} (layout : CanonicalKeeperLayout retry.image history)
+    (published : CheckpointPublication.Image) (vacant : TryLockObserves retry.owners directory (.ok true))
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) where
+  admission : CensusOpenAdmissionReports input directory inventory retry
+  callbacks : CapturedAlignedCallbacks admission
+  reads : CapturedMarkedReadReports admission layout published
+  finish : CapturedKeeperFinish callbacks reads vacant selected
+  chronology : CapturedMarkedReadCensus reads finish.reader
+  marker : IO.FS.Metadata
+  markerFound : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+    .ok (.ok marker) (admission.reached, admission.held)
+
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout retry.image history} {published : CheckpointPublication.Image}
