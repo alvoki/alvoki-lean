@@ -142,6 +142,43 @@ theorem decode_initial : decode initial = .ok initialSelection := by
     simp [decodeSlot, otherWord, magic]
   simp [decode, size, first, second, select]
 
+private theorem decodeSlot_valid {bytes : ByteArray} {slot : Nat} {selected : Selection}
+    (accepted : decodeSlot bytes slot = some selected) :
+    selected.slot = slot ∧ selected.epoch.toNat % 2 = slot ∧
+      selected.frontier.toNat % frameSize = 0 ∧
+      selected.epoch.toNat ≤ selected.frontier.toNat / frameSize := by
+  unfold decodeSlot at accepted
+  dsimp only at accepted
+  split at accepted
+  · rename_i checked
+    have fields := Option.some.inj accepted
+    subst selected
+    simp_all
+  · contradiction
+
+private theorem selectedSlot {left right : Option Selection} {selected : Selection}
+    (accepted : select left right = .ok selected) : left = some selected ∨ right = some selected := by
+  cases left <;> cases right <;> simp_all [select]
+  rename_i a b
+  by_cases order : a.epoch < b.epoch <;> simp only [order, ite_true, ite_false] at accepted
+  · split at accepted <;> simp_all
+  · split at accepted <;> simp_all
+
+/-- Successful decode identifies the physical slot containing the record
+and supplies the format invariants required to make a successor. -/
+theorem decode_valid {bytes : ByteArray} {selected : Selection} (accepted : decode bytes = .ok selected) :
+    decodeSlot bytes selected.slot = some selected ∧ selected.slot < 2 ∧
+      selected.epoch.toNat % 2 = selected.slot ∧ selected.frontier.toNat % frameSize = 0 ∧
+      selected.epoch.toNat ≤ selected.frontier.toNat / frameSize := by
+  unfold decode at accepted
+  split at accepted
+  · rcases selectedSlot accepted with first | second
+    · obtain ⟨slot, parity, aligned, count⟩ := decodeSlot_valid first
+      exact ⟨slot ▸ first, by rw [slot]; decide, slot ▸ parity, aligned, count⟩
+    · obtain ⟨slot, parity, aligned, count⟩ := decodeSlot_valid second
+      exact ⟨slot ▸ second, by rw [slot]; decide, slot ▸ parity, aligned, count⟩
+  · contradiction
+
 /-- Read one byte beyond the fixed container to witness oversized files. -/
 abbrev acquisitionLimit : Nat := containerSize + 1
 
@@ -389,6 +426,31 @@ theorem decode_syncedWrite {before after : ByteArray} {active : OrderedTwoSlot.S
   cases active with
   | first => exact .inl ⟨kept, target⟩
   | second => exact .inr ⟨target, kept⟩
+
+/-- A successful advance from an accepted container decodes as the new
+selection once its encoded bytes are durable and the other slot is intact. -/
+theorem decode_afterAdvance {before after : ByteArray} {current next : Selection} {frontier : Nat}
+    (prior : decode before = .ok current) (advanced : advance current frontier = .ok next)
+    (size : after.size = containerSize)
+    (unchanged : ∀ position,
+      (position < next.slot * stride ∨ next.slot * stride + 40 ≤ position) →
+        after.get! position = before.get! position)
+    (written : after.extract (next.slot * stride) (next.slot * stride + 40) = next.encode) :
+    decode after = .ok next := by
+  obtain ⟨found, bounded, oldParity, oldAligned, oldCounts⟩ := decode_valid prior
+  obtain ⟨slot, epoch, _, increases, _⟩ := advance_fields advanced
+  obtain ⟨parity, aligned, counts⟩ := advance_valid advanced oldParity oldAligned oldCounts
+  have inside : next.slot * stride + 40 ≤ after.size := by
+    rw [size, slot]
+    change (1 - current.slot) * 4096 + 40 ≤ 8192
+    omega
+  obtain initial | alternate : current.slot = 0 ∨ current.slot = 1 := by omega
+  · apply decode_syncedWrite (active := .first) size (by simpa only [initial, slotIndex] using found)
+      (by simp [initial, slot, slotIndex, OrderedTwoSlot.Slot.other]) unchanged inside written
+      parity aligned counts epoch.symm increases
+  · apply decode_syncedWrite (active := .second) size (by simpa only [alternate, slotIndex] using found)
+      (by simp [alternate, slot, slotIndex, OrderedTwoSlot.Slot.other]) unchanged inside written
+      parity aligned counts epoch.symm increases
 
 /-- Schedule used by the native writer. On a reported failure the remaining
 operations are skipped, including the installation of the cached slot. -/
