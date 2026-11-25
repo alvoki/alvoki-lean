@@ -69,18 +69,18 @@ theorem resolveAfterAppend_sameInode {handle state : Type}
     (owned : cache.Agrees directory inode (bindings appended)) :
     ∃ synced resolved,
       cache.resolve directory keeper openRead appended = .ok synced (resolved, appended) ∧
-      inode synced = inode file := by
+      inode synced = inode file ∧ resolved.Agrees directory inode (bindings appended) := by
   have appendBinding := owned.active active
   cases pending : cache.pending.find? (fun entry => entry.1 == keeper) with
   | none =>
-    exact ⟨file, cache, by simp [SyncHandleRouting.Cache.resolve, notDirectory, active, pending], rfl⟩
+    exact ⟨file, cache, by simp [SyncHandleRouting.Cache.resolve, notDirectory, active, pending], rfl, owned⟩
   | some entry =>
     obtain ⟨path, captured⟩ := entry
     have same : path = keeper := by
       simpa using List.find?_some pending
     subst path
     exact ⟨captured, cache.consume keeper, by simp [SyncHandleRouting.Cache.resolve, notDirectory, pending],
-      Option.some.inj ((owned.pending pending).symm.trans appendBinding)⟩
+      Option.some.inj ((owned.pending pending).symm.trans appendBinding), owned.consume⟩
 
 /-- The executed append and cache-routed barrier use descriptions for
 one inode. The result preserves the exact reached cache and syscall result. -/
@@ -102,16 +102,16 @@ theorem appendThenSync_sameInode {handle state : Type}
     (bindingsPreserved : bindings appended = bindings before)
     (selectedPreserved : bindings appended keeper = bindings opened keeper) :
     ∃ synced resolved,
-      inode synced = inode file ∧
+      inode synced = inode file ∧ resolved.Agrees directory inode (bindings appended) ∧
       ((SyncHandleRouting.runAppendWithCache keeper frame openAppend write flush >>= fun _ =>
         SyncHandleRouting.sync directory openRead fsync keeper) (cache, before)) =
         SyncHandleRouting.withCache resolved (fsync synced appended) := by
   obtain ⟨appendResult, activeOwned⟩ := SyncHandleRouting.runAppendWithCache_owned
     frame openAppend write flush bindings inode owned fresh selected wrote flushed
     bindingsPreserved selectedPreserved
-  obtain ⟨synced, resolved, lookup, same⟩ :=
+  obtain ⟨synced, resolved, lookup, same, resolvedOwned⟩ :=
     resolveAfterAppend_sameInode (openRead := openRead) notDirectory rfl activeOwned
-  exact ⟨synced, resolved, same, by
+  exact ⟨synced, resolved, same, resolvedOwned, by
     simp only [Bind.bind, EStateM.bind, appendResult, SyncHandleRouting.sync, lookup]⟩
 
 /-- If the slot write or marker barrier fails after the WAL barrier, the
