@@ -144,3 +144,26 @@ in the workspace.
 [Per-trial results](offered-repeat.csv) retain the elapsed time and both
 response p99 values in nanoseconds for all 18 runs, including rename.
 Each p99 is the nearest-rank percentile of the 4,000 responses of its kind.
+
+### Durability contract for the ordered slots
+
+The alternate strategy writes the inactive 40-byte record at offset 0
+or 4096 on a held, non-append descriptor. A batch syncs the WAL before
+it writes that record, then syncs the marker before acknowledging the
+batch. Reopen validates the selected WAL, syncs the same marker
+descriptor used to read the selection, and only then repairs the WAL.
+
+The modeled crash contract requires the database lock and stable
+descriptor identity. An interrupted inactive-slot write must preserve
+the active record. The inactive record may survive as the old record,
+the complete new record, or an invalid record. This last case requires
+that a torn image cannot pass the decoder as a different valid record.
+Checksums detect many corruptions and this exclusion is a filesystem
+and fault-model premise. The 4096-byte spacing by itself establishes
+neither power-loss atomicity nor separate physical failure domains.
+
+The model also requires a successful sync to make the relevant writes
+durable on the selected inode, and a successful directory sync where
+the shared file-management code publishes or removes names. An error
+or interruption can occur on either side of the modeled persistence
+effect. See the [retry and client-return proofs](../../../../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean).
