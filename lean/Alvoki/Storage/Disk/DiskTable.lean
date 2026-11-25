@@ -348,6 +348,24 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
   unless metadata.type == .file && metadata.numLinks == 1 do
     throw (IO.userError s!"expected a regular database file with one link: '{path}'")
 
+/-- A checkpoint run path may already exist after an interrupted attempt.
+Check its private regular binding before opening it for write. Pass the
+description used for both the write and flush to the final callback. -/
+@[macro_inline] def writeCheckpointRunWith [Monad m] [MonadExceptOf IO.Error m] {handle result : Type}
+    (lookup : FilePath → m (Except IO.Error IO.FS.Metadata)) (openWrite : FilePath → m handle)
+    (write : handle → ByteArray → m Unit) (flush : handle → m Unit)
+    (path : FilePath) (bytes : ByteArray) (retain : handle → m result) : m result := do
+  if let some metadata ← optionalMetadataWith (lookup path) then checkPrivateRegularWith path metadata
+  let handle ← openWrite path
+  write handle bytes
+  flush handle
+  retain handle
+
+theorem writeRunFlushed_schedule (files : SyncFiles) (path : FilePath) (bytes : ByteArray) :
+    writeRunFlushed files path bytes =
+      writeCheckpointRunWith (m := IO) (fun name => name.symlinkMetadata.toBaseIO)
+        (IO.FS.Handle.mk · .write) IO.FS.Handle.write IO.FS.Handle.flush path bytes (files.remember path) := rfl
+
 /-- Project the concrete pre-lock admission schedule onto supplied
 primitive callbacks. Successful append-open identifies the handle passed to
 acquisition, including when the lock file has just been created. -/
