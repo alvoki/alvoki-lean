@@ -12,15 +12,27 @@ private abbrev State := SyncHandleRouting.Cache Handle × WalInodeImage
 variable {directory : DiskDirectory} {before : SegmentedWriterState}
   {attempt : SegmentedCheckpointReport directory before}
 
-/-- The manifest projection is framed at each observed run pair.
-The prefix writes and the failed file sync each leave this off-target
-projection intact. The selected run bytes are tracked independently
-through the canonical run paths and inode frames. -/
-structure RunSyncFailureManifestFrames (report : ObservedCheckpointRunSyncFailure attempt)
-    (manifest : State → Publication.Image) : Prop where
+/-- The off-target manifest projection at the initial run prefix, each
+successfully returned pair, and the selected pair's reached error. -/
+structure RunPrefixManifestFrames (report : ObservedCheckpointRunPrefix attempt)
+    (reached : State) (manifest : State → Publication.Image) : Prop where
   entry : manifest (report.atRun 0) = before.published.manifest
   earlier : ∀ index < report.index, manifest (report.atRun (index + 1)) = manifest (report.atRun index)
-  failed : manifest report.reached = manifest (report.atRun report.index)
+  failed : manifest reached = manifest (report.atRun report.index)
+
+theorem RunPrefixManifestFrames.preserves {report : ObservedCheckpointRunPrefix attempt} {reached : State}
+    {manifest : State → Publication.Image} (frames : RunPrefixManifestFrames report reached manifest) :
+    manifest reached = before.published.manifest := by
+  have preserved (through : Nat) (within : through ≤ report.index) :
+      manifest (report.atRun through) = before.published.manifest := by
+    induction through with
+    | zero => exact frames.entry
+    | succ previous ih => exact (frames.earlier previous within).trans (ih (Nat.le_trans (Nat.le_succ _) within))
+  exact frames.failed.trans (preserved report.index (Nat.le_refl _))
+
+abbrev RunSyncFailureManifestFrames (report : ObservedCheckpointRunSyncFailure attempt)
+    (manifest : State → Publication.Image) : Prop :=
+  RunPrefixManifestFrames report.toObservedCheckpointRunPrefix report.reached manifest
 
 namespace ObservedCheckpointRunSyncFailure
 
@@ -32,13 +44,7 @@ def reachedPublication (report : ObservedCheckpointRunSyncFailure attempt)
 
 theorem priorManifest (report : ObservedCheckpointRunSyncFailure attempt)
     {manifest : State → Publication.Image} (frames : RunSyncFailureManifestFrames report manifest) :
-    (report.reachedPublication manifest).manifest = before.published.manifest := by
-  have preserved (through : Nat) (within : through ≤ report.index) :
-      manifest (report.atRun through) = before.published.manifest := by
-    induction through with
-    | zero => exact frames.entry
-    | succ previous ih => exact (frames.earlier previous within).trans (ih (Nat.le_trans (Nat.le_succ _) within))
-  exact frames.failed.trans (preserved report.index (Nat.le_refl _))
+    (report.reachedPublication manifest).manifest = before.published.manifest := frames.preserves
 
 /-- The old manifest remains selected after the failed private run sync.
 Release leaves exactly the reached files. The same reported admitted

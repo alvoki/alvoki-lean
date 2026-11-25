@@ -69,11 +69,8 @@ private def dispatch {directory : DiskDirectory} {before : SegmentedWriterState}
       | none => throw (IO.userError "checkpoint run index is out of bounds"))
     writeRun writeStage (SyncPathGroup.run (sync directory.path openRead fsync)) rename
 
-/-- This reported run completed the guarded open, write and flush. Its
-own file sync returns an error after the preceding private run pairs.
-The write projection and off-target frame concern the same callback,
-opened description and reached namespace. -/
-structure ObservedCheckpointRunSyncFailure {directory : DiskDirectory} {before : SegmentedWriterState}
+/-- The exact successful run pairs preceding a selected run callback. -/
+structure ObservedCheckpointRunPrefix {directory : DiskDirectory} {before : SegmentedWriterState}
     (attempt : SegmentedCheckpointReport directory before) where
   flushedTable : (flushForCheckpoint before.installed.table id : Except String PackedTable) = .ok attempt.table
   generationFits : before.installed.generation.toNat + 1 < UInt64.size
@@ -94,6 +91,12 @@ structure ObservedCheckpointRunSyncFailure {directory : DiskDirectory} {before :
   prefixPairs : ∀ i < index, Nonempty (CheckpointRunPairCustody directory (SegmentedCheckpointReport.generation before)
     attempt.table (dispatch attempt writeRun writeStage rename openRead fsync) (atRun i) (atRun (i + 1))
     (view i) (view (i + 1)) i)
+/-- This reported run completed the guarded open, write and flush. Its
+own file sync returns an error after the preceding private run pairs.
+The write projection and off-target frame concern the same callback,
+opened description and reached namespace. -/
+structure ObservedCheckpointRunSyncFailure {directory : DiskDirectory} {before : SegmentedWriterState}
+    (attempt : SegmentedCheckpointReport directory before) extends ObservedCheckpointRunPrefix attempt where
   inventory : DescriptorInventory
   slot : DescriptorSlot
   flushed : WalInodeImage
@@ -123,6 +126,95 @@ structure ObservedCheckpointRunSyncFailure {directory : DiskDirectory} {before :
   sameNames : reachedView.visible = flushedBindings
   frame : RunWriteInodeFrame (directory.file (.run (SegmentedCheckpointReport.generation before) index))
     (inventory.inode slot.description) flushed (view index) reachedView
+
+namespace ObservedCheckpointRunPrefix
+
+variable {directory : DiskDirectory} {before : SegmentedWriterState}
+  {attempt : SegmentedCheckpointReport directory before}
+
+abbrev path (report : ObservedCheckpointRunPrefix attempt) : FilePath :=
+  directory.file (.run (SegmentedCheckpointReport.generation before) report.index)
+
+abbrev perform (report : ObservedCheckpointRunPrefix attempt) : Step → EStateM IO.Error State Unit :=
+  dispatch attempt report.writeRun report.writeStage report.rename report.openRead report.fsync
+
+/-- A returned error at the selected pair stops the real ordered schedule
+after the previously completed pairs. -/
+theorem returnsError (report : ObservedCheckpointRunPrefix attempt) {cause : IO.Error} {reached : State}
+    (failed : ((report.perform (.writeRun report.index) >>= fun _ => report.perform (.syncRun report.index))
+      (report.atRun report.index)) = .error cause reached) :
+    CheckpointPublication.run attempt.table.runs.length report.perform (report.atRun 0) = .error cause reached := by
+  obtain ⟨remaining, schedule⟩ := steps_atRunPair report.within
+  have past := runSteps_returned report.perform report.index report.atRun (fun i earlier =>
+    let ⟨pair⟩ := report.prefixPairs i earlier
+    pair.returned)
+  change ((steps attempt.table.runs.length).forM report.perform) (report.atRun 0) = _
+  rw [schedule, List.append_assoc, List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
+  simp only [Bind.bind, EStateM.bind, past]
+  have suffix : ([Step.writeRun report.index, Step.syncRun report.index] ++ remaining).forM report.perform =
+      ((report.perform (.writeRun report.index) >>= fun _ => report.perform (.syncRun report.index)) >>=
+        fun _ => remaining.forM report.perform) := by
+    simp [List.forM_eq_forM, List.forM_cons, List.cons_append, bind_assoc]
+  rw [suffix]
+  simp only [Bind.bind, EStateM.bind] at failed ⊢
+  rw [failed]
+
+/-- The selected pair returns the exact poisoned writer. A successful
+close or final drop makes the reached files available for another open. -/
+theorem poisonsAndReleases (report : ObservedCheckpointRunPrefix attempt) {writer : Nat} {cause : IO.Error} {reached : State}
+    (failed : CheckpointPublication.run attempt.table.runs.length report.perform (report.atRun 0) = .error cause reached)
+    (ownership : before.owners.Owns directory writer) (release : SegmentedFailureRelease writer) :
+    let poisoned : Phase Installed × LockedFileState State := (.poisoned, ⟨reached, before.owners⟩)
+    let released : LockedFileState State := ⟨reached, before.owners.set (directory.file .lock) none⟩
+    runPreparedCheckpoint attempt.prepared report.perform (.ready before.installed, ⟨report.atRun 0, before.owners⟩) =
+        .error cause poisoned ∧
+      release.Observed (directory := directory) poisoned released ∧
+      TryLockObserves released.owners directory (.ok true) := by
+  have publication : CheckpointPublication.run attempt.prepared.table.runs.length report.perform (report.atRun 0) =
+      .error cause reached := failed
+  obtain ⟨poisoned, closed, drops, vacant⟩ := runPreparedCheckpoint_failure_handoff
+    (before := ⟨report.atRun 0, before.owners⟩) before.installed attempt.prepared report.perform publication ownership
+  refine ⟨poisoned, ?_, vacant⟩
+  cases release with
+  | closed => exact closed
+  | references held events last => exact drops held events last
+
+/-- The earlier completed run pairs preserve the inodes and payloads
+selected by the old manifest. The returned path separation also applies
+to the selected next run. -/
+theorem priorStable (report : ObservedCheckpointRunPrefix attempt) {writer : Nat}
+    (ready : before.RetainedReady directory writer)
+    (entry : CheckpointRunPrefix.EntrySelection before (report.view 0))
+    {raw : ByteArray} {metadata : Manifest.IntegrityCheckpoint}
+    (binding : before.wal.directory.active.manifest = some raw)
+    (decoded : Manifest.IntegrityCheckpoint.decode raw = .ok metadata)
+    {index : Nat} (within : index < metadata.header.runCount.toNat) :
+    let path := directory.file (.run metadata.header.generation index)
+    ∃ payload inode, before.published.durable metadata.header.generation index = some payload ∧
+      (report.view report.index).Stable path inode payload ∧ path ≠ report.path := by
+  intro path
+  have prior := ready.resumed.selected
+  rw [← ready.walPair] at prior
+  obtain ⟨payload, stored⟩ := prior.runExists binding decoded within
+  obtain ⟨inode, captured⟩ := entry raw metadata binding decoded index within payload stored
+  have liveManifest : before.published.manifest.active = some raw := by
+    rw [ready.manifestFiles, ready.directoryFiles]
+    exact binding
+  have distinctGeneration := CheckpointPowerCut.freshGeneration ready report.generationFits raw (.inl liveManifest)
+    (.integrity metadata) (Manifest.VersionedCheckpoint.decode_integrity decoded)
+  have separated (i : Nat) : path ≠ directory.file (.run (SegmentedCheckpointReport.generation before) i) :=
+    runPath_ne directory (fun same => distinctGeneration (congrArg Prod.fst same))
+  have stable (through : Nat) (limited : through ≤ report.index) :
+      (report.view through).Stable path inode payload := by
+    induction through with
+    | zero => exact captured
+    | succ previous ih =>
+      obtain ⟨pair⟩ := report.prefixPairs previous limited
+      exact pair.frame.keepsStable pair.synced pair.privateBinding (separated previous)
+        (ih (Nat.le_trans (Nat.le_succ _) limited))
+  exact ⟨payload, inode, stored, stable report.index (Nat.le_refl _), separated report.index⟩
+
+end ObservedCheckpointRunPrefix
 
 namespace ObservedCheckpointRunSyncFailure
 
@@ -176,29 +268,12 @@ theorem failedPair (report : ObservedCheckpointRunSyncFailure attempt) :
   rw [show report.fsync captured report.flushed = _ from report.failed] at routed
   exact routed
 
-/-- The actual checkpoint worker returns at this run's own file barrier.
-No subsequent run, directory barrier or manifest dispatch is reached. -/
+/-- The actual checkpoint worker returns at this run's own file barrier. -/
 theorem returns (report : ObservedCheckpointRunSyncFailure attempt) :
-    CheckpointPublication.run attempt.table.runs.length report.perform (report.atRun 0) = .error report.error report.reached := by
-  obtain ⟨remaining, schedule⟩ := steps_atRunPair report.within
-  have past := runSteps_returned report.perform report.index report.atRun (fun i earlier =>
-    let ⟨pair⟩ := report.prefixPairs i earlier
-    pair.returned)
-  have failed := report.failedPair.2
-  change ((steps attempt.table.runs.length).forM report.perform) (report.atRun 0) = _
-  rw [schedule, List.append_assoc, List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
-  simp only [Bind.bind, EStateM.bind, past]
-  have suffix : ([Step.writeRun report.index, Step.syncRun report.index] ++ remaining).forM report.perform =
-      ((report.perform (.writeRun report.index) >>= fun _ => report.perform (.syncRun report.index)) >>=
-        fun _ => remaining.forM report.perform) := by
-    simp [List.forM_eq_forM, List.forM_cons, List.cons_append, bind_assoc]
-  rw [suffix]
-  simp only [Bind.bind, EStateM.bind] at failed ⊢
-  rw [failed]
+    CheckpointPublication.run attempt.table.runs.length report.perform (report.atRun 0) = .error report.error report.reached :=
+  report.toObservedCheckpointRunPrefix.returnsError report.failedPair.2
 
-/-- Under the old writer's lock, the reported failed dispatch poisons
-the exact ready session. The reported close or last reference drop then
-releases its unchanged file image for admitted retry. -/
+/-- Return the exact poisoned writer and its observed release. -/
 theorem poisonsAndReleases (report : ObservedCheckpointRunSyncFailure attempt) {writer : Nat}
     (ownership : before.owners.Owns directory writer) (release : SegmentedFailureRelease writer) :
     let poisoned : Phase Installed × LockedFileState State := (.poisoned, ⟨report.reached, before.owners⟩)
@@ -206,15 +281,8 @@ theorem poisonsAndReleases (report : ObservedCheckpointRunSyncFailure attempt) {
     runPreparedCheckpoint attempt.prepared report.perform (.ready before.installed, ⟨report.atRun 0, before.owners⟩) =
         .error report.error poisoned ∧
       release.Observed (directory := directory) poisoned released ∧
-      TryLockObserves released.owners directory (.ok true) := by
-  have publication : CheckpointPublication.run attempt.prepared.table.runs.length report.perform (report.atRun 0) =
-      .error report.error report.reached := report.returns
-  obtain ⟨poisoned, closed, drops, vacant⟩ := runPreparedCheckpoint_failure_handoff
-    (before := ⟨report.atRun 0, before.owners⟩) before.installed attempt.prepared report.perform publication ownership
-  refine ⟨poisoned, ?_, vacant⟩
-  cases release with
-  | closed => exact closed
-  | references held events last => exact drops held events last
+      TryLockObserves released.owners directory (.ok true) :=
+  report.toObservedCheckpointRunPrefix.poisonsAndReleases report.returns ownership release
 
 /-- The checked new-generation path and its complete link census exclude
 every previously selected run inode. The successful prefix and the failed
@@ -224,28 +292,10 @@ theorem priorRuns (report : ObservedCheckpointRunSyncFailure attempt) {writer : 
     (entry : CheckpointRunPrefix.EntrySelection before (report.view 0)) :
     SelectedRunsAgree before.wal.directory.active.manifest (report.runs report.reached).guaranteed before.published.durable := by
   intro raw metadata binding decoded index within
-  have prior := ready.resumed.selected
-  rw [← ready.walPair] at prior
-  obtain ⟨payload, stored⟩ := prior.runExists binding decoded within
-  obtain ⟨inode, captured⟩ := entry raw metadata binding decoded index within payload stored
-  have liveManifest : before.published.manifest.active = some raw := by
-    rw [ready.manifestFiles, ready.directoryFiles]
-    exact binding
-  have distinctGeneration := CheckpointPowerCut.freshGeneration ready report.generationFits raw (.inl liveManifest)
-    (.integrity metadata) (Manifest.VersionedCheckpoint.decode_integrity decoded)
-  let path := directory.file (.run metadata.header.generation index)
-  have separated (i : Nat) : path ≠ directory.file (.run (SegmentedCheckpointReport.generation before) i) :=
-    runPath_ne directory (fun same => distinctGeneration (congrArg Prod.fst same))
-  have stable (through : Nat) (limited : through ≤ report.index) :
-      (report.view through).Stable path inode payload := by
-    induction through with
-    | zero => exact captured
-    | succ previous ih =>
-      obtain ⟨pair⟩ := report.prefixPairs previous limited
-      exact pair.frame.keepsStable pair.synced pair.privateBinding (separated previous)
-        (ih (Nat.le_trans (Nat.le_succ _) limited))
+  obtain ⟨_, _, stored, stable, separated⟩ :=
+    report.toObservedCheckpointRunPrefix.priorStable ready entry binding decoded within
   have retained := report.frame.keepsStableOnSyncError (effective := report.effective) rfl report.links.privateBinding
-    (separated report.index) (stable report.index (Nat.le_refl _))
+    separated stable
   exact retained.guaranteed.trans stored.symm
 
 end ObservedCheckpointRunSyncFailure
