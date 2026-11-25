@@ -29,6 +29,7 @@ import Alvoki.Storage.Disk.NativeCheckpointManifestDataError
 import Alvoki.Storage.Disk.NativeCheckpointManifestRenameError
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
+import Alvoki.Storage.Disk.NativeCheckpointSourceCrash
 
 namespace Alvoki.Storage.DiskSession
 
@@ -131,6 +132,13 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
   | interruptedCheckpointRunDirectory {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (stop : NativeCheckpointRunDirectoryStop (image := image) current.ready.state cut)
+  | stoppedEarlyCheckpoint {heap : Type} {opened : NativeOpenedHandle heap}
+      {position : NativeOpenedPosition opened} (same : position.current = current)
+      {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
+      {stage : CheckpointPublication.Step} {reason : FilePath} {reached : CheckpointWorld heap}
+      (stop : NativeCheckpointSourceStop position primitives fsync stage reason reached)
+      (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
+      {storage : heap → CheckpointStorageObservation} (stable : NativeReadyStorage current.ready.state (storage reached.2))
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause)
   | coveredWalUnlinkError (reported : NativeCoveredWalUnlinkError current.ready.state)
@@ -165,7 +173,8 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .checkpointError _ _ | .checkpointRunDirectoryError _ | .checkpointRunFileError _
   | .checkpointRunDataError _ | .checkpointManifestSyncError _
   | .checkpointManifestOpenError _ | .checkpointManifestDataError _ | .checkpointManifestRenameError _ => .checkpoint
-  | .interruptedCheckpoint _ | .interruptedCheckpointRunFile _ | .interruptedCheckpointRunDirectory _ => .checkpoint
+  | .interruptedCheckpoint _ | .interruptedCheckpointRunFile _ | .interruptedCheckpointRunDirectory _
+  | .stoppedEarlyCheckpoint _ _ _ _ => .checkpoint
   | .collectionError _ _ _ => .collectCoveredWal
   | .interruptedCoveredWalUnlink _ | .interruptedCoveredWalDirectory _ | .coveredWalUnlinkError _ => .collectCoveredWal
   | .interruptedObsoleteRunUnlink cut _ => .collectObsoleteRuns cut.plan.reports.held
@@ -263,6 +272,13 @@ def Reached : NativeExecutionEnd current → Prop
   | .interruptedCheckpoint stop => NativePendingCheckpoint current.ready stop
   | .interruptedCheckpointRunFile stop => NativePendingCheckpointRunFile current.ready stop
   | .interruptedCheckpointRunDirectory stop => NativePendingCheckpointRunDirectory current.ready stop
+  | .stoppedEarlyCheckpoint (opened := opened) (position := position) (primitives := primitives) (fsync := fsync)
+      (stage := stage) (reason := reason) (reached := reached) _ _ _ (storage := storage) _ =>
+    opened.table.UsesOpenCheckpointSchedule position.current.ready.state.session.directory opened.files opened.phase ∧
+    (runCheckpointOnOpenPhaseUntilSyncStop position.current.ready.state.session.directory
+      opened.phase opened.get opened.set primitives fsync).run
+      (position.current.ready.state.cache, position.reached) = .error (stage, reason) reached ∧
+      NativeReadyStorage current.ready.state (storage reached.2)
   | .collectionError reported cause _ =>
       reported.run = .error (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}")
         (.poisoned, ⟨(current.ready.state.cache, reported.pending.image), reported.pending.owners⟩) ∧
@@ -348,6 +364,7 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   | interruptedCheckpoint stop => exact current.ready.stopsDuringCheckpoint stop
   | interruptedCheckpointRunFile stop => exact current.ready.stopsAtCheckpointRunFile stop
   | interruptedCheckpointRunDirectory stop => exact current.ready.stopsAtCheckpointRunDirectory stop
+  | stoppedEarlyCheckpoint _ stop _ stable => exact ⟨stop.source, stop.stoppedCall, stable⟩
   | collectionError reported _ failed =>
     obtain ⟨returned, _, _, _, _, _, _, _, _, _, _, _, _, survivors, _⟩ :=
       current.ready.readPrefix.collectionBarrierFailed reported failed
@@ -432,7 +449,7 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
   | ready | close | callsAfterReadyClose | rejectedOpensAfterClose | interruptedClose | checkpointError | interruptedCheckpoint
-  | interruptedCheckpointRunFile | interruptedCheckpointRunDirectory
+  | interruptedCheckpointRunFile | interruptedCheckpointRunDirectory | stoppedEarlyCheckpoint
   | checkpointRunDirectoryError | checkpointRunFileError | checkpointRunDataError
   | checkpointManifestSyncError | checkpointManifestOpenError | checkpointManifestDataError | checkpointManifestRenameError
   | collectionError | coveredWalUnlinkError | interruptedCoveredWalUnlink
