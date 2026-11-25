@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.WalTwoSlot
@@ -1355,14 +1356,19 @@ theorem recoveredRetries_installedReads
         durableRuns manifest.header.generation index = some payload →
         readRunPrefix (directory.file (.run manifest.header.generation index)) payload.size (atRun index) =
           .ok payload (atRun (index + 1)))
-    {entries : Array IO.FS.DirEntry} {listedState scannedState : FileImage}
-    (listed : list directory.path (atRun (WalSegmentRepair.selectedRunCount target.pair.manifest)) = .ok entries listedState)
+    (layout : DiskSession.CanonicalKeeperLayout prepared ((history ++ batch).take target.range.through))
+    (layoutTarget : layout.target = target)
+    (catalog : WalSegmentRepair.CachedRetryReadInventory directory layout)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (extentReports : lstat = fun path => liftExcept (.ok (catalog.inventory.reports.lstat path) : Except IO.Error _))
+    {listedState scannedState : FileImage}
+    (listed : list directory.path (atRun (WalSegmentRepair.selectedRunCount target.pair.manifest)) = .ok catalog.entries listedState)
     {extents required : List (Nat × IO.FS.Metadata)} {newer : List Nat}
-    (scanned : readWalSegmentExtentsWith directory lstat (entries.toList.map (·.fileName)) listedState =
+    (scanned : readWalSegmentExtentsWith directory lstat (catalog.entries.toList.map (·.fileName)) listedState =
       .ok extents scannedState)
     (selectedExtents : WalSegmentRepair.selectWalExtentsThrough extents (checkpointResult.getD (.empty, 0)).1.committed.toNat
       (selected.frontier.toNat / frameSize) = some (required, newer))
-    (laterNames : newer = prepared.later.visible)
     {keeperMetadata : IO.FS.Metadata} {atKeeper : FileImage}
     (sealReads : WalSegmentRepair.CachedWalKeeperReached directory readSeal target.first
       keeperMetadata required scannedState atKeeper)
@@ -1403,11 +1409,8 @@ theorem recoveredRetries_installedReads
       state.effect target action = some next →
       WalSegmentRepair.performPaths directory plan removeFile throw write sync renameFile action state =
         .ok () next)
-    (layout : DiskSession.CanonicalKeeperLayout prepared ((history ++ batch).take target.range.through))
-    (layoutTarget : layout.target = target)
     (selectedRecovery : WalSegmentRecovery image target.pair target.range (history ++ batch)
       (checkpointResult.getD (.empty, 0)).1 layout.first table)
-    (layoutOffsets : layout.sealed.map WalSegment.first = required.dropLast.map Prod.fst)
     (layoutBytes : ∀ segment ∈ layout.sealed, prepared.kept segment.first = some segment.bytes)
     {snapshot : UInt64} (retained : table.pins.floor ≤ snapshot)
     (within : snapshot.toNat ≤ target.range.through) :
@@ -1461,6 +1464,25 @@ theorem recoveredRetries_installedReads
   have watermark : base.committed.toNat ≤ selected.frontier.toNat / frameSize := by
     rw [sameWatermark, through]
     exact checkpointCovered
+  have layoutThrough : layout.range.through = target.range.through :=
+    congrArg (fun t : Target => t.range.through) layoutTarget
+  have absoluteLayout : selected.frontier.toNat = layout.range.through * frameSize := by
+    rw [← sameLength, absolute, layoutThrough]
+  obtain ⟨catalogExtents, catalogRequired, catalogScan, catalogSelection, catalogOrder, _⟩ :=
+    catalog.scanSelected following (fun start member =>
+      layoutThrough.symm ▸ preparedPlan.newer _ (List.mem_cons_self ..) start member) absoluteLayout
+  have exactScan := scanned
+  rw [extentReports, WalSegmentRepair.readWalSegmentExtentsWith_liftReports, catalogScan] at exactScan
+  change EStateM.Result.ok catalogExtents listedState = _ at exactScan
+  have extentsAgree := (EStateM.Result.ok.inj exactScan).1
+  have catalogWatermark : layout.range.watermark = base.committed.toNat :=
+    (congrArg (fun t : Target => t.range.watermark) layoutTarget).trans sameWatermark.symm
+  rw [extentsAgree, catalogWatermark] at catalogSelection
+  have selectionAgrees := Prod.mk.inj (Option.some.inj (selectedExtents.symm.trans catalogSelection))
+  have laterNames : newer = prepared.later.visible := selectionAgrees.2
+  have layoutOffsets : layout.sealed.map WalSegment.first = required.dropLast.map Prod.fst := by
+    rw [selectionAgrees.1, List.map_dropLast, catalogOrder, List.map_append, List.map_cons, List.map_nil,
+      List.dropLast_append_cons, List.dropLast_singleton, List.append_nil]
   have keeperSize : target.trimmed.size =
       (selected.frontier.toNat / frameSize - target.first) * frameSize := by
     rw [through]

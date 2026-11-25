@@ -15,7 +15,9 @@ state directly to the WAL directory scan. Preparation preserves the state
 reached by those reads and
 supplies their exact keeper to repair. The selected WAL reader now derives
 its report from the directory listing, extent scan, ordered seal reads and
-the final bounded keeper read, in order on their reached states. The full
+the final bounded keeper read, in order on their reached states. The held
+directory inventory and its no-follow metadata reports determine the
+selected seal order and later names to prune. The full
 keeper and the marker-bounded prefix provably replay to the same table,
 including when the keeper contains an unchecked tail. The client theorem
 now derives replay of the selected files from the segmented recovery using
