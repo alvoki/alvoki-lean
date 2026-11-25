@@ -47,7 +47,8 @@ result. At the final retry, the marked dispatcher reads the checkpoint
 selected by the surviving pair, then installs the replay of the same WAL.
 The callback packet is indexed by the physical selected layout at that
 retry. It supplies the successful native admission reports for its exact lock
-slot, the chunk reads and the successful reached repair effects. -/
+slot, the chunk reads and the successful reached repair effects.
+Any provenance of its native callbacks and admission is retained in the result. -/
 theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDirectory}
     {before : SegmentedWriterState} {writer : Nat} {input : FilePath} (cut : CheckpointPowerCut directory before)
     (ready : before.RetainedReady directory writer) (published : CheckpointPublication.Image)
@@ -57,11 +58,15 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
     (failures : BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
       ⟨(physical before published).crash pair (some before.wal.active.bytes) [],
         before.owners.set (directory.file .lock) none⟩ retry)
+    (observedBy : ∀ {layout : CanonicalKeeperLayout retry.image before.history}
+      (operations : MarkedRetryChunkOperations files directory layout),
+      OpenAdmissionReports input directory operations.slot → Prop)
     (observes : ∀ layout : CanonicalKeeperLayout retry.image before.history,
       layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
       layout.sealed ++ [layout.keeper] = (published.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark →
-      ∃ observed : MarkedRetryChunkReports files directory layout published,
-        Nonempty (OpenAdmissionReports input directory observed.slot)) :
+      ∃ (observed : MarkedRetryChunkReports files directory layout published)
+        (admission : OpenAdmissionReports input directory observed.slot),
+        observedBy observed.toMarkedRetryChunkOperations admission) :
     BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
       ⟨physical before published, before.owners⟩ retry ∧
     ∃ (layout : CanonicalKeeperLayout retry.image before.history)
@@ -84,7 +89,8 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
       opened.table.committed.toNat = before.history.length ∧ opened.table.RowBounds ∧ opened.table.Refines model ∧
       RepresentsWalHistory before.history model ∧
       ∃ after, CheckpointChunkWriter directory before published observed after ∧
-        after.checkpoint = checkpoint ∧ after.installed = opened.installed := by
+        after.checkpoint = checkpoint ∧ after.installed = opened.installed ∧
+        observedBy observed.toMarkedRetryChunkOperations admission := by
   obtain ⟨reached, executed, walLayout, valid, inputs, crash⟩ := cut.selectsAcknowledgedHistory ready
   have exactPublished : reached = published := Option.some.inj (executed.symm.trans projected)
   subst reached
@@ -95,7 +101,7 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
     .crash survives
   obtain ⟨layout, chosenPair, keeper, tail, descriptors, offsets, prepared, _, accepted⟩ :=
     published.checkpointRetryLayout walLayout valid crashDirectory inputs lineage
-  obtain ⟨observed, ⟨admission⟩⟩ := observes layout keeper tail descriptors
+  obtain ⟨observed, admission, provenance⟩ := observes layout keeper tail descriptors
   have following := observed.selectedAfterWatermark offsets descriptors
   have recovered := runOpenWithInstallation_markedRetryFromChunks observed prepared.keeperPrefix prepared.newer
     following accepted ready.resumed.ordered
@@ -133,6 +139,6 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
     (observed.runWithAdmission_eq admission).trans returned, directoryExact,
     lock.trans observed.inventoryDescription, phase, held, surviving, finalPair, repaired, selected, rfl,
     exactGeneration, exactBytes, exactKeeper, replayed, committed, bounds, refines, represents,
-    after, writer, sameCheckpoint, sameInstalled⟩
+    after, writer, sameCheckpoint, sameInstalled, provenance⟩
 
 end Alvoki.Storage.DiskSession

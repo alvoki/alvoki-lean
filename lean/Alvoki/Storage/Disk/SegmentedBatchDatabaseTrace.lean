@@ -335,8 +335,11 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterCheckpointPowerLossChunks {files 
   have beforeReady := (trace.preservesRetained ready).1
   obtain ⟨_, layout, observed, admission, _, _, _, _, session, final, returned, path, lock, _, held, selected,
     finalPair, _, _, _, generation,
-    _, _, _, _, _, _, _, after, installed, _, installedPayload⟩ :=
-    cut.reopensFromChunks beforeReady published projected pair survives retry failures observes
+    _, _, _, _, _, _, _, after, installed, _, installedPayload, _⟩ :=
+    cut.reopensFromChunks beforeReady published projected pair survives retry failures (fun _ _ => True)
+      (fun layout keeper aligned descriptors => by
+        obtain ⟨observed, ⟨admission⟩⟩ := observes layout keeper aligned descriptors
+        exact ⟨observed, admission, trivial⟩)
   obtain ⟨phase, afterFiles, afterOwners⟩ :=
     installed.atReopen ((observed.runWithAdmission_eq admission).symm.trans returned)
   exact ⟨layout, observed, after, installed,

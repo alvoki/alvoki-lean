@@ -1,9 +1,10 @@
 import Alvoki.Storage.Disk.CheckpointManifestRenameCut
 import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
+import Alvoki.Storage.Disk.HeldWalInstallation
 
 namespace Alvoki.Storage.DiskSession
 
-open System CheckpointPublication WalSegmentRepair
+open System CheckpointPublication WalSegmentRepair SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
 /-- Compare the run maps only at the indices named by the selected manifest. -/
@@ -71,12 +72,39 @@ private theorem CheckpointPowerCut.newManifestHeader {directory : DiskDirectory}
   rw [exactBytes] at decoded
   exact congrArg Manifest.IntegrityCheckpoint.header (Except.ok.inj (decoded.symm.trans roundTrip))
 
+private abbrev OpenHandle := DescriptorInventory × DescriptorSlot × Nat
+
+/-- The native-shaped reports for the checked open of the physical run
+map selected after the crash. The WAL and metadata callbacks, directory
+inventory, and authorization all describe this same open. -/
+structure CheckpointHeldOpen (input : FilePath) (directory : DiskDirectory)
+    {retry : LockedFileState FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout retry.image history) (physical : Image) where
+  calls : MarkedRetryChunkCalls (Cache OpenHandle) directory retry
+  wal : HeldWalInstallReads layout calls
+  held : HeldDirectoryMarkedRetryReports wal.operations physical
+  namespaceMatches : held.lifetime.namespaceView = wal.view
+  rootMatches : held.lifetime.root = wal.root
+  authorization : ListedDirectoryAuthorization held
+  metadata : HeldMarkedMetadata held
+  completed : authorization.outcome = .completed
+  healthy : wal.operations.HealthyFinish
+  admission : OpenAdmissionReports input directory calls.slot
+
+def CheckpointHeldOpen.chunkReports {input directory history physical} {retry : LockedFileState FileImage}
+    {layout : CanonicalKeeperLayout retry.image history}
+    (observed : CheckpointHeldOpen input directory layout physical) :
+    MarkedRetryChunkReports (Cache OpenHandle) directory layout physical :=
+  observed.held.toChunkReports (observed.authorization.settles observed.completed)
+    observed.metadata.callbackMetadata observed.healthy
+
 /-- At an interrupted manifest rename the reported surviving inode determines
 the selected manifest. Open reports use the same run bindings through the
-retries. The shared admitted opener installs the checkpoint and replays the
-unchanged marked WAL. Its returned writer continues any mixed trace reaching
-the interrupted writer with the same submission log. -/
-theorem CheckpointPowerCut.reopensAfterManifestRename {files : Type} {directory : DiskDirectory}
+retries. The held-directory packet supplies the exact callbacks and admission.
+Reindexing the checkpoint run map preserves both. This same open installs the
+checkpoint and unchanged marked WAL, and its returned writer continues any
+mixed trace reaching the interrupted writer with the same submission log. -/
+theorem CheckpointPowerCut.reopensAfterManifestRename {directory : DiskDirectory}
     {before : SegmentedWriterState} {writer : Nat} {input : FilePath}
     (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
     (published : Image)
@@ -102,15 +130,13 @@ theorem CheckpointPowerCut.reopensAfterManifestRename {files : Type} {directory 
     (∀ layout : CanonicalKeeperLayout retry.image before.history,
       layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
       layout.sealed ++ [layout.keeper] = (published.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark →
-      ∃ observed : MarkedRetryChunkReports files directory layout physical,
-        Nonempty (OpenAdmissionReports input directory observed.slot)) →
+      Nonempty (CheckpointHeldOpen input directory layout physical)) →
     ∃ (layout : CanonicalKeeperLayout retry.image before.history)
-      (observed : MarkedRetryChunkReports files directory layout physical)
-      (admission : OpenAdmissionReports input directory observed.slot)
+      (observed : CheckpointHeldOpen input directory layout physical)
       (session : SegmentedSession) (final : LockedFileState FileImage)
       (opened : Reopened) (checkpoint : Option (PackedTable × UInt64)) (model : Sequential.SnapshotTable UInt64),
-      observed.runWithAdmission admission = .ok session final ∧
-      session.directory = directory ∧ session.descriptor = observed.slot.description ∧
+      observed.wal.operations.runWithAdmission observed.admission = .ok session final ∧
+      session.directory = directory ∧ session.descriptor = observed.calls.slot.description ∧
       session.phase = .ready opened.installed ∧ final.owners.Owns directory session.descriptor ∧
       final.image.directory.active = pair ∧
       SelectedIntegrityCheckpoint (runs interrupted).guaranteed binding checkpoint ∧
@@ -119,12 +145,12 @@ theorem CheckpointPowerCut.reopensAfterManifestRename {files : Type} {directory 
       recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok opened.table ∧
       opened.table.committed.toNat = before.history.length ∧ opened.table.Refines model ∧
       RepresentsWalHistory before.history model ∧
-      ∃ (after : SegmentedWriterState), after.RetainedReady directory observed.slot.description ∧
+      ∃ (after : SegmentedWriterState), after.RetainedReady directory observed.calls.slot.description ∧
         after.checkpoint = checkpoint ∧ after.installed = opened.installed ∧
         after.files = final.image ∧ after.owners = final.owners ∧
         ∀ {initialDescriptor initial allowCollection log},
           SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before →
-            SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after := by
+            SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.calls.slot.description after := by
   intro pair physical failures observes
   have pairSurvives : pair ∈ (published.segmentedCheckpointView before.wal).directory.crashImages := by
     exact List.mem_map.mpr ⟨binding, admitted binding survives, rfl⟩
@@ -148,26 +174,42 @@ theorem CheckpointPowerCut.reopensAfterManifestRename {files : Type} {directory 
   have retryAgrees : SelectedRunsAgree retry.image.directory.active.manifest (runs interrupted).guaranteed published.durable := by
     rw [retryPair]
     exact agrees
+  let observedBy {layout : CanonicalKeeperLayout retry.image before.history}
+      (operations : MarkedRetryChunkOperations (Cache OpenHandle) directory layout)
+      (admission : OpenAdmissionReports input directory operations.slot) : Prop :=
+    ∃ packet : CheckpointHeldOpen input directory layout physical,
+      packet.wal.operations = operations ∧ HEq packet.admission admission
   have modelReports (layout : CanonicalKeeperLayout retry.image before.history)
       (keeper : layout.keeper = before.wal.active) (tail : layout.tail = ByteArray.empty)
       (descriptors : layout.sealed ++ [layout.keeper] =
         (published.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark) :
-      ∃ observed : MarkedRetryChunkReports files directory layout published,
-        Nonempty (OpenAdmissionReports input directory observed.slot) := by
-    obtain ⟨observed, admission⟩ := observes layout keeper tail descriptors
-    exact ⟨observed.withRunMap published.durable retryAgrees, admission⟩
+      ∃ (observed : MarkedRetryChunkReports (Cache OpenHandle) directory layout published)
+        (admission : OpenAdmissionReports input directory observed.slot),
+        observedBy observed.toMarkedRetryChunkOperations admission := by
+    obtain ⟨packet⟩ := observes layout keeper tail descriptors
+    exact ⟨packet.chunkReports.withRunMap published.durable retryAgrees, packet.admission, packet, rfl, HEq.rfl⟩
   obtain ⟨_, layout, observed, admission, _, opened, checkpoint, model, session, final,
     returned, directoryExact, slot, phase, held, _, finalPair, _, selected, _, generation, _, _, replayed, committed,
-    _, refinement, represents, after, installed, afterCheckpoint, afterTable⟩ :=
-    cut.reopensFromChunks ready published projected pair pairSurvives retry failures modelReports
+    _, refinement, represents, after, installed, afterCheckpoint, afterTable, packet, sameOperations, sameAdmission⟩ :=
+    cut.reopensFromChunks ready published projected pair pairSurvives retry failures observedBy modelReports
   obtain ⟨_, afterFiles, afterOwners⟩ :=
     installed.atReopen ((observed.runWithAdmission_eq admission).symm.trans returned)
-  let physicalReads := observed.withRunMap (runs interrupted).guaranteed retryAgrees.symm
-  refine ⟨layout, physicalReads, admission, session, final, opened, checkpoint, model,
-    returned, directoryExact, slot, phase, held, finalPair, SelectedIntegrityCheckpoint.withRunMap selected agrees.symm,
-    generation, replayed, committed, refinement, represents, after, installed.retained,
-    afterCheckpoint, afterTable, afterFiles, afterOwners, ?_⟩
-  intro _ _ _ _ prior
-  exact .checkpointPowerLossObserved prior cut projected pairSurvives failures retryPair installed
+  let OpenCall := (operations : MarkedRetryChunkOperations (Cache OpenHandle) directory layout) ×
+    OpenAdmissionReports input directory operations.slot
+  have sameCall : (⟨packet.wal.operations, packet.admission⟩ : OpenCall) =
+      ⟨observed.toMarkedRetryChunkOperations, admission⟩ := Sigma.ext sameOperations sameAdmission
+  have sameReturn := congrArg (fun call : OpenCall => call.1.runWithAdmission call.2) sameCall
+  have descriptor : packet.calls.slot.description = observed.slot.description :=
+    congrArg (fun operations : MarkedRetryChunkOperations (Cache OpenHandle) directory layout =>
+      operations.slot.description) sameOperations
+  refine ⟨layout, packet, session, final, opened, checkpoint, model,
+    sameReturn.trans returned, directoryExact, slot.trans descriptor.symm, phase, held, finalPair,
+    SelectedIntegrityCheckpoint.withRunMap selected agrees.symm, generation, replayed, committed,
+    refinement, represents, after, ?_, afterCheckpoint, afterTable, afterFiles, afterOwners, ?_⟩
+  · rw [descriptor]
+    exact installed.retained
+  · intro _ _ _ _ prior
+    rw [descriptor]
+    exact .checkpointPowerLossObserved prior cut projected pairSurvives failures retryPair installed
 
 end Alvoki.Storage.DiskSession
