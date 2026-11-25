@@ -334,6 +334,7 @@ import Alvoki.Storage.Disk.NativeExecutionPendingWrite
 import Alvoki.Storage.Disk.NativePendingFirstAppend
 import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
 import Alvoki.Storage.Disk.NativeFirstAppendPowerLoss
+import Alvoki.Storage.Disk.NativeStoppedFirstAppendTableOpen
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativePendingCloseRetries
 import Alvoki.Storage.Disk.NativePendingCloseReferenceDrop
@@ -2055,6 +2056,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendExitReads.sameKeeper
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversFirstAppendAfterExit
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversFirstAppendPowerLoss
+#check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendCrash.plans
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversFirstAppendPowerLossFrom
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsWriteAtFirstAppend
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedFirstAppend
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.binding
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.returns
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.rejectsReads

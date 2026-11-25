@@ -241,6 +241,9 @@ lake env leanchecker Alvoki.Storage.Disk.NativeExecutionPendingWrite
 lake env leanchecker Alvoki.Storage.Disk.NativePendingFirstAppend
 lake env leanchecker Alvoki.Storage.Disk.NativeFirstAppendExitReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeFirstAppendPowerLoss
+lake env leanchecker Alvoki.Storage.Disk.NativePendingFirstAppendOpenPhase
+lake env leanchecker Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
+lake env leanchecker Alvoki.Storage.Disk.NativeStoppedFirstAppendTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionPendingClose
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCloseRetries
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCloseReferenceDrop

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
-import Alvoki.Storage.Disk.NativeHealthyMarkedTableOpen
+import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.NativePendingMarkerDirectoryOpenPhase
 import Alvoki.Storage.Disk.NativeExecutionTrace
 
@@ -29,33 +29,9 @@ structure RawStoppedMarkerReopenEffects
     (allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed)))
     (allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)) (stream : Type)
     (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)) (stage : LongKeeperStageCallbacks heap)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) where
-  raw : RawOpenAdmissionReport reader.opening.admission view calls rebooted
-  seed : OpenSyncCacheAllocations reader.opening.admission.opened view init raw.afterFlock
-  fileCalls : MarkedTemporaryReadCalls heap
-  directoryCalls : MarkedDirectoryReadCalls heap stream
-  slotOf : heap → stream → DescriptorSlot
-  callbacks : AlignedKeeperCacheCallbacks heap
-  checkpoint : NativeMarkedCheckpointReadHeap seed reader.opening.chronology fileCalls
-  listing : MarkedDirectoryReadReport checkpoint directoryCalls slotOf
-  extents : MarkedWalExtentReports checkpoint listing
-  beforeKeeper : heap
-  repaired : heap
-  seals : MarkedSealReadChain seed fileCalls reader.opening.chronology.seals listing.reached beforeKeeper
-  keeper : NativeHealthyMarkedKeeperReport seed fileCalls callbacks beforeKeeper remove stage rename reader.opening.finish repaired
-  sameLookup : fileCalls.stat = calls.lookup
-  flat : optionalMetadataWith (fileCalls.stat (state.session.directory.file .wal)) seed.afterPending = .ok none seed.afterPending
-  marked : optionalMetadataWith (fileCalls.stat (state.session.directory.file .walBoundary)) seed.afterPending =
-    .ok (some reader.opening.marker) seed.afterPending
-  allocations : ∀ opened,
-    reader.opening.finish.markedWorker reader.opening.chronology state.session.directory reader.opening.admission.cache
-      (reader.opening.admission.reached, reader.opening.admission.held) =
-      .ok opened (view.descriptors repaired, view.files repaired) →
-    ∃ allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase opened.installed repaired,
-      phaseIdentity allocation.phase = reader.opening.callbacks.nextRef ∧
-      tokenIdentity allocation.token = reader.opening.callbacks.nextRef + 1 ∧
-      CacheAllocationFrame view seed.directoryRef seed.activeRef seed.pendingRef repaired allocation.afterPhase ∧
-      CacheAllocationFrame view seed.directoryRef seed.activeRef seed.pendingRef allocation.afterPhase allocation.afterToken
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    extends RawHealthyMarkedOpenEffects reader.opening view calls init rebooted
+      phaseIdentity tokenIdentity allocatePhase allocateToken stream remove stage rename where
   survivorNames : ∀ path, path = state.session.directory.path ∨ path = state.session.directory.file .lock ∨
     checkpointSurvivorPath state.session.directory state.writer crash.pair.manifest path →
     names rebooted path = crash.raw.names path
@@ -63,6 +39,11 @@ structure RawStoppedMarkerReopenEffects
     ∀ object, crash.raw.names path = some object → bytes rebooted object = crash.raw.contents object
 
 variable {reader : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected}
+
+noncomputable abbrev RawStoppedMarkerReopenEffects.openTable
+    (seen : RawStoppedMarkerReopenEffects reader view calls init names bytes rebooted phaseIdentity tokenIdentity
+      allocatePhase allocateToken stream remove stage rename) :=
+  seen.toRawHealthyMarkedOpenEffects.openTable
 
 def NativeMarkerPublicationCrashReads.RepairForMarker
     (reader : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected) : Prop :=
@@ -108,18 +89,6 @@ theorem NativeMarkerPublicationCrashReads.usesRepairForMarker
       simp only [marker, ite_true, Nat.add_zero] at extent
       have longer : plan.layout.boundedPlan.keeperSize < reader.opening.reads.wal.keeper.calls.metadata.byteSize.toNat := repair
       omega
-
-noncomputable def RawStoppedMarkerReopenEffects.openTable
-    (seen : RawStoppedMarkerReopenEffects reader view calls init names bytes rebooted phaseIdentity tokenIdentity
-      allocatePhase allocateToken stream remove stage rename)
-    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
-    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
-    (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
-      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles) : EStateM.Result IO.Error heap DiskTable :=
-  calls.runOpen input init makeCache (fun resolved lock cache => do
-    let opened ← recoverHealthyMarkedWithRefs seen.fileCalls seen.directoryCalls seen.callbacks seen.seed.directoryRef
-      seen.seed.activeRef seen.seed.pendingRef remove stage rename calls.lookup resolved (bootstrap resolved cache)
-    installReady opened.installed allocatePhase allocateToken (fun phase token => pure (assemble resolved lock cache phase token))) rebooted
 
 private def NativeMarkerPublicationCrashReads.markedReport (reader : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected)
     (valid : state.Valid) (pending : PendingClientReplay log reads plan.history)
