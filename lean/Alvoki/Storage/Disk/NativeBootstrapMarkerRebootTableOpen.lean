@@ -169,7 +169,9 @@ variable {nextView : OpenCloseHeapView heap FileImage}
   {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)} {stage : LongKeeperStageCallbacks heap}
   {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
 
-def Opened (opening : OpenObservation (input := input) selection)
+/-- The selected raw reopen and its reached empty ledger. Later client
+reports start on this exact table and heap. -/
+structure Returned (opening : OpenObservation (input := input) selection)
     (raw : RawHealthyMarkedOpenEffects opening nextView nextCalls nextInit rebooted
       phaseIdentity tokenIdentity allocatePhase allocateToken stream remove stage rename)
     (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
@@ -177,29 +179,38 @@ def Opened (opening : OpenObservation (input := input) selection)
       IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
     (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
     (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
-    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) : Prop :=
-    selection.SelectedReads opening ∧
-    (∃ finish : CapturedAlignedFinish opening.callbacks opening.reads selection.vacant
-      (selection.noCheckpoint), opening.finish = .aligned finish) ∧
-    (nextView.descriptors rebooted).slots = [] ∧ nextView.files rebooted = selection.markedInput ∧
-    ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
-      (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
-        IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
-      (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
-      DiskTable.OpenSyncFiles.IsOpenAction directory.path cacheOpen ∧
-      cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
-        (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
-        (fun value => liftM (IO.mkRef value)) makeCache ∧
-      raw.openTable bootstrap assemble makeCache = .ok handle.table start.reached ∧
-      nextView.phase start.reached handle.phase = some (.ready ⟨.empty, 0, 0, 0⟩) ∧
-      start.current.ready.state.writer.installed = ⟨.empty, 0, 0, 0⟩ ∧
-      handle.lock = raw.raw.lock ∧ handle.files.UsesCacheReferences raw.seed.activeRef raw.seed.pendingRef raw.seed.directoryRef ∧
-      handle.contents = nextView.phase ∧ handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧
-      nextView.files start.reached = start.current.ready.state.files ∧
-      nextView.descriptors start.reached = start.current.ready.state.census ∧
-      nextView.cacheAt start.reached raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef =
-        start.current.ready.state.cache ∧
-      start.current.history = [] ∧ start.current.submissions = [] ∧ start.current.ready.reads = [] ∧ start.pins = []
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) where
+  selectedReads : selection.SelectedReads opening
+  aligned : ∃ finish : CapturedAlignedFinish opening.callbacks opening.reads selection.vacant
+    selection.noCheckpoint, opening.finish = .aligned finish
+  emptyCensus : (nextView.descriptors rebooted).slots = []
+  filesAtEntry : nextView.files rebooted = selection.markedInput
+  cacheOpen : IO DiskTable.OpenSyncFiles
+  makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+    IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles
+  handle : NativeOpenedHandle heap
+  start : NativeOpenedPosition handle
+  cacheAction : DiskTable.OpenSyncFiles.IsOpenAction directory.path cacheOpen
+  cacheSource : cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
+    (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
+    (fun value => liftM (IO.mkRef value)) makeCache
+  sourceOpen : raw.openTable bootstrap assemble makeCache = .ok handle.table start.reached
+  phase : nextView.phase start.reached handle.phase = some (.ready ⟨.empty, 0, 0, 0⟩)
+  installed : start.current.ready.state.writer.installed = ⟨.empty, 0, 0, 0⟩
+  lock : handle.lock = raw.raw.lock
+  references : handle.files.UsesCacheReferences raw.seed.activeRef raw.seed.pendingRef raw.seed.directoryRef
+  contents : handle.contents = nextView.phase
+  phaseGet : handle.get = get
+  phaseSet : handle.set = set
+  comparesToken : handle.ptrEq = ptrEq
+  files : nextView.files start.reached = start.current.ready.state.files
+  census : nextView.descriptors start.reached = start.current.ready.state.census
+  cache : nextView.cacheAt start.reached raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef =
+    start.current.ready.state.cache
+  history : start.current.history = []
+  submissions : start.current.submissions = []
+  reads : start.current.ready.reads = []
+  pins : start.pins = []
 
 /-- The first admitted marked open from the selected bootstrap reboot
 reads those same files and allocates an empty ready table on its reached
@@ -216,7 +227,7 @@ theorem opensEmptyTable (opening : OpenObservation (input := input) selection)
     (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
     (phaseEffects : OpenPhaseCellEffects nextView.phase get set)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
-    selection.Opened opening raw bootstrap assemble get set ptrEq := by
+    Nonempty (selection.Returned opening raw bootstrap assemble get set ptrEq) := by
   let report := selection.markedReport opening
   obtain ⟨_, installed, cacheOpen, makeCache, cacheAction, cacheSource, returned⟩ :=
     report.opensHealthyFromAdmission raw.raw raw.seed raw.checkpoint raw.listing raw.extents raw.seals raw.keeper
@@ -228,10 +239,10 @@ theorem opensEmptyTable (opening : OpenObservation (input := input) selection)
   have empty : (nextView.descriptors rebooted).slots = [] := by
     rw [raw.raw.entryCensus]
     exact selection.emptyCensus
-  refine ⟨selection.readsSelectedReboot opening same, selection.choosesAligned opening, empty,
+  refine ⟨⟨selection.readsSelectedReboot opening same, selection.choosesAligned opening, empty,
     raw.raw.entryFiles, cacheOpen, makeCache, handle, start, cacheAction, cacheSource, ?_, ?_, ?_, lock,
     files.symm ▸ installed.cacheReferences, contents, actualGet, actualSet, actualCompare, ?_, ?_, ?_,
-    history, submissions, reads, pins⟩
+    history, submissions, reads, pins⟩⟩
   · rw [table, reached]
     exact returned
   · rw [phase, reached, installed.phaseStored, exactPhase]

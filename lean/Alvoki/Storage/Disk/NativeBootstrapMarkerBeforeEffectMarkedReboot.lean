@@ -107,7 +107,7 @@ theorem opensEmptyTable (valid : BootstrapValid before.image)
     (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
     (phaseEffects : OpenPhaseCellEffects nextView.phase get set)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
-    report.Selected ∧ (report.selects valid).marked.Opened opening raw bootstrap assemble get set ptrEq :=
+    report.Selected ∧ Nonempty ((report.selects valid).marked.Returned opening raw bootstrap assemble get set ptrEq) :=
   ⟨report.selects valid, (report.selects valid).marked.opensEmptyTable opening same raw bootstrap assemble
     constructs get set phaseEffects ptrEq⟩
 
