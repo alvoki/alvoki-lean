@@ -436,4 +436,6 @@ The poisoned writer's explicit close now connects that failed run-directory sync
 
 The same mixed client trace step now covers a returned write or flush error after opening a checkpoint run. The new case uses the exact reported post-finalization file image and the prior checkpoint's selected bytes. Reopen from that image preserves both client ledgers and gives the same guarded replay guarantees for the returned session. [Run error client trace](../lean/Alvoki/Storage/Disk/CheckpointRunErrorClientTrace.lean)
 
+The native checkpoint reads the session phase, flushes pending rows in memory, checks generation and run-count bounds, then encodes the strict manifest. Each rejected check returns its exact error before changing the phase or dispatching a file operation. The proof retains the original phase, lock and file image. A successful preparation passes the exact next writer state and encoded manifest to the existing publication schedule. [Native checkpoint preflight](../lean/Alvoki/Storage/Disk/CheckpointPreflight.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

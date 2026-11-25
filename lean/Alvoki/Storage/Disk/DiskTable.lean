@@ -938,6 +938,34 @@ theorem DiskTable.checkpoint_fileEffects (db : DiskTable) : db.checkpoint = (do
       db.phase.set (.ready { state with table, generation })) := by
   simp only [checkpoint, List.size_toArray]
 
+/-- Separate the checkpoint's preparation from its phase and file changes.
+The publication callback receives the exact next writer state and manifest. -/
+@[macro_inline] def DiskSession.withPreparedCheckpoint [Monad m] [MonadExceptOf IO.Error m]
+    (installed : m DiskSession.Installed) (validate : {α : Type} → Except String α → m α)
+    (publish : DiskSession.Installed → ByteArray → m Unit) : m Unit := do
+  let state ← installed
+  let table ← flushForCheckpoint state.table validate
+  let next := state.generation.toNat + 1
+  unless next < UInt64.size ∧ table.runs.length < UInt64.size do
+    throw (IO.userError "checkpoint generation or run count is too large")
+  let generation := UInt64.ofNat next
+  let manifest ← validate (encodeCheckpointIntegrityManifest table generation)
+  publish { state with table, generation } manifest
+
+/-- The same preparation guards consume the native phase read before the
+actual checkpoint writes the poisoned phase or issues its file schedule. -/
+theorem DiskTable.checkpoint_schedule (db : DiskTable) :
+    db.checkpoint = DiskSession.withPreparedCheckpoint (do (← db.phase.get).installed) IO.ofExcept
+      (fun next manifest => do
+        db.phase.set .poisoned
+        CheckpointPublication.run next.table.runs.length
+          (performCheckpointFileStep db.dir next.generation next.table.runs.toArray (db.dir.file .stagedManifest)
+            manifest (fromOption · "checkpoint run index is out of bounds")
+            (writeRunFlushed db.files) db.files.stage db.files.syncPaths IO.FS.rename)
+        db.phase.set (.ready next)) := by
+  rw [db.checkpoint_fileEffects]
+  rfl
+
 /-- Inspect the final component without following symlinks. A missing entry
 in the owned parent is ineligible. Other lookup errors stop the pass. -/
 private def runCollectionKindAt (path : FilePath) : IO (Except String IO.FS.FileType) := do

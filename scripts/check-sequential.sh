@@ -91,6 +91,7 @@ lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestRenameFailure
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestErrorClientTrace
 lake env leanchecker Alvoki.Storage.Disk.CheckpointObservedDispatch
 lake env leanchecker Alvoki.Storage.Disk.CheckpointLockHandoff
+lake env leanchecker Alvoki.Storage.Disk.CheckpointPreflight
 lake env leanchecker Alvoki.Storage.Disk.CheckpointCutSession
 lake env leanchecker Alvoki.Storage.Disk.CheckpointSuccessSession
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCheckpointStep
