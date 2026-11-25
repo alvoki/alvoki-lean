@@ -141,6 +141,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeMarkedReadPrefix
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenChoice
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenReferences
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenAcquire
+lake env leanchecker Alvoki.Storage.Disk.NativeOpenPinRead
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenEarlyError
 lake env leanchecker Alvoki.Storage.Disk.NativeContendedOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeManifestDecodeError
