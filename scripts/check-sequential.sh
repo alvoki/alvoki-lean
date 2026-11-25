@@ -178,6 +178,8 @@ lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerSync
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerRename
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedKeeperSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerDirectory
+lake env leanchecker Alvoki.Storage.Disk.NativeWriteCrashReads
+lake env leanchecker Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeWritePreflight
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
