@@ -1064,6 +1064,11 @@ the exact reached cache. The sync result identifies the descriptor
 whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
+The acquisition model now takes its bounded reader as an argument.
+Lean proves equality with the shared native reader once the primitive
+open and rewind have been projected to their reached cursor. The
+existing recovery proofs continue to use the same acquisition result.
+
 The native-shaped marker read now has an explicit proof edge from
 the read-write open to the rewind and bounded read on the returned
 handle. The bounded read starts on the exact heap reached by rewind.

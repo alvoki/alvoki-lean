@@ -1629,7 +1629,8 @@ private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × By
 
 /-- The open records its reached inventory before the bounded read. The
 read advances the reported cursor on that same description. -/
-def acquireMarkerWithInventory {state : Type}
+def acquireMarkerWithInventoryUsing {state : Type}
+    (readMarker : (USize → EStateM IO.Error Nat ByteArray) → EStateM IO.Error Nat ByteArray)
     (reached : DiskSession.DescriptorInventory → state → state)
     (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
     EStateM IO.Error state (KeeperDescriptorIdentity × Selection) := do
@@ -1641,13 +1642,37 @@ def acquireMarkerWithInventory {state : Type}
     | .ok (inventory, slot, cursor) =>
       let files := reached inventory files
       let handle : KeeperDescriptorIdentity := ⟨slot.description, inventory.inode slot.description⟩
-      match readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
-          (reads.readChunk handle.description) acquisitionLimit ByteArray.empty cursor with
+      match readMarker (reads.readChunk handle.description) cursor with
       | .error cause _ => .error cause files
       | .ok bytes _ =>
         match decode bytes with
         | .error cause => .error (IO.userError cause) files
         | .ok selected => .ok (handle, selected) files
+
+def acquireMarkerWithInventory {state : Type}
+    (reached : DiskSession.DescriptorInventory → state → state)
+    (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
+    EStateM IO.Error state (KeeperDescriptorIdentity × Selection) :=
+  acquireMarkerWithInventoryUsing
+    (fun read => readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+      read acquisitionLimit ByteArray.empty)
+    reached reads path
+
+/-- The projected cursor already includes the successful native rewind.
+Running the shared reader with that effect accounted for gives the
+same acquisition action, including its bounded reads and error returns. -/
+theorem acquireMarkerWithInventory_sharedReader {state : Type}
+    (reached : DiskSession.DescriptorInventory → state → state)
+    (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
+    acquireMarkerWithInventoryUsing (readMarkerBytesWith (EStateM.pure ())) reached reads path =
+      acquireMarkerWithInventory reached reads path := by
+  have same : readMarkerBytesWith (EStateM.pure ()) =
+      (fun (read : USize → EStateM IO.Error Nat ByteArray) =>
+        readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+          read acquisitionLimit ByteArray.empty) := by
+    funext read cursor
+    rfl
+  exact congrArg (fun readMarker => acquireMarkerWithInventoryUsing readMarker reached reads path) same
 
 def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
     EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) :=
@@ -1674,7 +1699,7 @@ theorem acquireMarkerInCensus_returns
         (before.1, file.calls.inventory, before.2.2) := by
   obtain ⟨bytes, returned, agrees⟩ := decode_markerFromHeldDirectory file available
   cases before
-  simp [acquireMarkerInCensus, acquireMarkerWithInventory, checkPrivateRegularWith, file.calls.stat,
+  simp [acquireMarkerInCensus, acquireMarkerWithInventory, acquireMarkerWithInventoryUsing, checkPrivateRegularWith, file.calls.stat,
     file.calls.regular, privateFile, file.calls.opened, returned,
     show (IO.FS.FileType.file == .file) = true from rfl,
     Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept, agrees.trans decoded]
@@ -3001,7 +3026,7 @@ theorem recoveredRetries_installedReads
       cases markerHandle
       simp only [KeeperDescriptorIdentity.mk.injEq]
       exact ⟨markerDescription, markerDescription ▸ reachedInode⟩
-    simp [acquireMarkerFromReports, acquireMarkerWithInventory, checkPrivateRegularWith, markerFile.calls.stat,
+    simp [acquireMarkerFromReports, acquireMarkerWithInventory, acquireMarkerWithInventoryUsing, checkPrivateRegularWith, markerFile.calls.stat,
       markerFile.calls.regular, markerPrivate, markerFile.calls.opened, markerRead,
       show (IO.FS.FileType.file == .file) = true from rfl,
       Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept,
