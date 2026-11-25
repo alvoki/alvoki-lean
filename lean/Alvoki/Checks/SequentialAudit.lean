@@ -280,6 +280,7 @@ import Alvoki.Storage.Disk.NativeMarkedSealHeap
 import Alvoki.Storage.Disk.NativeAlignedMarkedWorker
 import Alvoki.Storage.Disk.NativeMarkedTableOpen
 import Alvoki.Storage.Disk.NativeAlignedCloseTableOpen
+import Alvoki.Storage.Disk.NativeOpenExternalPinRead
 import Alvoki.Storage.Disk.NativeReopenedSnapshotRead
 import Alvoki.Storage.Disk.NativePrunedAlignedMarkedWorker
 import Alvoki.Storage.Disk.NativePrunedMarkedTableOpen
@@ -1787,6 +1788,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.opensAlignedFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedReopenEffects.opens
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.closesThenOpensAligned
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.readsSuppliedPin
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rejectsOldPinAfterReopen
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.opensPrunedAlignedFromAdmission
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.keeperCacheSchedules

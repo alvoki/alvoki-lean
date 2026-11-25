@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeAlignedCloseTableOpen
+import Alvoki.Storage.Disk.NativeOpenExternalPinRead
 
 namespace Alvoki.Storage.DiskSession
 
@@ -56,26 +57,23 @@ theorem NativeOpenedPosition.rejectsOldPinAfterReopen
   have foreign : issuer ≠ current := by
     rw [session]
     exact close.sessionFresh.symm
-  have different : oldHandle.token ≠ newHandle.token := fun equal =>
-    foreign (oldToken.symm.trans ((congrArg tokenIdentity equal).trans newToken))
-  have ready := reopened.current.ready.readPrefix.refines.1.phase
-  have loaded := newHandle.phaseEffects.reads reopened.reached newHandle.phase
-    reopened.current.ready.state.session.phase reopened.stored
-  refine ⟨different, issued, ?_, ?_, ?_⟩
-  · cases request with
-    | lookup key => exact reopened.uses.lookupIssuedPin pin.issued key
-    | range lo hi => exact reopened.uses.rangeIssuedPin pin.issued lo hi
-  · simp only [readSnapshotWith, withLocalHandle, Bind.bind, EStateM.bind, loaded, ready, Phase.installed,
-      comparesDistinct different, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure]
-  · obtain ⟨response, recorded, nextPosition, read⟩ := reopened.current.ready.readsHandle seen request
-    have rejected := (request.handleDenied_iff (seen.reader reopened.current.ready.readPrefix.refines.1)
-      pin.localPin.handle).2 (Or.inl foreign)
-    have absent := (EStateM.Result.ok.inj (read.result.returned.symm.trans rejected)).1
-    subst response
-    let reached : NativeOpenedPosition newHandle :=
-      ⟨⟨reopened.current.history, reopened.current.submissions, nextPosition⟩, reopened.reached,
-        by rw [read.state]; exact reopened.directory, by rw [read.state]; exact reopened.stored, reopened.pins⟩
-    exact ⟨recorded, reached, .snapshotHandleRead reopened.current seen request none recorded nextPosition read,
-      read.result.records, read.state, rfl, rfl⟩
+  have distinctId : tokenIdentity oldHandle.token ≠ tokenIdentity newHandle.token :=
+    fun equal => foreign (oldToken.symm.trans (equal.trans newToken))
+  have different : oldHandle.token ≠ newHandle.token :=
+    fun equal => distinctId (congrArg tokenIdentity equal)
+  have identifies : tokenIdentity oldHandle.token = tokenIdentity newHandle.token ↔
+      oldHandle.token = newHandle.token :=
+    ⟨fun equal => False.elim (distinctId equal), congrArg tokenIdentity⟩
+  have compared : newHandle.ptrEq oldHandle.token newHandle.token reopened.reached =
+      .ok (decide (tokenIdentity oldHandle.token = tokenIdentity newHandle.token)) reopened.reached := by
+    simpa only [decide_eq_false distinctId] using comparesDistinct different
+  obtain ⟨source, response, recorded, reached, raw, denied, step, state, heap, pins, _, records, _⟩ :=
+    reopened.readsSuppliedPin pin.issued tokenIdentity newToken identifies compared request
+  have absent := denied.2 (Or.inl different)
+  subst response
+  refine ⟨different, issued, source, raw, recorded, reached, ?_, ?_, state, heap, pins⟩
+  · simpa only [oldToken] using step
+  · simpa only [oldToken, seen, issuer, current, NativeSnapshotHandleObservation.reader, ObservedSnapshotReader.guard]
+      using records
 
 end Alvoki.Storage.DiskSession
