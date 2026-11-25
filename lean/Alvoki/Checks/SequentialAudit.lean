@@ -2245,6 +2245,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.rawTail_returns
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.finishAt_returns
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.installsAfterVacancy
+#check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.installsFromCensus
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.delayedKeeperSync
 #check_axioms Alvoki.Storage.DiskSession.KeeperRepairSlot.lockInode
 #check_axioms Alvoki.Storage.DiskSession.KeeperRepairSlot.openedCensus

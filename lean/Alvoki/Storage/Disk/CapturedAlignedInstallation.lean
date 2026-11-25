@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.CapturedKeeperCustody
+import Alvoki.Storage.Disk.CapturedCheckpointReadCensus
 import Alvoki.Storage.Disk.HeldWalInstallation
 
 namespace Alvoki.Storage.DiskSession
@@ -10,6 +11,19 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
   {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
   {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
   {published : CheckpointPublication.Image}
+
+/-- The reached reader state supplies the cache, descriptor inventory and
+files for the selected finisher. Carry reached state on both results. -/
+def finishPreparedWithCensus
+    (prepare : EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Plan × Reopened × Nat))
+    (finish : Plan → Nat → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (cache : CensusDirectoryCache) : EStateM IO.Error CensusOpenState Reopened :=
+  fun initial => match prepare (cache, initial) with
+    | .error cause (_, reached) => .error cause reached
+    | .ok (plan, opened, size) reached =>
+      match finish plan size reached with
+      | .ok () (_, final) => .ok opened final
+      | .error cause (_, final) => .error cause final
 
 /-- The file-action projections for this captured open. The aligned repair
 reports relate each reached sync to its actual cached callback. -/
@@ -332,6 +346,20 @@ theorem rawTail_returns (finish : CapturedAlignedFinish calls report vacant sele
   rw [authCensus, DescriptorInventory.afterDrops_append]
   rfl
 
+private theorem actions_returns (finish : CapturedAlignedFinish calls report vacant selected) :
+    let keeper := (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+    finish.actions directory layout.boundedPlan layout.plan.keeperBytes.size
+      (admission.cache.remember (directory.file (.walSegment layout.keeper.first)) keeper,
+        finish.readCustody.afterRead, admission.held) =
+      .ok () (admission.cache, finish.census, { admission.held with image := retry.image.syncDirectory.syncKeeper }) := by
+  have returned := finish.rawTail_returns
+  have read := finish.readCustody.readsAligned finish.keeperAligned
+  simp only [rawTail, Bind.bind, EStateM.bind, read] at returned
+  have extent : report.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
+    report.wal.keeper.observesFile.extent
+  rw [extent] at returned
+  exact returned
+
 private def finishAt (finish : CapturedAlignedFinish calls report vacant selected) (resolved : DiskDirectory)
     (_owner : DescriptorSlot) (cache : CensusDirectoryCache) (prepared : Plan × Reopened × Nat) :
     EStateM IO.Error CensusOpenState Reopened := fun (_, before) =>
@@ -349,17 +377,9 @@ theorem finishAt_returns (finish : CapturedAlignedFinish calls report vacant sel
     finish.finishAt directory admission.owner admission.cache
       (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) =
       .ok opened (finish.census, { admission.held with image := retry.image.syncDirectory.syncKeeper }) := by
-  have returned := finish.rawTail_returns
-  have read := finish.readCustody.readsAligned finish.keeperAligned
-  unfold rawTail at returned
-  simp only [Bind.bind, EStateM.bind, read] at returned
-  have measured : report.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size := by
-    rw [← finish.keeperAligned]
-    simp only [CanonicalKeeperLayout.plan, finish.keeperTailEmpty, ByteArray.append_empty]
-  rw [measured] at returned
   have keeperPath : (directory.file (.walSegment layout.boundedPlan.keeper)) =
       directory.file (.walSegment layout.keeper.first) := rfl
-  simp only [finishAt, keeperPath, returned]
+  simp only [finishAt, keeperPath, finish.actions_returns]
 
 end CapturedAlignedFinish
 
@@ -498,6 +518,16 @@ def run (finish : CapturedAlignedFinish calls report vacant selected) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
   calls.runWithFinish report finish.finishAt
 
+/-- Use the cache and inventory returned by the chronological reader.
+The same keeper handle remains pending until its reached file barrier. -/
+def runFromCensus (finish : CapturedAlignedFinish calls report vacant selected)
+    (metadataRelease runRelease sealRelease : FilePath → List LockReferenceDrop) :
+    EStateM.Result IO.Error CensusOpenState SegmentedSession :=
+  calls.runWithMarked fun resolved cache =>
+    finishPreparedWithCensus
+      (report.prepareFromCensus metadataRelease runRelease sealRelease finish.readCustody.readKeeperAt)
+      (finish.actions resolved) cache
+
 /-- The aligned repair starts at the reported vacant admission. Its
 captured directory and keeper barriers preserve the admitted pair. -/
 theorem installsAfterVacancy (finish : CapturedAlignedFinish calls report vacant selected)
@@ -532,6 +562,51 @@ theorem installsAfterVacancy (finish : CapturedAlignedFinish calls report vacant
     CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := report) vacant marker laterValid
       following accepted ordered selected finish.finishAt finish.finishAt_returns ready effects
   exact ⟨session, _, returned, rfl, installed⟩
+
+/-- The selected reads add the aligned keeper to the pending cache and
+return its reached census. Both grouped barriers use that state before
+the open returns the exact replayed table. -/
+theorem installsFromCensus (finish : CapturedAlignedFinish calls report vacant selected)
+    {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
+    (manifest : CapturedManifestCensus report metadataRelease manifestDrops)
+    (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
+    (markerRead : CapturedMarkerCensus report ((admission.reached.afterDrops manifestDrops).afterDrops
+      (runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest))) metadataRelease)
+    (chronology : report.listing.beforeOpen = manifestDrops ++
+      runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest) ++
+      (markerRead.custody.beforeOpen ++ metadataRelease (directory.file .walBoundary)))
+    {released : FilePath → List LockReferenceDrop} {required : List (Nat × IO.FS.Metadata)}
+    (seals : CapturedSealReadChain report released required report.listing.afterClose finish.readCustody.beforeOpen)
+    (offsets : required.map Prod.fst = (layout.sealed ++ [layout.keeper]).map WalSegment.first)
+    (retained : ∀ event ∈ finish.readCustody.beforeOpen,
+      event.removes admission.owner.reference = false ∧ event.removes admission.cached.reference = false)
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    (keeperValid : retry.image.keeper.Valid layout.target.Accepts)
+    (laterValid : retry.image.later.Beyond layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ session final, finish.runFromCensus metadataRelease runs.released released = .ok session (finish.census, final) ∧
+      final.image.directory.active = retry.image.directory.active ∧
+      admission.owner ∈ finish.census.slots ∧ admission.cached ∈ finish.census.slots ∧
+      CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
+        published calls.liveRefs (.ok session final) := by
+  obtain ⟨opened, reached, projected⟩ := report.preparesFromCensus manifest runs selected markerRead chronology
+    finish.readCustody seals offsets retained following laterValid accepted ordered finish.readCustody.readKeeperAt
+    (finish.readCustody.readsAligned finish.keeperAligned)
+  have same : finish.runFromCensus metadataRelease runs.released released = finish.run := by
+    unfold runFromCensus run
+    apply calls.runWithMarked_eq report _ finish.finishAt marker
+    simp only [finishPreparedWithCensus, reached, finish.actions_returns, Bind.bind, EStateM.bind, projected,
+      finish.finishAt_returns]
+  rw [same]
+  obtain ⟨session, final, returned, pair, installed⟩ :=
+    finish.installsAfterVacancy marker keeperValid laterValid following accepted ordered
+  exact ⟨session, final, returned, pair, finish.lockRetained, finish.directoryRetained, installed⟩
 
 /-- The shared open and aligned repair install the table selected by the
 checked reads at this admission. The proof follows the reported directory
