@@ -2030,3 +2030,12 @@ in the acknowledged history, so adding the uncertain batch does not
 change the covered prefix. The remaining WAL-side handoff must supply
 the valid initial WAL, the collection retry and the selected pair for
 the same reached crash image.
+
+The shared WAL recovery theorem now separates replay of the selected
+logical history from the proof about retained physical segments. The
+logical replay starts at a checkpoint with the correct watermark and
+history. It produces the table, its committed sequence and its
+refinement without taking a collection witness. The existing
+collection proof consumes this result and still establishes its exact
+physical reads. The two-slot installation can next use the same
+logical result with the canonical segment chain from its own reader.

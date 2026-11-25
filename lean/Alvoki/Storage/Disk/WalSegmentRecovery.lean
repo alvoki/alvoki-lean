@@ -54,6 +54,39 @@ theorem WalSegmentRecovery.first_eq
   have right := Nat.le_trans expectedCovered watermarkWithin
   omega
 
+/-- Replay the selected logical prefix from a checkpoint that represents its covered
+history. Physical readers can use this result once they establish their own byte layout. -/
+theorem recoverSelected_history {history : List Write} {range : MarkedWalRange}
+    {base : PackedTable} {model : SnapshotTable UInt64}
+    (beforeMarker : range.watermark ≤ range.through) (within : range.through ≤ history.length)
+    (committed : base.committed.toNat = range.watermark)
+    (refines : base.Refines model) (represents : RepresentsWalHistory (history.take range.watermark) model)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ table, recoverSelected base (WAL.encode (history.take range.through)) = .ok table ∧
+      table.committed.toNat = range.through ∧
+      (∃ model, table.Refines model ∧ RepresentsWalHistory (history.take range.through) model) := by
+  let chosenHistory := history.take range.through
+  let covered := history.take range.watermark
+  let pending := chosenHistory.drop range.watermark
+  have watermarkWithin := Nat.le_trans beforeMarker within
+  have chosenLength : chosenHistory.length = range.through := by
+    simp [chosenHistory, Nat.min_eq_left within]
+  have coveredLength : covered.length = base.committed.toNat := by
+    simp [covered, committed, Nat.min_eq_left watermarkWithin]
+  have exactCovered : chosenHistory.take range.watermark = covered := by
+    simp [chosenHistory, covered, List.take_take, Nat.min_eq_left beforeMarker]
+  have splitCovered : covered ++ pending = chosenHistory := by
+    simpa [pending, exactCovered] using (List.take_append_drop range.watermark chosenHistory)
+  have numbered : WAL.OrdinalsFrom 1 (covered ++ pending) := splitCovered.symm ▸ walOrdinals_take ordered _
+  obtain ⟨table, recovered, count⟩ := recoverSelected_encoded_complete base covered pending numbered coveredLength
+  have played := (recoverSelected_encoded base covered pending numbered coveredLength).symm.trans recovered
+  rw [splitCovered] at recovered
+  have total : table.committed.toNat = range.through := by
+    rwa [← List.length_append, splitCovered, chosenLength] at count
+  obtain ⟨abstract, replayed, refined⟩ := replay_refines refines played
+  have represented := splitCovered ▸ represents.append replayed
+  exact ⟨table, recovered, total, abstract, refined, represented⟩
+
 /-- For any pair still selectable after collection, feed the exact retained
 run of WAL segments to marked recovery. The loaded base represents the
 checkpoint's covered prefix. No success premise is needed for either worker. -/
@@ -71,27 +104,13 @@ theorem WalSegmentCollectionRetry.recoversSelected
   obtain ⟨_, _, marker, length, visible, decodedMarker, byteCount⟩ :=
     DirectoryPublication.Bindings.walRange_accounting decoded
   let chosenHistory := history.take range.through
-  let covered := history.take range.watermark
-  let pending := chosenHistory.drop range.watermark
   have watermarkWithin := Nat.le_trans beforeMarker within
   have firstWithin := Nat.le_trans begins watermarkWithin
   have firstBeforeMarker := Nat.le_trans begins beforeMarker
   have chosenLength : chosenHistory.length = range.through := by
     simp [chosenHistory, Nat.min_eq_left within]
-  have coveredLength : covered.length = base.committed.toNat := by
-    simp [covered, committed, Nat.min_eq_left watermarkWithin]
-  have exactCovered : chosenHistory.take range.watermark = covered := by
-    simp [chosenHistory, covered, List.take_take, Nat.min_eq_left beforeMarker]
-  have splitCovered : covered ++ pending = chosenHistory := by
-    simpa [pending, exactCovered] using (List.take_append_drop range.watermark chosenHistory)
-  have numbered : WAL.OrdinalsFrom 1 (covered ++ pending) := splitCovered.symm ▸ walOrdinals_take ordered _
-  obtain ⟨table, recovered, count⟩ := recoverSelected_encoded_complete base covered pending numbered coveredLength
-  have played := (recoverSelected_encoded base covered pending numbered coveredLength).symm.trans recovered
-  rw [splitCovered] at recovered
-  have total : table.committed.toNat = range.through := by
-    rwa [← List.length_append, splitCovered, chosenLength] at count
-  obtain ⟨abstract, replayed, refined⟩ := replay_refines refines played
-  have represented := splitCovered ▸ represents.append replayed
+  obtain ⟨table, recovered, total, representation⟩ :=
+    recoverSelected_history beforeMarker within committed refines represents ordered
   have encodedSize : (WAL.encode chosenHistory).size = length.toNat := by
     rw [WAL.encode_size, chosenLength, byteCount, Nat.mul_comm]
   have countEq : length = (WAL.encode chosenHistory).size.toUInt64 := by
@@ -103,7 +122,7 @@ theorem WalSegmentCollectionRetry.recoversSelected
     rw [← WAL.encode_append, List.take_append_drop, ← countEq] at select
     exact select
   have full : WAL.Boundary.recoverMarked base length (WAL.encode history) = .ok (WAL.encode chosenHistory, table) := by
-    simp [WAL.Boundary.recoverMarked, fullSelect, recovered, Bind.bind, Except.bind, Pure.pure, Except.pure]
+    simp [WAL.Boundary.recoverMarked, fullSelect, chosenHistory, recovered, Bind.bind, Except.bind, Pure.pure, Except.pure]
   let removed := history.take first
   have removedLength : removed.length = first := by simp [removed, Nat.min_eq_left firstWithin]
   have removedCovered : removed.length ≤ base.committed.toNat := by rwa [removedLength, committed]
@@ -129,7 +148,7 @@ theorem WalSegmentCollectionRetry.recoversSelected
     subst recoveredTable
     exact ⟨first, table, begins, retained, total,
       ⟨marker, length, selected, visible, decodedMarker, byteCount, (ByteArray.append_right_inj _).mp sameBytes,
-        actual, full⟩, abstract, refined, represented⟩
+        actual, full⟩, representation⟩
 
 /-- Recover from the exact ordered run bytes loaded for the strict v2
 checkpoint selected by the same pair as the WAL marker. -/
