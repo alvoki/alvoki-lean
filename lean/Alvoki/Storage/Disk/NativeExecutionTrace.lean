@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.BootstrapCreateErrorLineage
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeReadyCheckpoint
 import Alvoki.Storage.Disk.NativeReadyWalCollection
+import Alvoki.Storage.Disk.NativeCoveredWalUnlinkReopen
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
@@ -53,6 +54,7 @@ inductive NativeExecutionEvent : Type 1 where
   | checkpointCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | interruptedCheckpointRecovered (input : FilePath) (manifest : Option ByteArray)
   | collectCoveredWal
+  | interruptedCoveredWalUnlinkRecovered (input : FilePath)
   | walCollectionPlan (result : Except IO.Error (List Nat))
   | rotatedWal
   | rotationErrorRecovered (input : FilePath) (error : IO.Error)
@@ -307,6 +309,16 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (returned : NativeObsoleteRunUnlinkErrorStep current.ready cut error next) :
       NativeExecutionStep current (.obsoleteRunCollectionError cut.plan.reports.held error.cause)
         ⟨current.history, current.submissions, next⟩
+  | recoverInterruptedCoveredWalUnlink (current : NativeExecutionPosition) {input : FilePath}
+      {stop : NativeCoveredWalUnlinkStop current.ready.state} (crash : NativeCoveredWalUnlinkCrash stop)
+      (recovery : NativeCoveredWalUnlinkReopen current.ready crash input)
+      {layout : CanonicalKeeperLayout crash.observed.retry.image current.ready.state.writer.history}
+      {selected : SelectedIntegrityCheckpoint current.ready.state.writer.published.durable
+        crash.observed.retry.image.directory.active.manifest current.ready.state.writer.checkpoint}
+      (seen : NativeReadyRestartReads crash.observed input layout selected) (state : NativeReadyState)
+      (reached : NativeReadyReadPrefix seen.run state current.history current.submissions current.ready.reads state) :
+      NativeExecutionStep current (.interruptedCoveredWalUnlinkRecovered input)
+        ⟨current.history, current.submissions, ⟨seen.run, state, state, current.ready.reads, reached⟩⟩
   | recoverInterruptedRunUnlink (current : NativeExecutionPosition) {input : FilePath}
       {cut : NativeObsoleteRunUnlinkCut current.ready.state} (stop : NativeObsoleteRunUnlinkStop cut)
       (crash : NativeObsoleteRunUnlinkCrash cut) (next : NativeReadPosition current.history current.submissions)
@@ -446,6 +458,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case obsoleteRunUnlinkError returned => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.reads⟩
+  case recoverInterruptedCoveredWalUnlink =>
+    simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads]
   case recoverInterruptedRunUnlink reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case rewriteRunCheckpointAndReopen reopened => exact ⟨by simp [NativeExecutionEvent.writes],
@@ -529,6 +543,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | checkpointThenCloseAndReopen (input : FilePath)
   | checkpointThenPowerLossAndReopen (input : FilePath)
   | collectCoveredWal
+  | interruptedCoveredWalUnlinkThenReopen (input : FilePath)
   | planWalCollection
   | rotateWal
   | rotateThenCloseAndReopen (input : FilePath)
@@ -565,6 +580,7 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .checkpointThenCloseAndReopen input, .checkpointErrorRecovered opened _ => opened = input
   | .checkpointThenPowerLossAndReopen input, .checkpointCrashRecovered opened _ _ => opened = input
   | .collectCoveredWal, .collectCoveredWal => True
+  | .interruptedCoveredWalUnlinkThenReopen input, .interruptedCoveredWalUnlinkRecovered opened => opened = input
   | .planWalCollection, .walCollectionPlan _ => True
   | .rotateWal, .rotatedWal => True
   | .rotateThenCloseAndReopen input, .rotationErrorRecovered opened _ => opened = input
@@ -626,6 +642,13 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
       (observed : NativeReadyCheckpoint current.state reports)
   | collectCoveredWal (observed : NativeReadyWalCollection current.state)
       (completed : observed.barrier.outcome = .completed)
+  | interruptedCoveredWalUnlinkThenReopen (input : FilePath) {stop : NativeCoveredWalUnlinkStop current.state}
+      (crash : NativeCoveredWalUnlinkCrash stop)
+      (observe : ∀ layout : CanonicalKeeperLayout crash.observed.retry.image current.state.writer.history,
+        layout.target = current.state.writer.target → Prepared crash.observed.retry.image layout.target layout.plan →
+        ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+          crash.observed.retry.image.directory.active.manifest current.state.writer.checkpoint,
+        Nonempty (NativeReadyRestartReads crash.observed input layout selected))
   | closeAndReopen (input : FilePath) (observed : NativeCloseReopenObservation current.state input)
   | interruptedCloseThenReopen (input : FilePath) (observed : NativeInterruptedCloseReopenObservation current.state input)
   | interruptedCheckpointThenReopen (input : FilePath) (observed : NativePendingCheckpointCrashObservation current.state input)
@@ -705,6 +728,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .restart _ input _ => .restart input
   | .checkpoint _ => .checkpoint
   | .collectCoveredWal _ _ => .collectCoveredWal
+  | .interruptedCoveredWalUnlinkThenReopen input _ _ => .interruptedCoveredWalUnlinkThenReopen input
   | .closeAndReopen input _ => .closeAndReopen input
   | .interruptedCloseThenReopen input _ => .interruptedCloseThenReopen input
   | .interruptedCheckpointThenReopen input _ => .interruptedCheckpointThenReopen input
@@ -754,6 +778,10 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | collectCoveredWal observed completed =>
     obtain ⟨_, step⟩ := current.collectsCoveredWal observed completed
     exact ⟨_, _, step, trivial⟩
+  | interruptedCoveredWalUnlinkThenReopen _ crash observe =>
+    have recovery := current.ready.recoversInterruptedCoveredWalUnlink _ crash observe
+    obtain ⟨_, _, layout, selected, seen, state, reached, _⟩ := recovery.reopened
+    exact ⟨_, _, .recoverInterruptedCoveredWalUnlink current crash recovery seen state reached, rfl⟩
   | closeAndReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.closesAndReopens observed
     exact ⟨_, _, .closeAndReopen current observed next reopened, rfl⟩

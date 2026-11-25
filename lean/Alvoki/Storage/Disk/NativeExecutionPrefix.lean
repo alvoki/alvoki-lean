@@ -13,6 +13,7 @@ import Alvoki.Storage.Disk.NativePendingMarkerStageWrite
 import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 import Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
+import Alvoki.Storage.Disk.NativeCoveredWalUnlinkStop
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 
@@ -84,6 +85,7 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
       (stop : NativeCheckpointDirectoryStop (image := image) current.ready.state cut)
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause)
+  | interruptedCoveredWalUnlink (stop : NativeCoveredWalUnlinkStop current.ready.state)
   | interruptedObsoleteRunUnlink (cut : NativeObsoleteRunUnlinkCut current.ready.state)
       (stop : NativeObsoleteRunUnlinkStop cut)
   | interruptedRotation (stop : NativeRotationDirectoryStop current.ready.state)
@@ -110,6 +112,7 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .checkpointError _ _ => .checkpoint
   | .interruptedCheckpoint _ => .checkpoint
   | .collectionError _ _ _ => .collectCoveredWal
+  | .interruptedCoveredWalUnlink _ => .collectCoveredWal
   | .interruptedObsoleteRunUnlink cut _ => .collectObsoleteRuns cut.plan.reports.held
   | .interruptedRotation _ => .rotateWal
   | .rotationError _ _ => .rotateWal
@@ -191,6 +194,14 @@ def Reached : NativeExecutionEnd current → Prop
         (.poisoned, ⟨(current.ready.state.cache, reported.pending.image), reported.pending.owners⟩) ∧
       ∀ sealed ∈ reported.pending.image.crashSealed,
         Nonempty (CoveredWalRetrySelection current.ready.state.writer { reported.pending.image.visible with sealed })
+  | .interruptedCoveredWalUnlink stop =>
+      (∀ barrier, stop.run barrier = .error stop.path
+        (.poisoned, ⟨(current.ready.state.cache, stop.census, stop.after), current.ready.state.files.owners⟩)) ∧
+      stop.census = current.ready.state.census ∧
+      current.ready.state.files.owners.Owns current.ready.state.session.directory current.ready.state.session.descriptor ∧
+      current.ready.state.owner ∈ stop.census.slots ∧ current.ready.state.directorySlot ∈ stop.census.slots ∧
+      ∀ sealed ∈ stop.after.crashSealed,
+        WalSegmentCollectionRetry current.ready.state.writer.wal { stop.after.visible with sealed }
   | .interruptedObsoleteRunUnlink cut stop =>
       (∀ barrier, stop.runFromReady barrier = .error cut.path
         (.ready current.ready.state.writer.installed,
@@ -249,6 +260,10 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
     obtain ⟨returned, _, _, _, _, _, _, _, _, _, _, _, _, survivors, _⟩ :=
       current.ready.readPrefix.collectionBarrierFailed reported failed
     exact ⟨returned, survivors⟩
+  | interruptedCoveredWalUnlink stop =>
+    have valid := current.ready.readPrefix.refines.1
+    have custody := stop.retainsCustody valid
+    exact ⟨stop.stops valid, stop.sameCensus.2, valid.retained.held, custody.1, custody.2.1, (stop.selections valid).2⟩
   | interruptedObsoleteRunUnlink cut stop =>
     obtain ⟨stopped, held, selected, protectedRuns, _⟩ := current.ready.stopsDuringObsoleteRunUnlink cut stop
     exact ⟨stopped, held, selected, protectedRuns⟩
@@ -317,7 +332,7 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
   | ready | close | rejectedOpensAfterClose | interruptedClose | checkpointError | interruptedCheckpoint
-  | collectionError | interruptedObsoleteRunUnlink | interruptedRotation | rotationError =>
+  | collectionError | interruptedCoveredWalUnlink | interruptedObsoleteRunUnlink | interruptedRotation | rotationError =>
     refine ⟨current.history, .inl rfl, ?_, current.ready.readPrefix.readsBounded⟩
     all_goals simpa [submissions, uncertainBatch] using current.ready.readPrefix.refines.2.2
 
@@ -374,6 +389,8 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause) :
       NativeExecutionEndObservation current .collectCoveredWal
+  | interruptedCoveredWalUnlink (stop : NativeCoveredWalUnlinkStop current.ready.state) :
+      NativeExecutionEndObservation current .collectCoveredWal
   | interruptedObsoleteRunUnlink (cut : NativeObsoleteRunUnlinkCut current.ready.state)
       (stop : NativeObsoleteRunUnlinkStop cut) : NativeExecutionEndObservation current (.collectObsoleteRuns cut.plan.reports.held)
   | interruptedRotation (stop : NativeRotationDirectoryStop current.ready.state) :
@@ -416,6 +433,7 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
   | checkpointError reported physical => exact ⟨.checkpointError reported physical, rfl, NativeExecutionEnd.reached _⟩
   | interruptedCheckpoint stop => exact ⟨.interruptedCheckpoint stop, rfl, NativeExecutionEnd.reached _⟩
   | collectionError reported cause failed => exact ⟨.collectionError reported cause failed, rfl, NativeExecutionEnd.reached _⟩
+  | interruptedCoveredWalUnlink stop => exact ⟨.interruptedCoveredWalUnlink stop, rfl, NativeExecutionEnd.reached _⟩
   | interruptedObsoleteRunUnlink cut stop => exact ⟨.interruptedObsoleteRunUnlink cut stop, rfl, NativeExecutionEnd.reached _⟩
   | interruptedRotation stop => exact ⟨.interruptedRotation stop, rfl, NativeExecutionEnd.reached _⟩
   | rotationError cause failure => exact ⟨.rotationError cause failure, rfl, NativeExecutionEnd.reached _⟩
