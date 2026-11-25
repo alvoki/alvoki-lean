@@ -341,6 +341,7 @@ import Alvoki.Storage.Disk.NativeRawManifestOpenError
 import Alvoki.Storage.Disk.NativeRawManifestStatError
 import Alvoki.Storage.Disk.NativeRawSelectedMarkerStatError
 import Alvoki.Storage.Disk.NativeRawSelectedMarkerDecodeError
+import Alvoki.Storage.Disk.NativeRawAlignedWalDecodeError
 import Alvoki.Storage.Disk.NativeRawMarkerChunkError
 import Alvoki.Storage.Disk.NativeRawFinalizedManifestError
 import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
@@ -2105,6 +2106,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerDecodeError.finalizedAttempt
 #check_axioms Alvoki.Storage.DiskSession.RawPresentManifestMarkerRead.oversized
 #check_axioms Alvoki.Storage.DiskSession.RawPresentManifestMarkerRead.oversizedPrefix
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedWalDecodeRead.returnsListing
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedWalDecodeRead.remembersSelected
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedWalDecodeRead.readKeeper
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedWalDecodeRead.readsSelected
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedWalDecodeRead.replayError
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedWalDecodeRead.stopsMarkedWorker
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.missingManifest
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.releasesSelected
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.stopsMarkedWorker
@@ -3574,6 +3581,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.readPrefixUntilEofWith_requestBound
 #check_axioms Alvoki.Storage.readPrefixUntilEofWith_requestBoundBy
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reported
+#check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_singletonReturned
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBoundedMarkedFromReaders_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_eq_of_wal

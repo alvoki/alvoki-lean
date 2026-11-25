@@ -54,6 +54,19 @@ def readCachedWalPayloads [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirect
     (required : List (Nat × IO.FS.Metadata)) : m (List (Nat × ByteArray) × Nat) :=
   readCachedWalPayloadsFrom dir through readSeal readKeeper required []
 
+/-- The singleton selection uses the exact heap returned by its keeper
+read. There is no preceding seal or subsequent payload request. -/
+theorem readCachedWalPayloads_singletonReturned {state : Type} (dir : DiskDirectory) (through first : Nat)
+    (readSeal : FilePath → Nat → EStateM IO.Error state ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
+    (metadata : IO.FS.Metadata) {before reached : state} {bytes : ByteArray}
+    (width : bytes.size = (through - first) * frameSize) (aligned : bytes.size = metadata.byteSize.toNat)
+    (observed : readKeeper (dir.file (.walSegment first)) bytes.size bytes.size before = .ok bytes reached) :
+    readCachedWalPayloads dir through readSeal readKeeper [(first, metadata)] before =
+      .ok ([(first, bytes)], metadata.byteSize.toNat) reached := by
+  simp [readCachedWalPayloads, readCachedWalPayloadsFrom, ← width, ← aligned, observed,
+    Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
 open RecoveryRequestCount in
 private theorem readCachedWalPayloadsFrom_payloadCallsBound (dir : DiskDirectory) (through : Nat)
     (readSeal : FilePath → Nat → EStateM IO.Error Nat ByteArray)
