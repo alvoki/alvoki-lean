@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.CheckpointRunDirectoryClose
 import Alvoki.Storage.Disk.CleanCachedClose
 import Alvoki.Storage.Disk.ClientReadTrace
 import Alvoki.Storage.Disk.ListedMarkedFinish
+import Alvoki.Storage.Disk.LockCensusTrace
 import Alvoki.Storage.Disk.MaintainedRecoveryWork
 
 namespace Alvoki.Storage.DiskSession
@@ -38,31 +39,22 @@ theorem reaches (close : CachedCloseReports directory writer start) (openPhase :
     have files := close.finishedFiles held
     exact ⟨outcome, rfl, files, close.finishedDescriptors, by simp [files, TryLockObserves, LockOwners.set]⟩
 
-/-- Use the issuing slot of the actual close as a live reference in the
-complete census. A failed unlock leaves that census in force. -/
-def lockReferences (close : CachedCloseReports directory writer start) : HeldLockReferences writer :=
-  start.descriptors.held writer (List.ne_nil_of_mem
-    (start.descriptors.mem_references.mpr ⟨close.slot, close.live, rfl, close.description⟩))
-
-/-- If an explicit unlock failed, later reference loss releases the lock
-only when the original description has no remaining slots. The data
-image and the exact final census can be carried into the next admission. -/
-theorem afterFailedUnlockDrops (close : CachedCloseReports directory writer start) (openPhase : start.phase ≠ .closed)
-    (held : start.files.owners.Owns directory writer) {cause : IO.Error} (failed : close.result = .error cause)
-    (drops : List LockReferenceDrop) :
-    let reached := close.lockReferences.afterFileDrops drops directory start.files
-    let remaining := (start.descriptors.afterDrops drops).references writer
-    close.run = .error cause start ∧ reached.image = start.files.image ∧
-      (TryLockObserves reached.owners directory (.ok true) ↔ remaining = []) ∧
-      (remaining ≠ [] → reached = start.files) ∧
-      (remaining = [] → reached = ⟨start.files.image, start.files.owners.set (directory.file .lock) none⟩) := by
-  have returned := close.reaches openPhase held
+/-- A returned unlock failure leaves the starting phase, cache, files
+and census in force. The same census then accounts for later aliases,
+private forks and drops of the lock description. -/
+theorem afterFailedUnlockCensus (close : CachedCloseReports directory writer start) (openPhase : start.phase ≠ .closed)
+    {cause : IO.Error} (failed : close.result = .error cause)
+    {inventory : DescriptorInventory} {reached : LockedFileState (Cache handle × image)}
+    (observed : LockCensusTrace directory writer start.descriptors start.files inventory reached) :
+    close.run = .error cause start ∧
+      inventory.inode = start.descriptors.inode ∧
+      (TryLockObserves reached.owners directory (.ok true) ↔ inventory.references writer = []) ∧
+      reached = if inventory.references writer = [] then
+        ⟨start.files.image, start.files.owners.set (directory.file .lock) none⟩
+      else start.files := by
+  have returned := close.reaches openPhase observed.reached.1
   simp only [Reached, failed] at returned
-  have same : close.lockReferences.remaining drops = (start.descriptors.afterDrops drops).references writer :=
-    start.descriptors.held_remaining writer _ drops
-  exact ⟨returned.1, rfl, by rw [← same]; exact close.lockReferences.afterFileDrops_admits held,
-    fun live => close.lockReferences.afterFileDrops_surviving (same.symm ▸ live),
-    fun last => close.lockReferences.afterFileDrops_released held (same.symm ▸ last)⟩
+  exact ⟨returned.1, observed.reached.2.1, observed.freshFlockAllowed, observed.reached.2.2⟩
 
 end CachedCloseReports
 

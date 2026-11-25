@@ -67,17 +67,18 @@ private theorem references_fork_empty (inventory : DescriptorInventory) (parent 
       have live := inventory.mem_references.mpr ⟨old, earlier, rfl, desc⟩
       simp only [empty, List.not_mem_nil] at live
 
-/-- The owner of the same lock description survives exactly while its
-chronologically observed census has a live slot. Inserting unrelated slots
-or duplicating a live slot changes no files and cannot revive a dead lock. -/
+/-- Slot events preserve the file image and every other lock. They
+release this owner exactly when its chronological census is empty. -/
 theorem LockCensusTrace.reached {initial inventory : DescriptorInventory}
     {directory : DiskDirectory} {description : Nat} {source after : LockedFileState image}
     (observed : LockCensusTrace directory description initial source inventory after) :
-    after.image = source.image ∧ inventory.inode = initial.inode ∧
-      after.owners (directory.file .lock) = if inventory.references description = [] then none else some description := by
+    source.owners.Owns directory description ∧ inventory.inode = initial.inode ∧
+      after = if inventory.references description = [] then
+        ⟨source.image, source.owners.set (directory.file .lock) none⟩
+      else source := by
   induction observed with
   | start held live =>
-    exact ⟨rfl, rfl, by simpa only [LockOwners.Owns, ite_eq_right live] using held⟩
+    exact ⟨held, rfl, by simp only [ite_eq_right live]⟩
   | insert _ slot free aliasLive ih =>
     refine ⟨ih.1, ih.2.1, ?_⟩
     by_cases same : slot.description = description
@@ -86,23 +87,21 @@ theorem LockCensusTrace.reached {initial inventory : DescriptorInventory}
   | fork _ parent child fresh ih =>
     exact ⟨ih.1, ih.2.1, by simpa only [references_fork_empty _ parent child description fresh] using ih.2.2⟩
   | @drops inventory before prior events ih =>
+    refine ⟨ih.1, ih.2.1, ?_⟩
     by_cases live : inventory.references description ≠ []
-    · have held : before.owners.Owns directory description := by
-        simpa only [LockOwners.Owns, ite_eq_right live] using ih.2.2
+    · have same : before = source := by simpa only [ite_eq_right live] using ih.2.2
       have refs := inventory.held_remaining description live events
       by_cases last : (inventory.afterDrops events).references description = []
-      · have released := (inventory.held description live).afterFileDrops_released held (refs.trans last)
-        rw [DescriptorInventory.dropLockState, dite_eq_left live, released]
-        exact ⟨ih.1, ih.2.1, by simp [last, LockOwners.set]⟩
-      · have retained := (inventory.held description live).afterFileDrops_surviving (drops := events)
-          (fun empty => last (refs.symm.trans empty)) (directory := directory) (before := before)
-        exact ⟨by simpa [DescriptorInventory.dropLockState, live, retained] using ih.1, ih.2.1,
-          by simpa only [DescriptorInventory.dropLockState, dite_eq_left live, retained, ite_eq_right last, ite_eq_right live] using ih.2.2⟩
+      · rw [DescriptorInventory.dropLockState, dite_eq_left live, same,
+          (inventory.held description live).afterFileDrops_released ih.1 (refs.trans last), ite_eq_left last]
+      · rw [DescriptorInventory.dropLockState, dite_eq_left live,
+          (inventory.held description live).afterFileDrops_surviving (fun empty => last (refs.symm.trans empty)),
+          same, ite_eq_right last]
     · have empty := Classical.not_not.mp live
       have nextEmpty : (inventory.afterDrops events).references description = [] := by
         simp [DescriptorInventory.references_afterDrops, empty]
-      exact ⟨by simpa [DescriptorInventory.dropLockState, live] using ih.1, ih.2.1,
-        by simpa only [DescriptorInventory.dropLockState, dite_eq_right live, ite_eq_left empty, ite_eq_left nextEmpty] using ih.2.2⟩
+      simpa only [DescriptorInventory.dropLockState, dite_eq_right live, ite_eq_left empty, ite_eq_left nextEmpty]
+        using ih.2.2
 
 /-- The lock on the same stable file is vacant for a fresh competing
 description exactly when the earlier description has no reported slots. -/
@@ -110,17 +109,24 @@ theorem LockCensusTrace.freshFlockAllowed {directory : DiskDirectory} {descripti
     {source after : LockedFileState image} {initial inventory : DescriptorInventory}
     (observed : LockCensusTrace directory description initial source inventory after) :
     TryLockObserves after.owners directory (.ok true) ↔ inventory.references description = [] := by
-  simp [TryLockObserves, observed.reached.2.2]
+  obtain ⟨held, _, reached⟩ := observed.reached
+  by_cases last : inventory.references description = []
+  · rw [reached, ite_eq_left last]
+    simp [TryLockObserves, LockOwners.set, last]
+  · rw [reached, ite_eq_right last]
+    simp [TryLockObserves, LockOwners.Owns, last] at held ⊢
+    exact fun vacant => by rw [held] at vacant; contradiction
 
 /-- The same ordered census supplies the retry prefix's reference drops.
 Each drop comes from the inventory reached by the preceding slot events.
 The prefix retains their lock and file projection. -/
 theorem LockCensusTrace.reopenTrace {directory : DiskDirectory} {description : Nat}
-    {source after : LockedFileState FileImage} {initial inventory : DescriptorInventory} (keeper : Nat)
-    (observed : LockCensusTrace directory description initial source inventory after) :
-    ReportedReopenPrefix directory keeper source after := by
+    {origin source after : LockedFileState FileImage} {initial inventory : DescriptorInventory} {keeper : Nat}
+    (observed : LockCensusTrace directory description initial source inventory after)
+    (earlier : ReportedReopenPrefix directory keeper origin source) :
+    ReportedReopenPrefix directory keeper origin after := by
   induction observed with
-  | start => exact .start
+  | start => exact earlier
   | insert _ _ _ _ ih | fork _ _ _ _ ih => exact ih
   | @drops census before _ events ih =>
     by_cases live : census.references description ≠ []

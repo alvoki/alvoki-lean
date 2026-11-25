@@ -1251,7 +1251,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.finishedDescriptors
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.lockSlotAfterClears
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.reaches
-#check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.afterFailedUnlockDrops
+#check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.afterFailedUnlockCensus
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReopenCensus.captures
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.cachedClosePrefix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterCachedCloseRetries
