@@ -298,6 +298,7 @@ import Alvoki.Storage.Disk.WalCollectionPreflight
 import Alvoki.Storage.Disk.WalCollectionFirstUnlink
 import Alvoki.Storage.Disk.WalCollectionFirstEffect
 import Alvoki.Storage.Disk.WalCollectionOrderedPrefix
+import Alvoki.Storage.Disk.WalCollectionDirectoryFsync
 import Alvoki.Storage.Disk.SelectedRecoveryPayload
 import Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
@@ -1530,6 +1531,16 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.dispatch
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.projects
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.reportedWalUnlinkPrefix
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionReads.continueWithEffects_barrier
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionDirectoryEffect.exactImage
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionDirectoryFsync.resolves
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionDirectoryFsync.custody
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionDirectoryFsync.groupReturns
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionDirectoryFsync.syncReturns
+#check_axioms Alvoki.Storage.DiskSession.WalUnlinkInvariant.afterDirectoryFsync
+#check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.keepsDirectory
+#check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.completedNamesAbsent
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.reportedWalCollectionBarrier
 #check_axioms Alvoki.Storage.OpenPathReadReports.walSegmentExtents_offsets
 #check_axioms Alvoki.Storage.walCollectionOffsetsFromExtents_observed
 #check_axioms Alvoki.Storage.planWalCollectionWith_reported

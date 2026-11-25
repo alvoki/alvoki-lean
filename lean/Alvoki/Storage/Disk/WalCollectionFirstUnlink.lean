@@ -70,6 +70,26 @@ theorem continueWithEffects_unlink (directory : DiskDirectory)
   | error cause => simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw]
   | ok value => cases value; simp [Pure.pure, EStateM.pure]
 
+/-- The empty remaining schedule is the final directory callback.
+The installed phase is restored only after this callback succeeds. -/
+theorem continueWithEffects_barrier (directory : DiskDirectory)
+    (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
+    (syncDirectory : FilePath → EStateM IO.Error image Unit) (installed : Installed)
+    (before : LockedFileState image) :
+    continueWithEffects directory removeFile syncDirectory installed [] (.poisoned, before) =
+      match syncDirectory directory.path before.image with
+      | .ok () after => .ok () (.ready installed, {before with image := after})
+      | .error cause after => .error cause (.poisoned, {before with image := after}) := by
+  cases returned : syncDirectory directory.path before.image with
+  | ok value after =>
+    cases value
+    simp [continueWithEffects, RunCollection.run, RunCollection.steps, RunCollection.performPaths,
+      walCollectionFileCall, Bind.bind, EStateM.bind, returned, modify, modifyGet,
+      MonadStateOf.modifyGet, EStateM.modifyGet, Pure.pure, EStateM.pure]
+  | error cause after =>
+    simp [continueWithEffects, RunCollection.run, RunCollection.steps, RunCollection.performPaths,
+      walCollectionFileCall, Bind.bind, EStateM.bind, returned]
+
 /-- With a nonempty successful plan, the production suffix begins by
 calling unlink at its first canonical path with the original files and
 owner. This equation does not require that unlink to return successfully. -/

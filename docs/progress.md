@@ -119,6 +119,14 @@ suffix with the detached names filtered out. An accepted ENOENT keeps the effect
 proof takes local lookup, detach and survivor reports and reaches the directory barrier without interpreting its
 result. [Ordered unlink prefix](../lean/Alvoki/Storage/Disk/WalCollectionOrderedPrefix.lean)
 
+After all reported unlinks succeed, even for an empty plan, the collector runs the singleton directory sync
+on the cached live description for the same directory inode. The proof derives the exact returned WAL image
+from the before- or after-effect report. An effective sync settles the remaining names and rules out every
+planned seal in each reported crash survivor. Success restores the same installed writer and pins. A sync
+error keeps the writer poisoned and returns the actual reached files with the path-wrapped diagnostic.
+Both error timings preserve a valid WAL for recovery. The native contract supplies slot liveness, directory
+identity and sync effects. [Final collection directory sync](../lean/Alvoki/Storage/Disk/WalCollectionDirectoryFsync.lean)
+
 `DiskTable.collectCoveredWal` executes that preflight and the shared canonical unlink and directory-sync schedule under one lock. A failed preflight leaves the writer ready. The adapter poisons the session on a mutation error until it closes; a successful pass keeps the installed table and pins. Native tests inject errors before and after the real directory sync and check reopened data, the next append and the required barrier on an empty retry. Physical effect and descriptor reports remain the trusted boundary. [Native collector](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Fault tests](../lean/Alvoki/Checks/DiskTableChecks.lean)
 
 A reported collection error keeps its pending crash choices through the poisoned session's close. The mixed trace carries exact owner transitions through rejected acquisitions, failed read-only preparations, observed reference drops and reported directory barrier failures. Once an observed barrier settles the list, subsequent failures preserve that settlement. A healthy final bounded open preserves the loaded checkpoint and determines the exact returned writer. [Collection lock handoff](../lean/Alvoki/Storage/Disk/SegmentedCollectionLockHandoff.lean) · [Mixed reopen report](../lean/Alvoki/Storage/Disk/SegmentedCollectionLiveReopen.lean)

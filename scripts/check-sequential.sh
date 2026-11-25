@@ -181,6 +181,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalCollectionPreflight
 lake env leanchecker Alvoki.Storage.Disk.WalCollectionFirstUnlink
 lake env leanchecker Alvoki.Storage.Disk.WalCollectionFirstEffect
 lake env leanchecker Alvoki.Storage.Disk.WalCollectionOrderedPrefix
+lake env leanchecker Alvoki.Storage.Disk.WalCollectionDirectoryFsync
 lake env leanchecker Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
 lake env leanchecker Alvoki.Storage.Disk.WalSealedInodeLifetime
 lake env leanchecker Alvoki.Storage.Disk.WalHiddenSealRetry
