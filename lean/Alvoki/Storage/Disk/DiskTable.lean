@@ -1031,4 +1031,9 @@ theorem readKeeperPrefix_fileEffects (files : SyncFiles) (path : FilePath) (coun
           file.read size ByteArray.empty)
         files.remember path count fileSize := rfl
 
+/-- A successful stage remembers the descriptor returned by the native
+fresh write and flush. -/
+theorem syncFilesStage_schedule (files : SyncFiles) (path : FilePath) (bytes : ByteArray) :
+    files.stage path bytes = (writeFreshStagedHandle path bytes >>= files.remember path) := rfl
+
 end Alvoki.Storage

@@ -188,6 +188,7 @@ import Alvoki.Storage.Disk.DiskOpenAdmission
 import Alvoki.Storage.Disk.DiskBootstrapAdmission
 import Alvoki.Storage.Disk.ObservedBootstrapCache
 import Alvoki.Storage.Disk.BootstrapZeroKeeperCustody
+import Alvoki.Storage.Disk.BootstrapMarkerCustody
 import Alvoki.Storage.Disk.ObservedBootstrapFailure
 import Alvoki.Storage.Disk.ObservedBootstrapRetry
 import Alvoki.Storage.Disk.MarkerlessBootstrapRetryInstallation
@@ -1394,6 +1395,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.settledEmpty
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.rotationHealthy
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.installs
+#check_axioms Alvoki.Storage.syncFilesStage_schedule
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCustody.callbacks
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCustody.settledInode
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCustody.markerHealthy
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerCustody.installs
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.entries
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.canonicalLock
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.retained
