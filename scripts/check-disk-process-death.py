@@ -364,6 +364,23 @@ def check_two_slot_batch_cut(binary, shim, database, cut):
                     f"two-slot reopen did not respect the live writer lock: {stderr}")
             owner.kill()
             require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "two-slot writer was not killed")
+        for failure in ("before", "after"):
+            sync_log = Path(scratch) / f"retry-{failure}.log"
+            status, stderr = run_probe(binary, "--two-slot-open-once", database, env={
+                **os.environ,
+                "LD_PRELOAD": str(shim),
+                "ALVOKI_CHECK_SYNC_LOG": str(sync_log),
+                "ALVOKI_CHECK_SYNC_FAIL": str(marker),
+                "ALVOKI_CHECK_SYNC_FAIL_MODE": failure,
+            })
+            require(status != 0, f"two-slot reopen ignored the {failure} marker sync error: {stderr}")
+            expected_syncs = [str(marker)]
+            if failure == "after":
+                expected_syncs.append(f"synced before error: {marker}")
+            require(sync_log.read_text().splitlines() == expected_syncs,
+                    f"two-slot reopen went past the {failure} marker sync error")
+            require(marker.read_bytes() == new_marker and wal.read_bytes() == new_wal,
+                    "failed retry changed the marker or trimmed the WAL")
     status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "new" if cut == "marker-sync" else "old")
     require(status == 0, f"could not recover and extend the two-slot batch: {stderr}")
     retained = new_wal if cut == "marker-sync" else old_wal
@@ -547,5 +564,5 @@ if __name__ == "__main__":
     print("Read the manifest in two bounded phases and preserved its exact reopen and rejection outcomes.")
     print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
-    print("Recovered and extended the appropriate two-slot prefix after native WAL sync, partial slot write and marker sync cuts.")
+    print("Recovered the appropriate two-slot prefix after native publication cuts and two failed retries.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")
