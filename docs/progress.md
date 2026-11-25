@@ -1,5 +1,7 @@
 # Current handoff
 
+The finite execution on one opened table now includes release by issuance index and retention-floor changes. Release compares the tracked pin's token and follows the setter on the original phase cell. A refused floor change keeps the heap, while an accepted change stores the new table in the same cell. Both preserve the issuance list and client ledgers. Later reads still consult the table's active pin registry. [Snapshot controls in the opened trace](../lean/Alvoki/Storage/Disk/NativeOpenReadyTrace.lean)
+
 The finite trace on one opened table now consumes actual checkpoint returns. A successful return supplies the exact heap and selected durable checkpoint from the matching file callbacks. A reported error that leaves the phase ready supplies the preflight rejection and preserves the exact position. Subsequent writes and reads use the reached phase and prior pin and client ledgers. [Checkpoint returns in the opened trace](../lean/Alvoki/Storage/Disk/NativeOpenReadyTrace.lean)
 
 A successful checkpoint return on the opened phase cell now gives the common ready checkpoint edge at its actual returned heap. The physical report uses the same callbacks and starting file projection. Its exact publication and writer supply the next position, preserving issued pins and all prior client ledgers. [Classified checkpoint success](../lean/Alvoki/Storage/Disk/NativeClassifiedCheckpointSuccess.lean)

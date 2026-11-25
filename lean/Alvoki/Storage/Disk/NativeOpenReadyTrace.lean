@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
 import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
 import Alvoki.Storage.Disk.NativeClassifiedWriteAck
+import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 
 namespace Alvoki.Storage.DiskSession
 
@@ -14,10 +15,12 @@ inductive NativeOpenedInstruction : Type 1 where
   | write (request : WriteRequest)
   | checkpoint
   | acquireAt (sequence : UInt64)
+  | releaseAt (index : Nat)
+  | advanceFloor (floor : UInt64)
   | readAt (index : Nat) (request : SnapshotReadRequest α)
 
-/-- Per-call observations at the reached position. A read gets its pin
-by index from the reached list of tracked and newly issued pins. -/
+/-- Per-call observations at the reached position. Reads and releases
+address issued pins by index. The table tracks whether each pin is active. -/
 inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpenedInstruction → Type 1 where
   | write (request : WriteRequest) (nonempty : request.rows ≠ [])
       (calls : WriteRequest.Calls (DescriptorInventory × DescriptorSlot × Nat))
@@ -55,6 +58,12 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
   | acquireAt (sequence : UInt64) {pin : SnapshotPin} {table : PackedTable}
       (acquired : start.current.ready.state.writer.installed.table.acquireAt sequence = some (pin, table)) :
       NativeOpenedReport start (.acquireAt sequence)
+  | releaseAt (index : Nat) (pin : NativeOpenedPin opened)
+      (issued : start.pins[index]? = some pin)
+      (compared : opened.ptrEq opened.token opened.token start.reached = .ok true start.reached) :
+      NativeOpenedReport start (.releaseAt index)
+  | advanceFloor (floor : UInt64) :
+      NativeOpenedReport start (.advanceFloor floor)
   | readAt (index : Nat) (request : SnapshotReadRequest α) (pin : NativeOpenedPin opened)
       (issued : start.pins[index]? = some pin)
       (compared : opened.ptrEq opened.token opened.token start.reached = .ok true start.reached) :
@@ -113,6 +122,25 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
         (opened.set opened.phase) issue sequence start.reached = .ok (some returned.raw) next.reached ∧
       returned.raw = issue pin ∧ returned.localPin = pin ∧ next.pins = start.pins ++ [returned] ∧
       event = .snapshotControl (.acquireAt sequence) (.ok (some (start.current.ready.state.session.sessionRef, pin)))
+  | .releaseAt _ pin _ _ =>
+    opened.table.release pin.raw.handle = releaseSnapshotWith (m := IO)
+      (do (← opened.phase.get).installed) (opened.token.ptrEq opened.token) opened.phase.set pin.localPin.handle ∧
+    releaseSnapshotWith (m := EStateM IO.Error heap) (do (← opened.get opened.phase).installed)
+      (opened.ptrEq opened.token opened.token) (opened.set opened.phase) pin.localPin.handle start.reached =
+        .ok () next.reached ∧
+    opened.set opened.phase next.current.ready.state.session.phase start.reached = .ok () next.reached ∧
+    event = .snapshotControl (.release start.current.ready.state.session.sessionRef pin.localPin.handle) (.ok ()) ∧
+    next.pins = start.pins
+  | .advanceFloor floor =>
+    opened.table.advanceFloor floor = advanceFloorWith (m := IO)
+      (do (← opened.phase.get).installed) opened.phase.set floor ∧
+    ∃ accepted : Bool,
+      advanceFloorWith (m := EStateM IO.Error heap) (do (← opened.get opened.phase).installed)
+        (opened.set opened.phase) floor start.reached = .ok accepted next.reached ∧
+      (accepted = false → next.reached = start.reached) ∧
+      (accepted = true →
+        opened.set opened.phase next.current.ready.state.session.phase start.reached = .ok () next.reached) ∧
+      event = .snapshotControl (.advanceFloor floor) (.ok accepted) ∧ next.pins = start.pins
   | .readAt _ request pin _ _ =>
     (match request with
       | .lookup key => opened.table.lookup pin.raw.handle key = readSnapshotWith (m := IO)
@@ -133,6 +161,26 @@ structure Reached (report : NativeOpenedReport start instruction) (event : Nativ
     (next : NativeOpenedPosition opened) : Prop where
   common : NativeExecutionStep start.current event next.current
   returned : report.Returns event next
+
+private theorem reachesSnapshotControl {current : NativeExecutionPosition}
+    {observed : NativeSnapshotUpdateObservation current.ready.state α}
+    {next : NativeReadPosition current.history current.submissions} {value : α}
+    (transition : NativeSnapshotUpdateContinuation current.ready observed next)
+    (returned : observed.run = .ok value next.state.session) :
+    NativeExecutionStep current (.snapshotControl observed.update (.ok value))
+      ⟨current.history, current.submissions, next⟩ ∧
+    next.state.session.directory = current.ready.state.session.directory := by
+  have step := NativeExecutionStep.snapshotControl current observed next transition
+  have response := transition.returned.symm.trans returned
+  have state := transition.reached
+  generalize observed.update.outcome current.ready.state.session = outcome at step response state
+  cases outcome
+  case failed => cases response
+  all_goals
+    have same := (EStateM.Result.ok.inj response).1
+    subst value
+    have directory := congrArg (fun value : NativeReadyState => value.session.directory) state
+    exact ⟨step, directory⟩
 
 /-- Derive the next common step and the exact raw phase interpretation
 from the local report. The step acquires its next position here. -/
@@ -181,6 +229,23 @@ theorem reaches (report : NativeOpenedReport start instruction) :
     have common := NativeExecutionStep.snapshotControl start.current (.acquireAt sequence) next transition
     simp only [NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome, valid.phase, acquired] at common
     exact ⟨_, nextPosition, common, issue, actualPin, source, raw, rfl, rfl, rfl, rfl⟩
+  | releaseAt _ pin _ compared =>
+    obtain ⟨source, next, reached, transition, returned, raw, stored, _, setter⟩ :=
+      start.current.ready.releasesViaOpenReferences opened.table start.uses pin.issued
+        opened.phaseEffects start.stored opened.ptrEq start.current.ready.state.session.sessionRef true (by simp) compared
+    obtain ⟨step, directory⟩ := reachesSnapshotControl transition returned
+    let position : NativeOpenedPosition opened :=
+      ⟨⟨start.current.history, start.current.submissions, next⟩, reached, directory.trans start.directory,
+        stored, start.pins⟩
+    exact ⟨_, position, step, source, raw, setter rfl, rfl, rfl⟩
+  | advanceFloor floor =>
+    obtain ⟨source, next, reached, accepted, transition, returned, raw, stored, refused, setter⟩ :=
+      start.current.ready.advancesFloorViaOpenReferences opened.table start.uses opened.phaseEffects start.stored floor
+    obtain ⟨step, directory⟩ := reachesSnapshotControl transition returned
+    let position : NativeOpenedPosition opened :=
+      ⟨⟨start.current.history, start.current.submissions, next⟩, reached, directory.trans start.directory,
+        stored, start.pins⟩
+    exact ⟨_, position, step, source, accepted, raw, refused, setter, rfl, rfl⟩
   | readAt _ request pin _ compared =>
     obtain ⟨source, response, recorded, next, observed, raw, _⟩ :=
       start.current.ready.readsOpenPin opened.table start.uses pin.issued
