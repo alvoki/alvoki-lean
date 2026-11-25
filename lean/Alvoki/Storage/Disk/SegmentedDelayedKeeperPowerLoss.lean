@@ -91,7 +91,7 @@ private theorem continuesAuthorized {initial final : LockedFileState FileImage} 
   | empty => exact trace
   | failed _ attempt acquisition _ reports ran ih =>
     exact continueFailure ih (attempt.errorFiles acquisition reports ran)
-  | cacheInitializationFailed _ failure unchanged ih =>
+  | cachedPrefixFailed _ failure unchanged ih =>
     change EffectTrace target source failure.reached
     rw [unchanged]
     exact ih

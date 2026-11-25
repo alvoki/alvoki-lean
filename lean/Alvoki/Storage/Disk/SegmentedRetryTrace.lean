@@ -182,40 +182,49 @@ theorem BoundedReopenAttempt.errorFiles {directory : DiskDirectory} {admits : Ta
     rw [BoundedReopenAttempt.run, runOpenWithInstallation_outcome, denied] at ran
     exact Or.inl (congrArg LockedFileState.image (EStateM.Result.error.inj ran).2.symm)
 
-/-- A successfully acquired open stopped while opening its directory
-cache. Its effects are the cache callback's reached state and local unlock. -/
-structure DirectoryCacheInitFailure {image : Type} (files : Type) (directory : DiskDirectory)
+/-- A successfully acquired open stopped in its initialization or route
+checks. The failed prefix records the reached state before local unlock. -/
+structure CachedOpenPrefixFailure {image : Type} (files : Type) (directory : DiskDirectory)
     (before : LockedFileState image) where
   descriptor : Nat
   nextRef : Nat
   acquisition : TryLockObserves before.owners directory (.ok true)
   unlock : UnlockReport
   localUnlock : unlock.LocalFlock
-  openFiles : EStateM IO.Error image files
+  prepare : EStateM IO.Error image files
   cause : IO.Error
   reached : image
-  failed : openFiles before.image = .error cause reached
+  failed : prepare before.image = .error cause reached
 
-namespace DirectoryCacheInitFailure
+namespace CachedOpenPrefixFailure
 
 variable {files image : Type} {directory : DiskDirectory} {before : LockedFileState image}
 
-def error (failure : DirectoryCacheInitFailure files directory before) : IO.Error :=
+def error (failure : CachedOpenPrefixFailure files directory before) : IO.Error :=
   match failure.unlock with
   | .success => failure.cause
   | .failure cleanup _ => cleanup
 
-def after (failure : DirectoryCacheInitFailure files directory before) : LockedFileState image :=
+def after (failure : CachedOpenPrefixFailure files directory before) : LockedFileState image :=
   ⟨failure.reached, before.owners.set (directory.file .lock)
     (match failure.unlock with
      | .success => none
      | .failure _ _ => some failure.descriptor)⟩
 
-theorem run_error (failure : DirectoryCacheInitFailure files directory before)
+/-- Successful local unlock returns the prefix error and clears ownership.
+A failed local unlock returns its own error and leaves the owner held. -/
+theorem cleanupOutcome (failure : CachedOpenPrefixFailure files directory before) :
+    match failure.unlock with
+    | .success => failure.error = failure.cause ∧ failure.after.owners (directory.file .lock) = none
+    | .failure cleanup _ =>
+      failure.error = cleanup ∧ failure.after.owners (directory.file .lock) = some failure.descriptor := by
+  cases report : failure.unlock <;> simp [error, after, report, LockOwners.set]
+
+theorem run_error (failure : CachedOpenPrefixFailure files directory before)
     (recover : files → EStateM IO.Error image Reopened) :
     runOpenWithInstallation directory failure.descriptor failure.nextRef (.ok true) failure.unlock
-      (failure.openFiles >>= recover) before = .error failure.error failure.after := by
-  have failed : (failure.openFiles >>= recover) before.image = .error failure.cause failure.reached := by
+      (failure.prepare >>= recover) before = .error failure.error failure.after := by
+  have failed : (failure.prepare >>= recover) before.image = .error failure.cause failure.reached := by
     simp only [Bind.bind, EStateM.bind, failure.failed]
   rw [runOpenWithInstallation_acquiredRecoveryError _ _ _ _ _ _ failed]
   cases report : failure.unlock with
@@ -225,7 +234,7 @@ theorem run_error (failure : DirectoryCacheInitFailure files directory before)
       simpa [UnlockReport.LocalFlock, report] using failure.localUnlock
     simp [error, after, report, retained]
 
-end DirectoryCacheInitFailure
+end CachedOpenPrefixFailure
 
 /-- A finite retry can cross failed opens, observed drops of lock references,
 and power losses. Failed opens record their exact returned image and owner.
@@ -237,8 +246,8 @@ inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Pr
       (attempt : BoundedReopenAttempt) (acquisition : TryLockObserves before.owners directory attempt.acquired)
       (localUnlock : attempt.unlock.LocalFlock) (reports : attempt.Reports directory before.image admits)
       (ran : attempt.run directory before = .error cause after) : BoundedReopenTrace directory admits initial after
-  | cacheInitializationFailed {before files} (prior : BoundedReopenTrace directory admits initial before)
-      (failure : DirectoryCacheInitFailure files directory before) (unchanged : failure.reached = before.image) :
+  | cachedPrefixFailed {before files} (prior : BoundedReopenTrace directory admits initial before)
+      (failure : CachedOpenPrefixFailure files directory before) (unchanged : failure.reached = before.image) :
       BoundedReopenTrace directory admits initial failure.after
   | cachedRejected {before} (prior : BoundedReopenTrace directory admits initial before)
       (rejection : CachedOpenRejection directory before) :
@@ -318,7 +327,7 @@ theorem BoundedReopenTrace.trans {directory admits initial middle after}
   induction later with
   | empty => exact earlier
   | failed _ attempt acquisition unlock reports ran ih => exact .failed ih attempt acquisition unlock reports ran
-  | cacheInitializationFailed _ failure unchanged ih => exact .cacheInitializationFailed ih failure unchanged
+  | cachedPrefixFailed _ failure unchanged ih => exact .cachedPrefixFailed ih failure unchanged
   | cachedRejected _ rejection ih => exact .cachedRejected ih rejection
   | cachedAuthorizationFailed _ failure admitted ih => exact .cachedAuthorizationFailed ih failure admitted
   | cachedRepairFailed _ attempt admitted prepared effects ran ih =>
@@ -337,7 +346,7 @@ theorem BoundedReopenTrace.continuesLineage {directory : DiskDirectory} {admits 
   | empty => exact prior
   | failed _ attempt acquisition _ reports ran ih =>
     exact ih.afterFailure unique (attempt.errorFiles acquisition reports ran)
-  | cacheInitializationFailed _ failure unchanged ih =>
+  | cachedPrefixFailed _ failure unchanged ih =>
     change ReopenLineage source admits failure.reached
     rw [unchanged]
     exact ih

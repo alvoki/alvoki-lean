@@ -54,6 +54,43 @@ structure DirectoryCacheOpenErrorReports (directory : DiskDirectory) (before : L
   census : DirectoryCacheFailureCensus directory bindings initial reached
   failed : openDirectory directory.path (initial, before.image) = .error cause (reached, before.image)
 
+/-- Pass the data image from a census-bearing failure to the bounded
+retry. The admitted result still records the reached raw census. -/
+def CachedOpenPrefixFailure.projectFiles {census image files : Type} {directory : DiskDirectory}
+    {before : LockedFileState image} {initial : census}
+    (failure : CachedOpenPrefixFailure files directory
+      (⟨(initial, before.image), before.owners⟩ : LockedFileState (census × image))) :
+    CachedOpenPrefixFailure files directory before where
+  descriptor := failure.descriptor
+  nextRef := failure.nextRef
+  acquisition := failure.acquisition
+  unlock := failure.unlock
+  localUnlock := failure.localUnlock
+  prepare := fun image =>
+    match failure.prepare (initial, image) with
+    | .ok prepared (_, reached) => .ok prepared reached
+    | .error cause (_, reached) => .error cause reached
+  cause := failure.cause
+  reached := failure.reached.2
+  failed := by rw [show failure.prepare (initial, before.image) = .error failure.cause failure.reached from failure.failed]
+
+/-- Interpret the admitted cached opener on observed callbacks. The lock
+returned by admission guards initialization and the two route probes. -/
+def runAdmittedCachedOpen {files image : Type} {input : FilePath} {directory : DiskDirectory} {owner : DescriptorSlot}
+    (admission : OpenAdmissionReports input directory owner) (before : LockedFileState image)
+    (flock : DescriptorSlot → Except IO.Error Bool) (nextRef : Nat) (unlock : UnlockReport)
+    (openFiles : DiskDirectory → DescriptorSlot → EStateM IO.Error image files)
+    (lookup : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata))
+    (marked bootstrap : DiskDirectory → files → EStateM IO.Error image Reopened) :
+    EStateM.Result IO.Error (LockedFileState image) SegmentedSession :=
+  DiskTable.withOpenAdmission input (fun path => liftExcept (admission.realPath path))
+    (fun path => pure (admission.lookup path)) (fun path => liftExcept (admission.openAppend path))
+    (fun resolved slot => runOpenWithInstallation resolved slot.description nextRef (flock slot) unlock (do
+      let cache ← openFiles resolved slot
+      recoverSegmentedWalWith (rejectFlatWalWith resolved (optionalMetadataWith (lookup (resolved.file .wal))))
+        (optionalMetadataWith (lookup (resolved.file .walBoundary))) (marked resolved cache) (bootstrap resolved cache)))
+    before
+
 namespace DirectoryCacheOpenErrorReports
 
 variable {directory : DiskDirectory} {before : LockedFileState FileImage}
@@ -66,38 +103,21 @@ theorem openError (observed : DirectoryCacheOpenErrorReports directory before) :
   runSyncFilesOpen_openError observed.failed
 
 def nativeFailure (observed : DirectoryCacheOpenErrorReports directory before) :
-    DirectoryCacheInitFailure (Cache Handle) directory
+    CachedOpenPrefixFailure (Cache Handle) directory
       (⟨(observed.initial, before.image), before.owners⟩ : LockedFileState NativeState) where
   descriptor := observed.owner.description
   nextRef := observed.nextRef
   acquisition := observed.acquired ▸ observed.acquisition
   unlock := observed.unlock
   localUnlock := observed.localUnlock
-  openFiles := runSyncFilesOpen (observed.openDirectory directory.path)
+  prepare := runSyncFilesOpen (observed.openDirectory directory.path)
   cause := observed.cause
   reached := (observed.reached, before.image)
   failed := observed.openError
 
-/-- Project only the file image into the bounded retry. The raw reached
-census remains part of the admitted call's result. -/
 def projectedFailure (observed : DirectoryCacheOpenErrorReports directory before) :
-    DirectoryCacheInitFailure (Cache Handle) directory before where
-  descriptor := observed.nativeFailure.descriptor
-  nextRef := observed.nativeFailure.nextRef
-  acquisition := observed.nativeFailure.acquisition
-  unlock := observed.nativeFailure.unlock
-  localUnlock := observed.nativeFailure.localUnlock
-  openFiles := fun image =>
-    match observed.nativeFailure.openFiles (observed.initial, image) with
-    | .ok cache (_, reached) => .ok cache reached
-    | .error cause (_, reached) => .error cause reached
-  cause := observed.cause
-  reached := before.image
-  failed := by
-    change (match runSyncFilesOpen (observed.openDirectory directory.path) (observed.initial, before.image) with
-      | .ok cache (_, reached) => EStateM.Result.ok cache reached
-      | .error cause (_, reached) => .error cause reached) = _
-    rw [observed.openError]
+    CachedOpenPrefixFailure (Cache Handle) directory before :=
+  observed.nativeFailure.projectFiles
 
 /-- The native-shaped admission executes the directory cache initialization
 under the opened lock before the locked flat-WAL check and marker dispatch. -/
@@ -106,14 +126,9 @@ def runWithAdmission {input : FilePath} (observed : DirectoryCacheOpenErrorRepor
     (lookup : FilePath → EStateM IO.Error NativeState (Except IO.Error IO.FS.Metadata))
     (marked bootstrap : DiskDirectory → Cache Handle → EStateM IO.Error NativeState Reopened) :
     EStateM.Result IO.Error (LockedFileState NativeState) SegmentedSession :=
-  DiskTable.withOpenAdmission input (fun path => liftExcept (admission.realPath path))
-    (fun path => pure (admission.lookup path)) (fun path => liftExcept (admission.openAppend path))
-    (fun resolved slot => runOpenWithInstallation resolved slot.description observed.nextRef (observed.flock slot)
-      observed.unlock (do
-        let cache ← runSyncFilesOpen (observed.openDirectory resolved.path)
-        recoverSegmentedWalWith (rejectFlatWalWith resolved (optionalMetadataWith (lookup (resolved.file .wal))))
-          (optionalMetadataWith (lookup (resolved.file .walBoundary))) (marked resolved cache) (bootstrap resolved cache)))
-    ⟨(observed.initial, before.image), before.owners⟩
+  runAdmittedCachedOpen admission ⟨(observed.initial, before.image), before.owners⟩
+    observed.flock observed.nextRef observed.unlock
+    (fun resolved _ => runSyncFilesOpen (observed.openDirectory resolved.path)) lookup marked bootstrap
 
 /-- Failure stops before either recovery route, returning the exact raw
 state under local unlock precedence. The projected state extends the same
@@ -135,13 +150,11 @@ theorem continuesAfterError {input : FilePath} {source : LockedFileState FileIma
     | .failure cleanup _ =>
       failed.error = cleanup ∧ failed.after.owners (directory.file .lock) = some observed.owner.description := by
   intro failed
-  refine ⟨?_, .cacheInitializationFailed prior failed rfl, rfl, rfl, observed.census.lockReferences observed.lockLive, ?_⟩
-  · unfold runWithAdmission
+  refine ⟨?_, .cachedPrefixFailed prior failed rfl, rfl, rfl, observed.census.lockReferences observed.lockLive, ?_⟩
+  · unfold runWithAdmission runAdmittedCachedOpen
     rw [admission.admits, observed.acquired]
     exact observed.nativeFailure.run_error _
-  · cases unlock : observed.unlock <;>
-      simp [failed, projectedFailure, nativeFailure, DirectoryCacheInitFailure.error, DirectoryCacheInitFailure.after,
-        unlock, LockOwners.set]
+  · exact failed.cleanupOutcome
 
 end DirectoryCacheOpenErrorReports
 end Alvoki.Storage.DiskSession
