@@ -222,6 +222,7 @@ import Alvoki.Storage.Disk.NativeReadyReadPrefix
 import Alvoki.Storage.Disk.NativeMarkedReadPrefix
 import Alvoki.Storage.Disk.NativeOpenChoice
 import Alvoki.Storage.Disk.NativeOpenEarlyError
+import Alvoki.Storage.Disk.NativeOpenListingError
 import Alvoki.Storage.Disk.NativeReadyUncertainWrite
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeExecutionPendingWrite
@@ -1447,6 +1448,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorUnlock.admitsAfterFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.stopsBeforeRecovery
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeReaddirFailure.releases
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingError.stopsAtListing
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingError.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteFailure.returnsUnknown
