@@ -16,7 +16,8 @@ private theorem selectedLoadedFiles {durable : CheckpointPublication.RunFiles} {
   cases selected with
   | present decoded stored loaded => exact ⟨_, _, decoded, stored, loaded⟩
 
-private theorem loadedRunBytes {files : List ByteArray} {runs : List CheckedRun}
+/-- The checked run parser retains the exact input payload for each run. -/
+theorem loadedRunBytes {files : List ByteArray} {runs : List CheckedRun}
     (opened : files.mapM CheckedRun.openBytes = .ok runs) :
     files = runs.map (·.run.bytes) := by
   induction files generalizing runs with

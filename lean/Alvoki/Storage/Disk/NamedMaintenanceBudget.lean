@@ -200,6 +200,16 @@ theorem SegmentedCheckpointReport.Installs.collectRetainedRunNames {directory de
     reports.finishedNamedTotal publishedReady unique complete present regular
   exact ⟨returned, crash, checkpoint, uniqueCatalog, catalogComplete, count⟩
 
+/-- The maintenance endpoint fixes which bytes a subsequent recovery
+can select. Extra surviving run names do not enter this selection. -/
+structure MaintainedRecoveryBounds (before after : SegmentedWriterState) : Prop where
+  fullCheckpoint : after.target.range.watermark = after.history.length
+  keeper : after.wal.active = before.wal.active
+  selectedRuns : ((after.checkpoint.getD (.empty, 0)).1.runs.map (·.run.bytes.size)).sum ≤
+    16 * before.installed.table.runs.length +
+      32 * (before.installed.table.runs.map (fun run =>
+        retentionRowBound run.history.rows before.installed.table.pins.floor)).sum
+
 /-- A complete scheduled maintenance cycle bounds the data bytes under
 canonical run and WAL segment names. The caller chooses an active segment
 width cap and a budget for unselected run names that the policy keeps. The
@@ -248,7 +258,7 @@ theorem SegmentedCheckpointReport.Installs.maintainedNamedPayload {directory des
             32 * (before.installed.table.runs.map (fun run =>
               retentionRowBound run.history.rows before.installed.table.pins.floor)).sum +
             extraBudget + cap * frameSize) ∧
-    runNames = table.runs.length + extraNames ∧
+    runNames = table.runs.length + extraNames ∧ MaintainedRecoveryBounds before after ∧
     (∀ {owners readerDescriptor tail},
       (observed : HealthyBoundedWalReports directory owners readerDescriptor after.wal after.target.pair
         after.target.range.watermark after.published.durable tail) →
@@ -281,9 +291,10 @@ theorem SegmentedCheckpointReport.Installs.maintainedNamedPayload {directory des
     rw [runMap, runTotals ByteArray.size]
     have bytes := congrArg (· + runs.visible.namedRunTotal ByteArray.size extra) selectedBytes
     simpa only [catalog, selected, files, List.length_map, List.map_map, Function.comp_def] using bytes
-  obtain ⟨nextReady, _, _, _, _, _, owners, _⟩ := walInstalled.outcome collectedReady
+  obtain ⟨nextReady, _, sameKeeper, _, sameTarget, sameCheckpoint, owners, _⟩ :=
+    walInstalled.outcome collectedReady
+  obtain ⟨base, restored, restoredData, committed⟩ := installed.restored
   have full : postRun.target.range.through = postRun.target.range.watermark := by
-    obtain ⟨base, restored, _, committed⟩ := installed.restored
     have checkpointWatermark := collectedReady.resumed.selected.watermark
     change selectedCheckpointWatermark published.target.pair.manifest =
       some (published.checkpoint.getD (.empty, 0)).1.committed.toNat at checkpointWatermark
@@ -320,9 +331,29 @@ theorem SegmentedCheckpointReport.Installs.maintainedNamedPayload {directory des
     change after.published.durable.namedRunTotal (fun _ => 1) catalog = _
     rw [runMap]
     exact runCount
+  have checkpointed : MaintainedRecoveryBounds before after := by
+    refine ⟨?_, ?_, ?_⟩
+    · calc
+        after.target.range.watermark = postRun.target.range.watermark := congrArg (·.range.watermark) sameTarget
+        _ = postRun.target.range.through := full.symm
+        _ = after.target.range.through := congrArg (·.range.through) sameTarget.symm
+        _ = after.history.length := nextReady.resumed.through
+    · rw [sameKeeper]
+      change published.wal.active = before.wal.active
+      rw [installed.wal]
+      rfl
+    · have unchanged : after.checkpoint = published.checkpoint := sameCheckpoint
+      have sameTable : attempt.table = table := by
+        have flushed := observed.flushed
+        change (flushForCheckpoint table id : Except String PackedTable) = .ok attempt.table at flushed
+        simpa [flushForCheckpoint, empty, Pure.pure, Except.pure] using flushed.symm
+      rw [unchanged, restored]
+      change (base.runs.map (·.run.bytes.size)).sum ≤ _
+      rw [restoredData.runs, sameTable]
+      simpa only [files, List.map_map, Function.comp_def] using boundedRuns
   refine ⟨returned, uniqueCatalog, ?_, nextReady, owners.trans installed.owners,
     walInstalled.history.trans installed.history, namedRuns, congrArg ByteArray.size keeperPayload, names,
-    ?_, namedCount, ?_⟩
+    ?_, namedCount, checkpointed, ?_⟩
   · rw [runMap]
     exact catalogComplete
   · intro cap width

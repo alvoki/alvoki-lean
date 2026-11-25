@@ -76,15 +76,25 @@ abbrev CleanUnlockReports.ReopenObservations (closed : CleanUnlockReports direct
 /-- Derive the lookup and recovery plan from the old writer's settled
 physical layout. The callback packets come from the same canonical lock
 object at explicit unlock and later acquisition. A newly opened
-file description may reuse a numeric fd after the previous slot drops. -/
-theorem SegmentedWriterState.RetainedReady.closeWithAdmission {files : Type} {input : FilePath}
+file description may reuse a numeric fd after the previous slot drops.
+Keep any supplied witness for the exact admitted report and its callbacks. -/
+theorem SegmentedWriterState.RetainedReady.closeWithAdmissionFromReports {files : Type} {input : FilePath}
     {directory : DiskDirectory} {oldDescriptor : Nat} {before : SegmentedWriterState}
     (ready : before.RetainedReady directory oldDescriptor) (closed : CleanUnlockReports directory oldDescriptor)
-    (observes : closed.ReopenObservations files input before) :
+    (observedBy : ∀ {layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history}
+      (observed : MarkedRetryChunkReports files directory layout before.published),
+      OpenAdmissionReports input directory observed.slot → Prop)
+    (observes : ∀ layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history,
+      layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
+      layout.sealed ++ [layout.keeper] = before.wal.readDescriptors layout.range.watermark →
+      ∃ (observed : MarkedRetryChunkReports files directory layout before.published)
+        (admission : OpenAdmissionReports input directory observed.slot),
+        observed.bindings (directory.file .lock) = closed.bindings (directory.file .lock) ∧
+        observed.slot.description ≠ oldDescriptor ∧ observedBy observed admission) :
     ∃ (layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history)
       (observed : MarkedRetryChunkReports files directory layout before.published)
       (admission : OpenAdmissionReports input directory observed.slot) (after : SegmentedWriterState),
-      AdmittedCleanReopen closed observed admission after := by
+      AdmittedCleanReopen closed observed admission after ∧ observedBy observed admission := by
   let released := SegmentedCleanReopenReport.released directory before
   have closeRan : runCloseWithFiles directory oldDescriptor closed.report
       (.ready before.installed, ⟨before.files, before.owners⟩) = .ok () (.closed, released) := by
@@ -97,7 +107,7 @@ theorem SegmentedWriterState.RetainedReady.closeWithAdmission {files : Type} {in
   rw [ready.cleanFiles] at chosen
   obtain ⟨layout, range, keeper, aligned, seals, offsets, _, keeperChoices, keeperPrefix, laterValid⟩ := chosen
   rw [← range] at seals offsets laterValid
-  obtain ⟨observed, lockBinding, distinct, ⟨admission⟩⟩ := observes layout keeper aligned seals
+  obtain ⟨observed, admission, lockBinding, distinct, reported⟩ := observes layout keeper aligned seals
   have sameLock := Option.some.inj (observed.lockObject.symm.trans (lockBinding.trans closed.lockObject))
   have prepared := layout.prepared keeperChoices keeperPrefix laterValid
   have choice : CheckpointRetryTarget before.history before.wal.active.first layout.target :=
@@ -128,8 +138,24 @@ theorem SegmentedWriterState.RetainedReady.closeWithAdmission {files : Type} {in
   rw [exactTarget, durable] at selected
   have checkpoint := selected.uniqueResult ready.resumed.selected
   have exactInstalled := Phase.ready.inj ((output.atReopen recovered).1.symm.trans phase)
-  exact ⟨layout, observed, admission, after, closeRan, sameLock, distinct, output,
+  exact ⟨layout, observed, admission, after, ⟨closeRan, sameLock, distinct, output,
     exactTarget, checkpoint, (congrArg Installed.generation exactInstalled).trans generation,
-    (congrArg Installed.table exactInstalled).symm ▸ replayed⟩
+    (congrArg Installed.table exactInstalled).symm ▸ replayed⟩, reported⟩
+
+/-- A clean lock handoff derives the exact next marked session. -/
+theorem SegmentedWriterState.RetainedReady.closeWithAdmission {files : Type} {input : FilePath}
+    {directory : DiskDirectory} {oldDescriptor : Nat} {before : SegmentedWriterState}
+    (ready : before.RetainedReady directory oldDescriptor) (closed : CleanUnlockReports directory oldDescriptor)
+    (observes : closed.ReopenObservations files input before) :
+    ∃ (layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history)
+      (observed : MarkedRetryChunkReports files directory layout before.published)
+      (admission : OpenAdmissionReports input directory observed.slot) (after : SegmentedWriterState),
+      AdmittedCleanReopen closed observed admission after := by
+  obtain ⟨layout, observed, admission, after, endpoint, _⟩ :=
+    ready.closeWithAdmissionFromReports closed (fun _ _ => True) (by
+      intro layout keeper tail seals
+      obtain ⟨observed, binding, description, ⟨admission⟩⟩ := observes layout keeper tail seals
+      exact ⟨observed, admission, binding, description, trivial⟩)
+  exact ⟨layout, observed, admission, after, endpoint⟩
 
 end Alvoki.Storage.DiskSession

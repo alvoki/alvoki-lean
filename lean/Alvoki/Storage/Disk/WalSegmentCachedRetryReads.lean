@@ -86,29 +86,23 @@ theorem CachedRetryReadReports.selectedAfterWatermark {directory : DiskDirectory
   obtain ⟨_, head⟩ := chainOffsets_head layout.chain (by simp)
   exact followingAfterSelection chosen ordered (by simp [head])
 
-/-- The actual cached scan derives both the exact selected payload vector
-and the remaining visible names to prune. In particular, a healthy report
-of these names need not open any of their payloads, and gaps stay intact. -/
-theorem CachedRetryReadReports.readSelected {state : Type} {directory : DiskDirectory}
+/-- The checked listing and extent scan select these exact ordered WAL
+offsets before any payload callback. Later names only enter the prune plan. -/
+theorem CachedRetryReadInventory.scanSelected {directory : DiskDirectory}
     {image : FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout image history}
-    (reported : CachedRetryReadReports directory layout)
+    (reported : CachedRetryReadInventory directory layout)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
     (later : ∀ start ∈ image.later.visible, layout.range.through < start)
-    {count : UInt64} (absolute : count.toNat = layout.range.through * frameSize) (initial : state) :
-    let files := layout.sealed.map (fun segment => (segment.first, segment.bytes)) ++
-      [(layout.keeper.first, layout.keeper.bytes)]
-    (readSelectedWithCachedExtents (m := EStateM IO.Error state) directory layout.range.watermark count
-      (fun path => liftExcept (reported.list path))
-      (fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _))
-      (fun path size => liftExcept (reported.readSeal path size))
-      (fun path size physical => liftExcept (reported.readKeeper path size physical))) initial =
-      .ok (⟨files, image.later.visible⟩, (layout.keeper.bytes ++ layout.tail).size) initial := by
-  intro files
+    {count : UInt64} (absolute : count.toNat = layout.range.through * frameSize) :
+    ∃ extents required,
+      readWalSegmentExtentsWith (m := Except IO.Error) directory
+        (fun path => .ok (reported.inventory.reports.lstat path)) (reported.entries.toList.map (·.fileName)) = .ok extents ∧
+      selectWalExtentsThrough extents layout.range.watermark (count.toNat / frameSize) = some (required, image.later.visible) ∧
+      required.map Prod.fst = (layout.sealed ++ [layout.keeper]).map WalSegment.first ∧
+      (required.head?.map Prod.fst) = some layout.first := by
   let segments := layout.sealed ++ [layout.keeper]
   let offsets := segments.map WalSegment.first
-  have fileOffsets : files.map Prod.fst = offsets := by
-    simp [offsets, segments, files, List.map_append, List.map_map, Function.comp_def]
   obtain ⟨rest, head⟩ : ∃ rest, offsets = layout.first :: rest := chainOffsets_head layout.chain (by simp [segments])
   have inventory := reported.inventory.scanRegular reported.unique reported.ordered reported.present (by
     intro first member
@@ -116,7 +110,6 @@ theorem CachedRetryReadReports.readSelected {state : Type} {directory : DiskDire
     exact ⟨metadata, probe, regular⟩)
   have atThrough : count.toNat / frameSize = layout.range.through := by
     rw [absolute, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
-  have aligned : count.toNat % frameSize = 0 := by rw [absolute, Nat.mul_mod_left]
   have covered := (DirectoryPublication.Bindings.walRange_accounting layout.decoded).2.1
   have beforeFirst : ∀ start ∈ reported.older, start < layout.first := by
     intro start member
@@ -129,8 +122,8 @@ theorem CachedRetryReadReports.readSelected {state : Type} {directory : DiskDire
     have laterStart : segment.first ∈ offsets.drop 1 := by rw [head, List.drop_one, List.tail_cons]; exact member
     exact ⟨following _ laterStart, layout.through ▸ layout.chain.startsWithin segment present⟩
   have chosen : selectWalSegmentReadsThrough (reported.older ++ offsets ++ image.later.visible)
-      layout.range.watermark (count.toNat / frameSize) = some (files.map Prod.fst, image.later.visible) := by
-    rw [atThrough, fileOffsets, head]
+      layout.range.watermark (count.toNat / frameSize) = some (offsets, image.later.visible) := by
+    rw [atThrough, head]
     exact selectWalSegmentReadsThrough_split reported.older rest image.later.visible layout.first
       layout.range.watermark layout.range.through layout.covers covered beforeFirst follows later
   have projection :
@@ -150,7 +143,7 @@ theorem CachedRetryReadReports.readSelected {state : Type} {directory : DiskDire
       exact ⟨extents, rfl, Except.ok.inj (by simpa only [measured, Except.map] using projection)⟩
   obtain ⟨required, selection, addresses⟩ : ∃ required,
       selectWalExtentsThrough extents layout.range.watermark (count.toNat / frameSize) =
-        some (required, image.later.visible) ∧ required.map Prod.fst = files.map Prod.fst := by
+        some (required, image.later.visible) ∧ required.map Prod.fst = offsets := by
     have actual := selectWalExtentsThrough_offsets extents layout.range.watermark (count.toNat / frameSize)
     rw [exactOffsets, chosen] at actual
     cases found : selectWalExtentsThrough extents layout.range.watermark (count.toNat / frameSize) with
@@ -160,6 +153,38 @@ theorem CachedRetryReadReports.readSelected {state : Type} {directory : DiskDire
       rw [found] at actual
       obtain ⟨addresses, rfl⟩ := Prod.mk.inj (Option.some.inj actual)
       exact ⟨required, rfl, addresses⟩
+  refine ⟨extents, required, scanned, selection, addresses, ?_⟩
+  rw [← List.head?_map, addresses, head]
+  rfl
+
+/-- The actual cached scan derives both the exact selected payload vector
+and the remaining visible names to prune. In particular, a healthy report
+of these names need not open any of their payloads, and gaps stay intact. -/
+theorem CachedRetryReadReports.readSelected {state : Type} {directory : DiskDirectory}
+    {image : FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout image history}
+    (reported : CachedRetryReadReports directory layout)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (later : ∀ start ∈ image.later.visible, layout.range.through < start)
+    {count : UInt64} (absolute : count.toNat = layout.range.through * frameSize) (initial : state) :
+    let files := layout.sealed.map (fun segment => (segment.first, segment.bytes)) ++
+      [(layout.keeper.first, layout.keeper.bytes)]
+    (readSelectedWithCachedExtents (m := EStateM IO.Error state) directory layout.range.watermark count
+      (fun path => liftExcept (reported.list path))
+      (fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _))
+      (fun path size => liftExcept (reported.readSeal path size))
+      (fun path size physical => liftExcept (reported.readKeeper path size physical))) initial =
+      .ok (⟨files, image.later.visible⟩, (layout.keeper.bytes ++ layout.tail).size) initial := by
+  intro files
+  have fileOffsets : files.map Prod.fst = (layout.sealed ++ [layout.keeper]).map WalSegment.first := by
+    simp [files, List.map_append, List.map_map, Function.comp_def]
+  obtain ⟨extents, required, scanned, selection, addresses, _⟩ :=
+    reported.toCachedRetryReadInventory.scanSelected following later absolute
+  rw [← fileOffsets] at addresses
+  have atThrough : count.toNat / frameSize = layout.range.through := by
+    rw [absolute, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
+  have aligned : count.toNat % frameSize = 0 := by rw [absolute, Nat.mul_mod_left]
+  have covered := (DirectoryPublication.Bindings.walRange_accounting layout.decoded).2.1
   have spans : WalSegmentSpans (count.toNat / frameSize) files := by
     rw [atThrough]
     have chainSpans := layout.chain.checkReadSpans (tail := ByteArray.empty)
