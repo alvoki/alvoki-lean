@@ -2,9 +2,10 @@
 
 Alvoki's sequential Linux storage engine should implement a legal key-value history from the first open
 through writes, maintenance, failures and later sessions. The current proofs establish that argument for
-reported executions and connect selected routes to the literal returned table. The primary remaining
-obligation is to derive coverage of those reports from the executable operations and their admitted
-primitive outcomes. [Native storage assessment](proofs/native-storage.md)
+reported executions and connect selected routes to the literal returned table. The target is one
+induction over the actual source schedules and their admitted primitive outcomes. Each step exports
+the state it reaches, including failed opens and interruptions, so that later steps can compose
+without a separate proof for each sequence. [Target execution argument](proofs/native-storage.md#target-execution-argument)
 
 ## Three views of the engine
 
@@ -37,6 +38,11 @@ reached states. At the native boundary, evidence supplies the identity, contents
 of the issued primitive. Proofs carry just the invariant needed by the next layer, including any
 file identity, crash correlation or live reference on which the conclusion depends. The hierarchy
 describes reasoning boundaries and can cross the source module structure. [Native refinement boundaries](proofs/native-storage.md#refinement-boundaries)
+
+For lifecycle proofs, make the call, exit, reboot and individual open attempts compose at the same
+reached state. Put the local facts that permit the next step in the invariant. A further outcome should
+extend a local refinement and feed the same induction. If the change also needs another compound
+trace constructor, check for a missing intermediate state before adding it. [Migration test](proofs/native-storage.md#migration-test)
 
 ## How to navigate the evidence
 

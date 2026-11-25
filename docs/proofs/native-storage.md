@@ -212,6 +212,13 @@ Follow declarations from the claim sections for further queries. The probe repor
 compiled Lean environment. Executable path coverage and premise provenance are reviewed against the
 source and contract above. [Dependency probe](../../lean/Alvoki/Checks/ProofDependencies.lean)
 
+The architecture review also probed the fresh-open theorem, the opened-session induction and
+`NativeExecutionTrace.keyValueRefinement`. The first two declaration types reference
+`NativeOpenedSessionTrace.Reports`. The fresh-open proof calls the session induction, and the
+session induction uses `NativeOpenedSessionReport.reaches`, `.common` and the key-value
+refinement. The latter uses `.ledgers`. All three have only `Classical.choice`, `Quot.sound`
+and `propext` as transitive axioms. This locates the open premise at the execution boundary.
+
 ## Research applied here
 
 FSCQ motivates a separate condition at an issued crash and an ordinary postcondition after a returned
@@ -226,14 +233,103 @@ uncertain batch under a sublist-only rule. It rejected the same fragment under
 `DatabaseSubmissions.Retains`, and rejected replacing an acknowledged row with an unsubmitted row.
 [Batch retention](../../lean/Alvoki/Storage/Disk/SegmentedBatchDatabaseTrace.lean) · [IronSpec](https://www.usenix.org/conference/osdi24/presentation/goldweber)
 
-## Ranked changes
+## Why adding cases is expensive
 
-| Rank | Obligation and next consumer | Leverage and risk |
+The architecture review uses GitHub `main` at `e71b55afbb3a5bd963a0320affda01c986bf131a`.
+The native storage sources match the pilot revision above. The following findings explain which
+work is essential and which can be shared.
+
+| Finding | Consequence | Evidence at the reviewed revision |
 |---|---|---|
-| 1 | Derive the first issued stop and successful prefix from the actual interruptible checkpoint schedule. Connect the run-file and first directory sync cases to the existing stop and recovery reports at the same heap. Carry the classification principle to the marked opener. | High leverage because it removes a report assumption for every covered action of the schedule. Medium risk at the distinction between an ordinary error and an interrupted call. |
-| 2 | Join the raw fresh-start and terminal execution interfaces. Induct over reached outcomes and reuse supported finalized retries from the exact files and custody. Widen marked recovery coverage with one returned failure and one healthy completion as integration cases. | High leverage for public safety. Higher risk around ownership, partially effected repairs and repeated retries. |
-| 3 | After the producers compose, extend the remaining mutation and lifecycle cuts within those contracts. Prove healthy completion, scheduling and resource bounds with explicit scope. | Important for broader coverage. Physical allocation and resource assumptions require separate evidence. |
+| The opened session trace joins ready positions. Its 15 action constructors are represented by 17 report constructors and 17 step constructors. Several actions bundle an interruption, a release or reboot, retries and a successful open. | A new combination needs a new high-level report, branch and matching proof. A prefix ending while recovery is still unavailable belongs to a different interface. | [Opened actions, steps and reports](../../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean#L144) |
+| The terminal interface separately represents requested endings, derived endings and observations. There are 36 ending and 36 observation constructors. `reachesPrefix` needs both successful-prefix reports and a terminal observation. | A cut that can end a trace and also allow a future open needs evidence at both interfaces. The terminal existential history does not quantify over each particular independently observed crash survivor. | [Endings](../../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean#L68) · [Observations](../../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean#L448) · [Prefix producer](../../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean#L639) |
+| Both fresh bootstrap and the opened-session induction accept `Reports`. Ready write and checkpoint observations also take source returns paired with specific operation reports. | The replay argument is already reusable. The direction still needed for coverage is from one independently observed execution to the facts required by that replay. | [Fresh raw open](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean#L27) · [Per-call observations](../../lean/Alvoki/Storage/Disk/NativeOpenReadyTrace.lean) · [Report premise](../../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean#L382) |
+| Finalized read-only retries join at an exact heap, but each held failure can provide its own `recover` callback. The retry preservation result frames a projected file image and descriptor inode map. | Reuse exact heap adjacency and cleanup. To cover public `open`, fix the same source worker across attempts and relate its actual selected bindings and bytes. A repair error can change the image before cleanup. | [Finalized attempt](../../lean/Alvoki/Storage/Disk/NativeFinalizedOpenRetries.lean#L14) · [Retry preservation](../../lean/Alvoki/Storage/Disk/NativeFinalizedOpenRetries.lean#L211) · [Source dispatcher classification](../../lean/Alvoki/Storage/Disk/NativeRawRecoveryReturn.lean#L71) |
 
-Use the existing checklist for completion criteria and retire detailed history in stages as subsystems
-get a stable argument. The priority is the source-to-report relationship that the current inductions
-need. [Active roadmap](../proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
+The checkpoint pilot is evidence that sharing a recovery endpoint pays off. A run-file fsync and a
+first directory fsync reach different descriptor and cache states, yet both reuse the selected-file
+installation proof. A manifest rename that returns an ordinary error after taking effect can use that same
+installer with either watermark. The pilot still classifies the cut separately from the facts used
+by its terminal and reopen consumers. Sharing one reached checkpoint outcome is the next structural
+test. A proof about the descriptor on which fsync was issued or the name that became durable remains necessary.
+[Early checkpoint report](../../lean/Alvoki/Storage/Disk/NativeOpenedEarlyCheckpointReport.lean) · [Shared installer](../../lean/Alvoki/Storage/Disk/NativeAlignedCheckpointReopenEffects.lean)
+
+## Target execution argument
+
+**Public theorem.** For every finite execution of the supported sequential `DiskTable` API starting
+at a fresh managed directory, under the stated native and filesystem assumptions, derive a legal
+client history for those same calls and outcomes. Every acknowledged group appears in order. An
+unresolved submission can be omitted or retained whole according to the actual durable selection.
+No rejected or unsubmitted mutation can appear. One replay explains each successful point and range
+response at its issued pin and each returned ready table at its reached committed prefix. Guarded
+denials, including use of an old pin on a new table, match the public result. Safety includes finite
+executions ending before an API response or immediately after a rejected open. For each admitted
+joint crash image the theorem applies to the trace that selects that image. Healthy completion,
+maintenance progress and physical space bounds have separate conditions. [Client and format behavior](../specifications.md) · [Filesystem assumptions](../proof-roadmap.md#filesystem-assumptions-and-detailed-proof-targets)
+
+Build the argument with the following boundaries.
+
+1. **Observe one source execution.** Interpret the existing production schedules with primitive
+   outcomes at the reached heap. A call returns a value or an ordinary error with its effects, or
+   the prefix ends without an API response, either between primitives or within an issued primitive.
+   The reached state carries the effects so far and the concrete target of any issued call.
+   A process exit updates custody separately. A power loss
+   chooses one joint survivor from the reached state. Derive exhaustiveness from the schedule and
+   primitive contracts. Defining admission in terms of the existence of a high-level report would
+   leave coverage circular. [Native API and schedule equalities](../../lean/Alvoki/Storage/Disk/DiskTable.lean)
+2. **Preserve one invariant at adjacent states.** At the native layer carry the managed root, live
+   descriptions and locks, and file bindings and bytes necessary for the next effect. Describe
+   durability on objects, so a sync of a stale descriptor cannot settle a replacement at the same
+   pathname. At the protocol layer require the checkpoint and marker-selected WAL at each allowed
+   selection to represent the settled history and the allowed whole pending submission. Track the
+   actual in-flight, poisoned or released state so the next step has the correct obligations.
+   Expose a ready-table relation only after the installer succeeds, with its literal table, phase,
+   cache and token. Identity, custody and crash correlation remain indexed where a later step uses
+   them. [Descriptor and inode example](../../lean/Alvoki/Storage/Disk/ReplacedWalDescriptor.lean) · [Pending history](../../lean/Alvoki/Storage/Disk/PendingClientReplay.lean)
+3. **Compose single steps.** Treat operation completion, interruption, exit, reboot and each open
+   attempt as independently composable steps when their reached states match. Derive the exact
+   returned open or error from the same worker, cleanup and installer across the sequence. Prove
+   induction from durable empty state over that concrete chronology. Reuse the existing client
+   replay and read results at ready points, and prove the between-session invariant carries prior
+   observations and all allowed durable histories. A compound success scenario becomes a corollary
+   of the same induction. [Ledger and replay](../../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean#L888) · [Snapshot refinement](../../lean/Alvoki/Storage/Disk/ClientReadTrace.lean)
+
+Ordinary `IO.Error` and interruption must remain distinct even when they involve the same fsync.
+The first and final directory sync can also use the same path and descriptor with different
+publication consequences. Their stage must come from the reached continuation. Across an open
+failure, an unlock error can replace the outward diagnostic, and a surviving lock alias can still
+prevent admission. Those facts belong to the operation, release and admission proofs. The client
+replay consumes the derived history and responses. Each retry inherits the allowed alternatives from
+the exact reached files. A failed open can observe a marker that a later reboot is still allowed to
+lose. Resolve an uncertain write once the authority settles, including a barrier that took effect
+before an error, or a successful open exposes the recovered history. Subsequent retries must preserve
+that decision. Until then the invariant carries the allowed alternatives and accounts for effects
+that narrow them. The runtime, FFI and filesystem assumptions remain explicit at the source
+boundary. The traces and invariants
+can be verification-only. [Append and retry selections](../../lean/Alvoki/Storage/Disk/AppendRetrySession.lean)
+
+## Migration test
+
+Keep the codecs, ordered replay, snapshot and retention proofs, publication laws, bounded reads,
+and the exact installer. Keep the current scenarios as regression evidence during the migration.
+Replace the high-level scenario inputs where the new source argument covers them, then remove
+redundant wrappers once their consumers and guarantees have moved. A wholesale rewrite would
+re-prove local facts that the proposed induction needs in either design.
+
+Start with the two early fsync stops. Derive one reached outcome from the full checkpoint schedule
+and use it both to end a finite prefix and to continue through a reboot. Carry the same survivor
+through one failed open and then, in an extension of that exact prefix, through a successful open
+and a point or range read on its returned table. Derive the issued prefix and source heap once,
+without an independently supplied successful prefix for a second interpreter. Check that an
+ordinary earlier EIO and a later directory sync on the same descriptor do not inhabit the early
+stop. Then try the effective manifest rename with either survivor and a failed repair that has
+already changed the image. These cases test both the shared boundary and the information it keeps.
+
+The next test is a successful acknowledged batch followed by an uncertain one. Show that the same
+induction can end after a failed open or continue with the actual returned table. Reject a half
+retained batch, invented write, mixed manifest/run image, stale pin and a successful lock acquisition
+while an alias still owns the lock. New operation outcomes should require local refinement lemmas
+and yield the same global theorem. If a case requires another copy of the session or terminal
+argument, inspect which state or invariant the interface is missing before widening coverage.
+The [active roadmap](../proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
+defines the acceptance checks and tracks work that remains.
