@@ -76,24 +76,33 @@ def finished (report : CachedCloseReports directory writer before) : CachedClose
   { pending.drop .directory (report.drops .directory) with phase := .closed }
 
 /-- The shared close schedule clears active, pending and directory
-references in order after successful unlock. An unlock error leaves the
-poisoned phase, cache, files, slots and ownership at the reached state. -/
-theorem outcome (report : CachedCloseReports directory writer before) (poisoned : before.phase = .poisoned) :
+references in order after successful unlock. An unlock error keeps the
+reached phase, cache, files, slots and ownership. -/
+theorem outcome_open (report : CachedCloseReports directory writer before) (openPhase : before.phase ≠ .closed) :
     report.run = match report.result with
     | .ok () => .ok () report.finished
     | .error cause => .error cause before := by
   unfold run closeSchedule
-  simp only [Bind.bind, EStateM.bind, poisoned, Phase.close]
-  cases returned : report.result with
-  | error cause =>
-    have unlock := report.unlockEffect
-    rw [returned] at unlock
-    rw [unlock]
-  | ok value =>
-    cases value
-    have unlock := report.unlockEffect
-    rw [returned] at unlock
-    simp only [unlock, report.active returned, report.pending returned, report.directoryCache returned, finished]
+  cases phase : before.phase
+  case closed => simp_all
+  all_goals
+    simp only [Bind.bind, EStateM.bind, Phase.close]
+    cases returned : report.result with
+    | error cause =>
+      have unlock := report.unlockEffect
+      rw [returned] at unlock
+      rw [unlock]
+    | ok value =>
+      cases value
+      have unlock := report.unlockEffect
+      rw [returned] at unlock
+      simp only [unlock, report.active returned, report.pending returned, report.directoryCache returned, finished]
+
+theorem outcome (report : CachedCloseReports directory writer before) (poisoned : before.phase = .poisoned) :
+    report.run = match report.result with
+    | .ok () => .ok () report.finished
+    | .error cause => .error cause before :=
+  report.outcome_open (by simp [poisoned])
 
 theorem finishedFiles (report : CachedCloseReports directory writer before)
     (held : before.files.owners.Owns directory writer) :
