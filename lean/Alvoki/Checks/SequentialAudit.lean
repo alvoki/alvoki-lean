@@ -1079,6 +1079,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.preparesFrom
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.rejectsFromOpenCell
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.publicationErrorViaOpenReferences
+#check_axioms Alvoki.Storage.CheckpointPublication.run_firstFailure
+#check_axioms Alvoki.Storage.DiskSession.OpenPhaseCellEffects.classifiesCheckpointReturn
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.reachesIssue
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.stepCache
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.prefixKeepsRoutes
