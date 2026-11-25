@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeCheckpointSourceCrash
-import Alvoki.Storage.Disk.NativeCheckpointOpenChronology
+import Alvoki.Storage.Disk.NativeQuietPowerLossRaw
 
 namespace Alvoki.Storage.DiskSession
 

@@ -138,6 +138,7 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
       {stage : CheckpointPublication.Step} {reason : FilePath} {reached : CheckpointWorld heap}
       (stop : NativeCheckpointSourceStop position primitives fsync stage reason reached)
       (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
+      (poisoned : opened.contents reached.2 opened.phase = some .poisoned)
       {storage : heap → CheckpointStorageObservation} (stable : NativeReadyStorage current.ready.state (storage reached.2))
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause)
@@ -174,7 +175,7 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .checkpointRunDataError _ | .checkpointManifestSyncError _
   | .checkpointManifestOpenError _ | .checkpointManifestDataError _ | .checkpointManifestRenameError _ => .checkpoint
   | .interruptedCheckpoint _ | .interruptedCheckpointRunFile _ | .interruptedCheckpointRunDirectory _
-  | .stoppedEarlyCheckpoint _ _ _ _ => .checkpoint
+  | .stoppedEarlyCheckpoint _ _ _ _ _ => .checkpoint
   | .collectionError _ _ _ => .collectCoveredWal
   | .interruptedCoveredWalUnlink _ | .interruptedCoveredWalDirectory _ | .coveredWalUnlinkError _ => .collectCoveredWal
   | .interruptedObsoleteRunUnlink cut _ => .collectObsoleteRuns cut.plan.reports.held
@@ -273,11 +274,12 @@ def Reached : NativeExecutionEnd current → Prop
   | .interruptedCheckpointRunFile stop => NativePendingCheckpointRunFile current.ready stop
   | .interruptedCheckpointRunDirectory stop => NativePendingCheckpointRunDirectory current.ready stop
   | .stoppedEarlyCheckpoint (opened := opened) (position := position) (primitives := primitives) (fsync := fsync)
-      (stage := stage) (reason := reason) (reached := reached) _ _ _ (storage := storage) _ =>
+      (stage := stage) (reason := reason) (reached := reached) _ _ _ _ (storage := storage) _ =>
     opened.table.UsesOpenCheckpointSchedule position.current.ready.state.session.directory opened.files opened.phase ∧
     (runCheckpointOnOpenPhaseUntilSyncStop position.current.ready.state.session.directory
       opened.phase opened.get opened.set primitives fsync).run
       (position.current.ready.state.cache, position.reached) = .error (stage, reason) reached ∧
+      opened.contents reached.2 opened.phase = some .poisoned ∧
       NativeReadyStorage current.ready.state (storage reached.2)
   | .collectionError reported cause _ =>
       reported.run = .error (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}")
@@ -364,7 +366,7 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   | interruptedCheckpoint stop => exact current.ready.stopsDuringCheckpoint stop
   | interruptedCheckpointRunFile stop => exact current.ready.stopsAtCheckpointRunFile stop
   | interruptedCheckpointRunDirectory stop => exact current.ready.stopsAtCheckpointRunDirectory stop
-  | stoppedEarlyCheckpoint _ stop _ stable => exact ⟨stop.source, stop.stoppedCall, stable⟩
+  | stoppedEarlyCheckpoint _ stop _ poisoned stable => exact ⟨stop.source, stop.stoppedCall, poisoned, stable⟩
   | collectionError reported _ failed =>
     obtain ⟨returned, _, _, _, _, _, _, _, _, _, _, _, _, survivors, _⟩ :=
       current.ready.readPrefix.collectionBarrierFailed reported failed

@@ -39,10 +39,15 @@ storage as the terminal endpoint of the same finite replay. -/
 def terminalPrefix {storage : heap → CheckpointStorageObservation}
     (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
     (stable : NativeReadyStorage current.current.ready.state (storage reached.2))
+    (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
+      (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
+        fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
+      opened.contents after.2 opened.phase = opened.contents before.2 opened.phase)
+    (stoppedKeeps : opened.contents reached.2 opened.phase = opened.contents stop.atIssue.2 opened.phase)
     (ordered : NativeExecutionInstructions instructions events)
     (prior : NativeExecutionTrace start events current.current) :
     NativeReachedExecutionPrefix start instructions .checkpoint :=
-  let ending := NativeExecutionEnd.stoppedEarlyCheckpoint rfl stop early stable
+  let ending := NativeExecutionEnd.stoppedEarlyCheckpoint rfl stop early (stop.phaseAtStop returnedKeeps stoppedKeeps) stable
   ⟨events, current.current, ending, ordered, prior, rfl, ending.reached⟩
 
 end NativeCheckpointSourceStop
