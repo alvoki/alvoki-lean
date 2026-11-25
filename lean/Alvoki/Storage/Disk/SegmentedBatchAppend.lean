@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.WalBatchCommitReports
 import Alvoki.Storage.Disk.RetainedWriterState
 import Alvoki.Storage.Disk.AppendGroupedReports
 import Alvoki.Storage.Disk.WalBatchSession
+import Alvoki.Storage.Disk.SingleWritePreflight
 
 namespace Alvoki.Storage.DiskSession
 
@@ -106,6 +107,104 @@ private theorem activeGuard_readOnly {image : Type} (directory : DiskDirectory) 
           Pure.pure, Except.pure, EStateM.pure, privateFile, extent] <;> rfl
     · simp [found, liftExcept, checkPrivateRegularWith, Bind.bind, Except.bind, EStateM.bind,
         Pure.pure, EStateM.pure, privateFile] <;> rfl
+
+/-- The installed marker accounts for the complete logical history in bytes.
+Even at WAL byte-count exhaustion, the one-row sequence check can succeed. -/
+private theorem SegmentedWriterState.RetainedReady.hasSingleSequence {directory descriptor before}
+    (ready : SegmentedWriterState.RetainedReady directory descriptor before) :
+    before.installed.table.committed.toNat + 1 < UInt64.size := by
+  obtain ⟨model, refinement, represented⟩ := ready.resumed.canonical
+  have sequence := represented.committed_count
+  rw [← refinement.committed] at sequence
+  obtain ⟨_, _, _, length, _, _, size⟩ :=
+    DirectoryPublication.Bindings.walRange_accounting before.target.decoded
+  rw [ready.resumed.through, ← sequence, WAL.frameSize] at size
+  have fits := length.toNat_lt_size
+  have space : 2 ≤ UInt64.size := by decide
+  omega
+
+/-- Single and one-row batch writes from a retained-ready writer have
+identical outcomes under the same native append, stage, sync and rename
+callbacks. Sequence allocation cannot mask byte-count exhaustion even
+though the two public schedules run those checks in opposite orders. -/
+theorem runSingleWrite_eq_runBatchWrite_singleton {image : Type} {directory : DiskDirectory}
+    {descriptor : Nat} {writer : SegmentedWriterState}
+    (ready : writer.RetainedReady directory descriptor)
+    (key : UInt64) (value : Option UInt64) (before : LockedFileState image)
+    (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+    (append stage : FilePath → ByteArray → EStateM IO.Error image Unit)
+    (sync : Array FilePath → EStateM IO.Error image Unit) (rename : FilePath → FilePath → EStateM IO.Error image Unit) :
+    runSingleWrite directory key value lookup
+      (fun state event count => commitAt directory state.activeFirst event count append stage sync rename)
+      (.ready writer.installed, before) =
+    runBatchWrite directory [(key, value)] lookup append stage sync rename (.ready writer.installed, before) := by
+  have sequence : (writer.installed.table.write key value).isSome = true :=
+    (PackedTable.write_iff _ _ _).mpr ready.hasSingleSequence
+  obtain ⟨next, written⟩ := Option.isSome_iff_exists.mp sequence
+  let event : WAL.Write := ⟨next.committed, key, value⟩
+  have single : prepareWrite writer.installed.table key value = some (event, next) := by
+    simp [prepareWrite, written, event]
+  have batch : prepareBatch writer.installed.table [(key, value)] = some ([event], next) := by
+    simp [prepareBatch_singleton, single]
+  by_cases fits : writer.installed.walBytes + WAL.frameSize < UInt64.size
+  · cases active : (checkActiveSegmentWith directory writer.installed lookup : Except IO.Error Unit) with
+    | error cause =>
+      rw [runSingleWrite_rejectedActive single fits active]
+      simp [runBatchWrite, writeBatchSchedule, Phase.installed, batch, fits, active, activeGuard_readOnly,
+        observeWriteFiles, Bind.bind, EStateM.bind, Pure.pure, Except.pure, EStateM.pure]
+    | ok accepted =>
+      cases accepted
+      rw [runSingleWrite_of_preflight single fits active]
+      simp [runBatchWrite, writeBatchSchedule, Phase.installed, batch, fits, active, activeGuard_readOnly,
+        observeWriteFiles, Bind.bind, EStateM.bind, Pure.pure, Except.pure, EStateM.pure, WAL.encodeBatch_singleton,
+        runPreparedWrite, commitAt]
+      simp only [publishPreparedWrite, publishPrepared, modify, modifyGet, MonadStateOf.modifyGet,
+        EStateM.modifyGet, observeWriteFiles, Bind.bind, EStateM.bind]
+      cases commitBytesAt directory writer.installed.activeFirst (WAL.encodeFrame event)
+          (writer.installed.walBytes + WAL.frameSize) append stage sync rename before.image with
+      | ok accepted reached => cases accepted; rfl
+      | error cause reached => rfl
+  · rw [runSingleWrite_rejectedWalCount single (Nat.le_of_not_gt fits)]
+    simp [runBatchWrite, writeBatchSchedule, Phase.installed, fits, Bind.bind, EStateM.bind,
+      Pure.pure, Except.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+
+/-- The ready preflight's first failing check. Phase rejection is
+handled before these operations. An empty batch reaches none of them. -/
+inductive BatchPreflightRejection (directory : DiskDirectory) (installed : Installed)
+    (rows : List (UInt64 × Option UInt64)) (lookup : FilePath → Except IO.Error IO.FS.Metadata) : IO.Error → Prop where
+  | byteCount (nonempty : rows ≠ []) (overflow : UInt64.size ≤ installed.walBytes + WAL.frameSize * rows.length) :
+      BatchPreflightRejection directory installed rows lookup (IO.userError "WAL byte count is too large")
+  | sequence (nonempty : rows ≠ []) (fits : installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+      (exhausted : prepareBatch installed.table rows = none) :
+      BatchPreflightRejection directory installed rows lookup (IO.userError "write sequence space exhausted")
+  | active (nonempty : rows ≠ []) (fits : installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+      (prepared : prepareBatch installed.table rows = some (events, table))
+      (checked : (checkActiveSegmentWith directory installed lookup : Except IO.Error Unit) = .error cause) :
+      BatchPreflightRejection directory installed rows lookup cause
+
+/-- A failed checked preflight determines the exact error with no
+dependence on append, staging, sync or rename. -/
+theorem BatchPreflightRejection.run {image : Type} {directory : DiskDirectory} {installed : Installed}
+    {rows : List (UInt64 × Option UInt64)} {lookup : FilePath → Except IO.Error IO.FS.Metadata} {cause : IO.Error}
+    (rejected : BatchPreflightRejection directory installed rows lookup cause) (before : LockedFileState image)
+    (append stage : FilePath → ByteArray → EStateM IO.Error image Unit)
+    (sync : Array FilePath → EStateM IO.Error image Unit) (rename : FilePath → FilePath → EStateM IO.Error image Unit) :
+    runBatchWrite directory rows lookup append stage sync rename (.ready installed, before) =
+      .error (.rejected cause) (.ready installed, before) := by
+  have nonempty : rows.isEmpty = false := by
+    cases rows with
+    | nil => cases rejected <;> contradiction
+    | cons => rfl
+  cases rejected with
+  | byteCount _ overflow =>
+    simp [runBatchWrite, writeBatchSchedule, Phase.installed, nonempty, Nat.not_lt.mpr overflow, Bind.bind,
+      EStateM.bind, Pure.pure, Except.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+  | sequence _ fits exhausted =>
+    simp [runBatchWrite, writeBatchSchedule, Phase.installed, nonempty, fits, exhausted, Bind.bind,
+      EStateM.bind, Pure.pure, Except.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+  | active _ fits prepared checked =>
+    simp [runBatchWrite, writeBatchSchedule, Phase.installed, nonempty, fits, prepared, checked, observeWriteFiles,
+      activeGuard_readOnly, Bind.bind, EStateM.bind, Pure.pure, Except.pure, EStateM.pure]
 
 /-- A rejected batch returns the original phase, files, cache and owner.
 Its error is independent of every WAL publication callback. -/

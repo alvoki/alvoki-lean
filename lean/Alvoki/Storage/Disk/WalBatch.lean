@@ -16,6 +16,16 @@ def prepareBatch (state : PackedTable) (rows : List (UInt64 × Option UInt64)) :
     Option (List Write × PackedTable) :=
   prepareBatchLoop state [] rows
 
+/-- A one-row batch prepares the same event and table as a single write. -/
+theorem prepareBatch_singleton (state : PackedTable) (key : UInt64) (value : Option UInt64) :
+    prepareBatch state [(key, value)] = (prepareWrite state key value).map
+      (fun (event, next) => ([event], next)) := by
+  cases step : prepareWrite state key value with
+  | none => simp [prepareBatch, prepareBatchLoop, step]
+  | some result =>
+    cases result
+    simp [prepareBatch, prepareBatchLoop, step]
+
 private theorem prepareBatchLoop_spec (state : PackedTable) (reversed : List Write)
     (rows : List (UInt64 × Option UInt64)) {events : List Write} {next : PackedTable}
     (prepared : prepareBatchLoop state reversed rows = some (events, next)) :
@@ -79,6 +89,9 @@ private theorem encodeBatch_fold (events : List Write) (prefixBytes : ByteArray)
 
 theorem encodeBatch_eq (events : List Write) : encodeBatch events = encode events := by
   simp [encodeBatch, encodeBatch_fold]
+
+theorem encodeBatch_singleton (event : Write) : encodeBatch [event] = encodeFrame event := by
+  simp [encodeBatch_eq, encode]
 
 end Alvoki.WAL
 
