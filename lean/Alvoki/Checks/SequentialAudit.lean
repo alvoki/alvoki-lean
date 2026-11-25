@@ -224,6 +224,7 @@ import Alvoki.Storage.Disk.NativeReadyUncertainWrite
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeExecutionPendingWrite
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
+import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
@@ -1440,6 +1441,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyClose.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyClose.rejectsReads
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.closes
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseUnlockInterruption.reachesUnlock
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseUnlockInterruption.filesAfterDrops
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseUnlockInterruption.admitsAfterDrops
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseUnlockInterruption.reopenFiles_image
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseUnlockInterruption.blocksOpen
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsDuringClose
+#check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.stopsDuringClose
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.binding
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.returns
