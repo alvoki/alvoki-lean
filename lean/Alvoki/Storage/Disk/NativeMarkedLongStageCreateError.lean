@@ -25,6 +25,10 @@ structure NativeMarkedLongStageCreateError (reads : CapturedMarkedReadReports ad
     (keeper : CapturedKeeperOpenReports reads) where
   longer : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat
   noLater : retry.image.later.visible = []
+  finalizeKeeper : Handle → EStateM IO.Error CensusOpenState Unit
+  finalized : dataErrorDropState finalizeKeeper
+      (reads.wal.keeper.calls.inventory, reads.wal.keeper.calls.slot, 0) (keeper.afterRead, admission.held) =
+    (keeper.afterRead.afterDrops [reads.wal.keeper.calls.slot.closeEvent], admission.held)
   openRead : FilePath → EStateM IO.Error CensusOpenState Handle
   fsync : Handle → EStateM IO.Error CensusOpenState Unit
   afterAuthorize : List LockReferenceDrop
@@ -74,16 +78,19 @@ def readKeeper (path : FilePath) (count physical : Nat) : EStateM IO.Error Repai
   fun initial => match keeper.readKeeperAt path count physical initial with
   | .error cause reached => .error cause reached
   | .ok bytes (cache, census, files) =>
-    .ok bytes (cache, if count < physical then census.afterDrops [reads.wal.keeper.calls.slot.closeEvent] else census, files)
+    let reached := (census, files)
+    let handle := (reads.wal.keeper.calls.inventory, reads.wal.keeper.calls.slot, 0)
+    .ok bytes (cache, if count < physical then dataErrorDropState seen.finalizeKeeper handle reached else reached)
 
-include seen in
+/-- The reported close consumes the exact description just read by the
+long keeper path. Its returned file state enters the authorization sync. -/
 theorem readsAndCloses :
-    readKeeper (keeper := keeper) (directory.file (.walSegment layout.keeper.first)) layout.keeper.bytes.size
+    seen.readKeeper (directory.file (.walSegment layout.keeper.first)) layout.keeper.bytes.size
       reads.wal.keeper.calls.metadata.byteSize.toNat (admission.cache, keeper.atOpen, admission.held) =
     .ok layout.keeper.bytes (admission.cache, afterRead (keeper := keeper), admission.held) := by
   have read := keeper.readsLong seen.longer
   unfold CapturedKeeperOpenReports.readKeeper at read
-  simp only [readKeeper, read, seen.longer, ite_true, afterRead]
+  simp only [readKeeper, read, seen.longer, ite_true, seen.finalized, afterRead]
 
 def sync : Array FilePath → EStateM IO.Error RepairState Unit :=
   SyncPathGroup.run (SyncHandleRouting.sync directory.path seen.openRead seen.fsync)
@@ -161,14 +168,14 @@ theorem recoveryFails
       retry.image.directory.active.manifest)
     (ordered : WAL.OrdinalsFrom 1 history) :
     let prepare := reads.prepareFromCensus chronology.metadataRelease chronology.runs.released
-      chronology.sealRelease (readKeeper (keeper := keeper))
+      chronology.sealRelease seen.readKeeper
     finishPreparedWithCensus prepare (fun plan measure =>
       finishBoundedMarkedOpen directory plan measure seen.remove seen.stage seen.sync seen.rename)
       admission.cache (admission.reached, admission.held) = .error seen.cause seen.atStage := by
   dsimp only
   obtain ⟨_, reached, _⟩ := reads.preparesFromCensus chronology.manifest chronology.runs selected
     chronology.marker chronology.beforeListing keeper chronology.seals chronology.offsets chronology.retained
-    following prepared.newer accepted ordered (readKeeper (keeper := keeper)) seen.readsAndCloses
+    following prepared.newer accepted ordered seen.readKeeper seen.readsAndCloses
   rw [finishPreparedWithCensus, reached]
   dsimp only
   rw [seen.finishes prepared]
@@ -191,7 +198,7 @@ noncomputable def run (chronology : CapturedMarkedReadCensus reads keeper)
   admission.run fun path owner cache =>
     admission.recoverWithMarked path
       (finishPreparedWithCensus (reads.prepareFromCensus chronology.metadataRelease chronology.runs.released
-        chronology.sealRelease (readKeeper (keeper := keeper))) (fun plan measure =>
+        chronology.sealRelease seen.readKeeper) (fun plan measure =>
           finishBoundedMarkedOpen path plan measure seen.remove seen.stage seen.sync seen.rename) cache)
       (bootstrap path cache) >>= install path owner cache
 
