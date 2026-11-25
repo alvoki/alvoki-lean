@@ -1372,7 +1372,6 @@ theorem recoveredRetries_installedReads
     (reportedSeal : ∀ entry ∈ required.dropLast, ∀ {before after bytes},
       readSeal (directory.file (.walSegment entry.1)) entry.2.byteSize.toNat before = .ok bytes after →
       prepared.kept entry.1 = some bytes)
-    (keeperCovers : target.trimmed.size ≤ keeperMetadata.byteSize.toNat)
     (keeperRead : readKeeper (directory.file (.walSegment target.first)) target.trimmed.size
       keeperMetadata.byteSize.toNat atKeeper = .ok target.trimmed prepared)
     {marker settledMarker : WalInodeImage} {markerHandle : KeeperDescriptorIdentity}
@@ -1468,6 +1467,12 @@ theorem recoveredRetries_installedReads
       (selected.frontier.toNat / frameSize - target.first) * frameSize := by
     rw [through]
     exact target.trimmedSize
+  obtain ⟨tail, fullKeeper⟩ := preparedPlan.keeperPrefix.activeValid
+  have full : plan.keeperBytes = target.trimmed ++ tail :=
+    Option.some.inj (preparedPlan.keeperRead.symm.trans fullKeeper)
+  have keeperCovers : target.trimmed.size ≤ keeperMetadata.byteSize.toNat := by
+    rw [keeperExtent, full, ByteArray.size_append]
+    exact Nat.le_add_right ..
   obtain ⟨earlier, earlierOffsets, earlierBytes, payloadRead⟩ :=
     sealReads.read_success (selected.frontier.toNat / frameSize) readKeeper
       (selected := fun first bytes => prepared.kept first = some bytes)
@@ -1477,9 +1482,6 @@ theorem recoveredRetries_installedReads
   have walRead := WalSegmentRepair.readSelectedWithCachedExtents_stateful directory
     base.committed.toNat selected.frontier list lstat readSeal readKeeper
     ⟨aligned, watermark⟩ listed scanned selectedExtents payloadRead
-  obtain ⟨tail, fullKeeper⟩ := preparedPlan.keeperPrefix.activeValid
-  have full : plan.keeperBytes = target.trimmed ++ tail :=
-    Option.some.inj (preparedPlan.keeperRead.symm.trans fullKeeper)
   let payload := WAL.encode (((history ++ batch).take target.range.through).drop first)
   have authorized := prepared_settleMarker preparedPlan selected observed
   obtain ⟨after, repaired, ready, authorizedRepair⟩ :=
