@@ -1331,4 +1331,28 @@ fresh write and flush. -/
 theorem syncFilesStage_schedule (files : SyncFiles) (path : FilePath) (bytes : ByteArray) :
     files.stage path bytes = (writeFreshStagedHandle path bytes >>= files.remember path) := rfl
 
+/-- The two markerless publication writes keep their produced handles
+in the same pending cell that is consumed by the file barriers. -/
+def DiskTable.OpenSyncFiles.UsesBootstrapCacheSchedules (files : DiskTable.OpenSyncFiles)
+    (directory : DiskDirectory) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cachedDirectory : IO.Ref (Option IO.FS.Handle)) : Prop :=
+  files.create (directory.file (.walSegment 0)) =
+    (IO.FS.Handle.mk (directory.file (.walSegment 0)) .writeNew >>= fun descriptor =>
+      pending.modify (SyncHandleRouting.pushPending (directory.file (.walSegment 0)) descriptor)) ∧
+  files.stage (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0) =
+    (writeFreshStagedHandle (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0) >>= fun descriptor =>
+      pending.modify (SyncHandleRouting.pushPending (directory.file .stagedWalBoundary) descriptor)) ∧
+  ∀ paths, files.syncPaths paths = SyncPathGroup.run (fun path =>
+    SyncHandleRouting.syncWithHandles directory.path path cachedDirectory.get pending.get pending.set active.get
+      (fun name => IO.FS.Handle.mk name .read) fsyncHandle) paths
+
+theorem DiskTable.OpenSyncFiles.bootstrapCacheSchedules {files : DiskTable.OpenSyncFiles}
+    {directory : DiskDirectory} {active pending cachedDirectory}
+    (uses : files.UsesCacheReferences active pending cachedDirectory) (atDirectory : files.AtDirectory directory.path) :
+    files.UsesBootstrapCacheSchedules directory active pending cachedDirectory := by
+  obtain ⟨rfl, rfl, rfl⟩ := uses
+  refine ⟨rfl, rfl, ?_⟩
+  intro paths
+  rw [syncFilesSyncPaths_schedule, atDirectory]
+
 end Alvoki.Storage
