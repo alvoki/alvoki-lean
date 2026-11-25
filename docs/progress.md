@@ -911,3 +911,10 @@ custody and release report. Together with the seal-chain result this
 provides lifetime proofs for both loops in the two-slot preparation
 schedule. The enclosing opener still supplies the manifest, scan and
 keeper transitions that join those loops to the marker fsync.
+
+The checked directory scan now preserves a retained marker slot through
+its observed stream lifetime. The proof composes the scan with the
+selected WAL seals and the bounded keeper read, reaching the exact
+post-read census with the same marker slot. This covers that WAL read
+phase under the ambient-drop reports. The checkpoint-to-scan handoff
+and the post-read stabilization and repair handoff remain open.

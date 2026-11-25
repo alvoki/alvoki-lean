@@ -84,14 +84,7 @@ theorem preservesSlot (custody : TemporaryPrefixCustody opened initial (released
     slot ∈ (opened.inventory.afterDrops (released path)).slots := by
   have beforeOpen : slot ∈ (initial.afterDrops custody.beforeOpen).slots :=
     List.mem_filter.mpr ⟨present, List.all_eq_true.mpr (by simpa using retainedBeforeOpen)⟩
-  have finalizer : opened.slot.closeEvent.removes slot.reference = false := by
-    cases removed : opened.slot.closeEvent.removes slot.reference with
-    | false => rfl
-    | true =>
-      exfalso
-      apply custody.free slot beforeOpen
-      simpa [DescriptorSlot.address, DescriptorSlot.closeEvent, LockReferenceDrop.removes,
-        Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq] using removed
+  have finalizer := DescriptorInventory.closeOtherSlot beforeOpen custody.free
   rw [custody.closes.1, ← DescriptorInventory.afterDrops_append,
     congrArg (initial.afterDrops custody.beforeOpen).afterDrops custody.closing]
   refine List.mem_filter.mpr ⟨beforeOpen, List.all_eq_true.mpr ?_⟩
@@ -418,4 +411,34 @@ theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission l
   | ok value after => cases value; rfl
 
 end CapturedMarkedReadReports
+
+/-- The checked listing and the selected-seal reads reach the keeper
+with the same retained marker slot. The scan and seal finalizers each
+close their own temporary descriptions. -/
+theorem CapturedKeeperOpenReports.preservesSlotAtOpen
+    {report : CapturedMarkedReadReports admission layout published}
+    (keeper : CapturedKeeperOpenReports report)
+    {released : FilePath → List LockReferenceDrop} {required : List (Nat × IO.FS.Metadata)}
+    {slot : DescriptorSlot}
+    (seals : CapturedSealReadChainWith report released (· = slot)
+      required report.listing.afterClose keeper.beforeOpen)
+    (present : slot ∈ admission.reached.slots)
+    (duringListing : ∀ event ∈ report.listing.beforeOpen ++ report.listing.duringScan,
+      event.removes slot.reference = false) :
+    slot ∈ keeper.atOpen.slots :=
+  seals.preservesSlot rfl (report.listing.preservesSlot present duringListing)
+
+/-- Opening and reading the keeper leaves a separate marker descriptor
+live in the census returned by the bounded read. -/
+theorem CapturedKeeperOpenReports.preservesSlotAfterRead
+    {report : CapturedMarkedReadReports admission layout published}
+    (keeper : CapturedKeeperOpenReports report) {slot : DescriptorSlot}
+    (present : slot ∈ keeper.atOpen.slots)
+    (retained : ∀ event ∈ keeper.duringRead, event.removes slot.reference = false) :
+    slot ∈ keeper.afterRead.slots := by
+  unfold CapturedKeeperOpenReports.afterRead
+  rw [keeper.opened]
+  exact List.mem_filter.mpr ⟨List.mem_cons_of_mem _ present,
+    List.all_eq_true.mpr (by simpa using retained)⟩
+
 end Alvoki.Storage.DiskSession

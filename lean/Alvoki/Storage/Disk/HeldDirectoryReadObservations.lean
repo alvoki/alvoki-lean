@@ -105,6 +105,35 @@ theorem HeldDirectoryScan.afterClose_eq {initial owner} {lifetime : HeldDirector
     ← DescriptorInventory.afterDrops_append initial report.beforeOpen]
   exact DescriptorInventory.insert_thenClose _ report.stream report.free report.duringScan
 
+theorem DescriptorInventory.closeOtherSlot {inventory : DescriptorInventory}
+    {slot temporary : DescriptorSlot} (present : slot ∈ inventory.slots)
+    (free : ∀ existing ∈ inventory.slots, existing.address ≠ temporary.address) :
+    temporary.closeEvent.removes slot.reference = false := by
+  cases removed : temporary.closeEvent.removes slot.reference with
+  | false => rfl
+  | true =>
+    exfalso
+    apply free slot present
+    simpa [DescriptorSlot.address, DescriptorSlot.closeEvent, LockReferenceDrop.removes,
+      Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq] using removed
+
+/-- A held descriptor survives the checked scan when reported ambient
+drops preserve it. The stream's own finalizer has a different address. -/
+theorem HeldDirectoryScan.preservesSlot {initial owner} {lifetime : HeldDirectoryReadLifetime initial owner}
+    (report : HeldDirectoryScan lifetime) {slot : DescriptorSlot} (present : slot ∈ initial.slots)
+    (retained : ∀ event ∈ report.beforeOpen ++ report.duringScan, event.removes slot.reference = false) :
+    slot ∈ report.afterClose.slots := by
+  have atOpen : slot ∈ (initial.afterDrops report.beforeOpen).slots :=
+    List.mem_filter.mpr ⟨present, List.all_eq_true.mpr fun event member => by
+      simp [retained event (List.mem_append_left _ member)]⟩
+  have finalizer := DescriptorInventory.closeOtherSlot atOpen report.free
+  rw [report.afterClose_eq, report.drops]
+  refine List.mem_filter.mpr ⟨present, List.all_eq_true.mpr ?_⟩
+  intro event member
+  rcases List.mem_append.mp member with ambient | closing
+  · simp [retained event ambient]
+  · simp [List.mem_singleton.mp closing, finalizer]
+
 theorem HeldDirectoryScan.liveAtRead {initial owner} {lifetime : HeldDirectoryReadLifetime initial owner}
     (report : HeldDirectoryScan lifetime) {earlier rest : List LockReferenceDrop}
     (readAt : report.duringScan = earlier ++ rest) :
