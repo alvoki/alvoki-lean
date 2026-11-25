@@ -589,6 +589,10 @@ inductive DiskWriteError where
   /-- WAL mutation was attempted. The write may be recovered after reopening. -/
   | commitUnknown (cause : IO.Error)
 
+/-- The native diagnostic carried by either recorded write outcome. -/
+def DiskWriteError.cause : DiskWriteError → IO.Error
+  | .rejected cause | .commitUnknown cause => cause
+
 /-- Commit the prepared frame to the validated active segment and publish
 the new absolute byte count from the locked write path. -/
 @[macro_inline] private def commitWalWrite (dir : DiskDirectory) (files : SyncFiles) (activeFirst : Nat) (event : WAL.Write)
@@ -747,6 +751,50 @@ theorem DiskTable.writeBatchWithOutcome_fileEffects (db : DiskTable)
         db.files.append db.files.stage db.files.syncPaths IO.FS.rename).adapt DiskWriteError.commitUnknown
       db.phase.set (.ready { state with table, walBytes })
       return table.committed) := rfl
+
+private theorem adaptWriteBind (mapError : ε → ε')
+    (action : EIO ε α) (next : α → EIO ε β) :
+    (action >>= next).adapt mapError = action.adapt mapError >>= fun value => (next value).adapt mapError := by
+  funext world
+  change EIO.adapt mapError (EST.bind action next) world =
+    EST.bind (action.adapt mapError) (fun value => (next value).adapt mapError) world
+  simp only [EIO.adapt, EST.bind]
+  cases action world <;> rfl
+
+private theorem adaptWriteAdapt (action : EIO ε α) (first : ε → ε') (second : ε' → ε'') :
+    (action.adapt first).adapt second = action.adapt (second ∘ first) := by
+  funext world
+  unfold EIO.adapt
+  cases action world <;> rfl
+
+private theorem adaptWritePure (mapError : ε → ε') (value : α) :
+    (pure value : EIO ε α).adapt mapError = pure value := rfl
+
+private theorem adaptWriteThrow (mapError : ε → ε') (cause : ε) :
+    (throw cause : EIO ε α).adapt mapError = throw (mapError cause) := rfl
+
+private theorem adaptWriteIf (mapError : ε → ε') (condition : Prop) [Decidable condition]
+    (yes no : EIO ε α) :
+    (if condition then yes else no).adapt mapError =
+      if condition then yes.adapt mapError else no.adapt mapError := by
+  split <;> rfl
+
+/-- The plain single-write API forgets the outcome tag after the same
+native schedule runs, preserving the reached state and diagnostic. -/
+theorem DiskTable.write_eq_adaptOutcome (db : DiskTable) (key : UInt64) (value : Option UInt64) :
+    db.write key value = (db.writeWithOutcome key value).adapt DiskWriteError.cause := by
+  simp only [write, writeWithOutcome, writeWith, DiskSession.withPreparedSingleWrite,
+    DiskSession.publishPreparedWrite, DiskSession.publishPrepared, adaptWriteBind, adaptWriteAdapt,
+    adaptWritePure, adaptWriteThrow, adaptWriteIf]
+  rfl
+
+/-- The plain batch API forgets the outcome tag after the same native
+schedule runs, including the no-op return for an empty batch. -/
+theorem DiskTable.writeBatch_eq_adaptOutcome (db : DiskTable) (rows : List (UInt64 × Option UInt64)) :
+    db.writeBatch rows = (db.writeBatchWithOutcome rows).adapt DiskWriteError.cause := by
+  simp only [writeBatch, writeBatchWithOutcome, writeBatchWith, DiskSession.publishPreparedWrite,
+    DiskSession.publishPrepared, adaptWriteBind, adaptWriteAdapt, adaptWritePure, adaptWriteThrow, adaptWriteIf]
+  rfl
 
 def DiskTable.acquireAt (db : DiskTable) (snapshot : UInt64) : IO (Option DiskSnapshotPin) := do
   let state ← db.installed

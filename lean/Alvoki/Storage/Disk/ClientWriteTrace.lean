@@ -44,6 +44,12 @@ namespace WriteRequest
 
 variable {directory : DiskDirectory} {before : SegmentedWriterState} {handle : Type}
 
+/-- Keep the value or original IO diagnostic and the exact reached state. -/
+def plainResult {state value : Type} :
+    EStateM.Result DiskWriteError state value → EStateM.Result IO.Error state value
+  | .ok value reached => .ok value reached
+  | .error outcome reached => .error outcome.cause reached
+
 abbrev readyCall (before : SegmentedWriterState) (cache : Cache handle) : WriteCallState handle :=
   (.ready before.installed, ⟨(cache, WriteFiles.initial before.history
     (before.files.directory.staged .walBoundary)), before.owners⟩)
@@ -60,6 +66,13 @@ structure Calls (handle : Type) where
 def Calls.run (calls : Calls handle) (request : WriteRequest) (directory : DiskDirectory)
     (before : SegmentedWriterState) : EStateM.Result DiskWriteError (WriteCallState handle) UInt64 :=
   request.runReported directory calls.lookup calls.append calls.stage calls.sync calls.rename (readyCall before calls.cache)
+
+/-- Interpret the plain IO entry points using the same reached result.
+Their native equalities `DiskTable.write_eq_adaptOutcome` and
+`DiskTable.writeBatch_eq_adaptOutcome` erase only the diagnostic's tag. -/
+def Calls.runPlain (calls : Calls handle) (request : WriteRequest) (directory : DiskDirectory)
+    (before : SegmentedWriterState) : EStateM.Result IO.Error (WriteCallState handle) UInt64 :=
+  plainResult (calls.run request directory before)
 
 def Calls.ofSuccess {report : SegmentedBatchAppendReport directory before} (seen : ObservedBatchWrite report handle) :
     Calls handle :=
@@ -152,6 +165,17 @@ theorem ReturnedReports.refinesClient {request : WriteRequest} {calls : Calls ha
     change runBatchWrite directory failure.rows _ _ _ _ _ (readyCall before observed.cache) = _ at returned
     rw [returned]
     exact .unknown failure observed rfl rows cacheAfter
+
+/-- The same client continuation explains a plain IO return. The
+classified witness carries the reached phase and file state and still
+distinguishes a rejected write from an uncertain publication. -/
+theorem ReturnedReports.refinesPlainClient {request : WriteRequest} {calls : Calls handle}
+    (reported : ReturnedReports request directory before handle calls)
+    (trace : SegmentedClientReadTrace directory initialDescriptor initial allowCollection log reads writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor) :
+    ∃ outcome, calls.runPlain request directory before = plainResult outcome ∧
+      ClientReturn request directory initialDescriptor initial allowCollection log reads writer before handle calls outcome :=
+  ⟨calls.run request directory before, rfl, reported.refinesClient trace initialReady⟩
 
 end WriteRequest
 

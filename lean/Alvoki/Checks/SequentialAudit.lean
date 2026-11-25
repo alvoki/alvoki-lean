@@ -994,6 +994,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.writeBatchWithOutcome_schedule
 #check_axioms Alvoki.Storage.DiskTable.close_schedule
 #check_axioms Alvoki.Storage.DiskTable.writeBatch_schedule
+#check_axioms Alvoki.Storage.DiskTable.writeBatch_eq_adaptOutcome
 #check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_fileEffects
 #check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_reports
 #check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atReportedCut
@@ -1102,6 +1103,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.AppendCommitReports.run
 #check_axioms Alvoki.Storage.DiskSession.runPreparedWrite_failure_handoff
 #check_axioms Alvoki.Storage.DiskTable.writeWithOutcome_schedule
+#check_axioms Alvoki.Storage.DiskTable.write_eq_adaptOutcome
 #check_axioms Alvoki.Storage.DiskSession.runSingleWrite_rejectedPhase
 #check_axioms Alvoki.Storage.DiskSession.runSingleWrite_rejectedSequence
 #check_axioms Alvoki.Storage.DiskSession.runSingleWrite_rejectedWalCount
@@ -1270,6 +1272,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.ReturnedReports.refinesClient
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchFailure.refinesReopenPrefix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedWrite
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.ReturnedReports.refinesPlainClient
 #check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.issuingHandles
 #check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.returnedReports
 #check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.refinesClient
