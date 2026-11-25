@@ -1307,7 +1307,7 @@ private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × By
 /-- The same retry-selected recovery explains the retained submissions and
 fresh snapshot reads on the session installed by the shared open schedule. -/
 theorem recoveredRetries_installedReads
-    {initial prepared after : FileImage} {target : Target}
+    {initial prepared : FileImage} {target : Target}
     (beforeBarrier : UnsettledRetries initial prepared)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
     {current : Selection} {next : Selection}
@@ -1400,8 +1400,6 @@ theorem recoveredRetries_installedReads
       | .ok directory => .ok () { prepared with directory }
       | .error cause => .error (IO.userError cause) prepared)
     (keeperExtent : keeperMetadata.byteSize.toNat = plan.keeperBytes.size)
-    (repaired : WalSegmentRepair.finishMarkedOpen directory plan removeFile write sync renameFile
-      { prepared with directory := settleMarker prepared.directory selected } = .ok () after)
     (settles : sync #[directory.path] { prepared with directory := settleMarker prepared.directory selected } =
       .ok () ({ prepared with directory := settleMarker prepared.directory selected } : FileImage).syncDirectory)
     (healthy : ∀ action state next,
@@ -1411,7 +1409,7 @@ theorem recoveredRetries_installedReads
       state.effect target action = some next →
       WalSegmentRepair.performPaths directory plan removeFile throw write sync renameFile action state =
         .ok () next)
-    (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
+    (selectedRecovery : WalSegmentRecovery image target.pair range (history ++ batch) base first opened.table)
     (sealedRead : ∀ file ∈ sealed, prepared.kept file.1 = some file.2)
     (layout : DiskSession.CanonicalKeeperLayout prepared ((history ++ batch).take range.through))
     (layoutTarget : layout.target = target) (layoutStart : layout.first = first)
@@ -1420,6 +1418,7 @@ theorem recoveredRetries_installedReads
     {snapshot : UInt64} (retained : opened.table.pins.floor ≤ snapshot)
     (within : snapshot.toNat ≤ range.through) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
+    ∃ after : FileImage,
     (∀ bytes, some bytes ∈ after.keeper.active :: after.keeper.crashImages →
       recoverMarkedWalSegments base selected.frontier (sealed ++ [(target.first, bytes)]) =
         .ok (WAL.encode (((history ++ batch).take range.through).drop first), opened.table) ∧
@@ -1485,12 +1484,10 @@ theorem recoveredRetries_installedReads
     Option.some.inj (preparedPlan.keeperRead.symm.trans fullKeeper)
   let payload := WAL.encode (((history ++ batch).take range.through).drop first)
   have authorized := prepared_settleMarker preparedPlan selected observed
-  obtain ⟨repairedFiles, finishSeen, ready, repairTrace⟩ :=
+  obtain ⟨after, repaired, ready, authorizedRepair⟩ :=
     WalSegmentRepair.finishMarkedOpen_completes authorized directory removeFile write sync renameFile settles healthy
-  have repairedImage := (EStateM.Result.ok.inj (finishSeen.symm.trans repaired)).2
-  have authorizedRepair : EffectTrace target
-      { prepared with directory := settleMarker prepared.directory selected } after :=
-    repairedImage ▸ repairTrace
+  have recovery : WalSegmentRecovery image after.directory.active range (history ++ batch)
+      base first opened.table := ready.selected.symm ▸ selectedRecovery
   have retries : SettledRetries target after after := .start
   have ledger := recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
@@ -1625,10 +1622,10 @@ theorem recoveredRetries_installedReads
   obtain ⟨retry, retryTarget, retryStart, retrySeals, retryKeeper, _, retryPrepared⟩ :=
     canonicalLayout_afterMarkerRetries layout selected observed layoutPrepared
       (layoutTarget.symm ▸ authorizedRepair) (layoutTarget.symm ▸ retries)
-  refine ⟨ledger.1, ?_, retry, retryTarget.trans layoutTarget, retryStart.trans layoutStart,
+  refine ⟨ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart.trans layoutStart,
     retrySeals, retryKeeper, layoutTarget ▸ retryPrepared, session, final, reference,
-    opened.installed, pin, pinned, returned, reached, reached.symm ▸ (repairedImage ▸ ready),
-    reached.symm ▸ (repairedImage ▸ repairTrace), owner, freshSession, replayed, installed, acquired, points, ranges⟩
+    opened.installed, pin, pinned, returned, reached, reached.symm ▸ ready,
+    reached.symm ▸ authorizedRepair, owner, freshSession, replayed, installed, acquired, points, ranges⟩
   intro bytes survives
   obtain ⟨equalReplay, sealedBytes⟩ := physical bytes survives
   exact ⟨equalReplay.trans selectedReplay, sealedBytes⟩
