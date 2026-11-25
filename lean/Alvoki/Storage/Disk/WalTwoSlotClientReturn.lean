@@ -1287,7 +1287,12 @@ theorem recoveredRetries_installedReads
     (oldSize : current.frontier.toNat = (WAL.encode history).size)
     (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
     (acquisition : DiskSession.TryLockObserves openedFrom.owners directory (.ok true))
-    (reopened : reopenWith prepare stabilize finish openedFrom.image = .ok opened after)
+    {bounded : WalSegmentRepair.Plan} {size : Nat}
+    (read : prepare openedFrom.image = .ok (bounded, opened, size) prepared)
+    (barrier : stabilize prepared = .ok ()
+      { prepared with directory := settleMarker prepared.directory selected })
+    (repaired : finish bounded size
+      { prepared with directory := settleMarker prepared.directory selected } = .ok () after)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
     {snapshot : UInt64} (retained : opened.table.pins.floor ≤ snapshot)
     (within : snapshot.toNat ≤ range.through) :
@@ -1307,8 +1312,8 @@ theorem recoveredRetries_installedReads
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2
   obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
-  obtain ⟨session, final, returned, _, _, installed, reached, _, owner, _, _, freshSession⟩ :=
-    DiskSession.runOpenWithInstallation_ready (unlock := unlock) liveRefs fresh acquisition reopened
+  obtain ⟨session, final, returned, installed, reached, owner, freshSession⟩ :=
+    reopenWith_installsPrepared (unlock := unlock) liveRefs fresh acquisition read barrier repaired
   exact ⟨ledger.1, session, final, reference, opened.installed, pin, pinned,
     returned, reached, owner, freshSession, replayed, installed, acquired, points, ranges⟩
 
