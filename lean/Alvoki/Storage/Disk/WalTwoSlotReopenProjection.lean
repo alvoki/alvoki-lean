@@ -532,6 +532,19 @@ theorem reopenWith_installsPrepared {image : Type} {directory : Storage.DiskDire
     runOpenWithInstallation_ready (unlock := unlock) liveRefs fresh acquisition report
   exact ⟨session, final, success, phase, files, owner, freshSession⟩
 
+/-- Syncing the marker selected by preparation preserves its repair plan.
+Only the crash choices of the marker bytes can change. -/
+theorem prepared_settleMarker {image : FileImage} {target : Target} {plan : Plan}
+    (prepared : Prepared image target plan) (selected : Selection)
+    (bound : image.directory.active.walBoundary = some (Boundary.encode selected.frontier)) :
+    Prepared { image with directory := settleMarker image.directory selected } target plan := by
+  have active : (settleMarker image.directory selected).active = image.directory.active := by
+    have eta : (⟨image.directory.active.manifest, image.directory.active.walBoundary⟩ : Bindings) =
+        image.directory.active := by cases image.directory.active; rfl
+    simpa [settleMarker, bound] using eta
+  exact ⟨active.trans prepared.pair, prepared.keeperPrefix, prepared.newer,
+    prepared.through, prepared.start, prepared.names, prepared.keeperRead⟩
+
 /-- A successful two-slot reopen uses the shared keeper repair proof
 before it installs the table and allocates a fresh snapshot identity. -/
 theorem reopenWith_installsAfterRepair
@@ -549,8 +562,11 @@ theorem reopenWith_installsAfterRepair
     (read : prepare before.image =
       .ok ({ full with keeperBytes := full.keeperBytes.extract 0 full.keeperSize },
         opened, full.keeperBytes.size) prepared)
+    (selected : Selection)
+    (bound : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
+    (plan : Prepared prepared target full)
+    (reached : settled = { prepared with directory := settleMarker prepared.directory selected })
     (barrier : stabilize prepared = .ok () settled)
-    (plan : Prepared settled target full)
     (settles : sync #[directory.path] settled = .ok () settled.syncDirectory)
     (healthy : ∀ action state next, ReachesAction target settled.syncDirectory full.finishActions action state →
       state.effect target action = some next →
@@ -563,8 +579,9 @@ theorem reopenWith_installsAfterRepair
       session.phase = .ready opened.installed ∧
       final.image.Ready target ∧ EffectTrace target settled final.image ∧
       final.owners.Owns directory descriptor ∧ session.sessionRef ∉ liveRefs := by
+  have settledPlan : Prepared settled target full := reached.symm ▸ prepared_settleMarker plan selected bound
   obtain ⟨after, repaired, ready, trace⟩ :=
-    finishMarkedOpen_completes plan directory removeFile write sync renameFile settles healthy
+    finishMarkedOpen_completes settledPlan directory removeFile write sync renameFile settles healthy
   have bounded := finishBoundedMarkedOpen_eq_full directory full plan.valid removeFile write sync renameFile
   obtain ⟨session, final, success, phase, image, owner, newRef⟩ :=
     reopenWith_installsPrepared (descriptor := descriptor) (unlock := unlock)
