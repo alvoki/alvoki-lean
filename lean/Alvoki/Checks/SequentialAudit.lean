@@ -239,6 +239,7 @@ import Alvoki.Storage.Disk.NativeOpenPinRead
 import Alvoki.Storage.Disk.NativeOpenWrite
 import Alvoki.Storage.Disk.NativeMarkedOpenHeap
 import Alvoki.Storage.Disk.NativeOpenReadTrace
+import Alvoki.Storage.Disk.NativeOpenClose
 import Alvoki.Storage.Disk.NativeOpenEarlyError
 import Alvoki.Storage.Disk.NativeCacheOpenRejection
 import Alvoki.Storage.Disk.NativeContendedOpen
@@ -1606,6 +1607,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.acquireAt
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.acquiresViaOpenReferences
 #check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.acquiresAfterInstall
+#check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.close
+#check_axioms Alvoki.Storage.DiskSession.OpenCloseClears.emptyCache
+#check_axioms Alvoki.Storage.DiskSession.OpenCloseObservation.returns
+#check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.closesViaOpenReferences
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.lookupPin
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.rangePin
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.readsOpenPin

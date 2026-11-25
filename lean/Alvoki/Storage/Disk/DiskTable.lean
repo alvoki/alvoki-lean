@@ -506,6 +506,26 @@ theorem DiskTable.close_schedule (db : DiskTable) :
     db.close = DiskSession.closeSchedule db.phase.get (fun _ => db.lock.unlock)
       (db.files.active.set none) (db.files.pending.set []) (db.files.directory.set none) (db.phase.set .closed) := rfl
 
+/-- The three cache cells belonging to the synchronization record
+captured by the opener. -/
+def DiskTable.OpenSyncFiles.UsesCacheReferences (files : DiskTable.OpenSyncFiles)
+    (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (directory : IO.Ref (Option IO.FS.Handle)) : Prop :=
+  files.active = active ∧ files.pending = pending ∧ files.directory = directory
+
+/-- Close reads and writes exactly the phase, lock and cache
+references of the opened table. -/
+theorem DiskTable.UsesOpenReferences.close {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) :
+    ∃ (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+      (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cachedDirectory : IO.Ref (Option IO.FS.Handle)),
+      files.UsesCacheReferences active pending cachedDirectory ∧
+      db.close = DiskSession.closeSchedule phase.get (fun _ => lock.unlock)
+        (active.set none) (pending.set []) (cachedDirectory.set none) (phase.set .closed) := by
+  obtain ⟨_, sameLock, sameFiles, samePhase, _⟩ := uses
+  exact ⟨files.active, files.pending, files.directory, ⟨rfl, rfl, rfl⟩,
+    by rw [DiskTable.close_schedule, sameLock, sameFiles, samePhase]⟩
+
 private def DiskTable.installed (db : DiskTable) : IO Installed := do
   (← db.phase.get).installed
 
