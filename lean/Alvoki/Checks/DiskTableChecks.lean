@@ -2286,14 +2286,36 @@ private def checkTwoSlotMarker (root : FilePath) : IO Unit := do
   let (oversizedOpened, oversizedSyncs) ← probeDisk bin dir none "--two-slot-open-once" (extraEnv := shortReads)
   check (!oversizedOpened && oversizedSyncs.isEmpty) "two-slot reopen accepted an oversized marker"
   IO.FS.writeBinFile marker completeMarker
-  let reopened ← TwoSlotDiskTable.open dir
+  -- Run the same committed history through the rename adapter, including
+  -- checkpoint and rotation, and compare both reopen results.
+  let rename ← DiskTable.open legacy
   try
-    let some old ← reopened.acquireAt 1 | throw (IO.userError "missing earlier two-slot snapshot")
-    check ((← reopened.lookup old.handle 10) == some (some 10)) "two-slot snapshot lost its earlier value"
-    let latest ← reopened.acquire
-    check (latest.sequence == 3 && (← reopened.lookup latest.handle 10) == some none &&
-      (← reopened.lookup latest.handle 11) == some (some 11)) "two-slot reopen lost batch state"
-  finally reopened.close
+    check ((← rename.write 10 (some 10)) == 1) "wrong first rename ordinal"
+    check ((← rename.writeBatch []) == 1) "empty rename batch advanced the WAL"
+    rename.checkpoint
+    rename.rotateWal
+    rename.collectCoveredWal
+    check ((← rename.writeBatch [(10, none), (11, some 11)]) == 3) "wrong rename batch ordinal"
+  finally rename.close
+  let rename ← DiskTable.open legacy
+  try
+    let reopened ← TwoSlotDiskTable.open dir
+    try
+      let some old ← reopened.acquireAt 1 | throw (IO.userError "missing earlier two-slot snapshot")
+      let some renameOld ← rename.acquireAt 1 | throw (IO.userError "missing earlier rename snapshot")
+      let latest ← reopened.acquire
+      let renameLatest ← rename.acquire
+      check (latest.sequence == renameLatest.sequence && latest.sequence == 3)
+        "the WAL marker strategies disagree on the recovered sequence"
+      for (slotPin, renamePin) in [(old, renameOld), (latest, renameLatest)] do
+        for key in [9, 10, 11, 12] do
+          check ((← reopened.lookup slotPin.handle key) == (← rename.lookup renamePin.handle key))
+            s!"the WAL marker strategies disagree on recovered key {key} at sequence {slotPin.sequence}"
+      check ((← reopened.lookup old.handle 10) == some (some 10)) "two-slot snapshot lost its earlier value"
+      check ((← reopened.lookup latest.handle 10) == some none &&
+        (← reopened.lookup latest.handle 11) == some (some 11)) "two-slot reopen lost batch state"
+    finally reopened.close
+  finally rename.close
   let active := dir / "WAL-segment-1"
   let before ← IO.FS.readBinFile marker
   let selected ← IO.ofExcept (WAL.TwoSlot.decode before)
