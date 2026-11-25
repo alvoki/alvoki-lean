@@ -123,6 +123,65 @@ end
 
 namespace RawAlignedCheckpointReopenEffects
 
+section
+
+variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
+  {history modelHistory : List WAL.Write} {log : List DatabaseSubmissions}
+  {inventory : DescriptorInventory} {retry : LockedFileState FileImage}
+  {layout : CanonicalKeeperLayout retry.image modelHistory} {published : Image}
+  {vacant : TryLockObserves retry.owners directory (.ok true)} {checkpoint : Option (PackedTable × UInt64)}
+  {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
+  {bindings : FilePath → Option Nat}
+  {opening : CheckpointBarrierAlignedReports input directory inventory retry layout published vacant selected bindings}
+  {chronology : CapturedMarkedReadCensus opening.reads opening.finish.readCustody}
+  {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
+  {init : OpenSyncCacheCallbacks heap} {entry : heap}
+  {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+  {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+  {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+  (seen : RawAlignedCheckpointReopenEffects opening chronology view calls init entry phaseIdentity tokenIdentity
+    allocatePhase allocateToken stream)
+  (next : NativeReadPosition history log)
+  (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+  (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+  (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+  (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+  (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+  (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+  (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+  (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+
+/-- The actual open returns the table and ready position of the fixed
+reader, with the same cache and callback projections. -/
+structure ReturnedAt where
+  cacheOpen : IO DiskTable.OpenSyncFiles
+  makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+    IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles
+  cacheAction : DiskTable.OpenSyncFiles.IsOpenAction directory.path cacheOpen
+  cacheSource : cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
+    (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
+    (fun value => liftM (IO.mkRef value)) makeCache
+  handle : NativeOpenedHandle heap
+  start : NativeOpenedPosition handle
+  rawOpen : seen.openTable remove write rename bootstrap assemble makeCache = .ok handle.table start.reached
+  position : start.current = ⟨history, log, next⟩
+  lock : handle.lock = seen.raw.lock
+  references : handle.files.UsesCacheReferences seen.seed.activeRef seen.seed.pendingRef seen.seed.directoryRef
+  directory : handle.files.AtDirectory directory.path
+  contents : handle.contents = view.phase
+  readsPhase : handle.get = get
+  writesPhase : handle.set = set
+  comparesTokens : handle.ptrEq = ptrEq
+  tokenRef : tokenIdentity handle.token = next.state.session.sessionRef
+  pins : start.pins = []
+  files : view.files start.reached = next.state.files
+  census : view.descriptors start.reached = next.state.census
+  cache : view.cacheAt start.reached seen.seed.directoryRef seen.seed.activeRef seen.seed.pendingRef = next.state.cache
+
+end
+
+section
+
 variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
   {history modelHistory : List WAL.Write} {log : List DatabaseSubmissions} {recorded : List RecordedSnapshotRead}
   {report : MarkedOpenSuccessReports input directory modelHistory log recorded} {bindings : FilePath → Option Nat}
@@ -146,40 +205,6 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
   (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
   (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
 
-/-- Once a checkpoint reader is fixed, its returned table and ready
-position use its exact cache, phase and token references. -/
-structure ReturnedAt where
-  cacheOpen : IO DiskTable.OpenSyncFiles
-  makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
-    IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles
-  cacheAction : DiskTable.OpenSyncFiles.IsOpenAction directory.path cacheOpen
-  cacheSource : cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
-    (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
-    (fun value => liftM (IO.mkRef value)) makeCache
-  handle : NativeOpenedHandle heap
-  start : NativeOpenedPosition handle
-  rawOpen : seen.openTable remove write rename bootstrap assemble makeCache = .ok handle.table start.reached
-  position : start.current = ⟨history, log, next⟩
-  root : handle.directory = directory
-  lock : handle.lock = seen.raw.lock
-  references : handle.files.UsesCacheReferences seen.seed.activeRef seen.seed.pendingRef seen.seed.directoryRef
-  directory : handle.files.AtDirectory directory.path
-  contents : handle.contents = view.phase
-  readsPhase : handle.get = get
-  writesPhase : handle.set = set
-  comparesTokens : handle.ptrEq = ptrEq
-  payload : Reopened
-  allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase payload.installed seen.keeper.reached
-  phaseObject : handle.phase = allocation.phase
-  tokenObject : handle.token = allocation.token
-  phaseRef : phaseIdentity handle.phase = next.state.session.phaseRef
-  tokenRef : tokenIdentity handle.token = next.state.session.sessionRef
-  allocatedAt : start.reached = allocation.afterToken
-  pins : start.pins = []
-  files : view.files start.reached = next.state.files
-  census : view.descriptors start.reached = next.state.census
-  cache : view.cacheAt start.reached seen.seed.directoryRef seen.seed.activeRef seen.seed.pendingRef = next.state.cache
-
 variable {get set}
 
 /-- Install the selected aligned reader's actual return at the proved
@@ -202,8 +227,8 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
     selectedReport.opensAlignedFromAdmission seen.raw seen.seed opening.finish rfl seen.checkpoint seen.listing
       seen.extents seen.seals seen.keeper seen.sameLookup seen.flat seen.marked remove write rename bootstrap assemble
       constructs seen.allocations
-  obtain ⟨handle, start, table, root, lock, files, phase, token, contents, getEq, setEq, compared, position,
-    reached, pins, sameFiles, sameCensus, sameCache, _, _, _, phaseRef, tokenRef⟩ :=
+  obtain ⟨handle, start, table, _, lock, files, _, _, contents, getEq, setEq, compared, position,
+    reached, pins, sameFiles, sameCensus, sameCache, _, _, _, _, tokenRef⟩ :=
     installed.startsAtReportedPosition next sameReturn returned cache owner slot effects ptrEq
   refine ⟨{
     cacheOpen := cacheOpen
@@ -214,7 +239,6 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
     start := start
     rawOpen := ?_
     position := position
-    root := root
     lock := lock
     references := files.symm ▸ installed.cacheReferences
     directory := files.symm ▸ installed.cacheDirectory
@@ -222,19 +246,15 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
     readsPhase := getEq
     writesPhase := setEq
     comparesTokens := compared
-    payload := installed.opened
-    allocation := installed.allocation
-    phaseObject := phase
-    tokenObject := token
-    phaseRef := phaseRef
     tokenRef := tokenRef
-    allocatedAt := reached
     pins := pins
     files := sameFiles
     census := sameCensus
     cache := sameCache }⟩
   rw [table, reached]
   exact openedTable
+
+end
 
 end RawAlignedCheckpointReopenEffects
 
