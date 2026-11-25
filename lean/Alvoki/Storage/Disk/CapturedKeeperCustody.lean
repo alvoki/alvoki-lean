@@ -152,6 +152,53 @@ theorem readsLong (captured : CapturedKeeperOpenReports report)
       .ok layout.keeper.bytes (admission.cache, captured.afterRead, admission.held) := by
   simpa only [Cache.captureKeeper, ite_eq_right (Nat.ne_of_lt longer)] using captured.reads (Nat.le_of_lt longer)
 
+/-- The aligned finish uses the cached directory and keeper descriptions
+even when the caller has already stabilized its marker. The first
+barrier hands its reached files and census to the second barrier. -/
+theorem finishAlignedFromCache (captured : CapturedKeeperOpenReports report)
+    (aligned : layout.keeper.bytes.size = report.wal.keeper.calls.metadata.byteSize.toNat)
+    (noLater : retry.image.later.visible = [])
+    (openRead : FilePath → EStateM IO.Error CensusOpenState (DescriptorInventory × DescriptorSlot × Nat))
+    (fsync : (DescriptorInventory × DescriptorSlot × Nat) → EStateM IO.Error CensusOpenState Unit)
+    (removeFile : FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    {files : LockedFileState FileImage} {authorized : CensusOpenState}
+    (settled : fsync (admission.reached, admission.cached, 0) (captured.afterRead, files) =
+      .ok () authorized) :
+    let path := directory.file (.walSegment layout.keeper.first)
+    let handle := (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+    let grouped := SyncPathGroup.run (sync directory.path openRead fsync)
+    finishBoundedMarkedOpen directory layout.boundedPlan report.wal.keeper.calls.metadata.byteSize.toNat
+      removeFile write grouped renameFile (admission.cache.remember path handle, captured.afterRead, files) =
+      match fsync handle authorized with
+      | .ok () reached => .ok () (admission.cache, reached)
+      | .error cause reached => .error (IO.userError s!"sync failed for '{path}': {cause}") (admission.cache, reached) := by
+  intro path handle grouped
+  let remembered := admission.cache.remember path handle
+  have directorySync : grouped #[directory.path] (remembered, captured.afterRead, files) =
+      .ok () (remembered, authorized) := by
+    dsimp only [grouped]
+    rw [SyncPathGroup.run_single]
+    simp [sync, Cache.resolve, remembered, Cache.remember, CensusOpenAdmissionReports.cache, settled, withCache]
+  have measured : report.wal.keeper.calls.metadata.byteSize.toNat = layout.boundedPlan.keeperSize :=
+    aligned.symm.trans layout.target.trimmedSize
+  have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
+  have empty : layout.boundedPlan.newer = [] := noLater
+  have valid : layout.boundedPlan.valid = true :=
+    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, by simp [empty]⟩
+  simp only [finishBoundedMarkedOpen, measured, valid, size, beq_self_eq_true,
+    decide_eq_true (Nat.le_refl _), Bool.and_self, ↓reduceIte, empty, List.isEmpty_nil]
+  change (grouped #[directory.path] >>= fun _ => grouped #[path])
+    (remembered, captured.afterRead, files) = _
+  simp only [Bind.bind, EStateM.bind, directorySync]
+  change grouped #[path] (remembered, authorized) = _
+  dsimp only [grouped, remembered]
+  rw [SyncPathGroup.run_single, syncRemembered (file_ne_directory directory (.walSegment layout.keeper.first))]
+  cases fsync handle authorized with
+  | error cause reached => rfl
+  | ok value reached => cases value; rfl
+
 /-- The aligned read and first directory barrier reach the authorized files
 and the same pending keeper handle. The reported intervening drops keep
 the keeper and lock slots live. The next singleton barrier uses that
@@ -183,33 +230,16 @@ theorem syncFromRead (captured : CapturedKeeperOpenReports report)
       | .ok () reached => .ok () (admission.cache, reached)
       | .error cause reached => .error (IO.userError s!"sync failed for '{path}': {cause}") (admission.cache, reached) := by
   intro path handle grouped authorized
-  let remembered := admission.cache.remember path handle
   have survives {slot : DescriptorSlot} (present : slot ∈ captured.afterRead.slots)
       (retained : ∀ event ∈ afterRead, event.removes slot.reference = false) : slot ∈ authorized.1.slots := by
     exact List.mem_filter.mpr ⟨present, List.all_eq_true.mpr fun event member => by rw [retained event member]; rfl⟩
-  have directorySync : grouped #[directory.path] (remembered, captured.afterRead, admission.held) =
-      .ok () (remembered, authorized) := by
-    dsimp only [grouped]
-    rw [SyncPathGroup.run_single]
-    simp [sync, Cache.resolve, remembered, Cache.remember, CensusOpenAdmissionReports.cache, settled, withCache, authorized]
   refine ⟨survives captured.keeperRetained keeperLive, survives captured.ownerRetained ownerLive,
     captured.openedKeeper.2.2.2.1, ?_⟩
   have readResult : captured.readKeeper (admission.cache, captured.atOpen, admission.held) =
-      .ok layout.keeper.bytes (remembered, captured.afterRead, admission.held) := captured.readsAligned aligned
-  have measured : report.wal.keeper.calls.metadata.byteSize.toNat = layout.boundedPlan.keeperSize :=
-    aligned.symm.trans layout.target.trimmedSize
-  have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have empty : layout.boundedPlan.newer = [] := noLater
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, by simp [empty]⟩
-  simp only [Bind.bind, EStateM.bind, readResult, finishBoundedMarkedOpen, measured, valid, size, beq_self_eq_true,
-    decide_eq_true (Nat.le_refl _), Bool.and_self, ↓reduceIte, empty, List.isEmpty_nil, directorySync]
-  change grouped #[path] (remembered, authorized) = _
-  dsimp only [grouped, remembered]
-  rw [SyncPathGroup.run_single, syncRemembered (file_ne_directory directory (.walSegment layout.keeper.first))]
-  cases fsync handle authorized with
-  | error cause reached => rfl
-  | ok value reached => cases value; rfl
+      .ok layout.keeper.bytes (admission.cache.remember path handle, captured.afterRead, admission.held) :=
+    captured.readsAligned aligned
+  simp only [Bind.bind, EStateM.bind, readResult]
+  exact captured.finishAlignedFromCache aligned noLater openRead fsync removeFile write renameFile settled
 
 end CapturedKeeperOpenReports
 end Alvoki.Storage.DiskSession

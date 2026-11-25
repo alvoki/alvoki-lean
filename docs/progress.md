@@ -1002,3 +1002,9 @@ The shared guarded installer supplies the lock owner and fresh session
 identity from that exact recovered state. The remaining native proof
 must instantiate the modeled repair with the reached filesystem and
 descriptor reports for the two-slot path.
+
+The aligned repair proof now starts at the reached keeper cache and
+census with the caller's file image, including a marker already settled
+by the two-slot barrier. It proves that the directory sync hands its
+exact reached state to the cached keeper sync. The rename-backed read
+and finish proof reuses this result.
