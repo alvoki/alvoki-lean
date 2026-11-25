@@ -48,6 +48,7 @@ import Alvoki.Storage.Disk.DescriptorFork
 import Alvoki.Storage.Disk.LockCensusTrace
 import Alvoki.Storage.Disk.LockCensusOpenAdmission
 import Alvoki.Storage.Disk.CapturedMarkedReads
+import Alvoki.Storage.Disk.CapturedAlignedInstallation
 import Alvoki.Storage.Disk.DelayedKeeperInventory
 import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.KeeperReadCustody
@@ -2085,6 +2086,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.chunkReads
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.prepares
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.reachesMarkedPreparation
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.recoverThroughReads_prepared
+#check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.installs
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.delayedKeeperSync
 #check_axioms Alvoki.Storage.DiskSession.KeeperRepairSlot.lockInode
 #check_axioms Alvoki.Storage.DiskSession.KeeperRepairSlot.openedCensus
