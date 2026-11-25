@@ -218,6 +218,7 @@ import Alvoki.Storage.Disk.BootstrapKeeperFileError
 import Alvoki.Storage.Disk.BootstrapMarkerCustody
 import Alvoki.Storage.Disk.BootstrapKeeperMarkerHandoff
 import Alvoki.Storage.Disk.BootstrapExecution
+import Alvoki.Storage.Disk.BootstrapRetryPrefix
 import Alvoki.Storage.Disk.BootstrapMarkerSyncError
 import Alvoki.Storage.Disk.BootstrapMarkerRenameError
 import Alvoki.Storage.Disk.BootstrapMarkerDirectoryError
@@ -1696,6 +1697,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapClientStart.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.BootstrapClientStart.ofMarkedRetry
 #check_axioms Alvoki.Storage.DiskSession.BootstrapClientStart.ofMarkerlessRetry
+#check_axioms Alvoki.Storage.DiskSession.BootstrapReturnedFault.returns
+#check_axioms Alvoki.Storage.DiskSession.BootstrapRetryPrefix.preservesValid
+#check_axioms Alvoki.Storage.DiskSession.BootstrapRetryPrefix.validFromEmpty
+#check_axioms Alvoki.Storage.DiskSession.BootstrapRetryPrefix.installsFromEmpty
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.fromMarkedBootstrapRetry
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.fromMarkedBootstrapCrashRetry
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.fromBootstrapWithCapturedCache
