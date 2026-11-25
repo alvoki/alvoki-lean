@@ -47,6 +47,28 @@ theorem MarkedTemporaryReadCalls.readOptionalManifest (calls : MarkedTemporaryRe
   simp [readOptional, schedule, readOptionalDatabaseFileWithMetadata, stat, regular,
     read, show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
 
+theorem MarkedTemporaryReadCalls.readOptionalMissing (calls : MarkedTemporaryReadCalls heap)
+    (directory : DiskDirectory) (path : FilePath) {before : heap} {name message : String}
+    (stat : calls.stat path before = .ok (.error (.noFileOrDirectory name 2 message)) before) :
+    calls.readOptional directory path before = .ok none before := by
+  simp [readOptional, readOptionalDatabaseFileWithMetadata, stat, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
+theorem MarkedTemporaryReadCalls.readOptionalMarker (calls : MarkedTemporaryReadCalls heap)
+    (directory : DiskDirectory) {before after : heap} {metadata : IO.FS.Metadata} {bytes : ByteArray}
+    (stat : calls.stat (directory.file .walBoundary) before = .ok (.ok metadata) before)
+    (regular : metadata.type = .file)
+    (read : calls.readWith (directory.file .walBoundary)
+      (fun file => readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
+        WAL.Boundary.acquisitionLimit ByteArray.empty) before = .ok bytes after) :
+    calls.readOptional directory (directory.file .walBoundary) before = .ok (some bytes) after := by
+  have schedule : calls.readMetadata directory (directory.file .walBoundary) metadata =
+      fun file => readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
+        WAL.Boundary.acquisitionLimit ByteArray.empty := by
+    funext file
+    simp [MarkedTemporaryReadCalls.readMetadata]
+  simp [readOptional, schedule, readOptionalDatabaseFileWithMetadata, stat, regular,
+    read, show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
 def MarkedTemporaryReadCalls.runSize (calls : MarkedTemporaryReadCalls heap) (path : FilePath) :
     EStateM IO.Error heap Nat := do
   let metadata ← liftExcept (← calls.stat path)
