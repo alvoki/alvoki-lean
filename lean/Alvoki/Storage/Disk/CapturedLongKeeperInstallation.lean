@@ -464,6 +464,23 @@ noncomputable def runFromCensus (finish : CapturedLongKeeperFinish calls report 
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
   calls.runWithMarked (finish.recoverFromCensus metadataRelease runRelease sealRelease)
 
+/-- The chronological reads and replacement finish return the recovered
+value, settled files and reached census before session installation. -/
+theorem recoversFromCensus (finish : CapturedLongKeeperFinish calls report vacant selected)
+    (chronology : CapturedMarkedReadCensus report finish.reader)
+    (prepared : Prepared retry.image layout.target layout.plan)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ opened, finish.recoverFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
+      directory admission.cache (admission.reached, admission.held) = .ok opened (finish.census, finish.settled) := by
+  obtain ⟨opened, reached, _⟩ := report.preparesFromCensus chronology.manifest chronology.runs selected
+    chronology.marker chronology.beforeListing finish.reader chronology.seals chronology.offsets chronology.retained
+    following prepared.newer accepted ordered finish.readKeeperAndRelease finish.readKeeperAndRelease_returns
+  exact ⟨opened, finish.finishFromCensus_returns reached⟩
+
 /-- The long replacement starts after a reported vacant admission. Its
 directory barriers preserve the selected manifest and marker while the
 final barrier settles the newly staged keeper. -/
