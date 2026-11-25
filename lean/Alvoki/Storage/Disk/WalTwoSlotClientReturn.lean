@@ -1585,13 +1585,16 @@ theorem reopenSyncError_preservesRetry
     (projection : after = physical.completeFileSync physical.active →
       ∀ directory, projectRepairDirectory prepared.directory (physical.visible handle.inode) choices =
         .ok directory → project after = { prepared with directory }) :
-    ∃ error final,
-      DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
-        (do
-          let (opened, _, _) ← reopenAcquiredWith acquire prepare
-            (projectMarkerSync syncMarker physical) finish
-          pure opened) before = .error error final ∧
-      ReportedMarkerRetries initial final.image ∧ final.image.keeper = prepared.keeper := by
+    (DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+      (do
+        let (opened, _, _) ← reopenAcquiredWith acquire prepare
+          (projectMarkerSync syncMarker physical) finish
+        pure opened) before =
+      match unlock with
+      | .success => .error cause ⟨reached, before.owners.set (directory.file .lock) none⟩
+      | .failure cleanup applied => .error cleanup
+          ⟨reached, before.owners.set (directory.file .lock) (if applied then none else some descriptor)⟩) ∧
+    ReportedMarkerRetries initial reached ∧ reached.keeper = prepared.keeper := by
   have aligned : ReportedMarkerRetries initial reached ∧ reached.keeper = prepared.keeper := by
     have effect := sync.effect
     rw [sync.sameInode, current] at effect
@@ -1617,9 +1620,10 @@ theorem reopenSyncError_preservesRetry
   have reopened : reopenAcquiredWith acquire prepare
       (projectMarkerSync syncMarker physical) finish before.image = .error cause reached := by
     simp only [reopenAcquiredWith_reports, openedMarker, reopenWith_reports, read, projectedFailure]
+  refine ⟨?_, aligned⟩
   rw [DiskSession.runOpenWithInstallation_outcome, DiskSession.runOpenWithImage_acquired]
   simp only [Bind.bind, EStateM.bind, reopened]
-  cases unlock <;> exact ⟨_, _, rfl, aligned.1, aligned.2⟩
+  cases unlock <;> rfl
 
 /-- Derive the initial retry alternatives from the physical marker
 survivors of the interrupted slot write. An absent binding can arise
