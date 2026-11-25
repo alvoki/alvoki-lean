@@ -1,5 +1,7 @@
 # Current handoff
 
+The finite trace on one opened table now consumes actual checkpoint returns. A successful return supplies the exact heap and selected durable checkpoint from the matching file callbacks. A reported error that leaves the phase ready supplies the preflight rejection and preserves the exact position. Subsequent writes and reads use the reached phase and prior pin and client ledgers. [Checkpoint returns in the opened trace](../lean/Alvoki/Storage/Disk/NativeOpenReadyTrace.lean)
+
 A successful checkpoint return on the opened phase cell now gives the common ready checkpoint edge at its actual returned heap. The physical report uses the same callbacks and starting file projection. Its exact publication and writer supply the next position, preserving issued pins and all prior client ledgers. [Classified checkpoint success](../lean/Alvoki/Storage/Disk/NativeClassifiedCheckpointSuccess.lean)
 
 A checkpoint run file sync error now ties the public return to the exact terminal report for that run. With the same cached callbacks and initial file projection, the returned diagnostic, file and cache projection, and poisoned phase cell come from the reached sync error. Its observed slot release preserves the held database and the previous checkpoint and read replay. [Classified checkpoint run sync error](../lean/Alvoki/Storage/Disk/NativeClassifiedCheckpointRunFsync.lean)

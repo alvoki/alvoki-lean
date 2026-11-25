@@ -252,6 +252,7 @@ import Alvoki.Storage.Disk.NativeOpenCloseReopenTrace
 import Alvoki.Storage.Disk.NativeOpenCloseAdmissionTrace
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 import Alvoki.Storage.Disk.NativeOpenCheckpoint
+import Alvoki.Storage.Disk.NativeOpenedPosition
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointRunFsync
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
@@ -754,6 +755,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointsViaOpenReferences
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.checkpointsThenReadsOpenPin
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.checkpointAtWriter
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.uses
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.common
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.executes
