@@ -954,6 +954,17 @@ theorem DiskTable.release_schedule (db : DiskTable) (handle : DiskSnapshotHandle
     db.release handle = DiskSession.releaseSnapshotWith (m := IO) db.installed
       (handle.session.ptrEq db.session) db.phase.set handle.localHandle := rfl
 
+/-- Release compares the presented pin's token and updates the phase
+cell belonging to this opened table. -/
+theorem DiskTable.UsesOpenReferences.releasePin {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) {pin : DiskSnapshotPin}
+    {issuer : IO.Ref Unit} {issued : Alvoki.Sequential.SnapshotPin} (owns : pin.UsesOpenToken issuer issued) :
+    db.release pin.handle = DiskSession.releaseSnapshotWith (m := IO) (do (← phase.get).installed)
+      (issuer.ptrEq token) phase.set issued.handle := by
+  obtain ⟨_, _, _, cell, session⟩ := uses
+  obtain ⟨tokenOfPin, handle, _⟩ := owns
+  simp only [DiskTable.release_schedule, DiskTable.installed, cell, session, tokenOfPin, handle]
+
 def DiskTable.lookup (db : DiskTable) (handle : DiskSnapshotHandle) (key : UInt64) :
     IO (Option (Option UInt64)) :=
   DiskSession.withLocalHandle db.installed (handle.session.ptrEq db.session) none fun state =>
@@ -1018,6 +1029,15 @@ def DiskTable.advanceFloor (db : DiskTable) (floor : UInt64) : IO Bool := do
 
 theorem DiskTable.advanceFloor_schedule (db : DiskTable) (floor : UInt64) :
     db.advanceFloor floor = DiskSession.advanceFloorWith (m := IO) db.installed db.phase.set floor := rfl
+
+/-- The floor guard uses the reached phase and any update writes back
+through the same opened phase cell. -/
+theorem DiskTable.UsesOpenReferences.advanceFloor {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) (floor : UInt64) :
+    db.advanceFloor floor = DiskSession.advanceFloorWith (m := IO)
+      (do (← phase.get).installed) phase.set floor := by
+  obtain ⟨_, _, _, cell, _⟩ := uses
+  simp only [DiskTable.advanceFloor_schedule, DiskTable.installed, cell]
 
 /-- Commit an in-memory run rewrite only when the reached table accepts it. -/
 @[macro_inline] def DiskSession.rewriteRunWith [Monad m]
