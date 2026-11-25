@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+Lean now identifies the addresses of the reported short positional
+writes with the contiguous prefix ending at the reached cursor. The
+client theorem accepts that cursor interval for attributing surviving
+byte changes. The filesystem still supplies the reached cursor,
+including any in-flight effect, and the admissible torn-record decode.
+
 The client theorem uses the modeled positional-write transfer sequence
 to discharge the outside-slot byte equality. The filesystem premise
 attributes each changed surviving byte to that sequence, including any

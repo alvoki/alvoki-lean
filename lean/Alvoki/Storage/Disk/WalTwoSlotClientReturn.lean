@@ -755,6 +755,32 @@ inductive SlotWriteTransfers (start : Nat) : Nat → List Nat → Nat → Prop w
       (rest : SlotWriteTransfers start (cursor + count) later final) :
       SlotWriteTransfers start cursor ((List.range count).map (fun index => start + cursor + index) ++ later) final
 
+/-- Consecutive transfers cover every address up to the reached cursor,
+including when short or zero-byte transfers precede it. -/
+theorem SlotWriteTransfers.coversPrefix {start cursor final : Nat} {addresses : List Nat}
+    (trace : SlotWriteTransfers start cursor addresses final) (address : Nat) :
+    address ∈ addresses ↔ start + cursor ≤ address ∧ address < start + final := by
+  have movesForward {initialCursor endCursor : Nat} {written : List Nat}
+      (steps : SlotWriteTransfers start initialCursor written endCursor) : initialCursor ≤ endCursor := by
+    induction steps with
+    | done => omega
+    | transfer _ _ follows => omega
+  induction trace with
+  | done cursor => simp
+  | @transfer cursor count later final fits rest ih =>
+    have cursorLe := movesForward rest
+    simp only [List.mem_append, ih, List.mem_map]
+    constructor
+    · rintro (⟨index, member, rfl⟩ | after)
+      · have within := List.mem_range.mp member
+        omega
+      · omega
+    · intro within
+      by_cases first : address < start + (cursor + count)
+      · left
+        refine ⟨address - (start + cursor), List.mem_range.mpr ?_, ?_⟩ <;> omega
+      · exact .inr (by omega)
+
 /-- The whole short-write loop stays within the inactive record, including
 any prefix left by a process stop. This bounds syscall transfers. The
 separate filesystem contract describes the bytes surviving a power loss. -/
@@ -2101,7 +2127,7 @@ theorem installsAfterAcquiredRecovery_replays
       interruptedMarker.crashBytes interruptedMarker.active,
       bytes.size = containerSize ∧
       (∀ position, bytes.get! position ≠ (writeCut.initialMarker.visible writeCut.initialMarker.active).get! position →
-        position ∈ transferredAddresses) ∧
+        next.slot * stride ≤ position ∧ position < next.slot * stride + finalCursor) ∧
       (decodeSlot bytes (slotIndex active.other) =
           decodeSlot (writeCut.initialMarker.visible writeCut.initialMarker.active) (slotIndex active.other) ∨
         decodeSlot bytes (slotIndex active.other) = none ∨ decodeSlot bytes (slotIndex active.other) = some next))
@@ -2198,7 +2224,13 @@ theorem installsAfterAcquiredRecovery_replays
     | none => exact .inl (Except.ok.inj projection).symm
     | some bytes =>
       obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes (source bytes rfl)
-      exact .inr ⟨bytes, transfers.interruptedBytes offset advanced size attributed decoded, projection⟩
+      have reported : ∀ position, bytes.get! position ≠
+          (writeCut.initialMarker.visible writeCut.initialMarker.active).get! position →
+          position ∈ transferredAddresses := by
+        intro position changed
+        apply (transfers.coversPrefix position).mpr
+        simpa only [Nat.add_zero] using attributed position changed
+      exact .inr ⟨bytes, transfers.interruptedBytes offset advanced size reported decoded, projection⟩
   have choicesBefore := interruptedMarker_retryChoices accepted offset newer observations
   have choice := (beforeBarrier.selectsOldOrNew checkpoint current.frontier next.frontier choicesBefore observedFirst).2
   have bytes := choice.imp (fun old => old ▸ oldSize) (fun all => all ▸ newSize)
