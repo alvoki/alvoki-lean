@@ -25,6 +25,17 @@ structure CheckpointChunkWriter {files : Type} (directory : DiskDirectory) (befo
   durable : after.published.durable = published.durable
   retained : after.RetainedReady directory observed.slot.description
 
+/-- A successful open has one returned session and file state. Match the
+writer's ready payload and state to that exact result. -/
+theorem CheckpointChunkWriter.atReopen
+    (endpoint : CheckpointChunkWriter directory before published observed after)
+    {session : SegmentedSession} {final : LockedFileState FileImage}
+    (returned : observed.run = .ok session final) :
+    session.phase = .ready after.installed ∧ after.files = final.image ∧ after.owners = final.owners := by
+  obtain ⟨_, _, ran, _, _, phase, files, owners⟩ := endpoint.reopened
+  obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj (returned.symm.trans ran)
+  exact ⟨phase, files, owners⟩
+
 theorem CheckpointChunkWriter.preservesChain
     (endpoint : CheckpointChunkWriter directory before published observed after)
     (chain : WalSegment.Chain before.history 0 before.wal.segments) : WalSegment.Chain after.history 0 after.wal.segments := by
@@ -117,9 +128,7 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
   have writerSelected := next.resumed.selected
   rw [writerTarget, writerDurable] at writerSelected
   have sameCheckpoint := writerSelected.uniqueResult selectedRetry
-  have sameSession := (EStateM.Result.ok.inj (writerReturn.symm.trans returned)).1
-  rw [sameSession] at writerPhase
-  have sameInstalled := Phase.ready.inj (writerPhase.symm.trans phase)
+  have sameInstalled := Phase.ready.inj ((writer.atReopen returned).1.symm.trans phase)
   exact ⟨loss.trans failures, layout, observed, admission, sizes, opened, checkpoint, model, session, final,
     (observed.runWithAdmission_eq admission).trans returned, directoryExact,
     lock.trans observed.inventoryDescription, phase, held, surviving, finalPair, repaired, selected, rfl,

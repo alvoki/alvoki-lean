@@ -39,14 +39,28 @@ structure AdmittedCleanReopen {files : Type} {input : FilePath} {directory : Dis
   sameLock : observed.descriptors.inode observed.slot.description = closed.descriptors.inode closed.slot.description
   distinctDescription : observed.slot.description ≠ oldDescriptor
   writer : CheckpointChunkWriter directory before before.published observed after
-  reopenEffect : ∃ session final, observed.runWithAdmission admission = .ok session final ∧
-    session.directory = directory ∧ session.descriptor = observed.slot.description ∧
-    session.phase = .ready after.installed ∧ session.sessionRef ∉ observed.liveRefs ∧
-    after.files = final.image ∧ after.owners = final.owners
   target : after.target = before.target
   checkpoint : after.checkpoint = before.checkpoint
   generation : after.installed.generation = before.installed.generation
   replay : recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table
+
+/-- Apply the admission equation to the writer's returned session. The
+same return also supplies freshness relative to the reported live tokens. -/
+theorem AdmittedCleanReopen.reopenEffect {files : Type} {input : FilePath} {directory : DiskDirectory}
+    {oldDescriptor : Nat} {before : SegmentedWriterState}
+    {layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history}
+    {closed : CleanUnlockReports directory oldDescriptor}
+    {observed : MarkedRetryChunkReports files directory layout before.published}
+    {admission : OpenAdmissionReports input directory observed.slot} {after : SegmentedWriterState}
+    (endpoint : AdmittedCleanReopen closed observed admission after) :
+    ∃ session final, observed.runWithAdmission admission = .ok session final ∧
+      session.directory = directory ∧ session.descriptor = observed.slot.description ∧
+      session.phase = .ready after.installed ∧ session.sessionRef ∉ observed.liveRefs ∧
+      after.files = final.image ∧ after.owners = final.owners := by
+  obtain ⟨session, final, returned, path, description, phase, files, owners⟩ := endpoint.writer.reopened
+  have admitted := (observed.runWithAdmission_eq admission).trans returned
+  exact ⟨session, final, admitted, path, description, phase,
+    (observed.admittedSessionRefs admission admitted).2.2.2, files, owners⟩
 
 /-- The reached marked-open observations for the canonical retained layout
 and the same lock object as the successful explicit unlock. -/
@@ -113,13 +127,8 @@ theorem SegmentedWriterState.RetainedReady.closeWithAdmission {files : Type} {in
   have selected := retained.resumed.selected
   rw [exactTarget, durable] at selected
   have checkpoint := selected.uniqueResult ready.resumed.selected
-  have returnedSession := (EStateM.Result.ok.inj (returned.symm.trans recovered)).1
-  rw [returnedSession] at installedPhase
-  have exactInstalled := Phase.ready.inj (installedPhase.symm.trans phase)
-  have admitted := (observed.runWithAdmission_eq admission).trans returned
+  have exactInstalled := Phase.ready.inj ((output.atReopen recovered).1.symm.trans phase)
   exact ⟨layout, observed, admission, after, closeRan, sameLock, distinct, output,
-    ⟨session, files, admitted, path, description.trans observed.inventoryDescription, returnedSession.symm ▸ installedPhase,
-      (observed.admittedSessionRefs admission admitted).2.2.2, afterFiles, owners⟩,
     exactTarget, checkpoint, (congrArg Installed.generation exactInstalled).trans generation,
     (congrArg Installed.table exactInstalled).symm ▸ replayed⟩
 

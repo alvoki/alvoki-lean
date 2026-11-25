@@ -313,19 +313,16 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterCheckpointPowerLossChunks {files 
         session.phase = .ready after.installed ∧ final.owners.Owns directory session.descriptor ∧
         final.image.directory.active = pair ∧ after.files = final.image ∧ after.owners = final.owners := by
   have beforeReady := (trace.preservesRetained ready).1
-  obtain ⟨_, layout, observed, admission, _, _, _, _, session, final, returned, path, lock, phase, held, selected,
+  obtain ⟨_, layout, observed, admission, _, _, _, _, session, final, returned, path, lock, _, held, selected,
     finalPair, _, _, _, generation,
     _, _, _, _, _, _, _, after, installed, _, installedPayload⟩ :=
     cut.reopensFromChunks beforeReady published projected pair survives retry failures observes
-  obtain ⟨sameSession, sameFinal, installedReturn, _, _, _, afterFiles, afterOwners⟩ := installed.reopened
-  have same := EStateM.Result.ok.inj (installedReturn.symm.trans
-      ((observed.runWithAdmission_eq admission).symm.trans returned))
+  obtain ⟨phase, afterFiles, afterOwners⟩ :=
+    installed.atReopen ((observed.runWithAdmission_eq admission).symm.trans returned)
   exact ⟨layout, observed, after, installed,
     .checkpointPowerLossObserved trace cut projected survives failures selected installed,
     (congrArg Target.pair installed.target).trans selected, installedPayload.symm ▸ generation,
-    admission, session, final, returned, path, lock, installedPayload.symm ▸ phase, held, finalPair,
-    afterFiles.trans (congrArg LockedFileState.image same.2),
-    afterOwners.trans (congrArg LockedFileState.owners same.2)⟩
+    admission, session, final, returned, path, lock, phase, held, finalPair, afterFiles, afterOwners⟩
 
 /-- Extend the trace using the actual failed commit, lock release and
 bounded reopen reports. Retained readiness is derived from the prior trace. -/
