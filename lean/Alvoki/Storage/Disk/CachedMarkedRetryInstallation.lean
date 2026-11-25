@@ -8,11 +8,11 @@ open System WalSegmentRepair
 open WAL (frameSize)
 open WAL.Boundary (CheckpointRepresentsPrefix)
 
-/-- The observed callbacks of a held marked reopen from a single reached
-file image. A separate model supplies the admitted checkpoint and WAL layout. -/
-structure MarkedRetryChunkReports (files : Type) (directory : DiskDirectory)
+/-- The reached callbacks of a held marked reopen. The individual checkpoint
+open observations are supplied separately. -/
+structure MarkedRetryChunkOperations (files : Type) (directory : DiskDirectory)
     {before : LockedFileState FileImage} {history : List WAL.Write}
-    (layout : CanonicalKeeperLayout before.image history) (published : CheckpointPublication.Image) where
+    (layout : CanonicalKeeperLayout before.image history) where
   reported : CachedRetryReadReports directory layout
   descriptors : DescriptorInventory
   slot : DescriptorSlot
@@ -41,7 +41,6 @@ structure MarkedRetryChunkReports (files : Type) (directory : DiskDirectory)
   markedPath : lookup (directory.file .walBoundary) before.image = .ok (.ok markerMetadata) before.image
   reads : CheckpointRunChunkReads
   metadata : ∀ path, reported.inventory.reports.lstat path = (reads.stat path).map Prod.fst
-  chunks : reads.ObservesSelected directory before.image.directory.active.manifest published.durable
   manifestRead : reported.inventory.reports.readOptional (directory.file .manifest) =
     .ok before.image.directory.active.manifest
   markerRead : reported.inventory.reports.readOptional (directory.file .walBoundary) =
@@ -52,11 +51,18 @@ structure MarkedRetryChunkReports (files : Type) (directory : DiskDirectory)
   write : files → FilePath → ByteArray → EStateM IO.Error FileImage Unit
   sync : files → Array FilePath → EStateM IO.Error FileImage Unit
   renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit
-  settles : sync cache #[directory.path] before.image = .ok () before.image.syncDirectory
   healthy : ∀ action prior next,
     ReachesAction layout.target before.image.syncDirectory layout.plan.finishActions action prior →
     prior.effect layout.target action = some next →
     performPaths directory layout.plan removeFile throw (write cache) (sync cache) renameFile action prior = .ok () next
+
+/-- The observed callbacks and selected run read contracts of one held reopen. -/
+structure MarkedRetryChunkReports (files : Type) (directory : DiskDirectory)
+    {before : LockedFileState FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout before.image history) (published : CheckpointPublication.Image)
+    extends MarkedRetryChunkOperations files directory layout where
+  chunks : reads.ObservesSelected directory before.image.directory.active.manifest published.durable
+  settles : sync cache #[directory.path] before.image = .ok () before.image.syncDirectory
 
 namespace MarkedRetryChunkReports
 
