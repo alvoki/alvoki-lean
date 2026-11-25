@@ -159,6 +159,12 @@ variable {state : NativeReadyState} {crash : NativeReadyQuietCrash state} {input
   {selected : SelectedIntegrityCheckpoint state.writer.published.durable
     crash.retry.image.directory.active.manifest state.writer.checkpoint}
 
+/-- Use the same read and release observations in the general marked worker. -/
+def capturedChronology (observed : NativeReadyRestartReads crash input layout selected) :
+    CapturedMarkedReadCensus observed.opening.reads observed.opening.finish.readCustody :=
+  ⟨observed.metadataRelease, observed.manifestDrops, observed.manifest, observed.runs, observed.markerRead,
+    observed.chronology, observed.sealRelease, observed.required, observed.seals, observed.offsets, observed.retained⟩
+
 def run (observed : NativeReadyRestartReads crash input layout selected) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
   observed.opening.finish.runFromCensus observed.metadataRelease observed.runs.released observed.sealRelease
@@ -310,25 +316,26 @@ abbrev NativeReadyQuietCrash.Reopened {state : NativeReadyState} (crash : Native
       (observed : NativeReadyRestartReads crash input layout selected) (next : NativeReadyState),
       observed.ReachedSession next history log reads
 
-/-- Start from a reached phase with bounded client replay. The retained
-selection may have come from an operation that stopped before returning. -/
-theorem NativeReadyQuietCrash.restarts
+/-- Use the single chronological read of the chosen survivor to derive
+its exact ready session and the previous bounded client replay. -/
+theorem NativeReadyQuietCrash.restartsAt
     {state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
     {reads : List RecordedSnapshotRead}
     (crash : NativeReadyQuietCrash state) (valid : state.Valid)
     (originalHistory : state.writer.history = history) (pending : PendingClientReplay log reads history)
     (bounded : ∀ read ∈ reads, read.BoundedBy history.length) {input : FilePath}
-    (observe : ∀ layout : CanonicalKeeperLayout crash.retry.image state.writer.history,
-      layout.target = state.writer.target → Prepared crash.retry.image layout.target layout.plan →
-      ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
-        crash.retry.image.directory.active.manifest state.writer.checkpoint,
-      Nonempty (NativeReadyRestartReads crash input layout selected)) :
-    crash.Reopened input history log reads := by
+    (layout : CanonicalKeeperLayout crash.retry.image state.writer.history)
+    (target : layout.target = state.writer.target) (keeper : layout.keeper = state.writer.wal.active)
+    (descriptors : layout.sealed ++ [layout.keeper] = state.writer.wal.readDescriptors layout.range.watermark)
+    (offsets : selectWalSegmentReads (state.writer.wal.segments.map WalSegment.first) layout.range.watermark =
+      some (layout.first, (state.writer.wal.readDescriptors layout.range.watermark).map WalSegment.first))
+    (prepared : Prepared crash.retry.image layout.target layout.plan)
+    (selected : SelectedIntegrityCheckpoint state.writer.published.durable
+      crash.retry.image.directory.active.manifest state.writer.checkpoint)
+    (observed : NativeReadyRestartReads crash input layout selected) :
+    BoundedReopenTrace state.session.directory (· = state.writer.target) state.files crash.retry ∧
+    ∃ next, observed.ReachedSession next history log reads := by
   let ready := valid.retained
-  obtain ⟨layout, target, keeper, descriptors, offsets, prepared⟩ := ready.powerLossLayout
-  let selected : SelectedIntegrityCheckpoint state.writer.published.durable
-      crash.retry.image.directory.active.manifest state.writer.checkpoint := ready.resumed.selected
-  obtain ⟨observed⟩ := observe layout target prepared selected
   let opening := observed.opening
   let finish := opening.finish
   have following := opening.reads.walReads.selectedAfterWatermark offsets descriptors
@@ -370,7 +377,7 @@ theorem NativeReadyQuietCrash.restarts
     obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj indexed
     exact ⟨fun same => sessionFresh (same.symm ▸ observed.earlierTokens.2),
       fun same => phaseFresh (same.symm ▸ observed.earlierTokens.1)⟩
-  refine ⟨ready.powerLossTrace _, rfl, layout, selected, observed, next, newPrefix, path, rfl, rfl, rfl, rfl,
+  refine ⟨ready.powerLossTrace _, next, newPrefix, path, rfl, rfl, rfl, rfl,
     fresh.1, fresh.2, ?_, ?_, sameFiles.symm ▸ finalPair, selectedTarget.trans target, checkpoint, durable, crash.manifestAbsent,
     fun _ present => observed.readsManifest present, fun _ _ present decoded _ within _ stored =>
       observed.readsRun present decoded within stored,
@@ -389,6 +396,29 @@ theorem NativeReadyQuietCrash.restarts
       next.session.guardedAcquireReads nextValid.phase fun _ floor committed =>
         nextRepresents.acquireReads nextRefines retained.resumed.bounds
           ((nextHistory.trans originalHistory).symm ▸ replayed) floor committed⟩
+
+/-- Start from a reached phase with bounded client replay. The retained
+selection may have come from an operation that stopped before returning. -/
+theorem NativeReadyQuietCrash.restarts
+    {state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
+    {reads : List RecordedSnapshotRead}
+    (crash : NativeReadyQuietCrash state) (valid : state.Valid)
+    (originalHistory : state.writer.history = history) (pending : PendingClientReplay log reads history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy history.length) {input : FilePath}
+    (observe : ∀ layout : CanonicalKeeperLayout crash.retry.image state.writer.history,
+      layout.target = state.writer.target → Prepared crash.retry.image layout.target layout.plan →
+      ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
+        crash.retry.image.directory.active.manifest state.writer.checkpoint,
+      Nonempty (NativeReadyRestartReads crash input layout selected)) :
+    crash.Reopened input history log reads := by
+  let ready := valid.retained
+  obtain ⟨layout, target, keeper, descriptors, offsets, prepared⟩ := ready.powerLossLayout
+  let selected : SelectedIntegrityCheckpoint state.writer.published.durable
+      crash.retry.image.directory.active.manifest state.writer.checkpoint := ready.resumed.selected
+  obtain ⟨observed⟩ := observe layout target prepared selected
+  obtain ⟨lost, next, reached⟩ := crash.restartsAt valid originalHistory pending bounded layout target keeper
+    descriptors offsets prepared selected observed
+  exact ⟨lost, rfl, layout, selected, observed, next, reached⟩
 
 /-- Start the next prefix at the actual aligned open after a quiet crash.
 The earlier prefix fixes the durable selection and client responses. A
