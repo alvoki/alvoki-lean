@@ -96,6 +96,7 @@ import Alvoki.Storage.Disk.CheckpointObservedCompletion
 import Alvoki.Storage.Disk.NativeReadyCheckpoint
 import Alvoki.Storage.Disk.NativeCheckpointPreflight
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
+import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryError
 import Alvoki.Storage.Disk.NativePendingCheckpoint
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeCheckpointErrorReopen
@@ -673,6 +674,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeRetainedRunPublication.collects
 #check_axioms Alvoki.Storage.CheckpointPublication.ReturnedCheckpointPrefix.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.returns
+#check_axioms Alvoki.Storage.DiskSession.CompletedCheckpointTemporaryFile.runReturns
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryError.issues
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryError.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryError.custody
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryError.priorRunBytes
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryError.freshRunBytes
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryError.manifestAtReturn
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryError.selectedCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointRunDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.issues
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.routes
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.custody

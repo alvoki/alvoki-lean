@@ -79,6 +79,20 @@ theorem returns (seen : CompletedCheckpointTemporaryFile descriptors calls write
   simp only [CheckpointCacheCalls.callbacks, Bind.bind, EStateM.bind, stageFreshWithCache, seen.wrote]
   rw [SyncPathGroup.run_single, synced]
 
+/-- Instantiate the actual cached primitive dispatcher for one returned
+run pair. Its successful sync consumes the same temporary handle. -/
+theorem runReturns (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle image)
+    (directory : DiskDirectory) (next : Installed) (manifest : ByteArray) {index : Nat}
+    {run : Compaction.CheckedRun} (found : next.table.runs.toArray[index]? = some run)
+    (seen : CompletedCheckpointTemporaryFile descriptors primitives.cached primitives.cached.writeRun
+      (directory.file (.run next.generation index)) run.run.bytes before after)
+    (cache : CensusDirectoryCache) (pending : cache.pending = []) :
+    ((primitives.cached.perform directory next manifest (.writeRun index)) >>= fun _ =>
+      primitives.cached.perform directory next manifest (.syncRun index)) (cache, before) = .ok () (cache, after) := by
+  have returned := seen.returns directory (file_ne_directory directory (.run next.generation index)) cache pending
+  simpa only [CheckpointCacheCalls.perform, CheckpointFileCallbacks.perform, performCheckpointFileStep, found,
+    Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, CheckpointCacheCalls.callbacks] using returned
+
 end CompletedCheckpointTemporaryFile
 
 /-- The native cache and temporary descriptor observations common to a
@@ -120,13 +134,12 @@ private theorem runCache (report : NativeCheckpointPrefix state observed) {index
     (observed.atRun (index + 1)).1 = (observed.atRun index).1 := by
   obtain ⟨run, found, ⟨seen⟩⟩ := report.runLifetime index within
   change attempt.prepared.table.runs.toArray[index]? = some run at found
-  have ran := seen.returns state.session.directory (file_ne_directory _ (.run attempt.prepared.generation index))
+  have ran := seen.runReturns report.primitives state.session.directory attempt.prepared attempt.manifest found
     (observed.atRun index).1 pending
   have exact : (callbacks.perform state.session.directory attempt.prepared attempt.manifest (.writeRun index) >>=
         fun _ => callbacks.perform state.session.directory attempt.prepared attempt.manifest (.syncRun index))
       (observed.atRun index) = .ok () ((observed.atRun index).1, (observed.atRun (index + 1)).2) := by
-    simpa only [report.callbacks, CheckpointFileCallbacks.perform, performCheckpointFileStep, found, Bind.bind, EStateM.bind,
-      Pure.pure, EStateM.pure, CheckpointCacheCalls.callbacks] using ran
+    simpa only [report.callbacks] using ran
   have same := (EStateM.Result.ok.inj ((observed.pairs index within).symm.trans exact)).2
   simpa only using congrArg (Prod.fst : CheckpointState image → CensusDirectoryCache) same
 
