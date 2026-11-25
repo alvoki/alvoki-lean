@@ -413,6 +413,8 @@ lake env leanchecker Alvoki.Storage.Disk.RecoveryRequestCount
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 lake env leanchecker Alvoki.Storage.Disk.SelectedRecoveryChunkWork
 lake env leanchecker Alvoki.Storage.Disk.CheckpointHeldOpenWork
+lake env leanchecker Alvoki.Storage.Disk.MetadataRecoveryChunkWork
+lake env leanchecker Alvoki.Storage.Disk.NativeMarkedRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.MaintainedRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.MaintainedDirectoryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionSpace

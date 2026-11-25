@@ -53,36 +53,46 @@ theorem readExactPrefixWith_requestBound (mismatch : IO.Error)
 
 /-- Count every reached read in a capped prefix, including the EOF witness
 and reads returning an error. Only positive chunks continue the loop. -/
-theorem readPrefixUntilEofWith_requestBound (mismatch : IO.Error)
-    (read : USize → EStateM IO.Error Nat ByteArray)
-    (charged : ∀ count calls, reached (read count calls) = calls + 1)
-    (remaining : Nat) (bytes : ByteArray) (before : Nat) :
-    reached (readPrefixUntilEofWith mismatch read remaining bytes before) ≤ before + remaining := by
+theorem readPrefixUntilEofWith_requestBoundBy {state : Type} (mismatch : IO.Error)
+    (read : USize → EStateM IO.Error state ByteArray) (count : state → Nat)
+    (charged : ∀ size before, recoveryCalls count (read size before) = count before + 1)
+    (remaining : Nat) (bytes : ByteArray) (before : state) :
+    recoveryCalls count (readPrefixUntilEofWith mismatch read remaining bytes before) ≤ count before + remaining := by
   rw [readPrefixUntilEofWith]
   by_cases finished : remaining = 0
-  · simp [finished, Pure.pure, EStateM.pure, reached]
+  · simp [finished, Pure.pure, EStateM.pure, recoveryCalls]
   · have one := charged remaining.toUSize before
     rw [ite_eq_right finished]
     simp only [Bind.bind, EStateM.bind]
     cases report : read remaining.toUSize before with
     | error cause after =>
-      simp only [report, reached] at one
-      simp only [reached]
+      simp only [report, recoveryCalls] at one
+      simp only [recoveryCalls]
       omega
     | ok chunk after =>
-      simp only [report, reached] at one
+      simp only [report, recoveryCalls] at one
       by_cases empty : chunk.size = 0
-      · simp only [empty, ↓reduceIte, Pure.pure, EStateM.pure, reached]
+      · simp only [empty, ↓reduceIte, Pure.pure, EStateM.pure, recoveryCalls]
         omega
       · by_cases fits : chunk.size ≤ remaining
         · simp only [empty, ↓reduceIte, fits]
-          have rest := readPrefixUntilEofWith_requestBound mismatch read charged (remaining - chunk.size)
+          have rest := readPrefixUntilEofWith_requestBoundBy mismatch read count charged (remaining - chunk.size)
             (if bytes.isEmpty then chunk else bytes ++ chunk) after
           exact Nat.le_trans rest (by omega)
-        · simp only [empty, ↓reduceIte, fits, ↓reduceDIte, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached]
+        · simp only [empty, ↓reduceIte, fits, ↓reduceDIte, throw, throwThe, MonadExceptOf.throw, EStateM.throw, recoveryCalls]
           omega
 termination_by remaining
 decreasing_by omega
+
+theorem readPrefixUntilEofWith_requestBound (mismatch : IO.Error)
+    (read : USize → EStateM IO.Error Nat ByteArray)
+    (charged : ∀ count calls, reached (read count calls) = calls + 1)
+    (remaining : Nat) (bytes : ByteArray) (before : Nat) :
+    reached (readPrefixUntilEofWith mismatch read remaining bytes before) ≤ before + remaining := by
+  have same (result : EStateM.Result IO.Error Nat ByteArray) : recoveryCalls id result = reached result := by
+    cases result <;> rfl
+  simpa only [same, id] using readPrefixUntilEofWith_requestBoundBy mismatch read id
+    (fun size state => (same _).trans (charged size state)) remaining bytes before
 
 end Alvoki.Storage
 
