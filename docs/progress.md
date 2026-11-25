@@ -1,5 +1,7 @@
 # Current handoff
 
+A checkpoint run file sync error now ties the public return to the exact terminal report for that run. With the same cached callbacks and initial file projection, the returned diagnostic, file and cache projection, and poisoned phase cell come from the reached sync error. Its observed slot release preserves the held database and the previous checkpoint and read replay. [Classified checkpoint run sync error](../lean/Alvoki/Storage/Disk/NativeClassifiedCheckpointRunFsync.lean)
+
 The checkpoint preparation proves the decoded watermark of its exact encoded manifest from the caller's ready history. Preparing the checkpoint preserves the committed sequence. If a reported checkpoint cut selects the original manifest, that binding keeps its earlier watermark. If it selects the newly prepared manifest, the watermark covers the full history at the cut. The reported filesystem effects still determine which bytes survive. The finite native trace must carry that choice through each returned ready endpoint before the cross-session watermark bound follows. [Checkpoint manifest authority](../lean/Alvoki/Storage/Disk/CheckpointManifestRenameCut.lean)
 
 An ordinary checkpoint error on an opened table now supplies the common rejection edge when the reached phase cell stays ready. The classifier derives the exact preflight and original diagnostic from that return. The same heap, modeled files, cache and client ledgers remain at the reached position. [Classified checkpoint rejection](../lean/Alvoki/Storage/Disk/NativeClassifiedCheckpointPreflight.lean)
