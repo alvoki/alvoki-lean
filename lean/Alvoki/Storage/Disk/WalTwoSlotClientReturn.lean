@@ -1354,10 +1354,10 @@ theorem recoveredRetries_installedReads
     (sealedRead : ∀ file ∈ sealed, prepared.kept file.1 = some file.2)
     (checked : checkSelectedWalSegmentSpans (selected.frontier.toNat / frameSize)
       (sealed ++ [(target.first, plan.keeperBytes)]) = true)
-    (selectedStart : ((sealed ++ [(target.first, target.trimmed)]).head?.map Prod.fst) = some first)
-    {laterBytes : ByteArray}
-    (exactBytes : WalSegment.concatenate (image.afterWatermark range.watermark) =
-      walSegmentPayloadBytes (sealed ++ [(target.first, target.trimmed)]) ++ laterBytes)
+    {segments : List WalSegment}
+    (selectedChain : WalSegment.Chain ((history ++ batch).take range.through) first segments)
+    (selectedSegments : segments.map (fun segment => (segment.first, segment.bytes)) =
+      sealed ++ [(target.first, target.trimmed)])
     {snapshot : UInt64} (retained : opened.table.pins.floor ≤ snapshot)
     (within : snapshot.toNat ≤ range.through) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
@@ -1430,6 +1430,29 @@ theorem recoveredRetries_installedReads
   have sameLength := Except.ok.inj ((sameMarker ▸ decodedLength).symm.trans (Boundary.decode_encode _))
   have boundedChecked := checkSelectedWalSegmentSpans_replaceKeeperBytes (after := target.trimmed)
     sealed (Nat.le_of_eq keeperSize.symm) checked
+  have selectedStart : ((sealed ++ [(target.first, target.trimmed)]).head?.map Prod.fst) = some first := by
+    rw [← selectedSegments]
+    cases selectedChain with
+    | endOfHistory => simp at selectedSegments
+    | cons => rfl
+  have concatenated : walSegmentPayloadBytes (sealed ++ [(target.first, target.trimmed)]) = payload := by
+    have concatenate (parts : List WalSegment) :
+        walSegmentPayloadBytes (parts.map (fun segment => (segment.first, segment.bytes))) =
+          WalSegment.concatenate parts := by
+      induction parts with
+      | nil => rfl
+      | cons segment rest ih =>
+        change segment.bytes ++ walSegmentPayloadBytes
+          (rest.map (fun part => (part.first, part.bytes))) = segment.bytes ++ WalSegment.concatenate rest
+        rw [ih]
+    rw [← selectedSegments, concatenate]
+    exact selectedChain.concatenate_eq
+  let laterBytes := WAL.encode (((history ++ batch).drop first).drop (range.through - first))
+  have exactBytes : WalSegment.concatenate (image.afterWatermark range.watermark) =
+      walSegmentPayloadBytes (sealed ++ [(target.first, target.trimmed)]) ++ laterBytes := by
+    rw [recovery.historyRetained, concatenated]
+    dsimp only [payload, laterBytes]
+    rw [List.drop_take, ← WAL.encode_append, List.take_append_drop]
   have boundedReplay : recoverMarkedWalSegments base selected.frontier
       (sealed ++ [(target.first, target.trimmed)]) = .ok (payload, opened.table) := by
     obtain ⟨entry, rest, files⟩ := List.exists_cons_of_ne_nil
