@@ -12,6 +12,7 @@ import Alvoki.Storage.Disk.NativeCloseMarkedBarrierReopen
 import Alvoki.Storage.Disk.NativePendingCloseRecovery
 import Alvoki.Storage.Disk.NativePendingClientRecovery
 import Alvoki.Storage.Disk.NativePendingWriteProcessExit
+import Alvoki.Storage.Disk.NativeReadyProcessExit
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeWritePreflight
@@ -85,6 +86,7 @@ inductive NativeExecutionEvent : Type 1 where
   | rewroteRunCheckpointAndReopened (request : RunMaintenance) (input : FilePath)
   | closedAndReopened (input : FilePath) (result : Except IO.Error Unit)
   | closedAfterRetries (input : FilePath) (errors : List IO.Error) (result : Except IO.Error Unit)
+  | readyExitRecovered (input : FilePath) (process : Nat)
   | interruptedCloseRecovered (input : FilePath) (unlockEffective : Bool)
   | uncertainWriteRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (attempted retained : List WAL.Write)
@@ -355,6 +357,12 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (reopened : NativeRejectedOpenAlignedResult current.ready observed.after observed.files input next) :
       NativeExecutionStep current (.rejectedOpenSequenceRecovered inputs input observed.errors)
         ⟨current.history, current.submissions, next⟩
+  | recoverReadyExit (current : NativeExecutionPosition) {input : FilePath}
+      (seen : NativeReadyProcessExitObservation current.ready.state input)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeReadyProcessExitReopened current.ready seen next) :
+      NativeExecutionStep current (.readyExitRecovered input current.ready.state.owner.reference.process)
+        ⟨current.history, current.submissions, next⟩
   | recoverInterruptedClose (current : NativeExecutionPosition) {input : FilePath}
       (observed : NativeInterruptedCloseReopenObservation current.ready.state input)
       (next : NativeReadPosition current.history current.submissions)
@@ -588,6 +596,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverRejectedOpenSequence reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverReadyExit reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverInterruptedClose reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverCheckpointRunFileError reopened => exact ⟨by simp [NativeExecutionEvent.writes],
@@ -723,6 +733,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | closeThenRetryAndReopen (inputs : List FilePath) (input : FilePath)
   | closeAndReopen (input : FilePath)
   | closeAfterRetriesAndReopen (input : FilePath) (failedAttempts : Nat)
+  | readyExitThenReopen (input : FilePath)
   | interruptedCloseThenReopen (input : FilePath)
   | interruptedCheckpointThenReopen (input : FilePath)
   | writeThenCloseAndReopen (request : WriteRequest) (input : FilePath)
@@ -781,6 +792,7 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .closeAndReopen input, .closedAndReopened opened _ => opened = input
   | .closeAfterRetriesAndReopen input failedAttempts, .closedAfterRetries opened errors _ =>
     opened = input ∧ errors.length = failedAttempts
+  | .readyExitThenReopen input, .readyExitRecovered opened _ => opened = input
   | .interruptedCloseThenReopen input, .interruptedCloseRecovered opened _ => opened = input
   | .interruptedCheckpointThenReopen input, .interruptedCheckpointRecovered opened _ => opened = input
   | .writeThenCloseAndReopen request input, .uncertainWriteRecovered submitted opened _ _ _ =>
@@ -846,6 +858,7 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
         Nonempty (NativeReadyRestartReads crash.observed input layout selected))
   | closeAndReopen (input : FilePath) (observed : NativeCloseReopenObservation current.state input)
   | closeAfterRetriesAndReopen (input : FilePath) (observed : NativeReadyCloseRetryObservation current.state input)
+  | readyExitThenReopen (input : FilePath) (seen : NativeReadyProcessExitObservation current.state input)
   | interruptedCloseThenReopen (input : FilePath) (observed : NativeInterruptedCloseReopenObservation current.state input)
   | interruptedCheckpointThenReopen (input : FilePath) (observed : NativePendingCheckpointCrashObservation current.state input)
   | writeThenCloseAndReopen (observed : NativeUncertainWriteObservation current.state)
@@ -962,6 +975,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .interruptedCoveredWalDirectoryThenReopen input _ _ => .interruptedCoveredWalDirectoryThenReopen input
   | .closeAndReopen input _ => .closeAndReopen input
   | .closeAfterRetriesAndReopen input seen => .closeAfterRetriesAndReopen input seen.attempts.length
+  | .readyExitThenReopen input _ => .readyExitThenReopen input
   | .interruptedCloseThenReopen input _ => .interruptedCloseThenReopen input
   | .interruptedCheckpointThenReopen input _ => .interruptedCheckpointThenReopen input
   | .writeThenCloseAndReopen observed => .writeThenCloseAndReopen observed.write.request observed.input
@@ -1036,6 +1050,9 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | closeAfterRetriesAndReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.closesAndReopensAfterRetries observed
     exact ⟨_, _, .closesAfterRetries current observed next reopened, rfl, List.length_map ..⟩
+  | readyExitThenReopen _ seen =>
+    obtain ⟨next, reopened⟩ := current.ready.reopensAfterProcessExit seen
+    exact ⟨_, _, .recoverReadyExit current seen next reopened, rfl⟩
   | interruptedCloseThenReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.recoversInterruptedClose observed
     exact ⟨_, _, .recoverInterruptedClose current observed next reopened, rfl⟩
