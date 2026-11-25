@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 import Alvoki.Storage.Disk.NativeMarkedReadPrefix
+import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.ClientCachedClose
 import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
 
@@ -363,5 +364,68 @@ theorem NativeReadyReadPrefix.reopensCheckpointDirectoryError
   · rw [inventoryInodes, nextDirectory]
     exact sameDirectory
   · exact nextKept.trans (congrArg CheckpointWalView.kept physical.wal)
+
+/-- Reports for the final checkpoint failure, successful explicit close,
+and direct aligned open on the selected live checkpoint files. -/
+structure NativeCheckpointReopenObservation (state : NativeReadyState) (input : FilePath) where
+  image : Type
+  cut : CheckpointPowerCut state.session.directory state.writer
+  reported : NativeCheckpointDirectoryError (image := image) state cut
+  physical : reported.Physical
+  close : CachedCloseReports state.session.directory state.session.descriptor reported.closeState
+  owner : close.slot = state.owner
+  closed : close.result = .ok ()
+  files : NativeCheckpointCloseFiles physical
+  reopen : ∀ plan : physical.LiveRetry, Nonempty (NativeCheckpointAlignedReads files input close.finished.descriptors plan)
+
+def NativeCheckpointReopenObservation.diagnostic {input : FilePath}
+    (observed : NativeCheckpointReopenObservation state input) : IO.Error :=
+  observed.reported.error
+
+/-- One execution continuation through the returned checkpoint error and
+the two subsequent calls. The new ready position starts at the actual
+returned open and carries the same ledger. -/
+structure NativeCheckpointReopenContinuation (current : NativeReadPosition history log) {input : FilePath}
+    (observed : NativeCheckpointReopenObservation current.state input) (next : NativeReadPosition history log) : Prop where
+  returned : observed.reported.run = .error observed.diagnostic
+    (.poisoned, ⟨(current.state.cache, observed.reported.after), current.state.files.owners⟩)
+  closed : observed.close.run = .ok () observed.close.finished ∧ observed.close.finished.phase = .closed ∧
+    observed.close.finished.files =
+      ⟨(⟨none, none, []⟩, observed.reported.after), observed.physical.released.owners⟩ ∧
+    observed.close.finished.descriptors = current.state.census.afterDrops
+      (observed.close.drops .active ++ observed.close.drops .pending ++ observed.close.drops .directory) ∧
+    observed.close.bindings (current.state.session.directory.file .lock) =
+      observed.reported.bindings observed.reported.after (current.state.session.directory.file .lock)
+  reads : next.reads = current.reads
+  directory : next.state.session.directory = current.state.session.directory
+  directoryInode : next.state.census.inode next.state.directorySlot.description =
+    current.state.census.inode current.state.directorySlot.description
+  lockInode : next.state.census.inode next.state.owner.description = current.state.census.inode current.state.owner.description
+  phaseFresh : next.state.session.phaseRef ≠ current.state.session.phaseRef
+  sessionFresh : next.state.session.sessionRef ≠ current.state.session.sessionRef
+  generation : next.state.writer.installed.generation = SegmentedCheckpointReport.generation current.state.writer
+  pair : next.state.files.image.directory.active = observed.physical.released.image.directory.active
+  seals : next.state.files.image.kept = current.state.files.image.kept
+  exactOpen : ∃ (plan : observed.physical.LiveRetry)
+    (seen : NativeCheckpointAlignedReads observed.files input observed.close.finished.descriptors plan),
+    seen.run = .ok next.state.session (next.state.census, next.state.files) ∧
+    next.opened = seen.run ∧ next.initial = next.state ∧
+    next.state.owner = seen.opening.admission.owner ∧ next.state.directorySlot = seen.opening.admission.cached ∧
+    next.state.cache = seen.opening.admission.cache ∧ next.state.census = seen.opening.finish.census ∧
+    next.state.writer.target = plan.layout.target ∧ next.state.writer.checkpoint = plan.checkpoint ∧
+    next.state.writer.published.durable = observed.physical.publication.durable ∧ seen.SelectedReads
+  replay : InstalledClientReplay log current.reads history next.state.writer.installed next.state.session
+
+theorem NativeReadPosition.recoversCheckpointDirectoryError (current : NativeReadPosition history log) {input : FilePath}
+    (observed : NativeCheckpointReopenObservation current.state input) :
+    ∃ next, NativeCheckpointReopenContinuation current observed next := by
+  obtain ⟨returned, closed, phase, cleared, closeCensus, closeLock, plan, seen, state, readyPrefix, directory, owner,
+    directorySlot, cache, census, sessionFresh, phaseFresh, lockInode, directoryInode, pair, seals, target, checkpoint,
+    durable, generation, selected, replay⟩ := current.readPrefix.reopensCheckpointDirectoryError
+      observed.reported observed.physical observed.close observed.owner observed.closed observed.files observed.reopen
+  let next : NativeReadPosition history log := ⟨seen.run, state, state, current.reads, readyPrefix⟩
+  exact ⟨next, returned, ⟨closed, phase, cleared, closeCensus, closeLock⟩, rfl, directory, directoryInode, lockInode,
+    phaseFresh, sessionFresh, generation, pair, seals,
+    ⟨plan, seen, readyPrefix.frames.1, rfl, rfl, owner, directorySlot, cache, census, target, checkpoint, durable, selected⟩, replay⟩
 
 end Alvoki.Storage.DiskSession
