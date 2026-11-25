@@ -68,6 +68,7 @@ theorem installs (seen : OpenSyncCacheAllocations opened view calls entry) :
       openSyncFilesWith (calls.openDirectory directory.path) calls.newRef calls.newRef calls.newRef assemble entry =
         .ok cache seen.afterPending ∧
       cache.UsesCacheReferences seen.activeRef seen.pendingRef seen.directoryRef ∧
+      cache.AtDirectory directory.path ∧
       view.directory seen.afterPending seen.directoryRef = some seen.handle ∧
       view.active seen.afterPending seen.activeRef = none ∧ view.pending seen.afterPending seen.pendingRef = [] ∧
       view.cacheAt seen.afterPending seen.directoryRef seen.activeRef seen.pendingRef =
@@ -89,8 +90,9 @@ theorem installs (seen : OpenSyncCacheAllocations opened view calls entry) :
       ⟨some (initial.insert cached opened.free, cached, 0), none, []⟩ := by
     simp only [OpenCloseHeapView.cacheAt, directoryHandle, activeEmpty, seen.pendingSet, Option.map_some, Option.map_none,
       List.map_nil, seen.sameHandle, seen.openedHandle]
-  refine ⟨action, assemble, cache, starts, source, ?_, references _ _ _, directoryHandle, activeEmpty,
-    seen.pendingSet, cacheMatch, filesMatch, slots, ?_, slots.symm ▸ ownerLive, slots.symm ▸ cachedLive, slots.symm ▸ object⟩
+  obtain ⟨uses, path⟩ := references seen.directoryRef seen.activeRef seen.pendingRef
+  refine ⟨action, assemble, cache, starts, source, ?_, uses, path, directoryHandle, activeEmpty, seen.pendingSet,
+    cacheMatch, filesMatch, slots, ?_, slots.symm ▸ ownerLive, slots.symm ▸ cachedLive, slots.symm ▸ object⟩
   · simp only [openSyncFilesWith, Bind.bind, EStateM.bind, seen.rawOpened, seen.directoryAllocated,
       seen.activeAllocated, seen.pendingAllocated, Pure.pure, EStateM.pure, cache]
   · rw [cacheMatch, slots, filesMatch]

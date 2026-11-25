@@ -513,6 +513,10 @@ def DiskTable.OpenSyncFiles.UsesCacheReferences (files : DiskTable.OpenSyncFiles
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (directory : IO.Ref (Option IO.FS.Handle)) : Prop :=
   files.active = active ∧ files.pending = pending ∧ files.directory = directory
 
+/-- The path used for directory dispatch in the synchronization record. -/
+def DiskTable.OpenSyncFiles.AtDirectory (files : DiskTable.OpenSyncFiles) (path : FilePath) : Prop :=
+  files.dir = path
+
 /-- The actual initialization action for the synchronization record
 allocated on the resolved path by `DiskTable.open`. -/
 def DiskTable.OpenSyncFiles.IsOpenAction (path : FilePath) (action : IO DiskTable.OpenSyncFiles) : Prop :=
@@ -526,8 +530,9 @@ theorem DiskTable.openSyncCacheReferences (path : FilePath) :
       action = DiskSession.openSyncFilesWith (m := IO) (IO.FS.Handle.mk path .read)
         (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
         (fun value => liftM (IO.mkRef value)) assemble ∧
-      ∀ directory active pending, (assemble directory active pending).UsesCacheReferences active pending directory := by
-  exact ⟨SyncFiles.open path, SyncFiles.mk path, rfl, syncFilesOpen_schedule path, fun _ _ _ => ⟨rfl, rfl, rfl⟩⟩
+      ∀ directory active pending, (assemble directory active pending).UsesCacheReferences active pending directory ∧
+        (assemble directory active pending).AtDirectory path := by
+  exact ⟨SyncFiles.open path, SyncFiles.mk path, rfl, syncFilesOpen_schedule path, fun _ _ _ => ⟨⟨rfl, rfl, rfl⟩, rfl⟩⟩
 
 /-- Close reads and writes exactly the phase, lock and cache
 references of the opened table. -/
@@ -1302,6 +1307,24 @@ theorem readKeeperPrefix_fileEffects (files : SyncFiles) (path : FilePath) (coun
         (fun file size => readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
           file.read size ByteArray.empty)
         files.remember path count fileSize := rfl
+
+/-- The aligned keeper and its barriers use the same cells assembled by
+the cache initializer. Remembering the read handle modifies the pending
+cell that the keeper sync later reads and clears. -/
+theorem DiskTable.OpenSyncFiles.keeperCacheSchedules {files : DiskTable.OpenSyncFiles}
+    {dir : FilePath} {active pending directory}
+    (uses : files.UsesCacheReferences active pending directory) (atDirectory : files.AtDirectory dir)
+    (path : FilePath) (count fileSize : Nat) (paths : Array FilePath) :
+    readKeeperPrefix files path count fileSize =
+      SyncHandleRouting.readKeeperWith (fun name => IO.FS.Handle.mk name .read)
+        (fun file size => readExactPrefixWith (IO.userError "short or oversized WAL keeper read") file.read size ByteArray.empty)
+        (fun name file => pending.modify (SyncHandleRouting.pushPending name file)) path count fileSize ∧
+    files.syncPaths paths = SyncPathGroup.run (fun name =>
+      SyncHandleRouting.syncWithHandles dir name directory.get pending.get pending.set active.get
+        (fun file => IO.FS.Handle.mk file .read) fsyncHandle) paths := by
+  obtain ⟨rfl, rfl, rfl⟩ := uses
+  cases atDirectory
+  exact ⟨rfl, rfl⟩
 
 /-- A successful stage remembers the descriptor returned by the native
 fresh write and flush. -/
