@@ -48,4 +48,24 @@ theorem settleMarker_syncDirectory (image : Image) (selected : Selection)
   rw [chosen]
   exact ⟨rfl, rfl⟩
 
+open Alvoki.Storage.WalSegmentRepair
+
+/-- Once the positional marker is settled, each reached shared destructive
+repair prefix preserves that exact logical marker, including admitted cuts
+while replacing or pruning a keeper. -/
+theorem repair_preserves_settledMarker (initial : FileImage) (selected : Selection)
+    {target : Target} {after : FileImage}
+    (trace : EffectTrace target
+      { initial with directory := settleMarker initial.directory selected } after)
+    (pair : (settleMarker initial.directory selected).active = target.pair)
+    (keeper : initial.keeper.Valid target.Accepts)
+    (later : initial.later.Beyond target.range.through)
+    {survivor : Bindings} (chosen : survivor ∈ after.directory.active :: after.directory.crashImages) :
+    survivor.walBoundary = some (Boundary.encode selected.frontier) := by
+  have accepted := trace.valid pair keeper later
+  have same : survivor = target.pair := by
+    simpa [List.mem_cons, accepted.selected, accepted.settled] using chosen
+  rw [same, ← pair]
+  rfl
+
 end Alvoki.WAL.TwoSlot

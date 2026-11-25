@@ -2139,3 +2139,4 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.projectBinding_decodes
 #check_axioms Alvoki.WAL.TwoSlot.settleMarker_survivor_iff
 #check_axioms Alvoki.WAL.TwoSlot.settleMarker_syncDirectory
+#check_axioms Alvoki.WAL.TwoSlot.repair_preserves_settledMarker
