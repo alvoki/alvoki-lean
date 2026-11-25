@@ -1211,16 +1211,14 @@ private theorem recoveredFrontier_count {image : WalSegmentImage} {pair : Direct
     Except.ok.inj ((Boundary.decode_encode frontier).symm.trans (sameMarker ▸ decoded))
   exact sameLength ▸ bytes
 
-private theorem recoveredBatch_history {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
-    {range : MarkedWalRange} {history batch : List Write} {base table : PackedTable} {first : Nat}
-    (recovery : WalSegmentRecovery image pair range (history ++ batch) base first table)
-    {frontier : UInt64} (selected : pair.walBoundary = some (Boundary.encode frontier))
+private theorem recoveredBatch_history {range : MarkedWalRange} {history batch : List Write}
+    {frontier : UInt64} (counted : frontier.toNat = range.through * frameSize)
     (whole : frontier.toNat = (WAL.encode history).size ∨
       frontier.toNat = (WAL.encode (history ++ batch)).size) :
     (history ++ batch).take range.through = history ∨
       (history ++ batch).take range.through = history ++ batch := by
   have count : range.through = history.length ∨ range.through = (history ++ batch).length := by
-    rw [recoveredFrontier_count recovery selected, WAL.encode_size, WAL.encode_size] at whole
+    rw [counted, WAL.encode_size, WAL.encode_size] at whole
     unfold frameSize at whole
     omega
   rcases count with old | all
@@ -1240,7 +1238,7 @@ theorem recoveredBatch_retains {image : WalSegmentImage} {pair : DirectoryPublic
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
     ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
   refine ⟨?_, recovery.refines⟩
-  rcases recoveredBatch_history recovery selected whole with old | all
+  rcases recoveredBatch_history (recoveredFrontier_count recovery selected) whole with old | all
   · rw [old]
     simpa using (DatabaseBatchRetention.append (entry := .uncertainBatch batch)
       (suffix := []) prior (Or.inl rfl))
@@ -1743,11 +1741,11 @@ theorem recoveredRetries_retainUncertainBatch
       { prepared with directory := settleMarker prepared.directory selected } firstRepair)
     {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared prepared target plan)
     (retries : SettledRetries target firstRepair after)
-    {image : WalSegmentImage} {range : MarkedWalRange}
-    {base table : PackedTable} {first : Nat} {log : List DatabaseSubmissions}
+    {range : MarkedWalRange} {table : PackedTable} {log : List DatabaseSubmissions}
     (prior : DatabaseBatchRetention log history)
     (oldSize : current.frontier.toNat = (WAL.encode history).size)
-    (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first table) :
+    (counted : selected.frontier.toNat = range.through * frameSize)
+    (represented : ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
     (∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model) ∧
     ((history ++ batch).take range.through = history ∨
@@ -1764,8 +1762,14 @@ theorem recoveredRetries_retainUncertainBatch
     authorized.newer retries (List.mem_cons_self ..)
   have whole : _ ∨ _ := choice.imp
     (fun oldFrontier => oldFrontier ▸ oldSize) (fun newFrontier => newFrontier ▸ newSize)
-  obtain ⟨retained, represented⟩ := recoveredBatch_retains prior recovery binding whole
-  exact ⟨retained, represented, recoveredBatch_history recovery binding whole⟩
+  have historyChoice := recoveredBatch_history (range := range) (batch := batch) counted whole
+  refine ⟨?_, represented, historyChoice⟩
+  rcases historyChoice with old | all
+  · rw [old]
+    simpa using (DatabaseBatchRetention.append (entry := .uncertainBatch batch)
+      (suffix := []) prior (Or.inl rfl))
+  · rw [all]
+    exact DatabaseBatchRetention.append (entry := .uncertainBatch batch) prior (Or.inr rfl)
 
 private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × ByteArray)}
     (offsets : left.map Prod.fst = right.map Prod.fst)
@@ -2906,7 +2910,6 @@ theorem recoveredRetries_installedReads
         decodeSlot bytes (slotIndex active.other) = some next))
     (selected : Selection)
     {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared prepared target plan)
-    {image : WalSegmentImage}
     {log : List DatabaseSubmissions}
     {directory : DiskDirectory} {descriptor nextRef : Nat} {unlock : DiskSession.UnlockReport}
     {openedFrom : LockedFileState FileImage}
@@ -3022,10 +3025,6 @@ theorem recoveredRetries_installedReads
       state.effect target action = some next →
       WalSegmentRepair.performPaths directory plan removeFile throw write sync renameFile action state =
         .ok () next)
-    {initialWal : WalSegmentImage}
-    (collection : WalSegmentCollectionRetry initialWal image)
-    (walValid : initialWal.Valid (history ++ batch))
-    (walSelected : image.Selects target.pair)
     (acceptedCheckpoint : published.AcceptsVersioned history.length.toUInt64
       (Boundary.CheckpointRepresentsPrefix history) target.pair.manifest)
     (ordinals : WAL.OrdinalsFrom 1 (history ++ batch))
@@ -3072,8 +3071,9 @@ theorem recoveredRetries_installedReads
             WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
           openedFrom.image = .ok (opened, markerHandle, selected) after ∧
       session.phase = .ready opened.installed ∧ opened.table = table ∧
-      (∃ first, WalSegmentRecovery image after.directory.active target.range (history ++ batch)
-        (checkpointResult.getD (.empty, 0)).1 first opened.table) ∧
+      opened.table.committed.toNat = target.range.through ∧
+      (∃ model, opened.table.Refines model ∧
+        RepresentsWalHistory ((history ++ batch).take target.range.through) model) ∧
       ((history ++ batch).take target.range.through = history ∨
         (history ++ batch).take target.range.through = history ++ batch) ∧
       final.image = after ∧ final.image.Ready target ∧
@@ -3196,10 +3196,11 @@ theorem recoveredRetries_installedReads
   have samePrefix : (history ++ batch).take target.range.watermark = history.take target.range.watermark :=
     List.take_append_of_le_length checkpointCoveredByHistory
   rw [← samePrefix] at checkpointHistory
-  obtain ⟨first, table, shared⟩ := collection.recoversSelected walValid walSelected
-    target.decoded sameWatermark checkpointRefines checkpointHistory ordinals
-  have recovery : WalSegmentRecovery image after.directory.active target.range (history ++ batch)
-      base first table := ready.selected.symm ▸ shared
+  have throughWithin : target.range.through ≤ (history ++ batch).length := by
+    rw [← layoutThrough, layout.through]
+    simp [Nat.min_le_right]
+  obtain ⟨table, replayedPrefix, committed, representation⟩ :=
+    recoverSelected_history checkpointCovered throughWithin sameWatermark checkpointRefines checkpointHistory ordinals
   have retries : SettledRetries target after after := .start
   have observations := interruptedMarker_observations (active := active) projectedVisible projectedCrash
     (fun bytes present => by
@@ -3234,31 +3235,14 @@ theorem recoveredRetries_installedReads
     .powerLoss .start metadataSurvived keeperSurvived namesSurvived
   have beforeBarrier : UnsettledRetries initial prepared :=
     preparationPreservesFiles.symm ▸ (crash.trans openRetry).refines
-  have ledger := recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
-    observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
+  have counted : selected.frontier.toNat = target.range.through * frameSize := sameLength.symm ▸ absolute
+  have ledger : _ := recoveredRetries_retainUncertainBatch (table := table) beforeBarrier accepted offset advanced
+    observations selected observed authorizedRepair preparedPlan retries prior oldSize counted representation
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2.1
-  have liveMarker := (retries.preservesSelectedMarker prepared selected observed authorizedRepair
-    authorized.pair authorized.keeperPrefix authorized.newer (List.mem_cons_self ..)).1
-  obtain ⟨actualMarker, actualLength, _, marked, decodedLength, byteCount, _, _, fullReplay⟩ :=
-    recovery.marked
-  have sameMarker := Option.some.inj (marked.symm.trans liveMarker)
-  have sameLength := Except.ok.inj ((sameMarker ▸ decodedLength).symm.trans (Boundary.decode_encode _))
-  have throughWithin : target.range.through ≤ (history ++ batch).length := by
-    rw [← layoutThrough, layout.through]
-    simp [Nat.min_le_right]
   have prefixLength : ((history ++ batch).take target.range.through).length = target.range.through := by
     rw [List.length_take, Nat.min_eq_left throughWithin]
-  have selection := selectFullWalPrefix throughWithin byteCount ByteArray.empty
-  rw [ByteArray.append_empty] at selection
-  have replayedPrefix : recoverSelected base (WAL.encode ((history ++ batch).take target.range.through)) =
-      .ok table := by
-    unfold Boundary.recoverMarked at fullReplay
-    rw [selection] at fullReplay
-    cases replay : recoverSelected base (WAL.encode ((history ++ batch).take target.range.through)) with
-    | error cause => simp [replay, Bind.bind, Except.bind] at fullReplay
-    | ok result => simpa [replay, Bind.bind, Except.bind, Pure.pure, Except.pure] using fullReplay
   have absolute : selected.frontier.toNat = ((history ++ batch).take target.range.through).length * frameSize := by
-    rw [← sameLength, byteCount, prefixLength, Nat.mul_comm]
+    rw [prefixLength, counted]
   have covers : layout.first ≤ base.committed.toNat := by
     rw [sameWatermark]
     exact (congrArg (fun t : Target => t.range.watermark) layoutTarget) ▸ layout.covers
@@ -3359,13 +3343,13 @@ theorem recoveredRetries_installedReads
     simpa only [layoutTarget] using retryPrepared
   refine ⟨⟨markerBytes, markerRead, decodedMarker⟩, ledger.1, after, table, ?_, retry, retryTarget.trans layoutTarget, retryStart,
     retrySeals, retryKeeper, retryPlan, session, final, reference,
-    opened, returned, fullReopen, installed, rfl, ⟨first, recovery⟩, ledger.2.2, reached, reached.symm ▸ ready,
+    opened, returned, fullReopen, installed, rfl, committed, representation, ledger.2.2, reached, reached.symm ▸ ready,
     reached.symm ▸ authorizedRepair, owner, freshSession, replayed, ?_⟩
   · intro bytes survives
     obtain ⟨equalReplay, sealedBytes⟩ := physical bytes survives
     exact ⟨equalReplay.trans selectedReplay, fun segment found =>
       sealedBytes (segment.first, segment.bytes) (List.mem_map.mpr ⟨segment, found, rfl⟩)⟩
   · intro snapshot retained within
-    exact recovery.acquireReads replayed retained within
+    exact acquireReads_of_history committed representation replayed retained within
 
 end Alvoki.WAL.TwoSlot

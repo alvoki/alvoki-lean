@@ -200,6 +200,22 @@ theorem WalSegmentCollectionRetry.recoversAbsent
 
 /-- Any sequence within the recovered floor and marker can be pinned anew.
 That pin gives the point and ordered range reads of canonical WAL replay. -/
+theorem acquireReads_of_history {history : List Write} {table : PackedTable}
+    {through : Nat} (count : table.committed.toNat = through)
+    (representation : ∃ model, table.Refines model ∧ RepresentsWalHistory (history.take through) model)
+    {reference : SnapshotTable UInt64} (replayed : SnapshotWalReplay .empty (history.take through) reference)
+    {snapshot : UInt64} (retained : table.pins.floor ≤ snapshot) (within : snapshot.toNat ≤ through) :
+    ∃ pin pinned, table.acquireAt snapshot = some (pin, pinned) ∧
+      (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+      ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) := by
+  have committed : snapshot ≤ table.committed := UInt64.le_iff_toNat_le.mpr (count.symm ▸ within)
+  have same : table.SameData table := ⟨rfl, rfl, rfl, rfl⟩
+  obtain ⟨pin, pinned, acquired, lookup, scan⟩ := same.acquireAt_reads retained committed
+  obtain ⟨_, refined, canonical⟩ := representation
+  obtain ⟨pointReads, rangeReads⟩ := canonical.reads replayed (refined.pins ▸ retained)
+  exact ⟨pin, pinned, acquired, fun key => by rw [lookup, refined.table, pointReads],
+    fun start stop => by rw [scan, refined.table, rangeReads]⟩
+
 theorem WalSegmentRecovery.acquireReads {after : WalSegmentImage} {pair : DirectoryPublication.Bindings}
     {range : MarkedWalRange} {history : List Write} {base table : PackedTable} {first : Nat}
     (result : WalSegmentRecovery after pair range history base first table)
@@ -207,13 +223,7 @@ theorem WalSegmentRecovery.acquireReads {after : WalSegmentImage} {pair : Direct
     {snapshot : UInt64} (retained : table.pins.floor ≤ snapshot) (within : snapshot.toNat ≤ range.through) :
     ∃ pin pinned, table.acquireAt snapshot = some (pin, pinned) ∧
       (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
-      ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) := by
-  have committed : snapshot ≤ table.committed := UInt64.le_iff_toNat_le.mpr (result.count.symm ▸ within)
-  have same : table.SameData table := ⟨rfl, rfl, rfl, rfl⟩
-  obtain ⟨pin, pinned, acquired, lookup, scan⟩ := same.acquireAt_reads retained committed
-  obtain ⟨_, refined, canonical⟩ := result.refines
-  obtain ⟨pointReads, rangeReads⟩ := canonical.reads replayed (refined.pins ▸ retained)
-  exact ⟨pin, pinned, acquired, fun key => by rw [lookup, refined.table, pointReads],
-    fun start stop => by rw [scan, refined.table, rangeReads]⟩
+      ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) :=
+  acquireReads_of_history result.count result.refines replayed retained within
 
 end Alvoki.Storage

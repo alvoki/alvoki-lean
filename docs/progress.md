@@ -2039,3 +2039,12 @@ refinement without taking a collection witness. The existing
 collection proof consumes this result and still establishes its exact
 physical reads. The two-slot installation can next use the same
 logical result with the canonical segment chain from its own reader.
+
+The interrupted two-slot installation now derives its table from
+`recoverSelected_history` and connects it to the actual bounded reader
+through the canonical segment chain. The client retention and read
+proofs consume the selected frontier, table sequence and represented
+history. The installation theorem no longer takes a separate segment
+collection witness, valid initial WAL image or selected pair for that
+image. The remaining native handoff must derive the canonical layout
+and accepted checkpoint from the reached execution.
