@@ -232,6 +232,30 @@ theorem CapturedMarkedReadReports.checkpointThenScan
   simp only [Bind.bind, EStateM.bind, report.checkpointAtScan manifest runs selected chronology,
     report.scanWal_fromEntry, Pure.pure, EStateM.pure]
 
+/-- When the checkpoint starts with the marker already open, the scan
+report is indexed by the inventory reached after all checkpoint reads. -/
+theorem CapturedMarkedReadReports.scanAfterCheckpoint
+    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {start : DescriptorInventory} {release : FilePath → List LockReferenceDrop}
+    {manifestDrops : List LockReferenceDrop}
+    (manifest : CapturedManifestCensus report release start manifestDrops)
+    (runs : CapturedRunReadCensus report (start.afterDrops manifestDrops))
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    {lifetime : HeldDirectoryReadLifetime
+      ((start.afterDrops manifestDrops).afterDrops
+        (runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest))) admission.owner}
+    (scan : HeldDirectoryScan lifetime) :
+    ((do
+      let checkpoint ← report.readCheckpointFromCensus release runs.released
+      let entries ← scan.runInCensus directory.path
+      pure (checkpoint, entries)) :
+      EStateM IO.Error ReadState (Option (PackedTable × UInt64) × Array IO.FS.DirEntry))
+      (admission.cache, start, admission.held) =
+      .ok (checkpoint, scan.scan.entries directory.path) (admission.cache, scan.afterClose, admission.held) := by
+  simp only [Bind.bind, EStateM.bind, runs.reads manifest selected,
+    scan.runInCensus_returns directory.path admission.cache admission.held, Pure.pure, EStateM.pure]
+
 private theorem bindAtReportedSuccess {ε σ α β : Type}
     {first : EStateM ε σ α} {run : α → EStateM ε σ β}
     {before after : σ} {value : α} (returned : first before = .ok value after) :

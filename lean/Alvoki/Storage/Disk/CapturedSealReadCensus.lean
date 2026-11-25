@@ -269,23 +269,35 @@ theorem preservesSlot
 
 end CapturedSealReadChainWith
 
+/-- Project the checked stream result and its reached descriptor census
+without depending on the marker format or the earlier admission census. -/
+def HeldDirectoryScan.runInCensus {initial owner} {lifetime : HeldDirectoryReadLifetime initial owner}
+    (scan : HeldDirectoryScan lifetime) (path : FilePath) :
+    EStateM IO.Error ReadState (Array IO.FS.DirEntry) := fun (cache, census, files) =>
+  match (CheckedDirectoryReadReport.scanned scan.scan).result path with
+  | .ok entries => .ok entries (cache, census.afterDrops lifetime.drops, files)
+  | .error cause => .error cause (cache, census, files)
+
+theorem HeldDirectoryScan.runInCensus_returns {initial owner} {lifetime : HeldDirectoryReadLifetime initial owner}
+    (scan : HeldDirectoryScan lifetime) (path : FilePath) (cache : CensusDirectoryCache)
+    (files : LockedFileState FileImage) :
+    scan.runInCensus path (cache, initial, files) =
+      .ok (scan.scan.entries path) (cache, scan.afterClose, files) := by
+  have returned := (CheckedDirectoryReadReport.scan_complete path scan.eof scan.closed scan.complete).1
+  rw [runInCensus, returned, scan.afterClose_eq]
+
 namespace CapturedMarkedReadReports
 
 /-- Interpret the successful checked scan at the reached census. The
 stream opens, reads and closes in the same captured parent. -/
 def scanWal (report : CapturedMarkedReadReports admission layout published renameMarker) (path : FilePath) :
-    EStateM IO.Error ReadState (Array IO.FS.DirEntry) := fun (cache, census, files) =>
-  match (CheckedDirectoryReadReport.scanned report.listing.scan).result path with
-  | .ok entries => .ok entries (cache, census.afterDrops report.lifetime.drops, files)
-  | .error cause => .error cause (cache, census, files)
+    EStateM IO.Error ReadState (Array IO.FS.DirEntry) :=
+  report.listing.runInCensus path
 
 theorem scanWal_closed (report : CapturedMarkedReadReports admission layout published renameMarker) :
     report.scanWal directory.path (admission.cache, admission.reached, admission.held) =
-      .ok (report.listing.scan.entries directory.path) (admission.cache, report.listing.afterClose, admission.held) := by
-  have listing := (CheckedDirectoryReadReport.scan_complete directory.path report.listing.eof report.listing.closed
-    report.listing.complete).1
-  rw [scanWal, listing, report.listing.afterClose_eq]
-  rfl
+      .ok (report.listing.scan.entries directory.path) (admission.cache, report.listing.afterClose, admission.held) :=
+  report.listing.runInCensus_returns directory.path admission.cache admission.held
 
 /-- The same checked stream can start after manifest and marker reads
 have already applied the reported drops before opendir. -/
@@ -304,7 +316,7 @@ theorem scanWal_fromEntry (report : CapturedMarkedReadReports admission layout p
         [report.listing.stream.closeEvent] := report.listing.drops
     rw [chronology]
     simp [DescriptorInventory.afterDrops, List.filter_filter, List.all_append, Bool.and_comm, Bool.and_left_comm]
-  rw [scanWal, listing]
+  rw [scanWal, HeldDirectoryScan.runInCensus, listing]
   change EStateM.Result.ok (report.listing.scan.entries directory.path)
     (admission.cache, (admission.reached.afterDrops report.listing.beforeOpen).afterDrops report.lifetime.drops,
       admission.held) = _

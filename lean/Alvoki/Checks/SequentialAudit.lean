@@ -2324,6 +2324,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedRunReadCensus.preservesSlot
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.checkpointAtScan
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.checkpointThenScan
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanAfterCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.prepareFromHeldFrontier
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.walFromScanToKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.walFromScan

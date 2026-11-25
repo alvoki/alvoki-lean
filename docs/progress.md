@@ -1066,3 +1066,10 @@ proof. It starts at lock and cache admission, takes the actual
 marker-open inventory into the manifest and run readers, and returns
 the selected marker and checkpoint with the inventory reached by
 those reads.
+
+The checked directory scan now has a shared stateful projection
+indexed by its own entry inventory. Its post-checkpoint theorem uses
+the exact inventory returned by the manifest and run reads, including
+an earlier marker allocation, and gives the listing and census after
+closedir. The WAL seal reports still need to consume this scan instance
+in the combined two-slot reopen.
