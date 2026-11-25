@@ -698,6 +698,49 @@ theorem WriteRequest.runOnRawOpenPhase_acknowledges
           exact ⟨guarded, poisoned, settled, rfl, exclude, committed, installed, rfl,
             BatchActiveGuard.ofRawChecked lookup guard⟩
 
+
+/-- An uncertain raw return comes from the actual commit callback after
+the metadata guard and poison assignment. The cause and reached heap
+belong to that failure, and the ready setter is bypassed. -/
+theorem WriteRequest.runOnRawOpenPhase_commitUnknown
+    {installed : Installed} {batch : List WAL.Write} {table : PackedTable}
+    {entry reached : heap} {cause : IO.Error}
+    (loaded : get phase entry = .ok (.ready installed) entry)
+    (nonempty : request.rows ≠ [])
+    (prepared : prepareBatch installed.table request.rows = some (batch, table))
+    (fits : installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size)
+    (returned : request.runOnRawOpenPhase directory lookup append stage sync rename phase get set entry =
+      .error (.commitUnknown cause) reached) :
+    let count := installed.walBytes + WAL.frameSize * request.rows.length
+    ∃ guarded poisoned, checkActiveSegmentWith directory installed lookup entry = .ok () guarded ∧
+      set phase .poisoned guarded = .ok () poisoned ∧
+      commitBytesAt directory installed.activeFirst (WAL.encodeBatch batch) count append stage sync rename poisoned =
+        .error cause reached ∧
+      ∃ checked : BatchActiveGuard directory installed,
+        lookup (directory.file (.walSegment installed.activeFirst)) entry = .ok checked.metadata guarded := by
+  intro count
+  rw [request.runOnRawOpenPhase_afterPreparation directory lookup append stage sync rename phase get set
+    loaded nonempty prepared fits] at returned
+  cases guard : checkActiveSegmentWith directory installed lookup entry with
+  | error => simp [guard] at returned
+  | ok value guarded =>
+    cases value
+    cases exclude : set phase .poisoned guarded with
+    | error => simp [guard, exclude] at returned
+    | ok value poisoned =>
+      cases value
+      cases committed : commitBytesAt directory installed.activeFirst (WAL.encodeBatch batch)
+          (installed.walBytes + WAL.frameSize * request.rows.length) append stage sync rename poisoned with
+      | error actual after =>
+        simp only [guard, exclude, committed, EStateM.Result.error.injEq, DiskWriteError.commitUnknown.injEq] at returned
+        obtain ⟨rfl, rfl⟩ := returned
+        exact ⟨guarded, poisoned, rfl, exclude, committed, BatchActiveGuard.ofRawChecked lookup guard⟩
+      | ok value settled =>
+        cases value
+        cases installedResult : set phase
+            (.ready { installed with table, walBytes := installed.walBytes + WAL.frameSize * request.rows.length }) settled <;>
+          simp [guard, exclude, committed, installedResult] at returned
+
 end RawWrite
 
 end Alvoki.Storage.DiskSession
