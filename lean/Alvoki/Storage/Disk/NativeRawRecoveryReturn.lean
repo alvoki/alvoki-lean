@@ -6,6 +6,25 @@ open System WalSegmentRepair
 
 variable {heap α : Type}
 
+/-- A non-ENOENT no-follow error stops the optional metadata reader. -/
+theorem rawOptionalMetadataError (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    {before : heap} {cause : IO.Error} (reported : lookup before = .ok (.error cause) before)
+    (notMissing : ∀ path message, cause ≠ .noFileOrDirectory path 2 message) :
+    optionalMetadataWith lookup before = .error cause before := by
+  simp only [optionalMetadataWith, Bind.bind, EStateM.bind, reported]
+  rfl
+
+/-- The held source dispatcher runs its late guards before selecting
+recovery, and installs only after the selected worker succeeds. -/
+def RawOpenAdmissionCallbacks.recoverAndInstall (calls : RawOpenAdmissionCallbacks heap)
+    (marked bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (install : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap α)
+    (directory : DiskDirectory) (lock : IO.FS.Handle) (cache : DiskTable.OpenSyncFiles) : EStateM IO.Error heap α :=
+  recoverSegmentedWalWith
+    (rejectFlatWalWith directory (optionalMetadataWith (calls.lookup (directory.file .wal))))
+    (optionalMetadataWith (calls.lookup (directory.file .walBoundary)))
+    (marked directory cache) (bootstrap directory cache) >>= install directory lock cache
+
 /-- The worker's exact recovered value is the installer input. A worker
 error returns on its reached heap without invoking the installer. -/
 inductive OpenRecoveryWorkerReturn (worker : EStateM IO.Error heap Reopened)
@@ -79,9 +98,7 @@ theorem RawOpenAdmissionCallbacks.classifiesSegmentedOpenReturn
     let flat := fun (directory : DiskDirectory) =>
       rejectFlatWalWith directory (optionalMetadataWith (calls.lookup (directory.file .wal)))
     let marker := fun (directory : DiskDirectory) => optionalMetadataWith (calls.lookup (directory.file .walBoundary))
-    let recover := fun directory lock cache =>
-      recoverSegmentedWalWith (flat directory) (marker directory) (marked directory cache) (bootstrap directory cache)
-        >>= install directory lock cache
+    let recover := calls.recoverAndInstall marked bootstrap install
     let openCache := fun directory : DiskDirectory =>
       openSyncFilesWith (init.openDirectory directory.path) init.newRef init.newRef init.newRef makeCache
     RawOpenReturn calls input entry openCache recover (calls.runOpen input init makeCache recover entry) ∧

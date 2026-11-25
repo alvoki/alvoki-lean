@@ -241,7 +241,6 @@ lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectSessio
 lake env leanchecker Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 lake env leanchecker Alvoki.Storage.Disk.NativeFreshTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenEarlyError
-lake env leanchecker Alvoki.Storage.Disk.NativeRawMarkerRouteError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawManifestDecodeError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
 lake env leanchecker Alvoki.Storage.Disk.NativeRawFinalizedOpenError

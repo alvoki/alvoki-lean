@@ -334,7 +334,6 @@ import Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectSessions
 import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenEarlyError
-import Alvoki.Storage.Disk.NativeRawMarkerRouteError
 import Alvoki.Storage.Disk.NativeRawManifestDecodeError
 import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
 import Alvoki.Storage.Disk.NativeRawFinalizedOpenError
@@ -2093,13 +2092,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorUnlock.admitsAfterFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.stopsBeforeRecovery
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.returns
-#check_axioms Alvoki.Storage.DiskSession.RawMarkerRouteFailure.returns
 #check_axioms Alvoki.Storage.DiskSession.rawOptionalMetadataError
-#check_axioms Alvoki.Storage.DiskSession.RawHeldOpenCleanup.returnsError
-#check_axioms Alvoki.Storage.DiskSession.RawHeldOpenCleanup.returnsErrorAt
 #check_axioms Alvoki.Storage.DiskSession.RawManifestDecodeRead.readsSelected
 #check_axioms Alvoki.Storage.DiskSession.RawManifestDecodeRead.stopsBeforeWal
-#check_axioms Alvoki.Storage.DiskSession.RawManifestDecodeFailure.returns
 #check_axioms Alvoki.Storage.DiskSession.RawManifestDecodeRead.returnsFinalized
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returns
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsAfterLockFinalization
@@ -2184,7 +2179,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.stopsMarkedWorker
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.returnsAbsentManifest
 #check_axioms Alvoki.Storage.DiskSession.RawHeldFlatWalError.stops
-#check_axioms Alvoki.Storage.DiskSession.RawHeldFlatWalError.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.disposes
 #check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.censusInodes

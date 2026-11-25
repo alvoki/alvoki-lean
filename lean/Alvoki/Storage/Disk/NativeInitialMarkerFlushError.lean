@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.BootstrapMarkerFlushError
 import Alvoki.Storage.Disk.NativeBootstrapMarkerCollision
 import Alvoki.Storage.Disk.NativeOpenErrorLockFinalization
-import Alvoki.Storage.Disk.NativeRawMarkerRouteError
+import Alvoki.Storage.Disk.NativeRawRecoveryReturn
 import Alvoki.Storage.Disk.NativeReusedBootstrapKeeperHeap
 
 namespace Alvoki.Storage.DiskSession

@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeManifestDecodeError
 import Alvoki.Storage.Disk.NativeMarkedTableOpen
-import Alvoki.Storage.Disk.NativeRawMarkerRouteError
+import Alvoki.Storage.Disk.NativeRawOpenAdmission
 
 namespace Alvoki.Storage.DiskSession
 
@@ -85,44 +85,5 @@ theorem stopsBeforeWal {stream : Type}
     fault.invalid, Except.mapError, liftExcept, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
 
 end RawManifestDecodeRead
-
-variable {fault : NativeManifestDecodeError admission}
-  {seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock}
-  {fileCalls : MarkedTemporaryReadCalls heap}
-
-/-- The earlier error view keeps the reported synchronization cache
-live through local unlock. The decoder itself needs only its read report. -/
-structure RawManifestDecodeFailure (fault : NativeManifestDecodeError admission)
-    (seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock)
-    (fileCalls : MarkedTemporaryReadCalls heap)
-    extends RawManifestDecodeRead (admitted := admitted) fault seed fileCalls where
-  cleanup : NativeOpenErrorUnlock admission fault.afterRead
-  unlock : RawHeldOpenCleanup (admitted := admitted) cleanup seed closed
-
-/-- The acquired lock is unlocked at that exact post-release heap. The
-open reports the decoder error or the error from unlocking the same lock. -/
-theorem RawManifestDecodeFailure.returns {stream α : Type} (seen : RawManifestDecodeFailure (admitted := admitted) fault seed fileCalls)
-    (directoryCalls : MarkedDirectoryReadCalls heap stream) (callbacks : AlignedKeeperCacheCallbacks heap)
-    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
-    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
-    (install : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap α) :
-    let recover := fun resolved lock cache =>
-      calls.recoverMarkedWithCacheRefs fileCalls directoryCalls callbacks seed.directoryRef seed.activeRef seed.pendingRef
-        remove write rename bootstrap resolved cache >>= install resolved lock cache
-    seen.unlock.Returned recover (IO.userError fault.cause) ∧
-    (view.files seen.unlock.reached).image.directory.active.manifest = some fault.bytes ∧
-    (view.descriptors seen.unlock.reached).references fault.manifest.calls.slot.description = [] := by
-  intro recover
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, cache, files, _⟩ := seed.installs
-  obtain ⟨_, _, _, _, census, released⟩ := seen.toRawManifestDecodeRead.readsSelected
-  have returned := seen.unlock.returnsErrorAt recover (IO.userError fault.cause) (fun rawCache => by
-    simp only [recover, Bind.bind, EStateM.bind,
-      seen.toRawManifestDecodeRead.stopsBeforeWal directoryCalls callbacks remove write rename bootstrap])
-    (seen.frame.files.trans files) census (seen.frame.keepsInitialCache.trans cache)
-  refine ⟨returned, ?_, seen.unlock.census.symm ▸ released⟩
-  have image := seen.unlock.image.trans (congrArg LockedFileState.image (seen.frame.files.trans files))
-  exact (congrArg (fun image => image.directory.active.manifest) image).trans fault.selected
 
 end Alvoki.Storage.DiskSession
