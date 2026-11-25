@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.CheckpointManifestStageFailureReopen
 import Alvoki.Storage.Disk.CheckpointManifestDirectoryFailureReopen
 import Alvoki.Storage.Disk.CheckpointManifestRenameFailure
+import Alvoki.Storage.Disk.CheckpointRunErrorReopen
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
@@ -133,6 +134,10 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (endpoint : CheckpointManifestErrorReopened (directory := directory) (before := before) writer descriptor session final after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
+  | checkpointRunError {session final}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (endpoint : PriorCheckpointErrorReopened (directory := directory) (before := before) writer descriptor session final after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
   | checkpointPowerLossObserved {files : Type}
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (cut : CheckpointPowerCut directory before) {published : CheckpointPublication.Image}
@@ -249,6 +254,10 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨endpoint.retained, retained, endpoint.history.trans history, retention⟩
   | checkpointManifestError _ endpoint ih =>
+    obtain ⟨_, retained, history, retention⟩ := ih
+    obtain ⟨ready, unchanged, _⟩ := endpoint.preservesWriter
+    exact ⟨ready, retained, unchanged.trans history, retention⟩
+  | checkpointRunError _ endpoint ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     obtain ⟨ready, unchanged, _⟩ := endpoint.preservesWriter
     exact ⟨ready, retained, unchanged.trans history, retention⟩

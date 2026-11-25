@@ -83,6 +83,8 @@ import Alvoki.Storage.Disk.CheckpointRunFileSyncFailureReopen
 import Alvoki.Storage.Disk.CheckpointRunGuardFailure
 import Alvoki.Storage.Disk.CheckpointRunOpenFailure
 import Alvoki.Storage.Disk.CheckpointRunDataFailure
+import Alvoki.Storage.Disk.CheckpointRunErrorReopen
+import Alvoki.Storage.Disk.CheckpointRunErrorClientTrace
 import Alvoki.Storage.Disk.CheckpointManifestRenameCut
 import Alvoki.Storage.Disk.CheckpointManifestRenameReopen
 import Alvoki.Storage.Disk.CheckpointRunBarrierReopen
@@ -467,6 +469,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ManifestStageFailureBindings.reopens
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.checkpointManifestStageError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.checkpointManifestError
+#check_axioms Alvoki.Storage.DiskSession.CheckpointRunError.returns
+#check_axioms Alvoki.Storage.DiskSession.CheckpointRunError.priorRuns
+#check_axioms Alvoki.Storage.DiskSession.CheckpointRunError.reopens
+#check_axioms Alvoki.Storage.DiskSession.PriorCheckpointErrorReopened.preservesWriter
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.checkpointRunError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.afterRunError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterRunError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterRunDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestErrorReopened.preservesWriter
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.afterManifestError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterManifestDirectoryError
