@@ -255,6 +255,7 @@ import Alvoki.Storage.Disk.NativeOpenReadyTrace
 import Alvoki.Storage.Disk.NativeOpenCacheReferences
 import Alvoki.Storage.Disk.NativeRawOpenAdmission
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
+import Alvoki.Storage.Disk.NativePrunedAlignedKeeperCache
 import Alvoki.Storage.Disk.NativeAlignedOpenHeap
 import Alvoki.Storage.Disk.NativeBootstrapCacheMutations
 import Alvoki.Storage.Disk.NativeBootstrapCacheChronology
@@ -1697,6 +1698,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.admitsWithCache
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.keeperCacheSchedules
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.returns
+#check_axioms Alvoki.Storage.DiskSession.PrunedWalUnlinkHeaps.returns
+#check_axioms Alvoki.Storage.DiskSession.PrunedAlignedKeeperCacheReport.returns
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromAlignedCache
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.bootstrapCacheSchedules
 #check_axioms Alvoki.Storage.DiskSession.BootstrapPendingObservation.returns
@@ -3153,6 +3156,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.keeperReleased
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.keeperAtSync
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.repairAt_returns
+#check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.recoversFromCensus
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.installsFromCensus
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.delayedKeeperSync
 #check_axioms Alvoki.Storage.DiskSession.KeeperRepairSlot.lockInode

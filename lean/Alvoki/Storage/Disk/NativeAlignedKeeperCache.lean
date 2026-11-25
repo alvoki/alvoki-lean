@@ -16,6 +16,55 @@ structure AlignedKeeperCacheCallbacks (heap : Type) where
   getActive : IO.Ref (Option (FilePath × IO.FS.Handle)) → EStateM IO.Error heap (Option (FilePath × IO.FS.Handle))
   sync : IO.FS.Handle → EStateM IO.Error heap Unit
 
+namespace AlignedKeeperCacheCallbacks
+
+variable {heap : Type} (calls : AlignedKeeperCacheCallbacks heap)
+
+/-- Interpret the native keeper reader with a pending cell allocated by
+the same opener. -/
+def readKeeper (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (path : FilePath)
+    (count size : Nat) : EStateM IO.Error heap ByteArray :=
+  readKeeperWith calls.openRead
+    (fun handle size => readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
+      (calls.readChunk handle) size ByteArray.empty)
+    (fun name handle => calls.modifyPending pending (pushPending name handle)) path count size
+
+def syncPaths (directory : FilePath) (cached : IO.Ref (Option IO.FS.Handle))
+    (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (paths : Array FilePath) : EStateM IO.Error heap Unit :=
+  SyncPathGroup.run (fun path => syncWithHandles directory path (calls.getDirectory cached)
+    (calls.getPending pending) (calls.setPending pending) (calls.getActive active) calls.openRead calls.sync) paths
+
+theorem readsAligned {pending path count before opened read remembered keeper bytes}
+    (fits : count < USize.size)
+    (openedKeeper : calls.openRead path before = .ok keeper opened)
+    (readKeeper : readExactPrefixWith (IO.userError "short or oversized WAL keeper read") (calls.readChunk keeper)
+      count ByteArray.empty opened = .ok bytes read)
+    (rememberedKeeper : calls.modifyPending pending (pushPending path keeper) read = .ok () remembered) :
+    calls.readKeeper pending path count count before = .ok bytes remembered := by
+  simp [AlignedKeeperCacheCallbacks.readKeeper, readKeeperWith, Bind.bind, EStateM.bind, fits, openedKeeper,
+    readKeeper, rememberedKeeper, Pure.pure, EStateM.pure]
+
+theorem syncsDirectory {dir cached active pending before after handle}
+    (loaded : calls.getDirectory cached before = .ok (some handle) before)
+    (synced : calls.sync handle before = .ok () after) :
+    calls.syncPaths dir cached active pending #[dir] before = .ok () after := by
+  rw [syncPaths, SyncPathGroup.run_single]
+  simp [syncWithHandles, Bind.bind, EStateM.bind, loaded, synced, Pure.pure, EStateM.pure]
+
+/-- A pending keeper bypasses the active cell and any fallback open.
+The removal from the pending cell precedes fsync. -/
+theorem syncsPendingKeeper {dir path cached active pending before consumed after handle}
+    (separate : path ≠ dir)
+    (loaded : calls.getPending pending before = .ok [(path, handle)] before)
+    (cleared : calls.setPending pending [] before = .ok () consumed)
+    (synced : calls.sync handle consumed = .ok () after) :
+    calls.syncPaths dir cached active pending #[path] before = .ok () after := by
+  rw [syncPaths, SyncPathGroup.run_single]
+  simp [syncWithHandles, Bind.bind, EStateM.bind, separate, loaded, cleared, synced, Pure.pure, EStateM.pure]
+
+end AlignedKeeperCacheCallbacks
+
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout retry.image history} {published : CheckpointPublication.Image}
@@ -89,16 +138,9 @@ def AlignedKeeperCacheReport.schedule
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit) : EStateM IO.Error heap Unit :=
     let path := keeperPath directory layout.keeper.first
     let size := reads.wal.keeper.calls.metadata.byteSize.toNat
-    let sync := SyncPathGroup.run (fun name =>
-      syncWithHandles directory.path name (callbacks.getDirectory seed.directoryRef)
-        (callbacks.getPending seed.pendingRef) (callbacks.setPending seed.pendingRef)
-        (callbacks.getActive seed.activeRef) callbacks.openRead callbacks.sync)
+    let sync := callbacks.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
     do
-      let _ ← readKeeperWith callbacks.openRead
-        (fun handle count => readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
-          (callbacks.readChunk handle) count ByteArray.empty)
-        (fun name handle => callbacks.modifyPending seed.pendingRef (pushPending name handle)) path
-        layout.keeper.bytes.size size
+      let _ ← callbacks.readKeeper seed.pendingRef path layout.keeper.bytes.size size
       finishBoundedMarkedOpen directory layout.boundedPlan size remove write sync rename
 
 /-- Read the marked prefix and execute the two actual aligned barriers.
@@ -121,16 +163,9 @@ theorem AlignedKeeperCacheReport.returns
   · unfold schedule
     let path := keeperPath directory layout.keeper.first
     let size := reads.wal.keeper.calls.metadata.byteSize.toNat
-    let sync := SyncPathGroup.run (fun name =>
-      syncWithHandles directory.path name (callbacks.getDirectory seed.directoryRef)
-        (callbacks.getPending seed.pendingRef) (callbacks.setPending seed.pendingRef)
-        (callbacks.getActive seed.activeRef) callbacks.openRead callbacks.sync)
+    let sync := callbacks.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
     change (do
-      let _ ← readKeeperWith callbacks.openRead
-        (fun handle count => readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
-          (callbacks.readChunk handle) count ByteArray.empty)
-        (fun name handle => callbacks.modifyPending seed.pendingRef (pushPending name handle)) path
-        layout.keeper.bytes.size size
+      let _ ← callbacks.readKeeper seed.pendingRef path layout.keeper.bytes.size size
       finishBoundedMarkedOpen directory layout.boundedPlan size remove write sync rename :
       EStateM IO.Error heap Unit) entry = _
     have aligned : layout.keeper.bytes.size = size := by
@@ -144,24 +179,14 @@ theorem AlignedKeeperCacheReport.returns
     have valid : layout.boundedPlan.valid = true :=
       (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq bytes.symm, by simp [noLater]⟩
     have separate : path ≠ directory.path := file_ne_directory directory (.walSegment layout.keeper.first)
-    have directorySelected : sync #[directory.path] seen.remembered = .ok () seen.authorized := by
-      dsimp only [sync]
-      rw [SyncPathGroup.run_single]
-      simp [syncWithHandles, Bind.bind, EStateM.bind, seen.directoryLoad, seen.directorySync,
-        Pure.pure, EStateM.pure]
-    have selectedKeeper : sync #[path] seen.authorized = .ok () seen.reached := by
-      dsimp only [sync]
-      rw [SyncPathGroup.run_single]
-      simp [syncWithHandles, Bind.bind, EStateM.bind, separate, path, seen.pendingLoad,
-        seen.consume, seen.keeperSync, Pure.pure, EStateM.pure]
-    have readReturned : readKeeperWith callbacks.openRead
-        (fun handle count => readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
-          (callbacks.readChunk handle) count ByteArray.empty)
-        (fun name handle => callbacks.modifyPending seed.pendingRef (pushPending name handle))
-        path layout.keeper.bytes.size size entry = .ok layout.keeper.bytes seen.remembered := by
+    have directorySelected : sync #[directory.path] seen.remembered = .ok () seen.authorized :=
+      callbacks.syncsDirectory seen.directoryLoad seen.directorySync
+    have selectedKeeper : sync #[path] seen.authorized = .ok () seen.reached :=
+      callbacks.syncsPendingKeeper separate seen.pendingLoad seen.consume seen.keeperSync
+    have readReturned : callbacks.readKeeper seed.pendingRef path layout.keeper.bytes.size size entry =
+        .ok layout.keeper.bytes seen.remembered := by
       rw [← aligned]
-      simp [readKeeperWith, Bind.bind, EStateM.bind, fits, path, seen.rawOpen, seen.rawRead, seen.rawRemember,
-        Pure.pure, EStateM.pure]
+      exact callbacks.readsAligned fits seen.rawOpen seen.rawRead seen.rawRemember
     simp only [Bind.bind, EStateM.bind, readReturned]
     simp only [finishBoundedMarkedOpen, sizeEq, valid, bytes, Bind.bind, EStateM.bind,
       beq_self_eq_true, decide_eq_true (Nat.le_refl _), Bool.and_self, ↓reduceIte, noLater, List.isEmpty_nil,
