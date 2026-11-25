@@ -755,6 +755,19 @@ inductive SlotWriteTransfers (start : Nat) : Nat → List Nat → Nat → Prop w
       (rest : SlotWriteTransfers start (cursor + count) later final) :
       SlotWriteTransfers start cursor ((List.range count).map (fun index => start + cursor + index) ++ later) final
 
+/-- Successfulpositional-write reports determine the reached cursor.
+EINTR and terminal failures contribute no successful byte count. -/
+theorem SlotWriteTransfers.ofCounts (start cursor : Nat) (counts : List Nat)
+    (fits : cursor + counts.sum ≤ 40) :
+    ∃ addresses, SlotWriteTransfers start cursor addresses (cursor + counts.sum) := by
+  induction counts generalizing cursor with
+  | nil =>
+    exact ⟨[], by simpa using SlotWriteTransfers.done (start := start) cursor⟩
+  | cons count counts ih =>
+    simp only [List.sum_cons] at fits ⊢
+    obtain ⟨later, transferred⟩ := ih (cursor + count) (by omega)
+    exact ⟨_, SlotWriteTransfers.transfer (count := count) (by omega) (by simpa only [Nat.add_assoc] using transferred)⟩
+
 /-- Consecutive transfers cover every address up to the reached cursor,
 including when short or zero-byte transfers precede it. -/
 theorem SlotWriteTransfers.coversPrefix {start cursor final : Nat} {addresses : List Nat}
@@ -2121,13 +2134,12 @@ theorem installsAfterAcquiredRecovery_replays
     {interruptedMarker : WalInodeImage}
     (writeCut : InterruptedBatchMarkerPublication directory prior batch next (interrupted, interruptedMarker))
     (accepted : decode (writeCut.initialMarker.visible writeCut.initialMarker.active) = .ok current)
-    {transferredAddresses : List Nat} {finalCursor : Nat}
-    (transfers : SlotWriteTransfers (next.slot * stride) 0 transferredAddresses finalCursor)
+    (transferCounts : List Nat) (transfersFit : transferCounts.sum ≤ 40)
     (slotOutcome : ∀ bytes ∈ interruptedMarker.visible interruptedMarker.active ::
       interruptedMarker.crashBytes interruptedMarker.active,
       bytes.size = containerSize ∧
       (∀ position, bytes.get! position ≠ (writeCut.initialMarker.visible writeCut.initialMarker.active).get! position →
-        next.slot * stride ≤ position ∧ position < next.slot * stride + finalCursor) ∧
+        next.slot * stride ≤ position ∧ position < next.slot * stride + transferCounts.sum) ∧
       (decodeSlot bytes (slotIndex active.other) =
           decodeSlot (writeCut.initialMarker.visible writeCut.initialMarker.active) (slotIndex active.other) ∨
         decodeSlot bytes (slotIndex active.other) = none ∨ decodeSlot bytes (slotIndex active.other) = some next))
@@ -2171,6 +2183,8 @@ theorem installsAfterAcquiredRecovery_replays
         (.ready prior.installed, ⟨(prior.files, writeCut.initialMarker), prior.owners⟩) =
         .error writeCut.stopped (.poisoned, ⟨(interrupted, interruptedMarker), prior.owners⟩) := by
   intro opened prepare
+  obtain ⟨transferredAddresses, transfers⟩ := SlotWriteTransfers.ofCounts (next.slot * stride) 0 transferCounts (by simpa using transfersFit)
+  simp only [Nat.zero_add] at transfers
   have beforeBarrier := reportedBeforeBarrier.refines
   have finished := repair.returns
   have authorizedRepair : EffectTrace layout.target

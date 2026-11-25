@@ -975,6 +975,13 @@ the exact mixed record with the same fixture's complete slot write,
 then checks failed reopen attempts and the retained old or complete
 batch. These are Linux process-exit cases, outside the power-loss model.
 
+The interrupted writer's client theorem now derives the transfer trace
+from the reported successful positional-write byte counts. Filesystem
+assumptions still constrain the raw survivor: changed bytes lie in the
+reported prefix, and the inactive record decodes to the old record,
+the intended new record, or no record. The checksum check alone does
+not establish that last condition for arbitrary corruption.
+
 Lean now identifies the addresses of the reported short positional
 writes with the contiguous prefix ending at the reached cursor. The
 client theorem accepts that cursor interval for attributing surviving
