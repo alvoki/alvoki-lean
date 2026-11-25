@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointManifestRenameCut
 import Alvoki.Storage.Disk.NativeReadyCheckpoint
-import Alvoki.Storage.Disk.NativeCheckpointErrorPowerLoss
+import Alvoki.Storage.Disk.NativeCheckpointManifestRenameReboot
 
 namespace Alvoki.Storage.DiskSession
 
@@ -28,8 +28,44 @@ theorem NativeReadyCheckpoint.Completed.checkpointWatermark
   rw [watermark, ← valid.retained.resumed.through]
   exact (DirectoryPublication.Bindings.walRange_accounting state.writer.target.decoded).2.1
 
-/-- The watermark of the reopened writer follows the manifest of the
-reported survivor, for both returned and interrupted checkpoint calls. -/
+/-- Decode the published bytes from the actual reached writer's selected
+binding. The caller provides the old/new choice of that survivor. -/
+private theorem CheckpointPowerCut.reopenedWatermark
+    {history : List WAL.Write} {log : List DatabaseSubmissions}
+    {current next : NativeReadPosition history log} {survivor : DirectoryPublication.Bindings}
+    (cut : CheckpointPowerCut current.state.session.directory current.state.writer)
+    (settled : next.state.files.image.directory.active = survivor)
+    (chosen : survivor.manifest = current.state.writer.wal.directory.active.manifest ∨
+      survivor.manifest = some cut.checkpoint.manifest) :
+    current.state.writer.target.range.watermark ≤ next.state.writer.target.range.watermark ∧
+      (survivor.manifest = current.state.writer.wal.directory.active.manifest →
+        next.state.writer.target.range.watermark = current.state.writer.target.range.watermark) ∧
+      (survivor.manifest = some cut.checkpoint.manifest →
+        next.state.writer.target.range.watermark = current.state.writer.history.length) := by
+  have before := current.readPrefix.refines.1.retained
+  have authority : next.state.files.image.directory.active = next.state.writer.target.pair :=
+    next.readPrefix.refines.1.retained.resumed.ready.selected
+  have selected : selectedCheckpointWatermark survivor.manifest = some next.state.writer.target.range.watermark := by
+    rw [← settled, authority]
+    exact (DirectoryPublication.Bindings.walRange_accounting next.state.writer.target.decoded).1
+  have old (survived : survivor.manifest = current.state.writer.wal.directory.active.manifest) :
+      next.state.writer.target.range.watermark = current.state.writer.target.range.watermark := by
+    have watermark := (DirectoryPublication.Bindings.walRange_accounting current.state.writer.target.decoded).1
+    rw [survived, before.walPair, watermark] at selected
+    exact (Option.some.inj selected).symm
+  have new (survived : survivor.manifest = some cut.checkpoint.manifest) :
+      next.state.writer.target.range.watermark = current.state.writer.history.length := by
+    have watermark := (cut.checkpoint.preparedManifestWatermark before cut.preflight).2
+    rw [survived, watermark] at selected
+    exact (Option.some.inj selected).symm
+  refine ⟨?_, old, new⟩
+  rcases chosen with original | replacement
+  · exact Nat.le_of_eq (old original).symm
+  · rw [new replacement, ← before.resumed.through]
+    exact (DirectoryPublication.Bindings.walRange_accounting current.state.writer.target.decoded).2.1
+
+/-- The reopened writer follows the manifest reported to survive the
+final directory barrier, for both returned and interrupted calls. -/
 theorem NativeCheckpointRebootContinuation.checkpointWatermark
     {history : List WAL.Write} {log : List DatabaseSubmissions} {image : Type}
     {current next : NativeReadPosition history log} {input : System.FilePath}
@@ -41,27 +77,28 @@ theorem NativeCheckpointRebootContinuation.checkpointWatermark
       (crash.pair.manifest = current.state.writer.wal.directory.active.manifest →
         next.state.writer.target.range.watermark = current.state.writer.target.range.watermark) ∧
       (crash.pair.manifest = some cut.checkpoint.manifest →
+        next.state.writer.target.range.watermark = current.state.writer.history.length) :=
+  cut.reopenedWatermark (current := current) (next := next) reopened.settled
+    (crash.classification current.readPrefix.refines.1).2.2
+
+/-- After a reported manifest rename error and reboot, the same selected
+manifest bytes determine the watermark of the aligned reopen. This also
+applies when earlier rejected opens left the selected files unchanged. -/
+theorem NativeCheckpointManifestRenameReopened.checkpointWatermark
+    {history : List WAL.Write} {log : List DatabaseSubmissions} {image : Type}
+    {current next : NativeReadPosition history log} {input : System.FilePath}
+    {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
+    {report : NativeCheckpointManifestRenameError (image := image) current.state cut}
+    {crash : NativeCheckpointManifestRenameCrash report} {inventory : DescriptorInventory}
+    (reopened : NativeCheckpointManifestRenameReopened current crash input next inventory) :
+    current.state.writer.target.range.watermark ≤ next.state.writer.target.range.watermark ∧
+      (crash.pair.manifest = current.state.writer.wal.directory.active.manifest →
+        next.state.writer.target.range.watermark = current.state.writer.target.range.watermark) ∧
+      (crash.pair.manifest = some cut.checkpoint.manifest →
         next.state.writer.target.range.watermark = current.state.writer.history.length) := by
-  have before := current.readPrefix.refines.1.retained
-  have authority : next.state.files.image.directory.active = next.state.writer.target.pair :=
-    next.readPrefix.refines.1.retained.resumed.ready.selected
-  have selected : selectedCheckpointWatermark crash.pair.manifest = some next.state.writer.target.range.watermark := by
-    rw [← reopened.settled, authority]
-    exact (DirectoryPublication.Bindings.walRange_accounting next.state.writer.target.decoded).1
-  have old (survived : crash.pair.manifest = current.state.writer.wal.directory.active.manifest) :
-      next.state.writer.target.range.watermark = current.state.writer.target.range.watermark := by
-    have watermark := (DirectoryPublication.Bindings.walRange_accounting current.state.writer.target.decoded).1
-    rw [survived, before.walPair, watermark] at selected
-    exact (Option.some.inj selected).symm
-  have new (survived : crash.pair.manifest = some cut.checkpoint.manifest) :
-      next.state.writer.target.range.watermark = current.state.writer.history.length := by
-    have watermark := (cut.checkpoint.preparedManifestWatermark before cut.preflight).2
-    rw [survived, watermark] at selected
-    exact (Option.some.inj selected).symm
-  refine ⟨?_, old, new⟩
-  rcases reopened.generation with ⟨_, original⟩ | ⟨_, replacement⟩
-  · exact Nat.le_of_eq (old original).symm
-  · rw [new replacement, ← before.resumed.through]
-    exact (DirectoryPublication.Bindings.walRange_accounting current.state.writer.target.decoded).2.1
+  apply cut.reopenedWatermark (current := current) (next := next) reopened.settled
+  rcases crash.classification current.readPrefix.refines.1 with ⟨_, original⟩ | ⟨_, _, replacement⟩
+  · exact .inl original
+  · exact .inr replacement
 
 end Alvoki.Storage.DiskSession
