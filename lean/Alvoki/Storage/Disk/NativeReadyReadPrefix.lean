@@ -37,13 +37,15 @@ def withTable (state : NativeReadyState) (table : PackedTable) : NativeReadyStat
     session := { state.session with phase := .ready { state.writer.installed with table } }
     writer := state.writer.withTable table }
 
+private theorem Valid.tablePreserves {state : NativeReadyState} (valid : state.Valid) {table : PackedTable}
+    (step : SegmentedTableStep state.writer.installed.table table) : (state.withTable table).Valid :=
+  ⟨rfl, valid.owner, valid.ownerLive, valid.directoryLive, valid.captured, step.preservesRetained valid.retained⟩
+
 theorem Valid.acquirePreserves {state : NativeReadyState} (valid : state.Valid)
     {snapshot : UInt64} {pin : SnapshotPin} {table : PackedTable}
     (acquired : state.writer.installed.table.acquireAt snapshot = some (pin, table)) :
-    (state.withTable table).Valid := by
-  have step : SegmentedBatchDatabaseTrace state.session.directory state.session.descriptor state.writer
-      false [] state.session.descriptor (state.writer.withTable table) := .table .start (.acquireAt acquired)
-  exact ⟨rfl, valid.owner, valid.ownerLive, valid.directoryLive, valid.captured, (step.preservesRetained valid.retained).1⟩
+    (state.withTable table).Valid :=
+  valid.tablePreserves (.acquireAt acquired)
 
 theorem Valid.acquireReturns {state : NativeReadyState} (valid : state.Valid)
     {snapshot : UInt64} {pin : SnapshotPin} {table : PackedTable}
@@ -62,8 +64,8 @@ private theorem readReturns (state : NativeReadyState) {table : PackedTable} {pi
 end NativeReadyState
 
 /-- The first ready session is the exact result of the selected restart.
-Each next edge acquires a local pin and records the read at that reached
-session. Neither operation changes the files or descriptor inventory. -/
+Local snapshot updates and reads keep its files and descriptor inventory.
+A read acquires a local pin and records its response at the reached table. -/
 inductive NativeReadyReadPrefix
     (opened : EStateM.Result IO.Error CensusOpenState SegmentedSession)
     (initial : NativeReadyState) (history : List WAL.Write) (log : List DatabaseSubmissions) :
@@ -82,6 +84,12 @@ inductive NativeReadyReadPrefix
       (read : (state.withTable table).session.runSnapshotRead true (request.read pin.handle) =
         .ok (some response) (state.withTable table).session) :
       NativeReadyReadPrefix opened initial history log (reads ++ [request.record snapshot response]) (state.withTable table)
+  | snapshotUpdate {reads : List RecordedSnapshotRead} {state : NativeReadyState} {table : PackedTable}
+      {α : Type} (update : SnapshotUpdate α) {result : α}
+      (prior : NativeReadyReadPrefix opened initial history log reads state)
+      (returned : update.run state.session = .ok result (state.withTable table).session)
+      (step : SegmentedTableStep state.writer.installed.table table) :
+      NativeReadyReadPrefix opened initial history log reads (state.withTable table)
 
 private theorem readReplay (request : SnapshotReadRequest α) (reference : SnapshotTable UInt64)
     (snapshot : UInt64) : (request.record snapshot (request.replay reference snapshot)).agrees reference := by
@@ -122,6 +130,7 @@ theorem NativeReadyReadPrefix.frames
   induction observed with
   | installed returned _ _ _ _ => exact ⟨returned, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   | acquireRead _ _ _ _ ih => exact ih
+  | snapshotUpdate _ _ _ _ ih => exact ih
 
 /-- The ledger and exact native read results are preserved by induction
 over an arbitrary supported read prefix. -/
@@ -140,6 +149,8 @@ theorem NativeReadyReadPrefix.refines
     · exact responses _ old
     · obtain rfl := List.mem_singleton.mp new
       exact equal.symm ▸ readReplay request reference snapshot
+  | snapshotUpdate _ _ _ step ih =>
+    exact ⟨ih.1.tablePreserves step, ih.2⟩
 
 /-- Each successful response in the native prefix records a sequence
 within the history that supported its actual pin acquisition. -/
@@ -160,6 +171,7 @@ theorem NativeReadyReadPrefix.readsBounded
           (represented.committed_count.trans (congrArg List.length sameHistory))
       have committed := committedCount ▸ UInt64.le_iff_toNat_le.mp (acquiredAtBounds acquired).2
       cases request <;> exact committed
+  | snapshotUpdate _ _ _ _ ih => exact ih
 
 /-- The same replay already observed by the prefix still explains every
 supported local snapshot in the reached ready session. -/
