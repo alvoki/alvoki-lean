@@ -7,6 +7,7 @@ import Alvoki.Storage.Disk.SegmentedBatchAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
 import Alvoki.Storage.Disk.BatchAppendReopenAdmission
 import Alvoki.Storage.Disk.BatchCutReopenAdmission
+import Alvoki.Storage.Disk.PoisonedBatchClose
 import Alvoki.Storage.Disk.SegmentedBatchMarkerProcessExit
 import Alvoki.Storage.Disk.SegmentedBootstrapCompletion
 import Alvoki.Storage.Disk.AppendCutContinuation
@@ -746,6 +747,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.encodeBatch_eq
 #check_axioms Alvoki.Storage.DiskTable.writeBatchWithOutcome_fileEffects
 #check_axioms Alvoki.Storage.DiskTable.writeBatchWithOutcome_schedule
+#check_axioms Alvoki.Storage.DiskTable.close_schedule
 #check_axioms Alvoki.Storage.DiskTable.writeBatch_schedule
 #check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_fileEffects
 #check_axioms Alvoki.Storage.WalSegmentCommit.commitAt_reports
@@ -969,6 +971,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.reopensBatchCutAdmitted
 #check_axioms Alvoki.Storage.DiskSession.ObservedBatchFailure.reopensAdmitted
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterObservedBatchErrorWithAdmission
+#check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.outcome
+#check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.finishedFiles
+#check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.lockSlotAfterClears
+#check_axioms Alvoki.Storage.DiskSession.ObservedBatchFailure.reopensAfterCachedClose
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.pinnedReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.acquireReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.keyValueRefinement

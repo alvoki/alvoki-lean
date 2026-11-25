@@ -416,6 +416,19 @@ def DiskTable.close (db : DiskTable) : IO Unit := do
     db.files.directory.set none
     db.phase.set .closed
 
+/-- Project close onto its phase, unlock and cache callbacks. -/
+@[macro_inline] def DiskSession.closeSchedule [Monad m] (phase : m (Phase α))
+    (unlock : Unit → m Unit) (clearActive clearPending clearDirectory finish : m Unit) : m Unit := do
+  (← phase).close unlock fun _ => do
+    clearActive
+    clearPending
+    clearDirectory
+    finish
+
+theorem DiskTable.close_schedule (db : DiskTable) :
+    db.close = DiskSession.closeSchedule db.phase.get (fun _ => db.lock.unlock)
+      (db.files.active.set none) (db.files.pending.set []) (db.files.directory.set none) (db.phase.set .closed) := rfl
+
 private def DiskTable.installed (db : DiskTable) : IO Installed := do
   (← db.phase.get).installed
 
