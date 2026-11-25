@@ -1294,9 +1294,19 @@ theorem recoveredRetries_installedReads
     (repaired : finish bounded size
       { prepared with directory := settleMarker prepared.directory selected } = .ok () after)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
+    {sealed : List (Nat × ByteArray)} {payload : ByteArray}
+    (sealedRead : ∀ file ∈ sealed, prepared.kept file.1 = some file.2)
+    (checked : checkSelectedWalSegmentSpans (selected.frontier.toNat / frameSize)
+      (sealed ++ [(target.first, plan.keeperBytes)]) = true)
+    (selectedReplay : recoverMarkedWalSegments base selected.frontier
+      (sealed ++ [(target.first, plan.keeperBytes)]) = .ok (payload, opened.table))
     {snapshot : UInt64} (retained : opened.table.pins.floor ≤ snapshot)
     (within : snapshot.toNat ≤ range.through) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
+    (∀ bytes, some bytes ∈ after.keeper.active :: after.keeper.crashImages →
+      recoverMarkedWalSegments base selected.frontier (sealed ++ [(target.first, bytes)]) =
+        .ok (payload, opened.table) ∧
+      ∀ file ∈ sealed, after.kept file.1 = some file.2) ∧
     ∃ session final reference state pin pinned,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
         (reopenWith prepare stabilize finish) openedFrom = .ok session final ∧
@@ -1314,7 +1324,13 @@ theorem recoveredRetries_installedReads
   obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
   obtain ⟨session, final, returned, installed, reached, owner, freshSession⟩ :=
     reopenWith_installsPrepared (unlock := unlock) liveRefs fresh acquisition read barrier repaired
-  exact ⟨ledger.1, session, final, reference, opened.installed, pin, pinned,
+  have markerRead : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
+    congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
+  have authorized := prepared_settleMarker preparedPlan selected observed
+  have physical bytes survives := retries.replayUnchanged authorizedRepair authorized base sealed
+    sealedRead markerRead (Boundary.decode_encode selected.frontier) checked (bytes := bytes) survives
+  exact ⟨ledger.1, fun bytes survives =>
+      ⟨(physical bytes survives).1.trans selectedReplay, (physical bytes survives).2⟩, session, final, reference, opened.installed, pin, pinned,
     returned, reached, owner, freshSession, replayed, installed, acquired, points, ranges⟩
 
 end Alvoki.WAL.TwoSlot
