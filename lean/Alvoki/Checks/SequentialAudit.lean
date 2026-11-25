@@ -154,6 +154,7 @@ import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.ObsoleteRunInodeLifetime
 import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.MixedTraceSnapshotReads
+import Alvoki.Storage.Disk.ClientReadTrace
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.SegmentedCollectionInventory
 import Alvoki.Storage.Disk.SegmentedRetainedWriter
@@ -1020,6 +1021,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.range_schedule
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.guardedReadsBeforeSuffix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.intermediateSnapshotRefinement
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.append
+#check_axioms Alvoki.Storage.DiskSession.RecordedSnapshotRead.Observed.agreesAfterSuffix
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.writes
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.responses
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquireAt_ready
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquire_of_acquireAt
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquireAt_unsupported
