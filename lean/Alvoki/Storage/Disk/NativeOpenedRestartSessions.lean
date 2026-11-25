@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
+import Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
 
 namespace Alvoki.Storage.DiskSession
 
@@ -15,7 +16,7 @@ theorem NativeExecutionTrace.append
 
 variable {heap : Type}
 
-/-- A position can move to a newly opened handle at a machine restart. -/
+/-- A position can move to a newly opened handle across sessions. -/
 structure NativeOpenedSessionPoint (heap : Type) where
   handle : NativeOpenedHandle heap
   position : NativeOpenedPosition handle
@@ -130,9 +131,10 @@ theorem NativeQuietRestartReport.reaches (seen : NativeQuietRestartReport before
 inductive NativeOpenedSessionAction : Type 1 where
   | calls (instructions : List NativeOpenedInstruction)
   | quietRestart (input : FilePath)
+  | closeAndReopen (input : FilePath)
 
-/-- A segment either stays on the same raw handle or uses an exact
-reported quiet reboot to begin the following session. -/
+/-- Same-handle calls and the two supported reopen routes compose at
+the exact handle and ready position reached by the preceding segment. -/
 inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (before : NativeOpenedSessionPoint heap) :
     NativeOpenedSessionAction → List NativeExecutionEvent → NativeOpenedSessionPoint heap → Prop where
@@ -142,6 +144,9 @@ inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
   | quiet {input : FilePath} (seen : NativeQuietRestartReport before input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next) :
       NativeOpenedSessionStep view names bytes before (.quietRestart input) [.readOrRestart (.restart input)] next
+  | close {input : FilePath} (seen : NativeOpenedAlignedCloseReport before.position input view)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.closeAndReopen input) [.closedAndReopened input (.ok ())] next
 
 inductive NativeOpenedSessionTrace (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (start : NativeOpenedSessionPoint heap) :
@@ -153,7 +158,7 @@ inductive NativeOpenedSessionTrace (view : OpenCloseHeapView heap FileImage)
       NativeOpenedSessionTrace view names bytes start (actions ++ [action]) (events ++ added) after
 
 /-- The common ledger spans the same exact ready positions as the raw
-session trace, including every quiet restart. -/
+session trace, including every close and quiet restart. -/
 theorem NativeOpenedSessionTrace.common (trace : NativeOpenedSessionTrace view names bytes start actions events last) :
     NativeExecutionTrace start.position.current events last.position.current := by
   induction trace with
@@ -162,8 +167,9 @@ theorem NativeOpenedSessionTrace.common (trace : NativeOpenedSessionTrace view n
     cases next with
     | calls ran => exact prior.append ran.common
     | quiet _ returned => exact .step prior returned.common
+    | close _ returned => exact .step prior returned.common
 
-/-- A report for just the next prescribed block of calls or restart. -/
+/-- A report for the next prescribed block of calls or reopen. -/
 inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray)
     (before : NativeOpenedSessionPoint heap) : NativeOpenedSessionAction → Type 1 where
@@ -171,6 +177,8 @@ inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
       NativeOpenedSessionReport view names bytes before (.calls instructions)
   | quiet (input : FilePath) (report : NativeQuietRestartReport before input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.quietRestart input)
+  | close (input : FilePath) (report : NativeOpenedAlignedCloseReport before.position input view) :
+      NativeOpenedSessionReport view names bytes before (.closeAndReopen input)
 
 theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport view names bytes before action) :
     ∃ events next, NativeOpenedSessionStep view names bytes before action events next := by
@@ -181,10 +189,13 @@ theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport vi
   | quiet input seen =>
     obtain ⟨next, returned⟩ := seen.reaches
     exact ⟨_, next, .quiet seen returned⟩
+  | close input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .close seen returned⟩
 
 /-- Obtain the next local report only at the reached position of this
-prescribed prefix. Each restart can have a different reached machine
-heap and new handle within the same filesystem interpretation. -/
+prescribed prefix. Each reopen can reach a new handle. Quiet restarts
+share the same filesystem view. -/
 def NativeOpenedSessionTrace.Reports (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray)
     (start : NativeOpenedSessionPoint heap) (actions : List NativeOpenedSessionAction) : Prop :=
@@ -193,9 +204,9 @@ def NativeOpenedSessionTrace.Reports (view : OpenCloseHeapView heap FileImage)
     NativeOpenedSessionTrace view names bytes start completed events reached →
     Nonempty (NativeOpenedSessionReport view names bytes reached action)
 
-/-- Execute arbitrary finite interleavings of verified ready calls and
-reported quiet power losses with healthy aligned reopen. One replay
-accounts for the recorded responses and the final returned table. -/
+/-- Execute finite interleavings of verified ready calls, successful
+explicit close and quiet power loss, using healthy aligned reopen
+reports. One replay explains the recorded responses and final table. -/
 theorem NativeOpenedSessionTrace.executes (start : NativeOpenedSessionPoint heap) (actions : List NativeOpenedSessionAction)
     (reports : Reports view names bytes start actions) :
     ∃ events next, NativeOpenedSessionTrace view names bytes start actions events next ∧

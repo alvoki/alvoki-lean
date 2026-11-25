@@ -153,16 +153,16 @@ private theorem startsAtSameHistory
       start.current = ⟨priorHistory, log, next⟩ ∧ handle.table = installed.table ∧
       handle.lock = lock ∧ handle.files = installed.files ∧
       handle.phase = installed.allocation.phase ∧ handle.token = installed.allocation.token ∧
-      handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧
+      handle.contents = view.phase ∧ handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧
       tokenIdentity handle.token = next.state.session.sessionRef ∧
       start.reached = installed.allocation.afterToken ∧ start.pins = [] ∧
       view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
       view.cacheAt start.reached seed.directoryRef seed.activeRef seed.pendingRef = next.state.cache := by
   subst priorHistory
-  obtain ⟨handle, start, table, _, sameLock, sameCache, phase, token, _, getEq, setEq, compared,
+  obtain ⟨handle, start, table, _, sameLock, sameCache, phase, token, contents, getEq, setEq, compared,
     current, heap, pins, files, census, cached, _, _, _, _, tokenRef⟩ :=
     installed.startsAtReportedPosition next sameReturn reported cache owner slot phaseEffects ptrEq
-  exact ⟨handle, start, current, table, sameLock, sameCache, phase, token, getEq, setEq, compared, tokenRef, heap,
+  exact ⟨handle, start, current, table, sameLock, sameCache, phase, token, contents, getEq, setEq, compared, tokenRef, heap,
     pins, files, census, cached⟩
 
 end
@@ -240,7 +240,8 @@ theorem NativeOpenedTrace.closesThenOpensAligned
       handle.files.UsesCacheReferences seen.admission.seed.activeRef seen.admission.seed.pendingRef
         seen.admission.seed.directoryRef ∧ handle.files.AtDirectory state.session.directory.path ∧
       tokenIdentity handle.token = next.state.session.sessionRef ∧
-      handle.get = opened.get ∧ handle.set = opened.set ∧ handle.ptrEq = opened.ptrEq ∧ start.pins = [] ∧
+      handle.contents = view.phase ∧ handle.get = opened.get ∧ handle.set = opened.set ∧
+      handle.ptrEq = opened.ptrEq ∧ start.pins = [] ∧
       view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
       view.cacheAt start.reached seen.admission.seed.directoryRef seen.admission.seed.activeRef
         seen.admission.seed.pendingRef = next.state.cache := by
@@ -272,13 +273,13 @@ theorem NativeOpenedTrace.closesThenOpensAligned
   have phaseEffects : OpenPhaseCellEffects view.phase opened.get opened.set := by
     rw [samePhase]
     exact opened.phaseEffects
-  obtain ⟨handle, start, reachedPosition, table, lock, cacheFiles, _, _, getEq, setEq, compared, tokenRef, reachedHeap, pins,
+  obtain ⟨handle, start, reachedPosition, table, lock, cacheFiles, _, _, contents, getEq, setEq, compared, tokenRef, reachedHeap, pins,
     sameFiles, sameCensus, sameCache⟩ := startsAtSameHistory installed rows next nextOpened
       nextReturned cache owner slot phaseEffects opened.ptrEq
   refine ⟨source, next, after, plan, selected, reader, seen, cacheOpen, makeCache, handle, start,
     returned, shut, files, census, cacheAction, cacheSource, nextOpened, nextReturned, reads, reopened, ?_, ?_,
     reachedPosition, lock, cacheFiles.symm ▸ installed.cacheReferences, cacheFiles.symm ▸ installed.cacheDirectory, tokenRef,
-    getEq, setEq, compared, pins, sameFiles, sameCensus, sameCache⟩
+    contents, getEq, setEq, compared, pins, sameFiles, sameCensus, sameCache⟩
   · rw [reachedPosition]
     exact trace
   · rw [table, reachedHeap]
