@@ -54,13 +54,14 @@ theorem failure {files frame α : Type} (project : heap → files) (retain : hea
 theorem forM {files frame α : Type} {project : heap → files} {retain : heap → frame}
     (items : List α) {raw : α → EStateM IO.Error heap Unit}
     {modeled : α → EStateM IO.Error files Unit}
-    (observes : ∀ item, NativeFileEffectProjection project retain (raw item) (modeled item)) :
+    (observes : ∀ item ∈ items, NativeFileEffectProjection project retain (raw item) (modeled item)) :
     NativeFileEffectProjection project retain (items.forM raw) (items.forM modeled) := by
   induction items with
   | nil => exact NativeFileEffectProjection.pure _ _ ()
   | cons item remaining ih =>
     simp only [List.forM_eq_forM, List.forM_cons]
-    exact (observes item).bind fun _ => ih
+    exact (observes item List.mem_cons_self).bind fun _ =>
+      ih fun other member => observes other (List.mem_cons_of_mem _ member)
 
 theorem returnsOk {files frame α : Type} {project : heap → files} {retain : heap → frame}
     {raw : EStateM IO.Error heap α} {modeled : EStateM IO.Error files α}
