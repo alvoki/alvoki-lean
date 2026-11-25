@@ -242,6 +242,35 @@ theorem bootstrapEmptyWith_completes (directory : DiskDirectory) (before : State
   exact ⟨after, bootstrapEmptyWith_completesAt directory before valid empty seen createEmpty write sync renameFile
     rotation marker after completed⟩
 
+/-- A returned stage error stops before the file barrier. Only scratch
+metadata can change after the already completed zero-keeper settlement. -/
+theorem bootstrapEmptyWith_writeStagedError (directory : DiskDirectory) (before : State)
+    (valid : BootstrapValid before) (empty : Option ByteArray) (seen : before.observeSuccessor = empty)
+    (createEmpty : FilePath → BootstrapM Unit) (write : FilePath → ByteArray → BootstrapM Unit)
+    (sync : Array FilePath → BootstrapM Unit) (renameFile : FilePath → FilePath → BootstrapM Unit)
+    {reached : State} {cause : IO.Error} :
+    let rotate := WalSegmentRotation.performPaths directory 0 createEmpty (fun path => sync #[path])
+    let settled : State := ⟨before.metadata.syncDirectory, .durable⟩
+    (∀ done step todo prior next, WalSegmentRotation.steps empty.isSome = done ++ step :: todo →
+      before.execute done = some prior → prior.step step = some next → rotate step prior = .ok () next) →
+    write (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0) settled = .error cause reached →
+    reached.metadata.active = settled.metadata.active →
+    reached.metadata.crashImages = settled.metadata.crashImages →
+    reached.successor = .durable →
+    bootstrapEmptyWith directory empty createEmpty write sync renameFile before = .error cause reached ∧
+      BootstrapValid reached := by
+  intro _ settled rotation failed active crash keeper
+  obtain ⟨rotates, runRotation⟩ := bootstrapRotation_completes directory before empty seen createEmpty sync rotation
+  have validSettled := valid.rotatePrefix rotates
+  refine ⟨?_, ⟨⟨?_, ?_⟩, fun _ _ _ => keeper⟩⟩
+  · rw [bootstrapEmptyWith]
+    dsimp only [settled] at failed
+    simp only [Publication.run_performReplacement, Bind.bind, EStateM.bind, Pure.pure, runRotation, failed]
+  · rw [active, crash]
+    exact validSettled.metadata.activeMaySurvive
+  · rw [crash]
+    exact validSettled.metadata.crashValid
+
 /-- Once the zero keeper and marker write complete, a returned error
 from the staged file sync stops publication before rename and directory sync.
 The reported file effect may leave the stage written or fully file-synced. -/

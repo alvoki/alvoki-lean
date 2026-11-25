@@ -56,7 +56,8 @@ theorem settledCustody (route : BootstrapZeroKeeperRoute listed) :
     obtain ⟨_, lock, dir, _, bound, _⟩ := observed.settledKeeper
     exact ⟨lock, dir, bound, observed.statObject⟩
 
-private theorem settledVisible (route : BootstrapZeroKeeperRoute listed) :
+/-- The selected settled inode still has the reported empty payload. -/
+theorem settledVisible (route : BootstrapZeroKeeperRoute listed) :
     route.settledImage.visible route.settledImage.active = ByteArray.empty := by
   cases route with
   | fresh observed => exact observed.empty

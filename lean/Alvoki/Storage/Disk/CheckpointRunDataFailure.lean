@@ -1,8 +1,9 @@
 import Alvoki.Storage.Disk.CheckpointRunOpenFailure
+import Alvoki.Storage.Disk.StagedHandleCustody
 
 namespace Alvoki.Storage.CheckpointPublication
 
-open System
+open System SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
 private abbrev RunIO := EStateM IO.Error WalInodeImage
@@ -22,16 +23,11 @@ inductive RunDataWriteFailure {handle : Type} (write : handle → ByteArray → 
 /-- The error branch drops the unretained handle. In the pinned runtime
 its finalizer calls `fclose`; the finalizer's status does not override
 the earlier callback error. Retain its reported reached file effects. -/
-def runDataDropImage {handle : Type} (drop : handle → RunIO Unit) (descriptor : handle)
-    (reached : WalInodeImage) : WalInodeImage :=
-  match drop descriptor reached with
-  | .ok _ after | .error _ after => after
+abbrev runDataDropImage {handle : Type} (drop : handle → RunIO Unit) (descriptor : handle)
+    (reached : WalInodeImage) : WalInodeImage := dataErrorDropState drop descriptor reached
 
-def dropHandleOnDataError {handle : Type} (drop : handle → RunIO Unit)
-    (descriptor : handle) (action : RunIO Unit) : RunIO Unit := fun before =>
-  match action before with
-  | .ok () reached => .ok () reached
-  | .error cause reached => .error cause (runDataDropImage drop descriptor reached)
+abbrev dropHandleOnDataError {handle : Type} (drop : handle → RunIO Unit)
+    (descriptor : handle) (action : RunIO Unit) : RunIO Unit := withDataErrorDrop drop descriptor action
 
 /-- Project the reached primitive error and the error branch's local
 handle drop onto the actual checked write/flush/retain schedule. -/
@@ -53,8 +49,8 @@ theorem RunDataWriteFailure.returns {handle : Type}
         dropHandleOnDataError drop descriptor (flush descriptor) >>= fun _ => pure descriptor) opened =
       .error cause (runDataDropImage drop descriptor reached) := by
     cases failure with
-    | writeError failed => simp only [Bind.bind, EStateM.bind, dropHandleOnDataError, failed]
-    | flushError written failed => simp only [Bind.bind, EStateM.bind, dropHandleOnDataError, written, failed]
+    | writeError failed => simp only [Bind.bind, EStateM.bind, dropHandleOnDataError, withDataErrorDrop, failed]
+    | flushError written failed => simp only [Bind.bind, EStateM.bind, dropHandleOnDataError, withDataErrorDrop, written, failed]
   rcases guard with ⟨_, _, absent⟩ | ⟨metadata, present, regular, privateFile⟩
   · simpa [writeCheckpointRunWith, optionalMetadataWith, absent, openedFile, Bind.bind, EStateM.bind, Pure.pure,
       EStateM.pure] using data

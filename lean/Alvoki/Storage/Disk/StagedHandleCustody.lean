@@ -5,6 +5,28 @@ namespace Alvoki.Storage.SyncHandleRouting
 
 open System
 
+/-- Model the file effects of dropping the unretained handle on a data
+error. The pinned runtime calls `fclose` and ignores its status. -/
+def dataErrorDropState {handle state : Type} (drop : handle → EStateM IO.Error state Unit)
+    (descriptor : handle) (before : state) : state :=
+  match drop descriptor before with
+  | .ok _ after | .error _ after => after
+
+def withDataErrorDrop {handle state : Type} (drop : handle → EStateM IO.Error state Unit)
+    (descriptor : handle) (action : EStateM IO.Error state Unit) : EStateM IO.Error state Unit :=
+  fun before =>
+    match action before with
+    | .ok () after => .ok () after
+    | .error cause after => .error cause (dataErrorDropState drop descriptor after)
+
+/-- The reported finalizer effect follows the original data callback's
+error. It supplies the reached file state while the cause stays original. -/
+theorem withDataErrorDrop_error {handle state : Type} (drop : handle → EStateM IO.Error state Unit)
+    (descriptor : handle) (action : EStateM IO.Error state Unit) {before after : state} {cause : IO.Error}
+    (failed : action before = .error cause after) :
+    withDataErrorDrop drop descriptor action before = .error cause (dataErrorDropState drop descriptor after) := by
+  simp only [withDataErrorDrop, failed]
+
 /-- Interpret `SyncFiles.stage` as the fresh staged write followed by
 pending-handle insertion on successful return. A failed open, write or
 flush can already have filesystem effects, which the result retains. -/

@@ -56,6 +56,19 @@ private theorem BootstrapMarkerStageOpen.uses {tryCreate detach create path init
   | replaced conflict detached returned =>
     simp [withFreshStaging, Bind.bind, EStateM.bind, conflict, detached, returned]
 
+/-- After the reported exclusive open and write, the staged writer
+propagates a flush error on that same issued description. -/
+theorem BootstrapMarkerStageOpen.flushError {tryCreate detach create path initial handle opened}
+    (opening : BootstrapMarkerStageOpen tryCreate detach create path initial handle opened)
+    {write : Handle → ByteArray → EStateM IO.Error Files Unit}
+    {flush : Handle → EStateM IO.Error Files Unit} {bytes : ByteArray} {written reached : Files} {cause : IO.Error}
+    (wrote : write handle bytes opened = .ok () written)
+    (failed : flush handle written = .error cause reached) :
+    writeFreshStagedWith tryCreate detach create write flush path bytes initial = .error cause reached := by
+  unfold writeFreshStagedWith
+  rw [opening.uses]
+  simp only [Bind.bind, EStateM.bind, wrote, failed]
+
 variable {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
   {calls : BootstrapOpenCalls (Cache Handle) directory before}
   {captured : BootstrapCacheOpen calls.toBootstrapAdmissionCalls}
