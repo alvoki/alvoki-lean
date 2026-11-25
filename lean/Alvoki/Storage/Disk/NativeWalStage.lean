@@ -100,17 +100,14 @@ theorem acquireKeeps {footprint : Type} (calls : RawWalStageCalls heap) (path : 
     exact keepsAfterBind observe _ _ atCreate (createKeeps atCreate) (fun _ => rfl)
   next => rfl
 
-/-- The named scratch binding comes from the exclusive create that
-actually returned the selected handle, including a retry after EEXIST. -/
-theorem acquireBinds (calls : RawWalStageCalls heap) (path : FilePath)
-    (binding : heap → FilePath → Option Nat) (inode : IO.FS.Handle → Nat)
+private theorem acquireProvides (calls : RawWalStageCalls heap) (path : FilePath)
+    (observes : IO.FS.Handle → heap → Prop)
     {entry opened : heap} {file : IO.FS.Handle}
     (acquired : calls.acquire path entry = .ok file opened)
     (first : ∀ {file reached}, calls.tryCreate path entry = .ok (.ok file) reached →
-      binding reached path = some (inode file))
+      observes file reached)
     (retry : ∀ {file before reached}, calls.create path before = .ok file reached →
-      binding reached path = some (inode file)) :
-    binding opened path = some (inode file) := by
+      observes file reached) : observes file opened := by
   unfold acquire withFreshStaging at acquired
   cases tried : calls.tryCreate path entry with
   | error => simp [Bind.bind, EStateM.bind, tried] at acquired
@@ -133,6 +130,19 @@ theorem acquireBinds (calls : RawWalStageCalls heap) (path : FilePath)
           obtain ⟨rfl, rfl⟩ := acquired
           exact retry created
     next => simp [EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at acquired
+
+/-- The named scratch binding comes from the exclusive create that
+actually returned the selected handle, including a retry after EEXIST. -/
+theorem acquireBinds (calls : RawWalStageCalls heap) (path : FilePath)
+    (binding : heap → FilePath → Option Nat) (inode : IO.FS.Handle → Nat)
+    {entry opened : heap} {file : IO.FS.Handle}
+    (acquired : calls.acquire path entry = .ok file opened)
+    (first : ∀ {file reached}, calls.tryCreate path entry = .ok (.ok file) reached →
+      binding reached path = some (inode file))
+    (retry : ∀ {file before reached}, calls.create path before = .ok file reached →
+      binding reached path = some (inode file)) :
+    binding opened path = some (inode file) :=
+  calls.acquireProvides path (fun file state => binding state path = some (inode file)) acquired first retry
 
 private theorem freshStagingThen {handle α : Type}
     (tryCreate : FilePath → EStateM IO.Error heap (Except IO.Error handle))
@@ -194,6 +204,40 @@ theorem returned (calls : RawWalStageCalls heap) {pending : IO.Ref (List (FilePa
       | ok value atFlush =>
         cases value
         exact ⟨file, atOpen, atWrite, atFlush, rfl, wrote, flushed, by simpa [opened, wrote, flushed] using staged⟩
+
+/-- The actual exclusive create starts empty. Follow the buffered
+write and flush on that stream to the inode named after the pending store. -/
+theorem stagesVisible (calls : RawWalStageCalls heap)
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {path : FilePath} {bytes : ByteArray}
+    {entry reached : heap} (binding : heap → FilePath → Option Nat) (inode : IO.FS.Handle → Nat)
+    (visible : heap → Nat → ByteArray) (buffered : heap → IO.FS.Handle → ByteArray)
+    (staged : calls.run pending path bytes entry = .ok () reached)
+    (first : ∀ {file atOpen}, calls.tryCreate path entry = .ok (.ok file) atOpen →
+      binding atOpen path = some (inode file) ∧
+      visible atOpen (inode file) = ByteArray.empty ∧ buffered atOpen file = ByteArray.empty)
+    (retry : ∀ {file before atOpen}, calls.create path before = .ok file atOpen →
+      binding atOpen path = some (inode file) ∧
+      visible atOpen (inode file) = ByteArray.empty ∧ buffered atOpen file = ByteArray.empty)
+    (written : ∀ {file before after}, calls.write file bytes before = .ok () after →
+      binding after path = binding before path ∧
+      visible after (inode file) ++ buffered after file =
+        (visible before (inode file) ++ buffered before file) ++ bytes)
+    (flushed : ∀ {file before after}, calls.flush file before = .ok () after →
+      binding after path = binding before path ∧
+      visible after (inode file) = visible before (inode file) ++ buffered before file)
+    (stored : ∀ {file before}, calls.remember pending (pushPending path file) before = .ok () reached →
+      binding reached path = binding before path ∧ visible reached (inode file) = visible before (inode file)) :
+    ∃ selected, binding reached path = some selected ∧ visible reached selected = bytes := by
+  obtain ⟨file, _, _, _, acquired, wrote, didFlush, remembered⟩ := calls.returned staged
+  obtain ⟨named, empty, clean⟩ := calls.acquireProvides path (fun stream state =>
+    binding state path = some (inode stream) ∧
+    visible state (inode stream) = ByteArray.empty ∧ buffered state stream = ByteArray.empty) acquired first retry
+  obtain ⟨writeName, writtenBytes⟩ := written wrote
+  obtain ⟨flushName, flushedBytes⟩ := flushed didFlush
+  obtain ⟨storeName, storedBytes⟩ := stored remembered
+  have payload := storedBytes.trans (flushedBytes.trans writtenBytes)
+  rw [empty, clean, ByteArray.append_empty, ByteArray.empty_append] at payload
+  exact ⟨inode file, storeName.trans (flushName.trans (writeName.trans named)), payload⟩
 
 /-- The original pending ref contains the returned marker handle. The
 stage keeps any protected observation shared with the prior append, such

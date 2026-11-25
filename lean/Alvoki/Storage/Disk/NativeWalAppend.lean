@@ -87,6 +87,58 @@ theorem retainsKeeper {image : Type} (calls : RawWalAppendCalls heap) (view : Op
   obtain ⟨activeHandle, stillNamed⟩ := stored saved
   exact ⟨handle, activeHandle, stillNamed.trans ((keepsFlush flushed).trans ((keepsWrite wrote).trans keeper))⟩
 
+/-- Follow the selected stream's bytes through the actual write, flush,
+and active-cell store. A successful write can leave a suffix buffered.
+The flush publishes that suffix before the selected stream is retained. -/
+theorem appendsVisible {image : Type} (calls : RawWalAppendCalls heap) (view : OpenCloseHeapView heap image)
+    {active : IO.Ref (Option (FilePath × IO.FS.Handle))} {path : FilePath} {bytes : ByteArray}
+    {entry reached : heap} (bindings : heap → FilePath → Option Nat) (inode : IO.FS.Handle → Nat)
+    (visible : heap → Nat → ByteArray) (buffered : heap → IO.FS.Handle → ByteArray) {keeper : Nat}
+    (named : bindings entry path = some keeper)
+    (loaded : calls.getActive active entry = .ok (view.active entry active) entry)
+    (appended : calls.run active path bytes entry = .ok () reached)
+    (cleanCached : ∀ handle, view.active entry active = some (path, handle) →
+      inode handle = keeper ∧ buffered entry handle = ByteArray.empty)
+    (openedExisting : ∀ {handle opened}, calls.openAppend path entry = .ok handle opened →
+      inode handle = keeper ∧ bindings opened path = some keeper ∧
+      visible opened keeper = visible entry keeper ∧ buffered opened handle = ByteArray.empty)
+    (writeEffect : ∀ {handle before after}, calls.write handle bytes before = .ok () after →
+      bindings after path = bindings before path ∧
+      visible after (inode handle) ++ buffered after handle =
+        (visible before (inode handle) ++ buffered before handle) ++ bytes)
+    (flushEffect : ∀ {handle before after}, calls.flush handle before = .ok () after →
+      bindings after path = bindings before path ∧
+      visible after (inode handle) = visible before (inode handle) ++ buffered before handle ∧
+      buffered after handle = ByteArray.empty)
+    (storeEffect : ∀ {handle before}, calls.setActive active (some (path, handle)) before = .ok () reached →
+      view.active reached active = some (path, handle) ∧ bindings reached path = bindings before path ∧
+      visible reached (inode handle) = visible before (inode handle) ∧
+      buffered reached handle = buffered before handle) :
+    ∃ handle, view.active reached active = some (path, handle) ∧ inode handle = keeper ∧
+      bindings reached path = some keeper ∧ visible reached keeper = visible entry keeper ++ bytes ∧
+      buffered reached handle = ByteArray.empty := by
+  obtain ⟨handle, opened, _, _, selected, wrote, flushed, saved⟩ := calls.returned loaded appended
+  have initial : inode handle = keeper ∧ bindings opened path = some keeper ∧
+      visible opened keeper = visible entry keeper ∧ buffered opened handle = ByteArray.empty := by
+    cases cached : view.active entry active with
+    | none => exact openedExisting (by simpa [selectAppendHandle, cached] using selected)
+    | some value =>
+      obtain ⟨name, file⟩ := value
+      by_cases hit : path = name
+      · simp [selectAppendHandle, cached, hit, Pure.pure, EStateM.pure] at selected
+        obtain ⟨rfl, rfl⟩ := selected
+        obtain ⟨same, clean⟩ := cleanCached file (by simpa [hit] using cached)
+        exact ⟨same, named, rfl, clean⟩
+      · exact openedExisting (by simpa [selectAppendHandle, cached, hit] using selected)
+  obtain ⟨same, openName, openBytes, clean⟩ := initial
+  obtain ⟨writeName, written⟩ := writeEffect wrote
+  obtain ⟨flushName, flushedBytes, flushedBuffer⟩ := flushEffect flushed
+  obtain ⟨activeHandle, storeName, storedBytes, storedBuffer⟩ := storeEffect saved
+  have payload := storedBytes.trans (flushedBytes.trans written)
+  rw [same, openBytes, clean, ByteArray.append_empty] at payload
+  exact ⟨handle, activeHandle, same, storeName.trans (flushName.trans (writeName.trans openName)),
+    payload, storedBuffer.trans flushedBuffer⟩
+
 /-- Project the effect of the selected open or the hit on the original
 active reference. A hit does not consult the append opener. -/
 private theorem projectedSelect {heap files : Type}
