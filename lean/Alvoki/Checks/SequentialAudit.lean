@@ -3762,6 +3762,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.appendCacheSchedule
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.returned
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.retainsKeeper
+#check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.appendsVisible
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.projects
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.syncPending
 #check_axioms Alvoki.Storage.DiskSession.freshStageCacheSchedule
@@ -3770,6 +3771,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.fresh_effect
 #check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.returned
 #check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.retainsStaged
+#check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.stagesVisible
 #check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.rejected
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.commitAfterStaging
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.rootBarrier

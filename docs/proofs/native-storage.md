@@ -34,9 +34,13 @@ store law at the reached success or failure. Clearing or replacing the cell can 
 so its projected result can change the files as well as the cache. The runtime law still has to
 account for local and cached reference releases and their filesystem effects. The proof composes
 the append result before marker publication. [Production cache schedules](../../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Raw append projection](../../lean/Alvoki/Storage/Disk/NativeWalAppend.lean)
+The append buffer and flush observations now give the exact old keeper bytes plus the submitted bytes
+on the selected inode. The cache assignment preserves the flushed payload. These laws apply to a
+clean cached handle or one opened on the existing keeper.
 
 The raw staging callback follows the exclusive open, write, flush and pending-reference update.
-A data failure carries the observed stream-release effects and the original error. The WAL
+A data failure carries the observed stream-release effects and the original error. A successful
+flush fixes the marker payload on the newly created inode through the pending update. The WAL
 schedule reaches its file barrier on the staging return. The barrier reads the active keeper
 and attempts the remembered marker on the heap left by that keeper fsync, including an error.
 Bootstrap and stopped checkpoint sync reuse the same selector and reference interpretation.
