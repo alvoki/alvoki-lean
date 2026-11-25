@@ -750,6 +750,20 @@ def DiskTable.acquire (db : DiskTable) : IO DiskSnapshotPin := do
   let state ← db.installed
   fromOption (← db.acquireAt state.table.committed) "cannot acquire the latest snapshot"
 
+/-- Read the committed sequence, then acquire it through the same pinned
+snapshot action used for an explicit sequence. -/
+@[macro_inline] def DiskSession.acquireLatestWith [Monad m] [MonadExceptOf IO.Error m]
+    (installed : m DiskSession.Installed) (acquireAt : UInt64 → m (Option α)) : m α := do
+  let state ← installed
+  match ← acquireAt state.table.committed with
+  | some pin => pure pin
+  | none => throw (IO.userError "cannot acquire the latest snapshot")
+
+theorem DiskTable.acquire_schedule (db : DiskTable) :
+    db.acquire = DiskSession.acquireLatestWith (m := IO) db.installed
+      (DiskSession.acquireSnapshotWith db.installed db.phase.set
+        (fun pin => ⟨⟨db.session, pin.handle⟩, pin.sequence⟩)) := rfl
+
 def DiskTable.release (db : DiskTable) (handle : DiskSnapshotHandle) : IO Unit :=
   DiskSession.withLocalHandle db.installed (handle.session.ptrEq db.session) () fun state =>
     db.phase.set (.ready { state with table := state.table.release handle.localHandle })

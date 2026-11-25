@@ -36,6 +36,19 @@ theorem SegmentedSession.runAcquireAt_unsupported {session : SegmentedSession} {
   simp [SegmentedSession.runAcquireAt, acquireSnapshotWith, phase, Phase.installed, Bind.bind, EStateM.bind,
     Pure.pure, EStateM.pure, PackedTable.acquireAt, absent]
 
+/-- Interpret both phase reads in latest acquisition. In a sequential
+session the first read observes the same cell used by `runAcquireAt`. -/
+def SegmentedSession.runAcquire : EStateM IO.Error SegmentedSession (Nat × SnapshotPin) :=
+  fun session => acquireLatestWith (m := EStateM IO.Error SegmentedSession)
+    session.phase.installed SegmentedSession.runAcquireAt session
+
+theorem SegmentedSession.runAcquire_of_acquireAt {session after : SegmentedSession}
+    {installed : Installed} (ready : session.phase = .ready installed) {pin : SnapshotPin}
+    (acquired : session.runAcquireAt installed.table.committed = .ok (some (session.sessionRef, pin)) after) :
+    session.runAcquire = .ok (session.sessionRef, pin) after := by
+  simp only [SegmentedSession.runAcquire, acquireLatestWith, ready, Phase.installed, Bind.bind,
+    EStateM.bind, Pure.pure, EStateM.pure, acquired]
+
 /-- Interpret the native release schedule with the reached session and the
 observed token comparison. Only the phase cell can change. -/
 def SegmentedSession.runRelease (sameSession : Bool) (handle : SnapshotHandle) :

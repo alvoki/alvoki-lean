@@ -507,6 +507,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.withOpenAdmission_lockRefused
 #check_axioms Alvoki.Storage.DiskTable.withOpenAdmission_lockOpenError
 #check_axioms Alvoki.Storage.DiskTable.acquireAt_schedule
+#check_axioms Alvoki.Storage.DiskTable.acquire_schedule
 #check_axioms Alvoki.Storage.DiskTable.release_schedule
 #check_axioms Alvoki.Storage.DiskTable.advanceFloor_schedule
 #check_axioms Alvoki.Storage.OpenPathReadReports.checkpointCompletes
@@ -1000,6 +1001,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.guardedKeyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.guardedAcquireReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquireAt_ready
+#check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquire_of_acquireAt
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquireAt_unsupported
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runRelease_ready
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runRelease_local
@@ -1272,6 +1274,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.uniqueResult
 #check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.sameInstalled
 #check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.guardedSnapshotReads
+#check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.guardedLatestSnapshotReads
 #check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.completesAfterCrashAndRetries
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeThenCachedReopen
 #check_axioms Alvoki.Storage.DiskTable.close.eq_def
