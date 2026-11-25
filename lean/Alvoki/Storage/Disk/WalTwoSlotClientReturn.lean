@@ -1314,7 +1314,6 @@ theorem recoveredRetries_installedReads
     {checkedState : FileImage} {checkpointResult : Option (PackedTable × UInt64)}
     (checkpointRead : readCheckpoint openedFrom.image = .ok checkpointResult checkedState)
     (checkpointBase : (checkpointResult.getD (.empty, 0)).1 = base)
-    {markerBytes : ByteArray} (acceptedMarker : decode markerBytes = .ok selected)
     (watermark : base.committed.toNat ≤ selected.frontier.toNat / frameSize)
     {entries : Array IO.FS.DirEntry} {listedState scannedState : FileImage}
     (listed : list directory.path checkedState = .ok entries listedState)
@@ -1373,13 +1372,14 @@ theorem recoveredRetries_installedReads
   obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
   let readWal := fun start length =>
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
-  obtain ⟨_, _, _, aligned, _⟩ := decode_valid acceptedMarker
   have markerRead : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
   obtain ⟨_, _, marker, length, binding, decoded, absolute⟩ :=
     DirectoryPublication.Bindings.walRange_accounting target.decoded
   have sameMarker := Option.some.inj (binding.symm.trans markerRead)
   have sameLength := Except.ok.inj ((sameMarker ▸ decoded).symm.trans (Boundary.decode_encode _))
+  have aligned : selected.frontier.toNat % frameSize = 0 := by
+    rw [← sameLength, absolute, Nat.mul_mod_left]
   have through : selected.frontier.toNat / frameSize = target.range.through := by
     rw [← sameLength, absolute, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
   have keeperSize : target.trimmed.size =
