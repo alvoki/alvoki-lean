@@ -5,6 +5,11 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+inductive NativePendingClientInstruction : Type 1 where
+  | request (operation : NativeInactiveRequest)
+  | close
+  | lastReferenceDrop (event : LockReferenceDrop)
+
 /-- The arguments and responses while the original write remains
 pending. A reported reference drop marks the end of the held attempts. -/
 inductive NativePendingClientEvent : Type 1 where
@@ -14,6 +19,11 @@ inductive NativePendingClientEvent : Type 1 where
   | lastReferenceDrop (event : LockReferenceDrop)
 
 namespace NativePendingClientEvent
+
+def instruction : NativePendingClientEvent → NativePendingClientInstruction
+  | .rejected _ request _ => .request request
+  | .closeError _ | .closed => .close
+  | .lastReferenceDrop event => .lastReferenceDrop event
 
 def error : NativePendingClientEvent → Option IO.Error
   | .closeError cause => some cause
