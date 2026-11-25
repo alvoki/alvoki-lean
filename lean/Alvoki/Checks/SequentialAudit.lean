@@ -192,6 +192,7 @@ import Alvoki.Storage.Disk.ClientReadTrace
 import Alvoki.Storage.Disk.ClientCachedClose
 import Alvoki.Storage.Disk.ClientWriteTrace
 import Alvoki.Storage.Disk.ReturnedWriteRecovery
+import Alvoki.Storage.Disk.PendingClientReplay
 import Alvoki.Storage.Disk.BatchGroupedWriteError
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
 import Alvoki.Storage.Disk.ClientRunMaintenance
@@ -1268,6 +1269,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.guardedAcquireReads
 #check_axioms Alvoki.Storage.DiskTable.lookup_schedule
 #check_axioms Alvoki.Storage.DiskTable.range_schedule
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.guardedReadsForReplay
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.guardedReadsBeforeSuffix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.intermediateSnapshotRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.append
@@ -1278,7 +1280,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.rangeDenied_iff
 #check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.recordLookup
 #check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.recordRange
-#check_axioms Alvoki.Storage.DiskSession.RecordedSnapshotRead.Observed.agreesAfterSuffix
+#check_axioms Alvoki.Storage.DiskSession.RecordedSnapshotRead.Observed.agreesForReplay
 #check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.run_release
 #check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.readyTransition
 #check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.closed
@@ -1302,6 +1304,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.refinesClient
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReturnedWrite
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.responses
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.responsesForReplay
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.replaysUncertainSubmission
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.replaysPendingBatchMarker
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.replaysPendingWriteError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.replaysPendingFirstAppend
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.guardedReplay
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.HeldReopen.refinesClient
