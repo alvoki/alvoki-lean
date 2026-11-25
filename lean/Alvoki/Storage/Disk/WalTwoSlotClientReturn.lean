@@ -244,6 +244,34 @@ theorem reopenSync_preservesReadFrontier
   rw [syncedInode_survivor sync current sameBinding survivor, ← current]
   exact (decode_of_heldRead mismatch observes available fits returned).symm.trans accepted
 
+/-- Project one directory crash choice from a completed marker sync.
+A present name uses the bytes of its surviving inode, while an absent
+name preserves the manifest and leaves the marker absent. -/
+theorem reopenSync_projectsCrashBinding
+    {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
+    (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      handle marker (fun inode files => files.completeFileSync inode) (.ok () settled))
+    (current : handle.inode = marker.active)
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selected : Selection} (observed : decode (marker.visible handle.inode) = .ok selected)
+    (before : DirectoryPublication.Bindings) {survived : Option ByteArray}
+    (presence : survived.isSome = before.walBoundary.isSome)
+    (physical : ∀ bytes, survived = some bytes →
+      ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode) :
+    (match survived with
+      | none => Except.ok (ε := String) (⟨before.manifest, none⟩ : DirectoryPublication.Bindings)
+      | some bytes => projectBinding before bytes) =
+      .ok ⟨before.manifest, before.walBoundary.map fun _ => Boundary.encode selected.frontier⟩ := by
+  cases survived with
+  | none =>
+    cases boundary : before.walBoundary <;> simp_all
+  | some bytes =>
+    have exactBytes := syncedInode_survivor sync current sameBinding (physical bytes rfl)
+    have decoded : decode bytes = .ok selected := by rw [exactBytes, ← current]; exact observed
+    change projectBinding before bytes = _
+    rw [projectBinding_decodes decoded]
+    cases boundary : before.walBoundary <;> simp_all
+
 /-- A successful barrier on each held descriptor fixes the bytes used by
 recovery. The marker encoding comes from the reported positional write;
 the WAL prefix comes from the reported append on the selected keeper. -/
