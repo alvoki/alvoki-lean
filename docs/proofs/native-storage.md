@@ -14,28 +14,27 @@ The claim is that every acknowledged write or batch is present in order and ever
 from a submission. Each uncertain batch is omitted or retained as one ordered group. The legal history
 explains the reads that the client actually observed.
 
-For a finite sequence of supported opened-table actions, `FreshBootstrapOpenHeap.executesOpenedSessions`
-derives the exact raw open result from fresh bootstrap reports. The first table has the original lock
-and cache, a fresh phase and token, the zero marker, and empty client ledgers. It then composes the
-actions using `NativeOpenedSessionTrace.executes`. Its `Reports` premise supplies the next typed report
-at each reached handle and heap. The assembled trace yields `NativeExecutionTrace.keyValueRefinement`.
-The resulting history, submissions and reads extend the initial ledgers by their event deltas.
+`FreshBootstrapOpenHeap.opensFromAdmission` derives the exact raw open result from fresh bootstrap
+observations. The first table has the original lock and cache, a fresh phase and token, the zero marker,
+and empty client ledgers. `FreshBootstrapOpenHeap.Returned` ties that initial position to the value
+and heap returned by the observed open schedule. An already observed trace from that position uses
+`Returned.refinesTrace` to derive the client history, submissions and reads directly from its events.
 `InstalledClientReplay` includes a replay from empty, ordered batch retention, acknowledged and
-submitted subsequences, and agreement with recorded reads and the ready table. [Raw fresh start](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) · [Opened-session induction](../../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean) · [Key-value refinement](../../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean) · [Client replay](../../lean/Alvoki/Storage/Disk/ClientReadTrace.lean)
+submitted subsequences, and agreement with recorded reads and the ready table. [Raw fresh start](../../lean/Alvoki/Storage/Disk/NativeFreshTableOpen.lean) · [Composition from the empty ledger](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) · [Key-value refinement](../../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean) · [Client replay](../../lean/Alvoki/Storage/Disk/ClientReadTrace.lean)
 
 The first-open theorem consumes raw admission, bootstrap and cache chronology, matching lock and
 metadata, and allocation reports that preserve inode and cache state. It joins the raw returned table,
 phase, cache and census. The later `FileImage` projection is supplied separately from the bootstrap
-rotation view. A ready write report still supplies its exact raw return and observed custody.
-Individual classifiers discharge some of these facts. The common trace requires a report for every
-covered reached action. [Per-call report premises](../../lean/Alvoki/Storage/Disk/NativeOpenReadyTrace.lean) · [Fresh allocation and views](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+rotation view. A ready write trace still uses exact interpreted returns in the normalized `OpenWriteFiles`
+view and local publication and custody evidence. [Per-call report premises](../../lean/Alvoki/Storage/Disk/NativeOpenReadyTrace.lean) · [Fresh allocation and views](../../lean/Alvoki/Storage/Disk/NativeFreshTableOpen.lean)
 
 `NativeReachedExecutionPrefix.keyValueRefinement` adds whole-or-none uncertain events, ready replay when
 the ending returns ready, and the existence of an allowed terminal history that agrees with prior reads.
-Its starting premise is a justified logical prefix with a reached ending. The exact raw fresh-start
-theorem and this terminal theorem have separate interfaces. Deriving a common source execution and all
-its terminal reports from the admitted production callbacks remains open. Duplicate client retries with
-durable request identity require their own contract. [Terminal refinement](../../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean) · [Ordered batch selection](../../lean/Alvoki/Storage/Disk/SegmentedBatchDatabaseTrace.lean)
+`Returned.stopsAfterWrites` uses that terminal argument on a finite observed write trace from fresh
+open. It derives the issued client instructions from the returned calls and consumes the source stop
+on the reached heap of that same opened table. Deriving the write trace and its protected storage
+directly from the raw production primitive chronology remains open. Duplicate client retries with
+durable request identity require their own contract. [Terminal refinement](../../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean) · [Fresh trace to checkpoint](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) · [Ordered batch selection](../../lean/Alvoki/Storage/Disk/SegmentedBatchDatabaseTrace.lean)
 
 ### Snapshot reads
 

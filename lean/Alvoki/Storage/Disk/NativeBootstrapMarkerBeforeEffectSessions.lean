@@ -1,6 +1,5 @@
 import Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectTableOpen
 import Alvoki.Storage.Disk.NativeBootstrapMarkerStopSessions
-import Alvoki.Storage.Disk.NativeFreshOpenedSessions
 
 namespace Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.BeforeEffectMarkerlessReboot
 

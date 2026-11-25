@@ -5,6 +5,21 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+namespace FreshBootstrapOpenHeap
+
+/-- The public open returned this handle at the start position used by
+the next call. Its client ledger and issued pins start empty. -/
+structure Returned {heap : Type} (call : EStateM IO.Error heap DiskTable) (entry : heap) where
+  handle : NativeOpenedHandle heap
+  start : NativeOpenedPosition handle
+  opened : call entry = .ok handle.table start.reached
+  emptyHistory : start.current.history = []
+  emptySubmissions : start.current.submissions = []
+  emptyReads : start.current.ready.reads = []
+  emptyPins : start.pins = []
+
+end FreshBootstrapOpenHeap
+
 variable {heap : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {report : EmptyOpenSuccessReports input directory}
   {admission : CensusOpenAdmissionReports input directory inventory report.before}
@@ -53,19 +68,19 @@ theorem FreshBootstrapOpenHeap.opensFromAdmission
     ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
       (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
         IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
-      (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
+      (returned : FreshBootstrapOpenHeap.Returned (calls.runOpen input init makeCache (fun resolved lock cache => do
+        let opened ← recover resolved cache
+        installReady opened.installed allocatePhase allocateToken
+          (fun phase token => pure (assemble resolved lock cache phase token)))) entry)
       (after : LockedFileState WalSegmentRotation.State),
+      let handle := returned.handle
+      let start := returned.start
       DiskTable.OpenSyncFiles.IsOpenAction directory.path cacheOpen ∧
       cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
         (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
         (fun value => liftM (IO.mkRef value)) makeCache ∧
       openSyncFilesWith (init.openDirectory directory.path) init.newRef init.newRef init.newRef makeCache
         admitted.afterFlock = .ok handle.files seed.afterPending ∧
-      calls.runOpen input init makeCache (fun resolved lock cache => do
-        let opened ← recover resolved cache
-        installReady opened.installed allocatePhase allocateToken
-          (fun phase token => pure (assemble resolved lock cache phase token))) entry =
-        .ok handle.table start.reached ∧
       handle.directory = directory ∧ handle.lock = admitted.lock ∧
       handle.files.UsesBootstrapCacheSchedules directory seed.activeRef seed.pendingRef seed.directoryRef ∧
       handle.phase = allocation.phase ∧ handle.token = allocation.token ∧ handle.contents = view.phase ∧
@@ -80,8 +95,7 @@ theorem FreshBootstrapOpenHeap.opensFromAdmission
       (NativeOpenSuccessReports.empty report).UsesReachedState start.current.ready.state after ∧
       (observed.keeperPhysical.inodes start.reached).crashBytes
         (BootstrapZeroKeeperRoute.settledImage (.fresh observed.keeper)).active = [ByteArray.empty] ∧
-      (observed.keeperPhysical.inodes start.reached).crashBytes report.marker.inodeState.active = [WAL.Boundary.encode 0] ∧
-      start.current.history = [] ∧ start.current.submissions = [] ∧ start.current.ready.reads = [] ∧ start.pins = [] := by
+      (observed.keeperPhysical.inodes start.reached).crashBytes report.marker.inodeState.active = [WAL.Boundary.encode 0] := by
   intro recover
   let lockIdentity := fun handle => (view.handle admitted.afterFlock handle).2.1.description
   have initial := (admitted.lockedCensus.trans admitted.appendCensus).symm.trans seed.entrySlots
@@ -108,12 +122,13 @@ theorem FreshBootstrapOpenHeap.opensFromAdmission
     simpa only [MonadExceptOf.tryCatch, tryCatchThe, EStateM.tryCatch, returned] using run
   obtain ⟨handle, start, table, path, lock, cache, phase, token, contents, getter, setter, compared, reached, ready,
     history, submissions, reads, pins⟩ := position get set effects ptrEq
-  refine ⟨cacheOpen, makeCache, handle, start, after, action, source, ?_, ?_, path, lock, ?_, phase, token,
-    contents, getter, setter, compared, reached, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
-    history, submissions, reads, pins⟩
-  · exact initialized.trans (congrArg (fun opened => EStateM.Result.ok opened seed.afterPending) cache.symm)
-  · rw [table, reached]
+  have opened : calls.runOpen input init makeCache worker entry = .ok handle.table start.reached := by
+    rw [table, reached]
     exact exactOpen
+  let fresh := FreshBootstrapOpenHeap.Returned.mk handle start opened history submissions reads pins
+  refine ⟨cacheOpen, makeCache, fresh, after, action, source, ?_, path, lock, ?_, phase, token,
+    contents, getter, setter, compared, reached, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · exact initialized.trans (congrArg (fun opened => EStateM.Result.ok opened seed.afterPending) cache.symm)
   · rw [cache]
     exact schedules
   · rw [lock]

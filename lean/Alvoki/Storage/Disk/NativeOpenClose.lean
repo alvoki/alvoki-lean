@@ -18,6 +18,12 @@ structure OpenCloseHeapView (heap image : Type) where
   files : heap → LockedFileState image
   descriptors : heap → DescriptorInventory
 
+/-- Change only the projected file-state model, preserving the same
+reference contents and descriptor observations. -/
+def OpenCloseHeapView.withFileProjection (view : OpenCloseHeapView heap image)
+    (files : heap → LockedFileState nextImage) : OpenCloseHeapView heap nextImage :=
+  ⟨view.phase, view.active, view.pending, view.directory, view.handle, files, view.descriptors⟩
+
 def OpenCloseHeapView.cacheAt (view : OpenCloseHeapView heap image) (reached : heap)
     (directory : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : Cache CheckpointOpenHandle :=

@@ -1,124 +1,83 @@
 import Alvoki.Storage.Disk.NativeFreshTableOpen
-import Alvoki.Storage.Disk.NativeOpenedRestartSessions
+import Alvoki.Storage.Disk.NativeOpenReadyTrace
+import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 
 namespace Alvoki.Storage.DiskSession
 
-open System WalSegmentRepair
+open System CheckpointPublication
 
-/-- Keep the same process heap, reference contents and descriptor
-observations while changing the file-state model projected from it. -/
-def OpenCloseHeapView.withFileProjection {heap image nextImage : Type} (view : OpenCloseHeapView heap image)
-    (files : heap → LockedFileState nextImage) : OpenCloseHeapView heap nextImage :=
-  ⟨view.phase, view.active, view.pending, view.directory, view.handle, files, view.descriptors⟩
+namespace NativeOpenedTrace
 
-variable {heap : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
-  {report : EmptyOpenSuccessReports input directory}
-  {admission : CensusOpenAdmissionReports input directory inventory report.before}
-  {view : OpenCloseHeapView heap WalSegmentRotation.State} {init : OpenSyncCacheCallbacks heap}
-  {calls : RawOpenAdmissionCallbacks heap} {entry : heap}
-  {bootstrap : FreshBootstrapCacheCalls heap}
-  {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
-  {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
-  {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+variable {heap : Type} {opened : NativeOpenedHandle heap} {start last : NativeOpenedPosition opened}
 
-/-- Start the finite multi-session trace at the exact public bootstrap
-return. Later reports use the same process and descriptor observations
-and supply the file-image projection of their reached heaps. -/
-theorem FreshBootstrapOpenHeap.executesOpenedSessions
-    (admitted : RawOpenAdmissionReport admission view calls entry)
-    {seed : OpenSyncCacheAllocations report.captured.opened view init admitted.afterFlock}
-    {raw : FreshBootstrapCacheChronology seed bootstrap}
-    (observed : FreshBootstrapOpenHeap report raw)
-    (owner : admission.owner = report.calls.slot)
-    (metadata : ∀ path, bootstrap.metadata path = optionalMetadataWith (calls.lookup path))
-    (marked : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
-    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles →
-      IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
-    (constructs : ∀ resolved lock files, DiskTable.OpenReferenceAssembly resolved lock files (assemble resolved lock files))
-    (allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase
-      (⟨.empty, 0, 0, 0⟩ : Reopened).installed raw.markerDirectory.reached)
-    (phaseID : phaseIdentity allocation.phase = report.calls.nextRef)
-    (tokenID : tokenIdentity allocation.token = report.calls.nextRef + 1)
-    (phaseFrame : CacheAllocationFrame view seed.directoryRef seed.activeRef seed.pendingRef
-      raw.markerDirectory.reached allocation.afterPhase)
-    (tokenFrame : CacheAllocationFrame view seed.directoryRef seed.activeRef seed.pendingRef
-      allocation.afterPhase allocation.afterToken)
-    (phaseInodes : observed.keeperPhysical.inodes allocation.afterPhase =
-      observed.keeperPhysical.inodes raw.markerDirectory.reached)
-    (tokenInodes : observed.keeperPhysical.inodes allocation.afterToken =
-      observed.keeperPhysical.inodes allocation.afterPhase)
-    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
-    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
-    (effects : OpenPhaseCellEffects view.phase get set)
-    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
-    (fileImage : heap → LockedFileState FileImage) (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) :
-    let clientView := view.withFileProjection fileImage
-    let recover := fun (resolved : DiskDirectory) (cache : DiskTable.OpenSyncFiles) =>
-      recoverSegmentedWalWith
-        (rejectFlatWalWith resolved (optionalMetadataWith (calls.lookup (resolved.file .wal))))
-        (optionalMetadataWith (calls.lookup (resolved.file .walBoundary)))
-        (marked resolved cache) (bootstrap.run resolved seed.directoryRef seed.activeRef seed.pendingRef)
-    ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
-      (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
-        IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
-      (start : NativeOpenedSessionPoint heap) (after : LockedFileState WalSegmentRotation.State),
-      DiskTable.OpenSyncFiles.IsOpenAction directory.path cacheOpen ∧
-      cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
-        (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
-        (fun value => liftM (IO.mkRef value)) makeCache ∧
-      openSyncFilesWith (init.openDirectory directory.path) init.newRef init.newRef init.newRef makeCache
-        admitted.afterFlock = .ok start.handle.files seed.afterPending ∧
-      calls.runOpen input init makeCache (fun resolved lock cache => do
-        let opened ← recover resolved cache
-        installReady opened.installed allocatePhase allocateToken
-          (fun phase token => pure (assemble resolved lock cache phase token))) entry =
-        .ok start.handle.table start.position.reached ∧
-      start.handle.directory = directory ∧ start.handle.lock = admitted.lock ∧
-      start.handle.files.UsesBootstrapCacheSchedules directory seed.activeRef seed.pendingRef seed.directoryRef ∧
-      start.handle.phase = allocation.phase ∧ start.handle.token = allocation.token ∧ start.handle.contents = clientView.phase ∧
-      start.handle.get = get ∧ start.handle.set = set ∧ start.handle.ptrEq = ptrEq ∧
-      start.position.reached = allocation.afterToken ∧
-      view.handle admitted.afterFlock start.handle.lock = (report.captured.initial, report.calls.slot, 0) ∧
-      (view.handle admitted.afterFlock start.handle.lock).2.1.description =
-        start.position.current.ready.state.session.descriptor ∧
-      phaseIdentity start.handle.phase = start.position.current.ready.state.session.phaseRef ∧
-      tokenIdentity start.handle.token = start.position.current.ready.state.session.sessionRef ∧
-      view.files start.position.reached = after ∧
-      clientView.descriptors start.position.reached = start.position.current.ready.state.census ∧
-      clientView.cacheAt start.position.reached seed.directoryRef seed.activeRef seed.pendingRef =
-        start.position.current.ready.state.cache ∧
-      report.calls.run report.admission = .ok start.position.current.ready.state.session after ∧
-      (NativeOpenSuccessReports.empty report).UsesReachedState start.position.current.ready.state after ∧
-      (observed.keeperPhysical.inodes start.position.reached).crashBytes
-        (BootstrapZeroKeeperRoute.settledImage (.fresh observed.keeper)).active = [ByteArray.empty] ∧
-      (observed.keeperPhysical.inodes start.position.reached).crashBytes report.marker.inodeState.active = [WAL.Boundary.encode 0] ∧
-      start.position.current.history = [] ∧ start.position.current.submissions = [] ∧
-      start.position.current.ready.reads = [] ∧ start.position.pins = [] ∧
-      ∀ actions, NativeOpenedSessionTrace.Reports clientView names bytes start actions →
-        ∃ events last, NativeOpenedSessionTrace clientView names bytes start actions events last ∧
-          NativeExecutionTrace start.position.current events last.position.current ∧
-          last.position.current.history = events.flatMap NativeExecutionEvent.writes ∧
-          last.position.current.submissions = events.flatMap NativeExecutionEvent.submissions ∧
-          last.position.current.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
-          InstalledClientReplay last.position.current.submissions last.position.current.ready.reads last.position.current.history
-            last.position.current.ready.state.writer.installed last.position.current.ready.state.session := by
-  intro clientView recover
-  obtain ⟨cacheOpen, makeCache, handle, position, after, cacheAction, cacheSource, cacheInitialized, opened,
-    path, lock, schedules, phase, token, contents, getter, setter, compared, reached, rawLock, lockRef, phaseRef, tokenRef,
-    projected, census, cache, returned, bootState, keeperBytes, markerBytes, emptyHistory, emptyLog, emptyReads, emptyPins⟩ :=
-    observed.opensFromAdmission admitted owner metadata marked assemble constructs allocation phaseID tokenID
-      phaseFrame tokenFrame phaseInodes tokenInodes effects ptrEq
-  let start : NativeOpenedSessionPoint heap := ⟨handle, position⟩
-  refine ⟨cacheOpen, makeCache, start, after, cacheAction, cacheSource, cacheInitialized, opened, path, lock,
-    schedules, phase, token, contents, getter, setter, compared, reached, rawLock, lockRef, phaseRef, tokenRef,
-    projected, census, cache,
-    returned, bootState, keeperBytes, markerBytes, emptyHistory, emptyLog, emptyReads, emptyPins, ?_⟩
-  intro actions localReports
-  obtain ⟨events, last, trace, common, replay⟩ := NativeOpenedSessionTrace.executes start actions localReports
-  obtain ⟨history, log, reads⟩ := common.ledgers
-  refine ⟨events, last, trace, common, ?_, ?_, ?_, replay⟩
-  · simpa only [start, emptyHistory, List.nil_append] using history
-  · simpa only [start, emptyLog, List.nil_append] using log
-  · simpa only [start, emptyReads, List.nil_append] using reads
+/-- The write instructions in a returned prefix already determine the
+matching client instructions. Ack and preflight denial both retain the
+request that was actually issued. -/
+theorem writeInstructions (trace : NativeOpenedTrace start instructions events last)
+    {requests : List WriteRequest}
+    (asWrites : instructions = requests.map NativeOpenedInstruction.write) :
+    NativeExecutionInstructions (requests.map NativeExecutionInstruction.write) events := by
+  induction trace generalizing requests with
+  | empty =>
+    have empty : requests = [] := List.map_eq_nil_iff.mp asWrites.symm
+    subst requests
+    exact .empty
+  | @step instructions events current instruction event reached prior report next earlier =>
+    rcases List.eq_nil_or_concat requests with empty | ⟨previous, request, appended⟩
+    · simp [empty] at asWrites
+    · subst requests
+      simp only [List.concat_eq_append, List.map_append, List.map_cons, List.map_nil] at asWrites ⊢
+      obtain ⟨priorWrites, sameInstruction⟩ := List.append_inj' asWrites (by simp)
+      have same := (List.cons.inj sameInstruction).1
+      subst instruction
+      have matched : (NativeExecutionInstruction.write request).Matches event := by
+        cases report with
+        | write =>
+          obtain ⟨_, _, _, _, eventEq, _⟩ := next.returned
+          rw [eventEq]
+          rfl
+        | writePreflight =>
+          obtain ⟨_, _, _, _, _, eventEq, _⟩ := next.returned
+          rw [eventEq]
+          rfl
+      exact .step (earlier priorWrites) matched
 
+end NativeOpenedTrace
+
+namespace FreshBootstrapOpenHeap.Returned
+
+variable {heap : Type} {call : EStateM IO.Error heap DiskTable} {entry : heap}
+  (opened : FreshBootstrapOpenHeap.Returned call entry)
+
+/-- The common execution consumes the empty ledgers derived by the
+fresh installer. This applies to both same-handle and later sessions. -/
+theorem refinesTrace (trace : NativeExecutionTrace opened.start.current events last) :
+    last.history = events.flatMap NativeExecutionEvent.writes ∧
+    last.submissions = events.flatMap NativeExecutionEvent.submissions ∧
+    last.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
+    InstalledClientReplay last.submissions last.ready.reads last.history
+      last.ready.state.writer.installed last.ready.state.session := by
+  simpa only [opened.emptyHistory, opened.emptySubmissions, opened.emptyReads, List.nil_append]
+    using trace.keyValueRefinement
+
+/-- End at the checkpoint issued on the heap of the preceding returned
+call. Both the prior replay and the stop use the same opened position. -/
+def stopsAfterWrites {last : NativeOpenedPosition opened.handle} {requests : List WriteRequest}
+    (trace : NativeOpenedTrace opened.start (requests.map NativeOpenedInstruction.write) events last)
+    {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
+    {stage : Step} {reason : FilePath} {reached : CheckpointWorld heap}
+    (stop : NativeCheckpointSourceStop last primitives fsync stage reason reached)
+    {storage : heap → CheckpointStorageObservation}
+    (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
+    (stable : NativeReadyStorage last.current.ready.state (storage reached.2))
+    (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
+      (primitives.checkpointStepUntilStop last.current.ready.state.session.directory
+        fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
+      opened.handle.contents after.2 opened.handle.phase = opened.handle.contents before.2 opened.handle.phase)
+    (stoppedKeeps : opened.handle.contents reached.2 opened.handle.phase =
+      opened.handle.contents stop.atIssue.2 opened.handle.phase) :
+    NativeReachedExecutionPrefix opened.start.current (requests.map NativeExecutionInstruction.write) .checkpoint :=
+  stop.terminalPrefix early stable returnedKeeps stoppedKeeps (trace.writeInstructions rfl) trace.common
+
+end FreshBootstrapOpenHeap.Returned
 end Alvoki.Storage.DiskSession
