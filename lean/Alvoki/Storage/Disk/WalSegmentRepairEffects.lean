@@ -445,6 +445,21 @@ theorem EffectTrace.trans {target : Target} {initial middle after : FileImage}
   | crash _ metadataSurvives keeperSurvives laterSurvive prior =>
     exact prior.crash metadataSurvives keeperSurvives laterSurvive
 
+/-- The trace begins after authorization. Two inputs that agree after
+the first directory sync therefore have the same subsequent effects. -/
+theorem EffectTrace.ofSameAuthorizedImage {target : Target} {initial replacement after : FileImage}
+    (trace : EffectTrace target initial after) (same : replacement.syncDirectory = initial.syncDirectory) :
+    EffectTrace target replacement after := by
+  induction trace with
+  | authorized => exact same ▸ EffectTrace.authorized
+  | unlink _ later prior => exact prior.unlink later
+  | syncPruned _ prior => exact prior.syncPruned
+  | replace _ gone ran prior => exact prior.replace gone ran
+  | aligned _ gone exactRead prior => exact prior.aligned gone exactRead
+  | scratch _ prior => exact prior.scratch
+  | crash _ metadataSurvives keeperSurvives laterSurvive prior =>
+    exact prior.crash metadataSurvives keeperSurvives laterSurvive
+
 def Plan.actions (plan : Plan) : List Step :=
   steps plan.newer (decide (plan.keeperSize < plan.keeperBytes.size))
 

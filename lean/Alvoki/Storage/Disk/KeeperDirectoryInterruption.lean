@@ -105,8 +105,6 @@ theorem projectsStoppedInodes (issue : ListedLongKeeperDirectoryIssue rename) (e
       FileImage.withKeeperInodes, WalInodeImage.project, WalInodeImage.settleBinding, WalInodeImage.renameSynced]
     rfl
 
-end ReachedCensus
-
 /-- Both effects of the issued, nonreturning barrier are cuts of the same
 authorized repair. The prefix has already durably pruned later names. -/
 theorem stoppedEffects (issue : ListedLongKeeperDirectoryIssue rename) (effective : Bool) :
@@ -115,6 +113,8 @@ theorem stoppedEffects (issue : ListedLongKeeperDirectoryIssue rename) (effectiv
   cases effective with
   | false => exact .replace pruned absent (cut := 3) rfl
   | true => exact .replace pruned absent (cut := 4) rfl
+
+end ReachedCensus
 
 /-- An observed effect at the admitted callback extends the existing retry
 prefix and keeps its initial files. The opener still owns the lock at this

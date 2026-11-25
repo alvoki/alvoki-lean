@@ -276,6 +276,25 @@ def repairActions (finish : CapturedPrunedAlignedFinish calls reads vacant selec
   | .ok () (cache, reached, _) => .ok () (cache, reached)
   | .error cause (cache, reached, _) => .error cause (cache, reached)
 
+/-- The completed suffix repair leaves precisely the selected keeper
+and durably removes the later segment names. -/
+theorem repairEffects (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
+    (later : ∀ first ∈ retry.image.later.visible, layout.range.through < first) :
+    EffectTrace layout.target retry.image finish.settled.image ∧
+      retry.image.unlinkVisibleSuffix.syncDirectory.keeper.active = some layout.target.trimmed ∧
+      retry.image.unlinkVisibleSuffix.syncDirectory.later.DurablyEmpty := by
+  have tailEmpty : layout.tail = ByteArray.empty := by
+    have measured := finish.aligned.trans reads.wal.keeper.observesFile.extent
+    rw [ByteArray.size_append] at measured
+    exact ByteArray.size_eq_zero_iff.mp (by omega)
+  have pruned := ListedLaterWalPrune.settledImage retry.image
+  have read : retry.image.unlinkVisibleSuffix.syncDirectory.keeper.active = some layout.target.trimmed := by
+    rw [pruned.2.2.2]
+    change retry.image.keeper.active = some layout.keeper.bytes
+    simpa only [tailEmpty, ByteArray.append_empty] using layout.visible
+  exact ⟨.aligned (.syncPruned ((EffectTrace.authorized (target := layout.target) (initial := retry.image)).unlinks
+      retry.image.later.visible later)) pruned.1 read, read, pruned.1⟩
+
 /-- The aligned suffix repair starts at the already stabilized marker
 state. Its first directory effect supplies the common repair image. -/
 theorem repairActions_returns_from (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
@@ -332,21 +351,10 @@ theorem installsFromCensus (finish : CapturedPrunedAlignedFinish calls reads vac
     chronology.marker chronology.beforeListing finish.reader chronology.seals chronology.offsets chronology.retained
     following laterValid accepted ordered finish.reader.readKeeperAt (finish.reader.readsAligned finish.aligned)
   have later := laterValid _ List.mem_cons_self
-  have tailEmpty : layout.tail = ByteArray.empty := by
-    have measured := finish.aligned.trans reads.wal.keeper.observesFile.extent
-    rw [ByteArray.size_append] at measured
-    exact ByteArray.size_eq_zero_iff.mp (by omega)
-  have pruned := ListedLaterWalPrune.settledImage retry.image
-  have read : retry.image.unlinkVisibleSuffix.syncDirectory.keeper.active = some layout.target.trimmed := by
-    rw [pruned.2.2.2]
-    change retry.image.keeper.active = some layout.keeper.bytes
-    simpa only [tailEmpty, ByteArray.append_empty] using layout.visible
-  have effects : EffectTrace layout.target retry.image finish.settled.image :=
-    .aligned (.syncPruned ((EffectTrace.authorized (target := layout.target) (initial := retry.image)).unlinks
-      retry.image.later.visible later)) pruned.1 read
+  obtain ⟨effects, read, pruned⟩ := finish.repairEffects later
   have safe := effects.valid rfl keeperValid laterValid
   have ready : finish.settled.image.Ready layout.target :=
-    ⟨safe.selected, safe.settled, read, congrArg (fun bytes => [bytes]) read, pruned.1⟩
+    ⟨safe.selected, safe.settled, read, congrArg (fun bytes => [bytes]) read, pruned⟩
   let projectedFinish : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Plan × Reopened × Nat →
       EStateM IO.Error CensusOpenState Reopened :=
     fun _ _ _ (_, opened, _) _ => .ok opened (finish.census, finish.settled)
@@ -358,7 +366,7 @@ theorem installsFromCensus (finish : CapturedPrunedAlignedFinish calls reads vac
   obtain ⟨session, returned, installed⟩ :=
     CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := reads) vacant marker laterValid
       following accepted ordered selected projectedFinish (fun _ => rfl) ready effects
-  exact ⟨session, same.trans returned, safe.selected, pruned.1, finish.lockRetained, finish.directoryRetained,
+  exact ⟨session, same.trans returned, safe.selected, pruned, finish.lockRetained, finish.directoryRetained,
     finish.keeperReleased, installed⟩
 
 end CapturedPrunedAlignedFinish

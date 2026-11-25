@@ -119,6 +119,10 @@ noncomputable def census (finish : CapturedLongKeeperFinish calls report vacant 
 noncomputable def settled (finish : CapturedLongKeeperFinish calls report vacant selected) : LockedFileState FileImage :=
   finish.settlement.stopped true
 
+theorem repairEffects (finish : CapturedLongKeeperFinish calls report vacant selected) :
+    EffectTrace layout.target retry.image finish.settled.image :=
+  finish.settlement.toListedLongKeeperDirectoryIssue.stoppedEffects true
+
 theorem suffixSettled (finish : CapturedLongKeeperFinish calls report vacant selected) :
     finish.settled.image.later.DurablyEmpty := finish.prune.stageInputEffects.2
 
@@ -503,7 +507,7 @@ theorem installsAfterVacancy (finish : CapturedLongKeeperFinish calls report vac
       finish.settled.image.directory.active = retry.image.directory.active ∧
       CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
         published calls.liveRefs (.ok session finish.settled) := by
-  have effects := finish.settlement.toListedLongKeeperDirectoryIssue.stoppedEffects true
+  have effects := finish.repairEffects
   have prepared : Prepared retry.image layout.target layout.plan :=
     ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
   have safe := effects.valid prepared.pair prepared.keeperPrefix prepared.newer

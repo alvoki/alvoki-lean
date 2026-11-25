@@ -1122,6 +1122,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.FileImage.Valid.allMarkersAtMost
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.valid
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.trans
+#check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.ofSameAuthorizedImage
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.recoveryInputs
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.selectKeeper
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.retryPlan

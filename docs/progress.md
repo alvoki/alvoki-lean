@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The successful replacement and suffix-prune reopen theorems now
+return the filesystem effect trace alongside the exact reopened table
+and descriptor census. The two-slot projection and rename-based repair
+share the same state after the first directory barrier, so both reuse
+the same proof of the subsequent file effects. The final client theorem
+still needs to consume each branch and join the retry outcomes.
+
 For an aligned keeper with no later segments, the successful directory
 and keeper sync reports now give both the exact repair callback return
 and its filesystem effect trace. The client theorem still needs to
