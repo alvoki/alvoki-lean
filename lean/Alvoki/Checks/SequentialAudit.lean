@@ -296,6 +296,7 @@ import Alvoki.Storage.Disk.NativeBootstrapCacheMutations
 import Alvoki.Storage.Disk.NativeBootstrapCacheChronology
 import Alvoki.Storage.Disk.NativeBootstrapKeeperPhysical
 import Alvoki.Storage.Disk.NativeReusedBootstrapKeeperHeap
+import Alvoki.Storage.Disk.NativeReusedBootstrapTableOpen
 import Alvoki.Storage.Disk.NativeBootstrapMarkerPhysical
 import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.NativeFreshTableOpen
@@ -1854,6 +1855,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerPublicationHeap.returns
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerPublicationHeap.Physical.settles
 #check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.MarkerPublication.returns
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.startFromValid
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.startsNativeReadPrefixFromValid
+#check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.MarkerPublication.opensFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapMarkerPhysical.settles
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.installs
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.opensFromAdmission
