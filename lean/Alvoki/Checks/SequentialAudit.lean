@@ -1986,7 +1986,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedRunReadCensus.reads
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkerCensus.reads
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.beforeWalScan
+#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.stat
+#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.matchesExtents
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.selectedWalReachesKeeper
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.beforeKeeper
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.liveAtRead
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.closedDescription
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.custody

@@ -128,6 +128,49 @@ namespace CapturedSealReadChain
 variable {report : CapturedMarkedReadReports admission layout published} {released : FilePath → List LockReferenceDrop}
   {required : List (Nat × IO.FS.Metadata)} {initial : DescriptorInventory} {drops : List LockReferenceDrop}
 
+/-- A captured seal or keeper uses exactly the extent probe from the
+catalog used by the selected reader. -/
+theorem stat (chain : CapturedSealReadChain report released required initial drops) :
+    ∀ entry ∈ required,
+      report.catalog.inventory.reports.lstat (directory.file (.walSegment entry.1)) = .ok entry.2 := by
+  induction chain with
+  | keeper =>
+    intro entry chosen
+    obtain rfl := List.mem_singleton.mp chosen
+    rw [report.stat, report.wal.keeper.calls.stat]
+    rfl
+  | @sealed initial segment next nextMetadata rest drops member forward size custody remaining ih =>
+    intro entry chosen
+    rcases List.mem_cons.mp chosen with rfl | later
+    · rw [report.stat, (report.wal.sealedFile segment member).calls.stat]
+      rfl
+    · exact ih _ later
+
+/-- The chronological read reports and the executable extent scan select
+the same entries when their ordered offsets agree. Each lookup's own
+result fixes the accompanying metadata. -/
+theorem matchesExtents (chain : CapturedSealReadChain report released required initial drops)
+    {scanned : List (Nat × IO.FS.Metadata)} (offsets : required.map Prod.fst = scanned.map Prod.fst)
+    (scannedStat : ∀ entry ∈ scanned,
+      report.catalog.inventory.reports.lstat (directory.file (.walSegment entry.1)) = .ok entry.2) :
+    required = scanned := by
+  have known := chain.stat
+  clear chain
+  induction required generalizing scanned with
+  | nil => cases scanned <;> simp_all
+  | cons entry rest ih =>
+    cases scanned with
+    | nil => simp at offsets
+    | cons actual more =>
+      obtain ⟨address, later⟩ := List.cons.inj offsets
+      have first := known entry List.mem_cons_self
+      have other := scannedStat actual List.mem_cons_self
+      rw [address] at first
+      have metadata := Except.ok.inj (first.symm.trans other)
+      have same : entry = actual := Prod.ext address metadata
+      rw [same, ih later (fun item member => scannedStat item (List.mem_cons_of_mem _ member))
+        (fun item member => known item (List.mem_cons_of_mem _ member))]
+
 /-- The actual extent-checked seal loop reaches the keeper in the census
 left by the ordered temporary reads. -/
 theorem reaches (chain : CapturedSealReadChain report released required initial drops)
@@ -217,7 +260,8 @@ theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission l
     ∃ earlier : List (Nat × ByteArray), earlier.map Prod.fst = required.dropLast.map Prod.fst ∧
       readSelectedWithCachedExtents directory layout.range.watermark count report.scanWal
         (fun path => liftExcept (.ok (report.catalog.inventory.reports.lstat path) : Except IO.Error _))
-        (readTemporarySeal report.reads released) readKeeper (admission.cache, admission.reached, admission.held) =
+        (readTemporarySeal report.reads released) readKeeper
+          (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) =
       (do
         let (last, size) ← readCachedWalPayloads directory (count.toNat / WAL.frameSize)
           (readTemporarySeal report.reads released) readKeeper [(layout.keeper.first, report.wal.keeper.calls.metadata)]
@@ -240,7 +284,7 @@ theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission l
     rw [readWalSegmentExtentsWith_liftReports, scanned]
     rfl
   simp only [readSelectedWithCachedExtents, aligned, covers, and_self, ↓reduceIte, Bind.bind, EStateM.bind,
-    report.scanWal_closed, scannedState, selected, Pure.pure, EStateM.pure]
+    report.scanWal_fromEntry, scannedState, selected, Pure.pure, EStateM.pure]
   rw [payloads]
   simp only [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, CapturedKeeperOpenReports.atOpen]
   cases readCachedWalPayloads directory (count.toNat / WAL.frameSize) (readTemporarySeal report.reads released)
