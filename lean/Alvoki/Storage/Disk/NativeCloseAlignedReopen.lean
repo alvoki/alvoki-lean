@@ -183,21 +183,21 @@ def NativeCloseAlignedResult {state : NativeReadyState} (files : NativeCloseFile
         seen.ReadsOriginal (state.session.directory.file (.walSegment segment.first)) segment.bytes) ∧
       InstalledClientReplay log reads history next.writer.installed next.session
 
-/-- Install a healthy aligned session from the exact released files and
-the reached inventory supplied by the preceding close or retry prefix. -/
-theorem NativeReadyReadPrefix.reopensReleasedAligned
-    {opened : EStateM.Result IO.Error CensusOpenState SegmentedSession}
-    {initial state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
+/-- Reopen the retained writer's selected files after release. The
+caller supplies the actual closure or owner drop separately, so the
+selected files can also come from a poisoned session. -/
+theorem NativeCloseFiles.reopensReleasedAligned
+    {state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
     {reads : List RecordedSnapshotRead}
-    (prior : NativeReadyReadPrefix opened initial history log reads state)
-    (files : NativeCloseFiles state) {input : FilePath} {inventory : DescriptorInventory}
+    (files : NativeCloseFiles state) (ready : state.writer.RetainedReady state.session.directory state.session.descriptor)
+    (originalHistory : state.writer.history = history) (pending : PendingClientReplay log reads history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy history.length)
+    {input : FilePath} {inventory : DescriptorInventory}
     (observe : ∀ plan : ClosedReadyReopenLayout state.writer state.releasedFiles,
       ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
         state.releasedFiles.image.directory.active.manifest state.writer.checkpoint,
       Nonempty (NativeCloseAlignedReads files input inventory plan.layout selected)) :
     NativeCloseAlignedResult files input inventory history log reads := by
-  obtain ⟨valid, originalHistory, pending⟩ := prior.refines
-  let ready := valid.retained
   obtain ⟨plan⟩ : Nonempty (ClosedReadyReopenLayout state.writer state.releasedFiles) := ready.cleanReopenLayout
   have pair := plan.prepared.pair.trans (congrArg Target.pair plan.target)
   have binding := congrArg DirectoryPublication.Bindings.manifest pair
@@ -215,7 +215,7 @@ theorem NativeReadyReadPrefix.reopensReleasedAligned
     kept, phaseFresh, sessionFresh⟩ := keeperFinish.startsNativeReadPrefix seen.chronology opening.markerFound
       plan.prepared following accepted ready.resumed.ordered ready.layout ready.valid ready.spans
       (ready.walPair.trans (congrArg Target.pair plan.target).symm) (congrArg WalSegment.first plan.keeper)
-      ready.sealedFiles (originalHistory.symm ▸ pending) (originalHistory.symm ▸ prior.readsBounded)
+      ready.sealedFiles (originalHistory.symm ▸ pending) (originalHistory.symm ▸ bounded)
   have continued : NativeReadyReadPrefix seen.run next history log reads next :=
     originalHistory ▸ seeded
   have sameCensus : next.census.inode = opening.admission.reached.inode := by
@@ -236,6 +236,20 @@ theorem NativeReadyReadPrefix.reopensReleasedAligned
     exact seen.admission.lockObject
   · rw [cached, sameCensus]
     exact opening.admission.opened.captures.2.2.2.2.1.symm.trans seen.admission.directoryObject
+
+/-- The ready read prefix supplies the retained writer and bounded ledger. -/
+theorem NativeReadyReadPrefix.reopensReleasedAligned
+    {opened : EStateM.Result IO.Error CensusOpenState SegmentedSession}
+    {initial state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
+    {reads : List RecordedSnapshotRead}
+    (prior : NativeReadyReadPrefix opened initial history log reads state)
+    (files : NativeCloseFiles state) {input : FilePath} {inventory : DescriptorInventory}
+    (observe : ∀ plan : ClosedReadyReopenLayout state.writer state.releasedFiles,
+      ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
+        state.releasedFiles.image.directory.active.manifest state.writer.checkpoint,
+      Nonempty (NativeCloseAlignedReads files input inventory plan.layout selected)) :
+    NativeCloseAlignedResult files input inventory history log reads :=
+  files.reopensReleasedAligned prior.refines.1.retained prior.refines.2.1 prior.refines.2.2 prior.readsBounded observe
 
 /-- The successful close supplies its exact file and census projection
 to the shared aligned reopen and the subsequent read prefix. -/
