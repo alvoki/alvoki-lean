@@ -28,7 +28,7 @@ open scoped List
 /-- Completed stretches and reported reopenings of one directory. A
 recovered writer is the exact predecessor of its next operation. The log
 accounts for write submissions separately from ownership changes.
-The collection-free specialization also preserves the full WAL chain. -/
+With WAL collection disabled, the trace also preserves the full WAL chain. -/
 inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor : Nat)
     (initial : SegmentedWriterState) (allowCollection : Bool) : List MarkedSessionWrites → Nat → SegmentedWriterState → Prop where
   | start : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection [] initialDescriptor initial
