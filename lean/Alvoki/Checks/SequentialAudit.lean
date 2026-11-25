@@ -389,6 +389,7 @@ import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
 import Alvoki.Storage.Disk.NativeQuietPowerLossRaw
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
+import Alvoki.Storage.Disk.NativeStoppedObsoleteRunTableOpen
 import Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
@@ -2259,6 +2260,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.readsSurvivingFile
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRestartAdmission.admits
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.restartsThenOpensAligned
+#check_axioms Alvoki.Storage.DiskSession.RawQuietRestartEffects.installsAligned
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.append
 #check_axioms Alvoki.Storage.DiskSession.NativeQuietRestartReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedAlignedCloseReport.reaches
@@ -2286,6 +2288,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrash.survivingRun
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrash.usesReachedBindings
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversInterruptedRunUnlink
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrashReopen.fromReader
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedObsoleteRunUnlink
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectionBarrierFailed
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.releasedVacant
 #check_axioms Alvoki.Storage.DiskSession.NativeCollectionCloseFiles.lock

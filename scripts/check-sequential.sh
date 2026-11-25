@@ -300,6 +300,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.NativeQuietPowerLossRaw
 lake env leanchecker Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
+lake env leanchecker Alvoki.Storage.Disk.NativeStoppedObsoleteRunTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
