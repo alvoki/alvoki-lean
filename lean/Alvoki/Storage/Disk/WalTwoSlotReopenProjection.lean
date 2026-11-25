@@ -338,6 +338,26 @@ theorem retries_preservePublishedFrontier
   rw [same, ← pair]
   exact ⟨manifest, by simp [settleMarker, observed], allowed⟩
 
+/-- The native preparation feeds its decoded slot frontier into the shared
+bounded reader. The returned payload uses the table from the reported
+checkpoint and selected WAL, and the exact keeper from those same reads. -/
+theorem prepareSelected_reported (directory : Storage.DiskDirectory) (selection : Selection)
+    (readCheckpoint : Except IO.Error (Option (Storage.PackedTable × UInt64)))
+    (readWal : Nat → UInt64 → Except IO.Error (Storage.WalSegmentMarkerReads × Nat))
+    {checkpoint : Option (Storage.PackedTable × UInt64)} (checkpointRead : readCheckpoint = .ok checkpoint)
+    {reads : Storage.WalSegmentMarkerReads} {fileSize : Nat}
+    (walRead : readWal (checkpoint.getD (.empty, 0)).1.committed.toNat selection.frontier = .ok (reads, fileSize))
+    {payload : ByteArray} {table : Storage.PackedTable} {keeper : Nat} {bytes : ByteArray}
+    (replayed : Storage.recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1
+      selection.frontier reads.files = .ok (payload, table))
+    (keeperRead : reads.files.getLast? = some (keeper, bytes)) :
+    prepareBoundedMarkedFromReaders directory readCheckpoint
+      (fun _ => pure (some (Boundary.encode selection.frontier))) readWal =
+      .ok (⟨selection.frontier.toNat / frameSize, keeper, reads.newer, bytes⟩,
+        ⟨table, (checkpoint.getD (.empty, 0)).2, selection.frontier, keeper⟩, fileSize) :=
+  prepareBoundedMarkedFromReaders_reported directory readCheckpoint _ readWal checkpointRead
+    rfl (Boundary.decode_encode selection.frontier) walRead replayed keeperRead
+
 open Storage.DiskSession
 
 /-- The shared installer returns the payload from the reached two-slot
