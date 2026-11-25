@@ -566,6 +566,29 @@ theorem decode_markerFromHeldDirectory
   exact decode_heldRead _ (file.calls.observes payload contents) available
     (Nat.lt_of_lt_of_le (by decide) USize.le_size)
 
+/-- The marker is opened read-write, then rewound on the same handle.
+The bounded reader starts in the heap returned by the rewind, on that
+same handle. Cursor reset is an effect of the rewind primitive. -/
+theorem readMarkerAfterRewind_reports
+    {heap handle : Type}
+    (openReadWrite : EStateM IO.Error heap handle)
+    (rewind : handle → EStateM IO.Error heap Unit)
+    (readChunk : handle → USize → EStateM IO.Error heap ByteArray)
+    {entry opened reached : heap} {marker : handle}
+    (openedMarker : openReadWrite entry = .ok marker opened)
+    (rewound : rewind marker opened = .ok () reached) :
+    (do
+      let marker ← openReadWrite
+      rewind marker
+      let bytes ← readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+        (readChunk marker) acquisitionLimit ByteArray.empty
+      pure (marker, bytes)) entry =
+      (do
+        let bytes ← readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+          (readChunk marker) acquisitionLimit ByteArray.empty
+        pure (marker, bytes)) reached := by
+  simp only [Bind.bind, EStateM.bind, openedMarker, rewound]
+
 /-- The successful reopen barrier persists the same marker that the
 bounded read observed. WAL repair may rely on this frontier for every
 subsequent surviving marker binding to that inode. A pending directory
