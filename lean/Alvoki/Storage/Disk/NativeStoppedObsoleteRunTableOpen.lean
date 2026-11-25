@@ -64,7 +64,7 @@ theorem NativeOpenedPosition.opensAfterStoppedObsoleteRunUnlink
       (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
         IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
       (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
-      NativeObsoleteRunUnlinkCrashReopen current.current.ready next stop crash input ∧
+      NativeObsoleteRunUnlinkCrashReopen current.current.ready next stop crash input ∧ reader.run = next.opened ∧
       NativeExecutionStep current.current (.interruptedRunUnlinkRecovered held input) start.current ∧
       DiskTable.OpenSyncFiles.IsOpenAction state.session.directory.path cacheOpen ∧
       cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk state.session.directory.path .read)
@@ -93,7 +93,7 @@ theorem NativeOpenedPosition.opensAfterStoppedObsoleteRunUnlink
       remove write rename bootstrap assemble constructs effects ptrEq
   have sameCutCensus := (congrArg Prod.fst raw.admission.reboot.previous).trans (congrArg Prod.fst stopped.files).symm
   refine ⟨stopped.stopped, sameCutCensus, ?_, ?_, Prod.ext raw.admission.raw.entryCensus raw.admission.raw.entryFiles, ?_,
-    next, cacheOpen, makeCache, handle, start, reopened, ?_, cacheAction, cacheSource, ran, currentEq, lock, references,
+    next, cacheOpen, makeCache, handle, start, reopened, rfl, ?_, cacheAction, cacheSource, ran, currentEq, lock, references,
     cacheDirectory, contents, getEq, setEq, compareEq, pins, sameFiles, sameCensus, sameCache⟩
   · exact fun path selected => (raw.admission.reboot.liveNames path selected).trans (crash.reachedBindings path selected)
   · intro path payload selected observed
