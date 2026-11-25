@@ -9,6 +9,7 @@ import Alvoki.Storage.Disk.BatchAppendReopenAdmission
 import Alvoki.Storage.Disk.BatchCutReopenAdmission
 import Alvoki.Storage.Disk.BatchRecoveryPrefix
 import Alvoki.Storage.Disk.BatchInterruptionDispatch
+import Alvoki.Storage.Disk.BatchAppendRecoveryPrefix
 import Alvoki.Storage.Disk.PoisonedBatchClose
 import Alvoki.Storage.Disk.CleanCachedClose
 import Alvoki.Storage.Disk.SegmentedBatchMarkerProcessExit
@@ -961,6 +962,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Valid.stopsBatchSchedule
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.stopsBatchSchedule
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedBatchMarker
+#check_axioms Alvoki.Storage.DiskSession.ReportedReopenPrefix.refines
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedBatchAppend
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.CachedReopenReports.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchPowerLoss
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendPowerLossReport.Valid.reachesInterruption
@@ -969,6 +972,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendProcessExitReport.installs
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchAppendProcessExit
 #check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Stop.reopensAdmitted
+#check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Stop.preparesRetry
+#check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Stop.reopensPrepared
+#check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Stop.refinesReopenPrefix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchAppendWithAdmission
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.processExit
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.ProcessExitCachedReopenReports.installs

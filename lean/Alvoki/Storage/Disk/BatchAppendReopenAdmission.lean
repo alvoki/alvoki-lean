@@ -42,11 +42,56 @@ private theorem Stop.priorAuthority (stop : report.Stop writer) (ready : before.
       report.cut.liveLayout ready
     exact ⟨stopped, fixed, rfl, source, target, keeper, descriptors, offsets, prepared⟩
 
+/-- A retry still prepares the old marker's bytes at the canonical keeper.
+The selected descriptor order and sealed files come from the prior writer. -/
+structure PreparedRetry (before : SegmentedWriterState) {image : FileImage}
+    (layout : CanonicalKeeperLayout image before.history) : Prop where
+  target : layout.target = before.target
+  first : layout.target.first = before.wal.active.first
+  descriptors : layout.sealed ++ [layout.keeper] = before.wal.readDescriptors layout.range.watermark
+  offsets : selectWalSegmentReads (before.wal.segments.map WalSegment.first) layout.range.watermark =
+    some (layout.first, (before.wal.readDescriptors layout.range.watermark).map WalSegment.first)
+  prepared : Prepared image layout.target layout.plan
+  kept : image.kept = before.files.kept
+
+theorem Stop.preparesRetry {retry : LockedFileState FileImage}
+    (stop : report.Stop writer) (ready : before.RetainedReady directory writer)
+    (attempts : BoundedReopenTrace directory (fun target => target = before.target) stop.origin retry) :
+    BoundedReopenTrace directory (fun target => target = before.target)
+      ⟨report.cut.physical before, before.owners⟩ stop.origin ∧
+    ∃ layout : CanonicalKeeperLayout retry.image before.history, PreparedRetry before layout := by
+  obtain ⟨stopped, fixed, oldSealed, source, target, keeper, descriptors, offsets, prepared⟩ :=
+    stop.priorAuthority ready
+  have effects := (target.symm ▸ attempts :
+    BoundedReopenTrace directory (fun candidate => candidate = source.target) stop.origin retry)
+    |>.effectsAfterFixedAuthority fixed
+  obtain ⟨layout, chosen, range, first, sealed, active, kept, nextPrepared⟩ :=
+    effects.canonicalRetryLayout source prepared
+  refine ⟨stopped, layout, ⟨chosen.trans target, congrArg WalSegment.first (active.trans keeper),
+    ?_, ?_, chosen.symm ▸ nextPrepared, kept.trans oldSealed⟩⟩
+  · rw [sealed, active, range]
+    exact descriptors
+  · rw [range, first]
+    exact offsets
+
 abbrev ReopenObservations (directory : DiskDirectory) (before : SegmentedWriterState)
     (files : Type) (input : FilePath) (retry : LockedFileState FileImage) : Prop :=
   ∀ layout : CanonicalKeeperLayout retry.image before.history, layout.target = before.target →
     ∃ reported : MarkedRetryChunkReports files directory layout before.published,
       Nonempty (OpenAdmissionReports input directory reported.slot)
+
+/-- The result of the given final callbacks supplies the exact ready
+phase, files and owner used by the next writer. -/
+abbrev ReopenReturned {files : Type} {input : FilePath} {retry : LockedFileState FileImage}
+    {layout : CanonicalKeeperLayout retry.image before.history}
+    (reported : MarkedRetryChunkReports files directory layout before.published)
+    (admission : OpenAdmissionReports input directory reported.slot) (descriptor : Nat)
+    (after : SegmentedWriterState) : Prop :=
+  ∃ (session : SegmentedSession) (final : LockedFileState FileImage),
+    reported.runWithAdmission admission = .ok session final ∧
+    session.directory = directory ∧ session.descriptor = descriptor ∧ session.phase = .ready after.installed ∧
+    final.owners.Owns directory descriptor ∧ after.files = final.image ∧ after.owners = final.owners ∧
+    final.image.Ready before.target
 
 /-- The successful reopen continues from the same interrupted operation
 and the reported finite retry lineage. Its installed phase comes from
@@ -62,12 +107,8 @@ structure AdmittedReopen {files : Type} (report : BatchAppendInterruption direct
     stop.origin retry
   reopened : ∃ (layout : CanonicalKeeperLayout retry.image before.history)
     (reported : MarkedRetryChunkReports files directory layout before.published)
-    (admission : OpenAdmissionReports input directory reported.slot) (session : SegmentedSession)
-    (final : LockedFileState FileImage),
-    reported.runWithAdmission admission = .ok session final ∧
-    session.directory = directory ∧ session.descriptor = descriptor ∧ session.phase = .ready after.installed ∧
-    final.owners.Owns directory descriptor ∧ after.files = final.image ∧ after.owners = final.owners ∧
-    final.image.Ready before.target
+    (admission : OpenAdmissionReports input directory reported.slot),
+    ReopenReturned (before := before) reported admission descriptor after
   target : after.target = before.target
   history : after.history = before.history
   checkpoint : after.checkpoint = before.checkpoint
@@ -76,43 +117,30 @@ structure AdmittedReopen {files : Type} (report : BatchAppendInterruption direct
   retained : after.RetainedReady directory descriptor
   sealedWal : after.wal.sealed = before.wal.sealed
 
-/-- After either first-append stop and any admitted retries, the marked
-opener installs the prior checkpoint and committed WAL from the exact
-selected reads. Any physical tail lies beyond the old marker. -/
-theorem Stop.reopensAdmitted {files : Type} {input : FilePath} {retry : LockedFileState FileImage}
+/-- The exact prepared layout and final marked-open callbacks install the
+prior checkpoint and committed WAL. The reached tail is beyond the old marker. -/
+theorem Stop.reopensPrepared {files : Type} {input : FilePath} {retry : LockedFileState FileImage}
+    {layout : CanonicalKeeperLayout retry.image before.history}
     (stop : report.Stop writer) (observed : report.Valid) (ready : before.RetainedReady directory writer)
+    (stopped : BoundedReopenTrace directory (fun target => target = before.target)
+      ⟨report.cut.physical before, before.owners⟩ stop.origin)
     (attempts : BoundedReopenTrace directory (fun target => target = before.target) stop.origin retry)
-    (reads : ReopenObservations directory before files input retry) :
-    ∃ descriptor after, report.AdmittedReopen (files := files) stop input retry descriptor after := by
-  obtain ⟨stopped, fixed, oldSealed, source, target, keeper, descriptors, offsets, prepared⟩ :=
-    stop.priorAuthority ready
-  have effects := (target.symm ▸ attempts :
-    BoundedReopenTrace directory (fun candidate => candidate = source.target) stop.origin retry)
-    |>.effectsAfterFixedAuthority fixed
-  obtain ⟨layout, chosen, range, first, sealed, active, kept, nextPrepared⟩ :=
-    effects.canonicalRetryLayout source prepared
-  have sameTarget := chosen.trans target
-  obtain ⟨reported, ⟨admission⟩⟩ := reads layout sameTarget
-  have exactDescriptors : layout.sealed ++ [layout.keeper] = before.wal.readDescriptors layout.range.watermark := by
-    rw [sealed, active, range]
-    exact descriptors
-  have exactOffsets : selectWalSegmentReads (before.wal.segments.map WalSegment.first) layout.range.watermark =
-      some (layout.first, (before.wal.readDescriptors layout.range.watermark).map WalSegment.first) := by
-    rw [range, first]
-    exact offsets
-  have accepted := (congrArg (fun chosen : Target => chosen.pair.manifest) sameTarget).symm ▸ ready.resumed.accepted
-  have preparedLayout : Prepared retry.image layout.target layout.plan := chosen.symm ▸ nextPrepared
+    (prepared : PreparedRetry before layout)
+    (reported : MarkedRetryChunkReports files directory layout before.published)
+    (admission : OpenAdmissionReports input directory reported.slot) :
+    ∃ after, report.AdmittedReopen (files := files) stop input retry reported.slot.description after ∧
+      ReopenReturned (before := before) reported admission reported.slot.description after := by
+  have accepted := (congrArg (fun chosen : Target => chosen.pair.manifest) prepared.target).symm ▸ ready.resumed.accepted
   have installed := runOpenWithAdmission_markedRetryFromChunks reported admission
-    preparedLayout.keeperPrefix preparedLayout.newer
-    (reported.selectedAfterWatermark exactOffsets exactDescriptors) accepted ready.resumed.ordered
+    prepared.prepared.keeperPrefix prepared.prepared.newer
+    (reported.selectedAfterWatermark prepared.offsets prepared.descriptors) accepted ready.resumed.ordered
   obtain ⟨_, appendReady⟩ := installed.readyForAppend accepted ready.resumed.ordered
-  have visible := ready.walPair.trans (congrArg Target.pair sameTarget).symm
-  have firstKeeper := (congrArg WalSegment.first (active.trans keeper) : layout.target.first = before.wal.active.first)
+  have visible := ready.walPair.trans (congrArg Target.pair prepared.target).symm
   obtain ⟨session, final, after, returned, path, lock, phase, files, owners, wal, selected, history, _, durable, next⟩ :=
-    appendReady.writerRetained ready.layout ready.valid ready.spans visible firstKeeper
-      ((kept.trans oldSealed).trans ready.sealedFiles)
+    appendReady.writerRetained ready.layout ready.valid ready.spans visible prepared.first
+      (prepared.kept.trans ready.sealedFiles)
   have nextReady : after.RetainedReady directory reported.slot.description := reported.inventoryDescription ▸ next
-  have exactTarget := selected.trans sameTarget
+  have exactTarget := selected.trans prepared.target
   have loaded := nextReady.resumed.selected
   rw [exactTarget, durable] at loaded
   have checkpoint := loaded.uniqueResult ready.resumed.selected
@@ -122,9 +150,20 @@ theorem Stop.reopensAdmitted {files : Type} {input : FilePath} {retry : LockedFi
     rw [← files, ← exactTarget]
     exact nextReady.resumed.ready
   have sealedWal := congrArg WalSegmentImage.sealed wal
-  exact ⟨reported.slot.description, after, observed, observed.reachesInterruption ready, stopped, attempts,
-    ⟨layout, reported, admission, session, final, returned, path, lock.trans reported.inventoryDescription, phase,
-      owners ▸ nextReady.held, files, owners, finalReady⟩,
-    exactTarget, history, checkpoint, generation, durable, nextReady, sealedWal⟩
+  have exactReturn : ReopenReturned (before := before) reported admission reported.slot.description after :=
+    ⟨session, final, returned, path, lock.trans reported.inventoryDescription, phase,
+      owners ▸ nextReady.held, files, owners, finalReady⟩
+  exact ⟨after, ⟨observed, observed.reachesInterruption ready, stopped, attempts, ⟨layout, reported, admission, exactReturn⟩,
+    exactTarget, history, checkpoint, generation, durable, nextReady, sealedWal⟩, exactReturn⟩
+
+theorem Stop.reopensAdmitted {files : Type} {input : FilePath} {retry : LockedFileState FileImage}
+    (stop : report.Stop writer) (observed : report.Valid) (ready : before.RetainedReady directory writer)
+    (attempts : BoundedReopenTrace directory (fun target => target = before.target) stop.origin retry)
+    (reads : ReopenObservations directory before files input retry) :
+    ∃ descriptor after, report.AdmittedReopen (files := files) stop input retry descriptor after := by
+  obtain ⟨stopped, layout, prepared⟩ := stop.preparesRetry ready attempts
+  obtain ⟨reported, ⟨admission⟩⟩ := reads layout prepared.target
+  obtain ⟨after, installed, _⟩ := stop.reopensPrepared observed ready stopped attempts prepared reported admission
+  exact ⟨reported.slot.description, after, installed⟩
 
 end Alvoki.Storage.DiskSession.BatchAppendInterruption

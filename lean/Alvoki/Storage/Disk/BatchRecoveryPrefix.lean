@@ -66,7 +66,9 @@ inductive ReportedReopenPrefix (directory : DiskDirectory) (keeper : Nat)
       ReportedReopenPrefix directory keeper initial
         ⟨before.image.crash pair bytes names, before.owners.set (directory.file .lock) none⟩
 
-private theorem ReportedReopenPrefix.refines {directory keeper initial after} {admits : Target → Prop}
+/-- If each admitted prefix has an exact preparation at the canonical
+keeper, all reached failures and crashes extend the admitted retry trace. -/
+theorem ReportedReopenPrefix.refines {directory keeper initial after} {admits : Target → Prop}
     (reported : ReportedReopenPrefix directory keeper initial after)
     (selects : ∀ {current}, BoundedReopenTrace directory admits initial current →
       ∃ target plan, admits target ∧ target.first = keeper ∧ Prepared current.image target plan) :
