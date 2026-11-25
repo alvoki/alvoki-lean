@@ -2988,16 +2988,17 @@ theorem recoveredRetries_installedReads
           survivingMarker = markerReads.objectBytes (markerView.modelObject rebootObject)) ∨
       projectBinding openedFrom.image.directory.active (marker.visible markerHandle.inode) =
         .ok openedFrom.image.directory.active)
-    {stabilize : KeeperDescriptorIdentity → EStateM IO.Error FileImage Unit}
+    (syncMarker : KeeperDescriptorIdentity → EStateM IO.Error (WalInodeImage × FileImage) Unit)
+    {settledFiles : FileImage}
+    (syncReturned : syncMarker markerHandle (marker, prepared) = .ok () (settledMarker, settledFiles))
     (markerChoices : List (DirectoryPublication.Bindings × Option ByteArray))
     (enumerated : markerChoices.map Prod.fst = prepared.directory.crashImages)
     (presence : ∀ choice ∈ markerChoices, choice.2.isSome = choice.1.walBoundary.isSome)
     (physicalChoices : ∀ choice ∈ markerChoices, ∀ bytes, choice.2 = some bytes →
       ∃ inode ∈ settledMarker.crashBindings, bytes ∈ settledMarker.crashBytes inode)
-    (stabilizeReport : stabilize markerHandle prepared =
-      match projectRepairDirectory prepared.directory (marker.visible markerHandle.inode) markerChoices with
-      | .ok directory => .ok () { prepared with directory }
-      | .error cause => .error (IO.userError cause) prepared)
+    (syncProjection : ∀ directory,
+      projectRepairDirectory prepared.directory (marker.visible markerHandle.inode) markerChoices =
+        .ok directory → settledFiles = { prepared with directory })
     (keeperExtent : keeperMetadata.byteSize.toNat = plan.keeperBytes.size)
     (settles : sync #[directory.path] { prepared with directory := settleMarker prepared.directory selected } =
       .ok () ({ prepared with directory := settleMarker prepared.directory selected } : FileImage).syncDirectory)
@@ -3038,7 +3039,7 @@ theorem recoveredRetries_installedReads
               (fun _ => pure (some (Boundary.encode selection.frontier)))
               (fun start length => WalSegmentRepair.readSelectedWithCachedExtents directory start length
                 list lstat readSeal readKeeper))
-            stabilize
+            (projectMarkerSync syncMarker marker)
             (fun bounded size =>
               WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
           pure opened) openedFrom = .ok session final ∧
@@ -3049,7 +3050,7 @@ theorem recoveredRetries_installedReads
             (fun _ => pure (some (Boundary.encode selection.frontier)))
             (fun start length => WalSegmentRepair.readSelectedWithCachedExtents directory start length
               list lstat readSeal readKeeper))
-          stabilize
+          (projectMarkerSync syncMarker marker)
           (fun bounded size =>
             WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
           openedFrom.image = .ok (opened, markerHandle, selected) after ∧
@@ -3295,9 +3296,10 @@ theorem recoveredRetries_installedReads
   have markerBound : prepared.directory.active.walBoundary.isSome = true := by simp [observed]
   have projected := reopenSync_projectsRepairDirectory markerSync markerCurrent markerBinding
     markerAccepted prepared.directory markerBound markerChoices enumerated presence physicalChoices
+  let stabilize := projectMarkerSync syncMarker marker
   have barrier : stabilize markerHandle prepared = .ok ()
       { prepared with directory := settleMarker prepared.directory selected } := by
-    rw [stabilizeReport, projected]
+    simp only [stabilize, projectMarkerSync, syncReturned, syncProjection _ projected]
   have keeperPrefixBytes : plan.keeperBytes.extract 0 plan.keeperSize = target.trimmed := by
     have size : plan.keeperSize = target.trimmed.size := by
       rw [WalSegmentRepair.Plan.keeperSize, preparedPlan.through, preparedPlan.start, target.trimmedSize]
