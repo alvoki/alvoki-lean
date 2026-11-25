@@ -7,12 +7,12 @@ variable {heap : Type}
 
 namespace NativeFileEffectProjection
 
-def result {files α : Type} (project : heap → files) :
-    EStateM.Result IO.Error heap α → EStateM.Result IO.Error files α
+def result {error files α : Type} (project : heap → files) :
+    EStateM.Result error heap α → EStateM.Result error files α
   | .ok value reached => .ok value (project reached)
   | .error cause reached => .error cause (project reached)
 
-def reached {α : Type} : EStateM.Result IO.Error heap α → heap
+def reached {error α : Type} : EStateM.Result error heap α → heap
   | .ok _ reached | .error _ reached => reached
 
 end NativeFileEffectProjection

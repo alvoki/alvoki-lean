@@ -6,20 +6,31 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting CheckpointPublication
 
+private def selectObsoleteRunsWith [Monad m] (directory : DiskDirectory) (held : List UInt64)
+    (load : m Installed) (readManifest : FilePath → m (Option ByteArray))
+    (check : Except String (Option UInt64) → m (Option UInt64))
+    (list : FilePath → m (Array IO.FS.DirEntry)) (kind : FilePath → m (Except String IO.FS.FileType)) :
+    m (List RunAddress) := do
+  let installed ← load
+  let manifest ← readManifest (directory.file .manifest)
+  let generation ← check (validateIntegrityRunCollectionGeneration installed.generation manifest)
+  let entries ← list directory.path
+  selectRunFilesWith directory generation (retainRunGeneration installed.generation held)
+    kind (entries.toList.map (·.fileName))
+
+private def performObsoleteRunsWith [Monad m] [MonadExceptOf IO.Error m] (directory : DiskDirectory)
+    (plan : m (List RunAddress)) (remove : FilePath → m (Except IO.Error Unit)) (sync : FilePath → m Unit) : m Unit := do
+  let selected ← plan
+  RunCollection.run selected (RunCollection.performPaths remove sync throw
+    (fun address => directory.file (.run address.1 address.2)) directory.path)
+
 private def collectObsoleteRunsWith [Monad m] [MonadExceptOf IO.Error m]
     (directory : DiskDirectory) (held : List UInt64) (load : m Installed)
     (readManifest : FilePath → m (Option ByteArray)) (check : Except String (Option UInt64) → m (Option UInt64))
     (list : FilePath → m (Array IO.FS.DirEntry))
     (kind : FilePath → m (Except String IO.FS.FileType))
-    (remove : FilePath → m (Except IO.Error Unit)) (sync : FilePath → m Unit) : m Unit := do
-  let installed ← load
-  let manifest ← readManifest (directory.file .manifest)
-  let generation ← check (validateIntegrityRunCollectionGeneration installed.generation manifest)
-  let entries ← list directory.path
-  let selected ← selectRunFilesWith directory generation (retainRunGeneration installed.generation held)
-    kind (entries.toList.map (·.fileName))
-  RunCollection.run selected (RunCollection.performPaths remove sync throw
-    (fun address => directory.file (.run address.1 address.2)) directory.path)
+    (remove : FilePath → m (Except IO.Error Unit)) (sync : FilePath → m Unit) : m Unit :=
+  performObsoleteRunsWith directory (selectObsoleteRunsWith directory held load readManifest check list kind) remove sync
 
 /-- The original table supplies both the phase getter and the cache cells
 for the final singleton directory sync. The caller's holds reach the
@@ -43,6 +54,13 @@ def UsesObsoleteRunCollectionSchedule (db : DiskTable) (directory : DiskDirector
         syncWithHandles directory.path name cachedDirectory.get pending.get pending.set active.get
           (fun path => IO.FS.Handle.mk path .read) fsync) #[path])
 
+private theorem nativeBindAssoc (run : IO α) (next : α → IO β) (last : β → IO γ) :
+    (run >>= next) >>= last = run >>= fun value => next value >>= last := by
+  change EST.bind (EST.bind run next) last = EST.bind run (fun value => EST.bind (next value) last)
+  funext world
+  unfold EST.bind
+  cases run world <;> rfl
+
 private theorem obsoleteRunCollectionSchedule {db : DiskTable}
     {directory lock files phase token active pending cachedDirectory}
     (uses : db.UsesOpenReferences directory lock files phase token)
@@ -53,7 +71,8 @@ private theorem obsoleteRunCollectionSchedule {db : DiskTable}
   obtain ⟨rfl, rfl, rfl⟩ := references
   unfold DiskTable.OpenSyncFiles.AtDirectory at cachePath
   refine ⟨_, _, by
-    simp only [db.collectObsoleteRuns_fileEffects, collectObsoleteRunsWith, syncFilesSyncPaths_schedule, cachePath]
+    simp only [db.collectObsoleteRuns_fileEffects, collectObsoleteRunsWith, performObsoleteRunsWith,
+      selectObsoleteRunsWith, nativeBindAssoc, syncFilesSyncPaths_schedule, cachePath]
     rfl⟩
 
 /-- Callback results on the reached heap, using the production selector
@@ -81,12 +100,16 @@ def OpenObsoleteRunCallbacks.kind (calls : OpenObsoleteRunCallbacks heap) (path 
   let result ← calls.stat path
   liftExcept (runKindAt (fun _ => result) path)
 
+def OpenObsoleteRunCallbacks.plan (calls : OpenObsoleteRunCallbacks heap)
+    (opened : NativeOpenedHandle heap) (held : List UInt64) : EStateM IO.Error heap (List RunAddress) :=
+  selectObsoleteRunsWith opened.directory held (do (← opened.get opened.phase).installed)
+    calls.manifest (liftExcept ∘ Except.mapError IO.userError) calls.list calls.kind
+
 def OpenObsoleteRunCallbacks.run (calls : OpenObsoleteRunCallbacks heap)
     (opened : NativeOpenedHandle heap) (held : List UInt64) (cacheDirectory : IO.Ref (Option IO.FS.Handle))
     (active : IO.Ref (Option (FilePath × IO.FS.Handle))) (pending : IO.Ref (List (FilePath × IO.FS.Handle))) :
     EStateM IO.Error heap Unit :=
-  collectObsoleteRunsWith opened.directory held (do (← opened.get opened.phase).installed)
-    calls.manifest (liftExcept ∘ Except.mapError IO.userError) calls.list calls.kind calls.remove
+  performObsoleteRunsWith opened.directory (calls.plan opened held) calls.remove
     (calls.sync opened.directory cacheDirectory active pending)
 
 /-- The table's projected phase, raw cache entries and resolved handles,
@@ -111,9 +134,8 @@ def OpenCloseHeapView.obsoleteRunFrame (view : OpenCloseHeapView heap RunUnlinkI
     view.cacheAt reached directory active pending, view.descriptors reached,
     (view.handle reached opened.lock).2.1, (view.files reached).owners⟩
 
-structure OpenObsoleteRunObservation {heap : Type} {opened : NativeOpenedHandle heap}
-    (current : NativeOpenedPosition opened) (held : List UInt64)
-    (pass : NativeObsoleteRunPass current.current.ready.state) where
+structure OpenObsoleteRunPlanObservation {heap : Type} {opened : NativeOpenedHandle heap}
+    (current : NativeOpenedPosition opened) (held : List UInt64) (plan : NativeObsoleteRunPlan current.current.ready.state) where
   view : OpenCloseHeapView heap RunUnlinkImage
   active : IO.Ref (Option (FilePath × IO.FS.Handle))
   pending : IO.Ref (List (FilePath × IO.FS.Handle))
@@ -121,20 +143,23 @@ structure OpenObsoleteRunObservation {heap : Type} {opened : NativeOpenedHandle 
   references : opened.files.UsesCacheReferences active pending directory
   cachePath : opened.files.AtDirectory opened.directory.path
   calls : OpenObsoleteRunCallbacks heap
-  holds : pass.reports.held = held
-  initial : (view.files current.reached).image = pass.initial
+  holds : plan.reports.held = held
+  initial : (view.files current.reached).image = plan.initial
   cache : view.cacheAt current.reached directory active pending = current.current.ready.state.cache
   census : view.descriptors current.reached = current.current.ready.state.census
   owner : (view.handle current.reached opened.lock).2.1 = current.current.ready.state.owner
   locked : (view.files current.reached).owners = current.current.ready.state.files.owners
   manifest : ∀ path, NativeFileEffectProjection (fun reached => (view.files reached).image)
-    (view.obsoleteRunFrame opened active pending directory) (calls.manifest path) (liftExcept (pass.reports.manifest.result path))
+    (view.obsoleteRunFrame opened active pending directory) (calls.manifest path) (liftExcept (plan.reports.manifest.result path))
   listed : ∀ path, NativeFileEffectProjection (fun reached => (view.files reached).image)
-    (view.obsoleteRunFrame opened active pending directory) (calls.list path) (liftExcept (pass.reports.list path))
+    (view.obsoleteRunFrame opened active pending directory) (calls.list path) (liftExcept (plan.reports.list path))
   stat : ∀ path, NativeFileEffectProjection (fun reached => (view.files reached).image)
-    (view.obsoleteRunFrame opened active pending directory) (calls.stat path) (pure (pass.stat path))
+    (view.obsoleteRunFrame opened active pending directory) (calls.stat path) (pure (plan.stat path))
   removes : ∀ path, NativeFileEffectProjection (fun reached => (view.files reached).image)
-    (view.obsoleteRunFrame opened active pending directory) (calls.remove path) (pass.reports.removeFile path)
+    (view.obsoleteRunFrame opened active pending directory) (calls.remove path) (plan.reports.removeFile path)
+structure OpenObsoleteRunObservation {heap : Type} {opened : NativeOpenedHandle heap}
+    (current : NativeOpenedPosition opened) (held : List UInt64) (pass : NativeObsoleteRunPass current.current.ready.state)
+    extends OpenObsoleteRunPlanObservation current held pass.toNativeObsoleteRunPlan where
   readsDirectory : ∀ reached,
     calls.readDirectory directory reached = .ok (view.directory reached directory) reached
   syncs : ∀ reached file,
@@ -182,14 +207,15 @@ private theorem projectsKind {heap frame files : Type} {project : heap → files
 variable {heap : Type} {opened : NativeOpenedHandle heap} {start : NativeOpenedPosition opened}
   {held : List UInt64} {pass : NativeObsoleteRunPass start.current.ready.state}
 
-private theorem OpenObsoleteRunObservation.projectsSelector (seen : OpenObsoleteRunObservation start held pass) :
+private theorem OpenObsoleteRunPlanObservation.projectsSelector
+    {plan : NativeObsoleteRunPlan start.current.ready.state} (seen : OpenObsoleteRunPlanObservation start held plan) :
     let installed := start.current.ready.state.writer.installed
-    let current := pass.reports.observed.map fun _ => installed.generation
+    let current := plan.reports.observed.map fun _ => installed.generation
     NativeFileEffectProjection (fun reached => (seen.view.files reached).image)
       (seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory)
       (selectRunFilesWith opened.directory current (retainRunGeneration installed.generation held)
-        seen.calls.kind pass.reports.inventory.names)
-      (pure pass.reports.selected) := by
+        seen.calls.kind plan.reports.inventory.names)
+      (pure plan.reports.selected) := by
   dsimp only
   rw [← congrArg (retainRunGeneration start.current.ready.state.writer.installed.generation) seen.holds,
     ← start.directory, SegmentedRunCollectionReports.selected, ← selectRunFilesWith_pure]
@@ -207,13 +233,54 @@ private theorem OpenObsoleteRunObservation.projectsSelector (seen : OpenObsolete
       obtain ⟨older, unheld⟩ := retainRunGeneration_false_iff.mp eligible.2
       rw [parseRunFileName_sound parsed] at listed
       apply NativeFileEffectProjection.bind
-      · have probe := projectsKind seen.calls pass.stat
+      · have probe := projectsKind seen.calls plan.stat
           (seen.stat (start.current.ready.state.session.directory.file (.run generation index)))
-        rw [pass.kind generation index listed older unheld] at probe
+        rw [plan.kind generation index listed older unheld] at probe
         exact probe
       · intro _
         exact NativeFileEffectProjection.pure _ _ _
     · exact NativeFileEffectProjection.pure _ _ _
+
+def OpenObsoleteRunPlanObservation.Chosen {plan : NativeObsoleteRunPlan start.current.ready.state}
+    (seen : OpenObsoleteRunPlanObservation start held plan) (selected : heap) : Prop :=
+  let directory := opened.directory
+  let state := start.current.ready.state
+  ∃ listed probed,
+    seen.calls.manifest (directory.file .manifest) start.reached = .ok plan.reports.observed listed ∧
+    seen.calls.list directory.path listed = .ok plan.reports.entries probed ∧
+    selectRunFilesWith directory (plan.reports.observed.map fun _ => state.writer.installed.generation)
+      (retainRunGeneration state.writer.installed.generation held) seen.calls.kind
+      (plan.reports.entries.toList.map (·.fileName)) probed = .ok plan.reports.selected selected
+
+/-- The public phase read, manifest generation check, checked listing
+and no-follow selector reach one ordered list on the original heap view. -/
+theorem OpenObsoleteRunPlanObservation.selects
+    {plan : NativeObsoleteRunPlan start.current.ready.state} (seen : OpenObsoleteRunPlanObservation start held plan) :
+    ∃ selected, seen.calls.plan opened held start.reached = .ok plan.reports.selected selected ∧ seen.Chosen selected ∧
+      (seen.view.files selected).image = plan.initial ∧
+      seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory selected =
+        seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory start.reached := by
+  have valid := start.current.ready.readPrefix.refines.1
+  have loaded := opened.phaseEffects.reads start.reached opened.phase _ start.stored
+  rw [valid.phase] at loaded
+  have manifest := seen.manifest (opened.directory.file .manifest)
+  have listed := seen.listed opened.directory.path
+  have manifestPath := congrArg (·.file DiskFile.manifest) start.directory
+  have directoryPath := congrArg DiskDirectory.path start.directory
+  rw [← manifestPath, plan.reports.manifestRead] at manifest
+  rw [← directoryPath, plan.reports.listed] at listed
+  obtain ⟨atList, readManifest, imageListed, frameListed⟩ := manifest.returnsOk start.reached rfl
+  obtain ⟨atProbes, readList, imageProbes, frameProbes⟩ := listed.returnsOk atList rfl
+  obtain ⟨selected, probes, imageSelected, frameSelected⟩ := seen.projectsSelector.returnsOk atProbes rfl
+  rw [← plan.reports.names] at probes
+  rw [manifestPath] at readManifest
+  rw [directoryPath] at readList
+  refine ⟨selected, ?_, ⟨atList, atProbes, readManifest, readList, probes⟩,
+    imageSelected.trans (imageProbes.trans (imageListed.trans seen.initial)),
+    frameSelected.trans (frameProbes.trans frameListed)⟩
+  simp only [OpenObsoleteRunCallbacks.plan, selectObsoleteRunsWith, Bind.bind, EStateM.bind, loaded, Phase.installed,
+    Pure.pure, EStateM.pure, readManifest, Function.comp_apply, plan.reports.preflight valid.retained, Except.mapError,
+    liftExcept, readList, probes]
 
 /-- The singleton group reads the original directory reference and syncs
 the exact corresponding raw handle from the reached unlink prefix. -/
@@ -288,13 +355,8 @@ dispatcher reached the exact directory barrier on the original cache. -/
 def OpenObsoleteRunObservation.Entered (seen : OpenObsoleteRunObservation start held pass)
     (reached : heap) : Prop :=
   let directory := opened.directory
-  let state := start.current.ready.state
-  ∃ listed probed selected issued,
-    seen.calls.manifest (directory.file .manifest) start.reached = .ok pass.reports.observed listed ∧
-    seen.calls.list directory.path listed = .ok pass.reports.entries probed ∧
-    selectRunFilesWith directory (pass.reports.observed.map fun _ => state.writer.installed.generation)
-      (retainRunGeneration state.writer.installed.generation held) seen.calls.kind
-      (pass.reports.entries.toList.map (·.fileName)) probed = .ok pass.reports.selected selected ∧
+  ∃ selected issued,
+    seen.toOpenObsoleteRunPlanObservation.Chosen selected ∧
     ((pass.reports.selected.map RunCollection.Step.unlink).forM
       (RunCollection.performPaths seen.calls.remove (seen.calls.sync directory seen.directory seen.active seen.pending)
         throw (fun address => directory.file (.run address.1 address.2)) directory.path)) selected = .ok () issued ∧
@@ -326,18 +388,7 @@ private theorem OpenObsoleteRunObservation.returns (seen : OpenObsoleteRunObserv
       seen.Entered reached ∧ (seen.view.files reached).image = pass.after ∧
       seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory reached =
         seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory start.reached := by
-  have valid := start.current.ready.readPrefix.refines.1
-  have loaded := opened.phaseEffects.reads start.reached opened.phase _ start.stored
-  rw [valid.phase] at loaded
-  have manifest := seen.manifest (opened.directory.file .manifest)
-  have listed := seen.listed opened.directory.path
-  have manifestPath := congrArg (·.file DiskFile.manifest) start.directory
-  have directoryPath := congrArg DiskDirectory.path start.directory
-  rw [← manifestPath, pass.reports.manifestRead] at manifest
-  rw [← directoryPath, pass.reports.listed] at listed
-  obtain ⟨atList, readManifest, imageListed, frameListed⟩ := manifest.returnsOk start.reached rfl
-  obtain ⟨atProbes, readList, imageProbes, frameProbes⟩ := listed.returnsOk atList rfl
-  obtain ⟨atUnlink, selected, imageUnlink, frameUnlink⟩ := seen.projectsSelector.returnsOk atProbes rfl
+  obtain ⟨atUnlink, selected, chosen, image, frameUnlink⟩ := seen.toOpenObsoleteRunPlanObservation.selects
   let sync := seen.calls.sync opened.directory seen.directory seen.active seen.pending
   have dispatch := projectsUnlinkPrefix opened.directory pass.reports.selected seen.calls.remove sync
     pass.reports.removeFile pass.reports.syncDirectory seen.removes
@@ -345,20 +396,13 @@ private theorem OpenObsoleteRunObservation.returns (seen : OpenObsoleteRunObserv
   unfold SegmentedRunCollectionReports.perform at unlinked
   have runPath := congrArg (fun directory (address : RunAddress) => directory.file (.run address.1 address.2))
     start.directory
-  rw [runPath, directoryPath] at unlinked
+  rw [runPath, congrArg DiskDirectory.path start.directory] at unlinked
   obtain ⟨issued, unlinks, atBarrier, beforeSync⟩ := dispatch.returnsOk atUnlink
-    (by rw [imageUnlink, imageProbes, imageListed, seen.initial]; exact unlinked)
-  have kept := beforeSync.trans (frameUnlink.trans (frameProbes.trans frameListed))
+    (by rw [image]; exact unlinked)
+  have kept := beforeSync.trans frameUnlink
   obtain ⟨reached, synced, barrier, physical, frame⟩ := seen.syncsReached issued atBarrier kept
-  rw [← pass.reports.names] at selected
-  rw [manifestPath] at readManifest
-  rw [directoryPath] at readList
-  refine ⟨reached, ?_, ⟨atList, atProbes, atUnlink, issued, readManifest, readList, selected, unlinks, barrier⟩,
-    physical, frame.trans kept⟩
-  have generation := pass.reports.preflight valid.retained
-  unfold OpenObsoleteRunCallbacks.run collectObsoleteRunsWith
-  simp only [Bind.bind, EStateM.bind, loaded, Phase.installed, Pure.pure, EStateM.pure,
-    readManifest, Function.comp_apply, generation, Except.mapError, liftExcept, readList, selected]
+  refine ⟨reached, ?_, ⟨atUnlink, issued, chosen, unlinks, barrier⟩, physical, frame.trans kept⟩
+  simp only [OpenObsoleteRunCallbacks.run, performObsoleteRunsWith, Bind.bind, EStateM.bind, selected]
   rw [RunCollection.run, RunCollection.steps, List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
   dsimp only [sync] at unlinks
   simp only [Bind.bind, EStateM.bind, unlinks]
@@ -432,5 +476,174 @@ theorem OpenObsoleteRunObservation.Reached.startsNextPass
   have input := later.initial
   rw [sameView] at input
   exact ⟨input.symm.trans returned.physical, later.holds.trans seen.holds.symm⟩
+
+
+/-- An outer stop identifies the issued unlink path. An ordinary I/O
+error would instead return inside the transformer. -/
+abbrev OpenObsoleteRunInterrupted (heap : Type) := ExceptT IO.Error (EStateM FilePath heap)
+
+def OpenObsoleteRunInterrupted.returning (run : EStateM IO.Error heap α) : OpenObsoleteRunInterrupted heap α :=
+  ExceptT.mk fun before =>
+    match run before with
+    | .ok value after => .ok (.ok value) after
+    | .error cause after => .ok (.error cause) after
+
+private theorem OpenObsoleteRunInterrupted.returning_bind (run : EStateM IO.Error heap α) (next : α → EStateM IO.Error heap β) :
+    OpenObsoleteRunInterrupted.returning (run >>= next) = OpenObsoleteRunInterrupted.returning run >>= fun value => OpenObsoleteRunInterrupted.returning (next value) := by
+  funext before
+  cases result : run before <;> simp [OpenObsoleteRunInterrupted.returning, Bind.bind, EStateM.bind, ExceptT.bind,
+    ExceptT.bindCont, ExceptT.mk, Pure.pure, EStateM.pure, result]
+
+private theorem completeUnlinkCalls {α : Type} (steps : List α)
+    (ordinary : α → EStateM IO.Error heap Unit) (interrupted : α → OpenObsoleteRunInterrupted heap Unit)
+    (same : ∀ step ∈ steps, interrupted step = OpenObsoleteRunInterrupted.returning (ordinary step)) :
+    steps.forM interrupted = OpenObsoleteRunInterrupted.returning (steps.forM ordinary) := by
+  induction steps with
+  | nil => rfl
+  | cons step remaining ih =>
+    simp only [List.forM_eq_forM, List.forM_cons, same step List.mem_cons_self]
+    rw [← List.forM_eq_forM, ← List.forM_eq_forM]
+    rw [ih (fun later member => same later (List.mem_cons_of_mem _ member)), OpenObsoleteRunInterrupted.returning_bind]
+
+/-- The checked preflight and each completed unlink use the reached
+opened heap. The single outer stop is reported by the same remove
+callback at the next selected address. -/
+structure OpenObsoleteRunUnlinkObservation {heap : Type} {opened : NativeOpenedHandle heap}
+    (current : NativeOpenedPosition opened) (held : List UInt64)
+    (cut : NativeObsoleteRunUnlinkCut current.current.ready.state) (stop : NativeObsoleteRunUnlinkStop cut)
+    extends OpenObsoleteRunPlanObservation current held cut.plan where
+  remove : FilePath → OpenObsoleteRunInterrupted heap (Except IO.Error Unit)
+  completed : ∀ address ∈ cut.done,
+    let path := opened.directory.file (.run address.1 address.2)
+    remove path = OpenObsoleteRunInterrupted.returning (calls.remove path)
+  stopped : ∀ issued, (view.descriptors issued, (view.files issued).image) = (cut.issueCensus, cut.issue) →
+    let path := opened.directory.file (.run cut.target.1 cut.target.2)
+    NativeFileEffectProjection.result (fun after => (view.descriptors after, (view.files after).image))
+      ((remove path).run issued) = (stop.remove cut.path).run (cut.issueCensus, cut.issue) ∧
+    view.obsoleteRunFrame opened active pending directory
+      (NativeFileEffectProjection.reached ((remove path).run issued)) =
+      view.obsoleteRunFrame opened active pending directory issued
+
+variable {cut : NativeObsoleteRunUnlinkCut start.current.ready.state} {stop : NativeObsoleteRunUnlinkStop cut}
+
+def OpenObsoleteRunUnlinkObservation.perform (seen : OpenObsoleteRunUnlinkObservation start held cut stop)
+    (sync : FilePath → OpenObsoleteRunInterrupted heap Unit) :
+    RunCollection.Step RunAddress → OpenObsoleteRunInterrupted heap Unit :=
+  RunCollection.performPaths seen.remove sync throw
+    (fun address => opened.directory.file (.run address.1 address.2)) opened.directory.path
+
+def OpenObsoleteRunUnlinkObservation.run (seen : OpenObsoleteRunUnlinkObservation start held cut stop)
+    (sync : FilePath → OpenObsoleteRunInterrupted heap Unit) :
+    EStateM.Result FilePath heap (Except IO.Error Unit) :=
+  (performObsoleteRunsWith opened.directory (OpenObsoleteRunInterrupted.returning (seen.calls.plan opened held)) seen.remove sync).run start.reached
+
+private theorem OpenObsoleteRunUnlinkObservation.completes (seen : OpenObsoleteRunUnlinkObservation start held cut stop)
+    (sync : FilePath → OpenObsoleteRunInterrupted heap Unit) (selected issued : heap)
+    (completed : ((cut.done.map RunCollection.Step.unlink).forM
+      (RunCollection.performPaths seen.calls.remove (fun _ => pure ()) throw
+        (fun address => opened.directory.file (.run address.1 address.2)) opened.directory.path)) selected = .ok () issued) :
+    (((cut.done.map RunCollection.Step.unlink).forM (seen.perform sync))).run selected = .ok (.ok ()) issued := by
+  let ordinary := RunCollection.performPaths seen.calls.remove (fun _ => pure ()) throw
+    (fun address : RunAddress => opened.directory.file (.run address.1 address.2)) opened.directory.path
+  rw [completeUnlinkCalls _ ordinary (seen.perform sync)]
+  · change ((cut.done.map RunCollection.Step.unlink).forM ordinary) selected = _ at completed
+    simp only [OpenObsoleteRunInterrupted.returning, ExceptT.run, ExceptT.mk, completed]
+  · intro step member
+    obtain ⟨address, chosen, rfl⟩ := List.mem_map.mp member
+    simp only [perform, ordinary, RunCollection.performPaths]
+    rw [seen.completed address chosen, OpenObsoleteRunInterrupted.returning_bind]
+    congr
+    funext outcome
+    cases RunCollection.ownedUnlinkResult outcome with
+    | ok value => cases value; rfl
+    | error cause => rfl
+
+/-- The terminal cut keeps the exact ready phase and heap projection.
+The directory barrier and every later unlink remain unentered. -/
+structure OpenObsoleteRunUnlinkObservation.Reached (seen : OpenObsoleteRunUnlinkObservation start held cut stop)
+    (reached : heap) : Prop where
+  source : UsesObsoleteRunCollectionSchedule opened.table opened.directory opened.phase
+    seen.active seen.pending seen.directory held
+  entered : ∃ selected issued,
+    seen.toOpenObsoleteRunPlanObservation.Chosen selected ∧
+    (((cut.done.map RunCollection.Step.unlink).forM (seen.perform (fun _ => pure ())))).run selected = .ok (.ok ()) issued ∧
+    (seen.view.descriptors issued, (seen.view.files issued).image) = (cut.issueCensus, cut.issue) ∧
+    (seen.remove (opened.directory.file (.run cut.target.1 cut.target.2))).run issued = .error cut.path reached
+  stopped : ∀ sync, seen.run sync = .error cut.path reached
+  files : (seen.view.descriptors reached, (seen.view.files reached).image) = (cut.reachedCensus, cut.reached)
+  frame : seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory reached =
+    seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory start.reached
+  holds : cut.plan.reports.held = held
+  phase : opened.contents reached opened.phase = some (.ready start.current.ready.state.writer.installed)
+  survivors : ∀ candidate ∈ cut.reached.crashImages,
+    SelectedIntegrityCheckpoint candidate start.current.ready.state.writer.target.pair.manifest
+      start.current.ready.state.writer.checkpoint
+  protectedRuns : ∀ generation index bytes,
+    start.current.ready.state.writer.installed.generation ≤ generation ∨ generation ∈ held →
+    cut.plan.initial.guaranteed generation index = some bytes → cut.reached.guaranteed generation index = some bytes
+  replay : PendingClientReplay start.current.submissions start.current.ready.reads start.current.history
+
+theorem NativeOpenedPosition.stopsDuringObsoleteRunUnlink
+    (seen : OpenObsoleteRunUnlinkObservation start held cut stop) : ∃ reached, seen.Reached reached := by
+  let directory := opened.directory
+  let plan := seen.toOpenObsoleteRunPlanObservation
+  obtain ⟨selected, planned, chosen, selectedImage, selectedFrame⟩ := plan.selects
+  have dispatch := projectsUnlinkPrefix directory cut.done seen.calls.remove (fun _ => pure ())
+    cut.plan.reports.removeFile cut.plan.reports.syncDirectory seen.removes
+  have completed := cut.completed
+  unfold SegmentedRunCollectionReports.perform at completed
+  have runPath := congrArg (fun directory (address : RunAddress) => directory.file (.run address.1 address.2))
+    start.directory
+  rw [runPath, congrArg DiskDirectory.path start.directory] at completed
+  obtain ⟨issued, unlinked, issueImage, frame⟩ := dispatch.returnsOk selected
+    (by rw [selectedImage]; exact completed)
+  have issueFrame := frame.trans selectedFrame
+  have census := ((congrArg OpenObsoleteRunFrame.census issueFrame).trans seen.census).trans cut.census.1.symm
+  have issue : (seen.view.descriptors issued, (seen.view.files issued).image) = (cut.issueCensus, cut.issue) :=
+    Prod.ext census issueImage
+  obtain ⟨projected, kept⟩ := seen.stopped issued issue
+  rw [stop.stopped] at projected
+  let path := opened.directory.file (.run cut.target.1 cut.target.2)
+  change NativeFileEffectProjection.result (fun after => (seen.view.descriptors after, (seen.view.files after).image))
+    ((seen.remove path).run issued) = _ at projected
+  change seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory
+    (NativeFileEffectProjection.reached ((seen.remove path).run issued)) = _ at kept
+  cases stopped : (seen.remove path).run issued with
+  | ok value reached => simp [stopped, NativeFileEffectProjection.result] at projected
+  | error endpoint reached =>
+    simp only [stopped, NativeFileEffectProjection.result, EStateM.Result.error.injEq] at projected
+    obtain ⟨rfl, physical⟩ := projected
+    have frame : seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory reached =
+        seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory start.reached :=
+      (by simpa only [stopped, NativeFileEffectProjection.reached] using kept :
+        seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory reached = _).trans issueFrame
+    have valid := start.current.ready.readPrefix.refines.1
+    obtain ⟨_, _, survivors, protectedRuns, replay, _⟩ := start.current.ready.stopsDuringObsoleteRunUnlink cut stop
+    have phase := (congrArg OpenObsoleteRunFrame.phase frame).trans start.stored
+    change opened.contents reached opened.phase = _ at phase
+    rw [valid.phase] at phase
+    have uses := start.uses
+    rw [start.directory] at uses
+    refine ⟨reached, obsoleteRunCollectionSchedule uses seen.references seen.cachePath held,
+      ⟨selected, issued, chosen, seen.completes _ selected issued unlinked, issue, stopped⟩, ?_, physical, frame,
+      seen.holds, phase, survivors, ?_, replay⟩
+    · intro sync
+      have prior := seen.completes sync selected issued unlinked
+      change ((cut.done.map RunCollection.Step.unlink).forM (seen.perform sync)) selected = _ at prior
+      change (seen.remove path) issued = _ at stopped
+      have atTarget : seen.perform sync (.unlink cut.target) issued = .error cut.path reached := by
+        simp [OpenObsoleteRunUnlinkObservation.perform, RunCollection.performPaths, path, stopped, Bind.bind,
+          ExceptT.bind, ExceptT.mk, EStateM.bind]
+      unfold OpenObsoleteRunUnlinkObservation.run performObsoleteRunsWith
+      change ((OpenObsoleteRunInterrupted.returning (seen.calls.plan opened held) >>= fun chosen =>
+        RunCollection.run chosen (seen.perform sync)) : OpenObsoleteRunInterrupted heap Unit) start.reached = _
+      dsimp only [plan] at planned
+      rw [cut.ordered] at planned
+      rw [List.forM_eq_forM] at prior
+      simp only [RunCollection.run, RunCollection.steps, List.map_append, List.map_cons, List.append_assoc,
+        List.cons_append, List.forM_eq_forM, List.forM_append, List.forM_cons, Bind.bind, ExceptT.bind, ExceptT.bindCont,
+        ExceptT.mk, EStateM.bind, OpenObsoleteRunInterrupted.returning, planned, prior, atTarget]
+    · simpa only [seen.holds] using protectedRuns
+
 
 end Alvoki.Storage.DiskSession
