@@ -97,15 +97,7 @@ theorem SegmentedDatabaseTrace.fromHealthyBootstrap (directory : DiskDirectory) 
       writer.RetainedReady directory descriptor ∧
       SegmentedDatabaseTrace directory descriptor writer allowCollection [] descriptor writer := by
   intro rotate publish settled recover rotation marker
-  have admitted : prepareBootstrapWith directory list readEmpty metadata = .ok before.image.observeSuccessor := by
-    cases stage with
-    | none =>
-      simp [prepareBootstrapWith, listed, clear, zeroRead, staged, Bind.bind, Except.bind, Pure.pure, Except.pure]
-    | some info =>
-      obtain ⟨regular, present⟩ := allowed info rfl
-      have regularFile : (info.type == .file) = true := by rw [regular]; rfl
-      simp [prepareBootstrapWith, listed, clear, zeroRead, staged, regularFile, present, Bind.bind, Except.bind,
-        Pure.pure, Except.pure]
+  have admitted := prepareBootstrapWith_admitted directory list readEmpty metadata listed clear zeroRead staged allowed
   obtain ⟨image, completed, bootstrap⟩ := bootstrapEmptyWith_completes directory before.image valid
     before.image.observeSuccessor rfl createEmpty write sync renameFile rotation marker
   have recovered : recover before.image = .ok ⟨.empty, 0, 0, 0⟩ image := by

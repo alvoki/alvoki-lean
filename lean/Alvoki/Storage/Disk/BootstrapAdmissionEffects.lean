@@ -4,6 +4,27 @@ namespace Alvoki.Storage.WalSegmentRepair
 
 open System
 
+/-- Reports for a checked listing, the empty segment probe and an allowed
+staging name reach publication with the exact observed empty segment. -/
+theorem prepareBootstrapWith_admitted (directory : DiskDirectory)
+    (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (readEmpty : FilePath → Except IO.Error (Option ByteArray))
+    (metadata : FilePath → Except IO.Error (Option IO.FS.Metadata))
+    {entries : Array IO.FS.DirEntry} (listed : list directory.path = .ok entries)
+    (clear : entries.any (fun entry => conflictsWithBootstrap entry.fileName) = false)
+    {empty : Option ByteArray} (observed : readEmpty (directory.file (.walSegment 0)) = .ok empty)
+    {stage : Option IO.FS.Metadata} (staged : metadata (directory.file .stagedWalBoundary) = .ok stage)
+    (allowed : ∀ info, stage = some info → info.type = .file ∧ empty.isSome = true) :
+    prepareBootstrapWith directory list readEmpty metadata = .ok empty := by
+  cases stage with
+  | none =>
+    simp [prepareBootstrapWith, listed, clear, observed, staged, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  | some info =>
+    obtain ⟨regular, present⟩ := allowed info rfl
+    have regularFile : (info.type == .file) = true := by rw [regular]; rfl
+    simp [prepareBootstrapWith, listed, clear, observed, staged, regularFile, present, Bind.bind, Except.bind,
+      Pure.pure, Except.pure]
+
 theorem prepareBootstrapWith_readEmpty (directory : DiskDirectory)
     (list : FilePath → Except IO.Error (Array IO.FS.DirEntry))
     (readEmpty : FilePath → Except IO.Error (Option ByteArray))

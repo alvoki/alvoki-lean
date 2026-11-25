@@ -176,6 +176,7 @@ import Alvoki.Storage.Disk.CachedMarkedRetryInstallation
 import Alvoki.Storage.Disk.DiskOpenAdmission
 import Alvoki.Storage.Disk.DiskBootstrapAdmission
 import Alvoki.Storage.Disk.ObservedBootstrapCache
+import Alvoki.Storage.Disk.ObservedBootstrapFailure
 import Alvoki.Storage.Disk.SegmentedCleanCachedReopen
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
 import Alvoki.Storage.Disk.CachedWalChunkReports
@@ -817,6 +818,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRotation.State.preparedAfterReopenBarrier
 #check_axioms Alvoki.Storage.WalSegmentRotation.State.finishAfterRotation
 #check_axioms Alvoki.Storage.WalSegmentRepair.BootstrapValid.crash
+#check_axioms Alvoki.Storage.WalSegmentRepair.BootstrapValid.nextSelection
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_safe
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_completes
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromHealthyBootstrap
@@ -824,6 +826,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_recoveryBranch
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_readEmpty
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_liftReports
+#check_axioms Alvoki.Storage.WalSegmentRepair.prepareBootstrapWith_admitted
 #check_axioms Alvoki.Storage.replay_drop_append
 #check_axioms Alvoki.Storage.replayWalChunks_eq_concat
 #check_axioms Alvoki.Storage.finishWalChunkReplay_eq_retained
@@ -1313,6 +1316,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.entries
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.canonicalLock
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.retained
+#check_axioms Alvoki.Storage.DiskSession.BootstrapOpenCalls.runMarkerless
+#check_axioms Alvoki.Storage.DiskSession.BootstrapOpenCalls.reachesPublication
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.publicationError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.fromBootstrapWithCapturedCache
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.uniqueResult
 #check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.sameInstalled

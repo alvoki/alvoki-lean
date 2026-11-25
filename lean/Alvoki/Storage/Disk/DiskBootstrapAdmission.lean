@@ -74,17 +74,17 @@ structure BootstrapOpenReports (files : Type) (directory : DiskDirectory)
   rotation : toBootstrapOpenCalls.RotationHealthy cache
   marker : toBootstrapOpenCalls.MarkerHealthy cache
 
-namespace BootstrapOpenReports
+namespace BootstrapOpenCalls
 
 variable {files : Type} {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
 
-private def bootstrapAt (observed : BootstrapOpenReports files directory before) (resolved : DiskDirectory)
+def bootstrapAt (observed : BootstrapOpenCalls files directory before) (resolved : DiskDirectory)
     (cache : files) : EStateM IO.Error WalSegmentRotation.State Reopened :=
   bootstrapSegmentedWith resolved (fun path => liftExcept (observed.list path))
     (fun path => liftExcept (observed.readEmpty path)) (fun path => liftExcept (bootstrapMetadata observed.lookup path))
     (observed.createEmpty cache) (observed.write cache) (observed.sync cache) observed.renameFile
 
-private def recoverAt (observed : BootstrapOpenReports files directory before) (resolved : DiskDirectory) :
+private def recoverAt (observed : BootstrapOpenCalls files directory before) (resolved : DiskDirectory) :
     EStateM IO.Error WalSegmentRotation.State Reopened := do
   let cache ← observed.openFiles resolved.path
   recoverSegmentedWalWith
@@ -92,18 +92,53 @@ private def recoverAt (observed : BootstrapOpenReports files directory before) (
     (optionalMetadataWith (pure (observed.lookup (resolved.file .walBoundary))))
     (observed.marked resolved cache) (observed.bootstrapAt resolved cache)
 
-private def runAt (observed : BootstrapOpenReports files directory before) (resolved : DiskDirectory)
+private def runAt (observed : BootstrapOpenCalls files directory before) (resolved : DiskDirectory)
     (slot : DescriptorSlot) : EStateM IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession :=
   runOpenWithInstallation resolved slot.description observed.nextRef (observed.flock slot) observed.unlock
     (observed.recoverAt resolved)
 
-def run {input : FilePath} (observed : BootstrapOpenReports files directory before)
+def run {input : FilePath} (observed : BootstrapOpenCalls files directory before)
     (admission : OpenAdmissionReports input directory observed.slot) :
     EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession :=
   DiskTable.withOpenAdmission input (fun path => liftExcept (admission.realPath path))
     (fun path => pure (admission.lookup path)) (fun path => liftExcept (admission.openAppend path)) observed.runAt before
 
-end BootstrapOpenReports
+/-- The admitted calls expose the exact markerless worker, whether that
+worker installs a table or stops at a reported error. -/
+theorem runMarkerless {input : FilePath} (calls : BootstrapOpenCalls files directory before)
+    (admission : OpenAdmissionReports input directory calls.slot) {cache : files}
+    (initialized : calls.openFiles directory.path before.image = .ok cache before.image) :
+    calls.run admission = runOpenWithInstallation directory calls.slot.description calls.nextRef (.ok true)
+      calls.unlock (calls.bootstrapAt directory cache) before := by
+  obtain ⟨flatName, flatMessage, flat⟩ := calls.flatAbsent
+  obtain ⟨_, markerName, markerMessage, marker⟩ := calls.markerAbsent
+  have branch := runOpenWithInstallation_markerlessBranch directory calls.slot.description calls.nextRef before
+    calls.unlock (calls.openFiles directory.path) (fun path => pure (calls.lookup path))
+    (calls.marked directory) (calls.bootstrapAt directory) cache initialized
+    flatName flatMessage markerName markerMessage (by simp [flat, Pure.pure, EStateM.pure])
+    (by simp [marker, Pure.pure, EStateM.pure])
+  rw [run, admission.admits, runAt, calls.acquired, recoverAt, branch]
+
+/-- The reached listing, empty segment probe and staging guard authorize
+the same first publication callback on the observed cache. -/
+theorem reachesPublication (calls : BootstrapOpenCalls files directory before) (cache : files)
+    {entries : Array IO.FS.DirEntry} (listed : calls.list directory.path = .ok entries)
+    (clear : entries.any (fun entry => conflictsWithBootstrap entry.fileName) = false) :
+    calls.bootstrapAt directory cache before.image =
+      bootstrapEmptyWith directory before.image.observeSuccessor (calls.createEmpty cache) (calls.write cache)
+        (calls.sync cache) calls.renameFile before.image := by
+  have admitted := prepareBootstrapWith_admitted directory calls.list calls.readEmpty (bootstrapMetadata calls.lookup)
+    listed clear calls.zeroRead calls.staged.1 calls.allowed
+  unfold bootstrapAt bootstrapSegmentedWith
+  rw [prepareBootstrapWith_liftReports, admitted]
+  rfl
+
+end BootstrapOpenCalls
+
+abbrev BootstrapOpenReports.run {files : Type} {input : FilePath} {directory : DiskDirectory}
+    {before : LockedFileState WalSegmentRotation.State} (observed : BootstrapOpenReports files directory before)
+    (admission : OpenAdmissionReports input directory observed.slot) :=
+  observed.toBootstrapOpenCalls.run admission
 
 /-- An admitted markerless execution installs the exact empty writer after
 its zero segment and marker are durable. It starts the mixed trace under
@@ -126,22 +161,13 @@ theorem SegmentedBatchDatabaseTrace.fromObservedBootstrap {files : Type} {input 
       SegmentedBatchDatabaseTrace directory observed.slot.description writer allowCollection [] observed.slot.description writer := by
   have acquisition : TryLockObserves before.owners directory (.ok true) := by
     simpa only [observed.acquired] using observed.acquisition
-  obtain ⟨flatName, flatMessage, flat⟩ := observed.flatAbsent
-  obtain ⟨visibleAbsent, markerName, markerMessage, marker⟩ := observed.markerAbsent
-  have branch := runOpenWithInstallation_markerlessBranch directory observed.slot.description observed.nextRef before
-    observed.unlock (observed.openFiles directory.path) (fun path => pure (observed.lookup path))
-    (observed.marked directory) (observed.bootstrapAt directory) observed.cache observed.initialized
-    flatName flatMessage markerName markerMessage (by simp [flat, Pure.pure, EStateM.pure])
-    (by simp [marker, Pure.pure, EStateM.pure])
   obtain ⟨after, bootstrap, returned, vacant, held, ready, _⟩ :=
     SegmentedDatabaseTrace.fromHealthyBootstrap directory observed.slot.description observed.nextRef before valid
       acquisition observed.unlock observed.list observed.readEmpty (bootstrapMetadata observed.lookup)
       observed.listed observed.clear observed.zeroRead observed.staged.1 observed.allowed
       (observed.createEmpty observed.cache) (observed.write observed.cache) (observed.sync observed.cache)
       observed.renameFile allowCollection observed.rotation observed.marker
-  refine ⟨after, bootstrap, ?_, observed.live, observed.lockObject, visibleAbsent, vacant, held, ready, .start⟩
-  rw [BootstrapOpenReports.run, admission.admits, BootstrapOpenReports.runAt, observed.acquired,
-    BootstrapOpenReports.recoverAt, branch]
-  exact returned
+  refine ⟨after, bootstrap, ?_, observed.live, observed.lockObject, observed.markerAbsent.1, vacant, held, ready, .start⟩
+  exact (observed.toBootstrapOpenCalls.runMarkerless admission observed.initialized).trans returned
 
 end Alvoki.Storage.DiskSession
