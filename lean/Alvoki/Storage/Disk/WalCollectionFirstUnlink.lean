@@ -59,6 +59,34 @@ theorem collectWithEffects_first (calls : WalCollectionReads) (directory : DiskD
       cases value
       simp [walCollectionFileCall, issued, returned, Pure.pure, EStateM.pure]
 
+/-- The result from the first callback either stops before the tail or
+starts that exact tail from the reached files, under the original owner. -/
+theorem collectWithEffects_afterFirst (calls : WalCollectionReads) (directory : DiskDirectory)
+    (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
+    (syncDirectory : FilePath → EStateM IO.Error image Unit)
+    (installed : Installed) (before : LockedFileState image) {first : Nat} {rest : List Nat}
+    (planned : calls.plan directory installed = .ok (first :: rest))
+    {result : Except IO.Error Unit} {reached : image}
+    (returned : removeFile (directory.file (.walSegment first)) before.image = .ok result reached) :
+    calls.collectWithEffects directory removeFile syncDirectory (.ready installed, before) =
+      match RunCollection.ownedUnlinkResult result with
+      | .error cause => .error cause (.poisoned, {before with image := reached})
+      | .ok () =>
+        (do
+          RunCollection.run rest (RunCollection.performPaths (fun path => walCollectionFileCall (removeFile path))
+            (fun path => walCollectionFileCall (syncDirectory path)) throw
+            (fun offset => directory.file (.walSegment offset)) directory.path)
+          modify (fun state : Phase Installed × LockedFileState image => (.ready installed, state.2)))
+          (.poisoned, {before with image := reached}) := by
+  rw [calls.collectWithEffects_first directory removeFile syncDirectory installed before planned]
+  cases accepted : RunCollection.ownedUnlinkResult result with
+  | error cause =>
+    simp [Bind.bind, EStateM.bind, walCollectionFileCall, returned, liftExcept, accepted, throw,
+      throwThe, MonadExceptOf.throw, EStateM.throw]
+  | ok value =>
+    cases value
+    simp [Bind.bind, EStateM.bind, walCollectionFileCall, returned, liftExcept, accepted, Pure.pure, EStateM.pure]
+
 end WalCollectionReads
 
 /-- The first selected WAL name resolved at the no-follow probe and at
