@@ -8,6 +8,7 @@ import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeUncertainWriteExitTableOpen
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
 import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
+import Alvoki.Storage.Disk.NativeStoppedFirstAppendExitTableOpen
 import Alvoki.Storage.Disk.NativeOpenedProcessExitReport
 
 namespace Alvoki.Storage.DiskSession
@@ -148,6 +149,7 @@ inductive NativeOpenedSessionAction : Type 1 where
   | uncertainWriteReboot (request : WriteRequest) (input : FilePath)
   | uncertainWriteExitAndReopen (request : WriteRequest) (input : FilePath)
   | stoppedWalWriteReboot (request : WriteRequest) (input : FilePath)
+  | stoppedFirstAppendExit (request : WriteRequest) (input : FilePath)
 
 /-- Same-handle calls and the supported reopen routes compose at
 the exact handle and ready position reached by the preceding segment. -/
@@ -198,6 +200,11 @@ inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
       (seen : NativeOpenedFirstAppendReport before.position request input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.stoppedWalWriteReboot request input) [seen.event] next
+  | stoppedFirstAppendExit {request : WriteRequest} {input : FilePath}
+      (seen : NativeStoppedFirstAppendExitTableOpen before.position request input view names bytes)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.stoppedFirstAppendExit request input)
+        [.interruptedAppendRecovered request input seen.prepared.batch] next
 
 inductive NativeOpenedSessionTrace (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (start : NativeOpenedSessionPoint heap) :
@@ -228,6 +235,7 @@ theorem NativeOpenedSessionTrace.common (trace : NativeOpenedSessionTrace view n
     | uncertainWriteExit _ returned => exact .step prior returned.common
     | stoppedWalWrite _ returned => exact .step prior returned.common
     | stoppedFirstAppend _ returned => exact .step prior returned.common
+    | stoppedFirstAppendExit _ returned => exact .step prior returned.common
 
 /-- A report for the next prescribed block of calls or reopen. -/
 inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
@@ -262,6 +270,9 @@ inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
   | stoppedFirstAppend (request : WriteRequest) (input : FilePath)
       (report : NativeOpenedFirstAppendReport before.position request input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.stoppedWalWriteReboot request input)
+  | stoppedFirstAppendExit (request : WriteRequest) (input : FilePath)
+      (report : NativeStoppedFirstAppendExitTableOpen before.position request input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.stoppedFirstAppendExit request input)
 
 theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport view names bytes before action) :
     ∃ events next, NativeOpenedSessionStep view names bytes before action events next := by
@@ -302,6 +313,9 @@ theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport vi
   | stoppedFirstAppend request input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .stoppedFirstAppend seen returned⟩
+  | stoppedFirstAppendExit request input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .stoppedFirstAppendExit seen returned⟩
 
 /-- Obtain the next local report only at the reached position of this
 prescribed prefix. Each reopen can reach a new handle. Quiet restarts
