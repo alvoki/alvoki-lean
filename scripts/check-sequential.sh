@@ -333,6 +333,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 lake env leanchecker Alvoki.Storage.Disk.NativePendingGroupedSyncOpenPhase
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerStageWrite
+lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerStageWriteOpenPhase
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedPendingWrite
 lake env leanchecker Alvoki.Storage.Disk.NativeWritePreflight
 lake env leanchecker Alvoki.Storage.Disk.NativeWriteClassification

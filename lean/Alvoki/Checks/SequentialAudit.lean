@@ -420,6 +420,7 @@ import Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 import Alvoki.Storage.Disk.NativePendingGroupedSyncOpenPhase
 import Alvoki.Storage.Disk.NativePendingMarkerStageWrite
+import Alvoki.Storage.Disk.NativePendingMarkerStageWriteOpenPhase
 import Alvoki.Storage.Disk.NativeGroupedPendingWrite
 import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.NativeWriteClassification
@@ -2474,6 +2475,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.fileChoices
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.batchCut
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtMarkerStageWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsWriteAtMarkerStageWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.oldMarkerAfterStageWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedMarkerStageWrite
 #check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.observedFailure
 #check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.returnsError
 #check_axioms Alvoki.Storage.DiskSession.NativeGroupedWriteSyncError.recoveryBindings

@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativePendingMarkerDirectory
 import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
+import Alvoki.Storage.Disk.NativePendingMarkerStageWrite
 import Alvoki.Storage.Disk.NativeWriteCrashReads
 
 namespace Alvoki.Storage.DiskSession
@@ -9,6 +10,7 @@ open System WalSegmentCommit WalSegmentRepair WAL.Boundary
 /-- A marked write stops at one reported publication callback. The
 pending write has no ordinary result. -/
 inductive NativeMarkerPublicationStop {state : NativeReadyState} (prepared : NativeReadyWritePreparation state) where
+  | stageWrite (stop : NativeMarkerStageWriteStop prepared)
   | keeperSync (stop : NativeWriteKeeperSyncStop prepared)
   | stagedSync (stop : NativeWriteStagedMarkerSyncStop prepared)
   | rename (stop : NativeWriteMarkerRenameStop prepared)
@@ -22,21 +24,23 @@ namespace NativeMarkerPublicationStop
 variable {state : NativeReadyState} {prepared : NativeReadyWritePreparation state}
 
 def request : NativeMarkerPublicationStop prepared → WriteRequest
-  | .keeperSync stop | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.request
+  | .stageWrite stop | .keeperSync stop | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.request
 
 def files : NativeMarkerPublicationStop prepared → FileImage
-  | .keeperSync stop | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.files
+  | .stageWrite stop | .keeperSync stop | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.files
 
 def cut : NativeMarkerPublicationStop prepared → MarkerInterruption
-  | .keeperSync stop | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.cut
+  | .stageWrite stop | .keeperSync stop | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.cut
 
-def staging : NativeMarkerPublicationStop prepared → NativeReadyWriteStaging prepared
-  | .keeperSync stop => stop.staging
-  | .stagedSync stop => stop.staging
-  | .rename stop => stop.synced.toNativeReadyWriteStaging
-  | .directorySync stop _ _ => stop.renamed.toNativeReadyWriteFileSyncs.toNativeReadyWriteStaging
+def stageAllocation : NativeMarkerPublicationStop prepared → NativeReadyWriteStageAllocation prepared
+  | .stageWrite stop => stop.allocated
+  | .keeperSync stop => stop.staging.toNativeReadyWriteStageAllocation
+  | .stagedSync stop => stop.staging.toNativeReadyWriteStageAllocation
+  | .rename stop => stop.synced.toNativeReadyWriteStaging.toNativeReadyWriteStageAllocation
+  | .directorySync stop _ _ => stop.renamed.toNativeReadyWriteFileSyncs.toNativeReadyWriteStaging.toNativeReadyWriteStageAllocation
 
 def oldMarkerChild : NativeMarkerPublicationStop prepared → DeviceInode
+  | .stageWrite stop => stop.oldMarker.child
   | .keeperSync stop => stop.oldMarker.child
   | .stagedSync stop => stop.oldMarker.child
   | .rename stop => stop.oldMarker.child
@@ -44,6 +48,7 @@ def oldMarkerChild : NativeMarkerPublicationStop prepared → DeviceInode
 
 def Reached {history log} (current : NativeReadPosition history log)
     {prepared : NativeReadyWritePreparation current.state} : NativeMarkerPublicationStop prepared → Prop
+  | .stageWrite stop => NativePendingMarkerStageWrite current stop
   | .keeperSync stop => NativePendingKeeperSync current stop
   | .stagedSync stop => NativePendingStagedMarkerSync current stop
   | .rename stop => NativePendingMarkerRename current stop
@@ -52,6 +57,7 @@ def Reached {history log} (current : NativeReadPosition history log)
 theorem reaches (current : NativeReadPosition history log) {prepared : NativeReadyWritePreparation current.state}
     (stop : NativeMarkerPublicationStop prepared) : stop.Reached current := by
   cases stop with
+  | stageWrite stopped => exact current.stopsAtMarkerStageWrite stopped
   | keeperSync stopped => exact current.stopsAtKeeperSync stopped
   | stagedSync stopped => exact current.stopsAtStagedMarkerSync stopped
   | rename stopped => exact current.stopsAtMarkerRename stopped
@@ -60,6 +66,7 @@ theorem reaches (current : NativeReadPosition history log) {prepared : NativeRea
 theorem batchCut (stop : NativeMarkerPublicationStop prepared) (valid : state.Valid) :
     BatchCutProjection stop.files (prepared.modeledMarkerCut stop.cut) := by
   cases stop with
+  | stageWrite stopped => exact stopped.batchCut valid
   | keeperSync stopped =>
     apply prepared.projectMarkerCut valid stopped.cut
     simp only [MarkerInterruption.reachedBatch, (prepared.extended valid).1]
@@ -72,15 +79,17 @@ theorem kept (stop : NativeMarkerPublicationStop prepared) :
     stop.files.kept = state.files.image.kept := by
   cases stop <;> rfl
 
-/-- Only the first file sync can leave less than the whole attempted
-tail. Use the exact reached effect to determine its surviving choices. -/
+/-- A stop before the keeper file sync completes uses the reached
+append or sync effect to determine the possible surviving tails. -/
 def keeperTails : NativeMarkerPublicationStop prepared → List ByteArray
+  | .stageWrite _ => ByteArray.empty :: prepared.tails
   | .keeperSync stopped => stopped.reached.2.crashTails
   | .stagedSync _ | .rename _ | .directorySync _ _ _ => [WAL.encode prepared.batch]
 
 theorem keeperChoices (stop : NativeMarkerPublicationStop prepared) (valid : state.Valid) :
     stop.files.keeper.crashImages = stop.keeperTails.map (fun tail => some (state.writer.wal.active.bytes ++ tail)) := by
   cases stop with
+  | stageWrite stopped => exact (stopped.fileChoices valid).2.2.2.2
   | keeperSync stopped =>
     change stopped.reached.2.crashTails.map (fun tail =>
       some (WAL.encode (state.writer.history.drop state.writer.wal.active.first) ++ tail)) = _
@@ -115,19 +124,19 @@ structure NativeMarkerPublicationCrash {state : NativeReadyState} {prepared : Na
   later : List Nat
   laterSurvived : later ∈ stop.files.later.crashImages
   namespaceView : DirectoryReadNamespace
-  objects : namespaceView.modelObject = stop.staging.stageView.modelObject
+  objects : namespaceView.modelObject = stop.stageAllocation.stageView.modelObject
   children : ∀ name, name ≠ "WAL.commit" → name ≠ "WAL.commit.next" →
-    namespaceView.child stop.staging.root name = stop.staging.stageView.child stop.staging.root name
-  marker : namespaceView.child stop.staging.root "WAL.commit" =
-    some (if usesNewMarker then stop.staging.openedMarker.child else stop.oldMarkerChild)
+    namespaceView.child stop.stageAllocation.root name = stop.stageAllocation.stageView.child stop.stageAllocation.root name
+  marker : namespaceView.child stop.stageAllocation.root "WAL.commit" =
+    some (if usesNewMarker then stop.stageAllocation.openedMarker.child else stop.oldMarkerChild)
   raw : WriteCrashView
-  root : raw.names state.session.directory.path = some (namespaceView.modelObject stop.staging.root)
+  root : raw.names state.session.directory.path = some (namespaceView.modelObject stop.stageAllocation.root)
   lock : raw.names (state.session.directory.file .lock) =
-    (namespaceView.child stop.staging.root "LOCK").map namespaceView.modelObject
+    (namespaceView.child stop.stageAllocation.root "LOCK").map namespaceView.modelObject
   keeper : raw.names prepared.keeperPath =
-    (namespaceView.child stop.staging.root prepared.keeperName).map namespaceView.modelObject
+    (namespaceView.child stop.stageAllocation.root prepared.keeperName).map namespaceView.modelObject
   markerPath : raw.names prepared.markerPath =
-    (namespaceView.child stop.staging.root "WAL.commit").map namespaceView.modelObject
+    (namespaceView.child stop.stageAllocation.root "WAL.commit").map namespaceView.modelObject
 
 namespace NativeMarkerPublicationCrash
 
@@ -154,16 +163,16 @@ theorem powerLoss (crash : NativeMarkerPublicationCrash stop) (valid : state.Val
 
 theorem sameRoot (crash : NativeMarkerPublicationCrash stop) :
     crash.raw.names state.session.directory.path = some (state.census.inode state.directorySlot.description) := by
-  rw [crash.root, crash.objects, stop.staging.stageObjects, stop.staging.directoryIdentity]
+  rw [crash.root, crash.objects, stop.stageAllocation.stageObjects, stop.stageAllocation.directoryIdentity]
 
 theorem sameLock (crash : NativeMarkerPublicationCrash stop) :
     crash.raw.names (state.session.directory.file .lock) = some (state.census.inode state.owner.description) := by
   rw [crash.lock, crash.children "LOCK" (by decide) (by decide),
-    stop.staging.stageBindings.2.1,
-    Option.map_some, crash.objects, stop.staging.stageObjects, stop.staging.lockIdentity]
+    stop.stageAllocation.stageBindings.2.1,
+    Option.map_some, crash.objects, stop.stageAllocation.stageObjects, stop.stageAllocation.lockIdentity]
 
 theorem sameKeeper (crash : NativeMarkerPublicationCrash stop) :
-    crash.raw.names prepared.keeperPath = some (state.census.inode stop.staging.keeperSlot.description) := by
+    crash.raw.names prepared.keeperPath = some (state.census.inode stop.stageAllocation.keeperSlot.description) := by
   have keeperName : prepared.keeperName ≠ "WAL.commit" := by
     intro same
     have samePrefix := congrArg (fun name : String => name.toList.take 4) same
@@ -172,17 +181,17 @@ theorem sameKeeper (crash : NativeMarkerPublicationCrash stop) :
     intro same
     have samePrefix := congrArg (fun name : String => name.toList.take 4) same
     simp [NativeReadyWritePreparation.keeperName, renderWalSegmentName, String.toList_append] at samePrefix
-  obtain ⟨_, inodes, _, _, keeperIdentity⟩ := stop.staging.selectsKeeper.custody
+  obtain ⟨_, inodes, _, _, keeperIdentity⟩ := stop.stageAllocation.selectsKeeper.custody
   rw [crash.keeper, crash.children _ keeperName keeperStage,
-    stop.staging.stageBindings.1,
-    Option.map_some, crash.objects, stop.staging.stageObjects, keeperIdentity, inodes]
+    stop.stageAllocation.stageBindings.1,
+    Option.map_some, crash.objects, stop.stageAllocation.stageObjects, keeperIdentity, inodes]
 
 theorem markerObject (crash : NativeMarkerPublicationCrash stop) :
     crash.raw.names prepared.markerPath = some (if crash.usesNewMarker then
-      state.census.inode stop.staging.markerSlot.description else
-      stop.staging.stageView.modelObject stop.oldMarkerChild) := by
+      state.census.inode stop.stageAllocation.markerSlot.description else
+      stop.stageAllocation.stageView.modelObject stop.oldMarkerChild) := by
   rw [crash.markerPath, crash.marker, Option.map_some, crash.objects]
-  split <;> simp only [stop.staging.stageIdentity]
+  split <;> simp only [stop.stageAllocation.stageIdentity]
 
 /-- The two encoded counts are distinct: the new marker covers a
 nonempty accepted group and both counts fit in the format. -/
@@ -253,6 +262,13 @@ theorem NativeMarkerPublicationCrash.oldMarkerAfterKeeperSync {state : NativeRea
     crash.usesNewMarker = false :=
   crash.oldMarkerOfSingleton valid (stopped.selectsPrior valid).2.1
 
+/-- A staged data write has not changed the published marker. -/
+theorem NativeMarkerPublicationCrash.oldMarkerAfterStageWrite {state : NativeReadyState}
+    {prepared : NativeReadyWritePreparation state} {stopped : NativeMarkerStageWriteStop prepared}
+    (crash : NativeMarkerPublicationCrash (.stageWrite stopped)) (valid : state.Valid) :
+    crash.usesNewMarker = false :=
+  crash.oldMarkerOfSingleton valid (stopped.fileChoices valid).2.1
+
 /-- The staged marker's file sync leaves the active marker in place. -/
 theorem NativeMarkerPublicationCrash.oldMarkerAfterStagedSync {state : NativeReadyState}
     {prepared : NativeReadyWritePreparation state} {stopped : NativeWriteStagedMarkerSyncStop prepared}
@@ -275,6 +291,7 @@ theorem NativeMarkerPublicationCrash.keeperTailWhenPublished {state : NativeRead
     (crash : NativeMarkerPublicationCrash stop) (valid : state.Valid) (published : crash.usesNewMarker = true) :
     crash.keeperTail = WAL.encode prepared.batch := by
   cases stop with
+  | stageWrite _ => exact Bool.noConfusion ((crash.oldMarkerAfterStageWrite valid).symm.trans published)
   | keeperSync _ => exact Bool.noConfusion ((crash.oldMarkerAfterKeeperSync valid).symm.trans published)
   | stagedSync _ => exact crash.completeKeeperTail rfl
   | rename _ => exact crash.completeKeeperTail rfl
@@ -289,8 +306,8 @@ structure NativeMarkerPublicationCrashReads {state : NativeReadyState}
     (selected : SelectedIntegrityCheckpoint state.writer.published.durable
       crash.retry.image.directory.active.manifest state.writer.checkpoint)
     extends NativeWriteCrashReads crash.raw input crash.vacant layout selected where
-  root : opening.admission.root = stop.staging.root
-  childMap : opening.admission.view.child opening.admission.root = crash.namespaceView.child stop.staging.root
+  root : opening.admission.root = stop.stageAllocation.root
+  childMap : opening.admission.view.child opening.admission.root = crash.namespaceView.child stop.stageAllocation.root
   identityMap : opening.admission.view.modelObject = crash.namespaceView.modelObject
 
 /-- Recovery returns the exact marked session from the survivor. The

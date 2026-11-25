@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.NativePendingMarkerDirectoryOpenPhase
 import Alvoki.Storage.Disk.NativePendingGroupedSyncOpenPhase
+import Alvoki.Storage.Disk.NativePendingMarkerStageWriteOpenPhase
 import Alvoki.Storage.Disk.NativeExecutionTrace
 
 namespace Alvoki.Storage.DiskSession
@@ -130,8 +131,8 @@ def RawStoppedMarkerReopenEffects.Returned
     names rebooted state.session.directory.path = some ((view.handle seen.seed.afterPending seen.seed.handle).1.inode
       (view.handle seen.seed.afterPending seen.seed.handle).2.1.description) ∧
     names rebooted prepared.markerPath = some (if crash.usesNewMarker then
-      state.census.inode stop.staging.markerSlot.description else
-      stop.staging.stageView.modelObject stop.oldMarkerChild) ∧
+      state.census.inode stop.stageAllocation.markerSlot.description else
+      stop.stageAllocation.stageView.modelObject stop.oldMarkerChild) ∧
     (∀ path payload, checkpointSurvivorPath state.session.directory state.writer crash.pair.manifest path →
       reader.toNativeWriteCrashReads.ReadsSurvivor path payload →
       ∃ read : reader.opening.reads.reads.ObservesFile path payload,
@@ -372,6 +373,41 @@ theorem NativeOpenedPosition.opensAfterStoppedKeeperSync
   unfold NativeWriteKeeperSyncStop.cut
   rw [complete]
   rfl
+
+end
+
+section
+
+variable (current : NativeOpenedPosition opened)
+  {prepared : NativeReadyWritePreparation current.current.ready.state} {stopped : NativeMarkerStageWriteStop prepared}
+  {crash : NativeMarkerPublicationCrash (.stageWrite stopped)} {plan : crash.Plan}
+  {reader : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected}
+
+/-- The original stage data write stops on its fresh descriptor. The
+prior marker and one reported keeper tail supply the raw reopened table. -/
+theorem NativeOpenedPosition.opensAfterStoppedMarkerStageWrite
+    (seen : RawStoppedMarkerReopenEffects reader view calls init names bytes rebooted phaseIdentity tokenIdentity
+      allocatePhase allocateToken stream remove stage rename)
+    (samePhase : view.phase = opened.contents)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    (constructs : ∀ resolved lock files, DiskTable.OpenReferenceAssembly resolved lock files (assemble resolved lock files)) :
+    let state := current.current.ready.state
+    opened.table.UsesOpenWriteSchedules state.session.directory opened.files opened.phase ∧
+    NativePendingMarkerStageWrite current.current.ready stopped ∧
+    (∃ poisoned, view.phase poisoned opened.phase = some .poisoned ∧
+      ∀ detach create flush sync replace, stopped.onOpenPhase opened detach create flush sync replace
+        (current.reached, state.cache, state.census, prepared.initial) =
+          .error (prepared.stagedPath, prepared.marker) (poisoned, stopped.allocated.appendCache, stopped.reached)) ∧
+    crash.usesNewMarker = false ∧ plan.layout.tail = crash.keeperTail ∧ seen.Returned current bootstrap assemble := by
+  intro state
+  obtain ⟨source, pending, poisoned, _, _, poison, interrupted⟩ := current.stopsWriteAtMarkerStageWrite stopped
+  have valid := current.current.ready.readPrefix.refines.1
+  have old := crash.oldMarkerAfterStageWrite valid
+  have tail := plan.tailBytes valid
+  rw [old] at tail
+  exact ⟨source, pending, ⟨poisoned, samePhase.symm ▸ poison, interrupted⟩, old, tail,
+    seen.returns current samePhase bootstrap assemble constructs⟩
 
 end
 
