@@ -1491,7 +1491,8 @@ theorem preparesFromHeldMarker
 /-- Construct the marker barrier from the prepared keeper census and
 derive the exact directory image that enters repair. -/
 theorem stabilizesAfterKeeperRead
-    (report : CapturedMarkedReadReports admission layout published false)
+    {readStart : DescriptorInventory}
+    (report : CapturedMarkedReadReports admission layout published false readStart)
     (captured : CapturedKeeperOpenReports report)
     {marker settled : WalInodeImage} {slot : DescriptorSlot}
     (live : slot ∈ captured.afterRead.slots)
@@ -1536,7 +1537,8 @@ def stabilizeCapturedMarker (visible : ByteArray)
 on the exact reached keeper state. A successful finish returns the
 same plan's opened table and the repair's reached state. -/
 theorem reopensAfterCapturedPreparation
-    (report : CapturedMarkedReadReports admission layout published false)
+    {readStart : DescriptorInventory}
+    (report : CapturedMarkedReadReports admission layout published false readStart)
     (captured : CapturedKeeperOpenReports report)
     {marker settled : WalInodeImage} {slot : DescriptorSlot}
     (live : slot ∈ captured.afterRead.slots)
@@ -1582,7 +1584,8 @@ theorem reopensAfterCapturedPreparation
 /-- The aligned case runs marker fsync, directory fsync and the cached
 keeper fsync in order, using the exact state returned by each call. -/
 theorem reopensAlignedAfterCapturedPreparation
-    (report : CapturedMarkedReadReports admission layout published false)
+    {readStart : DescriptorInventory}
+    (report : CapturedMarkedReadReports admission layout published false readStart)
     (captured : CapturedKeeperOpenReports report)
     {marker settled : WalInodeImage} {slot : DescriptorSlot}
     (live : slot ∈ captured.afterRead.slots)
@@ -1625,6 +1628,35 @@ theorem reopensAlignedAfterCapturedPreparation
   have returned := captured.finishAlignedFromCache aligned noLater openRead fsync
     removeFile write renameFile directorySync
   simpa only [keeperSync] using returned
+
+/-- Install the marked worker's recovered table in the admitted session.
+The acquired marker and selection feed recovery before the cache is dropped
+from the returned state. -/
+theorem installsAfterAcquiredRecovery
+    (calls : CapturedAlignedCallbacks admission)
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    (acquire : DiskDirectory → EStateM IO.Error (CensusDirectoryCache × CensusOpenState)
+      (KeeperDescriptorIdentity × Selection))
+    (prepare : DiskDirectory → Selection → EStateM IO.Error (CensusDirectoryCache × CensusOpenState)
+      (Plan × Reopened × Nat))
+    (stabilize : KeeperDescriptorIdentity → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (finish : DiskDirectory → Plan → Nat → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    {handle : KeeperDescriptorIdentity} {selection : Selection}
+    {acquired : CensusDirectoryCache × CensusOpenState}
+    (acquisition : acquire directory (admission.cache, admission.reached, admission.held) =
+      .ok (handle, selection) acquired)
+    {opened : Reopened} {after : CensusOpenState}
+    (recovery : reopenWith (prepare directory selection) (stabilize handle) (finish directory) acquired =
+      .ok opened (admission.cache, after)) :
+    calls.runWithMarked (fun resolved cache before =>
+      match reopenAcquiredWith (acquire resolved) (prepare resolved) stabilize (finish resolved) (cache, before) with
+      | .ok (opened, _, _) (_, reached) => .ok opened reached
+      | .error cause (_, reached) => .error cause reached) =
+      .ok ⟨directory, admission.owner.description, .ready opened.installed, calls.nextRef, calls.nextRef + 1⟩ after := by
+  apply calls.runWithMarked_ready _ marker
+  simp only [reopenAcquiredWith_reports, acquisition, recovery]
 
 /-- After marker stabilization, a longer keeper uses the shared native
 replacement schedule once its first directory sync authorizes repair. -/

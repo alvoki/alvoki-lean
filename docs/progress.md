@@ -773,6 +773,15 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The aligned repair lemmas accept the actual marker-open descriptor census
+while retaining the directory handle recorded at admission. The guarded
+marked-open schedule now has a checked handoff from successful marker
+acquisition and recovery to the exact installed session. This handoff
+still takes the reached recovery result as a premise. The longer and
+pruned keeper paths still need the same census threaded through their
+repair reports. [Two-slot client return](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
+
+
 For ordered two-slot markers, the retry proof now connects the retained
 client submissions and fresh snapshot reads to the table returned by the
 shared open schedule. That schedule derives the ready session, lock

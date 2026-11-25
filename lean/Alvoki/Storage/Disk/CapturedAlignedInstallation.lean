@@ -417,6 +417,25 @@ def runWithMarked (calls : CapturedAlignedCallbacks admission)
     calls.installAfterRecovery resolved owner
       (admission.recoverWithMarked resolved (marked resolved cache) (calls.bootstrapAt resolved cache))
 
+/-- The marked route installs the exact recovered payload and retains
+the state reached by the selected worker under the admitted lock. -/
+theorem runWithMarked_ready (calls : CapturedAlignedCallbacks admission)
+    (marked : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened)
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    {opened : Reopened} {after : CensusOpenState}
+    (recovered : marked directory admission.cache (admission.reached, admission.held) = .ok opened after) :
+    calls.runWithMarked marked =
+      .ok ⟨directory, admission.owner.description, .ready opened.installed, calls.nextRef, calls.nextRef + 1⟩ after := by
+  have route : optionalMetadataWith (admission.lookup (directory.file .walBoundary))
+      (admission.reached, admission.held) = .ok (some metadata) (admission.reached, admission.held) := by
+    simp only [optionalMetadataWith, Bind.bind, EStateM.bind, marker, Pure.pure, EStateM.pure]
+  simp only [runWithMarked, admission.run_reachesRecovery, installAfterRecovery,
+    tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, Bind.bind, EStateM.bind,
+    admission.recoverWithMarked_selects calls.flat route, Option.isSome_some, ↓reduceIte, recovered]
+  rfl
+
 /-- Use the shared marked recovery and allocate the ready session after the
 reached repair callback returns. -/
 def runWithFinish (calls : CapturedAlignedCallbacks admission)
