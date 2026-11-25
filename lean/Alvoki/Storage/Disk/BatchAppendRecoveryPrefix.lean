@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.BatchRecoveryPrefix
+import Alvoki.Storage.Disk.BatchInterruptionDispatch
 
 namespace Alvoki.Storage.DiskSession
 
@@ -30,7 +31,8 @@ theorem Stop.refinesReopenPrefix
 end BatchAppendInterruption
 
 /-- Reopen after a reported first-append stop and finite retry prefix.
-The chosen layout determines which primitive open reports to consume.
+The outer batch schedule supplies the starting files and owner. The
+chosen layout determines which primitive open reports to consume.
 The exact returned session keeps the old history and continues the same
 client ledger with one uncertain submission. -/
 theorem SegmentedClientReadTrace.reopenAfterReportedBatchAppend
@@ -41,12 +43,16 @@ theorem SegmentedClientReadTrace.reopenAfterReportedBatchAppend
     {before : SegmentedWriterState}
     (trace : SegmentedClientReadTrace directory initialDescriptor start.writer allowCollection log reads writer before)
     {report : BatchAppendInterruption directory before} (observed : report.Valid)
+    (outer : report.runUntilAppend stage sync rename = .error tag reached)
     (stop : report.Stop writer) {retry : LockedFileState FileImage}
     (retries : ReportedReopenPrefix directory before.wal.active.first stop.origin retry)
     {input : FilePath}
     (readAndFinish : ∀ layout : CanonicalKeeperLayout retry.image before.history,
       BatchAppendInterruption.PreparedRetry before layout →
       Nonempty (PrimitiveCheckpointHeldOpen input directory layout before.published)) :
+    tag = report.appendCall ∧ reached.1 = .poisoned ∧
+    BoundedReopenTrace directory (fun target => target = before.target)
+      ⟨FirstAppendCut.projectReached before reached.2.image, reached.2.owners⟩ retry ∧
     ∃ (layout : CanonicalKeeperLayout retry.image before.history)
       (primitive : PrimitiveCheckpointHeldOpen input directory layout before.published)
       (after : SegmentedWriterState) (session : SegmentedSession) (final : LockedFileState FileImage),
@@ -60,11 +66,13 @@ theorem SegmentedClientReadTrace.reopenAfterReportedBatchAppend
       GuardedClientReplay (log ++ [.uncertainBatch report.batch]) reads after session := by
   have ready := (trace.writes.preservesRetained (start.bootstrap.writerReady start.held).toRetained).1
   obtain ⟨attempts, stopped, _, layout, prepared⟩ := stop.refinesReopenPrefix ready retries
+  obtain ⟨call, poisoned, initialFiles⟩ := observed.reachedFileState outer
   obtain ⟨primitive⟩ := readAndFinish layout prepared
   obtain ⟨after, endpoint, session, final, returned, path, lock, phase, held, files, owners, settled⟩ :=
     stop.reopensPrepared observed ready stopped attempts prepared primitive.toHeldOpen.chunkReports primitive.admission
   have continued := trace.advance (.batchAppendAdmitted .start report endpoint)
-  exact ⟨layout, primitive, after, session, final, returned, path, lock, phase, lock.symm ▸ held, files, owners, settled,
+  exact ⟨call, poisoned, initialFiles.symm ▸ stopped.trans attempts, layout, primitive, after, session, final,
+    returned, path, lock, phase, lock.symm ▸ held, files, owners, settled,
     endpoint.history, lock.symm ▸ continued, continued.guardedReplay start.bootstrap start.held phase⟩
 
 end Alvoki.Storage.DiskSession
