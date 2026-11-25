@@ -2967,8 +2967,11 @@ theorem recoveredRetries_installedReads
     (markerAvailable : PrefixChunksAvailableUntilEof (marker.visible markerHandle.inode)
       (markerReads.readChunk markerFile.calls.slot.description))
     (markerAccepted : decode (marker.visible markerHandle.inode) = .ok selected)
-    (markerProjects : projectBinding openedFrom.image.directory.active
-      (marker.visible markerHandle.inode) = .ok openedFrom.image.directory.active)
+    (markerSource :
+      (openedFrom.image.directory.active = survivingBindings ∧
+        survivingMarker = some (marker.visible markerHandle.inode)) ∨
+      projectBinding openedFrom.image.directory.active (marker.visible markerHandle.inode) =
+        .ok openedFrom.image.directory.active)
     {stabilize : KeeperDescriptorIdentity → EStateM IO.Error FileImage Unit}
     (markerChoices : List (DirectoryPublication.Bindings × Option ByteArray))
     (enumerated : markerChoices.map Prod.fst = prepared.directory.crashImages)
@@ -3048,10 +3051,17 @@ theorem recoveredRetries_installedReads
   let readWal := fun start length =>
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
   have observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier) := by
-    rw [projectBinding_decodes markerAccepted] at markerProjects
-    exact congrArg DirectoryPublication.Bindings.walBoundary
-      (congrArg (fun image : FileImage => image.directory.active) preparationPreservesFiles |>.trans
-        (Except.ok.inj markerProjects).symm)
+    rw [preparationPreservesFiles]
+    rcases markerSource with ⟨binding, bytes⟩ | projected
+    · rw [binding]
+      have survived := survivorProjects
+      rw [bytes] at survived
+      change projectBinding ⟨checkpoint, none⟩ (marker.visible markerHandle.inode) =
+        .ok survivingBindings at survived
+      rw [projectBinding_decodes markerAccepted] at survived
+      exact congrArg DirectoryPublication.Bindings.walBoundary (Except.ok.inj survived).symm
+    · rw [projectBinding_decodes markerAccepted] at projected
+      exact congrArg DirectoryPublication.Bindings.walBoundary (Except.ok.inj projected).symm
   have logicalMarker : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
   have markerDescription : markerFile.calls.slot.description = markerHandle.description :=
