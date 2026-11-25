@@ -313,6 +313,7 @@ import Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectTableOpen
 import Alvoki.Storage.Disk.NativeBootstrapMarkerDirectoryReboot
 import Alvoki.Storage.Disk.NativeBootstrapMarkerRebootTableOpen
 import Alvoki.Storage.Disk.NativeBootstrapMarkerStopSessions
+import Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectSessions
 import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenEarlyError
@@ -1949,6 +1950,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.EffectiveReboot.selects
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.EffectiveReboot.readsSelectedReboot
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.EffectiveReboot.opensEmptyTable
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.replaysFromEmpty
+#check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.stopsPublicSchedule
+#check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.BeforeEffectMarkerlessReboot.executesOpenedSessions
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.EffectiveReboot.executesOpenedSessions
 #check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.MarkerPublication.returns
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.startFromValid

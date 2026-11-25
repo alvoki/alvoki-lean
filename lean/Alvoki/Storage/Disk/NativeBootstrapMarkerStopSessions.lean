@@ -5,7 +5,32 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
 
-namespace RawBootstrapMarkerDirectoryStop.EffectiveReboot
+/-- Replay the reported suffix from the exact returned session with no
+earlier client writes, submissions or reads. -/
+def NativeOpenedSessionTrace.ReplaysFromEmpty {heap : Type} (view : OpenCloseHeapView heap FileImage)
+    (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (start : NativeOpenedSessionPoint heap) : Prop :=
+  ∀ actions, NativeOpenedSessionTrace.Reports view names bytes start actions →
+    ∃ events last, NativeOpenedSessionTrace view names bytes start actions events last ∧
+      NativeExecutionTrace start.position.current events last.position.current ∧
+      last.position.current.history = events.flatMap NativeExecutionEvent.writes ∧
+      last.position.current.submissions = events.flatMap NativeExecutionEvent.submissions ∧
+      last.position.current.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
+      InstalledClientReplay last.position.current.submissions last.position.current.ready.reads last.position.current.history
+        last.position.current.ready.state.writer.installed last.position.current.ready.state.session
+
+theorem NativeOpenedSessionTrace.replaysFromEmpty {heap : Type} {view : OpenCloseHeapView heap FileImage}
+    {names : heap → FilePath → Option Nat} {bytes : heap → Nat → ByteArray} (start : NativeOpenedSessionPoint heap)
+    (history : start.position.current.history = []) (submissions : start.position.current.submissions = [])
+    (reads : start.position.current.ready.reads = []) : NativeOpenedSessionTrace.ReplaysFromEmpty view names bytes start := by
+  intro actions reports
+  obtain ⟨events, last, trace, common, replay⟩ := NativeOpenedSessionTrace.executes start actions reports
+  obtain ⟨allWrites, allSubmissions, allReads⟩ := common.ledgers
+  refine ⟨events, last, trace, common, ?_, ?_, ?_, replay⟩
+  · simpa only [history, List.nil_append] using allWrites
+  · simpa only [submissions, List.nil_append] using allSubmissions
+  · simpa only [reads, List.nil_append] using allReads
+
+namespace RawBootstrapMarkerDirectoryStop
 
 variable {heap : Type} {firstInput nextInput : FilePath} {directory : DiskDirectory}
   {before : LockedFileState WalSegmentRotation.State}
@@ -21,6 +46,44 @@ variable {heap : Type} {firstInput nextInput : FilePath} {directory : DiskDirect
   {keeper : ReusedBootstrapKeeperHeap guards} {stop : RawBootstrapMarkerDirectoryStop keeper}
   {marker : BootstrapMarkerRenamed listed} {handoff : BootstrapKeeperMarkerRename (.reused observed) marker}
   {physical : stop.Physical handoff}
+
+/-- The first public open issues the final directory fsync on its own
+cached handle. The terminal result is outside the returned IO errors. -/
+abbrev PublicStop (admitted : RawOpenAdmissionReport firstAdmission view firstCalls entry)
+    (stop : RawBootstrapMarkerDirectoryStop keeper)
+    (marked : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (install : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap DiskTable) : Prop :=
+  ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
+    (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles) (cache : DiskTable.OpenSyncFiles),
+    DiskTable.OpenSyncFiles.IsOpenAction directory.path cacheOpen ∧
+    cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
+      (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
+      (fun value => liftM (IO.mkRef value)) makeCache ∧
+    openSyncFilesWith (firstInit.openDirectory directory.path) firstInit.newRef firstInit.newRef firstInit.newRef
+      makeCache admitted.afterFlock = .ok cache seed.afterPending ∧
+    firstCalls.runUntilBootstrapDirectory firstInput firstInit makeCache
+      (fun resolved _ => calls.untilMarkerDirectory resolved seed.directoryRef seed.activeRef seed.pendingRef)
+      marked install entry = .error (directory.path, seed.handle) stop.afterRename
+
+theorem stopsPublicSchedule (physical : stop.Physical handoff)
+    (owner : firstAdmission.owner = fileCalls.slot)
+    (lockHandle : (view.handle stop.afterRename admitted.lock).2.1 = firstAdmission.owner)
+    (metadata : ∀ path, calls.metadata path = optionalMetadataWith (firstCalls.lookup path))
+    (keeperLookup : guards.metadataLookup (directory.file (.walSegment 0)) =
+      firstCalls.lookup (directory.file (.walSegment 0)))
+    (flat : calls.metadata (directory.file .wal) seed.afterPending = .ok none seed.afterPending)
+    (absent : calls.metadata (directory.file .walBoundary) seed.afterPending = .ok none seed.afterPending)
+    (marked : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (install : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap DiskTable) :
+    PublicStop admitted stop marked install := by
+  obtain ⟨cacheOpen, makeCache, cache, action, source, initialized, _, _, stopped, _, _⟩ :=
+    stopsPublicOpen admitted stop physical owner lockHandle metadata keeperLookup flat absent marked install
+  exact ⟨cacheOpen, makeCache, cache, action, source, initialized, stopped⟩
+
+namespace EffectiveReboot
+
+variable
   {nextView : OpenCloseHeapView heap FileImage} {nextCalls : RawOpenAdmissionCallbacks heap}
   {nextInit : OpenSyncCacheCallbacks heap} {stream : Type}
   {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
@@ -57,18 +120,7 @@ theorem executesOpenedSessions (reboot : EffectiveReboot physical) (valid : Boot
     (phaseEffects : OpenPhaseCellEffects nextView.phase get set)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) :
-    (∃ (firstCacheOpen : IO DiskTable.OpenSyncFiles)
-      (firstMakeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
-        IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles) (firstCache : DiskTable.OpenSyncFiles),
-      DiskTable.OpenSyncFiles.IsOpenAction directory.path firstCacheOpen ∧
-      firstCacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
-        (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
-        (fun value => liftM (IO.mkRef value)) firstMakeCache ∧
-      openSyncFilesWith (firstInit.openDirectory directory.path) firstInit.newRef firstInit.newRef firstInit.newRef
-        firstMakeCache admitted.afterFlock = .ok firstCache seed.afterPending ∧
-      firstCalls.runUntilBootstrapDirectory firstInput firstInit firstMakeCache
-        (fun resolved _ => calls.untilMarkerDirectory resolved seed.directoryRef seed.activeRef seed.pendingRef)
-        firstMarked firstInstall entry = .error (directory.path, seed.handle) stop.afterRename) ∧
+    PublicStop admitted stop firstMarked firstInstall ∧
     reboot.Selected ∧ reboot.SelectedReads valid opening ∧
     ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
       (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
@@ -81,30 +133,17 @@ theorem executesOpenedSessions (reboot : EffectiveReboot physical) (valid : Boot
       nextView.phase start.position.reached start.handle.phase = some (.ready ⟨.empty, 0, 0, 0⟩) ∧
       start.position.current.history = [] ∧ start.position.current.submissions = [] ∧
       start.position.current.ready.reads = [] ∧ start.position.pins = [] ∧
-      ∀ actions, NativeOpenedSessionTrace.Reports nextView names bytes start actions →
-        ∃ events last, NativeOpenedSessionTrace nextView names bytes start actions events last ∧
-          NativeExecutionTrace start.position.current events last.position.current ∧
-          last.position.current.history = events.flatMap NativeExecutionEvent.writes ∧
-          last.position.current.submissions = events.flatMap NativeExecutionEvent.submissions ∧
-          last.position.current.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
-          InstalledClientReplay last.position.current.submissions last.position.current.ready.reads last.position.current.history
-            last.position.current.ready.state.writer.installed last.position.current.ready.state.session := by
-  obtain ⟨firstCacheOpen, firstMakeCache, firstCache, firstAction, firstSource, firstAllocated, _, _, interrupted, _, _⟩ :=
-    stopsPublicOpen admitted stop physical owner lockHandle metadata keeperLookup flat absent firstMarked firstInstall
+      NativeOpenedSessionTrace.ReplaysFromEmpty nextView names bytes start := by
+  have interrupted := stopsPublicSchedule (admitted := admitted) physical owner lockHandle metadata keeperLookup
+    flat absent firstMarked firstInstall
   obtain ⟨selectedReads, _, _, _, cacheOpen, makeCache, handle, position, cacheAction, cacheSource, returned, phase,
     _, _, _, _, _, _, _, _, _, _, history, submissions, reads, pins⟩ :=
     reboot.opensEmptyTable valid opening same next fallback assemble constructs get set phaseEffects ptrEq
   let start : NativeOpenedSessionPoint heap := ⟨handle, position⟩
-  refine ⟨⟨firstCacheOpen, firstMakeCache, firstCache, firstAction, firstSource, firstAllocated, interrupted⟩,
-    reboot.selects valid, selectedReads, cacheOpen, makeCache, start, cacheAction, cacheSource, returned, phase,
-    history, submissions, reads, pins, ?_⟩
-  intro actions reports
-  obtain ⟨events, last, trace, common, replay⟩ := NativeOpenedSessionTrace.executes start actions reports
-  obtain ⟨allWrites, allSubmissions, allReads⟩ := common.ledgers
-  refine ⟨events, last, trace, common, ?_, ?_, ?_, replay⟩
-  · simpa only [start, history, List.nil_append] using allWrites
-  · simpa only [start, submissions, List.nil_append] using allSubmissions
-  · simpa only [start, reads, List.nil_append] using allReads
+  exact ⟨interrupted, reboot.selects valid, selectedReads, cacheOpen, makeCache, start, cacheAction, cacheSource,
+    returned, phase, history, submissions, reads, pins,
+    NativeOpenedSessionTrace.replaysFromEmpty start history submissions reads⟩
 
-end RawBootstrapMarkerDirectoryStop.EffectiveReboot
+end EffectiveReboot
+end RawBootstrapMarkerDirectoryStop
 end Alvoki.Storage.DiskSession
