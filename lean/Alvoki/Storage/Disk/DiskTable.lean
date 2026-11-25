@@ -67,6 +67,23 @@ private def SyncFiles.open (dir : FilePath) : IO SyncFiles := do
   let directory ← IO.FS.Handle.mk dir .read
   return ⟨dir, ← IO.mkRef (some directory), ← IO.mkRef none, ← IO.mkRef []⟩
 
+/-- Open the directory before allocating the three synchronization references. -/
+@[macro_inline] def DiskSession.openSyncFilesWith [Monad m]
+    (openDirectory : m handle) (recordDirectory : Option handle → m rDirectory)
+    (recordActive : Option (FilePath × handle) → m rActive)
+    (recordPending : List (FilePath × handle) → m rPending)
+    (assemble : rDirectory → rActive → rPending → files) : m files := do
+  let directory ← openDirectory
+  let captured ← recordDirectory (some directory)
+  let active ← recordActive none
+  let pending ← recordPending []
+  return assemble captured active pending
+
+theorem syncFilesOpen_schedule (dir : FilePath) :
+    SyncFiles.open dir = DiskSession.openSyncFilesWith (m := IO)
+      (IO.FS.Handle.mk dir .read) (fun value => liftM (IO.mkRef value))
+      (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value)) (SyncFiles.mk dir) := rfl
+
 private def SyncFiles.remember (files : SyncFiles) (path : FilePath)
     (handle : IO.FS.Handle) : IO Unit :=
   files.pending.modify (SyncHandleRouting.pushPending path handle)
