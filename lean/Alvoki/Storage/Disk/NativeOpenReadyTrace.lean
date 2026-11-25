@@ -40,6 +40,14 @@ structure NativeOpenedPosition (opened : NativeOpenedHandle heap) where
   stored : opened.contents reached opened.phase = some current.ready.state.session.phase
   pins : List (NativeOpenedPin opened)
 
+/-- Seed a trace from a reached ready open before any snapshot pin has
+been issued. Later reads then use pins issued inside the trace. -/
+def NativeOpenedPosition.fromOpen (opened : NativeOpenedHandle heap) (start : NativeExecutionPosition)
+    (reached : heap) (directory : start.ready.state.session.directory = opened.directory)
+    (stored : opened.contents reached opened.phase = some start.ready.state.session.phase) :
+    NativeOpenedPosition opened :=
+  ⟨start, reached, directory, stored, []⟩
+
 theorem NativeOpenedPosition.uses (position : NativeOpenedPosition opened) :
     opened.table.UsesOpenReferences position.current.ready.state.session.directory opened.lock opened.files
       opened.phase opened.token :=
@@ -52,7 +60,7 @@ inductive NativeOpenedInstruction : Type 1 where
   | readAt (index : Nat) (request : SnapshotReadRequest α)
 
 /-- Per-call observations at the reached position. A read gets its pin
-from the preceding successful acquisitions, by its issuance index. -/
+by index from the reached list of tracked and newly issued pins. -/
 inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpenedInstruction → Type 1 where
   | write (request : WriteRequest) {prepared : NativeReadyWritePreparation start.current.ready.state}
       (reported : NativeReadyWriteReport prepared) (rows : request.rows = prepared.rows) :
@@ -202,6 +210,8 @@ def Reports (start : NativeOpenedPosition opened) (instructions : List NativeOpe
     instructions = issued ++ instruction :: remaining →
     NativeOpenedTrace start issued events reached → Nonempty (NativeOpenedReport reached instruction)
 
+/-- A ready suffix can begin with previously tracked pins. Use
+`NativeOpenedPosition.fromOpen` to start immediately after opening. -/
 theorem executes (start : NativeOpenedPosition opened) (instructions : List NativeOpenedInstruction)
     (reports : Reports start instructions) :
     ∃ events last, NativeOpenedTrace start instructions events last ∧
