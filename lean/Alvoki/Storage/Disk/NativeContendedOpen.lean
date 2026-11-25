@@ -11,7 +11,7 @@ holds it. Its temporary description is distinct from that writer's
 description. The reported failed acquisition leaves the old owner held. -/
 structure NativeContendedOpen (state : NativeReadyState) (input : FilePath) where
   realPath : FilePath → EStateM IO.Error CensusOpenState FilePath
-  lookup : FilePath → EStateM IO.Error CensusOpenState (Except IO.Error IO.FS.Metadata)
+  stat : FilePath → EStateM IO.Error CensusOpenState (Except IO.Error (IO.FS.Metadata × DeviceInode))
   append : FilePath → EStateM IO.Error CensusOpenState DescriptorSlot
   tryLock : DescriptorSlot → EStateM IO.Error CensusOpenState Bool
   unlock : DescriptorSlot → EStateM IO.Error CensusOpenState Unit
@@ -26,11 +26,13 @@ structure NativeContendedOpen (state : NativeReadyState) (input : FilePath) wher
   lockObject : view.modelObject statLookup.child = state.census.inode state.owner.description
   appendedObject : state.census.inode slot.description = view.modelObject appendLookup.child
   resolved : realPath input (state.census, state.files) = .ok state.session.directory.path (state.census, state.files)
-  flat : optionalMetadataWith (lookup (state.session.directory.file .wal)) (state.census, state.files) =
-    .ok none (state.census, state.files)
+  flatName : String
+  flatMessage : String
+  flatAbsent : stat (state.session.directory.file .wal) (state.census, state.files) =
+    .ok (.error (.noFileOrDirectory flatName 2 flatMessage)) (state.census, state.files)
   metadata : IO.FS.Metadata
-  probed : optionalMetadataWith (lookup (state.session.directory.file .lock)) (state.census, state.files) =
-    .ok (some metadata) (state.census, state.files)
+  probed : stat (state.session.directory.file .lock) (state.census, state.files) =
+    .ok (.ok (metadata, statLookup.child)) (state.census, state.files)
   privateLock : (metadata.type == .file && metadata.numLinks == 1) = true
   opened : append (state.session.directory.file .lock) (state.census, state.files) =
     .ok slot (state.census.insert slot free, state.files)
@@ -43,6 +45,13 @@ variable {state : NativeReadyState} {input : FilePath}
 
 def diagnostic (_report : NativeContendedOpen state input) : IO.Error :=
   IO.userError s!"database already open: {state.session.directory.path}"
+
+/-- The scheduled no-follow lookup returns the metadata component of
+the same reported stat that identifies the physical child. -/
+def lookup (report : NativeContendedOpen state input) (path : FilePath) :
+    EStateM IO.Error CensusOpenState (Except IO.Error IO.FS.Metadata) := do
+  let result ← report.stat path
+  pure (result.map Prod.fst)
 
 def run (report : NativeContendedOpen state input)
     (recover : DiskDirectory → DescriptorSlot → EStateM IO.Error CensusOpenState α) :
@@ -57,8 +66,14 @@ unlock callback can be arbitrary since neither is reached. -/
 theorem returns (report : NativeContendedOpen state input)
     (recover : DiskDirectory → DescriptorSlot → EStateM IO.Error CensusOpenState α) :
     report.run recover = .error report.diagnostic (state.census.insert report.slot report.free, state.files) := by
+  have flat : optionalMetadataWith (report.lookup (state.session.directory.file .wal)) (state.census, state.files) =
+      .ok none (state.census, state.files) := by
+    simp [lookup, optionalMetadataWith, Bind.bind, EStateM.bind, report.flatAbsent, Pure.pure, EStateM.pure, Except.map]
+  have probed : optionalMetadataWith (report.lookup (state.session.directory.file .lock)) (state.census, state.files) =
+      .ok (some report.metadata) (state.census, state.files) := by
+    simp [lookup, optionalMetadataWith, Bind.bind, EStateM.bind, report.probed, Pure.pure, EStateM.pure, Except.map]
   unfold run
-  rw [DiskTable.withOpenAdmission_lockOpen _ _ _ _ report.resolved report.flat report.probed
+  rw [DiskTable.withOpenAdmission_lockOpen _ _ _ _ report.resolved flat probed
     (fun _ same => Option.some.inj same ▸ report.privateLock), report.opened]
   simp [openWithLock, Bind.bind, EStateM.bind, report.contended, diagnostic,
     throw, throwThe, MonadExceptOf.throw, EStateM.throw]
