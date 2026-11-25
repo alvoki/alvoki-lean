@@ -28,11 +28,11 @@ namespace RawSelectedMarkerDecodeError
 variable {selected : RawPresentManifestCheckpointPrefix (admitted := admitted) seed fileCalls durable checkpoint}
 variable (seen : RawSelectedMarkerDecodeError selected)
 
-/-- The byte array returned by the actual optional reader is the one
-from the selected inode. Its temporary description has been retired. -/
+/-- The actual optional reader returns the capped prefix of the exact
+selected inode bytes and retires its temporary description. -/
 theorem readsRejectedBytes :
     fileCalls.readOptional directory (directory.file .walBoundary) selected.beforeMarker =
-      .ok (some seen.bytes) seen.afterMarker ∧
+      .ok (some seen.acquired) seen.afterMarker ∧
     (view.files entry).image.directory.active.walBoundary = some seen.bytes ∧
     selected.reads.objectBytes (admission.view.modelObject seen.marker.object) = some seen.bytes ∧
     (view.descriptors seen.afterMarker).references seen.marker.calls.slot.description = [] :=
@@ -50,11 +50,13 @@ theorem stopsMarkedWorker (directoryCalls : MarkedDirectoryReadCalls heap stream
       remove write rename bootstrap directory cache seed.afterPending = .error (IO.userError seen.message) seen.afterMarker := by
   obtain ⟨loaded, marker, _⟩ := seen.toRawPresentManifestMarkerRead.reachesDecoder
   let observed : CachedWalMarkerRead directory (fileCalls.readOptional directory) fileCalls.runSize fileCalls.runPrefix
-      seed.afterPending seen.afterMarker := ⟨checkpoint, selected.beforeMarker, loaded, seen.bytes, marker⟩
+      seed.afterPending seen.afterMarker := ⟨checkpoint, selected.beforeMarker, loaded, seen.acquired, marker⟩
+  have invalid : WAL.Boundary.decode observed.marker = .error seen.message :=
+    (WAL.Boundary.decode_acquisitionPrefix seen.bytes).trans seen.invalid
   have rejected := observed.reopen_decodeError directoryCalls.run (MarkedWalExtentReports.inspect fileCalls)
     fileCalls.seal ((callbacks.withFileReads fileCalls).readKeeper seed.pendingRef) remove write
     ((callbacks.withFileReads fileCalls).syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef) rename
-    (message := seen.message) seen.invalid
+    (message := seen.message) invalid
   simp only [RawOpenAdmissionCallbacks.recoverMarkedWithCacheRefs, recoverSegmentedWalWith, rejectFlatWalWith,
     Bind.bind, EStateM.bind, seen.flat, seen.route, Option.isSome_none, Option.isSome_some, Bool.false_eq_true,
     ↓reduceIte, Pure.pure, EStateM.pure, rejected]
@@ -76,5 +78,25 @@ noncomputable def finalizedAttempt
     (seen.stopsMarkedWorker directoryCalls callbacks remove write rename bootstrap) finalized
 
 end RawSelectedMarkerDecodeError
+
+/-- Any reported physical marker beyond the valid length supplies a
+full acquisition prefix and the same length error as the whole file. -/
+def RawPresentManifestMarkerRead.oversized
+    {selected : RawPresentManifestCheckpointPrefix (admitted := admitted) seed fileCalls durable checkpoint}
+    (seen : RawPresentManifestMarkerRead selected) (tooLarge : 24 < seen.bytes.size) : RawSelectedMarkerDecodeError selected where
+  toRawPresentManifestMarkerRead := seen
+  message := "invalid WAL boundary length"
+  invalid := WAL.Boundary.decode_lengthError seen.bytes (Nat.ne_of_gt tooLarge)
+
+theorem RawPresentManifestMarkerRead.oversizedPrefix
+    {selected : RawPresentManifestCheckpointPrefix (admitted := admitted) seed fileCalls durable checkpoint}
+    (seen : RawPresentManifestMarkerRead selected) (tooLarge : 24 < seen.bytes.size) :
+    fileCalls.readOptional directory (directory.file .walBoundary) selected.beforeMarker =
+      .ok (some (seen.bytes.extract 0 WAL.Boundary.acquisitionLimit)) seen.afterMarker ∧
+    seen.acquired.size = WAL.Boundary.acquisitionLimit := by
+  have bound : WAL.Boundary.acquisitionLimit ≤ seen.bytes.size := tooLarge
+  refine ⟨?_, ?_⟩
+  · simpa only [RawPresentManifestMarkerRead.acquired, Nat.min_eq_left bound] using seen.reachesDecoder.2.1
+  · simp [RawPresentManifestMarkerRead.acquired, Nat.min_eq_left bound, ByteArray.size_extract]
 
 end Alvoki.Storage.DiskSession

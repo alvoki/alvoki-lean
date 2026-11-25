@@ -140,12 +140,16 @@ structure RawPresentManifestMarkerRead
   custody : TemporaryPrefixCustody marker.calls (view.descriptors selected.beforeMarker) drops
   read : RawTemporaryReadReport selected.reads seed fileCalls (directory.file .walBoundary) drops
     (fun file => readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (fileCalls.readChunk file)
-      WAL.Boundary.acquisitionLimit ByteArray.empty) bytes selected.beforeMarker afterMarker
+      WAL.Boundary.acquisitionLimit ByteArray.empty)
+    (bytes.extract 0 (min WAL.Boundary.acquisitionLimit bytes.size)) selected.beforeMarker afterMarker
+
+abbrev RawPresentManifestMarkerRead.acquired (seen : RawPresentManifestMarkerRead selected) : ByteArray :=
+  seen.bytes.extract 0 (min WAL.Boundary.acquisitionLimit seen.bytes.size)
 
 theorem RawPresentManifestMarkerRead.reachesDecoder (seen : RawPresentManifestMarkerRead selected) :
     readIntegrityCheckpointSized directory (fileCalls.readOptional directory (directory.file .manifest))
       fileCalls.runSize fileCalls.runPrefix seed.afterPending = .ok checkpoint selected.beforeMarker ∧
-    fileCalls.readOptional directory (directory.file .walBoundary) selected.beforeMarker = .ok (some seen.bytes) seen.afterMarker ∧
+    fileCalls.readOptional directory (directory.file .walBoundary) selected.beforeMarker = .ok (some seen.acquired) seen.afterMarker ∧
     MarkedReadCacheFrame seed seed.afterPending seen.afterMarker ∧
     (view.descriptors seen.afterMarker).inode = admission.reached.inode := by
   obtain ⟨loaded, frame, inode⟩ := selected.reachesMarker
@@ -172,8 +176,15 @@ theorem RawPresentManifestMarkerPrefix.reachesScan (seen : RawPresentManifestMar
       fileCalls.runSize fileCalls.runPrefix seed.afterPending = .ok checkpoint selected.beforeMarker ∧
     fileCalls.readOptional directory (directory.file .walBoundary) selected.beforeMarker = .ok (some seen.bytes) seen.atScan ∧
     MarkedReadCacheFrame seed seed.afterPending seen.atScan ∧
-    (view.descriptors seen.atScan).inode = admission.reached.inode :=
-  seen.toRawPresentManifestMarkerRead.reachesDecoder
+    (view.descriptors seen.atScan).inode = admission.reached.inode := by
+  have size : seen.bytes.size = 24 := by
+    by_cases complete : seen.bytes.size = 24
+    · exact complete
+    · have accepted := seen.decoded
+      simp [WAL.Boundary.decode, complete] at accepted
+  have covered : seen.bytes.size ≤ WAL.Boundary.acquisitionLimit := by rw [size]; decide
+  simpa only [RawPresentManifestMarkerRead.acquired, Nat.min_eq_right covered, ByteArray.extract_zero_size] using
+    seen.toRawPresentManifestMarkerRead.reachesDecoder
 
 variable {markerPrefix : RawPresentManifestMarkerPrefix selected}
 

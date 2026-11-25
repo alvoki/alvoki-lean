@@ -2079,6 +2079,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerDecodeError.readsRejectedBytes
 #check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerDecodeError.stopsMarkedWorker
 #check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerDecodeError.finalizedAttempt
+#check_axioms Alvoki.Storage.DiskSession.RawPresentManifestMarkerRead.oversized
+#check_axioms Alvoki.Storage.DiskSession.RawPresentManifestMarkerRead.oversizedPrefix
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.missingManifest
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.releasesSelected
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.stopsMarkedWorker
