@@ -280,6 +280,31 @@ private theorem WalSealedUnlinkReports.outcome {directory removeFile syncDirecto
   cases ran : actions.forM perform before <;>
     simpa only [ran, folded, Option.some.injEq] using outcomes
 
+/-- A returned unlink prefix reaches the actual final directory callback.
+The prefix effects fix its exact input, regardless of how that callback returns. -/
+theorem WalSealedUnlinkReports.reachesBarrier {directory removeFile syncDirectory}
+    (reports : WalSealedUnlinkReports directory removeFile syncDirectory)
+    (offsets : List Nat) (before atBarrier : WalSealedUnlinkImage) :
+    let perform := WalSealedUnlinkImage.performPaths directory removeFile syncDirectory
+    ((offsets.map RunCollection.Step.unlink).forM perform) before = .ok () atBarrier →
+    RunCollection.run offsets perform before = perform .syncDirectory atBarrier ∧
+      atBarrier.syncDirectory = (RunCollection.steps offsets).foldl WalSealedUnlinkImage.applyCollectionStep before := by
+  intro perform unlinked
+  have effects := reports.outcome (offsets.map RunCollection.Step.unlink) before
+  change (match ((offsets.map RunCollection.Step.unlink).forM perform) before with
+    | .ok _ after => _ = after
+    | .error _ after => ∃ cut, _ = after) at effects
+  rw [unlinked] at effects
+  constructor
+  · rw [RunCollection.run, RunCollection.steps, List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
+    change (EStateM.bind ((offsets.map RunCollection.Step.unlink).forM perform)
+      (fun _ => [RunCollection.Step.syncDirectory].forM perform)) before = _
+    simp only [EStateM.bind, unlinked, List.forM_eq_forM, List.forM_cons, List.forM_nil, Bind.bind,
+      Pure.pure, EStateM.pure]
+    cases reached : perform .syncDirectory atBarrier <;> rfl
+  · rw [RunCollection.steps, List.foldl_append, effects]
+    rfl
+
 private theorem approvedScheduleStep {initial : WalSegmentImage} {offsets : List Nat}
     (approved : ∀ first ∈ offsets, first ∈ initial.collectionOffsets)
     {first : Nat} (member : RunCollection.Step.unlink first ∈ RunCollection.steps offsets) :
