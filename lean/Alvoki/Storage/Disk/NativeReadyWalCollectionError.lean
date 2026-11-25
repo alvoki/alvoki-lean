@@ -8,6 +8,7 @@ open WAL.Boundary (CheckpointRepresentsPrefix)
 /-- Bounded reads after collection use the remaining sealed files but
 the same selected checkpoint, keeper and acknowledged WAL suffix. -/
 structure CoveredWalRetrySelection (before : SegmentedWriterState) (wal : WalSegmentImage) where
+  retained : WalSegmentCollectionRetry before.wal wal
   layout : CanonicalKeeperLayout (wal.checkpointReopenFiles wal.directory before.files.keeper.staged) before.history
   pair : wal.directory.active = before.target.pair
   range : layout.range = before.target.range
@@ -35,7 +36,7 @@ private theorem preparesCoveredWalRetry
     (congrArg DirectoryPublication.Bindings.manifest pair).symm ▸ ready.resumed.selected
   have accepted : before.published.AcceptsVersioned before.history.length.toUInt64 (CheckpointRepresentsPrefix before.history)
       wal.directory.active.manifest := (congrArg DirectoryPublication.Bindings.manifest pair).symm ▸ ready.resumed.accepted
-  refine ⟨⟨selected, pair, range, keeper.trans retry.keepsActive, aligned, ?_, ?_,
+  refine ⟨⟨retry, selected, pair, range, keeper.trans retry.keepsActive, aligned, ?_, ?_,
     selected.prepared choices prefixes (range.symm ▸ later), checkpoint, accepted⟩⟩
   · rw [range, reads, kept]
   · rw [range, reads]
