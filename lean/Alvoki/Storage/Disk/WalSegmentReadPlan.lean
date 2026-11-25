@@ -282,7 +282,7 @@ theorem concatenateReadWalSegmentPayloads (sealed : List WalSegment) (active : W
   | nil => simp [WalSegment.concatenate]
   | cons _ _ ih => simp [WalSegment.concatenate, ih, ByteArray.append_assoc]
 
-private theorem selectFullWalPrefix {history : List WAL.Write} {through : Nat} {length : UInt64}
+theorem selectFullWalPrefix {history : List WAL.Write} {through : Nat} {length : UInt64}
     (bounded : through ≤ history.length) (markerCount : length.toNat = through * WAL.frameSize) (tail : ByteArray) :
     WAL.Boundary.select length (WAL.encode history ++ tail) = .ok (WAL.encode (history.take through)) := by
   have size : (WAL.encode (history.take through)).size = length.toNat := by

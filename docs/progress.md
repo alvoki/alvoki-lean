@@ -2014,3 +2014,11 @@ together with their link to the acknowledged history. Those facts
 should be derived from the same reported execution that drives
 installation. The filesystem model supplies primitive observations
 such as which sync took effect and which bytes survived.
+
+The installed two-slot reopen now uses the same canonical segment-chain
+replay lemma as the first marked reopen. It proves the same table for
+the bounded keeper read and the physical keeper with an unselected
+tail. It no longer assumes that the collection witness and the
+physical read plan start at the same WAL offset. The remaining inputs
+are the collection retry witness, its initial valid history and selected
+pair, and the selected checkpoint's refinement and history.

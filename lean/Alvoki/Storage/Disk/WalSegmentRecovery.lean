@@ -9,7 +9,7 @@ namespace Alvoki.Storage
 open Sequential (SnapshotTable)
 open WAL (Write frameSize)
 
-private theorem ordinals_take {first : Nat} {history : List Write}
+theorem walOrdinals_take {first : Nat} {history : List Write}
     (ordered : WAL.OrdinalsFrom first history) (limit : Nat) : WAL.OrdinalsFrom first (history.take limit) := by
   induction limit generalizing first history with
   | zero => trivial
@@ -84,7 +84,7 @@ theorem WalSegmentCollectionRetry.recoversSelected
     simp [chosenHistory, covered, List.take_take, Nat.min_eq_left beforeMarker]
   have splitCovered : covered ++ pending = chosenHistory := by
     simpa [pending, exactCovered] using (List.take_append_drop range.watermark chosenHistory)
-  have numbered : WAL.OrdinalsFrom 1 (covered ++ pending) := splitCovered.symm ▸ ordinals_take ordered _
+  have numbered : WAL.OrdinalsFrom 1 (covered ++ pending) := splitCovered.symm ▸ walOrdinals_take ordered _
   obtain ⟨table, recovered, count⟩ := recoverSelected_encoded_complete base covered pending numbered coveredLength
   have played := (recoverSelected_encoded base covered pending numbered coveredLength).symm.trans recovered
   rw [splitCovered] at recovered
@@ -111,7 +111,7 @@ theorem WalSegmentCollectionRetry.recoversSelected
     rw [WAL.encode_size, removedLength, byteCount, Nat.mul_comm frameSize]
     exact Nat.mul_le_mul_right frameSize firstBeforeMarker
   have compared := WAL.Boundary.recoverRetainedMarked_eq_recoverMarked base length (WAL.encode (history.drop first))
-    (WAL.decodeOrdinals_encode removed (ordinals_take ordered first)) (by simp) removedCovered removedBeforeMarker
+    (WAL.decodeOrdinals_encode removed (walOrdinals_take ordered first)) (by simp) removedCovered removedBeforeMarker
   rw [removedLength, ← WAL.encode_append, List.take_append_drop, ← retained, full] at compared
   have samePrefix : chosenHistory.take first = removed := by
     simp [chosenHistory, removed, List.take_take, Nat.min_eq_left firstBeforeMarker]
