@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.RetainedWriterState
+import Alvoki.Storage.Disk.ManifestAcquisition
 
 namespace Alvoki.Storage.DiskSession
 
@@ -74,6 +75,7 @@ theorem SegmentedWriterState.RetainedReady.selectedRecoveryPayload {directory de
       (List.range manifest.header.runCount.toNat).mapM
         (state.published.durable manifest.header.generation) = some files ∧
       files = (state.checkpoint.getD (.empty, 0)).1.runs.map (·.run.bytes) ∧
+      files.length = manifest.header.runCount.toNat ∧
       (files.map ByteArray.size).sum = 16 * manifest.header.runCount.toNat +
         32 * ((state.checkpoint.getD (.empty, 0)).1.runs.map (·.history.rows.length)).sum ∧
       state.target.range.watermark = (state.checkpoint.getD (.empty, 0)).1.committed.toNat ∧
@@ -120,7 +122,9 @@ theorem SegmentedWriterState.RetainedReady.selectedRecoveryPayload {directory de
       Nat.mul_comm (state.target.range.watermark - first), ← Nat.mul_add]
     congr 1
     omega
-  refine ⟨manifest, files, first, decoded, stored, exactFiles, runBytes, watermark, starts, addresses,
+  have fileCount : files.length = manifest.header.runCount.toNat := by
+    rw [exactFiles, List.length_map, count]
+  refine ⟨manifest, files, first, decoded, stored, exactFiles, fileCount, runBytes, watermark, starts, addresses,
     payload, walBytes, ?_⟩
   rw [runBytes, walBytes]
   have rowBounds : ∀ pair ∈ table.runs.zip budgets, pair.1.history.rows.length ≤ pair.2 := by
@@ -132,5 +136,101 @@ theorem SegmentedWriterState.RetainedReady.selectedRecoveryPayload {directory de
   change (table.runs.map (·.history.rows.length)).sum ≤ budgets.sum at budget
   dsimp only [replayWal]
   omega
+
+private theorem readAcceptedMarker {source : ByteArray} {count : UInt64}
+    {read : USize → EStateM IO.Error Nat ByteArray}
+    (accepted : WAL.Boundary.decode source = .ok count)
+    (observes : PrefixChunkObserves source read) (available : PrefixChunksAvailableUntilEof source read) :
+    readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") read WAL.Boundary.acquisitionLimit
+      ByteArray.empty 0 = .ok source 24 := by
+  have length : source.size = 24 := by
+    rw [← WAL.Boundary.decode_reencode accepted, WAL.Boundary.encode_size]
+  have fits : WAL.Boundary.acquisitionLimit < USize.size :=
+    Nat.lt_of_lt_of_le (by decide) USize.le_size
+  have stop : min (0 + WAL.Boundary.acquisitionLimit) source.size = source.size := by
+    rw [Nat.zero_add, Nat.min_eq_right]
+    rw [length]
+    decide
+  have completed := readPrefixUntilEofWith_completes (IO.userError "invalid WAL boundary length")
+    observes available WAL.Boundary.acquisitionLimit fits (bytes := ByteArray.empty) (Nat.zero_le _)
+  dsimp only at completed
+  rw [stop, ByteArray.extract_zero_size, ByteArray.empty_append, length] at completed
+  exact completed
+
+private theorem checkpointAbsent {durable : CheckpointPublication.RunFiles}
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint durable none checkpoint) : checkpoint = none := by
+  cases selected
+  rfl
+
+/-- Charge the accepted metadata cursors and the exact selected run and WAL
+payload. File presence is supplied by the selected pair. The manifest uses the
+modeled prefix acquisition. Directory scans, libc I/O, repair writes and
+unsuccessful attempts are outside this byte bound. -/
+theorem SegmentedWriterState.RetainedReady.selectedRecoveryAcquisition {directory descriptor}
+    {state : SegmentedWriterState} (ready : state.RetainedReady directory descriptor)
+    (budgets : List Nat)
+    (length : (state.checkpoint.getD (.empty, 0)).1.runs.length = budgets.length)
+    (bounds : ∀ pair ∈ (state.checkpoint.getD (.empty, 0)).1.runs.zip budgets,
+      pair.1.run.bytes.size ≤ 16 + 32 * pair.2)
+    (readManifest readMarker : USize → EStateM IO.Error Nat ByteArray)
+    (manifestHealthy : ∀ source, state.target.pair.manifest = some source →
+      PrefixChunkObserves source readManifest ∧ PrefixChunksAvailable source readManifest ∧
+        source.size < USize.size)
+    (markerHealthy : ∀ source, state.target.pair.walBoundary = some source →
+      PrefixChunkObserves source readMarker ∧ PrefixChunksAvailableUntilEof source readMarker) :
+    ∃ (files : List ByteArray) (marker : ByteArray) (first manifestBytes : Nat),
+      files = (state.checkpoint.getD (.empty, 0)).1.runs.map (·.run.bytes) ∧
+      state.target.pair.walBoundary = some marker ∧
+      readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") readMarker
+        WAL.Boundary.acquisitionLimit ByteArray.empty 0 = .ok marker 24 ∧
+      (state.target.pair.manifest.mapM fun source =>
+        readIntegrityManifestPrefixWith readManifest source.size) 0 = .ok state.target.pair.manifest manifestBytes ∧
+      (match state.target.pair.manifest with
+        | none => manifestBytes = 0
+        | some bytes => ∃ manifest, Manifest.IntegrityCheckpoint.decode bytes = .ok manifest ∧
+          (List.range manifest.header.runCount.toNat).mapM
+            (state.published.durable manifest.header.generation) = some files ∧
+          manifestBytes = 48 + 16 * manifest.header.runCount.toNat) ∧
+      first ≤ state.target.range.watermark ∧
+      selectWalSegmentReads (state.wal.segments.map WalSegment.first) state.target.range.watermark =
+        some (first, (state.wal.readDescriptors state.target.range.watermark).map WalSegment.first) ∧
+      let selectedWal := WalSegment.concatenate (state.wal.readDescriptors state.target.range.watermark)
+      let replayWal := WAL.encode (state.history.drop state.target.range.watermark)
+      selectedWal = WAL.encode (state.history.drop first) ∧
+      selectedWal.size = (state.target.range.watermark - first) * frameSize + replayWal.size ∧
+      manifestBytes + 24 + (files.map ByteArray.size).sum + selectedWal.size ≤
+        manifestBytes + 24 + 16 * files.length + 32 * budgets.sum +
+          (state.target.range.watermark - first) * frameSize + replayWal.size := by
+  obtain ⟨watermark, _, marker, count, marked, decodedMarker, _⟩ :=
+    DirectoryPublication.Bindings.walRange_accounting state.target.decoded
+  obtain ⟨observesMarker, availableMarker⟩ := markerHealthy marker marked
+  have readMarkerExact := readAcceptedMarker decodedMarker observesMarker availableMarker
+  cases visible : state.target.pair.manifest with
+  | none =>
+    have noCheckpoint := checkpointAbsent (visible ▸ ready.resumed.selected)
+    have zero : state.target.range.watermark = 0 := by
+      simpa [visible, selectedCheckpointWatermark] using watermark.symm
+    have chosen : state.wal.Selects state.target.pair := ready.walPair ▸ List.mem_cons_self
+    obtain ⟨first, starts, _, addresses, _, payload⟩ := ready.layout.selects ready.valid chosen state.target.decoded
+    have firstZero : first = 0 := by omega
+    refine ⟨[], marker, first, 0, ?_, marked, readMarkerExact, rfl, rfl, starts, addresses, payload, ?_, ?_⟩
+    · simp [noCheckpoint, PackedTable.empty]
+    · rw [payload, firstZero, zero]
+      simp
+    · rw [payload, firstZero, zero]
+      simp
+  | some bytes =>
+    obtain ⟨manifest, files, first, decoded, stored, exactFiles, fileCount, _, _, starts, addresses, payload,
+      walBytes, payloadLimit⟩ := ready.selectedRecoveryPayload visible budgets length bounds
+    obtain ⟨observesManifest, availableManifest, fits⟩ := manifestHealthy bytes visible
+    have readManifestExact := readIntegrityManifestPrefixWith_accepted decoded observesManifest availableManifest fits
+    obtain ⟨encoded, _, runCount⟩ := Manifest.IntegrityCheckpoint.decode_spec decoded
+    have manifestSize : bytes.size = 48 + 16 * manifest.header.runCount.toNat := by
+      rw [← encoded, Manifest.IntegrityCheckpoint.encode_size, runCount]
+    refine ⟨files, marker, first, bytes.size, exactFiles, marked, readMarkerExact, ?_,
+      ⟨manifest, decoded, stored, manifestSize⟩, starts, addresses, payload, walBytes, ?_⟩
+    · simp [Option.mapM, Functor.map, EStateM.map, readManifestExact]
+    · simpa only [fileCount, Nat.add_assoc] using Nat.add_le_add_left payloadLimit (bytes.size + 24)
 
 end Alvoki.Storage.DiskSession

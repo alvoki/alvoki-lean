@@ -1233,6 +1233,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.delayedKeeperPowerLossCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.collectedWalPayload
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.selectedRecoveryPayload
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.selectedRecoveryAcquisition
 #check_axioms Alvoki.Storage.WalSegmentRepair.ReopenLineage.reopensRetainedAppendWith
 #check_axioms Alvoki.Storage.WalSegmentRepair.ReopenLineage.reopensRetainedAppend
 #check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.installsRetainedCached
