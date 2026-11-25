@@ -77,8 +77,6 @@ structure FirstAppendReopenObservations (input : FilePath) (directory : DiskDire
   marker : IO.FS.Metadata
   markerFound : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
     .ok (.ok marker) (admission.reached, admission.held)
-  following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
-    layout.range.watermark < start
 
 /-- A stop during the first append leaves the earlier marker in charge
 after process exit or power loss. The exact retained prefix is replayed
@@ -134,7 +132,8 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
     manifest.symm ▸ beforeReady.resumed.accepted
   obtain ⟨observations⟩ := observe layout prepared selected
   obtain ⟨session, final, returned, samePair, owner, cached, installed⟩ :=
-    observations.finish.installsAfterVacancy observations.markerFound prepared.prepared observations.following
+    observations.finish.installsAfterVacancy observations.markerFound prepared.prepared
+      (observations.reads.walReads.selectedAfterWatermark prepared.offsets prepared.descriptors)
       accepted beforeReady.resumed.ordered
   obtain ⟨actual, reached, ready, checkpoint, indexed, phase, loaded, recovered, refined⟩ :=
     CachedRetryInstalled.refinesPendingClient installed pending
