@@ -244,6 +244,7 @@ import Alvoki.Storage.Disk.NativeMarkedOpenHeap
 import Alvoki.Storage.Disk.NativeOpenReadTrace
 import Alvoki.Storage.Disk.NativeOpenClose
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
+import Alvoki.Storage.Disk.NativeOpenCheckpoint
 import Alvoki.Storage.Disk.NativeOpenEarlyError
 import Alvoki.Storage.Disk.NativeCacheOpenRejection
 import Alvoki.Storage.Disk.NativeContendedOpen
@@ -698,6 +699,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.directoryBarriers
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.completes
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.completesWithPublication
+#check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.checkpoint
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointsViaOpenReferences
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.RunBinding.completes
 #check_axioms Alvoki.Storage.DiskSession.RunMaintenance.outputAt
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rewritesRunCheckpointAndReopens
@@ -1028,6 +1031,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.total
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.preparedFacts
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.effect
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.preparesFrom
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.rejectsFromOpenCell
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.reachesIssue
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.stepCache
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.prefixKeepsRoutes

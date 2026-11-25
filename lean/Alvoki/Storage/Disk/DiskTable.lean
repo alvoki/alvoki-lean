@@ -1174,6 +1174,26 @@ theorem DiskTable.checkpoint_schedule (db : DiskTable) :
   rw [db.checkpoint_fileEffects]
   rfl
 
+/-- The public checkpoint uses the opened phase cell for its read and
+both setters, and passes the opened synchronization record to every
+run and manifest callback. -/
+def DiskTable.UsesOpenCheckpointSchedule (db : DiskTable) (directory : DiskDirectory)
+    (files : DiskTable.OpenSyncFiles) (phase : IO.Ref Phase) : Prop :=
+    db.checkpoint = DiskSession.withPreparedCheckpoint (do (← phase.get).installed) IO.ofExcept
+      (fun next manifest => DiskSession.publishPrepared phase.set
+        (CheckpointPublication.run next.table.runs.length
+          (performCheckpointFileStep directory next.generation next.table.runs.toArray (directory.file .stagedManifest)
+            manifest (fromOption · "checkpoint run index is out of bounds")
+            (writeRunFlushed files) files.stage files.syncPaths IO.FS.rename))
+        (phase.set (.ready next)))
+
+theorem DiskTable.UsesOpenReferences.checkpoint {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) :
+    db.UsesOpenCheckpointSchedule directory files phase := by
+  obtain ⟨path, _, cache, cell, _⟩ := uses
+  simp only [DiskTable.UsesOpenCheckpointSchedule, DiskTable.checkpoint_schedule, path, cache, cell,
+    DiskSession.publishPrepared]
+
 /-- Inspect the final component without following symlinks. A missing entry
 in the owned parent is ineligible. Other lookup errors stop the pass. -/
 private def runCollectionKindAt (path : FilePath) : IO (Except String IO.FS.FileType) := do
