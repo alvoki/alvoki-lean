@@ -2581,6 +2581,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.keeperReleased
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.keeperAtSync
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.repairAt_returns
+#check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.repairActions_returns_from
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.installsFromCensus
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.delayedKeeperSync
 #check_axioms Alvoki.Storage.DiskSession.KeeperRepairSlot.lockInode
@@ -2782,6 +2783,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.reopensAfterCapturedPreparation
 #check_axioms Alvoki.WAL.TwoSlot.reopensAlignedAfterCapturedPreparation
 #check_axioms Alvoki.WAL.TwoSlot.reopensLongAfterCapturedPreparation
+#check_axioms Alvoki.WAL.TwoSlot.reopensPrunedAfterCapturedPreparation
 #check_axioms Alvoki.WAL.TwoSlot.prepareSelected_reported
 #check_axioms Alvoki.WAL.TwoSlot.prepareSelected_stateful
 #check_axioms Alvoki.WAL.TwoSlot.prepareSelected_of_retainedReplay

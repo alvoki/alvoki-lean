@@ -1041,3 +1041,10 @@ write, file sync, rename and final directory sync from the
 marker-settled state. The theorem takes the successful first directory
 sync as a primitive report. The aligned case with later names still
 needs the corresponding composition.
+
+An aligned keeper with later names now follows the same native
+ordered-prune proof after two-slot marker stabilization. The first
+directory sync authorizes the unlinks. The suffix directory sync
+feeds the pending keeper's file sync and the observed final census.
+The three successful repair cases can now be composed with one native
+admission, marker acquisition and installation observation.

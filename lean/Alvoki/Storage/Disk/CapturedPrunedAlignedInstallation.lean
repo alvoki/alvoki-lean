@@ -15,7 +15,7 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
 prune in the pending cache. Its final sync and the reported release leave
 the owner and cached directory live. -/
 structure CapturedPrunedAlignedFinish (calls : CapturedAlignedCallbacks admission)
-    (reads : CapturedMarkedReadReports admission layout published)
+    {renameMarker : Bool} (reads : CapturedMarkedReadReports admission layout published renameMarker)
     (vacant : TryLockObserves retry.owners directory (.ok true))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) where
@@ -32,7 +32,8 @@ structure CapturedPrunedAlignedFinish (calls : CapturedAlignedCallbacks admissio
 
 namespace CapturedPrunedAlignedFinish
 
-variable {calls : CapturedAlignedCallbacks admission} {reads : CapturedMarkedReadReports admission layout published}
+variable {calls : CapturedAlignedCallbacks admission} {renameMarker : Bool}
+  {reads : CapturedMarkedReadReports admission layout published renameMarker}
   {vacant : TryLockObserves retry.owners directory (.ok true)} {checkpoint : Option (PackedTable × UInt64)}
   {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
 
@@ -190,12 +191,15 @@ private theorem syncDirectory (finish : CapturedPrunedAlignedFinish calls reads 
 /-- The bounded finisher selects the original directory for both
 barriers, prunes the checked suffix in order, and consumes the pending
 keeper at the last file sync. Its close supplies the final census. -/
-theorem repairAt_returns (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
+theorem repairAt_returns_from (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
+    (before : LockedFileState FileImage)
+    (authorizedEffect : finish.authorization.fsync (admission.reached, admission.cached, 0) before =
+      .ok () { admission.held with image := retry.image.syncDirectory })
     (later : ∀ first ∈ retry.image.later.visible, layout.range.through < first) :
     let keeper := (reads.wal.keeper.calls.inventory, reads.wal.keeper.calls.slot, 0)
     let remembered := admission.cache.remember (directory.file (.walSegment layout.keeper.first)) keeper
     finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size
-      (remembered, (finish.reader.afterRead, admission.held), finish.syncDrops) =
+      (remembered, (finish.reader.afterRead, before), finish.syncDrops) =
       .ok () (admission.cache, (finish.census, finish.settled), []) := by
   intro keeper remembered
   let next := finish.afterKeeper
@@ -204,12 +208,10 @@ theorem repairAt_returns (finish : CapturedPrunedAlignedFinish calls reads vacan
   let authorized : LockedFileState FileImage := { admission.held with image := retry.image.syncDirectory }
   let unlinked : LockedFileState FileImage := { admission.held with image := retry.image.unlinkVisibleSuffix }
   let atKeeper : LockedFileState FileImage := { admission.held with image := retry.image.unlinkVisibleSuffix.syncDirectory }
-  have firstEffect := finish.authorization.effect
-  rw [finish.prune.authorized] at firstEffect
   have first : finish.syncAt directory #[directory.path]
-      (remembered, (finish.reader.afterRead, admission.held), finish.syncDrops) =
+      (remembered, (finish.reader.afterRead, before), finish.syncDrops) =
       .ok () (remembered, (afterAuthorization, authorized), [finish.repair.afterSuffix, next]) :=
-    finish.syncDirectory rfl firstEffect
+    finish.syncDirectory rfl authorizedEffect
   have unlinks : ((layout.boundedPlan.newer.map Step.unlink).forM finish.repairStep)
       (remembered, (afterAuthorization, authorized), [finish.repair.afterSuffix, next]) =
       .ok () (remembered, (afterAuthorization, unlinked), [finish.repair.afterSuffix, next]) :=
@@ -256,12 +258,43 @@ theorem repairAt_returns (finish : CapturedPrunedAlignedFinish calls reads vacan
   simp only [Bind.bind, EStateM.bind, List.cons_append, List.nil_append, List.forM_eq_forM,
     List.forM_cons, List.forM_nil, repairStep, performPaths, suffix, keeperPlan, last, Pure.pure, EStateM.pure]
 
-private def repairActions (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
+theorem repairAt_returns (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
+    (later : ∀ first ∈ retry.image.later.visible, layout.range.through < first) :
+    let keeper := (reads.wal.keeper.calls.inventory, reads.wal.keeper.calls.slot, 0)
+    let remembered := admission.cache.remember (directory.file (.walSegment layout.keeper.first)) keeper
+    finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size
+      (remembered, (finish.reader.afterRead, admission.held), finish.syncDrops) =
+      .ok () (admission.cache, (finish.census, finish.settled), []) := by
+  have first := finish.authorization.effect
+  rw [finish.prune.authorized] at first
+  exact finish.repairAt_returns_from admission.held first later
+
+def repairActions (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
     (resolved : DiskDirectory) (plan : Plan) (size : Nat) :
     EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit := fun (cache, before) =>
   match finish.repairAt resolved plan size (cache, before, finish.syncDrops) with
   | .ok () (cache, reached, _) => .ok () (cache, reached)
   | .error cause (cache, reached, _) => .error cause (cache, reached)
+
+/-- The aligned suffix repair starts at the already stabilized marker
+state. Its first directory effect supplies the common repair image. -/
+theorem repairActions_returns_from (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
+    (before : LockedFileState FileImage)
+    (authorizedEffect : finish.authorization.fsync (admission.reached, admission.cached, 0) before =
+      .ok () { admission.held with image := retry.image.syncDirectory })
+    (later : ∀ first ∈ retry.image.later.visible, layout.range.through < first) :
+    let keeper := (reads.wal.keeper.calls.inventory, reads.wal.keeper.calls.slot, 0)
+    let remembered := admission.cache.remember (directory.file (.walSegment layout.keeper.first)) keeper
+    finish.repairActions directory layout.boundedPlan layout.plan.keeperBytes.size
+      (remembered, finish.reader.afterRead, before) =
+      .ok () (admission.cache, finish.census, finish.settled) := by
+  intro keeper remembered
+  have returned := finish.repairAt_returns_from before authorizedEffect later
+  change finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size
+    (remembered, (finish.reader.afterRead, before), finish.syncDrops) = _ at returned
+  simp only [repairActions, returned]
+
+variable {reads : CapturedMarkedReadReports admission layout published}
 
 /-- Use the actual reached keeper cache from the held read chronology
 through authorization, ordered removals and the two final barriers. -/

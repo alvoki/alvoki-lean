@@ -11,6 +11,7 @@ import Alvoki.Storage.Disk.SyncHandleEffects
 import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.DescriptorInventory
 import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
+import Alvoki.Storage.Disk.CapturedPrunedAlignedInstallation
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -1600,6 +1601,61 @@ theorem reopensLongAfterCapturedPreparation
     rw [projected]
     rfl
   simp only [reopenWith_reports, prepared, barrier, finish.repairAfterRead_returns_from _ directorySync]
+
+/-- An aligned keeper with later segments uses the same ordered suffix
+repair after the marker barrier reaches the common authorized image. -/
+theorem reopensPrunedAfterCapturedPreparation
+    (report : CapturedMarkedReadReports admission layout published false)
+    (calls : CapturedAlignedCallbacks admission)
+    (vacant : TryLockObserves retry.owners directory (.ok true))
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (finish : CapturedPrunedAlignedFinish calls report vacant selected)
+    {marker settled : WalInodeImage} {slot : DescriptorSlot}
+    (live : slot ∈ finish.reader.afterRead.slots)
+    (current : admission.reached.inode slot.description = marker.active)
+    (effect : Storage.SyncHandleRouting.FsyncResult marker
+      (marker.completeFileSync marker.active) true (.ok () settled))
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selection : Selection} (decoded : decode (marker.visible marker.active) = .ok selection)
+    (bound : retry.image.directory.active.walBoundary.isSome = true)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = retry.image.directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode)
+    (later : ∀ first ∈ retry.image.later.visible, layout.range.through < first)
+    {before : CensusDirectoryCache × CensusOpenState} {opened : Reopened}
+    (prepare : EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Plan × Reopened × Nat))
+    (prepared : prepare before =
+      .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size)
+        (admission.cache.remember (directory.file (.walSegment layout.keeper.first))
+          (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0), finish.reader.afterRead, admission.held))
+    (directorySync : finish.authorization.fsync (admission.reached, admission.cached, 0)
+      { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
+      .ok () { admission.held with image := retry.image.syncDirectory }) :
+    reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices)
+      (finish.repairActions directory) before =
+        .ok opened (admission.cache, finish.census, finish.settled) := by
+  have projected := stabilizesAfterKeeperRead report finish.reader live current effect sameBinding decoded
+    bound choices enumerated presence physical
+  let remembered := admission.cache.remember (directory.file (.walSegment layout.keeper.first))
+    (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+  have barrier : stabilizeCapturedMarker (marker.visible marker.active) choices
+      (remembered, finish.reader.afterRead, admission.held) =
+      .ok () (remembered, finish.reader.afterRead,
+        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) := by
+    change (match projectRepairDirectory retry.image.directory (marker.visible marker.active) choices with
+      | .error cause => _
+      | .ok settled => _) = _
+    rw [projected]
+    rfl
+  have repaired := finish.repairActions_returns_from _ directorySync later
+  change finish.repairActions directory layout.boundedPlan layout.plan.keeperBytes.size
+    (remembered, finish.reader.afterRead, _) = _ at repaired
+  change prepare before = .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size)
+    (remembered, finish.reader.afterRead, admission.held) at prepared
+  simp only [reopenWith_reports, prepared, barrier, repaired]
 
 end CapturedPreparation
 
