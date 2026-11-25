@@ -423,8 +423,8 @@ theorem SegmentedWriterState.RetainedReady.collectsCompleteObservedWalPlan
       effectView descriptor atBarrier)
     (sameDirectory : barrier.handle.2.1 = inventory.lifetime.directorySlot)
     (sameWriter : barrier.writerSlot = inventory.owner) :
-    inventory.lifetime.directorySlot ∈ (barrier.handle.1.afterDrops barrier.drops).slots ∧
-      inventory.owner ∈ (barrier.handle.1.afterDrops barrier.drops).slots ∧
+    inventory.lifetime.directorySlot ∈ barrier.reached.slots ∧
+      inventory.owner ∈ barrier.reached.slots ∧
       (barrier.outcome.effective = true → barrier.after.crashSealed = [atBarrier.visible.sealed] ∧
         ∀ segment ∈ state.wal.sealed, state.wal.Eligible segment →
           ∀ sealed ∈ barrier.after.crashSealed, segment ∉ sealed) ∧

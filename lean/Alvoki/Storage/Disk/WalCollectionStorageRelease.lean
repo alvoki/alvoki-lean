@@ -150,13 +150,13 @@ theorem SegmentedWriterState.RetainedReady.releasesCollectedWalSeal
     let child := measured.child.child
     let inode := inventory.lifetime.namespaceView.modelObject child
     ∀ (links : WalSealedInodeLinks directory segment.first inode measured.metadata calls.paths.lstat barrier.after)
-      (last : InodeLastObservedDrop inode (barrier.handle.1.afterDrops barrier.drops))
+      (last : InodeLastObservedDrop inode barrier.reached)
       (eviction : InodeBlockEviction inode links.visible links.crashImages last.after),
       eviction.outside = [] →
       Nonempty (IssuedSealUnlink directory inventory.lifetime.root removeFile segment.first child) ∧
       barrier.after.DurablyAbsent segment.first ∧
-      inventory.lifetime.directorySlot ∈ (barrier.handle.1.afterDrops barrier.drops).slots ∧
-      inventory.owner ∈ (barrier.handle.1.afterDrops barrier.drops).slots ∧
+      inventory.lifetime.directorySlot ∈ barrier.reached.slots ∧
+      inventory.owner ∈ barrier.reached.slots ∧
       (∀ path, links.visible path ≠ some inode) ∧
       (∀ names ∈ links.crashImages, ∀ path, names path ≠ some inode) ∧
       (∃ slot ∈ last.before.slots, last.before.inode slot.description = inode) ∧

@@ -71,22 +71,28 @@ structure NativeReadyWalCollection (state : NativeReadyState) where
   originalCache : barrier.cache = state.cache
   sameWriter : barrier.writerSlot = state.owner
   completed : barrier.outcome = .completed
-  afterListing : List LockReferenceDrop
+  barrierEntry : barrier.inventory = inventory.listing.afterClose
+  reachedObjects : reachedView.modelObject = inventory.lifetime.namespaceView.modelObject
   afterBarrier : List LockReferenceDrop
   keepsSlots : ∀ slot ∈ state.census.slots,
-    ∀ event ∈ inventory.lifetime.drops ++ afterListing ++ afterBarrier, event.removes slot.reference = false
+    ∀ event ∈ inventory.lifetime.drops ++ barrier.drops ++ afterBarrier, event.removes slot.reference = false
 
 namespace NativeReadyWalCollection
 
 variable {state : NativeReadyState}
 
+theorem reachesBarrier (reported : NativeReadyWalCollection state) :
+    reported.barrier.reached = reported.inventory.listing.afterClose.afterDrops reported.barrier.drops :=
+  congrArg (fun inventory => inventory.afterDrops reported.barrier.drops) reported.barrierEntry
+
 def census (reported : NativeReadyWalCollection state) : DescriptorInventory :=
-  (reported.inventory.listing.afterClose.afterDrops reported.afterListing).afterDrops reported.afterBarrier
+  reported.barrier.reached.afterDrops reported.afterBarrier
 
 theorem censusPreserved (reported : NativeReadyWalCollection state) : reported.census = state.census := by
-  let drops := reported.inventory.lifetime.drops ++ reported.afterListing ++ reported.afterBarrier
+  let drops := reported.inventory.lifetime.drops ++ reported.barrier.drops ++ reported.afterBarrier
   have previous : reported.census = reported.inventory.descriptors.afterDrops drops := by
-    simp only [census, reported.inventory.listing.afterClose_eq, DescriptorInventory.afterDrops_append, drops]
+    simp only [census, reported.reachesBarrier, reported.inventory.listing.afterClose_eq,
+      DescriptorInventory.afterDrops_append, drops]
   refine previous.trans ((congrArg (fun census => census.afterDrops drops) reported.startsAt).trans ?_)
   cases reached : state.census with
   | mk slots distinct inode =>
@@ -146,8 +152,8 @@ Every unlink preserves the lock binding read under the original owner. -/
 theorem retainsLock (reported : NativeReadyWalCollection state) :
     reported.barrier.writerSlot = state.owner ∧
     reported.reachedView.child reported.inventory.lifetime.root "LOCK" = some reported.inventory.lifetime.lock ∧
-    reported.inventory.lifetime.namespaceView.modelObject reported.inventory.lifetime.lock =
-      state.census.inode state.owner.description := by
+    reported.reachedView.modelObject reported.inventory.lifetime.lock =
+      reported.barrier.reached.inode state.owner.description := by
   have directoryLock : ∀ offset ∈ state.writer.wal.collectionOffsets, "LOCK" ≠ renderWalSegmentName offset := by
     intro offset _ same
     have lengths := congrArg String.length same
@@ -158,9 +164,20 @@ theorem retainsLock (reported : NativeReadyWalCollection state) :
   let owner := reported.inventory.owner
   have object := reported.inventory.lifetime.identifiesLock.trans
     (congrArg (fun census => census.inode owner.description) reported.startsAt)
-  exact ⟨reported.sameWriter, (reported.unlinked.keepsOtherChild directoryLock).trans
-    reported.inventory.lifetime.lockEntry,
-    object.trans (congrArg (fun slot : DescriptorSlot => state.census.inode slot.description) reported.ownersMatch)⟩
+  refine ⟨reported.sameWriter, (reported.unlinked.keepsOtherChild directoryLock).trans
+    reported.inventory.lifetime.lockEntry, ?_⟩
+  calc
+    reported.reachedView.modelObject reported.inventory.lifetime.lock =
+        reported.inventory.lifetime.namespaceView.modelObject reported.inventory.lifetime.lock :=
+      congrFun reported.reachedObjects _
+    _ = state.census.inode state.owner.description :=
+      object.trans (congrArg (fun slot : DescriptorSlot => state.census.inode slot.description) reported.ownersMatch)
+    _ = reported.inventory.descriptors.inode state.owner.description :=
+      congrArg (fun inventory => inventory.inode state.owner.description) reported.startsAt.symm
+    _ = reported.barrier.reached.inode state.owner.description := by
+      have listing := reported.inventory.listing.afterClose_eq
+      exact (congrArg (fun inventory => inventory.inode state.owner.description)
+        (reported.reachesBarrier.trans (congrArg (fun inventory => inventory.afterDrops reported.barrier.drops) listing))).symm
 
 end NativeReadyWalCollection
 
@@ -187,6 +204,9 @@ theorem NativeReadyReadPrefix.collectsCoveredWal
     reported.reachedView.child reported.inventory.lifetime.root "LOCK" = some reported.inventory.lifetime.lock ∧
     reported.barrier.handle.2.1 = state.directorySlot ∧
     reported.barrier.handle.1.inode state.directorySlot.description = state.census.inode state.directorySlot.description ∧
+    reported.barrier.reached = reported.inventory.listing.afterClose.afterDrops reported.barrier.drops ∧
+    state.directorySlot ∈ reported.barrier.reached.slots ∧ state.owner ∈ reported.barrier.reached.slots ∧
+    reported.reachedView.modelObject reported.inventory.lifetime.lock = reported.barrier.reached.inode state.owner.description ∧
     reported.barrier.after.crashSealed = [reported.next.writer.wal.sealed] ∧
     (∀ offset ∈ state.writer.wal.collectionOffsets,
       reported.reachedView.child reported.inventory.lifetime.root (renderWalSegmentName offset) = none) ∧
@@ -213,11 +233,14 @@ theorem NativeReadyReadPrefix.collectsCoveredWal
     List.mem_cons.mpr (.inl after.walPair.symm)
   have stillReads := retry.keepsReadDescriptors selected state.writer.target.decoded
   obtain ⟨directory, object, ownerLive, directoryLive⟩ := reported.retainsCustody valid
-  obtain ⟨owner, lock, _⟩ := reported.retainsLock
+  obtain ⟨owner, lock, lockObject⟩ := reported.retainsLock
+  have directoryAtIssue := directory ▸ reported.barrier.directoryLive
+  have ownerAtIssue := owner ▸ reported.barrier.writerLive
   have nextValid : reported.next.Valid :=
     ⟨valid.phase, valid.owner, ownerLive, directoryLive, valid.captured, after⟩
   refine ⟨reported.runs valid, nextValid, rfl, rfl, reported.censusPreserved, rfl, rfl, retry.keepsActive,
-    stillReads, sameHistory, owner, lock, directory, object, crash, reported.unlinked.completedNamesAbsent rfl rfl, ?_,
+    stillReads, sameHistory, owner, lock, directory, object, reported.reachesBarrier, directoryAtIssue, ownerAtIssue,
+    lockObject, crash, reported.unlinked.completedNamesAbsent rfl rfl, ?_,
     prior.guardedReplay⟩
   intro segment stored eligible present
   have offset : segment.first ∈ state.writer.wal.collectionOffsets := List.mem_map.mpr
