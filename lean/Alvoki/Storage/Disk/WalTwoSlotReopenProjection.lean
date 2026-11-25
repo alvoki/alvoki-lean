@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.WalSegmentReplayStability
+import Alvoki.Storage.Disk.SegmentedSessionInstall
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -260,5 +261,32 @@ theorem retries_preservePublishedFrontier
     simpa [valid.selected, valid.settled] using chosen
   rw [same, ← pair]
   exact ⟨manifest, by simp [settleMarker, observed], allowed⟩
+
+open Storage.DiskSession
+
+/-- The shared installer returns the payload from the reached two-slot
+preparation. The marker barrier and repair must both report success before
+allocation, and the previous session's snapshot references stay foreign. -/
+theorem reopenWith_installsPrepared {image : Type} {directory : Storage.DiskDirectory}
+    {descriptor nextRef : Nat} {unlock : UnlockReport}
+    {before : LockedFileState image} {prepared settled after : image}
+    {prepare : EStateM IO.Error image (Plan × Reopened × Nat)}
+    {stabilize : EStateM IO.Error image Unit} {finish : Plan → Nat → EStateM IO.Error image Unit}
+    {plan : Plan} {opened : Reopened} {size : Nat} (liveRefs : List Nat)
+    (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : TryLockObserves before.owners directory (.ok true))
+    (read : prepare before.image = .ok (plan, opened, size) prepared)
+    (barrier : stabilize prepared = .ok () settled)
+    (repaired : finish plan size settled = .ok () after) :
+    ∃ session final,
+      runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+        (reopenWith prepare stabilize finish) before = .ok session final ∧
+      session.phase = .ready opened.installed ∧ final.image = after ∧
+      final.owners.Owns directory descriptor ∧ session.sessionRef ∉ liveRefs := by
+  have report : reopenWith prepare stabilize finish before.image = .ok opened after := by
+    simp only [reopenWith_reports, read, barrier, repaired]
+  obtain ⟨session, final, success, _, _, phase, files, _, owner, _, _, freshSession⟩ :=
+    runOpenWithInstallation_ready (unlock := unlock) liveRefs fresh acquisition report
+  exact ⟨session, final, success, phase, files, owner, freshSession⟩
 
 end Alvoki.WAL.TwoSlot
