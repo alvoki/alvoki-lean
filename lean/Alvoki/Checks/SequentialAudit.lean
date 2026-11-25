@@ -287,6 +287,7 @@ import Alvoki.Storage.Disk.DiskBootstrapAdmission
 import Alvoki.Storage.Disk.ObservedBootstrapCache
 import Alvoki.Storage.Disk.BootstrapZeroKeeperCustody
 import Alvoki.Storage.Disk.BootstrapZeroCreateError
+import Alvoki.Storage.Disk.BootstrapZeroCreateRetry
 import Alvoki.Storage.Disk.BootstrapKeeperDirectoryError
 import Alvoki.Storage.Disk.BootstrapKeeperFileError
 import Alvoki.Storage.Disk.BootstrapMarkerCustody
@@ -2094,6 +2095,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroCreateError.cleanupReturns
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroCreateError.admitsAfterDrops
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroCreateError.returns
+#check_axioms Alvoki.Storage.DiskSession.CapturedBootstrapAdmission.admits
+#check_axioms Alvoki.Storage.DiskSession.CapturedBootstrapAdmission.dispatches
+#check_axioms Alvoki.Storage.DiskSession.BootstrapZeroCreateError.DisposedForRetry.released
+#check_axioms Alvoki.Storage.DiskSession.BootstrapZeroCreateError.reopensAfterCreateError
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperDirectoryError.keeper
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperDirectoryError.worker
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperDirectoryError.returns

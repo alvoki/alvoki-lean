@@ -21,11 +21,12 @@ theorem CheckpointPowerCut.barrierCrashVacant {directory : DiskDirectory} {befor
 
 /-- Compare canonical child lookups across the reported power-loss map
 and the stable namespace of the next held open. -/
-def CheckpointCrashChild (names : FilePath → Option Nat) (admission : CensusOpenAdmissionReports input directory inventory retry)
+def CheckpointCrashChild {retry : LockedFileState FileImage}
+    (names : FilePath → Option Nat) (admission : CensusOpenAdmissionReports input directory inventory retry)
     (path : FilePath) (name : String) : Prop :=
   (admission.view.child admission.root name).map admission.view.modelObject = names path
 
-theorem CheckpointCrashChild.sameObject {input directory inventory retry names path name}
+theorem CheckpointCrashChild.sameObject {input directory inventory names path name} {retry : LockedFileState FileImage}
     {admission : CensusOpenAdmissionReports input directory inventory retry} {reads object payload}
     (child : CheckpointCrashChild names admission path name)
     (file : RunChunkPathReport reads path name admission.root admission.view)
