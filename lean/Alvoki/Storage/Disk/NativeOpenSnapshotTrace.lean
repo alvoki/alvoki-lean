@@ -13,14 +13,14 @@ def NativeOpenedInstruction.SnapshotOperands (instruction : NativeOpenedInstruct
   | .acquireAt _ | .advanceFloor _ => True
   | .releaseAt index | .readAt index _ =>
     index < start.pins.length ∧ opened.ptrEq opened.token opened.token start.reached = .ok true start.reached
-  | .write _ | .checkpoint | .rewriteRun _ | .readSupplied _ _ => False
+  | .write _ | .checkpoint | .rewriteRun _ | .readSupplied _ _ | .releaseSupplied _ => False
 
 theorem NativeOpenedInstruction.observesSnapshot
     (instruction : NativeOpenedInstruction) (start : NativeOpenedPosition opened)
     (operands : instruction.SnapshotOperands start) :
     Nonempty (NativeOpenedReport start instruction) := by
   cases instruction with
-  | write | checkpoint | rewriteRun | readSupplied => exact False.elim operands
+  | write | checkpoint | rewriteRun | readSupplied | releaseSupplied => exact False.elim operands
   | acquireAt sequence =>
     cases acquired : start.current.ready.state.writer.installed.table.acquireAt sequence with
     | none => exact ⟨.acquireAtUnavailable sequence acquired⟩

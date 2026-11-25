@@ -22,6 +22,7 @@ inductive NativeOpenedInstruction : Type 1 where
   | advanceFloor (floor : UInt64)
   | readAt (index : Nat) (request : SnapshotReadRequest α)
   | readSupplied (pin : DiskSnapshotPin) (request : SnapshotReadRequest α)
+  | releaseSupplied (pin : DiskSnapshotPin)
 
 /-- Per-call observations at the reached position. Indexed operands
 select tracked pins. A supplied pin retains its original issuer, and
@@ -86,6 +87,14 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
       (compared : opened.ptrEq issuer opened.token start.reached =
         .ok (decide (tokenIdentity issuer = tokenIdentity opened.token)) start.reached) :
       NativeOpenedReport start (.readSupplied pin request)
+  | releaseSupplied (pin : DiskSnapshotPin)
+      {issuer : IO.Ref Unit} {issued : SnapshotPin} (owns : pin.UsesOpenToken issuer issued)
+      (tokenIdentity : IO.Ref Unit → Nat)
+      (currentToken : tokenIdentity opened.token = start.current.ready.state.session.sessionRef)
+      (identifies : tokenIdentity issuer = tokenIdentity opened.token ↔ issuer = opened.token)
+      (compared : opened.ptrEq issuer opened.token start.reached =
+        .ok (decide (tokenIdentity issuer = tokenIdentity opened.token)) start.reached) :
+      NativeOpenedReport start (.releaseSupplied pin)
 
 namespace NativeOpenedReport
 
@@ -209,6 +218,24 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
       event = .snapshotHandleRead (tokenIdentity issuer) issued.handle request response recorded ∧
       next.current.ready.state = start.current.ready.state ∧ next.reached = start.reached ∧ next.pins = start.pins ∧
       next.current.ready.reads = start.current.ready.reads ++ [recorded]
+  | .releaseSupplied pin (issuer := issuer) (issued := issued) _ tokenIdentity _ _ _ =>
+    let before := start.current.ready.state
+    let after := next.current.ready.state
+    opened.table.release pin.handle = releaseSnapshotWith (m := IO)
+      (do (← opened.phase.get).installed) (issuer.ptrEq opened.token) opened.phase.set issued.handle ∧
+    releaseSnapshotWith (m := EStateM IO.Error heap) (do (← opened.get opened.phase).installed)
+      (opened.ptrEq issuer opened.token) (opened.set opened.phase) issued.handle start.reached = .ok () next.reached ∧
+    (issuer ≠ opened.token → next.reached = start.reached ∧ after = before) ∧
+    (issuer = opened.token →
+      after = before.withTable (before.writer.installed.table.release issued.handle) ∧
+      opened.set opened.phase after.session.phase start.reached = .ok () next.reached ∧
+      after.writer.installed.table.pins.find issued.handle = none ∧
+      (∀ pin, pin ∈ after.writer.installed.table.pins.active ↔
+        pin ∈ before.writer.installed.table.pins.active ∧ pin.handle ≠ issued.handle)) ∧
+    event = .snapshotControl (.release (tokenIdentity issuer) issued.handle) (.ok ()) ∧
+    after.files = before.files ∧ after.cache = before.cache ∧ after.census = before.census ∧ after.owner = before.owner ∧
+    next.pins = start.pins ∧ next.current.history = start.current.history ∧
+    next.current.submissions = start.current.submissions ∧ next.current.ready.reads = start.current.ready.reads
 
 structure Reached (report : NativeOpenedReport start instruction) (event : NativeExecutionEvent)
     (next : NativeOpenedPosition opened) : Prop where
@@ -339,6 +366,42 @@ theorem reaches (report : NativeOpenedReport start instruction) :
     refine ⟨_, next, step, source, response, recorded, ?_, denied, rfl, state, heap, pins, reads⟩
     rw [heap]
     exact raw
+  | @releaseSupplied _ issuer issued owns tokenIdentity currentToken identifies compared =>
+    let before := start.current.ready.state
+    let sameToken := tokenIdentity issuer = before.session.sessionRef
+    have currentId : tokenIdentity opened.token = before.session.sessionRef := currentToken
+    have same : sameToken ↔ issuer = opened.token := by
+      simpa only [currentId] using identifies
+    have comparison : opened.ptrEq issuer opened.token start.reached = .ok (decide sameToken) start.reached := by
+      simpa only [sameToken, currentId] using compared
+    obtain ⟨source, next, reached, transition, returned, raw, stored, keepsHeap, setter⟩ :=
+      start.current.ready.releasesViaOpenReferences opened.table start.uses owns
+        opened.phaseEffects start.stored opened.ptrEq (tokenIdentity issuer) (decide sameToken) rfl comparison
+    obtain ⟨step, directory⟩ := reachesSnapshotControl transition returned
+    let position : NativeOpenedPosition opened :=
+      ⟨⟨start.current.history, start.current.submissions, next⟩, reached, directory.trans start.directory,
+        stored, start.pins⟩
+    have ready := start.current.ready.readPrefix.refines.1.phase
+    refine ⟨_, position, step, source, raw, ?_, ?_, rfl, transition.files, transition.cache, transition.census,
+      transition.owner, rfl, rfl, rfl, transition.reads⟩
+    · intro foreign
+      have distinct : tokenIdentity issuer ≠ start.current.ready.state.session.sessionRef :=
+        fun equal => foreign (same.mp equal)
+      refine ⟨keepsHeap (decide_eq_false distinct), ?_⟩
+      simpa only [NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome, ready, distinct, ite_false]
+        using transition.reached
+    · intro localToken
+      have localId : tokenIdentity issuer = start.current.ready.state.session.sessionRef := same.mpr localToken
+      have updated : next.state = before.withTable (before.writer.installed.table.release issued.handle) := by
+        simpa only [NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome, ready, localId, ite_true]
+          using transition.reached
+      refine ⟨updated, setter (decide_eq_true localId), ?_⟩
+      change next.state.writer.installed.table.pins.find issued.handle = none ∧
+        (∀ pin, pin ∈ next.state.writer.installed.table.pins.active ↔
+          pin ∈ before.writer.installed.table.pins.active ∧ pin.handle ≠ issued.handle)
+      rw [updated]
+      exact ⟨before.writer.installed.table.pins.find_released issued.handle,
+        before.writer.installed.table.pins.mem_release issued.handle⟩
 
 end NativeOpenedReport
 
