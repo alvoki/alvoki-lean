@@ -5,6 +5,19 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
+/-- Selection and namespace effects at the first run-directory barrier.
+The reached map contains the freshly synced file contents, even when its
+new bindings have yet to become durable. -/
+structure CheckpointRunBarrierCut {directory : DiskDirectory} {before : SegmentedWriterState}
+    (cut : CheckpointPowerCut directory before) (published : Image)
+    (reached interrupted : RunUnlinkImage) : Prop where
+  current : cut.current = .syncRunsDirectory
+  executed : before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published
+  manifestChoices : published.manifest.crashImages = [before.wal.directory.active.manifest]
+  olderRuns : ∀ older, older ≠ SegmentedCheckpointReport.generation before → ∀ index,
+    published.durable older index = before.published.durable older index
+  namespaceCut : interrupted = if cut.tookEffect then reached.syncDirectory else reached
+
 /-- All run-file barriers can complete before power is lost at the first
 directory barrier. The ordered native prefix reaches that exact callback
 with the directory handle in the reached cache. An observed effective cut settles the
@@ -56,12 +69,9 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
       SyncPathGroup.run (m := EStateM IO.Error (Cache handle × WalInodeImage))
         (fun _ (cache, image) => withCache cache (fsync directoryHandle image))
         #[directory.path] (atRun count) ∧
-    ∃ published, before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published ∧
+    ∃ published, CheckpointRunBarrierCut cut published (runs (atRun count)) (runs interrupted) ∧
       manifest interrupted = published.manifest ∧
-      published.manifest.crashImages = [before.wal.directory.active.manifest] ∧
       (cut.tookEffect = false → published = before.published) ∧
-      (∀ older, older ≠ generation → ∀ index,
-        published.durable older index = before.published.durable older index) ∧
       (∀ index < count, (runs (atRun count)).visible generation index = cut.checkpoint.plan.files[index]?) ∧
       (cut.tookEffect = true →
         ∀ index < count, (runs interrupted).guaranteed generation index = published.durable generation index) := by
@@ -96,9 +106,12 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
     rw [ready.manifestFiles, ready.directoryFiles]
     have directorySettled := ready.walDirectorySettled
     simp [DirectoryPublication.Image.project, DirectoryPublication.Bindings.get, directorySettled]
-  refine ⟨current, completedRuns.symm ▸ prefixRan, ?_, published, executed,
+  have selected : published.manifest.crashImages = [before.wal.directory.active.manifest] := by
+    rw [sameManifest]
+    exact settled
+  refine ⟨current, completedRuns.symm ▸ prefixRan, ?_, published, ⟨current, executed, selected, oldRuns, namespaceCut⟩,
     cutManifest.trans ((allManifests count (Nat.le_refl _)).trans sameManifest.symm),
-    by rw [sameManifest]; exact settled, beforeEffect, oldRuns, visible, ?_⟩
+    beforeEffect, visible, ?_⟩
   · rw [current]
     let cached (_ : FilePath) : EStateM IO.Error (Cache handle × WalInodeImage) Unit :=
       fun (cache, image) => withCache cache (fsync directoryHandle image)

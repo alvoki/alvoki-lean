@@ -8,7 +8,7 @@ open System CheckpointPublication WalSegmentRepair SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
 /-- Compare the run maps only at the indices named by the selected manifest. -/
-private def SelectedRunsAgree (binding : Option ByteArray) (left right : RunFiles) : Prop :=
+def SelectedRunsAgree (binding : Option ByteArray) (left right : RunFiles) : Prop :=
   ∀ bytes metadata, binding = some bytes → Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
     ∀ index < metadata.header.runCount.toNat,
       left metadata.header.generation index = right metadata.header.generation index
@@ -32,7 +32,8 @@ private def MarkedRetryChunkReports.withRunMap {files : Type} {directory : DiskD
       rw [← same bytes metadata selected decoded index inside] at stored
       exact report.chunks bytes metadata selected decoded index inside payload stored }
 
-private theorem SelectedIntegrityCheckpoint.withRunMap {binding : Option ByteArray}
+/-- A selected checkpoint depends only on the indices named by its manifest. -/
+theorem SelectedIntegrityCheckpoint.withRunMap {binding : Option ByteArray}
     {left right : RunFiles} {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint left binding checkpoint)
     (same : SelectedRunsAgree binding left right) : SelectedIntegrityCheckpoint right binding checkpoint := by
@@ -98,80 +99,67 @@ def CheckpointHeldOpen.chunkReports {input directory history physical} {retry : 
   observed.held.toChunkReports (observed.authorization.settles observed.completed)
     observed.metadata.callbackMetadata observed.healthy
 
-/-- At an interrupted manifest rename the reported surviving inode determines
-the selected manifest. Open reports use the same run bindings through the
-retries. The held-directory packet supplies the exact callbacks and admission.
-Reindexing the checkpoint run map preserves both. This same open installs the
-checkpoint and unchanged marked WAL, and its returned writer continues any
-mixed trace reaching the interrupted writer with the same submission log. -/
-theorem CheckpointPowerCut.reopensAfterManifestRename {directory : DiskDirectory}
+/-- A held open must report the keeper and ordered seals chosen from this
+checkpoint survivor and its retained WAL. -/
+abbrev CheckpointHeldOpen.Reports (input : FilePath) (directory : DiskDirectory) (before : SegmentedWriterState)
+    (retry : LockedFileState FileImage) (published physical : Image) : Prop :=
+  ∀ layout : CanonicalKeeperLayout retry.image before.history,
+    layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
+    layout.sealed ++ [layout.keeper] = (published.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark →
+    Nonempty (CheckpointHeldOpen input directory layout physical)
+
+/-- The actual held open and the next writer at its exact returned state. -/
+abbrev CheckpointPowerCut.HeldReopen {directory : DiskDirectory} {before : SegmentedWriterState}
+    (cut : CheckpointPowerCut directory before) (input : FilePath) (writer : Nat)
+    (retry : LockedFileState FileImage) (published : Image) (binding : Option ByteArray)
+    (runs : RunFiles) : Prop :=
+  let pair : DirectoryPublication.Bindings := ⟨binding, before.wal.directory.active.walBoundary⟩
+  let physical := { published with durable := runs }
+  ∃ (layout : CanonicalKeeperLayout retry.image before.history)
+    (observed : CheckpointHeldOpen input directory layout physical)
+    (session : SegmentedSession) (final : LockedFileState FileImage)
+    (opened : Reopened) (checkpoint : Option (PackedTable × UInt64)) (model : Sequential.SnapshotTable UInt64),
+    observed.wal.operations.runWithAdmission observed.admission = .ok session final ∧
+    session.directory = directory ∧ session.descriptor = observed.calls.slot.description ∧
+    session.phase = .ready opened.installed ∧ final.owners.Owns directory session.descriptor ∧
+    final.image.directory.active = pair ∧
+    SelectedIntegrityCheckpoint runs binding checkpoint ∧
+    ((opened.generation = before.installed.generation ∧ binding = before.wal.directory.active.manifest) ∨
+      (opened.generation = SegmentedCheckpointReport.generation before ∧ binding = some cut.checkpoint.manifest)) ∧
+    recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok opened.table ∧
+    opened.table.committed.toNat = before.history.length ∧ opened.table.Refines model ∧
+    RepresentsWalHistory before.history model ∧
+    ∃ (after : SegmentedWriterState), after.RetainedReady directory observed.calls.slot.description ∧
+      after.checkpoint = checkpoint ∧ after.installed = opened.installed ∧
+      after.files = final.image ∧ after.owners = final.owners ∧
+      ∀ {initialDescriptor initial allowCollection log},
+        SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before →
+          SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.calls.slot.description after
+
+/-- Reopen the selected checkpoint using its reported physical run bytes.
+Only the selected indices enter the read contract. Reindexing them
+preserves the exact callbacks and admission. -/
+theorem CheckpointPowerCut.reopensSelectedRunMap {directory : DiskDirectory}
     {before : SegmentedWriterState} {writer : Nat} {input : FilePath}
     (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
     (published : Image)
     (projected : before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published)
-    (interrupted : WalInodeImage) (bindings : List (Option Nat)) (binding : Option ByteArray)
-    (survives : binding ∈ bindings.flatMap (manifestCrashBytes interrupted))
-    (admitted : ∀ bytes ∈ bindings.flatMap (manifestCrashBytes interrupted), bytes ∈ published.manifest.crashImages)
-    (runs : WalInodeImage → RunUnlinkImage)
-    (newRuns : ∀ index < cut.checkpoint.table.runs.length,
-      (runs interrupted).guaranteed (SegmentedCheckpointReport.generation before) index =
-      published.durable (SegmentedCheckpointReport.generation before) index)
-    (oldRuns : ∀ bytes metadata, before.wal.directory.active.manifest = some bytes →
-      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
-      ∀ index < metadata.header.runCount.toNat,
-        (runs interrupted).guaranteed metadata.header.generation index =
-          published.durable metadata.header.generation index)
+    (binding : Option ByteArray) (survives : binding ∈ published.manifest.crashImages)
+    (runs : RunFiles) (agrees : SelectedRunsAgree binding runs published.durable)
     (retry : LockedFileState FileImage) :
     let pair : DirectoryPublication.Bindings := ⟨binding, before.wal.directory.active.walBoundary⟩
-    let physical := { published with durable := (runs interrupted).guaranteed }
     BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
       ⟨(CheckpointPowerCut.physical before published).crash pair (some before.wal.active.bytes) [],
         before.owners.set (directory.file .lock) none⟩ retry →
-    (∀ layout : CanonicalKeeperLayout retry.image before.history,
-      layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
-      layout.sealed ++ [layout.keeper] = (published.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark →
-      Nonempty (CheckpointHeldOpen input directory layout physical)) →
-    ∃ (layout : CanonicalKeeperLayout retry.image before.history)
-      (observed : CheckpointHeldOpen input directory layout physical)
-      (session : SegmentedSession) (final : LockedFileState FileImage)
-      (opened : Reopened) (checkpoint : Option (PackedTable × UInt64)) (model : Sequential.SnapshotTable UInt64),
-      observed.wal.operations.runWithAdmission observed.admission = .ok session final ∧
-      session.directory = directory ∧ session.descriptor = observed.calls.slot.description ∧
-      session.phase = .ready opened.installed ∧ final.owners.Owns directory session.descriptor ∧
-      final.image.directory.active = pair ∧
-      SelectedIntegrityCheckpoint (runs interrupted).guaranteed binding checkpoint ∧
-      ((opened.generation = before.installed.generation ∧ binding = before.wal.directory.active.manifest) ∨
-        (opened.generation = SegmentedCheckpointReport.generation before ∧ binding = some cut.checkpoint.manifest)) ∧
-      recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok opened.table ∧
-      opened.table.committed.toNat = before.history.length ∧ opened.table.Refines model ∧
-      RepresentsWalHistory before.history model ∧
-      ∃ (after : SegmentedWriterState), after.RetainedReady directory observed.calls.slot.description ∧
-        after.checkpoint = checkpoint ∧ after.installed = opened.installed ∧
-        after.files = final.image ∧ after.owners = final.owners ∧
-        ∀ {initialDescriptor initial allowCollection log},
-          SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before →
-            SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.calls.slot.description after := by
-  intro pair physical failures observes
-  have pairSurvives : pair ∈ (published.segmentedCheckpointView before.wal).directory.crashImages := by
-    exact List.mem_map.mpr ⟨binding, admitted binding survives, rfl⟩
-  obtain ⟨computed, executed, _, _, _, crash⟩ := cut.selectsAcknowledgedHistory ready
-  have sameImage := Option.some.inj (executed.symm.trans projected)
-  subst computed
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, choice, _, _, _, _⟩ := crash pairSurvives
-  have agrees : SelectedRunsAgree binding (runs interrupted).guaranteed published.durable := by
-    rcases choice with ⟨_, old⟩ | ⟨_, new⟩
-    · change binding = before.wal.directory.active.manifest at old
-      exact old.symm ▸ oldRuns
-    · intro bytes metadata present decoded index inside
-      have sameBytes : bytes = cut.checkpoint.manifest := Option.some.inj (present.symm.trans new)
-      subst bytes
-      rw [cut.newManifestHeader ready decoded] at inside ⊢
-      have count : (checkpointHeader cut.checkpoint.table (SegmentedCheckpointReport.generation before)).runCount.toNat =
-          cut.checkpoint.table.runs.length := UInt64.toNat_ofNat_of_lt' cut.runCountFits
-      exact newRuns index (count ▸ inside)
+    CheckpointHeldOpen.Reports input directory before retry published { published with durable := runs } →
+    cut.HeldReopen input writer retry published binding runs := by
+  intro pair failures observes
+  let physical := { published with durable := runs }
+  have pairSurvives : pair ∈ (published.segmentedCheckpointView before.wal).directory.crashImages :=
+    List.mem_map.mpr ⟨binding, survives, rfl⟩
   have retryPair := SegmentedCheckpointPowerLossReport.keepsSelectedPair rfl
     (failures.lineage (fun a b selected => CheckpointRetryTarget.unique a b selected))
-  have retryAgrees : SelectedRunsAgree retry.image.directory.active.manifest (runs interrupted).guaranteed published.durable := by
+  have retryAgrees : SelectedRunsAgree retry.image.directory.active.manifest runs published.durable := by
     rw [retryPair]
     exact agrees
   let observedBy {layout : CanonicalKeeperLayout retry.image before.history}
@@ -211,5 +199,58 @@ theorem CheckpointPowerCut.reopensAfterManifestRename {directory : DiskDirectory
   · intro _ _ _ _ prior
     rw [descriptor]
     exact .checkpointPowerLossObserved prior cut projected pairSurvives failures retryPair installed
+
+/-- At an interrupted manifest rename the reported surviving inode determines
+the selected manifest. Open reports use the same run bindings through the
+retries. The held-directory packet supplies the exact callbacks and admission.
+Reindexing the checkpoint run map preserves both. This same open installs the
+checkpoint and unchanged marked WAL, and its returned writer continues any
+mixed trace reaching the interrupted writer with the same submission log. -/
+theorem CheckpointPowerCut.reopensAfterManifestRename {directory : DiskDirectory}
+    {before : SegmentedWriterState} {writer : Nat} {input : FilePath}
+    (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
+    (published : Image)
+    (projected : before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published)
+    (interrupted : WalInodeImage) (bindings : List (Option Nat)) (binding : Option ByteArray)
+    (survives : binding ∈ bindings.flatMap (manifestCrashBytes interrupted))
+    (admitted : ∀ bytes ∈ bindings.flatMap (manifestCrashBytes interrupted), bytes ∈ published.manifest.crashImages)
+    (runs : WalInodeImage → RunUnlinkImage)
+    (newRuns : ∀ index < cut.checkpoint.table.runs.length,
+      (runs interrupted).guaranteed (SegmentedCheckpointReport.generation before) index =
+      published.durable (SegmentedCheckpointReport.generation before) index)
+    (oldRuns : ∀ bytes metadata, before.wal.directory.active.manifest = some bytes →
+      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+      ∀ index < metadata.header.runCount.toNat,
+        (runs interrupted).guaranteed metadata.header.generation index =
+          published.durable metadata.header.generation index)
+    (retry : LockedFileState FileImage) :
+    let pair : DirectoryPublication.Bindings := ⟨binding, before.wal.directory.active.walBoundary⟩
+    let physical := { published with durable := (runs interrupted).guaranteed }
+    BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
+      ⟨(CheckpointPowerCut.physical before published).crash pair (some before.wal.active.bytes) [],
+        before.owners.set (directory.file .lock) none⟩ retry →
+    CheckpointHeldOpen.Reports input directory before retry published physical →
+    cut.HeldReopen input writer retry published binding (runs interrupted).guaranteed := by
+  intro pair physical failures observes
+  have survived := admitted binding survives
+  have pairSurvives : pair ∈ (published.segmentedCheckpointView before.wal).directory.crashImages :=
+    List.mem_map.mpr ⟨binding, survived, rfl⟩
+  obtain ⟨computed, executed, _, _, _, crash⟩ := cut.selectsAcknowledgedHistory ready
+  have sameImage := Option.some.inj (executed.symm.trans projected)
+  subst computed
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, choice, _, _, _, _⟩ := crash pairSurvives
+  have agrees : SelectedRunsAgree binding (runs interrupted).guaranteed published.durable := by
+    rcases choice with ⟨_, old⟩ | ⟨_, new⟩
+    · change binding = before.wal.directory.active.manifest at old
+      exact old.symm ▸ oldRuns
+    · intro bytes metadata present decoded index inside
+      have sameBytes : bytes = cut.checkpoint.manifest := Option.some.inj (present.symm.trans new)
+      subst bytes
+      rw [cut.newManifestHeader ready decoded] at inside ⊢
+      have count : (checkpointHeader cut.checkpoint.table (SegmentedCheckpointReport.generation before)).runCount.toNat =
+          cut.checkpoint.table.runs.length := UInt64.toNat_ofNat_of_lt' cut.runCountFits
+      exact newRuns index (count ▸ inside)
+  exact cut.reopensSelectedRunMap ready published projected binding survived
+    (runs interrupted).guaranteed agrees retry failures observes
 
 end Alvoki.Storage.DiskSession
