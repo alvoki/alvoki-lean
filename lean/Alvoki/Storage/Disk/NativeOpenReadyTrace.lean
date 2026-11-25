@@ -58,6 +58,9 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
   | acquireAt (sequence : UInt64) {pin : SnapshotPin} {table : PackedTable}
       (acquired : start.current.ready.state.writer.installed.table.acquireAt sequence = some (pin, table)) :
       NativeOpenedReport start (.acquireAt sequence)
+  | acquireAtUnavailable (sequence : UInt64)
+      (unavailable : start.current.ready.state.writer.installed.table.acquireAt sequence = none) :
+      NativeOpenedReport start (.acquireAt sequence)
   | releaseAt (index : Nat) (pin : NativeOpenedPin opened)
       (issued : start.pins[index]? = some pin)
       (compared : opened.ptrEq opened.token opened.token start.reached = .ok true start.reached) :
@@ -122,6 +125,14 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
         (opened.set opened.phase) issue sequence start.reached = .ok (some returned.raw) next.reached ∧
       returned.raw = issue pin ∧ returned.localPin = pin ∧ next.pins = start.pins ++ [returned] ∧
       event = .snapshotControl (.acquireAt sequence) (.ok (some (start.current.ready.state.session.sessionRef, pin)))
+  | .acquireAtUnavailable sequence _ =>
+    ∃ issue : SnapshotPin → DiskSnapshotPin,
+      opened.table.acquireAt sequence = acquireSnapshotWith (m := IO)
+        (do (← opened.phase.get).installed) opened.phase.set issue sequence ∧
+      acquireSnapshotWith (m := EStateM IO.Error heap) (do (← opened.get opened.phase).installed)
+        (opened.set opened.phase) issue sequence start.reached = .ok none next.reached ∧
+      event = .snapshotControl (.acquireAt sequence) (.ok none) ∧
+      next.reached = start.reached ∧ next.current.ready.state = start.current.ready.state ∧ next.pins = start.pins
   | .releaseAt _ pin _ _ =>
     opened.table.release pin.raw.handle = releaseSnapshotWith (m := IO)
       (do (← opened.phase.get).installed) (opened.token.ptrEq opened.token) opened.phase.set pin.localPin.handle ∧
@@ -229,6 +240,22 @@ theorem reaches (report : NativeOpenedReport start instruction) :
     have common := NativeExecutionStep.snapshotControl start.current (.acquireAt sequence) next transition
     simp only [NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome, valid.phase, acquired] at common
     exact ⟨_, nextPosition, common, issue, actualPin, source, raw, rfl, rfl, rfl, rfl⟩
+  | acquireAtUnavailable sequence unavailable =>
+    obtain ⟨issue, next, result, reached, _, source, transition, returned, raw, stored, keepsHeap⟩ :=
+      start.current.ready.acquiresViaOpenReferences opened.table start.uses opened.phaseEffects start.stored sequence
+    have ready := start.current.ready.readPrefix.refines.1.phase
+    have noneReturned : start.current.ready.state.session.runAcquireAt sequence = .ok none next.state.session := by
+      simpa only [NativeSnapshotUpdateObservation.run, NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome,
+        ready, unavailable] using transition.returned
+    have sameResult := (EStateM.Result.ok.inj (returned.symm.trans noneReturned)).1
+    subst result
+    have state : next.state = start.current.ready.state := by
+      simpa only [NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome, ready, unavailable] using transition.reached
+    obtain ⟨step, directory⟩ := reachesSnapshotControl transition noneReturned
+    let position : NativeOpenedPosition opened :=
+      ⟨⟨start.current.history, start.current.submissions, next⟩, reached, directory.trans start.directory,
+        stored, start.pins⟩
+    exact ⟨_, position, step, issue, source, raw, rfl, keepsHeap rfl, state, rfl⟩
   | releaseAt _ pin _ compared =>
     obtain ⟨source, next, reached, transition, returned, raw, stored, _, setter⟩ :=
       start.current.ready.releasesViaOpenReferences opened.table start.uses pin.issued

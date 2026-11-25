@@ -1,0 +1,57 @@
+import Alvoki.Storage.Disk.NativeOpenReadyTrace
+
+namespace Alvoki.Storage.DiskSession
+
+variable {heap : Type} {opened : NativeOpenedHandle heap}
+
+/-- For a snapshot call, only the operand selection and the comparison
+of the original live token need a report. The ready phase supplies the
+guards, result and next state. -/
+def NativeOpenedInstruction.SnapshotOperands (instruction : NativeOpenedInstruction)
+    (start : NativeOpenedPosition opened) : Prop :=
+  match instruction with
+  | .acquireAt _ | .advanceFloor _ => True
+  | .releaseAt index | .readAt index _ =>
+    index < start.pins.length ∧ opened.ptrEq opened.token opened.token start.reached = .ok true start.reached
+  | .write _ | .checkpoint => False
+
+theorem NativeOpenedInstruction.observesSnapshot
+    (instruction : NativeOpenedInstruction) (start : NativeOpenedPosition opened)
+    (operands : instruction.SnapshotOperands start) :
+    Nonempty (NativeOpenedReport start instruction) := by
+  cases instruction with
+  | write | checkpoint => exact False.elim operands
+  | acquireAt sequence =>
+    cases acquired : start.current.ready.state.writer.installed.table.acquireAt sequence with
+    | none => exact ⟨.acquireAtUnavailable sequence acquired⟩
+    | some found =>
+      obtain ⟨pin, table⟩ := found
+      exact ⟨.acquireAt sequence acquired⟩
+  | advanceFloor floor => exact ⟨.advanceFloor floor⟩
+  | releaseAt index =>
+    obtain ⟨inBounds, compared⟩ := operands
+    let pin := start.pins[index]'inBounds
+    exact ⟨.releaseAt index pin (List.getElem?_eq_getElem inBounds) compared⟩
+  | readAt index request =>
+    obtain ⟨inBounds, compared⟩ := operands
+    let pin := start.pins[index]'inBounds
+    exact ⟨.readAt index request pin (List.getElem?_eq_getElem inBounds) compared⟩
+
+/-- Any finite snapshot-only continuation can be interpreted at the
+exact opened table. Each read or release must name an existing entry in
+the reached issuance list and report the live-token comparison there.
+Acquisition and floor decisions come from the reached table. -/
+theorem NativeOpenedTrace.executesSnapshots
+    (start : NativeOpenedPosition opened) (instructions : List NativeOpenedInstruction)
+    (operands : ∀ issued events reached instruction remaining,
+      instructions = issued ++ instruction :: remaining →
+      NativeOpenedTrace start issued events reached → instruction.SnapshotOperands reached) :
+    ∃ events last, NativeOpenedTrace start instructions events last ∧
+      NativeExecutionTrace start.current events last.current ∧
+      InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
+        last.current.ready.state.writer.installed last.current.ready.state.session := by
+  apply executes start instructions
+  intro issued events reached instruction remaining ordered previous
+  exact instruction.observesSnapshot reached (operands issued events reached instruction remaining ordered previous)
+
+end Alvoki.Storage.DiskSession

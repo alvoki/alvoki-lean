@@ -167,6 +167,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedCheckpointRenameError
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenReadyTrace
+lake env leanchecker Alvoki.Storage.Disk.NativeOpenSnapshotTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenCacheReferences
 lake env leanchecker Alvoki.Storage.Disk.NativeRawOpenAdmission
 lake env leanchecker Alvoki.Storage.Disk.NativeRawOpenPrefixReturn

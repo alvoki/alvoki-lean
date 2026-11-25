@@ -259,6 +259,7 @@ import Alvoki.Storage.Disk.NativeClassifiedCheckpointRenameError
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
 import Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
 import Alvoki.Storage.Disk.NativeOpenReadyTrace
+import Alvoki.Storage.Disk.NativeOpenSnapshotTrace
 import Alvoki.Storage.Disk.NativeOpenCacheReferences
 import Alvoki.Storage.Disk.NativeRawOpenAdmission
 import Alvoki.Storage.Disk.NativeRawOpenPrefixReturn
@@ -767,6 +768,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.common
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.executes
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedInstruction.observesSnapshot
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.executesSnapshots
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.RunBinding.completes
 #check_axioms Alvoki.Storage.DiskSession.RunMaintenance.outputAt
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rewritesRunCheckpointAndReopens
