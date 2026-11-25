@@ -1685,18 +1685,24 @@ theorem installsAfterAcquiredRecovery_replays
     {opened : Reopened} {after : CensusOpenState}
     (recovery : reopenWith (prepare directory selection) (stabilize handle) (finish directory) acquired =
       .ok opened (admission.cache, after))
-    {model : Sequential.SnapshotTable UInt64}
-    (pending : PendingClientReplay log reads history)
-    (represented : RepresentsWalHistory history model)
-    (refined : opened.installed.table.Refines model) (bounds : opened.installed.table.RowBounds) :
+    {image : WalSegmentImage} {range : MarkedWalRange}
+    {submitted : List WAL.Write} {base : PackedTable} {first : Nat}
+    (selected : WalSegmentRecovery image after.2.image.directory.active range submitted base first
+      opened.installed.table)
+    (pending : PendingClientReplay log reads (submitted.take range.through)) :
     ∃ session,
       calls.runWithMarked (fun resolved cache before =>
         match reopenAcquiredWith (acquire resolved) (prepare resolved) stabilize (finish resolved) (cache, before) with
         | .ok (opened, _, _) (_, reached) => .ok opened reached
         | .error cause (_, reached) => .error cause reached) =
-        .ok session after ∧ InstalledClientReplay log reads history opened.installed session := by
-  exact ⟨_, installsAfterAcquiredRecovery calls marker acquire prepare stabilize finish acquisition recovery,
-    pending.install rfl represented refined bounds⟩
+        .ok session after ∧ InstalledClientReplay log reads (submitted.take range.through) opened.installed session := by
+  obtain ⟨reference, replayed, retained, acknowledged, bounded, priorReads⟩ := pending
+  have returned := installsAfterAcquiredRecovery calls marker acquire prepare stabilize finish acquisition recovery
+  refine ⟨_, returned, reference, replayed, retained, acknowledged, bounded, priorReads, ?_⟩
+  apply DiskSession.SegmentedSession.guardedAcquireReads rfl
+  intro snapshot floor committed
+  exact selected.acquireReads replayed floor
+    (selected.count ▸ UInt64.le_iff_toNat_le.mp committed)
 
 /-- After marker stabilization, a longer keeper uses the shared native
 replacement schedule once its first directory sync authorizes repair. -/

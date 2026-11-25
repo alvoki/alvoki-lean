@@ -867,6 +867,14 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The acquired-marker client theorem now takes the canonical segmented
+recovery of the exact installed table at the returned directory image.
+It derives the guarded reads directly from that recovery and uses the
+same marker-selected prefix as the pending client replay. The theorem
+no longer needs separately supplied table representation or row-bound
+proofs. Connecting the native retry trace to the selected recovery and
+pending client replay remains open.
+
 The acquired-marker session installer now uses the same client replay
 lemma as the existing cached recovery. Given the selected history and
 its recovered table representation, the exact guarded session returned
