@@ -395,6 +395,7 @@ import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
 import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
 import Alvoki.Storage.Disk.NativeStoppedFirstAppendExitTableOpen
+import Alvoki.Storage.Disk.NativeStoppedAppendFinalizedRetry
 import Alvoki.Storage.Disk.NativeOpenedRestartSessions
 import Alvoki.Storage.Disk.NativeOpenedSnapshotSessions
 import Alvoki.Storage.Disk.NativeFreshOpenedSessions
@@ -2263,6 +2264,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawStoppedFirstAppendExitEffects.stopsAppend
 #check_axioms Alvoki.Storage.DiskSession.RawStoppedFirstAppendExitEffects.releases
 #check_axioms Alvoki.Storage.DiskSession.NativeStoppedFirstAppendExitTableOpen.reaches
+#check_axioms Alvoki.Storage.DiskSession.NativeStoppedAppendFinalizedRetry.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.common
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.executes

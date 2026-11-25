@@ -59,6 +59,15 @@ private def liftAppendCallback (call : EStateM IO.Error heap α) : StoppedAppend
     | .ok value reached => .ok (.ok value) reached
     | .error cause reached => .ok (.error cause) reached
 
+/-- The append stops before any flush or cache update on the raw heap. -/
+def RawStoppedFirstAppendExitEffects.StopsAppend
+    (seen : RawStoppedFirstAppendExitEffects current stop exit view) : Prop :=
+  ∀ (update : Option (FilePath × IO.FS.Handle) → StoppedAppendHeap heap Unit)
+    (flush : IO.FS.Handle → StoppedAppendHeap heap Unit),
+    appendWithActive (fun before => .ok (.ok (view.active before seen.activeRef)) before) update
+      (fun path => liftAppendCallback (seen.rawOpenAppend path)) seen.append flush
+      prepared.keeperPath (WAL.encodeBatch prepared.batch) seen.poisoned = .error stop.logical.appendCall seen.cut
+
 /-- The raw append helper also stops on that same selected handle.
 The cache setter and flush cannot run after the outer stop. -/
 theorem RawStoppedFirstAppendExitEffects.stopsAppend
@@ -173,33 +182,37 @@ structure NativeStoppedFirstAppendExitTableOpen (current : NativeOpenedPosition 
 variable {request : WriteRequest} {input : FilePath}
   {names : heap → FilePath → Option Nat} {bytes : heap → Nat → ByteArray}
 
-private def NativeStoppedFirstAppendExitTableOpen.markedReport
-    (seen : NativeStoppedFirstAppendExitTableOpen current request input view names bytes)
+/-- Reuse the live-marker plan at an admission with the same file
+image and its own exact owner map and descriptor inventory. -/
+def NativeFirstAppendExit.Plan.markedReport (plan : exit.Plan)
+    {inventory : DescriptorInventory} {owners : LockOwners}
+    {vacant : TryLockObserves owners current.current.ready.state.session.directory (.ok true)}
+    (opening : MarkedReadyOpenObservations input current.current.ready.state.session.directory inventory
+      ⟨exit.retry.image, owners⟩ plan.layout current.current.ready.state.writer.published vacant plan.selected)
     (valid : current.current.ready.state.Valid)
-    (pending : PendingClientReplay (current.current.submissions ++ [.uncertainBatch seen.prepared.batch])
-      current.current.ready.reads current.current.ready.state.writer.history)
-    (bounded : ∀ read ∈ current.current.ready.reads, read.BoundedBy current.current.ready.state.writer.history.length) :
+    (pending : PendingClientReplay log reads current.current.ready.state.writer.history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy current.current.ready.state.writer.history.length) :
     MarkedOpenSuccessReports input current.current.ready.state.session.directory current.current.ready.state.writer.history
-      (current.current.submissions ++ [.uncertainBatch seen.prepared.batch]) current.current.ready.reads where
-  inventory := seen.exit.census
-  retry := seen.exit.retry
-  layout := seen.plan.layout
+      log reads where
+  inventory := inventory
+  retry := ⟨exit.retry.image, owners⟩
+  layout := plan.layout
   published := current.current.ready.state.writer.published
   checkpoint := current.current.ready.state.writer.checkpoint
-  selected := seen.plan.selected
-  vacant := seen.exit.vacant
-  opening := seen.reader.opening
-  prepared := seen.plan.recovery.prepared
-  following := seen.reader.opening.reads.walReads.selectedAfterWatermark seen.plan.recovery.offsets seen.plan.recovery.descriptors
-  accepted := (congrArg DirectoryPublication.Bindings.manifest seen.plan.pair).symm ▸ valid.retained.resumed.accepted
+  selected := plan.selected
+  vacant := vacant
+  opening := opening
+  prepared := plan.recovery.prepared
+  following := opening.reads.walReads.selectedAfterWatermark plan.recovery.offsets plan.recovery.descriptors
+  accepted := (congrArg DirectoryPublication.Bindings.manifest plan.pair).symm ▸ valid.retained.resumed.accepted
   ordered := valid.retained.resumed.ordered
   wal := current.current.ready.state.writer.wal
   walLayout := valid.retained.layout
   walValid := valid.retained.valid
   spans := valid.retained.spans
-  active := valid.retained.walPair.trans (congrArg Target.pair seen.plan.recovery.target).symm
-  keeper := seen.plan.recovery.first
-  kept := seen.plan.recovery.kept.trans valid.retained.sealedFiles
+  active := valid.retained.walPair.trans (congrArg Target.pair plan.recovery.target).symm
+  keeper := plan.recovery.first
+  kept := plan.recovery.kept.trans valid.retained.sealedFiles
   pending := pending
   bounded := bounded
 
@@ -222,12 +235,7 @@ structure NativeStoppedFirstAppendExitTableOpen.Returned
   selected : selectAppendHandle (view.active seen.rawExit.poisoned seen.rawExit.activeRef)
     seen.rawExit.rawOpenAppend seen.prepared.keeperPath seen.rawExit.poisoned =
     .ok seen.rawExit.writeHandle seen.rawExit.beforeAppend
-  rawStopped : ∀ (update : Option (FilePath × IO.FS.Handle) → StoppedAppendHeap heap Unit)
-    (flush : IO.FS.Handle → StoppedAppendHeap heap Unit),
-    appendWithActive (fun before => .ok (.ok (view.active before seen.rawExit.activeRef)) before) update
-      (fun path => liftAppendCallback (seen.rawExit.rawOpenAppend path)) seen.rawExit.append flush
-      seen.prepared.keeperPath (WAL.encodeBatch seen.prepared.batch) seen.rawExit.poisoned =
-      .error seen.stop.logical.appendCall seen.rawExit.cut
+  rawStopped : seen.rawExit.StopsAppend
   nativeExit : let process := seen.stop.handle.2.1.reference.process
     seen.rawExit.exitProcess process seen.rawExit.cut = .error process seen.rawExit.afterExit
   released : seen.rawExit.Released
@@ -282,7 +290,8 @@ theorem NativeStoppedFirstAppendExitTableOpen.reaches
   obtain ⟨next, recovered, worker, nextReturned, cache, owner, slot⟩ :=
     current.current.ready.recoversFirstAppendAfterExitFrom seen.exit seen.plan seen.reader
   obtain ⟨valid, history, _⟩ := current.current.ready.readPrefix.refines
-  let marked := seen.markedReport valid (history.symm ▸ pending.replay) (history.symm ▸ pending.bounded)
+  let marked := seen.plan.markedReport (log := current.current.submissions ++ [.uncertainBatch seen.prepared.batch])
+    (reads := current.current.ready.reads) seen.reader.opening valid (history.symm ▸ pending.replay) (history.symm ▸ pending.bounded)
   obtain ⟨measured, installed, cacheOpen, makeCache, cacheAction, cacheSource, ran⟩ :=
     marked.opensHealthyFromAdmission seen.physical.raw seen.physical.seed seen.physical.checkpoint seen.physical.listing
       seen.physical.extents seen.physical.seals seen.physical.keeper seen.physical.sameLookup seen.physical.flat
