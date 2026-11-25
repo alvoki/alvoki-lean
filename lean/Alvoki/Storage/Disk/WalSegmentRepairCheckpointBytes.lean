@@ -304,15 +304,7 @@ def CachedCheckpointRepairEffects.reopen {state : Type} {directory : DiskDirecto
     {image : FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout image history}
     (effects : CachedCheckpointRepairEffects state directory) (reported : CachedRetryReadReports directory layout)
     (readRunPrefix : FilePath → Nat → Except IO.Error ByteArray) : EStateM IO.Error state Reopened :=
-  reopenMarkedBoundedWithCachedExtents directory
-    (fun path => liftExcept (reported.inventory.reports.readOptional path))
-    (fun path => liftExcept (checkpointRunSizeReport reported.inventory.reports path))
-    (fun path size => liftExcept (readRunPrefix path size))
-    (fun path => liftExcept (reported.list path))
-    (fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _))
-    (fun path size => liftExcept (reported.readSeal path size))
-    (fun path size physical => liftExcept (reported.readKeeper path size physical))
-    effects.removeFile effects.write effects.sync effects.renameFile
+  reported.reopen readRunPrefix effects.removeFile effects.write effects.sync effects.renameFile
 
 /-- A cached retry of an already settled pair reads its exact checkpoint
 before repair. Even on a reported repair error, the same physical crash
@@ -526,19 +518,20 @@ theorem CachedRetryReadReports.certifiesAuthorizationFailure
       failure.target = layout.target ∧ failure.attempt.descriptor = reported.inventory.descriptor ∧
       failure.attempt.unlock = unlock ∧ failure.cause = cause ∧ failure.reached = reached ∧
       failure.attempt.recover = effects.reopen reported sizes.readPrefix := by
-  let attempt : CachedOpenAttempt directory before :=
+  let attempt : CachedOpenAttempt directory before := reported.withReaders (m := EStateM IO.Error FileImage)
+    sizes.readPrefix fun readOptional readRunSize readRunPrefix list lstat readSeal readKeeper =>
     { descriptor := reported.inventory.descriptor
       nextRef := nextRef
       acquisition := acquisition
       unlock := unlock
       localUnlock := localUnlock
-      readOptional := fun path => liftExcept (reported.inventory.reports.readOptional path)
-      readRunSize := fun path => liftExcept (checkpointRunSizeReport reported.inventory.reports path)
-      readRunPrefix := fun path size => liftExcept (sizes.readPrefix path size)
-      list := fun path => liftExcept (reported.list path)
-      lstat := fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _)
-      readSeal := fun path size => liftExcept (reported.readSeal path size)
-      readKeeper := fun path size physical => liftExcept (reported.readKeeper path size physical)
+      readOptional := readOptional
+      readRunSize := readRunSize
+      readRunPrefix := readRunPrefix
+      list := list
+      lstat := lstat
+      readSeal := readSeal
+      readKeeper := readKeeper
       removeFile := effects.removeFile
       write := effects.write
       sync := effects.sync

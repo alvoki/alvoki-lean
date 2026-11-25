@@ -7,22 +7,49 @@ open System DiskSession
 open WAL (frameSize)
 open WAL.Boundary (CheckpointRepresentsPrefix)
 
+/-- Interpret the held inventory and exact payload reports as the read-only
+callbacks of the cached worker. Preparation and repair use the same readers. -/
+abbrev CachedRetryReadReports.withReaders {m : Type → Type} [Monad m] [MonadExceptOf IO.Error m]
+    {directory : DiskDirectory} {image : FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout image history} (reported : CachedRetryReadReports directory layout)
+    (readRunPrefix : FilePath → Nat → Except IO.Error ByteArray) {result : Type}
+    (use : (FilePath → m (Option ByteArray)) → (FilePath → m Nat) → (FilePath → Nat → m ByteArray) →
+      (FilePath → m (Array IO.FS.DirEntry)) → (FilePath → m (Except IO.Error IO.FS.Metadata)) →
+      (FilePath → Nat → m ByteArray) → (FilePath → Nat → Nat → m ByteArray) → result) : result :=
+  use (fun path => liftExcept (reported.inventory.reports.readOptional path))
+    (fun path => liftExcept (checkpointRunSizeReport reported.inventory.reports path))
+    (fun path size => liftExcept (readRunPrefix path size))
+    (fun path => liftExcept (reported.list path))
+    (fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _))
+    (fun path size => liftExcept (reported.readSeal path size))
+    (fun path size physical => liftExcept (reported.readKeeper path size physical))
+
 /-- The read-only preparation used by the cached worker. The state can
 carry other reached filesystem observations alongside the WAL image. -/
 def CachedRetryReadReports.prepare {directory : DiskDirectory} {image : FileImage} {history : List WAL.Write}
     {layout : CanonicalKeeperLayout image history} (reported : CachedRetryReadReports directory layout)
     (readRunPrefix : FilePath → Nat → Except IO.Error ByteArray) {state : Type} :
     EStateM IO.Error state (Plan × Reopened × Nat) :=
-  prepareBoundedMarkedFromReaders directory
-    (readIntegrityCheckpointSized directory (liftExcept (reported.inventory.reports.readOptional (directory.file .manifest)))
-      (fun path => liftExcept (checkpointRunSizeReport reported.inventory.reports path))
-      (fun path size => liftExcept (readRunPrefix path size)))
-    (fun path => liftExcept (reported.inventory.reports.readOptional path))
-    (fun watermark length => readSelectedWithCachedExtents directory watermark length
-      (fun path => liftExcept (reported.list path))
-      (fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _))
-      (fun path size => liftExcept (reported.readSeal path size))
-      (fun path size physical => liftExcept (reported.readKeeper path size physical)))
+  reported.withReaders (m := EStateM IO.Error state) readRunPrefix
+    fun optional runSize runPrefix list lstat readSeal readKeeper =>
+      prepareBoundedMarkedFromReaders directory
+        (readIntegrityCheckpointSized directory (optional (directory.file .manifest)) runSize runPrefix)
+        optional
+        (fun watermark length => readSelectedWithCachedExtents directory watermark length list lstat readSeal readKeeper)
+
+/-- Run the cached marked worker using the same reported readers as preparation. -/
+abbrev CachedRetryReadReports.reopen {state : Type} {directory : DiskDirectory} {image : FileImage}
+    {history : List WAL.Write} {layout : CanonicalKeeperLayout image history}
+    (reported : CachedRetryReadReports directory layout)
+    (readRunPrefix : FilePath → Nat → Except IO.Error ByteArray)
+    (removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error state Unit)
+    (sync : Array FilePath → EStateM IO.Error state Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error state Unit) : EStateM IO.Error state Reopened :=
+  reported.withReaders (m := EStateM IO.Error state) readRunPrefix
+    fun optional runSize runPrefix list lstat readSeal readKeeper =>
+      reopenMarkedBoundedWithCachedExtents directory optional runSize runPrefix list lstat readSeal readKeeper
+        removeFile write sync renameFile
 
 /-- Exact held reports yield the bounded plan and the table replayed from
 the selected checkpoint. Preparation leaves the reached state unchanged. -/
@@ -79,7 +106,8 @@ theorem CachedRetryReadReports.prepares {state : Type} {directory : DiskDirector
   refine ⟨opened, checkpoint, model, ?_, selected, reference, rfl, layout.through ▸ absolute, rfl,
     committed, rows, refines, represents, fresh⟩
   dsimp only [files] at tableSeen keeperSeen
-  simp only [CachedRetryReadReports.prepare, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind,
+  simp only [CachedRetryReadReports.prepare, CachedRetryReadReports.withReaders, prepareBoundedMarkedFromReaders,
+    Bind.bind, EStateM.bind,
     checkpointSeen, markerSeen, countSeen, clock, walSeen, tableSeen, keeperSeen, counted, Pure.pure, EStateM.pure]
   rfl
 
@@ -112,15 +140,7 @@ theorem CachedRetryReadReports.completes {directory : DiskDirectory} {retry : Fi
       before.effect layout.target action = some next →
       performPaths directory layout.plan removeFile throw write sync renameFile action before = .ok () next) :
     ∃ opened after checkpoint model, after.Ready layout.target ∧ EffectTrace layout.target retry after ∧
-      reopenMarkedBoundedWithCachedExtents directory
-        (fun path => liftExcept (reported.inventory.reports.readOptional path))
-        (fun path => liftExcept (checkpointRunSizeReport reported.inventory.reports path))
-        (fun path size => liftExcept (sizes.readPrefix path size))
-        (fun path => liftExcept (reported.list path))
-        (fun path => liftExcept (.ok (reported.inventory.reports.lstat path) : Except IO.Error _))
-        (fun path size => liftExcept (reported.readSeal path size))
-        (fun path size physical => liftExcept (reported.readKeeper path size physical))
-        removeFile write sync renameFile retry = .ok opened after ∧
+      reported.reopen sizes.readPrefix removeFile write sync renameFile retry = .ok opened after ∧
       SelectedIntegrityCheckpoint published.durable retry.directory.active.manifest checkpoint ∧
       recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok opened.table ∧
       opened.generation = (checkpoint.getD (.empty, 0)).2 ∧
