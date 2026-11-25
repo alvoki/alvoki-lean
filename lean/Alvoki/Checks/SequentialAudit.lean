@@ -1945,6 +1945,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.stoppedBindings
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.projectsStoppedInodes
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.stoppedEffects
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.continuesPrefix
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.crashSurvivor
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.exits
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.settlementCustody

@@ -16,6 +16,18 @@ variable {directory : DiskDirectory} {before : LockedFileState FileImage} {histo
 
 namespace ListedLongKeeperDirectoryIssue
 
+/-- Opening with the admitted inputs reaches the actual grouped callback
+on the renamed image. The continuation describes only what a return from
+that callback would do. -/
+abbrev AtAdmission {input : FilePath} (issue : ListedLongKeeperDirectoryIssue rename)
+    (admission : OpenAdmissionReports input directory operations.slot) : Prop :=
+  ∃ opened : Reopened,
+    operations.runWithAdmission admission =
+      runOpenWithInstallation directory operations.slot.description operations.nextRef (.ok true) operations.unlock
+        (fun _ => (do
+          operations.sync operations.cache #[directory.path]
+          pure opened : EStateM IO.Error FileImage Reopened) issue.files.image) before
+
 /-- The admitted marked opener reaches this final barrier after the exact
 checkpoint and keeper reads. If the issued callback returns, this is its
 continuation through the parent open schedule. -/
@@ -27,12 +39,7 @@ theorem admittedAtIssue {input : FilePath} (issue : ListedLongKeeperDirectoryIss
     (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
       before.image.directory.active.manifest)
     (ordered : WAL.OrdinalsFrom 1 history) :
-    ∃ opened : Reopened,
-      operations.runWithAdmission admission =
-        runOpenWithInstallation directory operations.slot.description operations.nextRef (.ok true) operations.unlock
-          (fun _ => (do
-            operations.sync operations.cache #[directory.path]
-            pure opened : EStateM IO.Error FileImage Reopened) issue.files.image) before := by
+    issue.AtAdmission admission := by
   let attempt := operations.cachedAttempt localUnlock
   obtain ⟨opened, read⟩ := metadata.cachedAttemptPrepared localUnlock prepared.newer following accepted ordered
   change attempt.prepare before.image = _ at read
@@ -99,6 +106,33 @@ theorem stoppedEffects (issue : ListedLongKeeperDirectoryIssue rename) (effectiv
   | false => exact .replace pruned absent (cut := 3) rfl
   | true => exact .replace pruned absent (cut := 4) rfl
 
+/-- An observed effect at the admitted callback extends the existing retry
+prefix and keeps its initial files. The opener still owns the lock at this
+point. A later exit or power loss starts from this exact stopped image. -/
+theorem continuesPrefix {input : FilePath} {keeper : Nat} {initial : LockedFileState FileImage}
+    (issue : ListedLongKeeperDirectoryIssue rename)
+    (prior : ReportedReopenPrefix directory keeper initial before) (first : layout.target.first = keeper)
+    (admission : OpenAdmissionReports input directory operations.slot) (metadata : HeldMarkedMetadata held)
+    (localUnlock : operations.unlock.LocalFlock) (prepared : Prepared before.image layout.target layout.plan)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      before.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) (effective : Bool) :
+    issue.AtAdmission admission ∧ ReportedReopenPrefix directory keeper initial (issue.stopped effective) := by
+  refine ⟨issue.admittedAtIssue admission metadata localUnlock prepared following accepted ordered, ?_⟩
+  have acquired : TryLockObserves before.owners directory (.ok true) :=
+    operations.acquired ▸ operations.acquisition
+  have owner : (issue.stopped effective).owners =
+      before.owners.set (directory.file .lock) (some operations.slot.description) := by
+    cases effective <;> rfl
+  have interrupted := ReportedReopenPrefix.repairInterrupted prior operations.slot.description
+    acquired prepared first (issue.stoppedEffects effective)
+  cases stopped : issue.stopped effective with
+  | mk image owners =>
+    simp only [stopped] at owner interrupted
+    rwa [owner]
+
 /-- A later power loss selects only the reported namespace and payload
 possibilities after this effect. The same marker and sealed WAL survive
 and each selected keeper accepts the same prefix. -/
@@ -130,10 +164,11 @@ def afterExit (issue : ListedLongKeeperDirectoryIssue rename) (effective : Bool)
     LockedFileState FileImage :=
   issue.lockReferences.afterFileDrops drops directory (issue.stopped effective)
 
-/-- Process exit ends the issuing process's slot, while aliases from the
-same census may keep the lock. The retry prefix begins at the exact files
-left by the barrier effect. No open result or local unlock is reported. -/
-theorem exits (issue : ListedLongKeeperDirectoryIssue rename) (effective : Bool) (drops : List LockReferenceDrop)
+/-- Extend the known prefix with the issuing process's exit. The observed
+exit removes its slots and a surviving alias can retain the lock. -/
+theorem exits {keeper : Nat} {initial : LockedFileState FileImage}
+    (issue : ListedLongKeeperDirectoryIssue rename) (effective : Bool)
+    (prior : ReportedReopenPrefix directory keeper initial (issue.stopped effective)) (drops : List LockReferenceDrop)
     (sameProcess : held.lifetime.directorySlot.reference.process = operations.slot.reference.process)
     (exited : LockReferenceDrop.exited held.lifetime.directorySlot.reference.process ∈ drops)
     (prepared : Prepared before.image layout.target layout.plan) :
@@ -142,7 +177,7 @@ theorem exits (issue : ListedLongKeeperDirectoryIssue rename) (effective : Bool)
     beforeDrops.owners.Owns directory operations.slot.description ∧
       operations.slot ∉ (issue.inventory.afterDrops drops).slots ∧
       held.lifetime.directorySlot ∉ (issue.inventory.afterDrops drops).slots ∧
-      ReportedReopenPrefix directory layout.keeper.first beforeDrops reached ∧
+      ReportedReopenPrefix directory keeper initial reached ∧
       (TryLockObserves reached.owners directory (.ok true) ↔
         (issue.inventory.afterDrops drops).references operations.slot.description = []) ∧
       reached.owners (directory.file .lock) =
@@ -177,7 +212,7 @@ theorem exits (issue : ListedLongKeeperDirectoryIssue rename) (effective : Bool)
     · rw [issue.lockReferences.afterFileDrops_surviving last]
       simpa only [ite_eq_right last, LockOwners.Owns] using owned
   have effects := issue.stoppedEffects effective
-  exact ⟨owned, gone _ sameProcess.symm, gone _ rfl, .referenceDrops .start issue.lockReferences drops, admitted, owner, rfl,
+  exact ⟨owned, gone _ sameProcess.symm, gone _ rfl, .referenceDrops prior issue.lockReferences drops, admitted, owner, rfl,
     effects.valid prepared.pair prepared.keeperPrefix prepared.newer, effects.keepsSealed⟩
 
 end ListedLongKeeperDirectoryIssue

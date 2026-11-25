@@ -32,9 +32,9 @@ private theorem samePreparedTarget {image : FileImage} {left right : Target} {a 
   rfl
 
 /-- An observed prefix of marked recovery. The recorded canonical keeper is
-part of the reached read plan. Each repair failure supplies the local
-preparation and the reached effects of that call. Membership of the chosen
-target in the batch's old-or-whole alternatives is proved below. -/
+part of the reached read plan. A failed or interrupted repair supplies the
+local preparation and its reached effects. The refinement derives the chosen
+target from the preceding trace. -/
 inductive ReportedReopenPrefix (directory : DiskDirectory) (keeper : Nat)
     (initial : LockedFileState FileImage) : LockedFileState FileImage → Prop where
   | start : ReportedReopenPrefix directory keeper initial initial
@@ -57,6 +57,13 @@ inductive ReportedReopenPrefix (directory : DiskDirectory) (keeper : Nat)
         plan.keeperBytes.size attempt.removeFile attempt.write attempt.sync attempt.renameFile before.image = .error cause reached)
       (effects : EffectTrace target before.image reached) :
       ReportedReopenPrefix directory keeper initial (attempt.cleanupError cause reached).2
+  | repairInterrupted {before target plan reached}
+      (prior : ReportedReopenPrefix directory keeper initial before)
+      (description : Nat) (acquired : TryLockObserves before.owners directory (.ok true))
+      (prepared : Prepared before.image target plan) (first : target.first = keeper)
+      (effects : EffectTrace target before.image reached) :
+      ReportedReopenPrefix directory keeper initial
+        ⟨reached, before.owners.set (directory.file .lock) (some description)⟩
   | referenceDrops {before description} (prior : ReportedReopenPrefix directory keeper initial before)
       (references : HeldLockReferences description) (drops : List LockReferenceDrop) :
       ReportedReopenPrefix directory keeper initial (references.afterFileDrops drops directory before)
@@ -67,7 +74,7 @@ inductive ReportedReopenPrefix (directory : DiskDirectory) (keeper : Nat)
         ⟨before.image.crash pair bytes names, before.owners.set (directory.file .lock) none⟩
 
 /-- If each admitted prefix has an exact preparation at the canonical
-keeper, all reached failures and crashes extend the admitted retry trace. -/
+keeper, all reached failures, interruptions and crashes extend the retry trace. -/
 theorem ReportedReopenPrefix.refines {directory keeper initial after} {admits : Target → Prop}
     (reported : ReportedReopenPrefix directory keeper initial after)
     (selects : ∀ {current}, BoundedReopenTrace directory admits initial current →
@@ -85,6 +92,10 @@ theorem ReportedReopenPrefix.refines {directory keeper initial after} {admits : 
     obtain ⟨chosen, _, allowed, chosenFirst, earlier⟩ := selects ih
     have same := samePreparedTarget earlier prepared (chosenFirst.trans first.symm)
     exact .cachedRepairFailed ih attempt (same ▸ allowed) prepared effects (attempt.run_repairError preparedRead failed)
+  | repairInterrupted _ description acquired prepared first effects ih =>
+    obtain ⟨chosen, _, allowed, chosenFirst, earlier⟩ := selects ih
+    have same := samePreparedTarget earlier prepared (chosenFirst.trans first.symm)
+    exact .repairInterrupted ih description acquired (same ▸ allowed) prepared effects
   | referenceDrops _ references drops ih => exact .referenceDrops ih references drops
   | powerLoss _ metadata payload later ih => exact .powerLoss ih metadata payload later
 

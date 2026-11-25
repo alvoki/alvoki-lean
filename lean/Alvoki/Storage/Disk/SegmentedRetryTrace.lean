@@ -41,7 +41,7 @@ inductive ReopenLineage (source : FileImage) (admits : Target → Prop) : FileIm
       (canonical : admits target) (prepared : Prepared start target plan)
       (trace : EffectTrace target start current) : ReopenLineage source admits current
 
-theorem ReopenLineage.afterFailure {source current after : FileImage} {admits : Target → Prop}
+theorem ReopenLineage.afterRepairEffects {source current after : FileImage} {admits : Target → Prop}
     (lineage : ReopenLineage source admits current)
     (unique : ∀ {left right}, admits left → admits right → left.pair = right.pair → left = right)
     (effects : after = current ∨ ∃ target plan, admits target ∧ Prepared current target plan ∧
@@ -236,9 +236,9 @@ theorem run_error (failure : CachedOpenPrefixFailure files directory before)
 
 end CachedOpenPrefixFailure
 
-/-- A finite retry can cross failed opens, observed drops of lock references,
-and power losses. Failed opens record their exact returned image and owner.
-The callback contract determines whether the directory barrier took effect. -/
+/-- A finite retry can cross failed opens, interrupted repairs, drops of
+lock references and power losses. An interruption records the effects at
+the observation point while the opener still owns the lock. -/
 inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Prop)
     (initial : LockedFileState FileImage) : LockedFileState FileImage → Prop where
   | empty : BoundedReopenTrace directory admits initial initial
@@ -260,6 +260,12 @@ inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Pr
       (prepared : Prepared before.image target plan) (effects : EffectTrace target before.image reached)
       (ran : attempt.run = .error (attempt.cleanupError cause reached).1 (attempt.cleanupError cause reached).2) :
       BoundedReopenTrace directory admits initial (attempt.cleanupError cause reached).2
+  | repairInterrupted {before target plan reached} (prior : BoundedReopenTrace directory admits initial before)
+      (description : Nat) (acquired : TryLockObserves before.owners directory (.ok true))
+      (admitted : admits target) (prepared : Prepared before.image target plan)
+      (effects : EffectTrace target before.image reached) :
+      BoundedReopenTrace directory admits initial
+        ⟨reached, before.owners.set (directory.file .lock) (some description)⟩
   | referenceDrops {before description} (prior : BoundedReopenTrace directory admits initial before)
       (references : HeldLockReferences description) (drops : List LockReferenceDrop) :
       BoundedReopenTrace directory admits initial (references.afterFileDrops drops directory before)
@@ -332,6 +338,8 @@ theorem BoundedReopenTrace.trans {directory admits initial middle after}
   | cachedAuthorizationFailed _ failure admitted ih => exact .cachedAuthorizationFailed ih failure admitted
   | cachedRepairFailed _ attempt admitted prepared effects ran ih =>
     exact .cachedRepairFailed ih attempt admitted prepared effects ran
+  | repairInterrupted _ description acquired admitted prepared effects ih =>
+    exact .repairInterrupted ih description acquired admitted prepared effects
   | referenceDrops _ references drops ih => exact .referenceDrops ih references drops
   | powerLoss _ metadata keeper names ih => exact .powerLoss ih metadata keeper names
 
@@ -345,16 +353,18 @@ theorem BoundedReopenTrace.continuesLineage {directory : DiskDirectory} {admits 
   induction ran with
   | empty => exact prior
   | failed _ attempt acquisition _ reports ran ih =>
-    exact ih.afterFailure unique (attempt.errorFiles acquisition reports ran)
+    exact ih.afterRepairEffects unique (attempt.errorFiles acquisition reports ran)
   | cachedPrefixFailed _ failure unchanged ih =>
     change ReopenLineage source admits failure.reached
     rw [unchanged]
     exact ih
   | cachedRejected _ _ ih => exact ih
-  | cachedAuthorizationFailed _ failure admitted ih => exact ih.afterFailure unique (failure.errorFiles admitted)
+  | cachedAuthorizationFailed _ failure admitted ih => exact ih.afterRepairEffects unique (failure.errorFiles admitted)
   | cachedRepairFailed _ attempt admitted prepared effects _ ih =>
-    apply ih.afterFailure unique
+    apply ih.afterRepairEffects unique
     exact Or.inr ⟨_, _, admitted, prepared, by simpa only [CachedOpenAttempt.cleanupError_keepsFiles] using effects⟩
+  | repairInterrupted _ _ _ admitted prepared effects ih =>
+    exact ih.afterRepairEffects unique (.inr ⟨_, _, admitted, prepared, effects⟩)
   | referenceDrops _ _ _ ih => exact ih
   | powerLoss _ metadata keeper later ih => exact ih.afterPowerLoss metadata keeper later
 
