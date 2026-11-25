@@ -10,6 +10,20 @@ def SegmentedSession.runSnapshotRead (sameSession : Bool) (read : PackedTable �
     EStateM IO.Error SegmentedSession (Option α) := fun session =>
   readSnapshotWith (m := EStateM IO.Error SegmentedSession) session.phase.installed (pure sameSession) read session
 
+/-- A phase error returns the reached session unchanged before the handle check. -/
+theorem SegmentedSession.runSnapshotRead_closed {session : SegmentedSession} (closed : session.phase = .closed)
+    (sameSession : Bool) (read : PackedTable → Option α) :
+    session.runSnapshotRead sameSession read = .error (IO.userError "database is closed") session := by
+  rw [SegmentedSession.runSnapshotRead, closed]
+  rfl
+
+theorem SegmentedSession.runSnapshotRead_poisoned {session : SegmentedSession} (poisoned : session.phase = .poisoned)
+    (sameSession : Bool) (read : PackedTable → Option α) :
+    session.runSnapshotRead sameSession read =
+      .error (IO.userError "publication failed; reopen the database") session := by
+  rw [SegmentedSession.runSnapshotRead, poisoned]
+  rfl
+
 /-- A local read at an active intermediate pin agrees with the same
 snapshot in the final abstract replay. The suffix starts at the exact
 ready writer that served the read under the observed lock description.

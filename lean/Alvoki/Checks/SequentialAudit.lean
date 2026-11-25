@@ -1022,6 +1022,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.guardedReadsBeforeSuffix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.intermediateSnapshotRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.append
+#check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runSnapshotRead_closed
+#check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runSnapshotRead_poisoned
+#check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.readResult
+#check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.lookupDenied_iff
+#check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.rangeDenied_iff
 #check_axioms Alvoki.Storage.DiskSession.RecordedSnapshotRead.Observed.agreesAfterSuffix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.writes
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.responses

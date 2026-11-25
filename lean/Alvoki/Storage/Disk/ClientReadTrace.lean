@@ -2,7 +2,7 @@ import Alvoki.Storage.Disk.MixedTraceSnapshotReads
 
 namespace Alvoki.Storage.DiskSession
 
-open Sequential (SnapshotPin SnapshotTable)
+open Sequential (SnapshotHandle SnapshotPin SnapshotTable)
 open WalSegmentRepair
 open scoped List
 
@@ -38,30 +38,87 @@ theorem SegmentedBatchDatabaseTrace.append
   | collectRunsPowerLoss enabled _ loss installed ih => exact .collectRunsPowerLoss enabled ih loss installed
   | rotationPowerLossAdmitted _ cut installed ih => exact .rotationPowerLossAdmitted ih cut installed
 
-/-- A successful read response carries the active snapshot sequence at
-the time of the operation. Point absence is a value of a successful read. -/
+/-- The token identities and reached registry entry for the supplied handle.
+A foreign token cannot use a coinciding local handle number. -/
+structure SnapshotReadGuard where
+  issuer : Nat
+  current : Nat
+  handle : SnapshotHandle
+  registered : Option SnapshotPin
+
+def SnapshotReadGuard.rejects (guard : SnapshotReadGuard) : Prop :=
+  guard.issuer ≠ guard.current ∨ (guard.issuer = guard.current ∧ guard.registered = none)
+
+/-- Successful responses use the pin's sequence at the time of the read.
+Denied responses retain the reached guard evidence for the requested handle. -/
 inductive RecordedSnapshotRead where
   | lookup (sequence key : UInt64) (value : Option UInt64)
   | range (sequence lo hi : UInt64) (entries : List (Compaction.Model.Entry (Option UInt64)))
+  | lookupDenied (key : UInt64) (guard : SnapshotReadGuard)
+  | rangeDenied (lo hi : UInt64) (guard : SnapshotReadGuard)
 
 def RecordedSnapshotRead.agrees (read : RecordedSnapshotRead) (reference : SnapshotTable UInt64) : Prop :=
   match read with
   | .lookup sequence key value => value = reference.table.lookup key sequence
   | .range sequence lo hi entries => entries = reference.table.range lo hi sequence
+  | .lookupDenied _ guard | .rangeDenied _ _ guard => guard.rejects
 
-/-- The point and range guards use the reported ready phase and pointer
-comparison of a local active pin at this writer. -/
-structure ObservedLocalPin (directory : DiskDirectory) (descriptor : Nat) (writer : SegmentedWriterState) where
+/-- The ready read schedule consumes the observed phase and pointer
+comparison at its reached writer. -/
+structure ObservedSnapshotReader (directory : DiskDirectory) (descriptor : Nat) (writer : SegmentedWriterState) where
   session : SegmentedSession
   sameDirectory : session.directory = directory
   sameDescriptor : session.descriptor = descriptor
   phase : session.phase = .ready writer.installed
-  pin : SnapshotPin
-  active : pin ∈ writer.installed.table.pins.active
   issuer : Nat
-  localToken : issuer = session.sessionRef
   sameSession : Bool
   compared : sameSession = decide (issuer = session.sessionRef)
+
+def ObservedSnapshotReader.guard (observed : ObservedSnapshotReader directory descriptor writer)
+    (handle : SnapshotHandle) : SnapshotReadGuard :=
+  ⟨observed.issuer, observed.session.sessionRef, handle, writer.installed.table.pins.find handle⟩
+
+theorem ObservedSnapshotReader.readResult (observed : ObservedSnapshotReader directory descriptor writer)
+    (read : PackedTable → Option α) :
+    observed.session.runSnapshotRead observed.sameSession read =
+      .ok (if observed.issuer = observed.session.sessionRef then read writer.installed.table else none)
+        observed.session := by
+  rw [SegmentedSession.runSnapshotRead, observed.phase, observed.compared]
+  by_cases localToken : observed.issuer = observed.session.sessionRef <;>
+    simp [localToken, readSnapshotWith, withLocalHandle, Phase.installed, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
+private theorem ObservedSnapshotReader.readNone_iff (observed : ObservedSnapshotReader directory descriptor writer)
+    (handle : SnapshotHandle) (read : PackedTable → Option α) (readAt : SnapshotPin → α)
+    (fromRegistry : read writer.installed.table = (writer.installed.table.pins.find handle).map readAt) :
+    observed.session.runSnapshotRead observed.sameSession read = .ok none observed.session ↔
+      (observed.guard handle).rejects := by
+  rw [observed.readResult, fromRegistry]
+  unfold ObservedSnapshotReader.guard SnapshotReadGuard.rejects
+  by_cases localToken : observed.issuer = observed.session.sessionRef
+  · cases writer.installed.table.pins.find handle <;> simp [localToken]
+  · simp [localToken]
+
+/-- A ready point response has outer absence precisely when the guard
+rejects the token or the local pin is inactive. -/
+theorem ObservedSnapshotReader.lookupDenied_iff (observed : ObservedSnapshotReader directory descriptor writer)
+    (handle : SnapshotHandle) (key : UInt64) :
+    observed.session.runSnapshotRead observed.sameSession (fun table => table.lookup handle key) =
+      .ok none observed.session ↔ (observed.guard handle).rejects :=
+  observed.readNone_iff handle _ (fun pin => writer.installed.table.lookupAt key pin.sequence) rfl
+
+theorem ObservedSnapshotReader.rangeDenied_iff (observed : ObservedSnapshotReader directory descriptor writer)
+    (handle : SnapshotHandle) (lo hi : UInt64) :
+    observed.session.runSnapshotRead observed.sameSession (fun table => table.range handle lo hi) =
+      .ok none observed.session ↔ (observed.guard handle).rejects :=
+  observed.readNone_iff handle _ (fun pin => writer.installed.table.rangeAt lo hi pin.sequence) rfl
+
+/-- A successfully guarded pin is active at the reached writer and its
+issuing token identifies that same session. -/
+structure ObservedLocalPin (directory : DiskDirectory) (descriptor : Nat) (writer : SegmentedWriterState)
+    extends ObservedSnapshotReader directory descriptor writer where
+  pin : SnapshotPin
+  active : pin ∈ writer.installed.table.pins.active
+  localToken : issuer = session.sessionRef
 
 inductive RecordedSnapshotRead.Observed (directory : DiskDirectory) (descriptor : Nat)
     (writer : SegmentedWriterState) : RecordedSnapshotRead → Prop where
@@ -73,6 +130,14 @@ inductive RecordedSnapshotRead.Observed (directory : DiskDirectory) (descriptor 
       (returned : pin.session.runSnapshotRead pin.sameSession (fun table => table.range pin.pin.handle lo hi) =
         .ok (some entries) pin.session) :
       Observed directory descriptor writer (.range pin.pin.sequence lo hi entries)
+  | lookupDenied (reader : ObservedSnapshotReader directory descriptor writer) (handle : SnapshotHandle)
+      (returned : reader.session.runSnapshotRead reader.sameSession (fun table => table.lookup handle key) =
+        .ok none reader.session) :
+      Observed directory descriptor writer (.lookupDenied key (reader.guard handle))
+  | rangeDenied (reader : ObservedSnapshotReader directory descriptor writer) (handle : SnapshotHandle)
+      (returned : reader.session.runSnapshotRead reader.sameSession (fun table => table.range handle lo hi) =
+        .ok none reader.session) :
+      Observed directory descriptor writer (.rangeDenied lo hi (reader.guard handle))
 
 private theorem ObservedLocalPin.responsesAfterSuffix
     (observed : ObservedLocalPin directory descriptor before)
@@ -107,6 +172,10 @@ theorem RecordedSnapshotRead.Observed.agreesAfterSuffix {read : RecordedSnapshot
     change _ = reference.table.range _ _ _
     exact Option.some.inj (EStateM.Result.ok.inj
       (returned.symm.trans ((pin.responsesAfterSuffix suffix ready replay).2 _ _))).1
+  | lookupDenied reader handle returned =>
+    exact (reader.lookupDenied_iff handle _).mp returned
+  | rangeDenied reader handle returned =>
+    exact (reader.rangeDenied_iff handle _ _).mp returned
 
 /-- Interleave ordered read responses with admitted write and recovery
 stretches. A read uses the reached writer and leaves that writer in place. -/
@@ -148,8 +217,8 @@ theorem SegmentedClientReadTrace.responses
       exact observed.agreesAfterSuffix suffix (prior.writes.preservesRetained initialReady).1 replayed
 
 /-- From installed bootstrap, one replay includes every acknowledged
-group in order and only submitted writes. That same replay explains
-every recorded successful point and range response. -/
+group in order and only submitted writes. The replay explains successful
+reads, and the reached token and registry evidence explains denied reads. -/
 theorem SegmentedClientReadTrace.keyValueRefinement
     {first : LockedFileState WalSegmentRotation.State} (bootstrap : BootstrapReady first.image)
     (held : first.owners.Owns directory initialDescriptor)
