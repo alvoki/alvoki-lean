@@ -186,6 +186,7 @@ import Alvoki.Storage.Disk.MixedTraceSnapshotReads
 import Alvoki.Storage.Disk.ClientReadTrace
 import Alvoki.Storage.Disk.ClientCachedClose
 import Alvoki.Storage.Disk.ClientWriteTrace
+import Alvoki.Storage.Disk.BatchGroupedWriteError
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
 import Alvoki.Storage.Disk.CheckpointClientTrace
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
@@ -1201,6 +1202,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runBatchWrite_empty
 #check_axioms Alvoki.Storage.DiskSession.ObservedBatchWrite.acknowledges
 #check_axioms Alvoki.Storage.DiskSession.runBatchWrite_rejected
+#check_axioms Alvoki.Storage.DiskSession.runBatchWrite_commitUnknown
 #check_axioms Alvoki.Storage.DiskSession.ObservedBatchFailure.commitUnknown
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.acknowledgeObservedBatch
 #check_axioms Alvoki.Storage.DiskSession.BatchCommitReports.run
@@ -1255,6 +1257,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BatchPreflightRejection.run
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runReported_eq_batch
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.ReturnedReports.refinesClient
+#check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.issuingHandles
+#check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.returnedReports
+#check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.refinesClient
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReturnedWrite
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.responses
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.keyValueRefinement
@@ -2001,6 +2006,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.WriteEffects.reachedWriteGroup
 #check_axioms Alvoki.Storage.SyncHandleRouting.groupedWrite_effects
 #check_axioms Alvoki.Storage.DiskSession.ReachedWriteGroup.marker
+#check_axioms Alvoki.Storage.DiskSession.ReachedWriteGroup.projected
 #check_axioms Alvoki.Storage.DiskSession.AppendCommitReports.ofReachedWriteGroup
 #check_axioms Alvoki.Storage.DiskTable.retainRunVersions_fileEffects
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.afterRunRetention

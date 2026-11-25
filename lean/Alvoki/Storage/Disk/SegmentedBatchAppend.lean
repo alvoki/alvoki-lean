@@ -284,7 +284,9 @@ private theorem runBatchWrite_acknowledges {image : Type} {directory : DiskDirec
     publishPreparedWrite, publishPrepared, modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet,
     Pure.pure, Except.pure, EStateM.pure, committed]
 
-private theorem runBatchWrite_commitUnknown {image : Type} {directory : DiskDirectory}
+/-- After checked preflight, a returned commit error fixes the exact
+poisoned phase, image and original error of the batch schedule. -/
+theorem runBatchWrite_commitUnknown {image : Type} {directory : DiskDirectory}
     {before : LockedFileState image} {reached : image} {installed : Installed}
     (guard : BatchActiveGuard directory installed)
     {rows : List (UInt64 × Option UInt64)} (nonempty : rows ≠ [])

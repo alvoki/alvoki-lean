@@ -54,6 +54,24 @@ def ReachedWriteGroup.effects {handle directory first bytes before perform}
   let wal := if observed.keeper.effective then observed.wal else .incomplete initial.appendCrashTails
   { initial with sync := writeGroupOutcome keeper staged wal observed.staged.effective }
 
+/-- The same two observed file syncs refine the grouped callback for any
+append whose reached crash tails and staged marker match these inputs. -/
+theorem ReachedWriteGroup.projected {handle directory first bytes before perform}
+    (observed : ReachedWriteGroup (handle := handle) directory first bytes before perform)
+    (initial : WriteEffects)
+    (crashTails : before.crashTails = ByteArray.empty :: initial.appendCrashTails)
+    (scratch : before.marker.staged = some (bytes, false)) :
+    let result := SyncPathGroup.run (sync directory.path observed.openRead observed.fsync)
+      #[directory.file (.walSegment first), directory.file .stagedWalBoundary] (observed.cache, before)
+    (reachedState result).1 = observed.cache.consume (directory.file .stagedWalBoundary) ∧
+      projectWriteGroup result = (observed.effects initial).markerStep bytes .syncStaged before := by
+  exact (groupedWrite_effects directory.path (directory.file (.walSegment first))
+    (directory.file .stagedWalBoundary) observed.cache before (observed.effects initial) bytes observed.openRead
+    observed.fsync observed.description observed.inode observed.bindings observed.keeperNotDirectory
+    observed.stagedNotDirectory observed.keeperMiss observed.active observed.pending observed.owned
+    observed.distinct initial.appendCrashTails observed.wal crashTails scratch observed.stableStage
+    observed.keeper observed.complete observed.staged rfl).2.2.2
+
 /-- Report the modeled marker action directly from the actual grouped
 observations. Only the preceding append and stage supply the input file
 image. The group classification follows from its two syscall outcomes. -/
@@ -66,13 +84,8 @@ theorem ReachedWriteGroup.marker {handle directory first newBytes before perform
     forgetError (performMarkerAt directory first newBytes write perform rename .syncStaged) before =
       (observed.effects initial).markerStep (WAL.Boundary.encode newBytes.toUInt64) .syncStaged before := by
   obtain ⟨crashTails, scratch⟩ := initial.reachedWriteGroup event _ appendedReport stagedReport
-  have grouped := groupedWrite_effects directory.path (directory.file (.walSegment first))
-    (directory.file .stagedWalBoundary) observed.cache before (observed.effects initial) _ observed.openRead
-    observed.fsync observed.description observed.inode observed.bindings observed.keeperNotDirectory
-    observed.stagedNotDirectory observed.keeperMiss observed.active observed.pending observed.owned
-    observed.distinct initial.appendCrashTails observed.wal crashTails scratch observed.stableStage
-    observed.keeper observed.complete observed.staged rfl
-  refine Eq.trans ?_ grouped.2.2.2.2
+  have grouped := observed.projected initial crashTails scratch
+  refine Eq.trans ?_ grouped.2
   change forgetError (perform #[directory.file (.walSegment first), directory.file .stagedWalBoundary]) before = _
   unfold forgetError
   rw [observed.execution]
