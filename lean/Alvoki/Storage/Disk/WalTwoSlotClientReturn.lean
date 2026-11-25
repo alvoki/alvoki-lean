@@ -486,6 +486,29 @@ theorem appendThenSync_survivor
   exact routedWalSync_survivor notDirectory rfl activeOwned live lookup (syncEffect synced syncReturned)
     binding survived
 
+/-- Interpret the successful positional write and sync on the single
+handle selected by the publication schedule. The sync report is
+indexed by that handle and the image reached by the write. -/
+theorem writeSlotThenSync_survivor
+    (handle : KeeperDescriptorIdentity) (next : Selection)
+    (write : KeeperDescriptorIdentity → UInt64 → ByteArray → EStateM IO.Error WalInodeImage Unit)
+    (sync : KeeperDescriptorIdentity → EStateM IO.Error WalInodeImage Unit)
+    {before written durable : WalInodeImage}
+    (wrote : write handle (next.slot * stride).toUInt64 next.encode before = .ok () written)
+    (returned : ((write handle (next.slot * stride).toUInt64 next.encode >>= fun _ => sync handle)
+      before) = .ok () durable)
+    (syncEffect : sync handle written = .ok () durable →
+      FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+        handle written (fun inode files => files.completeFileSync inode) (.ok () durable))
+    (current : handle.inode = written.active)
+    (binding : ∀ inode ∈ written.crashBindings, inode = handle.inode)
+    {bytes : ByteArray} (survived : ∃ inode ∈ durable.crashBindings, bytes ∈ durable.crashBytes inode) :
+    bytes = written.visible handle.inode := by
+  simp only [Bind.bind, EStateM.bind, wrote] at returned
+  rw [current]
+  exact syncedInode_survivor (syncEffect returned) current
+    (fun inode bound => (binding inode bound).trans current) survived
+
 /-- An error after the marker file has reached durable storage does not
 undo that effect. Every surviving binding to the marker inode reads the
 complete successor, even though the write returned commit-unknown. -/

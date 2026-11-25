@@ -1008,6 +1008,12 @@ experiment branch. Two rename-bootstrap proofs unfold the shared
 marker-parameterized bootstrap helper introduced by the two-slot
 adapter. The original rename schedule and its statements are unchanged.
 
+A successful positional marker write and its sync now have a joint
+survivor proof on the retained marker handle. The report for the
+sync uses the exact image reached by the write. With settled bindings
+and the file-sync contract, every reported survivor has the written
+bytes of that inode.
+
 The successful WAL append and cache-routed sync now feed one crash
 survivor theorem. The append report supplies the flushed handle and
 the exact reached cache. The sync result identifies the descriptor
