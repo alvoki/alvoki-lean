@@ -60,6 +60,7 @@ lake env leanchecker Alvoki.Storage.Disk.MarkedWriteReopenProgress
 lake env leanchecker Alvoki.Storage.Disk.OptionalFileRead
 lake env leanchecker Alvoki.Storage.Disk.CheckpointFileDispatch
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunWriteCustody
+lake env leanchecker Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunPrefixCustody
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunPrefixReports
 lake env leanchecker Alvoki.Storage.Disk.CheckpointObservedCompletion

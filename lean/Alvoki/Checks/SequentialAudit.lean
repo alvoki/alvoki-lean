@@ -75,6 +75,7 @@ import Alvoki.Storage.Disk.OptionalFileRead
 import Alvoki.Storage.Disk.CheckpointFileDispatch
 import Alvoki.Storage.Disk.CheckpointRunWriteCustody
 import Alvoki.Storage.Disk.CheckpointRunPrefixCustody
+import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 import Alvoki.Storage.Disk.CheckpointObservedCompletion
 import Alvoki.Storage.Disk.CheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.CheckpointRunFileSyncFailureReopen
@@ -392,6 +393,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.RunWriteInodeFrame.keepsStable
 #check_axioms Alvoki.Storage.CheckpointPublication.CheckpointRunPairCustody.ofObservedWrite
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.runExists
+#check_axioms Alvoki.Storage.DiskSession.SelectedRunsAgree.symm
+#check_axioms Alvoki.Storage.DiskSession.SelectedIntegrityCheckpoint.withRunMap
 #check_axioms Alvoki.Storage.CheckpointPublication.knownSyncedRunBytes_ofFileSync
 #check_axioms Alvoki.Storage.CheckpointPublication.syncedRunsFromInodes
 #check_axioms Alvoki.Storage.CheckpointPublication.visibleSyncedRunPrefix

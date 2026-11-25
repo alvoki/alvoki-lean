@@ -10,7 +10,7 @@ The writer-session and mixed database traces each derive readiness and acknowled
 
 Append retries share an installation contract for full-chain and retained-WAL recovery. The aligned collection and power-loss routes share the keeper-sync proof. Packed and sequential range proofs use one interval-local congruence lemma, and the tree memtable derives its upper bound from its lower bound. [Proof techniques and reuse](proof-index.md)
 
-Checkpoint retries after a reported publication error or power loss share a named installation contract for the selected manifest generation, keeper layout and healthy bounded-open reports. [Checkpoint retry](../lean/Alvoki/Storage/Disk/CheckpointRetrySession.lean)
+Checkpoint retries after a reported publication error or power loss share a named installation contract for the selected manifest generation, keeper layout and healthy bounded-open reports. The held reopen imports its shared lemma for agreement on the manifest's selected run indices directly from the checkpoint read model. [Checkpoint retry](../lean/Alvoki/Storage/Disk/CheckpointRetrySession.lean) · [Selected run maps](../lean/Alvoki/Storage/Disk/Checkpoint/SelectedRuns.lean)
 
 Append, checkpoint and rotation failure proofs now share the lock handoff for their reached file images. Collection uses the same successful-close lemma. [Proof techniques and reuse](proof-index.md)
 

@@ -1,29 +1,10 @@
-import Alvoki.Storage.Disk.CheckpointRunPrefixCustody
+import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 import Alvoki.Storage.Disk.HeldWalInstallation
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication WalSegmentRepair SyncHandleRouting
-
-/-- A selected checkpoint depends only on the indices named by its manifest. -/
-theorem SelectedIntegrityCheckpoint.withRunMap {binding : Option ByteArray}
-    {left right : RunFiles} {checkpoint : Option (PackedTable × UInt64)}
-    (selected : SelectedIntegrityCheckpoint left binding checkpoint)
-    (same : SelectedRunsAgree binding left right) : SelectedIntegrityCheckpoint right binding checkpoint := by
-  cases selected with
-  | absent => exact .absent
-  | @present bytes metadata files table decoded stored loaded =>
-    have reads (indices : List Nat) (valid : ∀ index ∈ indices, index < metadata.header.runCount.toNat) :
-        indices.mapM (left metadata.header.generation) = indices.mapM (right metadata.header.generation) := by
-      induction indices with
-      | nil => rfl
-      | cons index rest ih =>
-        simp only [List.mapM_cons, same bytes metadata rfl decoded index (valid index List.mem_cons_self),
-          ih (fun other included => valid other (List.mem_cons_of_mem index included))]
-    exact .present decoded
-      ((reads (List.range metadata.header.runCount.toNat) (fun _ included => List.mem_range.mp included)).symm.trans stored)
-      loaded
 
 abbrev CheckpointOpenHandle := DescriptorInventory × DescriptorSlot × Nat
 

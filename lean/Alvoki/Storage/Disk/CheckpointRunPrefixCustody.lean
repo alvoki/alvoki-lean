@@ -6,12 +6,6 @@ namespace Alvoki.Storage.CheckpointPublication
 open System DiskSession SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
-/-- Compare the run maps only at the indices named by the selected manifest. -/
-def _root_.Alvoki.Storage.DiskSession.SelectedRunsAgree (binding : Option ByteArray) (left right : RunFiles) : Prop :=
-  ∀ bytes metadata, binding = some bytes → Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
-    ∀ index < metadata.header.runCount.toNat,
-      left metadata.header.generation index = right metadata.header.generation index
-
 private theorem storedRunExists {indices : List Nat} {read : Nat → Option ByteArray}
     {files : List ByteArray} (stored : indices.mapM read = some files) {index : Nat}
     (named : index ∈ indices) : ∃ bytes, read index = some bytes := by

@@ -8,10 +8,6 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication WalSegmentRepair SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
-private theorem SelectedRunsAgree.symm {binding : Option ByteArray} {left right : RunFiles}
-    (same : SelectedRunsAgree binding left right) : SelectedRunsAgree binding right left :=
-  fun bytes metadata selected decoded index inside => (same bytes metadata selected decoded index inside).symm
-
 /-- Reindex the proof of the selected chunk contents. The callbacks and
 their installation result are definitionally unchanged. -/
 private def MarkedRetryChunkReports.withRunMap {files : Type} {directory : DiskDirectory}
