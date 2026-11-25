@@ -143,6 +143,50 @@ def AlignedKeeperCacheReport.schedule
       let _ ← callbacks.readKeeper seed.pendingRef path layout.keeper.bytes.size size
       finishBoundedMarkedOpen directory layout.boundedPlan size remove write sync rename
 
+private theorem alignedExtent (finish : CapturedAlignedFinish calls reads vacant selected) :
+    layout.keeper.bytes.size = reads.wal.keeper.calls.metadata.byteSize.toNat := by
+  have exactSize := finish.repair.aligned
+  rw [finish.sameKeeper] at exactSize
+  exact exactSize
+
+/-- The actual keeper reader returns the selected bytes at the heap
+where it has just remembered the original read handle. -/
+theorem AlignedKeeperCacheReport.readsKeeper
+    (seen : AlignedKeeperCacheReport finish view init cacheEntry seed callbacks entry) :
+    callbacks.readKeeper seed.pendingRef (directory.file (.walSegment layout.keeper.first))
+      layout.keeper.bytes.size reads.wal.keeper.calls.metadata.byteSize.toNat entry =
+      .ok layout.keeper.bytes seen.remembered := by
+  rw [← alignedExtent finish]
+  exact callbacks.readsAligned reads.wal.keeperFits seen.rawOpen seen.rawRead seen.rawRemember
+
+/-- Both barriers start at the heap returned by the keeper reader.
+The bounded finisher uses the pending handle already held there. -/
+theorem AlignedKeeperCacheReport.repairsAfterRead
+    (seen : AlignedKeeperCacheReport finish view init cacheEntry seed callbacks entry)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) :
+    finishBoundedMarkedOpen directory layout.boundedPlan reads.wal.keeper.calls.metadata.byteSize.toNat
+      remove write (callbacks.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef) rename
+      seen.remembered = .ok () seen.reached := by
+  let sync := callbacks.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
+  have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
+  have sizeEq := (alignedExtent finish).symm.trans bytes
+  have noLater : layout.boundedPlan.newer = [] := finish.repair.noLater
+  have valid : layout.boundedPlan.valid = true :=
+    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq bytes.symm, by simp [noLater]⟩
+  have separate := file_ne_directory directory (.walSegment layout.keeper.first)
+  have directorySelected : sync #[directory.path] seen.remembered = .ok () seen.authorized :=
+    callbacks.syncsDirectory seen.directoryLoad seen.directorySync
+  have selectedKeeper : sync #[directory.file (.walSegment layout.keeper.first)] seen.authorized = .ok () seen.reached :=
+    callbacks.syncsPendingKeeper separate seen.pendingLoad seen.consume seen.keeperSync
+  change finishBoundedMarkedOpen directory layout.boundedPlan reads.wal.keeper.calls.metadata.byteSize.toNat
+      remove write sync rename seen.remembered = _
+  simp only [finishBoundedMarkedOpen, sizeEq, valid, bytes, Bind.bind, EStateM.bind,
+    beq_self_eq_true, decide_eq_true (Nat.le_refl _), Bool.and_self, ↓reduceIte, noLater, List.isEmpty_nil,
+    directorySelected]
+  exact selectedKeeper
+
 /-- Read the marked prefix and execute the two actual aligned barriers.
 The sync of the original keeper consumes its remembered reference before
 issuing fsync on that same handle. -/
@@ -160,38 +204,8 @@ theorem AlignedKeeperCacheReport.returns
       (admission.cache, finish.census, { admission.held with image := retry.image.syncDirectory.syncKeeper }) := by
   refine ⟨?_, seen.sameKeeper.trans seen.rawKeeper, seen.consumeFrame.1.trans seen.authorizedFiles,
     seen.consumeFrame.2.trans seen.authorizedCensus, ?_⟩
-  · unfold schedule
-    let path := keeperPath directory layout.keeper.first
-    let size := reads.wal.keeper.calls.metadata.byteSize.toNat
-    let sync := callbacks.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
-    change (do
-      let _ ← callbacks.readKeeper seed.pendingRef path layout.keeper.bytes.size size
-      finishBoundedMarkedOpen directory layout.boundedPlan size remove write sync rename :
-      EStateM IO.Error heap Unit) entry = _
-    have aligned : layout.keeper.bytes.size = size := by
-      have exactSize := finish.repair.aligned
-      rw [finish.sameKeeper] at exactSize
-      exact exactSize
-    have fits := reads.wal.keeperFits
-    have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-    have sizeEq : size = layout.boundedPlan.keeperSize := aligned.symm.trans bytes
-    have noLater : layout.boundedPlan.newer = [] := finish.repair.noLater
-    have valid : layout.boundedPlan.valid = true :=
-      (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq bytes.symm, by simp [noLater]⟩
-    have separate : path ≠ directory.path := file_ne_directory directory (.walSegment layout.keeper.first)
-    have directorySelected : sync #[directory.path] seen.remembered = .ok () seen.authorized :=
-      callbacks.syncsDirectory seen.directoryLoad seen.directorySync
-    have selectedKeeper : sync #[path] seen.authorized = .ok () seen.reached :=
-      callbacks.syncsPendingKeeper separate seen.pendingLoad seen.consume seen.keeperSync
-    have readReturned : callbacks.readKeeper seed.pendingRef path layout.keeper.bytes.size size entry =
-        .ok layout.keeper.bytes seen.remembered := by
-      rw [← aligned]
-      exact callbacks.readsAligned fits seen.rawOpen seen.rawRead seen.rawRemember
-    simp only [Bind.bind, EStateM.bind, readReturned]
-    simp only [finishBoundedMarkedOpen, sizeEq, valid, bytes, Bind.bind, EStateM.bind,
-      beq_self_eq_true, decide_eq_true (Nat.le_refl _), Bool.and_self, ↓reduceIte, noLater, List.isEmpty_nil,
-      directorySelected]
-    exact selectedKeeper
+  · simpa only [schedule, keeperPath, Bind.bind, EStateM.bind, seen.readsKeeper] using
+      seen.repairsAfterRead remove write rename
   · simp only [OpenCloseHeapView.cacheAt, seen.directoryKept, seen.entryDirectory,
       seed.directoryKept, seed.directorySet, seen.activeKept, seen.entryActive, seed.activeKept, seed.activeSet,
       seen.pendingConsumed, Option.map_some, Option.map_none, List.map_nil, seen.directoryHandleKept, seen.sameDirectory,

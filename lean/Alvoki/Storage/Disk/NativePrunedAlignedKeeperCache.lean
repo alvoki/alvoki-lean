@@ -165,6 +165,62 @@ def schedule (_seen : PrunedAlignedKeeperCacheReport finish view init cacheEntry
     let _ ← callbacks.readKeeper seed.pendingRef path layout.keeper.bytes.size size
     finishBoundedMarkedOpen directory layout.boundedPlan size remove write sync rename
 
+private theorem alignedExtent (finish : CapturedPrunedAlignedFinish calls reads vacant selected) :
+    layout.keeper.bytes.size = reads.wal.keeper.calls.metadata.byteSize.toNat := by
+  have extent := finish.repair.aligned
+  rw [finish.sameKeeper] at extent
+  exact extent
+
+/-- The raw keeper read leaves the selected bytes and remembered handle
+at the same boundary as the aligned route with an empty suffix. -/
+theorem readsKeeper (seen : PrunedAlignedKeeperCacheReport finish view init cacheEntry seed callbacks remove entry) :
+    callbacks.readKeeper seed.pendingRef (directory.file (.walSegment layout.keeper.first))
+      layout.keeper.bytes.size reads.wal.keeper.calls.metadata.byteSize.toNat entry =
+      .ok layout.keeper.bytes seen.remembered := by
+  rw [← alignedExtent finish]
+  exact callbacks.readsAligned reads.wal.keeperFits seen.rawOpen seen.rawRead seen.rawRemember
+
+/-- Settle the checked suffix starting at the already remembered keeper,
+then use that pending entry for the last barrier. -/
+theorem repairsAfterRead (seen : PrunedAlignedKeeperCacheReport finish view init cacheEntry seed callbacks remove entry)
+    (later : ∀ first ∈ retry.image.later.visible, layout.range.through < first)
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) :
+    finishBoundedMarkedOpen directory layout.boundedPlan reads.wal.keeper.calls.metadata.byteSize.toNat
+      remove write (callbacks.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef) rename
+      seen.remembered = .ok () seen.reached := by
+  let path := directory.file (.walSegment layout.keeper.first)
+  let sync := callbacks.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
+  have initialSync : sync #[directory.path] seen.remembered = .ok () seen.authorized :=
+    callbacks.syncsDirectory seen.authorizationLoad seen.authorizationSync
+  have suffixSync : sync #[directory.path] seen.pruned = .ok () seen.suffixSettled :=
+    callbacks.syncsDirectory seen.suffixLoad seen.suffixSync
+  have separate : path ≠ directory.path := file_ne_directory directory (.walSegment layout.keeper.first)
+  have keeperSync : sync #[path] seen.suffixSettled = .ok () seen.reached :=
+    callbacks.syncsPendingKeeper separate seen.pendingLoad seen.consume seen.keeperSync
+  have unlinked : ((layout.boundedPlan.newer.map Step.unlink).forM
+      (performPaths directory layout.boundedPlan remove throw write sync rename)) seen.authorized =
+    .ok () seen.pruned :=
+    (seen.unlinks.returns admission.held seen.authorizedFiles layout.boundedPlan write sync rename).1
+  have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
+  have sizeEq := (alignedExtent finish).symm.trans bytes
+  have valid : layout.boundedPlan.valid = true :=
+    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq bytes.symm, later⟩
+  have suffix : layout.boundedPlan.newer.isEmpty = false := List.isEmpty_eq_false_iff.mpr finish.repair.nonempty
+  change finishBoundedMarkedOpen directory layout.boundedPlan reads.wal.keeper.calls.metadata.byteSize.toNat
+      remove write sync rename seen.remembered = _
+  simp only [finishBoundedMarkedOpen, valid, bytes, sizeEq, beq_self_eq_true,
+    decide_eq_true (Nat.le_refl _), Bool.and_self, ↓reduceIte, suffix, Bool.false_and, Bool.false_eq_true,
+    Nat.lt_irrefl, decide_false, runRepairPlan, steps, List.append_assoc, Bind.bind, EStateM.bind, initialSync]
+  rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
+  change ((layout.boundedPlan.newer.map Step.unlink).forM
+      (performPaths directory layout.boundedPlan remove throw write sync rename) >>= fun _ =>
+    ([Step.syncPruned] ++ [Step.syncKeeper]).forM
+      (performPaths directory layout.boundedPlan remove throw write sync rename)) seen.authorized = _
+  simp only [Bind.bind, EStateM.bind, unlinked, List.cons_append, List.nil_append, List.forM_eq_forM,
+    List.forM_cons, List.forM_nil, performPaths, suffixSync,
+    show directory.file (.walSegment layout.boundedPlan.keeper) = path from rfl, keeperSync, Pure.pure, EStateM.pure]
+
 structure Reached (seen : PrunedAlignedKeeperCacheReport finish view init cacheEntry seed callbacks remove entry)
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit) : Prop where
@@ -193,25 +249,8 @@ theorem returns (seen : PrunedAlignedKeeperCacheReport finish view init cacheEnt
     (later : ∀ first ∈ retry.image.later.visible, layout.range.through < first)
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit) : seen.Reached write rename := by
-  let path := keeperPath directory layout.keeper.first
-  let size := reads.wal.keeper.calls.metadata.byteSize.toNat
   let sync := callbacks.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
-  have aligned : layout.keeper.bytes.size = size := by
-    have extent := finish.repair.aligned
-    rw [finish.sameKeeper] at extent
-    exact extent
-  have read : callbacks.readKeeper seed.pendingRef path layout.keeper.bytes.size size entry =
-      .ok layout.keeper.bytes seen.remembered := by
-    rw [← aligned]
-    exact callbacks.readsAligned reads.wal.keeperFits seen.rawOpen seen.rawRead seen.rawRemember
-  have initialSync : sync #[directory.path] seen.remembered = .ok () seen.authorized :=
-    callbacks.syncsDirectory seen.authorizationLoad seen.authorizationSync
-  have suffixSync : sync #[directory.path] seen.pruned = .ok () seen.suffixSettled :=
-    callbacks.syncsDirectory seen.suffixLoad seen.suffixSync
-  have separate : path ≠ directory.path := file_ne_directory directory (.walSegment layout.keeper.first)
-  have keeperSync : sync #[path] seen.suffixSettled = .ok () seen.reached :=
-    callbacks.syncsPendingKeeper separate seen.pendingLoad seen.consume seen.keeperSync
-  obtain ⟨unlinked, unlinkedFiles, unlinkedCensus, unlinkedCells⟩ :=
+  obtain ⟨_, unlinkedFiles, unlinkedCensus, unlinkedCells⟩ :=
     seen.unlinks.returns admission.held seen.authorizedFiles layout.boundedPlan write sync rename
   have pending := (seen.authorizedCells.trans unlinkedCells).pending.trans seen.rememberedPending
   have custody := finish.keeperAtSync later
@@ -233,30 +272,8 @@ theorem returns (seen : PrunedAlignedKeeperCacheReport finish view init cacheEnt
     keeperBound := custody.2.2
     keeperReleased := seen.reachedCensus.symm ▸ finish.keeperReleased
     final := ?_ }
-  · have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-    have sizeEq : size = layout.boundedPlan.keeperSize := aligned.symm.trans bytes
-    have valid : layout.boundedPlan.valid = true :=
-      (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq bytes.symm, later⟩
-    have suffix : layout.boundedPlan.newer.isEmpty = false := List.isEmpty_eq_false_iff.mpr finish.repair.nonempty
-    change (do
-      let _ ← callbacks.readKeeper seed.pendingRef path layout.keeper.bytes.size size
-      finishBoundedMarkedOpen directory layout.boundedPlan size remove write sync rename :
-        EStateM IO.Error heap Unit) entry = _
-    simp only [Bind.bind, EStateM.bind, read]
-    simp only [finishBoundedMarkedOpen, valid, bytes, sizeEq, beq_self_eq_true,
-      decide_eq_true (Nat.le_refl _), Bool.and_self, ↓reduceIte, suffix, Bool.false_and, Bool.false_eq_true,
-      Nat.lt_irrefl, decide_false, runRepairPlan, steps, List.append_assoc, Bind.bind, EStateM.bind, initialSync]
-    rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
-    have unlinkedBounded : ((layout.boundedPlan.newer.map Step.unlink).forM
-        (performPaths directory layout.boundedPlan remove throw write sync rename)) seen.authorized =
-      .ok () seen.pruned := unlinked
-    change ((layout.boundedPlan.newer.map Step.unlink).forM
-        (performPaths directory layout.boundedPlan remove throw write sync rename) >>= fun _ =>
-      ([Step.syncPruned] ++ [Step.syncKeeper]).forM
-        (performPaths directory layout.boundedPlan remove throw write sync rename)) seen.authorized = _
-    simp only [Bind.bind, EStateM.bind, unlinkedBounded, List.cons_append, List.nil_append, List.forM_eq_forM,
-      List.forM_cons, List.forM_nil, performPaths, suffixSync,
-      show directory.file (.walSegment layout.boundedPlan.keeper) = path from rfl, keeperSync, Pure.pure, EStateM.pure]
+  · simpa only [schedule, keeperPath, Bind.bind, EStateM.bind, seen.readsKeeper] using
+      seen.repairsAfterRead later write rename
   · simp only [OpenCloseHeapView.cacheAt, seen.directoryKept, seen.entryCells.directory, seed.directoryKept,
       seed.directorySet, seen.activeKept, seen.entryCells.active, seed.activeKept, seed.activeSet,
       seen.pendingConsumed, Option.map_some, Option.map_none, List.map_nil, seen.directoryHandleKept,
