@@ -4,10 +4,10 @@
 
 The current engine is the sequential Linux `DiskTable` API. Lean checks its table, codecs and shared storage protocol against a logical key-value store and a model of the files that survive a crash. The engine uses v3 run files and v2 checkpoint manifests. These version numbers identify different artifacts. The v1 packed blocks and Verus search core are separate experiments. [Engine and I/O protocol](architecture.md#sequential-storage) · [Packed experiments](#packed-block-and-search-experiments)
 
-- **Durability.** Every acknowledged write survives in order across the crash and recovery sequences admitted by the mixed segmented trace. The durable marker determines whether an interrupted submission also survives.
-- **Read correctness.** The executable table agrees with abstract replay for point and ordered range reads at supported snapshots. Reopen installs a fresh snapshot registry.
+- **Durability.** Every acknowledged write survives in order across the crash and recovery sequences admitted by the mixed segmented trace. The selected marker retains all or none of an uncertain batch. [Mixed trace](../lean/Alvoki/Storage/Disk/SegmentedBatchDatabaseTrace.lean)
+- **Read correctness.** The session returned by marked reopen agrees with abstract replay for point and ordered range reads at supported snapshots. An unsupported request leaves that session unchanged. Previous live snapshot tokens remain foreign under the reported token comparison. [Reads from the returned session](../lean/Alvoki/Storage/Disk/CachedRetrySnapshotReads.lean)
 - **Exact recovery.** The admitted checkpoint and WAL reads determine the installed generation, active WAL segment and recovered table. The cached opener uses the same recovery result after admitted append, checkpoint, rotation and collection cuts.
-- **Native boundary.** The Lean claims use explicit reports for file contents, namespace effects, descriptor identity, locking and durability. Native fault tests exercise specific Linux outcomes. Deriving those reports across the entire native execution remains a proof milestone. [Proof roadmap](proof-roadmap.md#end-to-end-storage-guarantees)
+- **Native boundary.** An observed descriptor history carries the held lock and directory cache through the checked listing and first sync. It connects the selected checkpoint run reads to the same directory. The proof uses explicit reports for raw identity, file contents, namespace changes and durability. Native fault tests exercise specific Linux outcomes. [Directory custody](../lean/Alvoki/Storage/Disk/HeldDirectoryReadObservations.lean) · [First directory sync](../lean/Alvoki/Storage/Disk/ListedDirectoryAuthorization.lean) · [Proof roadmap](proof-roadmap.md#end-to-end-storage-guarantees)
 
 ## Disk recovery and collection
 
@@ -37,6 +37,8 @@ The earlier whole-file proofs cover strict checkpoint selection, repeated open f
 ### Durable batches
 
 The batch API shares the append and marker publication schedule, with one append, two file barriers before rename and a directory barrier after rename. Lean relates preparation to sequential replay and connects reached I/O callback reports to the exact committed or failed file state. The mixed trace covers reported batch errors, machine power loss and observed process exit during append and marker publication. It preserves acknowledgements in order and retains an uncertain batch in full or discards it in full. Acquiring a supported snapshot records its pin in the same ready session before the guarded point or range read, which agrees with replay given the reported token comparison. Native fixtures exercise the publication and lock cuts. The proofs assume truthful primitive reports for durable prefixes, effects, reads, repair and lock ownership. [Native schedule](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Reported failures](../lean/Alvoki/Storage/Disk/WalBatchSession.lean) · [Mixed trace](../lean/Alvoki/Storage/Disk/SegmentedBatchDatabaseTrace.lean)
+
+The selected WAL decoder performs at most one format check and one ordinal check per complete retained frame through the marker. The replay fold attempts at most one write per frame above the checkpoint watermark. Both counts reach their bounds on successful recovery. The proof charges the first failed attempt and excludes later work in that stage. These are source-operation bounds. Allocations, insertion costs, native I/O and retained disk space have separate obligations. [WAL recovery counts](../lean/Alvoki/Storage/Disk/WalReplayWork.lean)
 
 ## Packed block and search experiments
 
