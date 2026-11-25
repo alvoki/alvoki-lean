@@ -610,6 +610,26 @@ theorem reopenWith_prepareError {image : Type} {directory : Storage.DiskDirector
   rw [runOpenWithInstallation_outcome, runOpenWithImage_acquired, report]
   cases unlock <;> rfl
 
+/-- After the extent scan and the earlier seal reads, a keeper read
+error aborts the shared reopen before marker sync or WAL repair. -/
+theorem reopenWith_keeperReadError {state : Type} {directory : Storage.DiskDirectory}
+    (through : Nat)
+    {readSeal : System.FilePath → Nat → EStateM IO.Error state ByteArray}
+    (readKeeper : System.FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
+    (stabilize : EStateM IO.Error state Unit)
+    (finish : Plan → Nat → EStateM IO.Error state Unit)
+    {before checked atKeeper reached : state}
+    {required : List (Nat × IO.FS.Metadata)} {keeper : Nat} {metadata : IO.FS.Metadata}
+    (seals : CachedWalKeeperReached directory readSeal keeper metadata required checked atKeeper)
+    {prepare : EStateM IO.Error state (Plan × Reopened × Nat)} {cause : IO.Error}
+    (failed : readKeeper (directory.file (.walSegment keeper))
+      ((through - keeper) * frameSize) metadata.byteSize.toNat atKeeper = .error cause reached)
+    (prepareError : readCachedWalPayloads directory through readSeal readKeeper required checked =
+      .error cause reached → prepare before = .error cause reached) :
+    reopenWith prepare stabilize finish before = .error cause reached := by
+  have read := prepareError (seals.read_error through readKeeper failed)
+  simp only [reopenWith_reports, read]
+
 /-- A failed file barrier returns exactly its reached file image through
 lock cleanup. It cannot run keeper repair or allocate a ready session. -/
 theorem reopenWith_markerSyncError {image : Type} {directory : Storage.DiskDirectory}
