@@ -225,6 +225,7 @@ import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeExecutionPendingWrite
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeReadyWalCollection
+import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeReadyClose
@@ -1445,6 +1446,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.selectsAtReturn
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.reachesBarrier
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.censusPreserved
+#check_axioms Alvoki.Storage.DiskSession.WalPlanMetadataFile.readAndClose
+#check_axioms Alvoki.Storage.DiskSession.NativeWalPlanPrefix.releases
+#check_axioms Alvoki.Storage.DiskSession.NativeWalPlanExtents.plans
+#check_axioms Alvoki.Storage.DiskSession.NativeWalPlanExtents.eligibleInOrder
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.plansWalCollection
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.returned
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.runs
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsCustody

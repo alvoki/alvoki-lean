@@ -136,6 +136,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeUncertainExecution
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionPendingWrite
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionPendingClose
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWalCollection
+lake env leanchecker Alvoki.Storage.Disk.NativeWalPlanningQuery
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWalCollectionError
 lake env leanchecker Alvoki.Storage.Disk.NativeCollectionErrorReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyClose
