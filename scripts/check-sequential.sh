@@ -293,6 +293,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeReadyCloseRetries
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWrite
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerSync
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerRename
+lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerRenameOpenPhase
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedWriteSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedKeeperSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerDirectory

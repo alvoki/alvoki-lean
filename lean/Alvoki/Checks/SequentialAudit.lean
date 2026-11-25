@@ -385,6 +385,7 @@ import Alvoki.Storage.Disk.NativeReadyCloseRetries
 import Alvoki.Storage.Disk.NativeReadyWrite
 import Alvoki.Storage.Disk.NativePendingMarkerSync
 import Alvoki.Storage.Disk.NativePendingMarkerRename
+import Alvoki.Storage.Disk.NativePendingMarkerRenameOpenPhase
 import Alvoki.Storage.Disk.NativeGroupedKeeperSyncError
 import Alvoki.Storage.Disk.NativePendingMarkerDirectory
 import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
@@ -2283,6 +2284,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteFileSyncs.censusAfterClose
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteFileSyncs.groupReturns
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteMarkerRenameStop.stopsWrite
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.stopsPublicationOnOpenPhase
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteFileSyncs.reachesMarkerRename
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsWriteAtMarkerRename
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteMarkerRenameStop.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteMarkerRenameStop.choices
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteMarkerRenameStop.batchCut
