@@ -337,7 +337,9 @@ private theorem unlinks_execute (image : FileImage) (target : Target) (addresses
   | nil => rfl
   | cons first rest ih => exact ih (image.unlinkLater first)
 
-private theorem EffectTrace.unlinks {target : Target} {initial before : FileImage}
+/-- A sequence of unlinks confined to later WAL addresses preserves the
+selected repair prefix at every reached removal. -/
+theorem EffectTrace.unlinks {target : Target} {initial before : FileImage}
     (trace : EffectTrace target initial before) (addresses : List Nat)
     (allowed : ∀ first ∈ addresses, target.range.through < first) :
     EffectTrace target initial (addresses.foldl FileImage.unlinkLater before) := by

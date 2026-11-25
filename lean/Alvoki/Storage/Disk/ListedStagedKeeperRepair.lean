@@ -141,7 +141,9 @@ theorem keepsKeeper (pruning : LongKeeperPruning authorization) : pruning.stageI
   | .empty _ => rfl
   | .listed _ _ _ => (ListedLaterWalPrune.settledImage before.image).2.2.2
 
-private theorem finishAfterPrune (pruning : LongKeeperPruning authorization) :
+/-- Both approved pruning routes reach the same staged-replacement
+schedule at their exact settled file image. -/
+theorem finishAfterPrune (pruning : LongKeeperPruning authorization) :
     let run := performPaths directory layout.boundedPlan operations.removeFile throw
       (operations.write operations.cache) (operations.sync operations.cache) operations.renameFile
     finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat

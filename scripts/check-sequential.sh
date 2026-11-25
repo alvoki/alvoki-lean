@@ -262,6 +262,7 @@ lake env leanchecker Alvoki.Storage.Disk.ListedAlignedKeeperRepair
 lake env leanchecker Alvoki.Storage.Disk.ListedStagedKeeperRepair
 lake env leanchecker Alvoki.Storage.Disk.ListedStagedKeeperFailure
 lake env leanchecker Alvoki.Storage.Disk.ListedAlignedKeeperFailure
+lake env leanchecker Alvoki.Storage.Disk.ListedStagedWriteFailure
 lake env leanchecker Alvoki.Storage.Disk.HeldLaterWalPrune
 lake env leanchecker Alvoki.Storage.Disk.HeldLaterWalPruneFailure
 lake env leanchecker Alvoki.Storage.Disk.HeldMetadataReadObservations

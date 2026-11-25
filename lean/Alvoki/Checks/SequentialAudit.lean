@@ -193,6 +193,7 @@ import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
 import Alvoki.Storage.Disk.ListedStagedKeeperRepair
 import Alvoki.Storage.Disk.ListedStagedKeeperFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperFailure
+import Alvoki.Storage.Disk.ListedStagedWriteFailure
 import Alvoki.Storage.Disk.HeldLaterWalPrune
 import Alvoki.Storage.Disk.HeldLaterWalPruneFailure
 import Alvoki.Storage.Disk.HeldMetadataReadObservations
@@ -1435,6 +1436,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.stageCustody
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.finishFromStage
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperPruning.suffixSync
+#check_axioms Alvoki.Storage.DiskSession.LongKeeperPruning.finishAfterPrune
+#check_axioms Alvoki.Storage.DiskSession.StageWriteFailure.returns
+#check_axioms Alvoki.Storage.DiskSession.StageWriteFailure.onlyScratch
+#check_axioms Alvoki.Storage.DiskSession.ListedStagedWriteFailure.stageError
+#check_axioms Alvoki.Storage.DiskSession.ListedStagedWriteFailure.finishError
+#check_axioms Alvoki.Storage.DiskSession.ListedStagedWriteFailure.preservesRepair
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperPruning.keepsKeeper
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStageAt.stageCallbacks
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStageAt.stageCustody
