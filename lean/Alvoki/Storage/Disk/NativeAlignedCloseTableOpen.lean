@@ -154,15 +154,16 @@ private theorem startsAtSameHistory
       handle.lock = lock ∧ handle.files = installed.files ∧
       handle.phase = installed.allocation.phase ∧ handle.token = installed.allocation.token ∧
       handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧
+      tokenIdentity handle.token = next.state.session.sessionRef ∧
       start.reached = installed.allocation.afterToken ∧ start.pins = [] ∧
       view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
       view.cacheAt start.reached seed.directoryRef seed.activeRef seed.pendingRef = next.state.cache := by
   subst priorHistory
   obtain ⟨handle, start, table, _, sameLock, sameCache, phase, token, _, getEq, setEq, compared,
-    current, heap, pins, files, census, cached, _, _, _, _, _⟩ :=
+    current, heap, pins, files, census, cached, _, _, _, _, tokenRef⟩ :=
     installed.startsAtReportedPosition next sameReturn reported cache owner slot phaseEffects ptrEq
-  exact ⟨handle, start, current, table, sameLock, sameCache, phase, token, getEq, setEq, compared, heap, pins, files,
-    census, cached⟩
+  exact ⟨handle, start, current, table, sameLock, sameCache, phase, token, getEq, setEq, compared, tokenRef, heap,
+    pins, files, census, cached⟩
 
 end
 
@@ -231,6 +232,7 @@ theorem NativeOpenedTrace.closesThenOpensAligned
       seen.openTable remove write rename bootstrap assemble makeCache = .ok handle.table start.reached ∧
       start.current = ⟨current.current.history, current.current.submissions, next⟩ ∧
       handle.lock = seen.admission.raw.lock ∧
+      tokenIdentity handle.token = next.state.session.sessionRef ∧
       handle.get = opened.get ∧ handle.set = opened.set ∧ handle.ptrEq = opened.ptrEq ∧ start.pins = [] ∧
       view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
       view.cacheAt start.reached seen.admission.seed.directoryRef seen.admission.seed.activeRef
@@ -263,12 +265,12 @@ theorem NativeOpenedTrace.closesThenOpensAligned
   have phaseEffects : OpenPhaseCellEffects view.phase opened.get opened.set := by
     rw [samePhase]
     exact opened.phaseEffects
-  obtain ⟨handle, start, reachedPosition, table, lock, _, _, _, getEq, setEq, compared, reachedHeap, pins,
+  obtain ⟨handle, start, reachedPosition, table, lock, _, _, _, getEq, setEq, compared, tokenRef, reachedHeap, pins,
     sameFiles, sameCensus, sameCache⟩ := startsAtSameHistory installed rows next nextOpened
       nextReturned cache owner slot phaseEffects opened.ptrEq
   refine ⟨source, next, after, plan, selected, reader, seen, makeCache, handle, start,
-    returned, shut, files, census, nextOpened, nextReturned, reads, reopened, ?_, ?_, reachedPosition, lock, getEq, setEq, compared,
-    pins, sameFiles, sameCensus, sameCache⟩
+    returned, shut, files, census, nextOpened, nextReturned, reads, reopened, ?_, ?_, reachedPosition, lock, tokenRef,
+    getEq, setEq, compared, pins, sameFiles, sameCensus, sameCache⟩
   · rw [reachedPosition]
     exact trace
   · rw [table, reachedHeap]

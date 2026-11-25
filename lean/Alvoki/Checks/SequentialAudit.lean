@@ -267,6 +267,7 @@ import Alvoki.Storage.Disk.NativeMarkedSealHeap
 import Alvoki.Storage.Disk.NativeAlignedMarkedWorker
 import Alvoki.Storage.Disk.NativeMarkedTableOpen
 import Alvoki.Storage.Disk.NativeAlignedCloseTableOpen
+import Alvoki.Storage.Disk.NativeReopenedSnapshotRead
 import Alvoki.Storage.Disk.NativePrunedAlignedMarkedWorker
 import Alvoki.Storage.Disk.NativePrunedMarkedTableOpen
 import Alvoki.Storage.Disk.NativeLongKeeperReadHeap
@@ -1729,6 +1730,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.opensAlignedFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedReopenEffects.opens
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.closesThenOpensAligned
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rejectsOldPinAfterReopen
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.opensPrunedAlignedFromAdmission
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.keeperCacheSchedules
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.stageCacheSchedule
@@ -1784,6 +1786,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCloseReopenStep.markedOpenReport
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.lookupPin
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.rangePin
+#check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.lookupIssuedPin
+#check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.rangeIssuedPin
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.readsOpenPin
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.writeSchedules
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.acknowledgesViaOpenReferences
