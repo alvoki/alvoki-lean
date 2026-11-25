@@ -502,8 +502,14 @@ theorem selectedBytes_retainBatch
     {base table : PackedTable} {first : Nat} {log : List DatabaseSubmissions}
     (prior : DatabaseBatchRetention log history)
     (recovery : WalSegmentRecovery image pair range (history ++ batch) base first table)
-    {marker wal : ByteArray} {decoded : Selection}
-    (accepted : decode marker = .ok decoded)
+    {marker bytes wal : ByteArray} {decoded : Selection}
+    {read : USize → EStateM IO.Error Nat ByteArray} {reached : Nat}
+    (mismatch : IO.Error) (observes : PrefixChunkObserves marker read)
+    (available : PrefixChunksAvailableUntilEof marker read)
+    (fits : acquisitionLimit < USize.size)
+    (returned : readPrefixUntilEofWith mismatch read acquisitionLimit ByteArray.empty 0 =
+      .ok bytes reached)
+    (accepted : decode bytes = .ok decoded)
     (projected : projectBinding directory marker = .ok pair)
     (selected : Boundary.select decoded.frontier wal = .ok (WAL.encode events))
     (whole : events = history ∨ events = history ++ batch)
@@ -514,7 +520,8 @@ theorem selectedBytes_retainBatch
     else
       DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
       ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
-  have projection := projectBinding_decodes (visible := directory) accepted
+  have projection := projectBinding_of_heldRead (visible := directory)
+    mismatch observes available fits returned accepted
   have samePair := Except.ok.inj (projected.symm.trans projection)
   have binding : pair.walBoundary = some (Boundary.encode decoded.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary samePair
