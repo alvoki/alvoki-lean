@@ -102,6 +102,8 @@ managed data bindings change only through observed operations under its lock. Ad
 file before acquisition. The filesystem contract determines which effects may survive power loss. The compiler and runtime must implement the reported primitive behavior.
 [Native entry points](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Held directory observations](../lean/Alvoki/Storage/Disk/HeldDirectoryReadObservations.lean) · [Descriptor inventory](../lean/Alvoki/Storage/Disk/DescriptorInventory.lean) · [Lock census across reported slot events](../lean/Alvoki/Storage/Disk/LockCensusTrace.lean)
 
+After the last observed owner reference drops, the shared open schedule passes the exact census from its reported lock append-open through flock and directory cache initialization to the held recovery callback. The proof derives the reached cache and its two allocations from the primitive reports. The held recovery proofs still supply the selected reads and returned table. [Stateful reopen admission](../lean/Alvoki/Storage/Disk/LockCensusOpenAdmission.lean)
+
 Prove a single invariant for every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and
