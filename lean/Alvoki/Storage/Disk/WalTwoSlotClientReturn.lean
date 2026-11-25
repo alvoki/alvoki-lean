@@ -34,6 +34,45 @@ theorem prepared_write_reports {α σ : Type}
   simp only [DiskSession.publishPreparedWrite, DiskSession.publishPrepared, setPhase,
     commitReports, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, result]
 
+/-- A process stop during append leaves the state reported by that append.
+No WAL sync or marker mutation is issued by the remaining schedule. -/
+theorem publish_appendInterrupted {stop image : Type}
+    (append syncWal writeSlot syncSlot install : ExceptT IO.Error (EStateM stop image) Unit)
+    {before reached : image} {stopped : stop}
+    (cut : append.run before = .error stopped reached) :
+    (publish append syncWal writeSlot syncSlot install).run before = .error stopped reached := by
+  change append before = .error stopped reached at cut
+  simp [publish, Bind.bind, ExceptT.bind, ExceptT.mk, ExceptT.run, EStateM.bind, cut]
+
+/-- A process stop at the WAL barrier leaves the marker publication
+unissued. The caller sees an interrupted operation with no return. -/
+theorem publish_walSyncInterrupted {stop image : Type}
+    (append syncWal writeSlot syncSlot install : ExceptT IO.Error (EStateM stop image) Unit)
+    {before appended reached : image} {stopped : stop}
+    (wrote : append.run before = .ok (.ok ()) appended)
+    (cut : syncWal.run appended = .error stopped reached) :
+    (publish append syncWal writeSlot syncSlot install).run before = .error stopped reached := by
+  change append before = .ok (.ok ()) appended at wrote
+  change syncWal appended = .error stopped reached at cut
+  simp [publish, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind, wrote, cut]
+
+/-- A process stop at marker sync follows both WAL sync and the slot write,
+but it cannot install the cached marker or return an acknowledgement. -/
+theorem publish_markerSyncInterrupted {stop image : Type}
+    (append syncWal writeSlot syncSlot install : ExceptT IO.Error (EStateM stop image) Unit)
+    {before appended durable written reached : image} {stopped : stop}
+    (wrote : append.run before = .ok (.ok ()) appended)
+    (walBarrier : syncWal.run appended = .ok (.ok ()) durable)
+    (slot : writeSlot.run durable = .ok (.ok ()) written)
+    (cut : syncSlot.run written = .error stopped reached) :
+    (publish append syncWal writeSlot syncSlot install).run before = .error stopped reached := by
+  change append before = .ok (.ok ()) appended at wrote
+  change syncWal appended = .ok (.ok ()) durable at walBarrier
+  change writeSlot durable = .ok (.ok ()) written at slot
+  change syncSlot written = .error stopped reached at cut
+  simp [publish, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind,
+    wrote, walBarrier, slot, cut]
+
 open OrderedTwoSlot
 
 /-- An uncertain slot update selects the exact pre-write history or the
