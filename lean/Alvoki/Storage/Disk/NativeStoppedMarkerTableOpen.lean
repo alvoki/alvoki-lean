@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.NativePendingMarkerDirectoryOpenPhase
+import Alvoki.Storage.Disk.NativePendingStagedMarkerSyncOpenPhase
 import Alvoki.Storage.Disk.NativeExecutionTrace
 
 namespace Alvoki.Storage.DiskSession
@@ -140,8 +141,8 @@ def RawStoppedMarkerReopenEffects.Returned
     names rebooted state.session.directory.path = some ((view.handle seen.seed.afterPending seen.seed.handle).1.inode
       (view.handle seen.seed.afterPending seen.seed.handle).2.1.description) ∧
     names rebooted prepared.markerPath = some (if crash.usesNewMarker then
-      state.census.inode stop.synced.markerSlot.description else
-      stop.synced.stageView.modelObject stop.oldMarkerChild) ∧
+      state.census.inode stop.staging.markerSlot.description else
+      stop.staging.stageView.modelObject stop.oldMarkerChild) ∧
     (∀ path payload, checkpointSurvivorPath state.session.directory state.writer crash.pair.manifest path →
       reader.toNativeWriteCrashReads.ReadsSurvivor path payload →
       ∃ read : reader.opening.reads.reads.ObservesFile path payload,
@@ -168,7 +169,7 @@ def RawStoppedMarkerReopenEffects.Returned
       view.cacheAt start.reached seen.seed.directoryRef seen.seed.activeRef seen.seed.pendingRef = next.state.cache
 
 /-- The same selected bytes and measured repair feed the raw opener
-after either stopped callback of a synced marker publication. -/
+after each supported interruption of marker publication. -/
 theorem RawStoppedMarkerReopenEffects.returns
     (seen : RawStoppedMarkerReopenEffects reader view calls init names bytes rebooted phaseIdentity tokenIdentity
       allocatePhase allocateToken stream remove stage rename)
@@ -309,6 +310,37 @@ theorem NativeOpenedPosition.opensAfterStoppedMarkerDirectory
   obtain ⟨source, pending, poisoned, _, _, poison, _, _, stoppedAtSync⟩ := current.stopsWriteAtMarkerDirectory stopped
   exact ⟨source, pending, ⟨poisoned, samePhase.symm ▸ poison, stoppedAtSync⟩,
     NativeMarkerPublicationCrash.newMarkerAfterDirectoryEffect (crash := crash) current.current.ready.readPrefix.refines.1,
+    seen.returns current samePhase bootstrap assemble constructs⟩
+
+end
+
+section
+
+variable (current : NativeOpenedPosition opened)
+  {prepared : NativeReadyWritePreparation current.current.ready.state} {stopped : NativeWriteStagedMarkerSyncStop prepared}
+  {crash : NativeMarkerPublicationCrash (.stagedSync stopped)} {plan : crash.Plan}
+  {reader : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected}
+
+/-- The same stopped second file fsync supplies the reboot and raw
+table. The earlier marker preserves exactly the prior committed history. -/
+theorem NativeOpenedPosition.opensAfterStoppedStagedMarkerSync
+    (seen : RawStoppedMarkerReopenEffects reader view calls init names bytes rebooted phaseIdentity tokenIdentity
+      allocatePhase allocateToken stream remove stage rename)
+    (samePhase : view.phase = opened.contents)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    (constructs : ∀ resolved lock files, DiskTable.OpenReferenceAssembly resolved lock files (assemble resolved lock files)) :
+    let state := current.current.ready.state
+    opened.table.UsesOpenWriteSchedules state.session.directory opened.files opened.phase ∧
+    NativePendingStagedMarkerSync current.current.ready stopped ∧
+    (∃ poisoned, view.phase poisoned opened.phase = some .poisoned ∧
+      ∀ replace, stopped.onOpenPhase opened replace (current.reached, state.cache, state.census, prepared.initial) =
+        .error prepared.stagedPath (poisoned, stopped.staging.appendCache, stopped.reached)) ∧
+    crash.usesNewMarker = false ∧ seen.Returned current bootstrap assemble := by
+  intro state
+  obtain ⟨source, pending, poisoned, _, _, poison, _, interrupted⟩ := current.stopsWriteAtStagedMarkerSync stopped
+  have old := crash.oldMarkerAfterStagedSync current.current.ready.readPrefix.refines.1
+  exact ⟨source, pending, ⟨poisoned, samePhase.symm ▸ poison, interrupted⟩, old,
     seen.returns current samePhase bootstrap assemble constructs⟩
 
 end

@@ -409,6 +409,7 @@ import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
 import Alvoki.Storage.Disk.NativeStoppedMarkerTableOpen
 import Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
+import Alvoki.Storage.Disk.NativePendingStagedMarkerSyncOpenPhase
 import Alvoki.Storage.Disk.NativePendingMarkerStageWrite
 import Alvoki.Storage.Disk.NativeGroupedPendingWrite
 import Alvoki.Storage.Disk.NativeWritePreflight
@@ -2415,6 +2416,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteStagedMarkerSyncStop.choices
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteStagedMarkerSyncStop.batchCut
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtStagedMarkerSync
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsWriteAtStagedMarkerSync
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.oldMarkerAfterStagedSync
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedStagedMarkerSync
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteStageAllocation.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.stopsStage
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.stopsWrite

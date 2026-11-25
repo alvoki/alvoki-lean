@@ -13,6 +13,11 @@ def NativeMarkerPublicationStop.OnOpenedPhase (current : NativeOpenedPosition op
     (view : OpenCloseHeapView heap FileImage) : Prop :=
   let state := current.current.ready.state
   match stop with
+  | .stagedSync stopped =>
+    NativePendingStagedMarkerSync current.current.ready stopped ∧
+    ∃ poisoned, view.phase poisoned opened.phase = some .poisoned ∧
+      ∀ rename, stopped.onOpenPhase opened rename (current.reached, state.cache, state.census, prepared.initial) =
+        .error prepared.stagedPath (poisoned, stopped.staging.appendCache, stopped.reached)
   | .rename stopped =>
     NativePendingMarkerRename current.current.ready stopped ∧
     ∃ poisoned, view.phase poisoned opened.phase = some .poisoned ∧
@@ -29,6 +34,9 @@ theorem NativeMarkerPublicationStop.stopsOnOpenedPhase (current : NativeOpenedPo
     {view : OpenCloseHeapView heap FileImage} (samePhase : view.phase = opened.contents) :
     stop.OnOpenedPhase current view := by
   cases stop with
+  | stagedSync stopped =>
+    obtain ⟨_, pending, poisoned, _, _, poison, _, issue⟩ := current.stopsWriteAtStagedMarkerSync stopped
+    exact ⟨pending, poisoned, samePhase.symm ▸ poison, issue⟩
   | rename stopped =>
     obtain ⟨_, pending, poisoned, _, _, poison, _, _, issue⟩ := current.stopsWriteAtMarkerRename stopped
     exact ⟨pending, poisoned, samePhase.symm ▸ poison, issue⟩
@@ -36,7 +44,7 @@ theorem NativeMarkerPublicationStop.stopsOnOpenedPhase (current : NativeOpenedPo
     obtain ⟨_, pending, poisoned, _, _, poison, _, _, issue⟩ := current.stopsWriteAtMarkerDirectory stopped
     exact ⟨pending, poisoned, samePhase.symm ▸ poison, issue⟩
 
-/-- A prescribed write reaches either marker publication cut through
+/-- A prescribed write reaches a marker publication cut through
 its original phase and callbacks. One reported survivor feeds the
 matching reader of the next public open. -/
 structure NativeOpenedStoppedMarkerReport (current : NativeOpenedPosition opened) (request : WriteRequest)
@@ -77,12 +85,13 @@ def NativeOpenedStoppedMarkerReport.event
     NativeExecutionEvent :=
   .interruptedMarkerRecovered request input seen.prepared.batch retained
 
-/-- A reported effective directory sync settles the new marker. There
-is no such directory effect in the earlier rename interruption. -/
+/-- The staged file sync leaves the prior directory marker. A reported
+effective final directory sync settles the new marker. -/
 def NativeMarkerPublicationCrash.settledDirectory {state : NativeReadyState}
     {prepared : NativeReadyWritePreparation state} {stop : NativeMarkerPublicationStop prepared}
     (crash : NativeMarkerPublicationCrash stop) : Prop :=
   match stop with
+  | .stagedSync _ => crash.usesNewMarker = false
   | .rename _ => True
   | .directorySync stopped _ _ => stopped.applied = true → crash.usesNewMarker = true
 
@@ -90,6 +99,7 @@ theorem NativeMarkerPublicationCrash.settledWhenEffective {state : NativeReadySt
     {prepared : NativeReadyWritePreparation state} {stop : NativeMarkerPublicationStop prepared}
     (crash : NativeMarkerPublicationCrash stop) (valid : state.Valid) : crash.settledDirectory := by
   cases stop with
+  | stagedSync _ => exact crash.oldMarkerAfterStagedSync valid
   | rename _ => trivial
   | directorySync _ _ _ => exact crash.newMarkerAfterDirectoryEffect valid
 
@@ -114,8 +124,8 @@ structure NativeOpenedStoppedMarkerReport.Returned
     some ((view.handle seen.physical.seed.afterPending seen.physical.seed.handle).1.inode
       (view.handle seen.physical.seed.afterPending seen.physical.seed.handle).2.1.description)
   markerObject : names seen.rebooted seen.prepared.markerPath = some (if seen.crash.usesNewMarker then
-    current.current.ready.state.census.inode seen.stop.synced.markerSlot.description else
-    seen.stop.synced.stageView.modelObject seen.stop.oldMarkerChild)
+    current.current.ready.state.census.inode seen.stop.staging.markerSlot.description else
+    seen.stop.staging.stageView.modelObject seen.stop.oldMarkerChild)
   survivorBytes : ∀ path payload, checkpointSurvivorPath current.current.ready.state.session.directory
     current.current.ready.state.writer seen.crash.pair.manifest path → seen.reader.toNativeWriteCrashReads.ReadsSurvivor path payload →
     ∃ read : seen.reader.opening.reads.reads.ObservesFile path payload,
@@ -150,7 +160,7 @@ structure NativeOpenedStoppedMarkerReport.Returned
   cached : view.cacheAt start.reached seen.physical.seed.directoryRef seen.physical.seed.activeRef
     seen.physical.seed.pendingRef = start.current.ready.state.cache
 
-/-- Either actual cut extends the common trace by one recovery event.
+/-- Each supported cut extends the common trace by one recovery event.
 The same reported survivor supplies the exact next physical table. -/
 theorem NativeOpenedStoppedMarkerReport.reaches
     (seen : NativeOpenedStoppedMarkerReport current request input view names bytes) :
