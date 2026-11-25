@@ -426,6 +426,34 @@ theorem reopenWith_markerSyncError {image : Type} {directory : Storage.DiskDirec
   rw [runOpenWithInstallation_outcome, runOpenWithImage_acquired, report]
   cases unlock <;> rfl
 
+/-- A failed marker barrier either leaves the prepared file image alone
+or settles only the observed marker. In either case cleanup returns an
+unsettled retry image and leaves the keeper available for the next open. -/
+theorem reopenWith_markerSyncError_retries {directory : Storage.DiskDirectory}
+    {descriptor nextRef : Nat} (unlock : UnlockReport)
+    {initial prepared reached : FileImage} {before : LockedFileState FileImage}
+    (prior : UnsettledRetries initial prepared) (selection : Selection)
+    (observed : prepared.directory.active.walBoundary = some (Boundary.encode selection.frontier))
+    {prepare : EStateM IO.Error FileImage (Plan × Reopened × Nat)}
+    {stabilize : EStateM IO.Error FileImage Unit} {finish : Plan → Nat → EStateM IO.Error FileImage Unit}
+    {plan : Plan} {opened : Reopened} {size : Nat} {cause : IO.Error}
+    (read : prepare before.image = .ok (plan, opened, size) prepared)
+    (barrier : stabilize prepared = .error cause reached)
+    (effect : reached = prepared ∨ reached = { prepared with directory := settleMarker prepared.directory selection }) :
+    ∃ error final,
+      runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+        (reopenWith prepare stabilize finish) before = .error error final ∧
+      UnsettledRetries initial final.image ∧ final.image.keeper = prepared.keeper := by
+  have report := reopenWith_markerSyncError (directory := directory) (descriptor := descriptor)
+    (nextRef := nextRef) (finish := finish) unlock read barrier
+  have retry : UnsettledRetries initial reached := by
+    rcases effect with rfl | rfl
+    · exact prior
+    · exact .settle prior selection observed
+  have keeper : reached.keeper = prepared.keeper := by
+    rcases effect with rfl | rfl <;> rfl
+  cases unlock <;> exact ⟨_, _, report, retry, keeper⟩
+
 /-- For an installed segmented replay of the selected frontier, the table
 behind a fresh snapshot agrees with the client history at that frontier. -/
 theorem installedSnapshot_reads
