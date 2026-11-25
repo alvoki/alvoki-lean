@@ -183,7 +183,7 @@ theorem CheckpointCompletionReports.Completed.selectedRuns
 
 /-- Transport the held manifest and run reads to the physical files
 reported at successful checkpoint completion. -/
-private theorem CheckpointCompletionReports.Completed.openedPhysicalCheckpoint
+theorem CheckpointCompletionReports.Completed.openedPhysicalCheckpoint
     {state : Type} {directory : DiskDirectory} {before : SegmentedWriterState}
     {attempt : SegmentedCheckpointReport directory before} {reports : CheckpointCompletionReports state attempt}
     {phase : Phase Installed} {writer : Nat} {checkpointed : SegmentedWriterState}
@@ -191,8 +191,8 @@ private theorem CheckpointCompletionReports.Completed.openedPhysicalCheckpoint
     {input : FilePath} {retry : LockedFileState FileImage}
     {layout : CanonicalKeeperLayout retry.image checkpointed.history}
     (opened : CheckpointHeldOpen input directory layout checkpointed.published)
-    {closed : CleanUnlockReports directory writer} {after : SegmentedWriterState}
-    (endpoint : AdmittedCleanReopen closed opened.chunkReports opened.admission after)
+    {after : SegmentedWriterState}
+    (endpoint : ReadyReopenInstallation opened.chunkReports opened.admission after)
     (binding : retry.image.directory.active.manifest = checkpointed.target.pair.manifest)
     {final : LockedFileState FileImage} (files : after.files = final.image) :
     final.image.directory.active.manifest = (reports.manifest reports.observed.completed).active ∧
@@ -280,7 +280,7 @@ theorem SegmentedClientReadTrace.checkpointCloseAndReopen {image : Type} {input 
   have reopenedHeld : final.owners.Owns directory reopened.descriptor :=
     slot.symm ▸ owners ▸ endpoint.writer.retained.held
   obtain ⟨physicalManifest, manifestRead, runsRead, selected⟩ :=
-    completed.openedPhysicalCheckpoint opened endpoint
+    completed.openedPhysicalCheckpoint opened endpoint.toReadyReopenInstallation
       (congrArg DirectoryPublication.Bindings.manifest completed.retained.resumed.ready.selected) files
   have resumed : SegmentedClientReadTrace directory initialDescriptor (bootstrap.writerState first.owners)
       allowCollection log reads opened.calls.slot.description after := by
@@ -374,7 +374,7 @@ theorem SegmentedClientReadTrace.checkpointCloseAndReopenAfterRetries {image : T
   have reopenedHeld : final.owners.Owns directory reopened.descriptor :=
     description.symm ▸ owners ▸ endpoint.writer.retained.held
   obtain ⟨manifest, manifestRead, selectedRuns, selectedCheckpoint⟩ :=
-    completed.openedPhysicalCheckpoint opened.toHeldOpen endpoint (congrArg DirectoryPublication.Bindings.manifest pair) files
+    completed.openedPhysicalCheckpoint opened.toHeldOpen endpoint.toReadyReopenInstallation (congrArg DirectoryPublication.Bindings.manifest pair) files
   have resumed : SegmentedClientReadTrace directory initialDescriptor (bootstrap.writerState first.owners)
       allowCollection log reads opened.calls.slot.description after := by
     change SegmentedClientReadTrace directory initialDescriptor (bootstrap.writerState first.owners)

@@ -130,6 +130,19 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       {admission : OpenAdmissionReports input directory observed.slot}
       (endpoint : AdmittedCleanReopen closed observed admission after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after
+  | readyProcessExit {files : Type} {input : System.FilePath} {inventory : DescriptorInventory}
+      {cached : DescriptorSlot} {retry : LockedFileState FileImage}
+      {layout : CanonicalKeeperLayout retry.image before.history}
+      {observed : MarkedRetryChunkReports files directory layout before.published}
+      {admission : OpenAdmissionReports input directory observed.slot}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (exit : ReadyProcessExit inventory writer cached)
+      (attempts : BoundedReopenTrace directory (· = before.target)
+        (exit.reached directory ⟨before.files, before.owners⟩) retry)
+      (sameLock : observed.descriptors.inode observed.slot.description = inventory.inode exit.lock.description)
+      (distinct : observed.slot.description ≠ writer)
+      (installed : ReadyReopenInstallation observed admission after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after
   | checkpointManifestStageError {input : System.FilePath}
       {attempt : SegmentedCheckpointReport directory before}
       {report : ObservedManifestStageFailure attempt} {manifest runs}
@@ -264,6 +277,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | cleanReopenObserved _ _ endpoint ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨endpoint.writer.retained, retained, endpoint.writer.history.trans history, retention⟩
+  | readyProcessExit _ _ _ _ _ installed ih =>
+    obtain ⟨_, retained, history, retention⟩ := ih
+    exact ⟨installed.writer.retained, retained, installed.writer.history.trans history, retention⟩
   | checkpointManifestStageError _ endpoint ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨endpoint.retained, retained, endpoint.history.trans history, retention⟩

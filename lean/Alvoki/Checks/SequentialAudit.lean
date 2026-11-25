@@ -90,6 +90,7 @@ import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 import Alvoki.Storage.Disk.CheckpointObservedCompletion
 import Alvoki.Storage.Disk.CheckpointCompletionClientTrace
 import Alvoki.Storage.Disk.CheckpointCompletionHeldReopen
+import Alvoki.Storage.Disk.Checkpoint.ProcessExit
 import Alvoki.Storage.Disk.CheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.Checkpoint.Manifest.RenamePrefix
 import Alvoki.Storage.Disk.CheckpointRunDirectoryFailure
@@ -558,6 +559,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCompletionReports.Completed.closeFiles
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointCloseAndReopen
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointCloseAndReopenAfterRetries
+#check_axioms Alvoki.Storage.DiskSession.CheckpointCompletionReports.Completed.openedPhysicalCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.ReadyProcessExit.live
+#check_axioms Alvoki.Storage.DiskSession.ReadyProcessExit.reachedCensus
+#check_axioms Alvoki.Storage.DiskSession.CheckpointCompletionReports.Completed.processExit
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointThenProcessExitReopen
 #check_axioms Alvoki.Storage.commitWalWrite_fileEffects
 #check_axioms Alvoki.Storage.bootstrapSegmented_fileEffects
 #check_axioms Alvoki.Storage.DiskTable.writeWithOutcome_fileEffects
@@ -1274,6 +1280,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterCachedCloseRetries
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.cleanReopenLayout
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.admitsCleanReopenAt
+#check_axioms Alvoki.Storage.DiskSession.ReadyReopenInstallation.reopenEffect
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.admitsReadyReopenAt
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.refinesReadyReopenPrefix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.refinesClosedReopenPrefix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedCloseRetries
 #check_axioms Alvoki.Storage.DiskSession.ObservedBatchFailure.reopensAfterCachedClose

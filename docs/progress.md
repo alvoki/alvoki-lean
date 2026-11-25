@@ -586,4 +586,11 @@ the directory sync effect. [Checkpoint close through retries](../lean/Alvoki/Sto
 
 An interrupted rotation now follows the public call through its active-file guard and absent successor read to the exact exclusive open. The reached phase is poisoned, the old owner remains held, and the no-follow lookup and interrupted open preserve the original cache. In the rotation model the reported open effect leaves the successor absent or creates its empty binding. After observed power loss selects a survivor, the ordinary retry prefix derives the exact keeper and prepares the original history before any successful open. The primitive reports supply the name effect and survivors. Raw inode and descriptor identity at the exclusive open remain a separate obligation. [Interrupted rotation creation](../lean/Alvoki/Storage/Disk/RotationCreateInterruption.lean)
 
+An observed writer exit after a completed checkpoint drops the lock and directory slots held by the exiting
+process. The census at the actual checkpoint return determines whether an inherited reference retains the owner.
+The retry prefix starts from the same projected live files. A later held open on the reported original lock and
+directory objects reads the exact manifest and selected runs from that checkpoint. The same WAL replay accounts
+for both client ledgers. Primitive reports supply the original file projection, process-exit slot census, and the
+later recovery effects and acquisition. [Process exit after checkpoint](../lean/Alvoki/Storage/Disk/Checkpoint/ProcessExit.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

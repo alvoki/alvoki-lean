@@ -18,6 +18,8 @@ theorem SegmentedBatchDatabaseTrace.append
   | table _ step ih => exact .table ih step
   | checkpoint _ observed installed ih => exact .checkpoint ih observed installed
   | cleanReopenObserved _ closed endpoint ih => exact .cleanReopenObserved ih closed endpoint
+  | readyProcessExit _ exit attempts lock distinct installed ih =>
+    exact .readyProcessExit ih exit attempts lock distinct installed
   | checkpointManifestStageError _ endpoint ih => exact .checkpointManifestStageError ih endpoint
   | checkpointManifestError _ endpoint ih => exact .checkpointManifestError ih endpoint
   | checkpointRunError _ endpoint ih => exact .checkpointRunError ih endpoint
