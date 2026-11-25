@@ -36,6 +36,7 @@ import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
 import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeContendedOpen
+import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeUncertainStageRetry
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
@@ -225,6 +226,12 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (earlier : next.reads = current.ready.reads) :
       NativeExecutionStep current (.acknowledged request prepared.batch)
         ⟨current.history ++ prepared.batch, current.submissions ++ [.acknowledgedBatch prepared.batch], next⟩
+  | acknowledgedClassified (current : NativeExecutionPosition) {request : WriteRequest}
+      {calls : WriteRequest.Calls (DescriptorInventory × DescriptorSlot × Nat)} {sequence : UInt64}
+      {reached : OpenWriteFiles} {custody : NativePendingWriteCensus current.ready.state reached.1}
+      (ack : ClassifiedWriteAcknowledgement current.ready request calls sequence reached custody) :
+      NativeExecutionStep current (.acknowledged request ack.report.batch)
+        ⟨current.history ++ ack.report.batch, current.submissions ++ [.acknowledgedBatch ack.report.batch], ack.next⟩
   | checkpoint (current : NativeExecutionPosition)
       {image : Type} {attempt : SegmentedCheckpointReport current.ready.state.session.directory current.ready.state.writer}
       {reports : CheckpointCompletionReports (CensusDirectoryCache × image) attempt}
@@ -592,6 +599,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], observed.frames.1⟩
   case acknowledged reads =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reads⟩
+  case acknowledgedClassified ack =>
+    exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using ack.reads⟩
   case checkpoint => simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads,
       NativeReadPosition.afterMaintenance]
   case collectCoveredWal => simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions,

@@ -331,6 +331,7 @@ import Alvoki.Storage.Disk.NativeGroupedPendingWrite
 import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.NativeWriteClassification
 import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
+import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
 import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
@@ -1719,6 +1720,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.interpretsOpenWritePreflight
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.Calls.observesPreflight
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preflightsClassifiedWriteOnOpenPhase
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.ReturnedReports.acknowledgesOfNonemptyReturn
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.acknowledgesClassifiedWrite
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.releasePin
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.advanceFloor
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.releasesViaOpenReferences
