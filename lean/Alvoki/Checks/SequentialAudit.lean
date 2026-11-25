@@ -206,6 +206,7 @@ import Alvoki.Storage.Disk.ClientWriteTrace
 import Alvoki.Storage.Disk.ReturnedWriteRecovery
 import Alvoki.Storage.Disk.PendingClientReplay
 import Alvoki.Storage.Disk.PendingAlignedReopen
+import Alvoki.Storage.Disk.PendingFirstAppendReopen
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
 import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
@@ -1015,6 +1016,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.stopsBatchSchedule
 #check_axioms Alvoki.Storage.DiskSession.runSingleWriteWithInterruption_eq_singleton
 #check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Valid.stopsSingleWriteSchedule
+#check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Valid.stopsWriteRequest
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.stopsSingleWriteSchedule
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.stopsWriteRequest
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedBatchMarker
@@ -1351,6 +1353,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryInstalled.refinesPendingClient
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensReturnedWriteAligned
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensInterruptedMarkerAligned
+#check_axioms Alvoki.Storage.DiskSession.CapturedKeeperFinish.installsAfterVacancy
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensInterruptedFirstAppend
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.replaysClient
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysClientAtManifestDirectory
 #check_axioms Alvoki.Storage.CheckpointPublication.successfulFrame

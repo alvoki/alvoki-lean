@@ -149,6 +149,8 @@ first-append interruptions, returned publication errors, and mixed checkpoint an
 through the same carried file, cache and descriptor state.
 [First client execution](../lean/Alvoki/Storage/Disk/BootstrapExecution.lean) · [Recovery prefixes](../lean/Alvoki/Storage/Disk/BatchRecoveryPrefix.lean)
 
+At the first append, either submitted write interface can stop with the same issued path and bytes. The exact poisoned file state begins the reported process-exit or power-loss transition and retry prefix. The old marker identifies the prior checkpoint and the acknowledged WAL. A final healthy held open without later names installs that history, including when it replaces a longer keeper. The result names the actual returned table, live lock and directory slots, and the replay of recorded and newly guarded reads. Final lock vacancy, primitive read identities and the selected repair effects are locally reported. [Captured first-append reopen](../lean/Alvoki/Storage/Disk/PendingFirstAppendReopen.lean)
+
 A returned batch-publication error supplies its exact file cut to the same retry-prefix induction. Every reported failed open, reference drop or crash retains the checkpoint manifest binding and selects the old history or the whole batch. Given the reported unlock or last-reference drop and a later admitted open with held reads of the original checkpoint run map and successful required repair calls, the client continues from the exact returned session and selected WAL. [Recovery after a returned write](../lean/Alvoki/Storage/Disk/ReturnedWriteRecovery.lean)
 
 For a reported uncertain write followed by a healthy aligned open, the whole transition now starts at
