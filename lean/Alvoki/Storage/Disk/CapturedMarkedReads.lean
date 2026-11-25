@@ -13,6 +13,15 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
 
 namespace CensusOpenAdmissionReports
 
+/-- Read the native flat-WAL and marker guards before choosing the reached
+marked opener or markerless bootstrap. Both use the same held admission. -/
+def recoverWithMarked (admission : CensusOpenAdmissionReports input directory inventory retry)
+    (resolved : DiskDirectory) (marked bootstrap : EStateM IO.Error CensusOpenState Reopened) :
+    EStateM IO.Error CensusOpenState Reopened :=
+  recoverSegmentedWalWith
+    (rejectFlatWalWith resolved (optionalMetadataWith (admission.lookup (resolved.file .wal))))
+    (optionalMetadataWith (admission.lookup (resolved.file .walBoundary))) marked bootstrap
+
 /-- The original cache capture supplies the directory identity. The read
 report supplies the canonical lock child and the intervening slot drops. -/
 def readLifetime (admission : CensusOpenAdmissionReports input directory inventory retry)
@@ -149,9 +158,7 @@ def recoverThroughReads (report : CapturedMarkedReadReports admission layout pub
     (bootstrap : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened)
     (resolved : DiskDirectory) (owner : DescriptorSlot) (cache : CensusDirectoryCache) :
     EStateM IO.Error CensusOpenState Reopened :=
-  recoverSegmentedWalWith
-    (rejectFlatWalWith resolved (optionalMetadataWith (admission.lookup (resolved.file .wal))))
-    (optionalMetadataWith (admission.lookup (resolved.file .walBoundary)))
+  admission.recoverWithMarked resolved
     (report.walReads.prepare report.reads.readPrefix >>= finish resolved owner cache)
     (bootstrap resolved cache)
 
@@ -175,7 +182,8 @@ theorem recoverThroughReads_prepared (report : CapturedMarkedReadReports admissi
   have selectedRoute : optionalMetadataWith (admission.lookup (directory.file .walBoundary))
       (admission.reached, admission.held) = .ok (some metadata) (admission.reached, admission.held) := by
     simp only [optionalMetadataWith, Bind.bind, EStateM.bind, marker, Pure.pure, EStateM.pure]
-  simp only [recoverThroughReads, recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind,
+  simp only [recoverThroughReads, CensusOpenAdmissionReports.recoverWithMarked, recoverSegmentedWalWith, rejectFlatWalWith,
+    Bind.bind, EStateM.bind,
     flat, Option.isSome_none, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure,
     selectedRoute, Option.isSome_some, read]
 
