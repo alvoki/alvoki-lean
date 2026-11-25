@@ -234,6 +234,7 @@ import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativeExecutionPendingWrite
 import Alvoki.Storage.Disk.NativePendingFirstAppend
 import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
+import Alvoki.Storage.Disk.NativeFirstAppendPowerLoss
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 import Alvoki.Storage.Disk.NativeInterruptedCloseReopen
@@ -1566,6 +1567,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendExitReads.rootAndLock
 #check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendExitReads.sameKeeper
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversFirstAppendAfterExit
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversFirstAppendPowerLoss
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.binding
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.returns
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.rejectsReads
