@@ -1359,6 +1359,17 @@ structure TwoSlotDiskTable where
 
 namespace TwoSlotDiskTable
 
+/-- Install the recovered table and retain the marker from the same open. -/
+@[macro_inline] def installWithMarker [Monad m] {table cell handle : Type}
+    (recover : m (WalSegmentRepair.Reopened × handle × WAL.TwoSlot.Selection))
+    (install : WalSegmentRepair.Reopened → m table)
+    (allocateMarker : Option (handle × WAL.TwoSlot.Selection) → m cell) : m (table × cell) := do
+  let (opened, marker, selection) ← recover
+  let table ← install opened
+  let cell ← allocateMarker (some (marker, selection))
+  pure (table, cell)
+
+
 @[extern "alvoki_write_wal_marker_slot"]
 private opaque writeSlot : @& IO.FS.Handle → UInt64 → @& ByteArray → IO Unit
 
@@ -1433,13 +1444,16 @@ def «open» (path : FilePath) : IO TwoSlotDiskTable := do
     (fun _ => lock.unlock) fun _ => do
       rejectFlatWal dir
       let files ← SyncFiles.open dir.path
-      let (opened, marker, selection) ← if (← optionalMetadata (dir.file .walBoundary)).isSome then do
-        reopen dir files
-      else do
-        let opened ← bootstrap dir files
-        let (marker, selection) ← openMarker dir
-        pure (opened, marker, selection)
-      return ⟨← installReopened dir lock files opened, ← IO.mkRef (some (marker, selection))⟩
+      let (table, marker) ← installWithMarker
+        (do
+          if (← optionalMetadata (dir.file .walBoundary)).isSome then
+            reopen dir files
+          else
+            let opened ← bootstrap dir files
+            let (marker, selection) ← openMarker dir
+            pure (opened, marker, selection))
+        (installReopened dir lock files) (fun marker => liftM (IO.mkRef marker))
+      pure ⟨table, marker⟩
 
 /-- Admission and ownership use the same schedule as rename-backed open.
 The native marker read, its recovery and session installation all run
@@ -1451,13 +1465,16 @@ theorem open_admission (input : FilePath) :
           (fun _ => IO.userError s!"database already open: {directory.path}") (fun _ => lock.unlock) fun _ => do
             rejectFlatWal directory
             let files ← SyncFiles.open directory.path
-            let (opened, marker, selection) ← if (← optionalMetadata (directory.file .walBoundary)).isSome then do
-              reopen directory files
-            else do
-              let opened ← bootstrap directory files
-              let (marker, selection) ← openMarker directory
-              pure (opened, marker, selection)
-            return ⟨← installReopened directory lock files opened, ← IO.mkRef (some (marker, selection))⟩) := rfl
+            let (table, marker) ← installWithMarker
+              (do
+                if (← optionalMetadata (directory.file .walBoundary)).isSome then
+                  reopen directory files
+                else
+                  let opened ← bootstrap directory files
+                  let (marker, selection) ← openMarker directory
+                  pure (opened, marker, selection))
+              (installReopened directory lock files) (fun marker => liftM (IO.mkRef marker))
+            pure ⟨table, marker⟩) := rfl
 
 /-- The native decoder observes the same open handle returned for the
 marker barrier. Reading one extra byte detects an oversized file. -/

@@ -74,13 +74,13 @@ theorem installsWithRecoveredMarker
     (markerContents : heap → IO.Ref (Option (handle × WAL.TwoSlot.Selection)) →
       Option (Option (handle × WAL.TwoSlot.Selection)))
     (initializedMarker : markerContents afterMarker cell = some (some (marker, selected))) :
-    (do
-      let (reopened, marker, selected) ←
+    TwoSlotDiskTable.installWithMarker
+      (do
         if (← probe).isSome then WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish
-        else bootstrap
-      let table ← installReady reopened.installed allocatePhase allocateToken (fun phase token => pure (assemble phase token))
-      let cell ← allocateMarker (some (marker, selected))
-      pure (table, cell)) entry = .ok (assemble observed.phase observed.token, cell) afterMarker ∧
+        else bootstrap)
+      (fun reopened => installReady reopened.installed allocatePhase allocateToken
+        (fun phase token => pure (assemble phase token)))
+      allocateMarker entry = .ok (assemble observed.phase observed.token, cell) afterMarker ∧
     (assemble observed.phase observed.token).UsesOpenReferences directory lock syncFiles observed.phase observed.token ∧
     phaseContents afterMarker observed.phase = some (.ready opened.installed) ∧
     markerContents afterMarker cell = some (some (marker, selected)) := by
@@ -88,7 +88,7 @@ theorem installsWithRecoveredMarker
       .ok (opened, marker, selected) before := by
     simp only [WAL.TwoSlot.reopenAcquiredWith_reports, markerRead, WAL.TwoSlot.reopenWith_reports, readWal, markerSynced, repaired]
   obtain ⟨_, references, ready⟩ := observed.installs constructor
-  exact ⟨by simp only [Bind.bind, EStateM.bind, found, Option.isSome_some, ↓reduceIte, worker, installReady, observed.phaseAllocated, observed.tokenAllocated, markerAllocated, Pure.pure, EStateM.pure],
+  exact ⟨by simp only [TwoSlotDiskTable.installWithMarker, Bind.bind, EStateM.bind, found, Option.isSome_some, ↓reduceIte, worker, installReady, observed.phaseAllocated, observed.tokenAllocated, markerAllocated, Pure.pure, EStateM.pure],
     references, keepsPhase.trans ready, initializedMarker⟩
 
 end OpenReferenceAllocations
