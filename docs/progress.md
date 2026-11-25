@@ -7,8 +7,10 @@ ownership and a fresh session identity from successful preparation, marker
 sync and keeper repair reports. Once the marker is authorized, every
 admitted keeper byte survivor after repair or another crash replays to the
 same installed table, and the earlier sealed bytes remain exact. The proof
-derives successful preparation from the ordered checkpoint and selected
-WAL read reports. It preserves the state reached by those reads and
+derives successful preparation from the selected manifest, ordered run
+reads and WAL read reports. The checkpoint reader hands its final reached
+state directly to the WAL directory scan. Preparation preserves the state
+reached by those reads and
 supplies their exact keeper to repair. The selected WAL reader now derives
 its report from the directory listing, extent scan, ordered seal reads and
 the final bounded keeper read, in order on their reached states. The full

@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.DiskTable
@@ -1300,7 +1301,8 @@ theorem recoveredRetries_installedReads
     {first : Nat} {log : List DatabaseSubmissions}
     {directory : DiskDirectory} {descriptor nextRef : Nat} {unlock : DiskSession.UnlockReport}
     {openedFrom : LockedFileState FileImage}
-    (readCheckpoint : EStateM IO.Error FileImage (Option (PackedTable × UInt64)))
+    (readManifest : EStateM IO.Error FileImage (Option ByteArray))
+    (readRunPrefix : System.FilePath → Nat → EStateM IO.Error FileImage ByteArray)
     (list : System.FilePath → EStateM IO.Error FileImage (Array IO.FS.DirEntry))
     (lstat : System.FilePath → EStateM IO.Error FileImage (Except IO.Error IO.FS.Metadata))
     (readSeal : System.FilePath → Nat → EStateM IO.Error FileImage ByteArray)
@@ -1311,13 +1313,22 @@ theorem recoveredRetries_installedReads
     (oldSize : current.frontier.toNat = (WAL.encode history).size)
     (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
     (acquisition : DiskSession.TryLockObserves openedFrom.owners directory (.ok true))
-    {checkedState : FileImage} {checkpointResult : Option (PackedTable × UInt64)}
-    (checkpointRead : readCheckpoint openedFrom.image = .ok checkpointResult checkedState)
+    {checkpointResult : Option (PackedTable × UInt64)}
     (checkpointBase : (checkpointResult.getD (.empty, 0)).1 = base)
-    {durableRuns : CheckpointPublication.RunFiles}
+    {durableRuns : CheckpointPublication.RunFiles} {checkpointReports : OpenPathReadReports}
     (checkpointSelected : SelectedIntegrityCheckpoint durableRuns target.pair.manifest checkpointResult)
+    (sizes : WalSegmentRepair.SizedCheckpointRunReports directory checkpointReports
+      target.pair.manifest durableRuns)
+    (atRun : Nat → FileImage)
+    (manifestSeen : readManifest openedFrom.image = .ok target.pair.manifest (atRun 0))
+    (runReads : ∀ bytes manifest, target.pair.manifest = some bytes →
+      Manifest.IntegrityCheckpoint.decode bytes = .ok manifest →
+      ∀ index < manifest.header.runCount.toNat, ∀ payload,
+        durableRuns manifest.header.generation index = some payload →
+        readRunPrefix (directory.file (.run manifest.header.generation index)) payload.size (atRun index) =
+          .ok payload (atRun (index + 1)))
     {entries : Array IO.FS.DirEntry} {listedState scannedState : FileImage}
-    (listed : list directory.path checkedState = .ok entries listedState)
+    (listed : list directory.path (atRun (WalSegmentRepair.selectedRunCount target.pair.manifest)) = .ok entries listedState)
     {extents required : List (Nat × IO.FS.Metadata)} {newer : List Nat}
     (scanned : readWalSegmentExtentsWith directory lstat (entries.toList.map (·.fileName)) listedState =
       .ok extents scannedState)
@@ -1355,7 +1366,9 @@ theorem recoveredRetries_installedReads
       ∀ file ∈ sealed, after.kept file.1 = some file.2) ∧
     ∃ session final reference state pin pinned,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
-        (reopenWith (WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
+        (reopenWith (WalSegmentRepair.prepareBoundedMarkedFromReaders directory
+          (readIntegrityCheckpointSized directory readManifest
+            (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
           (fun _ => pure (some (Boundary.encode selected.frontier))) (fun start length => WalSegmentRepair.readSelectedWithCachedExtents directory start length
             list lstat readSeal readKeeper)) stabilize finish)
         openedFrom = .ok session final ∧
@@ -1411,6 +1424,10 @@ theorem recoveredRetries_installedReads
     rw [full] at checked selectedReplay
     exact (recoverMarkedWalSegments_removeKeeperTail base selected.frontier sealed target.first
       target.trimmed tail aligned (Nat.le_of_eq keeperSize.symm) checked).symm.trans selectedReplay
+  let readCheckpoint := readIntegrityCheckpointSized directory readManifest
+    (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix
+  have checkpointRead := sizes.readExactWithState checkpointSelected readManifest readRunPrefix
+    openedFrom.image atRun manifestSeen runReads
   have read := prepareSelected_stateful directory (Boundary.encode selected.frontier)
     selected.frontier (Boundary.decode_encode _) readCheckpoint readWal checkpointRead
     (checkpointBase.symm ▸ walRead)
