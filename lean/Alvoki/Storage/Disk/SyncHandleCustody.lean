@@ -82,6 +82,13 @@ theorem Cache.Agrees.consume {cache : Cache handle} {dir path : FilePath}
 
 /-- The newly captured object is the one handed to the subsequent
 pending-file barrier. Its effect leaves no pending handle for that name. -/
+theorem Cache.resolveRemembered {cache : Cache handle} {dir path : FilePath} (separate : path ≠ dir)
+    (descriptor : handle) (openRead : FilePath → EStateM IO.Error state handle) (before : state) :
+    (cache.remember path descriptor).resolve dir path openRead before =
+      .ok descriptor (cache.consume path, before) := by
+  have different : (path == dir) = false := beq_eq_false_iff_ne.mpr separate
+  simp [Cache.resolve, Cache.remember, Cache.consume, pushPending, different]
+
 theorem syncRemembered {cache : Cache handle} {dir path : FilePath} (separate : path ≠ dir)
     (descriptor : handle) (openRead : FilePath → EStateM IO.Error state handle)
     (fsync : handle → EStateM IO.Error state Unit) (before : state) :
@@ -89,10 +96,7 @@ theorem syncRemembered {cache : Cache handle} {dir path : FilePath} (separate : 
       match fsync descriptor before with
       | .ok result after => .ok result (cache.consume path, after)
       | .error cause after => .error cause (cache.consume path, after) := by
-  have pending : (cache.remember path descriptor).pending.find? (fun entry => entry.1 == path) =
-      some (path, descriptor) := by simp [Cache.remember, pushPending]
-  rw [(pendingSync separate pending openRead fsync before).1]
-  cases fsync descriptor before <;> simp only [Cache.remember, pushPending, Cache.consume, List.filter_cons,
-    bne_self_eq_false, Bool.false_eq_true, ↓reduceIte] <;> rfl
+  simp only [sync, Cache.resolveRemembered separate descriptor openRead before]
+  cases fsync descriptor before <;> rfl
 
 end Alvoki.Storage.SyncHandleRouting

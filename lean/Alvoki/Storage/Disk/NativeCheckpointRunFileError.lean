@@ -1,97 +1,45 @@
-import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryError
-import Alvoki.Storage.Disk.CheckpointRunFileSyncFailure
+import Alvoki.Storage.Disk.NativeCheckpointRunFileIssue
 
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication SyncHandleRouting WalSegmentRepair
 
-/-- The current checkpoint run was guarded, opened and flushed before its
-issued file sync returned an error. The preceding run pairs have finished.
-The local finalizer closes this same file description before return. -/
+/-- The run file sync returns an ordinary error. Its local finalizer
+closes the same temporary description before the caller sees the error. -/
 structure NativeCheckpointRunFileError {image : Type} (state : NativeReadyState)
-    (cut : CheckpointPowerCut state.session.directory state.writer) where
-  index : Nat
-  within : index < cut.checkpoint.table.runs.length
-  prior : NativeCheckpointRunObservations (image := image) state cut index
-  completed : cut.completed = runSteps index ++ [.writeRun index]
-  run : Compaction.CheckedRun
-  selected : cut.checkpoint.table.runs.toArray[index]? = some run
-  handle : CheckpointOpenHandle
-  guard : AcceptedRunGuard prior.primitives.lookup (state.session.directory.file (.run cut.checkpoint.prepared.generation index))
-    (prior.atRun index)
-  opened : image
-  buffered : image
-  flushed : image
-  openReturned : prior.primitives.openRun (state.session.directory.file (.run cut.checkpoint.prepared.generation index))
-    (prior.atRun index) = .ok handle opened
-  writeReturned : prior.primitives.write handle run.run.bytes opened = .ok () buffered
-  flushReturned : prior.primitives.flush handle buffered = .ok () flushed
-  free : ∀ old ∈ (prior.descriptors (prior.atRun index)).slots, old.address ≠ handle.2.1.address
-  fresh : (prior.descriptors (prior.atRun index)).references handle.2.1.description = []
-  allocated : handle.1 = (prior.descriptors (prior.atRun index)).insert handle.2.1 free
-  afterOpen : prior.descriptors opened = handle.1
-  atFileSync : prior.descriptors flushed = handle.1
-  links : RunOpenLinkCensus
-    (path := state.session.directory.file (.run cut.checkpoint.prepared.generation index))
-    (before := prior.atRun index) prior.primitives.lookup (prior.views index).visible (handle.1.inode handle.2.1.description)
-  issueBindings : FilePath → Option Nat
-  issuingFile : issueBindings (state.session.directory.file (.run cut.checkpoint.prepared.generation index)) =
-    some (handle.1.inode handle.2.1.description)
-  directoryAtIssue : issueBindings state.session.directory.path = some (state.census.inode state.directorySlot.description)
-  lockAtIssue : issueBindings (state.session.directory.file .lock) = some (state.census.inode state.owner.description)
+    (cut : CheckpointPowerCut state.session.directory state.writer)
+    extends NativeCheckpointRunFileEffect (image := image) state cut where
   cause : IO.Error
-  after : image
   failed : prior.primitives.fsync handle flushed = .error cause after
   afterClose : prior.descriptors after = handle.1.afterDrops [handle.2.1.closeEvent]
-  fileEffect : prior.inodes after = if cut.tookEffect then
-    (prior.inodes flushed).completeFileSync (handle.1.inode handle.2.1.description) else prior.inodes flushed
-  written : (prior.inodes flushed).visible (handle.1.inode handle.2.1.description) = run.run.bytes
-  view : RunDirectoryInodeView state.session.directory (prior.inodes after) (prior.runs after)
-  sameNames : view.visible = issueBindings
-  frame : RunWriteInodeFrame (state.session.directory.file (.run cut.checkpoint.prepared.generation index))
-    (handle.1.inode handle.2.1.description) (prior.inodes flushed) (prior.views index) view
-  walAndPair : prior.files after = prior.files (prior.atRun index)
 
 namespace NativeCheckpointRunFileError
 
 variable {image : Type} {state : NativeReadyState} {cut : CheckpointPowerCut state.session.directory state.writer}
 
 abbrev path (report : NativeCheckpointRunFileError (image := image) state cut) : FilePath :=
-  state.session.directory.file (.run cut.checkpoint.prepared.generation report.index)
+  report.toNativeCheckpointRunFileEffect.path
 
 def error (report : NativeCheckpointRunFileError (image := image) state cut) : IO.Error :=
   IO.userError s!"sync failed for '{report.path}': {report.cause}"
 
 def atIssue (report : NativeCheckpointRunFileError (image := image) state cut) : CensusDirectoryCache × image :=
-  (state.cache.remember report.path report.handle, report.flushed)
+  report.toNativeCheckpointRunFileEffect.toNativeCheckpointRunFileIssue.atIssue
 
-theorem current (report : NativeCheckpointRunFileError (image := image) state cut) : cut.current = .syncRun report.index := by
-  obtain ⟨_, paired⟩ := steps_atRunPair report.within
-  have ordered := cut.schedule
-  rw [report.completed, paired] at ordered
-  simp only [List.append_assoc, List.cons_append, List.nil_append] at ordered
-  exact (List.cons.inj (List.cons.inj (List.append_cancel_left ordered)).2).1.symm
+theorem current (report : NativeCheckpointRunFileError (image := image) state cut) : cut.current = .syncRun report.index :=
+  report.toNativeCheckpointRunFileEffect.toNativeCheckpointRunFileIssue.current
 
 theorem reachedWrite (report : NativeCheckpointRunFileError (image := image) state cut) :
     report.prior.perform cut.checkpoint.prepared cut.checkpoint.manifest (.writeRun report.index)
       (state.cache, report.prior.atRun report.index) = .ok () report.atIssue :=
-  report.prior.primitives.remembersRun state.session.directory cut.checkpoint.prepared cut.checkpoint.manifest report.selected
-    state.cache report.guard report.openReturned report.writeReturned report.flushReturned
+  report.toNativeCheckpointRunFileEffect.toNativeCheckpointRunFileIssue.reachedWrite
 
 /-- The actual preflight reaches the issued file sync on the exact pending
 handle installed by this run's write and flush. -/
 theorem issues (report : NativeCheckpointRunFileError (image := image) state cut) (valid : state.Valid) :
     CheckpointIssue report.prior.perform state.session.phase report.prior.entry cut.checkpoint.prepared cut.checkpoint.manifest
-      cut.completed (.syncRun report.index) report.atIssue := by
-  have scheduled := cut.schedule
-  rw [report.current] at scheduled
-  have returned : (cut.completed.forM (report.prior.perform cut.checkpoint.prepared cut.checkpoint.manifest))
-      report.prior.entry.image = .ok () report.atIssue := by
-    rw [report.completed, List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
-    simp only [Bind.bind, EStateM.bind, report.prior.runPrefix, List.forM_eq_forM, List.forM_cons,
-      report.reachedWrite, List.forM_nil, Pure.pure, EStateM.pure]
-  rw [valid.phase]
-  exact cut.preflight.reachesIssue report.prior.perform report.prior.entry scheduled returned
+      cut.completed (.syncRun report.index) report.atIssue :=
+  report.toNativeCheckpointRunFileEffect.toNativeCheckpointRunFileIssue.issues valid
 
 theorem callbackFails (report : NativeCheckpointRunFileError (image := image) state cut) :
     report.prior.perform cut.checkpoint.prepared cut.checkpoint.manifest (.syncRun report.index) report.atIssue =
@@ -147,20 +95,13 @@ theorem runBytes (report : NativeCheckpointRunFileError (image := image) state c
     report.view.visible report.path = some inode ∧
     (report.prior.runs report.after).visible cut.checkpoint.prepared.generation report.index = some report.run.run.bytes ∧
     (report.prior.inodes report.after).crashBytes inode = (if cut.tookEffect then [report.run.run.bytes]
-      else (report.prior.inodes report.flushed).crashBytes inode) := by
-  intro inode
-  have bound : report.view.visible report.path = some inode := by rw [report.sameNames]; exact report.issuingFile
-  refine ⟨bound, ?_, ?_⟩
-  · rw [report.view.visibleProjects _ _ _ bound, report.fileEffect]
-    cases cut.tookEffect <;> exact congrArg some report.written
-  · rw [report.fileEffect]
-    cases cut.tookEffect <;> simp [WAL.Boundary.WalInodeImage.completeFileSync, WAL.Boundary.WalInodeImage.reportFileSync,
-      inode, report.written]
+      else (report.prior.inodes report.flushed).crashBytes inode) :=
+  report.toNativeCheckpointRunFileEffect.runBytes
 
 theorem stableAfter (report : NativeCheckpointRunFileError (image := image) state cut) {path : FilePath}
     {inode : Nat} {bytes : ByteArray} (different : path ≠ report.path)
     (stable : (report.prior.views report.index).Stable path inode bytes) : report.view.Stable path inode bytes :=
-  report.frame.keepsStableOnSyncError report.fileEffect (report.links.privateBinding report.guard) different stable
+  report.toNativeCheckpointRunFileEffect.stableAfter different stable
 
 theorem priorRunBytes (report : NativeCheckpointRunFileError (image := image) state cut) (valid : state.Valid)
     {bytes payload : ByteArray} {metadata : Manifest.IntegrityCheckpoint} {index : Nat}
@@ -169,24 +110,23 @@ theorem priorRunBytes (report : NativeCheckpointRunFileError (image := image) st
     (stored : state.writer.published.durable metadata.header.generation index = some payload) :
     ∃ inode, (report.prior.views 0).Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload ∧
       report.view.Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload :=
-  report.prior.priorRunAfter valid report.stableAfter binding decoded within stored
+  report.toNativeCheckpointRunFileEffect.priorRunBytes valid binding decoded within stored
 
 theorem filesAtReturn (report : NativeCheckpointRunFileError (image := image) state cut) :
     report.prior.files report.after = state.files.image :=
-  report.walAndPair.trans (report.prior.filesAtRun report.index (Nat.le_refl _))
+  report.toNativeCheckpointRunFileEffect.filesAtEffect
 
 theorem manifestAtReturn (report : NativeCheckpointRunFileError (image := image) state cut) :
     match (report.prior.files report.after).directory.active.manifest with
     | none => report.view.visible (state.session.directory.file .manifest) = none
     | some bytes => ∃ inode, (report.prior.views 0).Stable (state.session.directory.file .manifest) inode bytes ∧
-        report.view.Stable (state.session.directory.file .manifest) inode bytes := by
-  rw [report.filesAtReturn]
-  exact report.prior.manifestAfter report.frame.visibleNames report.stableAfter
+        report.view.Stable (state.session.directory.file .manifest) inode bytes :=
+  report.toNativeCheckpointRunFileEffect.manifestAtEffect
 
 theorem selectedCheckpoint (report : NativeCheckpointRunFileError (image := image) state cut) (valid : state.Valid) :
     SelectedIntegrityCheckpoint (report.prior.runs report.after).guaranteed
       (report.prior.files report.after).directory.active.manifest state.writer.checkpoint :=
-  report.prior.selectedAfter valid report.stableAfter report.filesAtReturn
+  report.toNativeCheckpointRunFileEffect.selectedCheckpoint valid
 
 end NativeCheckpointRunFileError
 /-- A returned checkpoint run sync error reaches the poisoned phase

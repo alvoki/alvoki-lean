@@ -22,19 +22,29 @@ def checkpointSyncUntilStop (directory : FilePath)
       | .ok result reached => .ok result (cache, reached)
       | .error path reached => .error path (cache, reached)
 
+theorem checkpointSyncGroupStops {directory path : FilePath} {cache selectedCache : CensusDirectoryCache}
+    {openRead : FilePath → EStateM IO.Error image CheckpointOpenHandle}
+    {fsync : CheckpointOpenHandle → EStateM FilePath image (Except IO.Error Unit)}
+    {handle : CheckpointOpenHandle} {files reached : image}
+    (resolved : cache.resolve directory path openRead files = .ok handle (selectedCache, files))
+    (issued : fsync handle files = .error path reached) :
+    (SyncPathGroup.run (checkpointSyncUntilStop directory openRead fsync) #[path]).run (cache, files) =
+      .error path (selectedCache, reached) := by
+  have stopped : checkpointSyncUntilStop directory openRead fsync path (cache, files) =
+      .error path (selectedCache, reached) := by
+    simp only [checkpointSyncUntilStop, resolved, issued]
+  simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil, MonadExcept.tryCatch, MonadExceptOf.tryCatch,
+    tryCatchThe, ExceptT.tryCatch, Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind,
+    StateT.pure, Pure.pure, ExceptT.pure, stopped]
+
 theorem checkpointCachedDirectorySyncStops {directory : FilePath} {cache : CensusDirectoryCache}
     {openRead : FilePath → EStateM IO.Error image CheckpointOpenHandle}
     {fsync : CheckpointOpenHandle → EStateM FilePath image (Except IO.Error Unit)}
     {handle : CheckpointOpenHandle} {files reached : image}
     (cached : cache.directory = some handle) (issued : fsync handle files = .error directory reached) :
     (SyncPathGroup.run (checkpointSyncUntilStop directory openRead fsync) #[directory]).run (cache, files) =
-      .error directory (cache, reached) := by
-  have stopped : checkpointSyncUntilStop directory openRead fsync directory (cache, files) =
-      .error directory (cache, reached) := by
-    simp only [checkpointSyncUntilStop, Cache.resolve, beq_self_eq_true, ↓reduceIte, cached, issued]
-  simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil, MonadExcept.tryCatch, MonadExceptOf.tryCatch,
-    tryCatchThe, ExceptT.tryCatch, Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind,
-    StateT.pure, Pure.pure, ExceptT.pure, stopped]
+      .error directory (cache, reached) :=
+  checkpointSyncGroupStops (by simp only [Cache.resolve, beq_self_eq_true, ↓reduceIte, cached]) issued
 
 /-- The issued final directory fsync stops without a native return.
 The outer path identifies the interruption. Any ordinary return would
