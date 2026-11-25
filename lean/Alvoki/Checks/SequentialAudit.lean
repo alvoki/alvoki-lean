@@ -2326,9 +2326,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawStoppedFirstAppendExitEffects.releases
 #check_axioms Alvoki.Storage.DiskSession.NativeStoppedFirstAppendExitTableOpen.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeStoppedAppendFinalizedRetry.reaches
+#check_axioms Alvoki.Storage.DiskSession.NativeStoppedAppendFinalizedRetry.reachesWithAccess
 #check_axioms Alvoki.Storage.DiskSession.RawContendedAliasOpen.returns
 #check_axioms Alvoki.Storage.DiskSession.RawStoppedFirstAppendExitEffects.finalizesContendedOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeStoppedAppendFinalizedRetry.reachesAfterContention
+#check_axioms Alvoki.Storage.DiskSession.NativeStoppedAppendFinalizedRetry.recordsContendedRetry
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.common
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.executes

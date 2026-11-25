@@ -66,15 +66,17 @@ variable {current : NativeOpenedPosition opened} {request : WriteRequest}
 /-- The stopped write has one submission and the failed opens retain
 their ordered path and diagnostic pairs. -/
 def NativeStoppedAppendFinalizedRetry.event
-    (seen : NativeStoppedAppendFinalizedRetry current request inputs input view names bytes) : NativeExecutionEvent :=
-  .interruptedAppendRetriesRecovered request seen.returns input seen.prepared.batch
+    (seen : NativeStoppedAppendFinalizedRetry current request inputs input view names bytes)
+    (busy : Option (FilePath × IO.Error) := none) : NativeExecutionEvent :=
+  .appendRetryRecovery request seen.returns input seen.prepared.batch busy
 
 /-- Ordered rejected opens keep the live checkpoint and WAL selection.
 The exact returned table continues the prior reads and records one
 uncertain submission for the interrupted write. -/
 structure NativeStoppedAppendFinalizedRetry.Returned
     (seen : NativeStoppedAppendFinalizedRetry current request inputs input view names bytes)
-    {handle : NativeOpenedHandle heap} (start : NativeOpenedPosition handle) : Prop where
+    {handle : NativeOpenedHandle heap} (start : NativeOpenedPosition handle)
+    (busy : Option (FilePath × IO.Error) := none) : Prop where
   sourceWrite : opened.table.UsesOpenWriteSchedules current.current.ready.state.session.directory opened.files opened.phase
   requestMatches : seen.stop.request = request
   interrupted :
@@ -114,7 +116,7 @@ structure NativeStoppedAppendFinalizedRetry.Returned
     seen.physical.openTable seen.bootstrap seen.assemble makeCache = .ok handle.table start.reached
   reader : seen.reader.finish.run seen.reader.chronology =
     .ok start.current.ready.state.session (start.current.ready.state.census, start.current.ready.state.files)
-  common : NativeExecutionStep current.current seen.event start.current
+  common : NativeExecutionStep current.current (seen.event busy) start.current
   lock : handle.lock = seen.physical.raw.lock
   cache : handle.files.UsesCacheReferences seen.physical.seed.activeRef seen.physical.seed.pendingRef seen.physical.seed.directoryRef
   cacheDirectory : handle.files.AtDirectory current.current.ready.state.session.directory.path
@@ -137,9 +139,11 @@ structure NativeStoppedAppendFinalizedRetry.Returned
 /-- Execute the exact raw healthy marked opener after the reached
 finalized retry sequence. The continued replay is reconstructed from
 the old marker plan and the original poisoned append. -/
-theorem NativeStoppedAppendFinalizedRetry.reaches
-    (seen : NativeStoppedAppendFinalizedRetry current request inputs input view names bytes) :
-    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle), seen.Returned start := by
+theorem NativeStoppedAppendFinalizedRetry.reachesWithAccess
+    (seen : NativeStoppedAppendFinalizedRetry current request inputs input view names bytes)
+    {busy : Option (FilePath × IO.Error)}
+    (access : NativeFirstAppendRetryAccess seen.exit view seen.calls seen.release seen.rawExit.released busy) :
+    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle), seen.Returned start busy := by
   obtain ⟨_, poisoned, setter, _, stopped⟩ := seen.stop.stopsBeforeSuffix current seen.samePhase
   have samePoisoned := (EStateM.Result.ok.inj (setter.symm.trans seen.rawExit.setter)).2
   have released := seen.rawExit.releases
@@ -190,10 +194,19 @@ theorem NativeStoppedAppendFinalizedRetry.reaches
     exact ran
   · rw [position]
     exact installed.nativeReturned
-  · have stepped := NativeExecutionStep.recoverInterruptedAppendAfterRetries current.current seen.stop seen.exit pending
-      released.files released.census seen.attempts seen.plan seen.reader seen.originalView seen.originalRoot keeper next rfl rfl
+  · have reopened : NativeFirstAppendRetryRecovery current.current seen.stop seen.exit view seen.calls seen.init
+        seen.release seen.rawExit.released seen.returns input next :=
+      ⟨pending, released.files, released.census,
+        ⟨seen.last, seen.plan, seen.vacant, seen.reader, seen.attempts, seen.originalView, seen.originalRoot, keeper, rfl⟩,
+        rfl⟩
     rw [position]
-    simpa only [NativeStoppedAppendFinalizedRetry.event, seen.requestMatches] using stepped
+    cases busy with
+    | none =>
+      simpa only [NativeStoppedAppendFinalizedRetry.event, NativeExecutionEvent.appendRetryRecovery, seen.requestMatches] using
+        NativeExecutionStep.recoverInterruptedAppendAfterRetries current.current seen.stop seen.exit next reopened
+    | some receipt =>
+      simpa only [NativeStoppedAppendFinalizedRetry.event, NativeExecutionEvent.appendRetryRecovery, seen.requestMatches] using
+        NativeExecutionStep.recoverInterruptedAppendAfterContention current.current seen.stop seen.exit access next reopened
   · rw [position]
     exact token
   · rw [position]
@@ -207,5 +220,11 @@ theorem NativeStoppedAppendFinalizedRetry.reaches
   · rw [position]
   · rw [position]
     exact next.readPrefix.guardedReplay
+
+/-- The direct release report has no intervening contended open. -/
+theorem NativeStoppedAppendFinalizedRetry.reaches
+    (seen : NativeStoppedAppendFinalizedRetry current request inputs input view names bytes) :
+    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle), seen.Returned start :=
+  seen.reachesWithAccess .direct
 
 end Alvoki.Storage.DiskSession
