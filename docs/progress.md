@@ -1102,4 +1102,6 @@ The ordinary open classifier follows the same held worker past the second flat W
 
 A Linux fault fixture returned EIO immediately before or immediately after the native checkpoint manifest rename. The first run kept the old manifest inode and reopened only its run generation. The second installed the exact new manifest and reopened only the new generation. The new run bytes matched a successful control checkpoint, and both fresh processes reopened with the same acknowledged sequence and value. [Checkpoint rename error and exact table return](../lean/Alvoki/Storage/Disk/NativeCheckpointManifestRenameTableOpen.lean)
 
+The failed-open return interpretation now accounts for a reported close of the lock slot after unlock. It keeps the chosen diagnostic and the original files, and derives availability from the unlock result and remaining references to that description. Linux traces show the final lock close after either successful unlock or injected EPERM. The new rule uses the observed close and ownership effects. [Final lock drop](../lean/Alvoki/Storage/Disk/NativeOpenErrorLockFinalization.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

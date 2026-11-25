@@ -373,6 +373,7 @@ lake env leanchecker Alvoki.Storage.Disk.SessionRetentionFloor
 lake env leanchecker Alvoki.Storage.Disk.MarkedOpenControl
 lake env leanchecker Alvoki.Storage.Disk.DiskLockLifecycle
 lake env leanchecker Alvoki.Storage.Disk.LockDescriptionLifetime
+lake env leanchecker Alvoki.Storage.Disk.NativeOpenErrorLockFinalization
 lake env leanchecker Alvoki.Storage.Disk.LockedSegmentReopenEffects
 lake env leanchecker Alvoki.Storage.Disk.SegmentedSessionInstall
 lake env leanchecker Alvoki.Storage.Disk.BoundedSegmentSession

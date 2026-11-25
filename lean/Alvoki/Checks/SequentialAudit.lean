@@ -145,6 +145,7 @@ import Alvoki.Storage.Disk.SessionRetentionFloor
 import Alvoki.Storage.Disk.MarkedOpenControl
 import Alvoki.Storage.Disk.DiskLockLifecycle
 import Alvoki.Storage.Disk.LockDescriptionLifetime
+import Alvoki.Storage.Disk.NativeOpenErrorLockFinalization
 import Alvoki.Storage.Disk.LockedSegmentReopenEffects
 import Alvoki.Storage.Disk.RunGenerationCollection
 import Alvoki.Storage.Disk.RunUnlinkSchedule
@@ -1466,6 +1467,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWith_eq_full
 #check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.mem_remaining
 #check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.afterFileDrops_surviving
+#check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.afterFileDrops_unowned
 #check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.afterFileDrops_released
 #check_axioms Alvoki.Storage.DiskSession.HeldLockReferences.afterFileDrops_admits
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithImage_notAcquired
@@ -1899,6 +1901,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorDisposal.preserves
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorDisposal.admits
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorDisposal.canRetry_iff
+#check_axioms Alvoki.Storage.DiskSession.RawOpenErrorLockFinalization.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeEarlyOpenRejection.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeEarlyOpenRejection.captures
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenRejectionRoute.censusInodes
