@@ -256,6 +256,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedRestartSessions
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedSnapshotSessions
+lake env leanchecker Alvoki.Storage.Disk.NativeFreshOpenedSessions
 lake env leanchecker Alvoki.Storage.Disk.NativeReadRecoveryTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeSnapshotExecution
 lake env leanchecker Alvoki.Storage.Disk.NativeExplicitSnapshotRead

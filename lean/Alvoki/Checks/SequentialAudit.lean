@@ -347,6 +347,7 @@ import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 import Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedRestartSessions
 import Alvoki.Storage.Disk.NativeOpenedSnapshotSessions
+import Alvoki.Storage.Disk.NativeFreshOpenedSessions
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeSnapshotExecution
 import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
@@ -2054,6 +2055,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.executes
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.executesSnapshotsAndRewrites
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.executesOpenedSessions
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.survivorValid
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrash.kept
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrash.survivingRun
