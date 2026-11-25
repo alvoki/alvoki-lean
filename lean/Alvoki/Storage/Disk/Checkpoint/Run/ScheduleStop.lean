@@ -138,6 +138,45 @@ theorem prefixBeforeRunsDirectory {count : Nat} {done remaining : List Step}
     simp [steps, List.append_assoc]
   exact samePrefix ordered canonical
 
+theorem prefixBeforeManifestSync {count : Nat} {done remaining : List Step}
+    (ordered : steps count = done ++ .manifest .syncStaged :: remaining) :
+    done = (runSteps count ++ [.syncRunsDirectory]) ++ [.manifest .writeStaged] := by
+  apply samePrefix ordered (later := [.manifest .renameStaged, .manifest .syncDirectory])
+  simp [steps, Publication.steps, List.append_assoc]
+
+/-- A returned prefix ending in a write determines that write's entry
+heap. This is used by both cached checkpoint file barriers. -/
+theorem returnedLastStep {image : Type} (perform : Step → ExceptT IO.Error (EStateM FilePath image) Unit)
+    (priorSteps : List Step) (last : Step) {before after : image}
+    (returned : ((priorSteps ++ [last]).forM perform).run before = .ok (.ok ()) after) :
+    ∃ atLast, (priorSteps.forM perform).run before = .ok (.ok ()) atLast ∧
+      (perform last).run atLast = .ok (.ok ()) after := by
+  rw [List.forM_eq_forM, List.forM_append] at returned
+  change (ExceptT.bind (priorSteps.forM perform)
+    (fun _ => ExceptT.bind (perform last) (fun _ => pure ()))).run before = _ at returned
+  rw [run_bind] at returned
+  cases ran : (priorSteps.forM perform).run before with
+  | error rejected reached => rw [ran] at returned; cases returned
+  | ok result atLast =>
+    rw [ran] at returned
+    cases result with
+    | error cause => cases returned
+    | ok value =>
+      cases value
+      change (ExceptT.bind (perform last) (fun _ => pure ())).run atLast = _ at returned
+      rw [run_bind] at returned
+      refine ⟨atLast, rfl, ?_⟩
+      cases wrote : (perform last).run atLast with
+      | error rejected reached => rw [wrote] at returned; cases returned
+      | ok result reached =>
+        rw [wrote] at returned
+        cases result with
+        | error cause => cases returned
+        | ok value =>
+          cases value
+          exact congrArg (EStateM.Result.ok (Except.ok () : Except IO.Error Unit))
+            (EStateM.Result.ok.inj returned).2
+
 end Alvoki.Storage.CheckpointPublication
 
 namespace Alvoki.Storage.DiskSession
@@ -177,5 +216,15 @@ theorem CheckpointFileCallbacks.performRunWriteUntilSyncStop {image : Type}
     ExceptT.bind, ExceptT.bindCont, ExceptT.run, ExceptT.mk, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure,
     returned]
   cases calls.writeRun (directory.file (.run next.generation index)) run.run.bytes before <;> rfl
+
+theorem CheckpointFileCallbacks.performManifestWriteUntilSyncStop {image : Type}
+    (calls : CheckpointFileCallbacks image) (sync : Array FilePath → ExceptT IO.Error (EStateM FilePath image) Unit)
+    (directory : DiskDirectory) (next : Installed) (manifest : ByteArray) (before : image) :
+    (calls.performUntilSyncStop sync directory next manifest (.manifest .writeStaged)).run before =
+      match calls.writeStaged (directory.file .stagedManifest) manifest before with
+      | .ok value after => .ok (.ok value) after
+      | .error cause after => .ok (.error cause) after := by
+  simp only [performUntilSyncStop, performCheckpointFileStep, Publication.performReplacement, ExceptT.run, returned]
+  cases calls.writeStaged (directory.file .stagedManifest) manifest before <;> rfl
 
 end Alvoki.Storage.DiskSession

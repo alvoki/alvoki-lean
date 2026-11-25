@@ -66,6 +66,46 @@ private theorem rawPendingSelection {before : heap} {cache : CensusDirectoryCach
     obtain ⟨⟨rfl, identity⟩, _⟩ := entries
     exact ⟨literal, by simp, identity⟩
 
+/-- Observations of the pending-cell selection at one file barrier.
+The retained descriptor is checked again at the resulting syscall heap. -/
+structure CheckpointPendingSyncAt (calls : CheckpointRawSyncCalls heap)
+    (view : OpenCloseHeapView heap image) (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (fsync : CheckpointFsync heap) (path : FilePath) (entry atFsync : heap) : Prop where
+  loaded : calls.readPending pending entry = .ok (view.pending entry pending) entry
+  stored : calls.setPending pending ((view.pending entry pending).filter (fun pair => pair.1 != path)) entry = .ok () atFsync
+  consumed : view.pending atFsync pending = (view.pending entry pending).filter (fun pair => pair.1 != path)
+  primitive : ∀ literal, (view.pending entry pending).find? (fun pair => pair.1 == path) = some (path, literal) →
+    fsync (view.handle entry literal) entry = calls.fsync literal atFsync ∧ RawFsyncTarget view entry atFsync literal
+
+private theorem checkpointPendingIssuesRawSync {files : DiskTable.OpenSyncFiles} {root path : FilePath}
+    (calls : CheckpointRawSyncCalls heap) (cache : OpenSyncCacheRefs files root)
+    {entry atFsync rawReached : heap} {earlier : CensusDirectoryCache} {handle : CheckpointOpenHandle}
+    (separate : path ≠ root)
+    (remembered : view.cacheAt entry cache.directory cache.active cache.pending = earlier.remember path handle)
+    (observed : CheckpointPendingSyncAt calls view cache.pending fsync path entry atFsync)
+    (stopped : fsync handle entry = .error reason rawReached) :
+    ∃ literal, (view.pending entry cache.pending).find? (fun pair => pair.1 == path) = some (path, literal) ∧
+      (view.pending atFsync cache.pending).find? (fun pair => pair.1 == path) = none ∧
+      RawFsyncTarget view entry atFsync literal ∧
+      fsync (view.handle entry literal) entry = .error reason rawReached ∧
+      calls.fsync literal atFsync = .error reason rawReached ∧
+      calls.group root path cache.directory cache.active cache.pending entry = .error reason rawReached := by
+  obtain ⟨literal, found, identity⟩ := rawPendingSelection remembered
+  have sourceFsync := identity.symm ▸ stopped
+  obtain ⟨physical, custody⟩ := observed.primitive literal found
+  have rawFsync := physical.symm.trans sourceFsync
+  have selected : (calls.select root path cache.directory cache.active cache.pending).run entry =
+      .error reason rawReached := by
+    simp [CheckpointRawSyncCalls.select, syncWithHandles, separate, returned, observed.loaded, found, observed.stored,
+      rawFsync, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.run, ExceptT.mk, EStateM.bind,
+      Pure.pure, ExceptT.pure, EStateM.pure]
+  have missing : (view.pending atFsync cache.pending).find? (fun pair => pair.1 == path) = none := by
+    rw [observed.consumed, List.find?_eq_none]
+    intro pair member
+    have other : pair.1 ≠ path := by simpa using (List.mem_filter.mp member).2
+    exact fun same => other (beq_iff_eq.mp same)
+  exact ⟨literal, found, missing, custody, sourceFsync, rawFsync, checkpointRawGroupStops _ selected⟩
+
 /-- The run's stopped primitive consumes the pending ref before calling
 fsync on the literal handle selected by the source run. The primitive
 simulation relates that syscall's actual entry heap to the normalized
@@ -100,28 +140,32 @@ theorem NativeCheckpointSourceStop.runFileIssuesRawSync {index : Nat}
       calls.group root.path path cache.directory cache.active cache.pending stop.atIssue.2 = .error reason reached.2 := by
   intro root path
   obtain ⟨beforeWrite, _, handle, _, _, _, remembered, _, stopped⟩ := stop.runFileUsesWrittenHandle
-  have rememberedCache : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = beforeWrite.1.remember path handle :=
-    projected.trans remembered
-  obtain ⟨literal, found, identity⟩ := rawPendingSelection rememberedCache
-  have sourceFsync := identity.symm ▸ stopped
-  obtain ⟨physical, custody⟩ := primitive literal found
-  have rawFsync := physical.symm.trans sourceFsync
-  have separate : path ≠ root.path := file_ne_directory _ _
-  change calls.setPending cache.pending ((view.pending stop.atIssue.2 cache.pending).filter (fun entry => entry.1 != path))
-    stop.atIssue.2 = .ok () atFsync at store
-  have selected : (calls.select root.path path cache.directory cache.active cache.pending).run stop.atIssue.2 =
-      .error reason reached.2 := by
-    simp [CheckpointRawSyncCalls.select, syncWithHandles, separate, returned, load, found, store,
-      rawFsync, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.run, ExceptT.mk, EStateM.bind,
-      Pure.pure, ExceptT.pure, EStateM.pure]
-  have missing : (view.pending atFsync cache.pending).find? (fun entry => entry.1 == path) = none := by
-    change view.pending atFsync cache.pending = (view.pending stop.atIssue.2 cache.pending).filter
-      (fun entry => entry.1 != path) at stored
-    rw [stored, List.find?_eq_none]
-    intro entry member
-    have separate : entry.1 ≠ path := by simpa using (List.mem_filter.mp member).2
-    exact fun same => separate (beq_iff_eq.mp same)
-  exact ⟨literal, found, missing, custody, sourceFsync, rawFsync, checkpointRawGroupStops _ selected⟩
+  exact checkpointPendingIssuesRawSync calls cache (file_ne_directory _ _) (projected.trans remembered)
+    ⟨load, store, stored, primitive⟩ stopped
+
+/-- The staged manifest barrier consumes the same literal handle
+selected by the completed write from the whole stopped checkpoint. -/
+theorem NativeCheckpointSourceStop.manifestSyncIssuesRawSync
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncStaged) reason reached)
+    (calls : CheckpointRawSyncCalls heap)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
+    (projected : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = stop.atIssue.1)
+    {atFsync : heap}
+    (observed : CheckpointPendingSyncAt calls view cache.pending fsync
+      (current.current.ready.state.session.directory.file .stagedManifest) stop.atIssue.2 atFsync) :
+    let root := current.current.ready.state.session.directory
+    let path := root.file .stagedManifest
+    ∃ literal,
+      (view.pending stop.atIssue.2 cache.pending).find? (fun entry => entry.1 == path) = some (path, literal) ∧
+      (view.pending atFsync cache.pending).find? (fun entry => entry.1 == path) = none ∧
+      RawFsyncTarget view stop.atIssue.2 atFsync literal ∧
+      fsync (view.handle stop.atIssue.2 literal) stop.atIssue.2 = .error reason reached.2 ∧
+      calls.fsync literal atFsync = .error reason reached.2 ∧
+      calls.group root.path path cache.directory cache.active cache.pending stop.atIssue.2 = .error reason reached.2 := by
+  intro root path
+  obtain ⟨beforeWrite, _, _, _, remembered, _, stopped⟩ := stop.manifestSyncUsesWrittenHandle
+  exact checkpointPendingIssuesRawSync calls cache (file_ne_directory _ .stagedManifest)
+    (projected.trans remembered) observed stopped
 
 /-- The first directory barrier chooses the literal handle held in the
 original directory cache, at the exact heap reached by the file prefix.

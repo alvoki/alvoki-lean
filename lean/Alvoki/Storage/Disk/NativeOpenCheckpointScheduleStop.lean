@@ -308,6 +308,22 @@ private theorem checkpointRunWriteReturned
       have reachedWrite := (EStateM.Result.ok.inj returned).2
       exact ⟨run, handle, rfl, (congrArg Prod.snd reachedWrite) ▸ wrote, (congrArg Prod.fst reachedWrite).symm⟩
 
+private theorem checkpointStoppedRememberedFile
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    {directory path reason : FilePath} {atIssue reached : CheckpointWorld heap}
+    {cache : CensusDirectoryCache} {handle : CheckpointOpenHandle} (separate : path ≠ directory)
+    (remembered : atIssue.1 = cache.remember path handle)
+    (stopped : (primitives.syncUntilStop directory fsync #[path]).run atIssue = .error reason reached) :
+    reached.1 = atIssue.1.consume path ∧ fsync handle atIssue.2 = .error reason reached.2 := by
+  obtain ⟨selected, atEffect, resolved, issued⟩ := primitives.issuedFsync stopped
+  rw [remembered, Cache.resolveRemembered separate handle primitives.openRead atIssue.2] at resolved
+  obtain ⟨rfl, cacheAndHeap⟩ := EStateM.Result.ok.inj resolved
+  have sameCache := congrArg Prod.fst cacheAndHeap
+  have sameHeap := congrArg Prod.snd cacheAndHeap
+  refine ⟨?_, sameHeap.symm ▸ issued⟩
+  rw [remembered]
+  simpa [Cache.consume, Cache.remember, pushPending] using sameCache.symm
+
 /-- The last returned step before a run fsync installs the exact
 descriptor selected by that fsync. Extract both effects from the same
 prefix. The ordinary write callback includes guard, open and flush. -/
@@ -326,43 +342,61 @@ theorem NativeCheckpointSourceStop.runFileUsesWrittenHandle {index : Nat}
   intro directory path perform
   have stage := stop.runFileIssue
   have completed := stop.returnedPrefix
-  rw [stage.2.1, List.forM_eq_forM, List.forM_append] at completed
-  change (ExceptT.bind ((runSteps index).forM perform)
-    (fun _ => ExceptT.bind (perform (.writeRun index)) (fun _ => pure ()))).run
-      (current.current.ready.state.cache, stop.poisoned) = _ at completed
-  rw [run_bind] at completed
-  cases ran : ((runSteps index).forM perform).run (current.current.ready.state.cache, stop.poisoned) with
-  | error rejected after => rw [ran] at completed; cases completed
-  | ok returned beforeWrite =>
-    rw [ran] at completed
-    cases returned with
-    | error cause => cases completed
-    | ok value =>
-      cases value
-      change (ExceptT.bind (perform (.writeRun index)) (fun _ => pure ())).run beforeWrite = _ at completed
-      rw [run_bind] at completed
-      have lastWrite : (perform (.writeRun index)).run beforeWrite = .ok (.ok ()) stop.atIssue := by
-        cases wrote : (perform (.writeRun index)).run beforeWrite with
-        | error rejected after => rw [wrote] at completed; cases completed
-        | ok returned after =>
-          rw [wrote] at completed
-          cases returned with
-          | error cause => cases completed
-          | ok value =>
-            cases value
-            exact congrArg (EStateM.Result.ok (Except.ok () : Except IO.Error Unit))
-              (EStateM.Result.ok.inj completed).2
-      obtain ⟨run, handle, selectedRun, wrote, staged⟩ :=
-        checkpointRunWriteReturned primitives directory fsync stop.next stop.manifest index lastWrite
-      obtain ⟨selected, atEffect, resolved, issued⟩ := stage.2.2
-      change stop.atIssue.1.resolve directory.path path primitives.openRead stop.atIssue.2 = _ at resolved
-      rw [staged, Cache.resolveRemembered (file_ne_directory _ _) handle primitives.openRead stop.atIssue.2] at resolved
-      obtain ⟨rfl, cacheAndHeap⟩ := EStateM.Result.ok.inj resolved
-      have sameCache := congrArg Prod.fst cacheAndHeap
-      have sameHeap := congrArg Prod.snd cacheAndHeap
-      refine ⟨beforeWrite, run, handle, rfl, selectedRun, wrote, staged, ?_, sameHeap.symm ▸ issued⟩
-      rw [staged]
-      simpa [Cache.consume, Cache.remember, pushPending, path] using sameCache.symm
+  rw [stage.2.1] at completed
+  obtain ⟨beforeWrite, earlier, lastWrite⟩ := returnedLastStep perform (runSteps index) (.writeRun index) completed
+  obtain ⟨run, handle, selectedRun, wrote, staged⟩ :=
+    checkpointRunWriteReturned primitives directory fsync stop.next stop.manifest index lastWrite
+  obtain ⟨consumed, stopped⟩ := checkpointStoppedRememberedFile primitives fsync
+    (file_ne_directory _ _) staged stop.stoppedStep
+  exact ⟨beforeWrite, run, handle, earlier, selectedRun, wrote, staged, consumed, stopped⟩
+
+private theorem checkpointManifestWriteReturned
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (directory : DiskDirectory)
+    (fsync : CheckpointFsync heap) (next : Installed) (manifest : ByteArray)
+    {before after : CheckpointWorld heap}
+    (returned : (primitives.checkpointStepUntilStop directory fsync next manifest (.manifest .writeStaged)).run before =
+      .ok (.ok ()) after) :
+    let path := directory.file .stagedManifest
+    ∃ handle, primitives.cached.writeStaged path manifest before.2 = .ok handle after.2 ∧
+      after.1 = before.1.remember path handle := by
+  intro path
+  obtain ⟨cache, raw⟩ := before
+  have stage := (primitives.cached.callbacks directory).performManifestWriteUntilSyncStop
+    (primitives.syncUntilStop directory.path fsync) directory next manifest (cache, raw)
+  rw [stage] at returned
+  simp only [CheckpointCacheCalls.callbacks] at returned
+  cases wrote : primitives.cached.writeStaged (directory.file .stagedManifest) manifest raw with
+  | error cause reached => simp [stageFreshWithCache, wrote] at returned
+  | ok handle flushed =>
+    simp only [stageFreshWithCache, wrote] at returned
+    have reachedWrite := (EStateM.Result.ok.inj returned).2
+    exact ⟨handle, congrArg (EStateM.Result.ok handle) (congrArg Prod.snd reachedWrite),
+      (congrArg Prod.fst reachedWrite).symm⟩
+
+/-- A stopped manifest file barrier follows the actual completed run and
+directory prefix. Its staged write supplied the same handle that issued fsync. -/
+theorem NativeCheckpointSourceStop.manifestSyncUsesWrittenHandle
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncStaged) reason reached) :
+    let directory := current.current.ready.state.session.directory
+    let path := directory.file .stagedManifest
+    let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
+    ∃ beforeWrite handle,
+      ((runSteps stop.next.table.runs.length ++ [Step.syncRunsDirectory]).forM perform).run
+        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) beforeWrite ∧
+      primitives.cached.writeStaged path stop.manifest beforeWrite.2 = .ok handle stop.atIssue.2 ∧
+      stop.atIssue.1 = beforeWrite.1.remember path handle ∧
+      reached.1 = stop.atIssue.1.consume path ∧
+      fsync handle stop.atIssue.2 = .error reason reached.2 := by
+  intro directory path perform
+  have completed := stop.returnedPrefix
+  rw [prefixBeforeManifestSync stop.ordered] at completed
+  obtain ⟨beforeWrite, earlier, lastWrite⟩ := returnedLastStep perform
+    (runSteps stop.next.table.runs.length ++ [.syncRunsDirectory]) (.manifest .writeStaged) completed
+  obtain ⟨handle, wrote, staged⟩ :=
+    checkpointManifestWriteReturned primitives directory fsync stop.next stop.manifest lastWrite
+  obtain ⟨consumed, stopped⟩ := checkpointStoppedRememberedFile primitives fsync
+    (file_ne_directory _ _) staged stop.stoppedStep
+  exact ⟨beforeWrite, handle, earlier, wrote, staged, consumed, stopped⟩
 
 theorem NativeCheckpointSourceStop.runsDirectoryIssue
     (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached) :
