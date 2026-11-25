@@ -316,6 +316,12 @@ Replace the high-level scenario inputs where the new source argument covers them
 redundant wrappers once their consumers and guarantees have moved. A wholesale rewrite would
 re-prove local facts that the proposed induction needs in either design.
 
+Give each operation a proof about the components it observes or modifies. Carry independent
+history, ownership and file-selection facts by their frame conditions. When testing the boundary,
+vary a checkpoint outcome while keeping recovery fixed, then vary a recovery outcome while
+keeping the checkpoint fixed. Both changes should use the same composition rule. Require each
+migration to identify the existing consumers it replaces and the scenario-specific code it retires.
+
 Start with the two early fsync stops. Derive one reached outcome from the full checkpoint schedule
 and use it both to end a finite prefix and to continue through a reboot. Carry the same survivor
 through one failed open and then, in an extension of that exact prefix, through a successful open

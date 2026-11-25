@@ -333,6 +333,8 @@ lake env leanchecker Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedEarlyCheckpointReport
+lake env leanchecker Alvoki.Storage.Disk.NativeEarlyCheckpointStop
+lake env leanchecker Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedFirstAppendReport

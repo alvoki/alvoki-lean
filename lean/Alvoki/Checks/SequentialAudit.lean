@@ -418,6 +418,7 @@ import Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 import Alvoki.Storage.Disk.NativeOpenedEarlyCheckpointReport
+import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
 import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
@@ -914,7 +915,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunFileReboot.plans
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunFileStop.selectedHandle
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunFileStop.stopsGroup
-#check_axioms Alvoki.Storage.DiskSession.RawQuietRestartEffects.installsAlignedAt
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedCheckpointReopenEffects.installsQuietSelectionAt
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedCheckpointReopenEffects.reopensQuietSelection
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRestartEffects.reopensSelected
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtCheckpointRunFile
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsAtCheckpointRunFile
@@ -2393,6 +2395,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedManifestRenameReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedStoppedCheckpointReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.RawEarlyCheckpointStop.reaches
+#check_axioms Alvoki.Storage.DiskSession.RawEarlyCheckpointStop.stoppedState
+#check_axioms Alvoki.Storage.DiskSession.RawEarlyCheckpointStop.terminalPrefix
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedEarlyCheckpointReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedUncertainWriteReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationStop.stopsOnOpenedPhase
