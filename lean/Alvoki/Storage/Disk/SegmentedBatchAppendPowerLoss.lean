@@ -127,6 +127,7 @@ structure Installs (report : SegmentedBatchAppendReopenReport directory before d
   generation : after.installed.generation = before.installed.generation
   durable : after.published.durable = before.published.durable
   retained : after.RetainedReady directory descriptor
+  sealedWal : after.wal.sealed = before.wal.sealed
 
 /-- From either observed cut, the prior marker and exact selected files
 authorize the same bounded repair and installation. -/
@@ -176,7 +177,7 @@ theorem installsFromFixedAuthority (report : SegmentedBatchAppendReopenReport di
   have first : selected.target.first = before.wal.active.first :=
     (congrArg Target.first sameTarget).trans ready.active
   rw [watermark, tail] at install
-  obtain ⟨session, final, after, returned, path, lock, phase, files, owners, _, exactTarget, history,
+  obtain ⟨session, final, after, returned, path, lock, phase, files, owners, wal, exactTarget, history,
     generation, durable, retained⟩ :=
     (install report.read observed.settles (observed.healthy selected sameTarget)).writerRetained
       ready.layout ready.valid ready.spans visible first ((kept.trans sealed).trans ready.sealedFiles)
@@ -192,8 +193,9 @@ theorem installsFromFixedAuthority (report : SegmentedBatchAppendReopenReport di
     unfold run
     rw [cachedEq]
     exact returned
+  have sealedWal := congrArg WalSegmentImage.sealed wal
   exact ⟨after, ⟨stopped.trans report.failures, ⟨session, final, ran, path, lock, phase, files, owners, durableKeeper⟩,
-    target, history, sameCheckpoint, generation, durable, retained⟩⟩
+    target, history, sameCheckpoint, generation, durable, retained, sealedWal⟩⟩
 
 end SegmentedBatchAppendReopenReport
 

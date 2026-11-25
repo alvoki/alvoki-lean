@@ -80,6 +80,7 @@ structure Installs {files : Type} (loss : SegmentedRunCollectionPowerLoss report
   durable : after.published.durable = loss.survivingRuns
   replay : recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table
   retained : after.RetainedReady directory descriptor
+  sealedWal : after.wal.sealed = before.wal.sealed
 
 /-- Carry the reached collection cut through the shared cached recovery
 layout selection and admitted opener. Neither the returned table nor a
@@ -122,7 +123,7 @@ theorem reopensAdmitted {files : Type} {input : FilePath} {retry : LockedFileSta
   obtain ⟨_, appendReady⟩ := installed.readyForAppend accepted ready.resumed.ordered
   have visible := ready.walPair.trans (congrArg Target.pair exactTarget).symm
   have oldSeals : loss.crashed.image.kept = before.files.kept := rfl
-  obtain ⟨session, final, after, returned, directoryExact, lock, phase, files, owners, _, chosen,
+  obtain ⟨session, final, after, returned, directoryExact, lock, phase, files, owners, wal, chosen,
     history, _, durable, retained⟩ := appendReady.writerRetained ready.layout ready.valid ready.spans visible
       (congrArg WalSegment.first exactKeeper) ((kept.trans oldSeals).trans ready.sealedFiles)
   have target := chosen.trans exactTarget
@@ -147,10 +148,11 @@ theorem reopensAdmitted {files : Type} {input : FilePath} {retry : LockedFileSta
     exact replayed.trans (congrArg Except.ok (congrArg Installed.table sameInstalled))
   have lost : BoundedReopenTrace directory (fun target => target = before.target) ⟨before.files, before.owners⟩
       loss.crashed := .powerLoss .empty loss.pairSurvives loss.keeperSurvives loss.laterSurvives
+  have sealedWal := congrArg WalSegmentImage.sealed wal
   exact ⟨observed.slot.description, after, runCut, lost.trans attempts, chosenRuns,
     ⟨nextLayout, observed, admission, session, final, returned, directoryExact, lock.trans observed.inventoryDescription,
       phase, owners ▸ afterReady.held, finalReady, files, owners⟩,
-    sameCheckpoint, target, history, generation, durable, replay, afterReady⟩
+    sameCheckpoint, target, history, generation, durable, replay, afterReady, sealedWal⟩
 
 end SegmentedRunCollectionPowerLoss
 end Alvoki.Storage.DiskSession

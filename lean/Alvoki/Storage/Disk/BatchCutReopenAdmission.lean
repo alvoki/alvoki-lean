@@ -34,6 +34,7 @@ structure AdmittedBatchCutReopen {files : Type} (directory : DiskDirectory) (bef
   generation : after.installed.generation = before.installed.generation
   durable : after.published.durable = before.published.durable
   retained : after.RetainedReady directory descriptor
+  sealedWal : after.wal.sealed = before.wal.sealed
 
 /-- Use the same admitted opener for all cuts covered by the batch effect
 model. Retry selection supplies the exact keeper, checkpoint authority,
@@ -75,7 +76,7 @@ theorem BoundedReopenTrace.reopensBatchCutAdmitted {files : Type} {directory : D
   let wal := before.wal.appendSelectedView retry.image.directory.active history
   have sealed : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept := kept.trans sealedAtCut
   have spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize := ready.spans
-  obtain ⟨session, final, after, returned, path, slot, phase, files, owners, _, target, exactHistory, _, durable, next⟩ :=
+  obtain ⟨session, final, after, returned, path, slot, phase, files, owners, openedWal, target, exactHistory, _, durable, next⟩ :=
     cutReady.writerRetained layout valid spans rfl first sealed
   have readyAfter : after.RetainedReady directory reported.slot.description := reported.inventoryDescription ▸ next
   have oldManifest := manifest.trans (congrArg DirectoryPublication.Bindings.manifest ready.walPair)
@@ -89,9 +90,10 @@ theorem BoundedReopenTrace.reopensBatchCutAdmitted {files : Type} {directory : D
   have held : final.owners.Owns directory reported.slot.description := owners ▸ readyAfter.held
   have pair : final.image.directory.active = retry.image.directory.active :=
     files ▸ (readyAfter.resumed.ready.selected.trans (congrArg Target.pair target))
+  have sealedWal := congrArg WalSegmentImage.sealed openedWal
   exact ⟨reported.slot.description, after, ⟨history, selected, reported, admission, session, final,
     (reported.runWithAdmission_eq admission).trans returned, path, slot.trans reported.inventoryDescription,
-    phase, held, files, owners, pair, exactHistory⟩, exactHistory ▸ allowed, checkpoint, generation, durable, readyAfter⟩
+    phase, held, files, owners, pair, exactHistory⟩, exactHistory ▸ allowed, checkpoint, generation, durable, readyAfter, sealedWal⟩
 
 namespace ObservedBatchFailure
 

@@ -284,6 +284,8 @@ lake env leanchecker Alvoki.Storage.Disk.RecoveryRequestCount
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionSpace
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionNames
+lake env leanchecker Alvoki.Storage.Disk.WalSealedSpans
+lake env leanchecker Alvoki.Storage.Disk.ReachableWalSeals
 lake env leanchecker Alvoki.Storage.Disk.SelectedRecoveryPayload
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedRetryReads

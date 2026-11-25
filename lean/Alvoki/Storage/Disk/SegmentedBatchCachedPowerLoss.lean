@@ -83,6 +83,7 @@ structure InstallsFromCut (report : CachedReopenReports cut descriptor source) (
   generation : after.installed.generation = before.installed.generation
   durable : after.published.durable = before.published.durable
   retained : after.RetainedReady directory descriptor
+  sealedWal : after.wal.sealed = before.wal.sealed
 
 structure Installs (report : CachedReopenReports cut descriptor) (after : SegmentedWriterState) :
     Prop extends InstallsFromCut report after where
@@ -116,7 +117,7 @@ private theorem installsFromCut (report : CachedReopenReports cut descriptor sou
     selected.through oldCheckpoint report.removeFile report.write report.sync report.renameFile
   have sealed : report.retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept := kept
   have spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize := ready.spans
-  obtain ⟨session, final, after, returned, path, slot, phase, files, owners, _, target, exactHistory, _, durable, next⟩ :=
+  obtain ⟨session, final, after, returned, path, slot, phase, files, owners, openedWal, target, exactHistory, _, durable, next⟩ :=
     (installs raw report.settles (report.healthy history selected allowed first)).writerRetained layout valid spans
       rfl first sealed
   have ran : report.run = .ok session final := by
@@ -132,8 +133,9 @@ private theorem installsFromCut (report : CachedReopenReports cut descriptor sou
   have boundary : after.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode after.history).size.toUInt64) := by
     rw [pair, exactHistory]
     exact marker
+  have sealedWal := congrArg WalSegmentImage.sealed openedWal
   exact ⟨after, ⟨attempts, ⟨session, final, ran, path, slot, phase, files, owners⟩,
-    exactHistory ▸ allowed, pair, boundary, checkpoint, generation, durable, next⟩⟩
+    exactHistory ▸ allowed, pair, boundary, checkpoint, generation, durable, next, sealedWal⟩⟩
 
 /-- The actual cached worker installs the prior history or the entire
 batch from the machine crash's surviving pair. The exact selected
@@ -182,6 +184,7 @@ structure AdmittedRetry {files : Type} (cut : SegmentedBatchMarkerPowerLossRepor
   generation : after.installed.generation = before.installed.generation
   durable : after.published.durable = before.published.durable
   retained : after.RetainedReady directory descriptor
+  sealedWal : after.wal.sealed = before.wal.sealed
 
 /-- The post-retry layout comes from the reached batch cut. Exact native
 admission and checkpoint/WAL reads for that layout then install the next
@@ -202,7 +205,7 @@ theorem Reached.installsAdmitted {files : Type} {input : FilePath} {retry : Lock
     attempts.reopensBatchCutAdmitted ready observed.prepared (observed.preparedHistory ready).2.1
       effects rfl cut.physicalProjection reads
   exact ⟨descriptor, after, attempts, opened.reopened, opened.history, opened.checkpoint,
-    opened.generation, opened.durable, opened.retained⟩
+    opened.generation, opened.durable, opened.retained, opened.sealedWal⟩
 
 end SegmentedBatchMarkerPowerLossReport
 end Alvoki.Storage.DiskSession

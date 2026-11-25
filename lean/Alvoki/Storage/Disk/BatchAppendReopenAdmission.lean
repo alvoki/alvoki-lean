@@ -74,6 +74,7 @@ structure AdmittedReopen {files : Type} (report : BatchAppendInterruption direct
   generation : after.installed.generation = before.installed.generation
   durable : after.published.durable = before.published.durable
   retained : after.RetainedReady directory descriptor
+  sealedWal : after.wal.sealed = before.wal.sealed
 
 /-- After either first-append stop and any admitted retries, the marked
 opener installs the prior checkpoint and committed WAL from the exact
@@ -107,7 +108,7 @@ theorem Stop.reopensAdmitted {files : Type} {input : FilePath} {retry : LockedFi
   obtain ⟨_, appendReady⟩ := installed.readyForAppend accepted ready.resumed.ordered
   have visible := ready.walPair.trans (congrArg Target.pair sameTarget).symm
   have firstKeeper := (congrArg WalSegment.first (active.trans keeper) : layout.target.first = before.wal.active.first)
-  obtain ⟨session, final, after, returned, path, lock, phase, files, owners, _, selected, history, _, durable, next⟩ :=
+  obtain ⟨session, final, after, returned, path, lock, phase, files, owners, wal, selected, history, _, durable, next⟩ :=
     appendReady.writerRetained ready.layout ready.valid ready.spans visible firstKeeper
       ((kept.trans oldSealed).trans ready.sealedFiles)
   have nextReady : after.RetainedReady directory reported.slot.description := reported.inventoryDescription ▸ next
@@ -120,9 +121,10 @@ theorem Stop.reopensAdmitted {files : Type} {input : FilePath} {retry : LockedFi
   have finalReady : final.image.Ready before.target := by
     rw [← files, ← exactTarget]
     exact nextReady.resumed.ready
+  have sealedWal := congrArg WalSegmentImage.sealed wal
   exact ⟨reported.slot.description, after, observed, observed.reachesInterruption ready, stopped, attempts,
     ⟨layout, reported, admission, session, final, returned, path, lock.trans reported.inventoryDescription, phase,
       owners ▸ nextReady.held, files, owners, finalReady⟩,
-    exactTarget, history, checkpoint, generation, durable, nextReady⟩
+    exactTarget, history, checkpoint, generation, durable, nextReady, sealedWal⟩
 
 end Alvoki.Storage.DiskSession.BatchAppendInterruption
