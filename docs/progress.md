@@ -938,3 +938,9 @@ and the same run, scan, seal and keeper reports used by rename-backed
 recovery. The preparation composition still needs to connect the
 reached checkpoint and post-keeper censuses to the two-slot marker's
 retained descriptor and repair effects.
+
+For an already acquired marker, the checkpoint read now returns the
+exact census at the directory scan entry. This theorem combines the
+manifest and selected-run drops without reducing the entire preparation
+worker. That worker still needs to consume this census in the two-slot
+client proof.

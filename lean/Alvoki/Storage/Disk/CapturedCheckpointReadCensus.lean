@@ -195,6 +195,21 @@ theorem CapturedRunReadCensus.reads {report : CapturedMarkedReadReports admissio
       admission.cache admission.held
     simpa only [atIndex, runReadDrops, ← DescriptorInventory.afterDrops_append, ordered] using read
 
+/-- When the marker was already acquired, the manifest and selected runs
+account for exactly the descriptor drops before the WAL scan. -/
+theorem CapturedMarkedReadReports.checkpointAtScan
+    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
+    (manifest : CapturedManifestCensus report metadataRelease manifestDrops)
+    (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (chronology : report.listing.beforeOpen = manifestDrops ++
+      runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest)) :
+    report.readCheckpointFromCensus metadataRelease runs.released (admission.cache, admission.reached, admission.held) =
+      .ok checkpoint (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) := by
+  simpa only [chronology, DescriptorInventory.afterDrops_append] using runs.reads manifest selected
+
 /-- The marker is opened after the selected runs. Its bounded EOF read
 uses that exact description and the finalizer releases its temporary slot. -/
 structure CapturedMarkerCensus (report : CapturedMarkedReadReports admission layout published)
