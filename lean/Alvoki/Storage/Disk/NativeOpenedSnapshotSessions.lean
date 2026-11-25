@@ -44,53 +44,8 @@ theorem NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest
       (∀ read ∈ last.current.ready.reads, read.agrees reference) := by
   obtain ⟨handle, opened, returned⟩ := seen.reaches
   let reached : NativeOpenedSessionPoint heap := ⟨handle, opened⟩
-  obtain ⟨acquireEvent, acquired, atAcquired⟩ := (NativeOpenedReport.acquire (start := reached.position)).reaches
-  have compared := compareIssuedToken returned atAcquired
-  obtain ⟨_, pin, table, _, _, _, _, _, registered, pinState, _, _, active, event, pins, priorHistory, _, priorReads⟩ :=
-    atAcquired.returned
-  subst acquireEvent
-  have issued : acquired.pins[reached.position.pins.length]? = some pin := by simp [pins]
-  have found : acquired.current.ready.state.writer.installed.table.pins.find pin.localPin.handle = some pin.localPin := by
-    rw [pinState]
-    exact table.pins.find_of_mem active
-  let observation : NativeSnapshotHandleObservation acquired.current.ready.state.session :=
-    ⟨pin.localPin.handle, acquired.current.ready.state.session.sessionRef, true, by simp⟩
-  obtain ⟨source, response, recorded, next, read, raw, replay⟩ :=
-    acquired.current.ready.readsOpenPin reached.handle.table acquired.uses pin.issued
-      (fun value => reached.handle.phaseEffects.reads acquired.reached reached.handle.phase value)
-      acquired.stored reached.handle.ptrEq compared request
-  have positive : response.isSome = true := by
-    cases response with
-    | none =>
-      have denied := (request.handleDenied_iff _ _).mp read.result.returned
-      simp [NativeSnapshotHandleObservation.reader, ObservedSnapshotReader.guard,
-        SnapshotReadGuard.rejects, found] at denied
-    | some => rfl
-  obtain ⟨value, rfl⟩ := Option.isSome_iff_exists.mp positive
-  obtain ⟨selected, foundSelected, readRecord⟩ := read.result.records
-  have samePin : selected = pin.localPin := Option.some.inj (foundSelected.symm.trans found)
-  subst selected
-  have sequence := (PackedTable.acquireAt_spec registered).sequence
-  rw [sequence] at readRecord
-  subst recorded
-  obtain ⟨reference, wal, _, _, _, agrees, _⟩ := replay
-  have agreesRead := agrees (request.record reached.position.current.ready.state.writer.installed.table.committed value)
-    (by rw [read.reads]; simp)
-  have replayValue : value = request.replay reference reached.position.current.ready.state.writer.installed.table.committed := by
-    cases request <;> exact agreesRead
-  subst value
-  let last : NativeOpenedPosition reached.handle :=
-    ⟨⟨acquired.current.history, acquired.current.submissions, next⟩, acquired.reached,
-      read.state.symm ▸ acquired.directory, read.state.symm ▸ acquired.stored, acquired.pins⟩
-  let readReport := NativeOpenedReport.readAt reached.position.pins.length request pin issued compared
-  let sequence := reached.position.current.ready.state.writer.installed.table.committed
-  let value := request.replay reference sequence
-  let readEvent := NativeExecutionEvent.snapshotHandleRead acquired.current.ready.state.session.sessionRef
-    pin.localPin.handle request (some value) (request.record sequence value)
-  have atRead : readReport.Reached readEvent last := by
-    refine ⟨NativeExecutionStep.snapshotHandleRead acquired.current observation request _ _ next read, ?_, _, _, raw, rfl, rfl, rfl⟩
-    cases request <;> exact source
-  have calls := NativeOpenedTrace.step (NativeOpenedTrace.step .empty .acquire atAcquired) readReport atRead
+  obtain ⟨pin, acquired, last, reference, issued, compared, acquireReturned, readReturned, calls, reads, wal, agrees⟩ :=
+    opened.acquiresAndReadsLatest request (compareIssuedToken returned)
   have reopened : NativeOpenedSessionTrace view names bytes start _ _ reached :=
     .step prior (.stoppedCheckpointEarly seen returned)
   have continued := NativeOpenedSessionTrace.step reopened (.calls calls)
@@ -100,10 +55,10 @@ theorem NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest
   obtain ⟨oldHistory, _, oldReads⟩ := returned.common.ledgers
   rw [noChanges.1, List.append_nil] at oldHistory
   rw [noChanges.2, List.append_nil] at oldReads
-  refine ⟨reached, pin, acquired, last, reference, issued, compared, returned, atAcquired.returned, atRead.returned,
-    ?_, read.reads.trans (congrArg (· ++ [_]) (priorReads.trans oldReads)), ?_, agrees⟩
+  refine ⟨reached, pin, acquired, last, reference, issued, compared, returned, acquireReturned, readReturned,
+    ?_, reads.trans (congrArg (· ++ [_]) oldReads), ?_, agrees⟩
   · simpa only [List.append_assoc, List.singleton_append, List.cons_append, List.nil_append] using continued
-  · exact (priorHistory.trans oldHistory) ▸ wal
+  · exact oldHistory ▸ wal
 
 /-- Derive finite snapshot and run rewrite blocks at their reached
 tables. Reopen steps retain their own local survivor or close reports,

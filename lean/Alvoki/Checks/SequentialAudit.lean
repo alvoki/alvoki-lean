@@ -2418,6 +2418,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.common
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.executes
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acquiresAndReadsLatest
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.executesSnapshotsAndRewrites
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.executesOpenedSessions
