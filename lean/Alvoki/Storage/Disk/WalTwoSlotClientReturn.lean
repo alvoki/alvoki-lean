@@ -2804,7 +2804,7 @@ end CapturedPreparation
 fresh snapshot reads on the session installed by the shared open schedule. -/
 theorem recoveredRetries_installedReads
     {initial prepared : FileImage} {target : Target}
-    (beforeBarrier : UnsettledRetries initial prepared)
+    (beforeBarrier : ReportedMarkerRetries initial prepared)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
     {current : Selection} {next : Selection}
     (accepted : decode before = .ok current)
@@ -3049,7 +3049,7 @@ theorem recoveredRetries_installedReads
   have recovery : WalSegmentRecovery image after.directory.active target.range (history ++ batch)
       base layout.first table := ready.selected.symm ▸ selectedRecovery
   have retries : SettledRetries target after after := .start
-  have ledger := recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
+  have ledger := recoveredRetries_retainUncertainBatch beforeBarrier.refines accepted offset advanced
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2.1
   obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
