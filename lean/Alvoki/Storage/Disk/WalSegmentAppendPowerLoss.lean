@@ -50,12 +50,14 @@ theorem modeledFiles (cut : FirstAppendCut) (history : List WAL.Write) (event : 
     (scratch : Option (ByteArray × Bool)) :
     writeFilesAfter (runWriteEffects history event cut.writeEffects scratch) = cut.writeFiles history scratch := rfl
 
-/-- The first callback adds bytes only to the existing keeper. The actual
-metadata, sealed files, later names and unrelated staging are inherited. -/
-def physical (cut : FirstAppendCut) (before : SegmentedWriterState) : FileImage :=
-  let written := cut.writeFiles before.history (before.files.directory.staged .walBoundary)
+/-- Project the reached append bytes onto the existing keeper. Metadata,
+sealed files, later names and unrelated staging come from the prior image. -/
+def projectReached (before : SegmentedWriterState) (written : WriteFiles) : FileImage :=
   let segment := written.reopenSegment before.wal.active.first before.history before.files.directory.active.manifest
   { before.files with keeper := { segment.wal with staged := before.files.keeper.staged } }
+
+def physical (cut : FirstAppendCut) (before : SegmentedWriterState) : FileImage :=
+  projectReached before (cut.writeFiles before.history (before.files.directory.staged .walBoundary))
 
 def crashed (cut : FirstAppendCut) (before : SegmentedWriterState) (directory : DiskDirectory) (tail : ByteArray) :
     LockedFileState FileImage :=

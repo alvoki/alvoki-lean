@@ -72,25 +72,43 @@ namespace BatchAppendInterruption
 variable {directory : DiskDirectory} {before : SegmentedWriterState}
   {report : BatchAppendInterruption directory before}
 
-/-- The first observed append is issued by the outer batch call with the
-old owner retained and with the poisoned phase already installed. The
-normal write API never returns for this reported interruption. -/
-theorem Valid.stopsBatchSchedule (observed : report.Valid)
+/-- Run the outer batch schedule through the reported stop in its first append. -/
+def runUntilAppend (report : BatchAppendInterruption directory before)
     (stage : FilePath → ByteArray → ExceptT IO.Error (EStateM (FilePath × ByteArray) WriteFiles) Unit)
     (sync : Array FilePath → ExceptT IO.Error (EStateM (FilePath × ByteArray) WriteFiles) Unit)
     (rename : FilePath → FilePath → ExceptT IO.Error (EStateM (FilePath × ByteArray) WriteFiles) Unit) :
-    let scratch := before.files.directory.staged .walBoundary
-    runBatchWriteWithInterruption directory report.rows report.activeMetadata
-      (fun installed events bytes => commitBytesAt directory installed.activeFirst (WAL.encodeBatch events) bytes
-        (fun path data _ => .error (path, data) (report.cut.writeFiles before.history scratch))
-        stage sync rename)
-      (.ready before.installed, ⟨WriteFiles.initial before.history scratch, before.owners⟩) =
-    .error report.appendCall (.poisoned, ⟨report.cut.writeFiles before.history scratch, before.owners⟩) := by
-  intro scratch
+    EStateM.Result (FilePath × ByteArray) (Phase Installed × LockedFileState WriteFiles) (Except DiskWriteError UInt64) :=
+  let scratch := before.files.directory.staged .walBoundary
+  runBatchWriteWithInterruption directory report.rows report.activeMetadata
+    (fun installed events bytes => commitBytesAt directory installed.activeFirst (WAL.encodeBatch events) bytes
+      (fun path data _ => .error (path, data) (report.cut.writeFiles before.history scratch))
+      stage sync rename)
+    (.ready before.installed, ⟨WriteFiles.initial before.history scratch, before.owners⟩)
+
+/-- The outer batch call issues the first append with the old owner
+retained and the poisoned phase already installed. The stop has no
+ordinary return from the write API. -/
+theorem Valid.stopsBatchSchedule (observed : report.Valid) (stage sync rename) :
+    report.runUntilAppend stage sync rename =
+      .error report.appendCall (.poisoned,
+        ⟨report.cut.writeFiles before.history (before.files.directory.staged .walBoundary), before.owners⟩) := by
+  unfold runUntilAppend
+  dsimp only
   have guard := checkObservedActiveSegment observed.activeGuard
   apply runBatchWriteWithInterruption_stopped observed.nonempty observed.prepared observed.fits guard
   rw [observed.invoked]
   rfl
+
+/-- The stop transition starts at the exact files and owner reached by
+the no-return append schedule. The process or power-loss report applies
+to this state, before any retry can change it. -/
+theorem Valid.reachedFileState (observed : report.Valid)
+    (outer : report.runUntilAppend stage sync rename = .error tag reached) :
+    tag = report.appendCall ∧ reached.1 = .poisoned ∧
+    (⟨FirstAppendCut.projectReached before reached.2.image, reached.2.owners⟩ : LockedFileState FileImage) =
+      ⟨report.cut.physical before, before.owners⟩ := by
+  obtain ⟨rfl, rfl⟩ := EStateM.Result.error.inj (outer.symm.trans (observed.stopsBatchSchedule stage sync rename))
+  exact ⟨rfl, rfl, rfl⟩
 
 end BatchAppendInterruption
 

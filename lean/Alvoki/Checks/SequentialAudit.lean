@@ -964,6 +964,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchMarkerWithAdmission
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.refinesReopenPrefix
 #check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Valid.stopsBatchSchedule
+#check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Valid.reachedFileState
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.stopsBatchSchedule
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedBatchMarker
 #check_axioms Alvoki.Storage.DiskSession.ReportedReopenPrefix.refines
