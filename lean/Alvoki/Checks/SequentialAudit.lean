@@ -94,6 +94,7 @@ import Alvoki.Storage.Disk.CheckpointRunPrefixCustody
 import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 import Alvoki.Storage.Disk.CheckpointObservedCompletion
 import Alvoki.Storage.Disk.NativeReadyCheckpoint
+import Alvoki.Storage.Disk.NativeCheckpointWatermark
 import Alvoki.Storage.Disk.NativeCheckpointPreflight
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryError
@@ -744,6 +745,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.directoryBarriers
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.completes
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.completesWithPublication
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.Completed.checkpointWatermark
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.checkpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointsViaOpenReferences
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.checkpointsThenReadsOpenPin
