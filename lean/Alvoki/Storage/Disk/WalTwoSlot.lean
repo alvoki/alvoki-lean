@@ -230,12 +230,52 @@ theorem decode_agrees_with_protocol {bytes : ByteArray} {chosen : Selection}
   · exact select_agrees_with_protocol h
   · contradiction
 
-private def slotIndex : OrderedTwoSlot.Slot → Nat
+def slotIndex : OrderedTwoSlot.Slot → Nat
   | .first => 0
   | .second => 1
 
 def decodedSlots (bytes : ByteArray) : OrderedTwoSlot.Slots UInt64 :=
   fun slot => (decodeSlot bytes (slotIndex slot)).map Selection.toRecord
+
+/-- A successful decode supplies the active record and proves every
+other decodable record has an older epoch. -/
+theorem decodedSlots_active {bytes : ByteArray} {current : Selection}
+    (accepted : decode bytes = .ok current) (active : OrderedTwoSlot.Slot)
+    (offset : current.slot = slotIndex active) :
+    decodedSlots bytes active = some current.toRecord ∧
+      ∀ stale, decodedSlots bytes active.other = some stale → stale.epoch < current.toRecord.epoch := by
+  have found := (decode_valid accepted).1
+  rw [offset] at found
+  have currentRead : decodedSlots bytes active = some current.toRecord :=
+    congrArg (Option.map Selection.toRecord) found
+  have latest := decode_agrees_with_protocol accepted
+  change OrderedTwoSlot.selectNewest (decodedSlots bytes .first) (decodedSlots bytes .second) =
+    .ok current.toRecord at latest
+  refine ⟨currentRead, ?_⟩
+  intro stale other
+  cases active with
+  | first =>
+    change decodedSlots bytes .second = some stale at other
+    rw [currentRead, other] at latest
+    simp only [OrderedTwoSlot.selectNewest] at latest
+    split at latest
+    · rename_i order
+      have eq := congrArg OrderedTwoSlot.Record.epoch (Except.ok.inj latest)
+      omega
+    · split at latest
+      · assumption
+      · contradiction
+  | second =>
+    change decodedSlots bytes .first = some stale at other
+    rw [currentRead, other] at latest
+    simp only [OrderedTwoSlot.selectNewest] at latest
+    split at latest
+    · assumption
+    · split at latest
+      · rename_i order
+        have eq := congrArg OrderedTwoSlot.Record.epoch (Except.ok.inj latest)
+        omega
+      · contradiction
 
 private theorem decodedSlots_eq_writeTarget {before after : ByteArray}
     (active : OrderedTwoSlot.Slot)

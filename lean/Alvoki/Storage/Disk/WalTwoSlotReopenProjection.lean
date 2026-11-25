@@ -73,15 +73,15 @@ theorem decodedMarker_of_survivor {before after : ByteArray}
 /-- The projected directory binding of an accepted uncertain marker
 satisfies the old-or-whole premise of the retry model. -/
 theorem projectBinding_oldOrNew {directory : Bindings} {before after : ByteArray}
-    {active : OrderedTwoSlot.Slot} {old next : OrderedTwoSlot.Record UInt64}
+    {active : OrderedTwoSlot.Slot} {current : Selection} {next : OrderedTwoSlot.Record UInt64}
     {projected : Bindings}
     (report : OrderedTwoSlot.Survivor (decodedSlots before) active next .slotWriteUncertain (decodedSlots after))
-    (present : decodedSlots before active = some old)
-    (older : ∀ stale, decodedSlots before active.other = some stale → stale.epoch < old.epoch)
-    (newer : old.epoch < next.epoch)
+    (currentDecode : decode before = .ok current)
+    (activeOffset : current.slot = slotIndex active)
+    (newer : current.toRecord.epoch < next.epoch)
     (projection : projectBinding directory after = .ok projected) :
     projected.manifest = directory.manifest ∧
-      (projected.walBoundary = some (Boundary.encode old.frontier) ∨
+      (projected.walBoundary = some (Boundary.encode current.frontier) ∨
         projected.walBoundary = some (Boundary.encode next.frontier)) := by
   cases accepted : decode after with
   | error => simp [projectBinding, accepted, Except.map] at projection
@@ -89,6 +89,7 @@ theorem projectBinding_oldOrNew {directory : Bindings} {before after : ByteArray
     have binding := projectBinding_decodes (visible := directory) accepted
     have equal := Except.ok.inj (binding.symm.trans projection)
     cases equal
+    obtain ⟨present, older⟩ := decodedSlots_active currentDecode active activeOffset
     have selectedFrontier := decodedMarker_of_survivor report present older newer accepted
     exact ⟨rfl, selectedFrontier.imp
       (congrArg (fun value => some (Boundary.encode value)))

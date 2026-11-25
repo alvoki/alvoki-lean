@@ -94,7 +94,9 @@ The Linux adapter uses a shared exact-prefix loop for checkpoint runs, WAL seals
 
 The opt-in adapter uses the shared segmented replay, repair and session
 installation after decoding a durable frontier. Lean checks that an accepted
-slot container selects the same newest record as the protocol model. The
+slot container selects the same newest record as the protocol model. A
+successful pre-write decode supplies both the active record and the epoch
+ordering of any other valid slot to the recovery and client-ledger proofs. The
 writer's shared schedule reaches the inactive-slot write only after the WAL
 sync succeeds, and reaches installation only after the marker sync succeeds.
 Under the slot survivor contract, recovery chooses the old or new frontier

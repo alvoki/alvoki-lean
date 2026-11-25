@@ -218,12 +218,12 @@ theorem recoveredSlot_retains {image : WalSegmentImage} {pair : DirectoryPublica
     {log : List DatabaseSubmissions} (prior : DatabaseBatchRetention log history)
     (recovery : WalSegmentRecovery image pair range (history ++ batch) base first table)
     {before after : ByteArray} {active : OrderedTwoSlot.Slot}
-    {old next : OrderedTwoSlot.Record UInt64} {phase : OrderedTwoSlot.Phase} {decoded : Selection}
+    {current : Selection} {next : OrderedTwoSlot.Record UInt64} {phase : OrderedTwoSlot.Phase} {decoded : Selection}
     (report : OrderedTwoSlot.Survivor (decodedSlots before) active next phase (decodedSlots after))
-    (present : decodedSlots before active = some old)
-    (older : ∀ stale, decodedSlots before active.other = some stale → stale.epoch < old.epoch)
-    (newer : old.epoch < next.epoch)
-    (oldSize : old.frontier.toNat = (WAL.encode history).size)
+    (currentDecode : decode before = .ok current)
+    (activeOffset : current.slot = slotIndex active)
+    (newer : current.toRecord.epoch < next.epoch)
+    (oldSize : current.frontier.toNat = (WAL.encode history).size)
     (nextSize : next.frontier.toNat = (WAL.encode (history ++ batch)).size)
     (accepted : decode after = .ok decoded)
     (selected : pair.walBoundary = some (Boundary.encode decoded.frontier))
@@ -234,6 +234,7 @@ theorem recoveredSlot_retains {image : WalSegmentImage} {pair : DirectoryPublica
     else
       DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
       ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
+  obtain ⟨present, older⟩ := decodedSlots_active currentDecode active activeOffset
   have frontier := decodedMarker_of_survivor report present older newer accepted
   cases acknowledged with
   | false =>
@@ -242,7 +243,7 @@ theorem recoveredSlot_retains {image : WalSegmentImage} {pair : DirectoryPublica
     | beforeWalSync | beforeSlotWrite =>
       exact recoveredBatch_retains prior recovery selected (.inl (frontier ▸ oldSize))
     | slotWriteUncertain =>
-      change decoded.frontier = old.frontier ∨ decoded.frontier = next.frontier at frontier
+      change decoded.frontier = current.frontier ∨ decoded.frontier = next.frontier at frontier
       rcases frontier with oldFrontier | nextFrontier
       · exact recoveredBatch_retains prior recovery selected (.inl (oldFrontier ▸ oldSize))
       · exact recoveredBatch_retains prior recovery selected (.inr (nextFrontier ▸ nextSize))
