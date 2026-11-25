@@ -162,16 +162,13 @@ WAL segment and after rotation.
 
 The shared recovery boundary is `WalSegmentRecovery`, which relates the
 selected checkpoint and retained WAL bytes to the recovered table.
-`recoveredRetries_installedReads` carries that certificate through the
-two-slot open and into the returned table, but currently takes
-`selectedRecovery` as a premise. Discharge it at this boundary using
-`WalSegmentCollectionRetry.recoversSelected` and the existing
-checkpoint-prefix and retained-WAL invariants. The resulting first
-segment and table must agree with the bounded native reads. The
-marker-specific proof supplies the selected frontier and the same
-surviving file observations used by those shared invariants. Replay,
-session installation, and snapshot reads already have proofs over
-that shared result.
+`recoveredRetries_installedReads` uses
+`WalSegmentCollectionRetry.recoversSelected` with the checkpoint-prefix
+and retained-WAL invariants to derive the table. It identifies the first
+segment from the retained bytes, installs the derived table, and applies
+the shared read proof to snapshots within that table's retained range.
+The marker-specific proof still needs the selected frontier and surviving
+file observations to establish those shared input invariants.
 
 For end-to-end refinement, derive the reached native reports and retry
 transitions on one descriptor inventory. In particular, the append and

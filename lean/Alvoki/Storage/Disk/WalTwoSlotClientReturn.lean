@@ -2894,7 +2894,7 @@ theorem recoveredRetries_installedReads
     (selected : Selection)
     {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared prepared target plan)
     {image : WalSegmentImage}
-    {table : PackedTable} {log : List DatabaseSubmissions}
+    {log : List DatabaseSubmissions}
     {directory : DiskDirectory} {descriptor nextRef : Nat} {unlock : DiskSession.UnlockReport}
     {openedFrom : LockedFileState FileImage}
     {survivingBindings : DirectoryPublication.Bindings}
@@ -3019,17 +3019,14 @@ theorem recoveredRetries_installedReads
     (ordinals : WAL.OrdinalsFrom 1 (history ++ batch))
     (retainedBytes : WalSegment.concatenate (image.afterWatermark target.range.watermark) =
       WAL.encode ((history ++ batch).drop layout.first))
-    (expectedReplay : Boundary.recoverMarked (checkpointResult.getD (.empty, 0)).1 selected.frontier
-      (WAL.encode (history ++ batch)) = .ok (WAL.encode ((history ++ batch).take target.range.through), table))
     (layoutBytes : ∀ segment ∈ layout.sealed, prepared.kept segment.first = some segment.bytes)
-    {snapshot : UInt64} (retained : table.pins.floor ≤ snapshot)
-    (within : snapshot.toNat ≤ target.range.through) :
+    :
     (∃ bytes, readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
       (markerReads.readChunk markerFile.calls.slot.description) acquisitionLimit ByteArray.empty 0 =
         .ok bytes (min acquisitionLimit (marker.visible markerHandle.inode).size) ∧
       decode bytes = .ok selected) ∧
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take target.range.through) ∧
-    ∃ after : FileImage,
+    ∃ (after : FileImage) (table : PackedTable),
     (∀ bytes, some bytes ∈ after.keeper.active :: after.keeper.crashImages →
       recoverMarkedWalSegments (checkpointResult.getD (.empty, 0)).1 selected.frontier
         (layout.sealed.map (fun segment => (segment.first, segment.bytes)) ++ [(target.first, bytes)]) =
@@ -3039,7 +3036,7 @@ theorem recoveredRetries_installedReads
       retry.target = target ∧ retry.first = layout.first ∧
       retry.sealed = layout.sealed ∧ retry.keeper = layout.keeper ∧
       WalSegmentRepair.Prepared after target retry.plan ∧
-    ∃ session final reference opened pin pinned,
+    ∃ session final reference opened,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
         (do
           let (opened, _, _) ← reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary) rewindMarker)
@@ -3074,10 +3071,11 @@ theorem recoveredRetries_installedReads
       final.owners.Owns directory descriptor ∧
       session.sessionRef ∉ liveRefs ∧
       SnapshotWalReplay .empty ((history ++ batch).take target.range.through) reference ∧
-      opened.installed.table.acquireAt snapshot = some (pin, pinned) ∧
-      (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
-      ∀ start stop, pinned.range pin.handle start stop =
-        some (reference.table.range start stop snapshot) := by
+      (∀ snapshot : UInt64, opened.table.pins.floor ≤ snapshot → snapshot.toNat ≤ target.range.through →
+        ∃ pin pinned, opened.installed.table.acquireAt snapshot = some (pin, pinned) ∧
+          (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+          ∀ start stop, pinned.range pin.handle start stop =
+            some (reference.table.range start stop snapshot)) := by
   let base := (checkpointResult.getD (.empty, 0)).1
   let readWal := fun start length =>
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
@@ -3182,7 +3180,7 @@ theorem recoveredRetries_installedReads
   have authorized := prepared_settleMarker preparedPlan selected observed
   obtain ⟨after, repaired, ready, authorizedRepair⟩ :=
     WalSegmentRepair.finishMarkedOpen_completes authorized directory removeFile write sync renameFile settles healthy
-  obtain ⟨first, recovered, shared⟩ := collection.recoversSelected walValid walSelected
+  obtain ⟨first, table, shared⟩ := collection.recoversSelected walValid walSelected
     target.decoded sameWatermark checkpointRefines checkpointHistory ordinals
   have sameFirst : first = layout.first := by
     have lengths := congrArg ByteArray.size (shared.historyRetained.symm.trans retainedBytes)
@@ -3198,16 +3196,8 @@ theorem recoveredRetries_installedReads
       congrArg (fun t : Target => t.range.watermark) layoutTarget
     have right := Nat.le_trans (layoutWatermark ▸ layout.covers) watermarkWithin
     omega
-  obtain ⟨_, length, _, binding, decoded, _, _, _, fullReplay⟩ := shared.marked
-  have sameBytes := Option.some.inj (binding.symm.trans logicalMarker)
-  have sameLength : length = selected.frontier :=
-    Except.ok.inj ((sameBytes ▸ decoded).symm.trans (Boundary.decode_encode _))
-  have sameTable : recovered = table :=
-    (Prod.mk.inj (Except.ok.inj ((sameLength ▸ fullReplay).symm.trans expectedReplay))).2
-  have selectedRecovery : WalSegmentRecovery image target.pair target.range (history ++ batch)
-      base layout.first table := sameFirst ▸ sameTable ▸ shared
   have recovery : WalSegmentRecovery image after.directory.active target.range (history ++ batch)
-      base layout.first table := ready.selected.symm ▸ selectedRecovery
+      base layout.first table := ready.selected.symm ▸ sameFirst ▸ shared
   have retries : SettledRetries target after after := .start
   have observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
       pair = ⟨checkpoint, none⟩ ∨
@@ -3257,7 +3247,6 @@ theorem recoveredRetries_installedReads
   have ledger := recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2.1
-  obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
   have liveMarker := (retries.preservesSelectedMarker prepared selected observed authorizedRepair
     authorized.pair authorized.keeperPrefix authorized.newer (List.mem_cons_self ..)).1
   obtain ⟨actualMarker, actualLength, recoveredBytes, marked, decodedLength, _, samePayload, physicalReplay, _⟩ :=
@@ -3400,13 +3389,15 @@ theorem recoveredRetries_installedReads
       (layoutTarget.symm ▸ authorizedRepair) (layoutTarget.symm ▸ retries)
   have retryPlan : WalSegmentRepair.Prepared after target retry.plan := by
     simpa only [layoutTarget] using retryPrepared
-  refine ⟨⟨markerBytes, markerRead, decodedMarker⟩, ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
+  refine ⟨⟨markerBytes, markerRead, decodedMarker⟩, ledger.1, after, table, ?_, retry, retryTarget.trans layoutTarget, retryStart,
     retrySeals, retryKeeper, retryPlan, session, final, reference,
-    opened, pin, pinned, returned, fullReopen, installed, rfl, recovery, ledger.2.2, reached, reached.symm ▸ ready,
-    reached.symm ▸ authorizedRepair, owner, freshSession, replayed, acquired, points, ranges⟩
-  intro bytes survives
-  obtain ⟨equalReplay, sealedBytes⟩ := physical bytes survives
-  exact ⟨equalReplay.trans selectedReplay, fun segment found =>
-    sealedBytes (segment.first, segment.bytes) (List.mem_map.mpr ⟨segment, found, rfl⟩)⟩
+    opened, returned, fullReopen, installed, rfl, recovery, ledger.2.2, reached, reached.symm ▸ ready,
+    reached.symm ▸ authorizedRepair, owner, freshSession, replayed, ?_⟩
+  · intro bytes survives
+    obtain ⟨equalReplay, sealedBytes⟩ := physical bytes survives
+    exact ⟨equalReplay.trans selectedReplay, fun segment found =>
+      sealedBytes (segment.first, segment.bytes) (List.mem_map.mpr ⟨segment, found, rfl⟩)⟩
+  · intro snapshot retained within
+    exact recovery.acquireReads replayed retained within
 
 end Alvoki.WAL.TwoSlot
