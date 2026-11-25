@@ -21,7 +21,7 @@ private abbrev synced (before : WalSegmentRotation.State) := markerNext (written
 private abbrev renamed (before : WalSegmentRotation.State) := markerNext (synced before) .renameStaged
 private abbrev settled (before : WalSegmentRotation.State) := markerNext (renamed before) .syncDirectory
 
-private def project : EStateM.Result IO.Error (Cache Handle × Files) Unit →
+def bootstrapMarkerProjection : EStateM.Result IO.Error (Cache Handle × Files) Unit →
     EStateM.Result IO.Error WalSegmentRotation.State Unit
   | .ok () (_, image, _) => .ok () image
   | .error cause (_, image, _) => .error cause image
@@ -60,10 +60,9 @@ variable {directory : DiskDirectory} {before : LockedFileState WalSegmentRotatio
   {calls : BootstrapOpenCalls (Cache Handle) directory before}
   {captured : BootstrapCacheOpen calls.toBootstrapAdmissionCalls}
 
-/-- The marker publication starts after segment zero has settled. The
-tracked inode contains the staged bytes until the observed rename
-publishes its canonical marker name. -/
-structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) where
+/-- Staging opens, writes, and flushes a fresh zero-marker inode after
+segment zero has settled. Its pending handle supplies the file barrier. -/
+structure BootstrapMarkerStaging (listed : BootstrapCheckedListing captured) where
   initial : WalInodeImage
   tryCreate : FilePath → EStateM IO.Error Files (Except IO.Error Handle)
   statStale : FilePath → EStateM IO.Error Files (Except IO.Error IO.FS.Metadata)
@@ -73,7 +72,6 @@ structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) whe
   flush : Handle → EStateM IO.Error Files Unit
   read : FilePath → EStateM IO.Error Files Handle
   fsync : Handle → EStateM IO.Error Files Unit
-  rename : FilePath → FilePath → EStateM IO.Error Files Unit
   beforeStage : List LockReferenceDrop
   lockBeforeStage : calls.slot ∈ (listed.scan.afterClose.afterDrops beforeStage).slots
   directoryBeforeStage : captured.cached ∈ (listed.scan.afterClose.afterDrops beforeStage).slots
@@ -97,6 +95,21 @@ structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) whe
   stageBytes : inodeState.visible inodeState.active = markerBytes
   beforeFile : List LockReferenceDrop
   fileLive : slot ∈ (((listed.scan.afterClose.afterDrops beforeStage).insert slot free).afterDrops beforeFile).slots
+  projectWrite :
+    calls.write captured.cache (directory.file .stagedWalBoundary) markerBytes (markerInput before.image) =
+      bootstrapMarkerProjection (stageFreshWithCache (directory.file .stagedWalBoundary) markerBytes
+        (writeFreshStagedWith tryCreate (removeStaleStagingWith statStale unlinkStale) create write flush)
+        (captured.cache, markerInput before.image, initial))
+  projectFile :
+    calls.sync captured.cache #[directory.file .stagedWalBoundary] (written before.image) =
+      bootstrapMarkerProjection (SyncPathGroup.run (sync directory.path read fsync) #[directory.file .stagedWalBoundary]
+        (captured.cache.remember (directory.file .stagedWalBoundary)
+          ((listed.scan.afterClose.afterDrops beforeStage).insert slot free, slot, 0), written before.image, inodeState))
+
+/-- Successful publication observes both syncs and the rename of the
+staged inode to the canonical marker name. -/
+structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) extends BootstrapMarkerStaging listed where
+  rename : FilePath → FilePath → EStateM IO.Error Files Unit
   fileSynced : fsync ((listed.scan.afterClose.afterDrops beforeStage).insert slot free, slot, 0)
     (written before.image, inodeState) = .ok () (synced before.image, inodeState.completeFileSync inodeState.active)
   renamedView : DirectoryReadNamespace
@@ -114,30 +127,75 @@ structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) whe
   directorySynced : fsync (captured.reached, captured.cached, 0)
     (renamed before.image, inodeState.completeFileSync inodeState.active) =
     .ok () (settled before.image, (inodeState.completeFileSync inodeState.active).settleBinding)
-  projectWrite :
-    calls.write captured.cache (directory.file .stagedWalBoundary) markerBytes (markerInput before.image) =
-      project (stageFreshWithCache (directory.file .stagedWalBoundary) markerBytes
-        (writeFreshStagedWith tryCreate (removeStaleStagingWith statStale unlinkStale) create write flush)
-        (captured.cache, markerInput before.image, initial))
-  projectFile :
-    calls.sync captured.cache #[directory.file .stagedWalBoundary] (written before.image) =
-      project (SyncPathGroup.run (sync directory.path read fsync) #[directory.file .stagedWalBoundary]
-        (captured.cache.remember (directory.file .stagedWalBoundary)
-          ((listed.scan.afterClose.afterDrops beforeStage).insert slot free, slot, 0), written before.image, inodeState))
   projectRename :
     calls.renameFile (directory.file .stagedWalBoundary) (directory.file .walBoundary) (synced before.image) =
-      project (withCache (captured.cache.consume (directory.file .stagedWalBoundary))
+      bootstrapMarkerProjection (withCache (captured.cache.consume (directory.file .stagedWalBoundary))
         (rename (directory.file .stagedWalBoundary) (directory.file .walBoundary)
           (synced before.image, inodeState.completeFileSync inodeState.active)))
   projectDirectory :
     calls.sync captured.cache #[directory.path] (renamed before.image) =
-      project (SyncPathGroup.run (sync directory.path read fsync) #[directory.path]
+      bootstrapMarkerProjection (SyncPathGroup.run (sync directory.path read fsync) #[directory.path]
         (captured.cache.consume (directory.file .stagedWalBoundary), renamed before.image,
           inodeState.completeFileSync inodeState.active))
 
-namespace BootstrapMarkerCustody
-
 variable {listed : BootstrapCheckedListing captured}
+
+namespace BootstrapMarkerStaging
+
+abbrev inputState (_ : BootstrapMarkerStaging listed) : WalSegmentRotation.State :=
+  markerInput before.image
+
+abbrev writtenState (_ : BootstrapMarkerStaging listed) : WalSegmentRotation.State :=
+  written before.image
+
+abbrev syncedState (_ : BootstrapMarkerStaging listed) : WalSegmentRotation.State :=
+  synced before.image
+
+abbrev inventory (observed : BootstrapMarkerStaging listed) : DescriptorInventory :=
+  (listed.scan.afterClose.afterDrops observed.beforeStage).insert observed.slot observed.free
+
+abbrev handle (observed : BootstrapMarkerStaging listed) : Handle :=
+  (observed.inventory, observed.slot, 0)
+
+noncomputable abbrev stage (observed : BootstrapMarkerStaging listed) :=
+  writeFreshStagedWith observed.tryCreate (removeStaleStagingWith observed.statStale observed.unlinkStale)
+    observed.create observed.write observed.flush
+
+abbrev grouped (observed : BootstrapMarkerStaging listed) :=
+  SyncPathGroup.run (sync directory.path observed.read observed.fsync)
+
+theorem staged (observed : BootstrapMarkerStaging listed) :
+    let path := directory.file .stagedWalBoundary
+    stageFreshWithCache path markerBytes observed.stage (captured.cache, observed.inputState, observed.initial) =
+      .ok () (captured.cache.remember path observed.handle, observed.writtenState, observed.inodeState) := by
+  intro path
+  have wrote : observed.stage path markerBytes (markerInput before.image, observed.initial) =
+      .ok observed.handle (written before.image, observed.inodeState) := by
+    unfold stage writeFreshStagedWith
+    rw [observed.opening.uses]
+    simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, observed.writeReturned, observed.flushReturned]
+  simp [stageFreshWithCache, wrote]
+
+theorem writeProjected (observed : BootstrapMarkerStaging listed) :
+    calls.write captured.cache (directory.file .stagedWalBoundary) markerBytes observed.inputState =
+      .ok () observed.writtenState :=
+  observed.projectWrite.trans (congrArg bootstrapMarkerProjection observed.staged)
+
+theorem syncPending (observed : BootstrapMarkerStaging listed) :
+    let path := directory.file .stagedWalBoundary
+    observed.grouped #[path] (captured.cache.remember path observed.handle, observed.writtenState, observed.inodeState) =
+      match observed.fsync observed.handle (observed.writtenState, observed.inodeState) with
+      | .ok () after => .ok () (captured.cache.consume path, after)
+      | .error cause after => .error (IO.userError s!"sync failed for '{path}': {cause}") (captured.cache.consume path, after) := by
+  intro path
+  change SyncPathGroup.run (sync directory.path observed.read observed.fsync) #[path]
+    (captured.cache.remember path observed.handle, observed.writtenState, observed.inodeState) = _
+  rw [SyncPathGroup.run_single, syncRemembered (stagePath_ne_directory directory)]
+  cases observed.fsync observed.handle (observed.writtenState, observed.inodeState) <;> rfl
+
+end BootstrapMarkerStaging
+
+namespace BootstrapMarkerCustody
 
 abbrev publishedState (_ : BootstrapMarkerCustody listed) : WalSegmentRotation.State :=
   settled before.image
@@ -161,17 +219,8 @@ theorem callbacks (observed : BootstrapMarkerCustody listed) :
       .ok () (consumed, settled before.image, durable.settleBinding) := by
   intro path handle stage grouped consumed durable
   refine ⟨?_, ?_, ?_⟩
-  · have wrote : stage path markerBytes (markerInput before.image, observed.initial) =
-        .ok handle (written before.image, observed.inodeState) := by
-      unfold stage writeFreshStagedWith
-      rw [observed.opening.uses]
-      simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, observed.writeReturned, observed.flushReturned, handle]
-    simp [stageFreshWithCache, wrote]
-  · change SyncPathGroup.run (sync directory.path observed.read observed.fsync) #[path]
-      (captured.cache.remember path handle, written before.image, observed.inodeState) = _
-    rw [SyncPathGroup.run_single, syncRemembered (stagePath_ne_directory directory) handle observed.read observed.fsync,
-      show observed.fsync handle (written before.image, observed.inodeState) = .ok () (synced before.image, durable)
-        from observed.fileSynced]
+  · exact observed.toBootstrapMarkerStaging.staged
+  · simpa only [observed.fileSynced] using observed.toBootstrapMarkerStaging.syncPending
   · change SyncPathGroup.run (sync directory.path observed.read observed.fsync) #[directory.path]
       (consumed, renamed before.image, durable) = _
     rw [SyncPathGroup.run_single]

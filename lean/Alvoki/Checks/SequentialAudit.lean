@@ -196,6 +196,7 @@ import Alvoki.Storage.Disk.ObservedBootstrapCache
 import Alvoki.Storage.Disk.BootstrapZeroKeeperCustody
 import Alvoki.Storage.Disk.BootstrapMarkerCustody
 import Alvoki.Storage.Disk.BootstrapKeeperMarkerHandoff
+import Alvoki.Storage.Disk.BootstrapMarkerSyncError
 import Alvoki.Storage.Disk.ObservedBootstrapFailure
 import Alvoki.Storage.Disk.ObservedBootstrapRetry
 import Alvoki.Storage.Disk.MarkerlessBootstrapRetryInstallation
@@ -929,6 +930,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_safe
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_completes
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_completesAt
+#check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_syncStagedError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromHealthyBootstrap
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_markerlessBranch
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_recoveryBranch
@@ -1460,6 +1462,19 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.preservesKeeper
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.publishes
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.installs
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerStaging.staged
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerStaging.writeProjected
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerStaging.syncPending
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerStaging.heldAtStage
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerStaging.stageAfterKeeper
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerStaging.stagedKeeper
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerSyncError.fileBarrier
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerSyncError.physicalPrefix
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerSyncError.preservesKeeper
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerSyncError.worker
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerSyncError.returns
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerSyncError.crashSelection
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerSyncError.retryMarkerless
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.entries
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.canonicalLock
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.retained

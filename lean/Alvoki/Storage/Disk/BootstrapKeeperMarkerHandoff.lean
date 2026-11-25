@@ -64,48 +64,51 @@ private theorem settledVisible (route : BootstrapZeroKeeperRoute listed) :
 
 end BootstrapZeroKeeperRoute
 
-/-- These effects refer to the same reached successful callbacks as the
-keeper and marker reports. The two namespace mutations may affect their
-target names. The no-follow guard and stale detach, if reached, belong to
-the staged write. The file sync changes the selected inode's bytes, and
-the directory barriers settle names in the same captured directory. -/
-structure BootstrapKeeperMarkerHandoff (keeper : BootstrapZeroKeeperRoute listed)
-    (marker : BootstrapMarkerCustody listed) where
+/-- The reported keeper barrier and staging frame use one reached
+inventory and physical image. The stage may change the reserved name
+and its fresh inode's bytes. -/
+structure BootstrapKeeperMarkerStaging (keeper : BootstrapZeroKeeperRoute listed)
+    (marker : BootstrapMarkerStaging listed) where
   between : List LockReferenceDrop
   stageInventory : listed.scan.afterClose.afterDrops marker.beforeStage =
     keeper.settledInventory.afterDrops between
   stageInput : marker.initial = keeper.settledImage
   stageObjects : marker.stageView.modelObject = captured.view.modelObject
-  renameObjects : marker.renamedView.modelObject = captured.view.modelObject
   separateInodes : captured.view.modelObject marker.stageChild.child ≠
     captured.view.modelObject keeper.keeperChild
   stageNames : ∀ name, name ≠ stageName →
     marker.stageView.child captured.root name = keeper.keeperView.child captured.root name
-  renameNames : ∀ name, name ≠ stageName → name ≠ markerName →
-    marker.renamedView.child captured.root name = marker.stageView.child captured.root name
   stageBytes : ∀ inode, inode ≠ marker.inodeState.active →
     marker.inodeState.visible inode = marker.initial.visible inode ∧
     marker.inodeState.crashBytes inode = marker.initial.crashBytes inode
   afterKeeperNames : String → List (Option DeviceInode)
   afterStageNames : String → List (Option DeviceInode)
-  afterRenameNames : String → List (Option DeviceInode)
-  afterMarkerNames : String → List (Option DeviceInode)
   keeperSettlement : ∀ name, afterKeeperNames name = [keeper.keeperView.child captured.root name]
   stageChoices : ∀ name, name ≠ stageName → afterStageNames name = afterKeeperNames name
+
+/-- After staging and file sync, a successful continuation also reports
+the namespace effects of the marker rename and the final directory barrier. -/
+structure BootstrapKeeperMarkerHandoff (keeper : BootstrapZeroKeeperRoute listed)
+    (marker : BootstrapMarkerCustody listed)
+    extends BootstrapKeeperMarkerStaging keeper marker.toBootstrapMarkerStaging where
+  renameObjects : marker.renamedView.modelObject = captured.view.modelObject
+  renameNames : ∀ name, name ≠ stageName → name ≠ markerName →
+    marker.renamedView.child captured.root name = marker.stageView.child captured.root name
+  afterRenameNames : String → List (Option DeviceInode)
+  afterMarkerNames : String → List (Option DeviceInode)
   renameChoices : ∀ name, name ≠ stageName → name ≠ markerName → afterRenameNames name = afterStageNames name
   markerSettlement : ∀ name, afterMarkerNames name = [marker.renamedView.child captured.root name]
 
-namespace BootstrapKeeperMarkerHandoff
+namespace BootstrapKeeperMarkerStaging
 
-variable {keeper : BootstrapZeroKeeperRoute listed} {marker : BootstrapMarkerCustody listed}
+variable {keeper : BootstrapZeroKeeperRoute listed} {marker : BootstrapMarkerStaging listed}
 
 private theorem keeper_ne_stage : keeperName ≠ stageName := by decide
-private theorem keeper_ne_marker : keeperName ≠ markerName := by decide
 
 /-- Either keeper route reaches the same marker open boundary.
 The listing-derived census at that boundary extends the keeper barrier's
 reached census by the reported drops alone. -/
-theorem heldAtStage (observed : BootstrapKeeperMarkerHandoff keeper marker) :
+theorem heldAtStage (observed : BootstrapKeeperMarkerStaging keeper marker) :
     let reached := keeper.settledInventory.afterDrops observed.between
     calls.slot ∈ reached.slots ∧ captured.cached ∈ reached.slots ∧
     marker.initial = keeper.settledImage := by
@@ -113,6 +116,59 @@ theorem heldAtStage (observed : BootstrapKeeperMarkerHandoff keeper marker) :
   dsimp only [reached]
   exact ⟨observed.stageInventory ▸ marker.lockBeforeStage,
     observed.stageInventory ▸ marker.directoryBeforeStage, observed.stageInput⟩
+
+/-- The actual keeper directory barrier carries its exact reached state
+into the native staged-write schedule with the same captured cache. -/
+theorem stageAfterKeeper (observed : BootstrapKeeperMarkerStaging keeper marker) :
+    let input := keeper.keeperImage.completeFileSync keeper.keeperImage.active
+    let path := directory.file .stagedWalBoundary
+    (keeper.groupedSync #[directory.path] *> stageFreshWithCache path (WAL.Boundary.encode 0) marker.stage)
+      (captured.cache, keeper.fileSyncedState, input) =
+      .ok () (captured.cache.remember path marker.handle, marker.writtenState, marker.inodeState) := by
+  intro input path
+  have reached := keeper.reachesMarker
+  change keeper.groupedSync #[directory.path] (captured.cache, keeper.fileSyncedState, input) =
+    .ok () (captured.cache, marker.inputState, keeper.settledImage) at reached
+  rw [← observed.stageInput] at reached
+  simpa only [SeqRight.seqRight, EStateM.seqRight, reached] using marker.staged
+
+theorem stagedKeeper (observed : BootstrapKeeperMarkerStaging keeper marker) :
+    let inode := keeper.settledImage.active
+    let expected := some keeper.keeperChild
+    inode ≠ marker.inodeState.active ∧ marker.stageChild.child ≠ keeper.keeperChild ∧
+    marker.stageView.child captured.root keeperName = expected ∧
+    observed.afterKeeperNames keeperName = [expected] ∧
+    observed.afterStageNames keeperName = [expected] ∧
+    marker.inodeState.visible inode = ByteArray.empty ∧
+    marker.inodeState.crashBytes inode = [ByteArray.empty] := by
+  intro inode expected
+  obtain ⟨_, _, located, identity⟩ := keeper.settledCustody
+  have separate : inode ≠ marker.inodeState.active := by
+    change keeper.settledImage.active ≠ marker.inodeState.active
+    rw [← identity, marker.stageInode, observed.stageObjects]
+    exact observed.separateInodes.symm
+  have staged := (observed.stageNames keeperName keeper_ne_stage).trans located
+  have oldNames : observed.afterKeeperNames keeperName = [expected] := by simp [observed.keeperSettlement, located, expected]
+  have stagedNames := (observed.stageChoices keeperName keeper_ne_stage).trans oldNames
+  obtain ⟨visible, crash⟩ := observed.stageBytes inode separate
+  rw [observed.stageInput] at visible crash
+  exact ⟨separate, fun same => observed.separateInodes (congrArg captured.view.modelObject same), staged, oldNames, stagedNames,
+    visible.trans keeper.settledVisible, crash.trans keeper.settledEmpty.2⟩
+
+end BootstrapKeeperMarkerStaging
+
+namespace BootstrapKeeperMarkerHandoff
+
+variable {keeper : BootstrapZeroKeeperRoute listed} {marker : BootstrapMarkerCustody listed}
+
+theorem heldAtStage (observed : BootstrapKeeperMarkerHandoff keeper marker) :
+    let reached := keeper.settledInventory.afterDrops observed.between
+    calls.slot ∈ reached.slots ∧ captured.cached ∈ reached.slots ∧
+    marker.initial = keeper.settledImage :=
+  observed.toBootstrapKeeperMarkerStaging.heldAtStage
+
+private theorem keeper_ne_stage : keeperName ≠ stageName := by decide
+private theorem keeper_ne_marker : keeperName ≠ markerName := by decide
 
 /-- Through staging, the marker file sync, rename, and final directory
 barrier, the off-target keeper retains the same name and empty bytes.
@@ -137,26 +193,16 @@ theorem preservesKeeper (observed : BootstrapKeeperMarkerHandoff keeper marker) 
     markerSettled.visible inode = ByteArray.empty ∧
     markerSettled.crashBytes inode = [ByteArray.empty] := by
   intro inode fileSynced markerSettled expected
-  obtain ⟨_, _, located, identity⟩ := keeper.settledCustody
-  have separate : inode ≠ marker.inodeState.active := by
-    change keeper.settledImage.active ≠ marker.inodeState.active
-    rw [← identity, marker.stageInode, observed.stageObjects]
-    exact observed.separateInodes.symm
-  have staged := (observed.stageNames keeperName keeper_ne_stage).trans located
+  obtain ⟨separate, distinct, staged, oldNames, stagedNames, visibleEmpty, durableEmpty⟩ :=
+    observed.toBootstrapKeeperMarkerStaging.stagedKeeper
   have renamed := (observed.renameNames keeperName keeper_ne_stage keeper_ne_marker).trans staged
-  have oldNames : observed.afterKeeperNames keeperName = [expected] := by simp [observed.keeperSettlement, located, expected]
-  have stagedNames := (observed.stageChoices keeperName keeper_ne_stage).trans oldNames
   have renamedNames := (observed.renameChoices keeperName keeper_ne_stage keeper_ne_marker).trans stagedNames
   have finalNames : observed.afterMarkerNames keeperName = [expected] := by
     simp [observed.markerSettlement, renamed, expected]
-  obtain ⟨visible, crash⟩ := observed.stageBytes inode separate
-  rw [observed.stageInput] at visible crash
-  have visibleEmpty := visible.trans keeper.settledVisible
-  have durableEmpty := crash.trans keeper.settledEmpty.2
   have syncEmpty : fileSynced.crashBytes inode = [ByteArray.empty] := by
-    simp [fileSynced, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, separate, durableEmpty]
-  exact ⟨fun same => observed.separateInodes (congrArg captured.view.modelObject same),
-    staged, renamed, (congrArg (· keeper.keeperChild) observed.renameObjects).trans identity,
+    simp [fileSynced, inode, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, separate, durableEmpty]
+  exact ⟨distinct, staged, renamed,
+    (congrArg (· keeper.keeperChild) observed.renameObjects).trans keeper.settledCustody.2.2.2,
     oldNames, stagedNames, renamedNames, finalNames, visibleEmpty, durableEmpty,
     syncEmpty, visibleEmpty, syncEmpty⟩
 
