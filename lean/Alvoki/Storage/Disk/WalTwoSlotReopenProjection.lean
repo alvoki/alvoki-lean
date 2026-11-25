@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.WalSegmentBoundedRetry
 import Alvoki.Storage.Disk.WalSegmentBoundedOpenEffects
 import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.WalSegmentOpenFastEffects
@@ -310,6 +311,28 @@ private theorem appendRepairTrace {target : Target} {initial middle after : File
   | scratch _ ih => exact .scratch ih
   | crash _ metadata keeper later ih => exact .crash ih metadata keeper later
 
+/-- Repeated repairs and crashes extend the first authorized repair trace. -/
+theorem SettledRetries.effectTrace {target : Target} {initial first after : FileImage}
+    (retries : SettledRetries target first after)
+    (firstRepair : EffectTrace target initial first) : EffectTrace target initial after := by
+  induction retries with
+  | start => exact firstRepair
+  | repair _ effects ih => exact appendRepairTrace ih effects
+  | crash _ metadata keeper later ih => exact .crash ih metadata keeper later
+
+/-- Apply the shared canonical layout proof after the slot becomes durable.
+The same selected history, keeper and earlier bytes describe the retry. -/
+theorem SettledRetries.canonicalLayout {initial first after : FileImage} {history : List Write}
+    (layout : Storage.DiskSession.CanonicalKeeperLayout initial history)
+    (retries : SettledRetries layout.target first after)
+    (firstRepair : EffectTrace layout.target initial first)
+    (prepared : Prepared initial layout.target layout.plan) :
+    ∃ retry : Storage.DiskSession.CanonicalKeeperLayout after history,
+      retry.target = layout.target ∧ retry.range = layout.range ∧ retry.first = layout.first ∧
+      retry.sealed = layout.sealed ∧ retry.keeper = layout.keeper ∧ after.kept = initial.kept ∧
+      Prepared after layout.target retry.plan :=
+  (retries.effectTrace firstRepair).canonicalRetryLayout layout prepared
+
 /-- Once authorized, repeated repair attempts are prefixes of the same
 repair trace. Reuse its replay theorem on the entire retry sequence. -/
 theorem SettledRetries.replayUnchanged {target : Target} {initial first after : FileImage} {plan : Plan}
@@ -325,13 +348,8 @@ theorem SettledRetries.replayUnchanged {target : Target} {initial first after : 
     Storage.recoverMarkedWalSegments base length (sealed ++ [(target.first, bytes)]) =
       Storage.recoverMarkedWalSegments base length (sealed ++ [(target.first, plan.keeperBytes)]) ∧
     ∀ file ∈ sealed, after.kept file.1 = some file.2 := by
-  have trace : EffectTrace target initial after := by
-    clear survives
-    induction retries with
-    | start => exact firstRepair
-    | repair _ effects ih => exact appendRepairTrace ih effects
-    | crash _ metadata keeper later ih => exact .crash ih metadata keeper later
-  exact trace.replayUnchanged prepared base sealed sealedRead markerRead decoded checked survives
+  exact (retries.effectTrace firstRepair).replayUnchanged
+    prepared base sealed sealedRead markerRead decoded checked survives
 
 /-- Compose the first authorized repair prefix with later attempts. Every
 surviving binding still selects the same frontier, even if none of the

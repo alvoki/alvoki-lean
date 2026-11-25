@@ -18,7 +18,9 @@ keeper and the marker-bounded prefix provably replay to the same table,
 including when the keeper contains an unchecked tail. The client theorem
 now derives replay of the selected files from the segmented recovery using
 their common marker and a contiguous chain of selected segments. That
-chain now supplies the start offset and exact retained byte prefix. The
+chain now supplies the start offset and exact retained byte prefix. After
+marker authorization, two-slot retries reuse the shared layout proof and
+reconstruct the same canonical segment chain at the latest retry state. The
 remaining integration work is to derive the selected chain and primitive
 reports from one native descriptor chronology. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
 
