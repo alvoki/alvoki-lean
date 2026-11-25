@@ -119,7 +119,8 @@ installed writer and a continued client trace are conclusions of these steps. At
 explains prior responses and the returned session's supported reads.
 
 The first composition links an observed empty bootstrap, a confirmed batch, and a second batch
-interrupted during marker publication. The reported failed-recovery prefix preserves the confirmed batch
+interrupted during marker publication. The batch schedule reaches the reported operation in the poisoned
+phase without returning. That exact file effect starts the recovery prefix, which preserves the confirmed batch
 and admits the whole uncertain batch or none of it. A healthy held open supplies the precise returned
 session. Acquiring its latest snapshot and reading through that pin extends the same client trace.
 This proof uses reported publication steps, the attempted keeper offset and local repair effects.

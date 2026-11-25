@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.BatchRecoveryPrefix
+import Alvoki.Storage.Disk.BatchInterruptionDispatch
 import Alvoki.Storage.Disk.BootstrapKeeperMarkerHandoff
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
 
@@ -65,6 +66,16 @@ theorem BootstrapClientStart.acknowledgesThenRecovers {handle : Type} {directory
           (start.writer.files.directory.staged .walBoundary)), start.writer.owners⟩) =
         .ok acknowledged.table.committed
           (.ready (acknowledged.next target).installed, ⟨(cacheAfter, acknowledged.written), start.writer.owners⟩) ∧
+      (let before := acknowledged.next target
+       let scratch := before.wal.directory.staged .walBoundary
+       let reached := cut.cut.interrupt (WAL.Boundary.encode cut.nextBytes.toUInt64) cut.reached
+       runBatchWriteWithInterruption directory cut.rows cut.activeMetadata cut.publishUntilIssue
+         (.ready before.installed, ⟨WriteFiles.initial before.history scratch, before.owners⟩) =
+           .error cut.cut.action (.poisoned, ⟨reached, before.owners⟩) ∧
+       cut.inFlight = ⟨before.wal.appendReopenFiles
+         (reached.reopenImage (before.history.drop before.wal.active.first)
+           before.wal.directory.active.manifest (before.wal.directory.staged .manifest) before.files.keeper.staged)
+         before.files.keeper.staged, before.owners⟩) ∧
       ∃ (description : Nat) (after : SegmentedWriterState) (history : List WAL.Write)
         (layout : CanonicalKeeperLayout retry.image history)
         (reported : MarkedRetryChunkReports (Cache CheckpointOpenHandle) directory layout (acknowledged.next target).published)
@@ -100,6 +111,15 @@ theorem BootstrapClientStart.acknowledgesThenRecovers {handle : Type} {directory
     trace.reopenAfterReportedBatchMarker start observed retries readAndFinish
   have batchHistory : (acknowledged.next target).history = acknowledged.batch := rfl
   have initialReady := (start.bootstrap.writerReady start.held).toRetained
+  have beforeReady := (trace.writes.preservesRetained initialReady).1
+  have fileStop : cut.inFlight = ⟨(acknowledged.next target).wal.appendReopenFiles
+      ((cut.cut.interrupt (WAL.Boundary.encode cut.nextBytes.toUInt64) cut.reached).reopenImage
+        ((acknowledged.next target).history.drop (acknowledged.next target).wal.active.first)
+        (acknowledged.next target).wal.directory.active.manifest
+        ((acknowledged.next target).wal.directory.staged .manifest) (acknowledged.next target).files.keeper.staged)
+      (acknowledged.next target).files.keeper.staged, (acknowledged.next target).owners⟩ := by
+    unfold SegmentedBatchMarkerPowerLossReport.inFlight SegmentedBatchMarkerPowerLossReport.physical
+    rw [(observed.preparedHistory beforeReady).1]
   have ready := (continued.writes.preservesRetained initialReady).1
   obtain ⟨model, refined, _⟩ := ready.resumed.canonical
   have floor : after.installed.table.pins.floor ≤ after.installed.table.committed := by
@@ -110,7 +130,7 @@ theorem BootstrapClientStart.acknowledgesThenRecovers {handle : Type} {directory
     simpa only [List.cons_append, List.nil_append, path, lock] using continued
   obtain ⟨reference, issued, acquired, reader, replayed, _, pinned, localToken, sequence, exactPhase, readNext⟩ :=
     replay.acquireAndRead atSession phase _ floor (UInt64.le_refl _)
-  refine ⟨cacheAfter, returned, description, after, history, layout, reported, admission, session, final,
+  refine ⟨cacheAfter, returned, ⟨observed.stopsBatchSchedule, fileStop⟩, description, after, history, layout, reported, admission, session, final,
     opened, path, lock, phase, files, owners, sameHistory, by simpa only [batchHistory] using retained, continued, replay,
     reference, issued, acquired, reader, sameHistory ▸ replayed, pinned, localToken, sequence, exactPhase, ?_⟩
   intro sameSession compared α request
