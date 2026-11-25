@@ -31,6 +31,26 @@ theorem projectBinding_decodes {visible : Bindings} {bytes : ByteArray} {selecte
       ⟨visible.manifest, some (Boundary.encode selected.frontier)⟩ := by
   simp [projectBinding, accepted, Except.map, Bindings.replace]
 
+/-- The observed bounded read used by reopen projects the full physical
+marker to the same binding used by the shared WAL and checkpoint readers. -/
+theorem projectBinding_of_heldRead
+    {source bytes : ByteArray} {read : USize → EStateM IO.Error Nat ByteArray}
+    {reached : Nat} {visible : Bindings} {selected : Selection}
+    (mismatch : IO.Error) (observes : Storage.PrefixChunkObserves source read)
+    (available : Storage.PrefixChunksAvailableUntilEof source read)
+    (fits : acquisitionLimit < USize.size)
+    (returned : Storage.readPrefixUntilEofWith mismatch read acquisitionLimit ByteArray.empty 0 =
+      .ok bytes reached)
+    (accepted : decode bytes = .ok selected) :
+    projectBinding visible source = .ok
+      ⟨visible.manifest, some (Boundary.encode selected.frontier)⟩ := by
+  obtain ⟨bounded, result, agrees⟩ := decode_heldRead mismatch observes available fits
+  rw [returned] at result
+  have same : bytes = bounded := by injection result
+  apply projectBinding_decodes
+  rw [← agrees, ← same]
+  exact accepted
+
 /-- Bootstrap exposes the same zero frontier and checkpoint binding as
 the ordinary empty-WAL installer under the marker projection. -/
 theorem projectBinding_initial (visible : Bindings) :
