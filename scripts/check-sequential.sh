@@ -64,6 +64,7 @@ lake env leanchecker Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunPrefixCustody
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunPrefixReports
 lake env leanchecker Alvoki.Storage.Disk.CheckpointObservedCompletion
+lake env leanchecker Alvoki.Storage.Disk.NativeReadyCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.CheckpointCompletionClientTrace
 lake env leanchecker Alvoki.Storage.Disk.CheckpointCompletionHeldReopen
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.ProcessExit
