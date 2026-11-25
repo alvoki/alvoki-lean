@@ -15,6 +15,7 @@ theorem SegmentedBatchDatabaseTrace.append
   induction suffix with
   | start => simpa using prior
   | ordinary _ step ih => simpa only [List.append_assoc] using ih.ordinary step
+  | checkpoint _ observed installed ih => exact .checkpoint ih observed installed
   | cleanReopenObserved _ closed endpoint ih => exact .cleanReopenObserved ih closed endpoint
   | checkpointManifestStageError _ endpoint ih => exact .checkpointManifestStageError ih endpoint
   | checkpointManifestError _ endpoint ih => exact .checkpointManifestError ih endpoint

@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.CheckpointRunWriteCustody
+import Alvoki.Storage.Disk.CheckpointPreflight
 import Alvoki.Storage.Disk.CheckpointRunPrefixReports
 import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.RunUnlinkEffects
@@ -219,64 +220,87 @@ namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication
 
-/-- A complete reached checkpoint returns the same flushed table and lock
-owner as its counted publication projection. The resulting writer is
-ready in the mixed trace. Its existing WAL history and the exact new
-ordered checkpoint bindings follow from the selected publication. -/
+/-- The four file callbacks dispatched after checkpoint preparation. -/
+structure CheckpointFileCallbacks (state : Type) where
+  writeRun : FilePath → ByteArray → EStateM IO.Error state Unit
+  writeStaged : FilePath → ByteArray → EStateM IO.Error state Unit
+  sync : Array FilePath → EStateM IO.Error state Unit
+  rename : FilePath → FilePath → EStateM IO.Error state Unit
+
+/-- The file dispatch from `DiskTable.checkpoint_schedule`, indexed by the
+exact installed state and manifest produced by its preparation. -/
+def CheckpointFileCallbacks.perform {state : Type} (callbacks : CheckpointFileCallbacks state)
+    (directory : DiskDirectory) (next : Installed) (manifest : ByteArray) : Step → EStateM IO.Error state Unit :=
+  performCheckpointFileStep directory next.generation next.table.runs.toArray (directory.file .stagedManifest)
+    manifest (fun found => match found with
+      | some run => pure run
+      | none => throw (IO.userError "checkpoint run index is out of bounds"))
+    callbacks.writeRun callbacks.writeStaged callbacks.sync callbacks.rename
+
+/-- The preflight and reached file reports for one successful checkpoint.
+The returned state and durable bindings are derived from these reports. -/
+structure CheckpointCompletionReports (state : Type) {directory : DiskDirectory} {before : SegmentedWriterState}
+    (attempt : SegmentedCheckpointReport directory before) where
+  preflight : CheckpointPreflight (.ready before.installed) (.ok (attempt.prepared, attempt.manifest))
+  callbacks : CheckpointFileCallbacks state
+  observed : SuccessfulCheckpointSteps (callbacks.perform directory attempt.prepared attempt.manifest) attempt.table.runs.length
+  effectCount : state → Nat
+  initialCount : effectCount (observed.atRun 0) = 0
+  finalCount : effectCount observed.completed = attempt.cut
+  reached : ReachedFileReports attempt.report attempt.perform (steps attempt.table.runs.length) 0
+  projects : ∀ (done : List Step) step todo state,
+    steps attempt.table.runs.length = done ++ step :: todo →
+    (done.forM (callbacks.perform directory attempt.prepared attempt.manifest)) (observed.atRun 0) = .ok () state →
+    countReached effectCount (callbacks.perform directory attempt.prepared attempt.manifest step state) =
+      attempt.perform step (effectCount state)
+  runs : state → RunUnlinkImage
+  manifest : state → Publication.Image
+  bindings : CheckpointBindingReports observed runs manifest (SegmentedCheckpointReport.generation before)
+    attempt.plan.files attempt.manifest
+
+/-- The full scheduled return and the exact physical checkpoint selection
+at the same endpoint. The lock owner remains attached to the same writer. -/
+structure CheckpointCompletionReports.Completed {state : Type} {directory : DiskDirectory}
+    {before : SegmentedWriterState} {attempt : SegmentedCheckpointReport directory before}
+    (reports : CheckpointCompletionReports state attempt) (phase : Phase Installed)
+    (writer : Nat) (after : SegmentedWriterState) : Prop where
+  installed : attempt.Installs after
+  retained : after.RetainedReady directory writer
+  returned : runCheckpointWithEffects (reports.callbacks.perform directory)
+    (phase, ⟨reports.observed.atRun 0, before.owners⟩) =
+      .ok () (.ready after.installed, ⟨reports.observed.completed, after.owners⟩)
+  manifest : reports.manifest reports.observed.completed = after.published.manifest
+  runs : ∀ index < attempt.table.runs.length, (reports.runs reports.observed.completed).guaranteed after.installed.generation index =
+    after.published.durable after.installed.generation index
+
+/-- The exact prepared identity determines the file dispatch. Interpret
+its complete native schedule at the same writer in the mixed trace. The
+checkpoint does not contribute a write to the submission ledger. -/
 theorem SegmentedBatchDatabaseTrace.checkpointFromObservedSteps {state : Type}
     (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
     (initialReady : initial.RetainedReady directory initialDescriptor)
-    (attempt : SegmentedCheckpointReport directory before)
-    (flushed : (flushForCheckpoint before.installed.table id : Except String PackedTable) = .ok attempt.table)
-    (generationFits : before.installed.generation.toNat + 1 < UInt64.size)
-    (runCountFits : attempt.table.runs.length < UInt64.size)
-    (encoded : encodeCheckpointIntegrityManifest attempt.table (SegmentedCheckpointReport.generation before) = .ok attempt.manifest)
-    (writeRun writeStaged : FilePath → ByteArray → EStateM IO.Error state Unit)
-    (sync : Array FilePath → EStateM IO.Error state Unit)
-    (rename : FilePath → FilePath → EStateM IO.Error state Unit)
-    (runs : state → RunUnlinkImage) (manifest : state → Publication.Image) :
-    let perform := performCheckpointFileStep directory (SegmentedCheckpointReport.generation before)
-      attempt.table.runs.toArray (directory.file .stagedManifest) attempt.manifest
-      (fun found => match found with
-        | some run => pure run
-        | none => throw (IO.userError "checkpoint run index is out of bounds"))
-      writeRun writeStaged sync rename
-    ∀ (observed : SuccessfulCheckpointSteps perform attempt.table.runs.length) (effectCount : state → Nat),
-      effectCount (observed.atRun 0) = 0 →
-      effectCount observed.completed = attempt.cut →
-      ReachedFileReports attempt.report attempt.perform (steps attempt.table.runs.length) 0 →
-      (∀ (done : List Step) step todo reached, steps attempt.table.runs.length = done ++ step :: todo →
-        (done.forM perform) (observed.atRun 0) = .ok () reached →
-        countReached effectCount (perform step reached) = attempt.perform step (effectCount reached)) →
-      CheckpointBindingReports observed runs manifest (SegmentedCheckpointReport.generation before)
-        attempt.plan.files attempt.manifest →
-      ∃ after, attempt.Installs after ∧ after.RetainedReady directory writer ∧
-        runPreparedCheckpoint attempt.prepared perform
-          (.ready before.installed, ⟨observed.atRun 0, before.owners⟩) =
-            .ok () (.ready after.installed, ⟨observed.completed, after.owners⟩) ∧
-        manifest observed.completed = after.published.manifest ∧
-        (∀ index < attempt.table.runs.length, (runs observed.completed).guaranteed after.installed.generation index =
-          after.published.durable after.installed.generation index) ∧
-        SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
-          (log ++ [.ordinary [⟨[], none⟩]]) writer after := by
-  intro perform observed effectCount initialCount finalCount reached projects bindings
-  have counted := observed.returnsCounted effectCount attempt.perform projects
-  rw [initialCount, finalCount] at counted
-  have valid : attempt.Valid := ⟨flushed, generationFits, runCountFits, encoded, reached, counted⟩
+    {attempt : SegmentedCheckpointReport directory before} (reports : CheckpointCompletionReports state attempt) :
+    ∃ after, reports.Completed (.ready before.installed) writer after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer after := by
+  have counted := reports.observed.returnsCounted reports.effectCount attempt.perform reports.projects
+  rw [reports.initialCount, reports.finalCount] at counted
+  obtain ⟨flushed, generationFits, runCountFits, encoded⟩ := reports.preflight.preparedFacts
+  have valid : attempt.Valid := ⟨flushed, generationFits, runCountFits, encoded, reports.reached, counted⟩
   obtain ⟨after, installed, ready, _⟩ := attempt.installsRetained valid (trace.preservesRetained initialReady).1
-  have ran := observed.returns
-  have native : runPreparedCheckpoint attempt.prepared perform
-      (.ready before.installed, ⟨observed.atRun 0, before.owners⟩) =
-        .ok () (.ready after.installed, ⟨observed.completed, after.owners⟩) := by
-    rw [installed.installed, installed.owners]
+  have ran : run attempt.prepared.table.runs.length (reports.callbacks.perform directory attempt.prepared attempt.manifest)
+      (reports.observed.atRun 0) = .ok () reports.observed.completed := reports.observed.returns
+  have native : runCheckpointWithEffects (reports.callbacks.perform directory)
+      (.ready before.installed, ⟨reports.observed.atRun 0, before.owners⟩) =
+        .ok () (.ready after.installed, ⟨reports.observed.completed, after.owners⟩) := by
+    rw [reports.preflight.effect, installed.installed, installed.owners]
     simp only [runPreparedCheckpoint, Bind.bind, EStateM.bind, modify, modifyGet, MonadStateOf.modifyGet,
-      EStateM.modifyGet, SegmentedCheckpointReport.prepared, ran]
-  have published := observed.manifestSettled manifest attempt.manifest bindings.stageManifest
+      EStateM.modifyGet, ran]
+  have bindings := reports.bindings
+  have published := reports.observed.manifestSettled reports.manifest attempt.manifest bindings.stageManifest
     bindings.syncManifest bindings.renameManifest bindings.finalManifest
-  have runFiles := observed.durableRuns runs (SegmentedCheckpointReport.generation before) bindings.syncedRun
+  have runFiles := reports.observed.durableRuns reports.runs (SegmentedCheckpointReport.generation before) bindings.syncedRun
     bindings.previousRuns bindings.runNames bindings.stageRuns bindings.syncRuns bindings.renameRuns bindings.finalRuns
-  refine ⟨after, installed, ready, native, published.trans installed.settled.symm, ?_,
-    .ordinary trace (.writes .start (.checkpoint .empty attempt valid installed))⟩
+  refine ⟨after, ⟨installed, ready, native, published.trans installed.settled.symm, ?_⟩, .checkpoint trace valid installed⟩
   intro index within
   rw [installed.installed]
   exact (runFiles index within).trans (installed.runs index).symm

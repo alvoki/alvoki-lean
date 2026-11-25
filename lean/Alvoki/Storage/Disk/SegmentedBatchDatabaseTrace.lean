@@ -113,6 +113,11 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (step : SegmentedDatabaseTrace directory writer before allowCollection submissions descriptor after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.ordinary submissions]) descriptor after
+  | checkpoint
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      {attempt : SegmentedCheckpointReport directory before} (observed : attempt.Valid)
+      (installed : attempt.Installs after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer after
   | cleanReopenObserved {files : Type} {input : System.FilePath}
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (closed : CleanUnlockReports directory writer)
@@ -247,6 +252,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     obtain ⟨afterReady, suffix, extended, kept⟩ := step.preservesRetained beforeReady
     exact ⟨afterReady, retained ++ suffix, by rw [extended, beforeHistory, List.append_assoc],
       .append retention kept⟩
+  | checkpoint _ observed installed ih =>
+    obtain ⟨beforeReady, retained, history, retention⟩ := ih
+    exact ⟨(installed.preservesRetained observed beforeReady).1, retained, installed.history.trans history, retention⟩
   | cleanReopenObserved _ _ endpoint ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨endpoint.writer.retained, retained, endpoint.writer.history.trans history, retention⟩

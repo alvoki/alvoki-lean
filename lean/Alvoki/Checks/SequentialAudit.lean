@@ -78,6 +78,7 @@ import Alvoki.Storage.Disk.CheckpointRunWriteCustody
 import Alvoki.Storage.Disk.CheckpointRunPrefixCustody
 import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 import Alvoki.Storage.Disk.CheckpointObservedCompletion
+import Alvoki.Storage.Disk.CheckpointCompletionClientTrace
 import Alvoki.Storage.Disk.CheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.Checkpoint.Manifest.RenamePrefix
 import Alvoki.Storage.Disk.CheckpointRunDirectoryFailure
@@ -502,6 +503,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.manifestSettled
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.returnsCounted
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.checkpointFromObservedSteps
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointFromObservedSteps
 #check_axioms Alvoki.Storage.commitWalWrite_fileEffects
 #check_axioms Alvoki.Storage.bootstrapSegmented_fileEffects
 #check_axioms Alvoki.Storage.DiskTable.writeWithOutcome_fileEffects
@@ -703,6 +705,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.checkpoint_fileEffects
 #check_axioms Alvoki.Storage.DiskTable.checkpoint_schedule
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.total
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.preparedFacts
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.effect
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.rejected
 #check_axioms Alvoki.Storage.writeRunFlushed_schedule

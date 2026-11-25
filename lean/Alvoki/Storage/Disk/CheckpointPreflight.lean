@@ -40,6 +40,15 @@ theorem CheckpointPreflight.total (phase : Phase Installed) : ∃ result, Checkp
         | ok manifest => exact ⟨_, .prepared flushed fits encoded⟩
       · exact ⟨_, .boundsError flushed fits⟩
 
+/-- Recover the exact guard and encoder results from the prepared outcome. -/
+theorem CheckpointPreflight.preparedFacts {before next : Installed} {manifest : ByteArray}
+    (preflight : CheckpointPreflight (.ready before) (.ok (next, manifest))) :
+    (flushForCheckpoint before.table id : Except String PackedTable) = .ok next.table ∧
+      before.generation.toNat + 1 < UInt64.size ∧ next.table.runs.length < UInt64.size ∧
+      encodeCheckpointIntegrityManifest next.table (UInt64.ofNat (before.generation.toNat + 1)) = .ok manifest := by
+  cases preflight with
+  | prepared flushed fits encoded => exact ⟨flushed, fits.1, fits.2, encoded⟩
+
 private def liftCheckpointExcept {state α : Type} (result : Except String α) : EStateM IO.Error state α :=
   match result with
   | .ok value => pure value

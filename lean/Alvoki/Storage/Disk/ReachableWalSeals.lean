@@ -18,6 +18,9 @@ theorem SegmentedBatchDatabaseTrace.preservesPositiveSeals
   induction trace with
   | start => exact positive
   | ordinary prior step ih => exact step.preservesPositiveSeals (prior.preservesRetained ready).1 ih
+  | checkpoint _ _ installed ih =>
+    rw [installed.wal]
+    exact ih
   | cleanReopenObserved _ _ endpoint ih =>
     rw [endpoint.writer.wal]
     exact ih

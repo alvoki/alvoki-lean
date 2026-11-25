@@ -211,6 +211,8 @@ The returned manifest rename error uses the same completed run prefix, directory
 
 The native checkpoint reads the session phase, flushes pending rows in memory, checks generation and run-count bounds, then encodes the strict manifest. Each rejected check returns its exact error before changing the phase or dispatching a file operation. The proof retains the original phase, lock and file image. A successful preparation passes the exact next writer state and encoded manifest to the existing publication schedule. [Native checkpoint preflight](../lean/Alvoki/Storage/Disk/CheckpointPreflight.lean)
 
+A successful checkpoint now joins its exact prepared writer and manifest bytes to the reported file operations and the final ready phase of the same session. The final physical manifest and its selected run bytes are the ones in the mixed trace. The checkpoint leaves the submission and read ledgers intact, and one WAL replay accounts for the acknowledged writes, recorded responses, and guarded reads in the returned session. The proof uses truthful reached callback and binding reports. [Successful checkpoint client trace](../lean/Alvoki/Storage/Disk/CheckpointCompletionClientTrace.lean)
+
 ### Garbage collection contract
 
 The engine must eventually reclaim obsolete run generations, covered WAL data, and versions that no supported snapshot can observe. The proof covers the executable collector, including interruption and retry.
