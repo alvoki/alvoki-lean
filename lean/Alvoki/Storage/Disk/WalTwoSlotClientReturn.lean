@@ -1325,6 +1325,21 @@ private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × By
         (ih head.2 (fun file found => leftBytes file (List.mem_cons_of_mem _ found))
           (fun file found => rightBytes file (List.mem_cons_of_mem _ found)))
 
+/-- Project the marked acquisition onto the file image. The open callback
+supplies the rewound description; the bounded read only advances its cursor. -/
+def acquireMarkerFromReports (openMarker : EStateM IO.Error FileImage KeeperDescriptorIdentity)
+    (reads : WalSegmentRepair.CheckpointRunChunkReads) :
+    EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) := do
+  let handle ← openMarker
+  fun files =>
+    match readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+        (reads.readChunk handle.description) acquisitionLimit ByteArray.empty 0 with
+    | .error cause _ => .error cause files
+    | .ok bytes _ =>
+      match decode bytes with
+      | .error cause => .error (IO.userError cause) files
+      | .ok selected => .ok (handle, selected) files
+
 /-- The same retry-selected recovery explains the retained submissions and
 fresh snapshot reads on the session installed by the shared open schedule. -/
 theorem recoveredRetries_installedReads
@@ -1416,8 +1431,8 @@ theorem recoveredRetries_installedReads
       (markerReads.readChunk markerFile.calls.slot.description))
     (markerAccepted : decode (marker.visible markerHandle.inode) = .ok selected)
     {stabilize : KeeperDescriptorIdentity → EStateM IO.Error FileImage Unit}
-    (acquireMarker : EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection))
-    (markerAcquired : acquireMarker openedFrom.image = .ok (markerHandle, selected) openedFrom.image)
+    (openMarker : EStateM IO.Error FileImage KeeperDescriptorIdentity)
+    (markerOpened : openMarker openedFrom.image = .ok markerHandle openedFrom.image)
     (markerChoices : List (DirectoryPublication.Bindings × Option ByteArray))
     (enumerated : markerChoices.map Prod.fst = prepared.directory.crashImages)
     (presence : ∀ choice ∈ markerChoices, choice.2.isSome = choice.1.walBoundary.isSome)
@@ -1468,7 +1483,7 @@ theorem recoveredRetries_installedReads
             WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile))
         openedFrom = .ok session final ∧
       (∃ opened,
-        reopenAcquiredWith acquireMarker
+        reopenAcquiredWith (acquireMarkerFromReports openMarker markerReads)
           (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory
             (readIntegrityCheckpointSized directory readManifest
               (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
@@ -1674,7 +1689,13 @@ theorem recoveredRetries_installedReads
       (finish := fun bounded size =>
         WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
       liveRefs fresh acquisition read barrier boundedRepair
-  have fullReopen := (reopenAcquiredWith_success acquireMarker
+  obtain ⟨markerBytes, markerRead, markerDecode⟩ := decode_markerFromHeldDirectory markerFile markerAvailable
+  have markerAcquired : acquireMarkerFromReports openMarker markerReads openedFrom.image =
+      .ok (markerHandle, selected) openedFrom.image := by
+    rw [markerDescription] at markerRead
+    simp [acquireMarkerFromReports, Bind.bind, EStateM.bind, markerOpened, markerRead,
+      markerDecode.trans markerAccepted]
+  have fullReopen := (reopenAcquiredWith_success (acquireMarkerFromReports openMarker markerReads)
     (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
       (fun _ => pure (some (Boundary.encode selection.frontier))) readWal)
     stabilize
@@ -1701,7 +1722,6 @@ theorem recoveredRetries_installedReads
       (layoutTarget.symm ▸ authorizedRepair) (layoutTarget.symm ▸ retries)
   have retryPlan : WalSegmentRepair.Prepared after target retry.plan := by
     simpa only [layoutTarget] using retryPrepared
-  obtain ⟨markerBytes, markerRead, markerDecode⟩ := decode_markerFromHeldDirectory markerFile markerAvailable
   refine ⟨⟨markerBytes, markerRead, markerDecode.trans markerAccepted⟩, ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
     retrySeals, retryKeeper, retryPlan, session, final, reference,
     opened.installed, pin, pinned, returned, ⟨opened, fullReopen, installed⟩, reached, reached.symm ▸ ready,

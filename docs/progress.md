@@ -878,3 +878,10 @@ acquisition supplies the handle and selection, stabilization uses that
 handle, and the repaired image is the one installed in the session.
 Connecting the modeled acquisition and intermediate descriptor census
 to a single sequence of native callback reports remains open.
+
+Marker acquisition in the modeled reopen now computes its return from
+the reported raw open, the bounded reads on its returned description
+and the executable decoder. The client theorem derives the acquired
+pair from those reports. The raw open still projects a rewound
+descriptor, and the checkpoint and WAL callbacks still need to supply
+the intervening descriptor census and repair trace.
