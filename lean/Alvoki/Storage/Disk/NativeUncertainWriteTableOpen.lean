@@ -19,6 +19,36 @@ def NativeReadyWriteFailure.openCalls (write : NativeReadyWriteFailure state) :
 
 /-- Project the actual returned single or batch request into its same
 reported uncertain diagnostic, cache and files. -/
+theorem NativeOpenedPosition.classifiesPendingWriteReturn (current : NativeOpenedPosition opened)
+    (pending : NativePendingWrite current.current.ready)
+    {cause : IO.Error} {after : OpenWriteFiles}
+    (returned : pending.write.request.runOnOpenPhase current.current.ready.state.session.directory pending.write.openCalls
+      opened.phase opened.get opened.set (current.reached,
+        (WriteRequest.readyCall current.current.ready.state.writer current.current.ready.state.cache).2.image) =
+        .error (.commitUnknown cause) (failed, after)) :
+    let state := current.current.ready.state
+    opened.table.UsesOpenWriteSchedules state.session.directory opened.files opened.phase ∧
+      cause = pending.write.failure.cause ∧ after = (pending.cache, pending.write.failure.failed) ∧
+      opened.contents failed opened.phase = some .poisoned := by
+  intro state
+  obtain ⟨source, projected⟩ := current.current.ready.classifiesWriteOnOpenPhase opened.table current.uses
+    opened.phaseEffects current.stored pending.write.request pending.write.openCalls rfl
+  change projectOpenWriteResult opened.contents opened.phase state.writer.owners
+    (pending.write.request.runOnOpenPhase state.session.directory pending.write.openCalls opened.phase opened.get opened.set
+      (current.reached, (WriteRequest.readyCall state.writer state.cache).2.image)) = _ at projected
+  have known := pending.returned
+  change pending.write.openCalls.run pending.write.request state.session.directory state.writer = _ at known
+  rw [returned, known] at projected
+  cases phase : opened.contents failed opened.phase with
+  | none => simp [projectOpenWriteResult, phase] at projected
+  | some reached =>
+    simp only [projectOpenWriteResult, phase, Option.map_some] at projected
+    obtain ⟨diagnostic, effect⟩ := EStateM.Result.error.inj (Option.some.inj projected)
+    exact ⟨source, DiskWriteError.commitUnknown.inj diagnostic,
+      congrArg (fun result => result.2.image) effect, congrArg some (congrArg Prod.fst effect)⟩
+
+/-- Project the actual returned single or batch request into its same
+reported uncertain diagnostic, cache and files. -/
 theorem NativeOpenedPosition.classifiesReportedUncertainWrite (current : NativeOpenedPosition opened)
     (observed : NativeUncertainWriteCrashObservation current.current.ready.state input)
     {cause : IO.Error} {after : OpenWriteFiles}
@@ -29,23 +59,9 @@ theorem NativeOpenedPosition.classifiesReportedUncertainWrite (current : NativeO
     let state := current.current.ready.state
     opened.table.UsesOpenWriteSchedules state.session.directory opened.files opened.phase ∧
       cause = observed.write.failure.cause ∧ after = (observed.cache, observed.write.failure.failed) ∧
-      opened.contents failed opened.phase = some .poisoned := by
-  intro state
-  obtain ⟨source, projected⟩ := current.current.ready.classifiesWriteOnOpenPhase opened.table current.uses
-    opened.phaseEffects current.stored observed.write.request observed.write.openCalls rfl
-  change projectOpenWriteResult opened.contents opened.phase state.writer.owners
-    (observed.write.request.runOnOpenPhase state.session.directory observed.write.openCalls opened.phase opened.get opened.set
-      (current.reached, (WriteRequest.readyCall state.writer state.cache).2.image)) = _ at projected
-  have known := observed.returned
-  change observed.write.openCalls.run observed.write.request state.session.directory state.writer = _ at known
-  rw [returned, known] at projected
-  cases phase : opened.contents failed opened.phase with
-  | none => simp [projectOpenWriteResult, phase] at projected
-  | some reached =>
-    simp only [projectOpenWriteResult, phase, Option.map_some] at projected
-    obtain ⟨diagnostic, effect⟩ := EStateM.Result.error.inj (Option.some.inj projected)
-    exact ⟨source, DiskWriteError.commitUnknown.inj diagnostic,
-      congrArg (fun result => result.2.image) effect, congrArg some (congrArg Prod.fst effect)⟩
+      opened.contents failed opened.phase = some .poisoned :=
+  current.classifiesPendingWriteReturn
+    ⟨observed.write, observed.cache, observed.returned, observed.effects.census⟩ returned
 
 section
 

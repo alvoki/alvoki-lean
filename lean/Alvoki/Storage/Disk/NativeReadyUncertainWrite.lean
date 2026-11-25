@@ -63,17 +63,53 @@ def ReleasedMarkedReports (seen : NativeReadyWriteFailure state) (input : FilePa
     report.reads.bindings state.session.directory.path = some (state.census.inode state.directorySlot.description) ∧
     state.session.phaseRef ∈ report.callbacks.liveRefs ∧ state.session.sessionRef ∈ report.callbacks.liveRefs
 
-/-- The exact marked return, its selected history and the continued old
-read ledger, after the caller's reported release. -/
-def ReleasedReopenResult (seen : NativeReadyWriteFailure state) (input : FilePath)
-    (inventory : DescriptorInventory) (history : List WAL.Write) (log : List DatabaseSubmissions)
-    (recorded : List RecordedSnapshotRead) : Prop :=
-  ∃ (chosen : List WAL.Write) (layout : CanonicalKeeperLayout seen.failure.released.image chosen)
-    (selected : SelectedIntegrityCheckpoint state.writer.published.durable
-      seen.failure.released.image.directory.active.manifest state.writer.checkpoint)
-    (vacant : TryLockObserves seen.failure.released.owners state.session.directory (.ok true))
+def releasedWal (seen : NativeReadyWriteFailure state) (history : List WAL.Write) : WalSegmentImage :=
+  state.writer.wal.appendSelectedView seen.failure.released.image.directory.active history
+
+theorem releasedVacant (seen : NativeReadyWriteFailure state) :
+    TryLockObserves seen.failure.released.owners state.session.directory (.ok true) := by
+  simp [SegmentedBatchFailure.released, TryLockObserves, LockOwners.set]
+
+/-- Choose the replay from the live marker of the released write image.
+No power-loss image or successful recovery has been chosen here. -/
+structure ReleasedPlan (seen : NativeReadyWriteFailure state) where
+  history : List WAL.Write
+  allowed : history = state.writer.history ∨ history = state.writer.history ++ seen.failure.batch
+  marker : seen.failure.released.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64)
+  layout : CanonicalKeeperLayout seen.failure.released.image history
+  walLayout : (seen.releasedWal history).ReadLayout history
+  walValid : (seen.releasedWal history).Valid history
+  first : layout.target.first = (seen.releasedWal history).active.first
+  descriptors : layout.sealed ++ [layout.keeper] = (seen.releasedWal history).readDescriptors layout.range.watermark
+  offsets : selectWalSegmentReads ((seen.releasedWal history).segments.map WalSegment.first) layout.range.watermark =
+    some (layout.first, ((seen.releasedWal history).readDescriptors layout.range.watermark).map WalSegment.first)
+  prepared : Prepared seen.failure.released.image layout.target layout.plan
+  kept : seen.failure.released.image.kept = ((seen.releasedWal history).checkpointReopenFiles (seen.releasedWal history).directory none).kept
+  selected : SelectedIntegrityCheckpoint state.writer.published.durable
+    seen.failure.released.image.directory.active.manifest state.writer.checkpoint
+  accepted : state.writer.published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+    seen.failure.released.image.directory.active.manifest
+  ordered : WAL.OrdinalsFrom 1 history
+
+theorem releasedPlans (seen : NativeReadyWriteFailure state) (valid : state.Valid) : Nonempty seen.ReleasedPlan := by
+  have started : ReportedReopenPrefix state.session.directory state.writer.wal.active.first
+      ⟨seen.failure.released.image, seen.failure.released.owners⟩ seen.failure.released := .start
+  obtain ⟨_, kept, manifest, chosen, allowed, marker, walLayout, walValid, layout, first, descriptors, offsets,
+    prepared, accepted, ordered⟩ := seen.failure.refinesReopenPrefixWithWal valid.retained started
+  have sameManifest := manifest.trans (congrArg DirectoryPublication.Bindings.manifest valid.retained.walPair)
+  exact ⟨⟨chosen, allowed, marker, layout, walLayout, walValid, first, descriptors, offsets, prepared, kept,
+    sameManifest.symm ▸ valid.retained.resumed.selected, accepted, ordered⟩⟩
+
+/-- The original selected read result with its open, custody and ledger
+all indexed by the same chosen report. -/
+abbrev ReleasedReadResult (seen : NativeReadyWriteFailure state) (history : List WAL.Write) (log : List DatabaseSubmissions)
+    (recorded : List RecordedSnapshotRead) {input : FilePath} {inventory : DescriptorInventory} {chosen : List WAL.Write}
+    {layout : CanonicalKeeperLayout seen.failure.released.image chosen}
+    {selected : SelectedIntegrityCheckpoint state.writer.published.durable
+      seen.failure.released.image.directory.active.manifest state.writer.checkpoint}
+    {vacant : TryLockObserves seen.failure.released.owners state.session.directory (.ok true)}
     (report : MarkedReadyOpenObservations input state.session.directory inventory
-      seen.failure.released layout state.writer.published vacant selected) (next : NativeReadyState),
+      seen.failure.released layout state.writer.published vacant selected) (next : NativeReadyState) : Prop :=
     (chosen = history ∨ chosen = history ++ seen.failure.batch) ∧
     seen.failure.released.image.directory.active.walBoundary =
       some (WAL.Boundary.encode (WAL.encode chosen).size.toUInt64) ∧
@@ -91,7 +127,45 @@ def ReleasedReopenResult (seen : NativeReadyWriteFailure state) (input : FilePat
     NativeReadyReadPrefix (report.finish.run report.chronology) next chosen
       (log ++ [.uncertainBatch seen.failure.batch]) recorded next
 
+/-- The exact marked return, its selected history and the continued old
+read ledger, after the caller's reported release. -/
+def ReleasedReopenResult (seen : NativeReadyWriteFailure state) (input : FilePath)
+    (inventory : DescriptorInventory) (history : List WAL.Write) (log : List DatabaseSubmissions)
+    (recorded : List RecordedSnapshotRead) : Prop :=
+  ∃ (chosen : List WAL.Write) (layout : CanonicalKeeperLayout seen.failure.released.image chosen)
+    (selected : SelectedIntegrityCheckpoint state.writer.published.durable
+      seen.failure.released.image.directory.active.manifest state.writer.checkpoint)
+    (vacant : TryLockObserves seen.failure.released.owners state.session.directory (.ok true))
+    (report : MarkedReadyOpenObservations input state.session.directory inventory
+      seen.failure.released layout state.writer.published vacant selected) (next : NativeReadyState),
+    seen.ReleasedReadResult history log recorded report next
+
 end NativeReadyWriteFailure
+
+/-- Select the exact ready result from the same primitive report used by
+the released write's raw reopen. -/
+theorem NativeReadyReadPrefix.reopensReleasedUncertainWriteFrom
+    (prior : NativeReadyReadPrefix opened initial history log recorded state)
+    (seen : NativeReadyWriteFailure state) {input : FilePath} {inventory : DescriptorInventory}
+    (plan : seen.ReleasedPlan)
+    (report : MarkedReadyOpenObservations input state.session.directory inventory seen.failure.released
+      plan.layout state.writer.published seen.releasedVacant plan.selected)
+    (lock : report.reads.bindings (state.session.directory.file .lock) = some (state.census.inode state.owner.description))
+    (directory : report.reads.bindings state.session.directory.path = some (state.census.inode state.directorySlot.description))
+    (oldPhaseRef : state.session.phaseRef ∈ report.callbacks.liveRefs)
+    (oldSessionRef : state.session.sessionRef ∈ report.callbacks.liveRefs) :
+    ∃ next, seen.ReleasedReadResult history log recorded report next := by
+  obtain ⟨valid, oldHistory, priorReplay⟩ := prior.refines
+  have allowed : plan.history = history ∨ plan.history = history ++ seen.failure.batch := oldHistory ▸ plan.allowed
+  obtain ⟨pending, bounded⟩ := priorReplay.appendUncertain prior.readsBounded allowed plan.ordered
+  obtain ⟨next, seed, cacheIdentity, census, owner, directorySlot, pair, durable, checkpoint, path, _, _,
+    phaseFresh, sessionFresh⟩ :=
+    report.finish.startsNativeReadPrefix report.chronology report.markerFound plan.prepared
+      (report.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors) plan.accepted plan.ordered
+      plan.walLayout plan.walValid valid.retained.spans plan.prepared.pair plan.first plan.kept pending bounded
+  exact ⟨next, allowed, plan.marker, seed.frames.1, path, fun same => phaseFresh (same.symm ▸ oldPhaseRef),
+    fun same => sessionFresh (same.symm ▸ oldSessionRef), cacheIdentity, census, owner, directorySlot,
+    pair, checkpoint, durable, lock, directory, report.reads.chunkReads, seed⟩
 
 /-- Once the failed bytes and released owner are fixed, choose the old
 history or whole group before running the next reported marked open. -/
@@ -102,29 +176,11 @@ theorem NativeReadyReadPrefix.reopensReleasedUncertainWrite
     (lockIdentity : lockBinding = some (state.census.inode state.owner.description))
     (observe : seen.ReleasedMarkedReports input inventory lockBinding) :
     seen.ReleasedReopenResult input inventory history log recorded := by
-  obtain ⟨valid, oldHistory, priorReplay⟩ := prior.refines
-  have vacant : TryLockObserves seen.failure.released.owners state.session.directory (.ok true) := by
-    simp [SegmentedBatchFailure.released, TryLockObserves, LockOwners.set]
-  have started : ReportedReopenPrefix state.session.directory state.writer.wal.active.first
-      ⟨seen.failure.released.image, seen.failure.released.owners⟩ seen.failure.released := .start
-  obtain ⟨_, kept, manifest, chosen, allowed, marker, walLayout, walValid, layout, first, descriptors, offsets,
-    prepared, accepted, ordered⟩ := seen.failure.refinesReopenPrefixWithWal valid.retained started
-  have sameManifest := manifest.trans (congrArg DirectoryPublication.Bindings.manifest valid.retained.walPair)
-  let selected : SelectedIntegrityCheckpoint state.writer.published.durable
-      seen.failure.released.image.directory.active.manifest state.writer.checkpoint :=
-    sameManifest.symm ▸ valid.retained.resumed.selected
-  obtain ⟨report, lock, directory, oldPhaseRef, oldSessionRef⟩ := observe chosen layout allowed prepared selected vacant
-  have allowedFromTrace : chosen = history ∨ chosen = history ++ seen.failure.batch := oldHistory ▸ allowed
-  obtain ⟨pending, bounded⟩ := priorReplay.appendUncertain prior.readsBounded allowedFromTrace ordered
-  obtain ⟨next, seed, cacheIdentity, census, owner, directorySlot, pair, durable, checkpoint, path, _, _,
-    phaseFresh, sessionFresh⟩ :=
-    report.finish.startsNativeReadPrefix report.chronology report.markerFound prepared
-      (report.reads.walReads.selectedAfterWatermark offsets descriptors) accepted ordered walLayout walValid
-      valid.retained.spans prepared.pair first kept pending bounded
-  exact ⟨chosen, layout, selected, vacant, report, next, allowedFromTrace,
-    marker, seed.frames.1, path, fun same => phaseFresh (same.symm ▸ oldPhaseRef),
-    fun same => sessionFresh (same.symm ▸ oldSessionRef), cacheIdentity, census, owner, directorySlot,
-    pair, checkpoint, durable, lock.trans lockIdentity, directory, report.reads.chunkReads, seed⟩
+  obtain ⟨plan⟩ := seen.releasedPlans prior.refines.1
+  obtain ⟨report, lock, directory, phase, token⟩ :=
+    observe plan.history plan.layout plan.allowed plan.prepared plan.selected seen.releasedVacant
+  obtain ⟨next, recovered⟩ := prior.reopensReleasedUncertainWriteFrom seen plan report (lock.trans lockIdentity) directory phase token
+  exact ⟨plan.history, plan.layout, plan.selected, seen.releasedVacant, report, next, recovered⟩
 
 /-- A returned uncertain write, the successful close of its exact poisoned
 cache, and an immediate healthy marked reopen continue the existing native
