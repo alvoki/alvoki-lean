@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+Preparation and client replay now share the same selected WAL range.
+The client theorem carries an explicit equality between the history
+used to construct the prepared table and the selected submission
+prefix. It reuses the ordering proof from preparation for that prefix.
+The native composition must establish this equality from the selected
+files as well as supply repair and retry evidence.
+
 The client-session proof now derives marker settlement from the
 reported successful file sync on the inode acquired by the marker
 read. The WAL read proof supplies the still-live descriptor and inode

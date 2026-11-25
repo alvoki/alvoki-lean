@@ -1750,9 +1750,9 @@ theorem installsAfterAcquiredRecovery_replays
     (start : BootstrapClientStart directory bootstrapFirst initial)
     (trace : SegmentedClientReadTrace directory bootstrapFirst start.writer allowCollection log reads writer prior)
     {batch : List WAL.Write}
-    {image : WalSegmentImage} {range : MarkedWalRange}
+    {image : WalSegmentImage}
     {base : PackedTable} {first : Nat}
-    (selected : WalSegmentRecovery image after.2.image.directory.active range (prior.history ++ batch) base first
+    (selected : WalSegmentRecovery image after.2.image.directory.active layout.range (prior.history ++ batch) base first
       table)
     {interrupted firstRepair : FileImage} {target : Target}
     (beforeBarrier : UnsettledRetries interrupted retry.image)
@@ -1771,7 +1771,7 @@ theorem installsAfterAcquiredRecovery_replays
     {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared retry.image target plan)
     (retries : SettledRetries target firstRepair after.2.image)
     (oldSize : current.frontier.toNat = (WAL.encode prior.history).size)
-    (ordered : WAL.OrdinalsFrom 1 ((prior.history ++ batch).take range.through)) :
+    (sameHistory : history = (prior.history ++ batch).take layout.range.through) :
     let opened : Reopened := ⟨table, (loaded.getD (.empty, 0)).2, selection.frontier, layout.keeper.first⟩
     let prepare := fun (resolved : DiskDirectory) (chosen : Selection) =>
       prepareBoundedMarkedFromReaders resolved (report.readCheckpointFromCensus metadataRelease runs.released)
@@ -1785,7 +1785,7 @@ theorem installsAfterAcquiredRecovery_replays
         | .ok (opened, _, _) (_, reached) => .ok opened reached
         | .error cause (_, reached) => .error cause reached) =
         .ok session after ∧
-      InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take range.through)
+      InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take layout.range.through)
         opened.installed session := by
   intro opened prepare
   obtain ⟨acquisition, prepared, markerLive, sameInode⟩ := preparesFromHeldMarker file privateFile available report
@@ -1795,7 +1795,7 @@ theorem installsAfterAcquiredRecovery_replays
   have whole := (recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
     observations selection observed authorizedRepair preparedPlan retries previous oldSize selected).2.2
   obtain ⟨reference, replayed, retained, acknowledged, bounded, priorReads⟩ :=
-    trace.replaysUncertainSubmission start whole ordered
+    trace.replaysUncertainSubmission start whole (sameHistory ▸ orderedLayout)
   have projected := stabilizesAfterKeeperRead report keeper markerLive (sameInode.trans markerInode)
     effect sameBinding (markerBytes ▸ decoded) (by rw [observed]; rfl) choices enumerated presence physical
   have recovery : reopenWith (prepare directory selection)
