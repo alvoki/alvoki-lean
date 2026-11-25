@@ -2157,3 +2157,5 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.reopenWith_markerSyncError
 #check_axioms Alvoki.WAL.TwoSlot.uncertainSurvivor_of_bytes
 #check_axioms Alvoki.WAL.TwoSlot.syncedSurvivor_of_bytes
+#check_axioms Alvoki.WAL.TwoSlot.decodedMarker_of_survivor
+#check_axioms Alvoki.WAL.TwoSlot.projectBinding_oldOrNew

@@ -18,6 +18,60 @@ theorem projectBinding_decodes {visible : Bindings} {bytes : ByteArray} {selecte
       ⟨visible.manifest, some (Boundary.encode selected.frontier)⟩ := by
   simp [projectBinding, accepted, Except.map, Bindings.replace]
 
+/-- A physically observed marker that decodes after an interrupted write
+projects to one of the original batch frontiers. After successful sync its
+projection is the new frontier. WAL validation is checked separately. -/
+theorem decodedMarker_of_survivor {before after : ByteArray}
+    {active : OrderedTwoSlot.Slot} {old next : OrderedTwoSlot.Record UInt64}
+    {phase : OrderedTwoSlot.Phase} {selected : Selection}
+    (report : OrderedTwoSlot.Survivor (decodedSlots before) active next phase (decodedSlots after))
+    (present : decodedSlots before active = some old)
+    (older : ∀ stale, decodedSlots before active.other = some stale → stale.epoch < old.epoch)
+    (newer : old.epoch < next.epoch)
+    (accepted : decode after = .ok selected) :
+    match phase with
+    | .beforeWalSync | .beforeSlotWrite => selected.frontier = old.frontier
+    | .slotWriteUncertain => selected.frontier = old.frontier ∨ selected.frontier = next.frontier
+    | .slotSynced => selected.frontier = next.frontier := by
+  have logical := report.recovery (fun _ => true) present older newer rfl (fun _ => rfl)
+  have newest := decode_agrees_with_protocol accepted
+  change OrderedTwoSlot.selectNewest ((decodedSlots after) .first) ((decodedSlots after) .second) =
+    .ok selected.toRecord at newest
+  have same : OrderedTwoSlot.recover (fun _ => true) (decodedSlots after) = .ok selected.toRecord := by
+    simp [OrderedTwoSlot.recover, newest, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  rw [same] at logical
+  have frontier {r : OrderedTwoSlot.Record UInt64}
+      (h : Except.ok (ε := OrderedTwoSlot.SelectionError) selected.toRecord = .ok r) :
+      selected.frontier = r.frontier := congrArg OrderedTwoSlot.Record.frontier (Except.ok.inj h)
+  cases phase with
+  | beforeWalSync | beforeSlotWrite | slotSynced => exact frontier logical
+  | slotWriteUncertain =>
+    exact logical.elim (fun sameOld => .inl (frontier sameOld)) (fun sameNew => .inr (frontier sameNew))
+
+/-- The projected directory binding of an accepted uncertain marker
+satisfies the old-or-whole premise of the retry model. -/
+theorem projectBinding_oldOrNew {directory : Bindings} {before after : ByteArray}
+    {active : OrderedTwoSlot.Slot} {old next : OrderedTwoSlot.Record UInt64}
+    {projected : Bindings}
+    (report : OrderedTwoSlot.Survivor (decodedSlots before) active next .slotWriteUncertain (decodedSlots after))
+    (present : decodedSlots before active = some old)
+    (older : ∀ stale, decodedSlots before active.other = some stale → stale.epoch < old.epoch)
+    (newer : old.epoch < next.epoch)
+    (projection : projectBinding directory after = .ok projected) :
+    projected.manifest = directory.manifest ∧
+      (projected.walBoundary = some (Boundary.encode old.frontier) ∨
+        projected.walBoundary = some (Boundary.encode next.frontier)) := by
+  cases accepted : decode after with
+  | error => simp [projectBinding, accepted, Except.map] at projection
+  | ok selected =>
+    have binding := projectBinding_decodes (visible := directory) accepted
+    have equal := Except.ok.inj (binding.symm.trans projection)
+    cases equal
+    have selectedFrontier := decodedMarker_of_survivor report present older newer accepted
+    exact ⟨rfl, selectedFrontier.imp
+      (congrArg (fun value => some (Boundary.encode value)))
+      (congrArg (fun value => some (Boundary.encode value)))⟩
+
 /-- Model a successful file barrier where every present marker binding
 names the held file. Absent bindings can survive a pending bootstrap
 rename. The barrier changes neither that choice nor the manifest binding. -/
