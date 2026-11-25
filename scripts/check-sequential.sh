@@ -267,6 +267,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairCheckpointBytes
 lake env leanchecker Alvoki.Storage.Disk.CachedRetryInstallation
+lake env leanchecker Alvoki.Storage.Disk.CachedRetrySnapshotReads
 lake env leanchecker Alvoki.Storage.Disk.CachedRecoveryProgress
 lake env leanchecker Alvoki.Storage.Disk.CachedMarkedRetryInstallation
 lake env leanchecker Alvoki.Storage.Disk.DiskOpenAdmission

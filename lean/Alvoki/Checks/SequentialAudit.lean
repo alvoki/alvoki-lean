@@ -166,6 +166,7 @@ import Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 import Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
 import Alvoki.Storage.Disk.WalSegmentRepairCheckpointBytes
 import Alvoki.Storage.Disk.CachedRetryInstallation
+import Alvoki.Storage.Disk.CachedRetrySnapshotReads
 import Alvoki.Storage.Disk.CachedRecoveryProgress
 import Alvoki.Storage.Disk.CachedMarkedRetryInstallation
 import Alvoki.Storage.Disk.DiskOpenAdmission
@@ -1254,6 +1255,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.fromObservedBootstrap
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.uniqueResult
 #check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.sameInstalled
+#check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.guardedSnapshotReads
 #check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.completesAfterCrashAndRetries
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeThenCachedReopen
 #check_axioms Alvoki.Storage.DiskTable.close.eq_def
