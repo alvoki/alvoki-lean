@@ -1020,6 +1020,11 @@ the exact reached cache. The sync result identifies the descriptor
 whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
+At a writer interruption after the WAL barrier, the modeled marker
+callbacks preserve the exact keeper image produced by that barrier
+when each callback is reported to affect only the marker. Before
+the slot write starts, the physical marker is still unchanged.
+
 The held recovery theorem accepts the exact first power-loss outcome
 as the start of its retry suffix. It checks membership of the survived
 directory bindings, keeper bytes, and later names in the interrupted

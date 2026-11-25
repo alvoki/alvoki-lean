@@ -2160,6 +2160,33 @@ private theorem projectedMarker_member {checkpoint : Option ByteArray}
         · obtain ⟨bytes, present, projected⟩ := ih tail later
           exact ⟨bytes, List.mem_cons_of_mem _ present, projected⟩
 
+/-- After the WAL barrier, marker-only operations preserve the keeper
+image left by that barrier, even if the marker callback is interrupted. -/
+theorem InterruptedBatchMarkerPublication.keeperUnchangedOrWalSynced
+    {directory : DiskDirectory} {prior : SegmentedWriterState} {batch : List WAL.Write}
+    {next : Selection} {reached : FileImage × WalInodeImage}
+    (report : InterruptedBatchMarkerPublication directory prior batch next reached)
+    (writeKeepsKeeper : ∀ before (result : EStateM.Result report.Stop
+        (FileImage × WalInodeImage) (Except IO.Error Unit)),
+      (report.writeSlot report.markerHandle (next.slot * stride).toUInt64 next.encode).run before = result →
+      (match result with | .ok _ after | .error _ after => after.1.keeper) = before.1.keeper)
+    (syncKeepsKeeper : ∀ before,
+      (report.syncSlot report.markerHandle).run before = .error report.stopped reached →
+      reached.1.keeper = before.1.keeper) :
+    reached.2 = report.initialMarker ∨
+      ∃ appended durable,
+        let active := directory.file (.walSegment prior.installed.activeFirst)
+        (report.append active (WAL.encode batch)).run (prior.files, report.initialMarker) = .ok (.ok ()) appended ∧
+          (report.syncWal active).run appended = .ok (.ok ()) durable ∧
+          reached.1.keeper = durable.1.keeper := by
+  rcases report.cut with ⟨_, unchanged⟩ | ⟨appended, wrote, ⟨_, unchanged⟩ | ⟨durable, synced, cut⟩⟩
+  · exact .inl unchanged
+  · exact .inl unchanged
+  · refine .inr ⟨appended, durable, wrote, synced, ?_⟩
+    rcases cut with writeCut | ⟨written, writeReturned, syncCut⟩
+    · exact writeKeepsKeeper durable _ writeCut
+    · exact (syncKeepsKeeper written syncCut).trans (writeKeepsKeeper durable _ writeReturned)
+
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
 theorem installsAfterAcquiredRecovery_replays

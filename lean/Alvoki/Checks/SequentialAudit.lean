@@ -3393,6 +3393,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.ReportedMarkerRetries.trans
 #check_axioms Alvoki.WAL.TwoSlot.InterruptedBatchMarkerPublication.stops
 #check_axioms Alvoki.WAL.TwoSlot.InterruptedBatchMarkerPublication.markerUnchangedOrWalSynced
+#check_axioms Alvoki.WAL.TwoSlot.InterruptedBatchMarkerPublication.keeperUnchangedOrWalSynced
 #check_axioms Alvoki.WAL.TwoSlot.settledRetriesOfBoundedReopen
 #check_axioms Alvoki.WAL.TwoSlot.CapturedFinalRepair.returns
 #check_axioms Alvoki.WAL.TwoSlot.reopensLongAfterCapturedPreparation
