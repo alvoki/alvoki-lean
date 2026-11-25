@@ -265,6 +265,7 @@ import Alvoki.Storage.Disk.NativeExecutionTrace
 import Alvoki.Storage.Disk.NativeRunMaintenance
 import Alvoki.Storage.Disk.NativeRunMaintenanceReopen
 import Alvoki.Storage.Disk.NativeCheckpointRunCollection
+import Alvoki.Storage.Disk.NativeRunRetentionPass
 import Alvoki.Storage.Disk.NativeExecutionPrefix
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
@@ -664,6 +665,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunCollectionReports.completes
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunCollectionReports.reopensSelectedRun
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rewritesRunCheckpointCollectsAndReopens
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.runsRetentionSteps
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.completesRetentionPass
+#check_axioms Alvoki.Storage.DiskSession.NativeRunRetentionPass.checkpoints
+#check_axioms Alvoki.Storage.DiskSession.NativeRetainedRunPublication.collects
 #check_axioms Alvoki.Storage.CheckpointPublication.ReturnedCheckpointPrefix.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.issues
