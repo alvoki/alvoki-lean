@@ -208,7 +208,7 @@ private theorem syncedInode_survivor {image reached : WalInodeImage}
     (report : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
       descriptor image (fun inode files => files.completeFileSync inode) (.ok () reached))
     (current : descriptor.inode = image.active)
-    (settled : image.crashBindings = [image.active])
+    (binding : ∀ inode ∈ image.crashBindings, inode = image.active)
     {bytes : ByteArray} (survived : ∃ inode ∈ reached.crashBindings, bytes ∈ reached.crashBytes inode) :
     bytes = image.visible image.active := by
   have completed := report.effect.completed_of_return ⟨reached, rfl⟩
@@ -217,18 +217,19 @@ private theorem syncedInode_survivor {image reached : WalInodeImage}
   have state : reached = image.completeFileSync image.active := by injection completed
   obtain ⟨inode, bound, stored⟩ := survived
   have live : inode = image.active := by
-    simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, settled] using bound
+    exact binding inode (by simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync] using bound)
   simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, live] using stored
 
 /-- The successful reopen barrier persists the same marker that the
 bounded read observed. WAL repair may rely on this frontier for every
-subsequent marker survivor when the marker name is already settled. -/
+subsequent surviving marker binding to that inode. A pending directory
+barrier can still allow the name to be absent. -/
 theorem reopenSync_preservesReadFrontier
     {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
     (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
       handle marker (fun inode files => files.completeFileSync inode) (.ok () settled))
     (current : handle.inode = marker.active)
-    (nameSettled : marker.crashBindings = [marker.active])
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
     {bytes survived : ByteArray} {selected : Selection}
     {read : USize → EStateM IO.Error Nat ByteArray} {reached : Nat}
     (mismatch : IO.Error)
@@ -240,7 +241,7 @@ theorem reopenSync_preservesReadFrontier
     (accepted : decode bytes = .ok selected)
     (survivor : ∃ inode ∈ settled.crashBindings, survived ∈ settled.crashBytes inode) :
     decode survived = .ok selected := by
-  rw [syncedInode_survivor sync current nameSettled survivor, ← current]
+  rw [syncedInode_survivor sync current sameBinding survivor, ← current]
   exact (decode_of_heldRead mismatch observes available fits returned).symm.trans accepted
 
 /-- A successful barrier on each held descriptor fixes the bytes used by
@@ -269,8 +270,8 @@ theorem syncedDescriptors_selectBatch
     (appended : ∃ tail, wal.visible wal.active = WAL.encode (history ++ batch) ++ tail) :
     decode markerBytes = .ok next ∧
       Boundary.select next.frontier walBytes = .ok (WAL.encode (history ++ batch)) := by
-  rw [syncedInode_survivor walSync walCurrent walSettled walSurvived,
-    syncedInode_survivor markerSync markerCurrent markerSettled markerSurvived]
+  rw [syncedInode_survivor walSync walCurrent (by simp [walSettled]) walSurvived,
+    syncedInode_survivor markerSync markerCurrent (by simp [markerSettled]) markerSurvived]
   exact syncedBytes_selectBatch history batch prior advanced size unchanged written appended
 
 /-- Apply the filesystem contracts at the actual successful callback
@@ -380,7 +381,7 @@ theorem interruptedDescriptors_selectBatch
   have live : inode = markerHandle.inode := by
     simpa [markerSettled, markerCurrent] using bound
   obtain ⟨size, unchanged, target⟩ := slotOutcome markerBytes (live ▸ survived)
-  rw [syncedInode_survivor walSync walCurrent walSettled walSurvived]
+  rw [syncedInode_survivor walSync walCurrent (by simp [walSettled]) walSurvived]
   exact interruptedBytes_selectBatch prior activeOffset advanced size unchanged target oldCount appended
 
 /-- Before the schedule issues a marker write, append and WAL sync
