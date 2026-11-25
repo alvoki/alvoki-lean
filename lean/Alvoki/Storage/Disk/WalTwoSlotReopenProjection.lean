@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.WalTwoSlot
-import Alvoki.Storage.Disk.WalSegmentRepairEffects
+import Alvoki.Storage.Disk.WalSegmentReplayStability
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -171,6 +171,41 @@ theorem SettledRetries.preserves {target : Target} {initial after : FileImage}
         have eq : visible = names := by simpa [FileImage.crash, LaterNames.settled] using chosen
         subst visible
         exact ih.1.later _ (List.mem_cons_of_mem _ later))⟩, ih.2⟩
+
+private theorem appendRepairTrace {target : Target} {initial middle after : FileImage}
+    (first : EffectTrace target initial middle) (rest : EffectTrace target middle after) :
+    EffectTrace target initial after := by
+  induction rest with
+  | authorized => exact .syncPruned first
+  | unlink _ later ih => exact .unlink ih later
+  | syncPruned _ ih => exact .syncPruned ih
+  | replace _ gone ran ih => exact .replace ih gone ran
+  | aligned _ gone read ih => exact .aligned ih gone read
+  | scratch _ ih => exact .scratch ih
+  | crash _ metadata keeper later ih => exact .crash ih metadata keeper later
+
+/-- Once authorized, repeated repair attempts are prefixes of the same
+repair trace. Reuse its replay theorem on the entire retry sequence. -/
+theorem SettledRetries.replayUnchanged {target : Target} {initial first after : FileImage} {plan : Plan}
+    (firstRepair : EffectTrace target initial first)
+    (retries : SettledRetries target first after) (prepared : Prepared initial target plan)
+    (base : Storage.PackedTable) (sealed : List (Nat × ByteArray))
+    (sealedRead : ∀ file ∈ sealed, initial.kept file.1 = some file.2)
+    {marker : ByteArray} {length : UInt64} (markerRead : target.pair.walBoundary = some marker)
+    (decoded : Boundary.decode marker = .ok length)
+    (checked : Storage.checkSelectedWalSegmentSpans (length.toNat / frameSize)
+      (sealed ++ [(target.first, plan.keeperBytes)]) = true)
+    {bytes : ByteArray} (survives : some bytes ∈ after.keeper.active :: after.keeper.crashImages) :
+    Storage.recoverMarkedWalSegments base length (sealed ++ [(target.first, bytes)]) =
+      Storage.recoverMarkedWalSegments base length (sealed ++ [(target.first, plan.keeperBytes)]) ∧
+    ∀ file ∈ sealed, after.kept file.1 = some file.2 := by
+  have trace : EffectTrace target initial after := by
+    clear survives
+    induction retries with
+    | start => exact firstRepair
+    | repair _ effects ih => exact appendRepairTrace ih effects
+    | crash _ metadata keeper later ih => exact .crash ih metadata keeper later
+  exact trace.replayUnchanged prepared base sealed sealedRead markerRead decoded checked survives
 
 /-- Compose the first authorized repair prefix with later attempts. Every
 surviving binding still selects the same frontier, even if none of the
