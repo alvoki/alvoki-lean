@@ -260,6 +260,7 @@ import Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
 import Alvoki.Storage.Disk.NativeOpenReadyTrace
 import Alvoki.Storage.Disk.NativeOpenCacheReferences
 import Alvoki.Storage.Disk.NativeRawOpenAdmission
+import Alvoki.Storage.Disk.NativeRawOpenPrefixReturn
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
 import Alvoki.Storage.Disk.NativePrunedAlignedKeeperCache
 import Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
@@ -1732,6 +1733,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.admitsWithCache
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.startsHeldWorker
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.startsInitializedWorker
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionCallbacks.classifiesBeforeFlock
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionCallbacks.runsAfterPrefix
 #check_axioms Alvoki.Storage.DiskSession.MarkedHeapInstallation.opensFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.opensAlignedFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedReopenEffects.opens

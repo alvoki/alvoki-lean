@@ -1056,4 +1056,6 @@ An open can fail while it initializes the directory synchronization cache after 
 
 For a successful marked opening, the proof now extracts the exact recovered value, file image and descriptor census before phase allocation. It uses the same chronological repair worker on aligned, prune and replacement routes. The later phase contains that worker's exact replayed table. This identifies the file-side state at the installer boundary for the next heap proof. [Recovery before installation](../lean/Alvoki/Storage/Disk/NativeOpenChoice.lean)
 
+The open prefix now classifies all ordinary returns through the exact `LOCK` append. Each failed stage reports the original diagnostic and its reached heap, and a successful append supplies the same handle and heap to flock. The proof applies the production admission schedule to fixed path, metadata and append callbacks. [Raw open prefix returns](../lean/Alvoki/Storage/Disk/NativeRawOpenPrefixReturn.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
