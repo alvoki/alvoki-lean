@@ -79,6 +79,7 @@ import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 import Alvoki.Storage.Disk.CheckpointObservedCompletion
 import Alvoki.Storage.Disk.CheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.CheckpointRunDirectoryFailure
+import Alvoki.Storage.Disk.CheckpointRunDirectoryClose
 import Alvoki.Storage.Disk.CheckpointRunFileSyncFailureReopen
 import Alvoki.Storage.Disk.CheckpointRunGuardFailure
 import Alvoki.Storage.Disk.CheckpointRunOpenFailure
@@ -387,6 +388,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunSyncFailure.priorRuns
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunSyncFailure.priorManifest
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.reopensPriorCheckpointLive
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.reopensPriorCheckpointLiveWith
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunSyncFailure.reopens
 #check_axioms Alvoki.Storage.CheckpointPublication.RejectedRunGuard.returns
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunPrefix.returnsError
@@ -432,6 +434,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDirectoryFailure.priorRuns
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDirectoryFailure.poisonsAndReleases
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDirectoryFailure.reopens
+#check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDirectoryFailure.closes
+#check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDirectoryFailure.CloseReopenCensus.captured
+#check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDirectoryFailure.reopensAfterCachedClose
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.executeVersioned_atManifestRename
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.atManifestRename
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.plannedManifestBytes
@@ -1157,6 +1162,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.closeSchedule_alreadyClosed
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeCachedWithAdmission
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.finishedFiles
+#check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.finishedDescriptors
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.lockSlotAfterClears
 #check_axioms Alvoki.Storage.DiskSession.ObservedBatchFailure.reopensAfterCachedClose
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.pinnedReads

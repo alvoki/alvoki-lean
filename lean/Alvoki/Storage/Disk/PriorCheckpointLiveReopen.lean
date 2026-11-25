@@ -47,20 +47,26 @@ structure PriorCheckpointReopened {directory : DiskDirectory} {before : Segmente
 /-- From the released live image, the old manifest and its stable run
 bytes determine the exact successful held retry. Other run names may
 still have different physical crash choices. -/
-theorem SegmentedWriterState.RetainedReady.reopensPriorCheckpointLive
+theorem SegmentedWriterState.RetainedReady.reopensPriorCheckpointLiveWith
     {directory : DiskDirectory} {before : SegmentedWriterState} {input : FilePath} {writer : Nat}
     (ready : before.RetainedReady directory writer) (publication : Image)
     (manifestActive : publication.manifest.active = before.wal.directory.active.manifest)
     (manifestChoices : publication.manifest.crashImages = [before.wal.directory.active.manifest])
     (agrees : SelectedRunsAgree before.wal.directory.active.manifest publication.durable before.published.durable)
-    (retry : LockedFileState FileImage) :
+    (retry : LockedFileState FileImage)
+    (evidence : ∀ {layout : CanonicalKeeperLayout retry.image before.history},
+      CheckpointHeldOpen input directory layout publication → Prop) :
     let released := ⟨CheckpointPowerCut.physical before publication, before.owners.set (directory.file .lock) none⟩
     BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first) released retry →
-    CheckpointHeldOpen.Reports input directory before retry publication publication →
+    (∀ layout : CanonicalKeeperLayout retry.image before.history,
+      layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
+      layout.sealed ++ [layout.keeper] =
+        (publication.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark →
+      ∃ opened : CheckpointHeldOpen input directory layout publication, evidence opened) →
     ∃ (layout : CanonicalKeeperLayout retry.image before.history)
       (opened : CheckpointHeldOpen input directory layout publication)
       (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState),
-      PriorCheckpointReopened opened session final after := by
+      PriorCheckpointReopened opened session final after ∧ evidence opened := by
   intro released failures reads
   let wal := publication.segmentedCheckpointView before.wal
   have active : wal.directory.active = before.wal.directory.active := by
@@ -87,7 +93,7 @@ theorem SegmentedWriterState.RetainedReady.reopensPriorCheckpointLive
   rw [CheckpointPowerCut.physical_eq publication ready] at lineage
   obtain ⟨keeperLayout, chosen, keeper, tail, descriptions, offsets, prepared, _, accepted⟩ :=
     publication.checkpointRetryLayout layout valid (.visible (wal := wal)) inputs lineage
-  obtain ⟨opened⟩ := reads keeperLayout keeper tail descriptions
+  obtain ⟨opened, observed⟩ := reads keeperLayout keeper tail descriptions
   let chunks := opened.chunkReports
   have following := chunks.selectedAfterWatermark offsets descriptions
   have installed := runOpenWithInstallation_markedRetryFromChunks chunks prepared.keeperPrefix prepared.newer following
@@ -117,10 +123,34 @@ theorem SegmentedWriterState.RetainedReady.reopensPriorCheckpointLive
     rw [observed] at chosenCheckpoint
     exact (SelectedIntegrityCheckpoint.withRunMap chosenCheckpoint agrees).uniqueResult oldSelected
   rw [exactReplay, sameTable] at replay
-  refine ⟨keeperLayout, opened, session, final, after, runtime, path,
+  refine ⟨keeperLayout, opened, session, final, after, ⟨runtime, path,
     descriptor.trans chunks.inventoryDescription, phase, files, owners, chunks.inventoryDescription ▸ next, history, ?_,
-    durable, pair, sameCheckpoint, replay⟩
+    durable, pair, sameCheckpoint, replay⟩, observed⟩
   rw [files]
   exact reportedWal
+
+/-- The held reopen from the reached live image preserves the old
+checkpoint and the physical run map. -/
+theorem SegmentedWriterState.RetainedReady.reopensPriorCheckpointLive
+    {directory : DiskDirectory} {before : SegmentedWriterState} {input : FilePath} {writer : Nat}
+    (ready : before.RetainedReady directory writer) (publication : Image)
+    (manifestActive : publication.manifest.active = before.wal.directory.active.manifest)
+    (manifestChoices : publication.manifest.crashImages = [before.wal.directory.active.manifest])
+    (agrees : SelectedRunsAgree before.wal.directory.active.manifest publication.durable before.published.durable)
+    (retry : LockedFileState FileImage) :
+    let released := ⟨CheckpointPowerCut.physical before publication, before.owners.set (directory.file .lock) none⟩
+    BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first) released retry →
+    CheckpointHeldOpen.Reports input directory before retry publication publication →
+    ∃ (layout : CanonicalKeeperLayout retry.image before.history)
+      (opened : CheckpointHeldOpen input directory layout publication)
+      (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState),
+      PriorCheckpointReopened opened session final after := by
+  intro released failures reads
+  obtain ⟨layout, opened, session, final, after, endpoint, _⟩ :=
+    ready.reopensPriorCheckpointLiveWith publication manifestActive manifestChoices agrees retry (fun _ => True)
+      failures (fun layout keeper tail descriptors => by
+        obtain ⟨opened⟩ := reads layout keeper tail descriptors
+        exact ⟨opened, trivial⟩)
+  exact ⟨layout, opened, session, final, after, endpoint⟩
 
 end Alvoki.Storage.DiskSession

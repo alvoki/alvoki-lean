@@ -430,4 +430,6 @@ A returned error from the first run-directory sync now stops the checkpoint befo
 
 The run guard, write-open, own file sync and first directory sync errors now share a mixed client trace step from their exact released image to the admitted session. The step preserves the original checkpoint and both ledgers. One WAL replay accounts for the acknowledged writes, recorded successful responses and supported reads from the returned session. The recorded guards explain denied responses. [Run error client trace](../lean/Alvoki/Storage/Disk/CheckpointRunErrorClientTrace.lean)
 
+The poisoned writer's explicit close now connects that failed run-directory sync to the next held open. Unlock and the three reported cache clears carry the reached checkpoint namespace and descriptor census forward. The next admission and cache allocation use that census after the reported drops and identify the same lock and directory objects. The admitted opener returns the ready session that loads the prior checkpoint and retained WAL. [Cached close and held reopen](../lean/Alvoki/Storage/Disk/CheckpointRunDirectoryClose.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
