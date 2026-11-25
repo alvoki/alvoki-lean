@@ -1846,10 +1846,10 @@ theorem settledRetriesOfBoundedReopen
   | repairing prior canonical _ effects =>
     exact .repair (beforeBarrier prior) (canonical ▸ effects)
 
-/-- A cut at the inactive slot write, after the WAL append and sync.
+/-- A cut during the inactive slot write or marker sync, after WAL persistence.
 The reached state supplies both the logical file image and physical
 marker image used by the retry proof. -/
-structure InterruptedBatchSlotWrite (directory : DiskDirectory) (prior : SegmentedWriterState)
+structure InterruptedBatchMarkerPublication (directory : DiskDirectory) (prior : SegmentedWriterState)
     (batch : List WAL.Write) (reached : FileImage × WalInodeImage) where
   Stop : Type
   rows : List (UInt64 × Option UInt64)
@@ -1870,18 +1870,22 @@ structure InterruptedBatchSlotWrite (directory : DiskDirectory) (prior : Segment
   stopped : Stop
   wrote : append.run (prior.files, initialMarker) = .ok (.ok ()) appended
   walBarrier : syncWal.run appended = .ok (.ok ()) durable
-  cut : writeSlot.run durable = .error stopped reached
+  cut : writeSlot.run durable = .error stopped reached ∨
+    ∃ written, writeSlot.run durable = .ok (.ok ()) written ∧ syncSlot.run written = .error stopped reached
 
-theorem InterruptedBatchSlotWrite.stops
+theorem InterruptedBatchMarkerPublication.stops
     {directory : DiskDirectory} {prior : SegmentedWriterState} {batch : List WAL.Write}
-    {reached : FileImage × WalInodeImage} (report : InterruptedBatchSlotWrite directory prior batch reached) :
+    {reached : FileImage × WalInodeImage} (report : InterruptedBatchMarkerPublication directory prior batch reached) :
     runBatchWriteWithInterruption directory report.rows report.lookup
       (fun _ _ _ => publish report.append report.syncWal report.writeSlot report.syncSlot report.install)
       (.ready prior.installed, ⟨(prior.files, report.initialMarker), prior.owners⟩) =
-      .error report.stopped (.poisoned, ⟨reached, prior.owners⟩) :=
-  runBatch_slotWriteInterrupted report.nonempty report.prepared report.fits report.guard
-    report.append report.syncWal report.writeSlot report.syncSlot report.install
-    report.wrote report.walBarrier report.cut
+      .error report.stopped (.poisoned, ⟨reached, prior.owners⟩) := by
+  apply runBatchWriteWithInterruption_stopped report.nonempty report.prepared report.fits report.guard
+  rcases report.cut with writeCut | ⟨written, slot, syncCut⟩
+  · exact publish_slotWriteInterrupted report.append report.syncWal report.writeSlot report.syncSlot report.install
+      report.wrote report.walBarrier writeCut
+  · exact publish_markerSyncInterrupted report.append report.syncWal report.writeSlot report.syncSlot report.install
+      report.wrote report.walBarrier slot syncCut
 
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
@@ -1958,7 +1962,7 @@ theorem installsAfterAcquiredRecovery_replays
     (offset : current.slot = slotIndex active)
     (advanced : advance current (WAL.encode (prior.history ++ batch)).size = .ok next)
     {interruptedMarker : WalInodeImage}
-    (writeCut : InterruptedBatchSlotWrite directory prior batch (interrupted, interruptedMarker))
+    (writeCut : InterruptedBatchMarkerPublication directory prior batch (interrupted, interruptedMarker))
     (accepted : decode (writeCut.initialMarker.visible writeCut.initialMarker.active) = .ok current)
     (retainedBinding : ∀ inode ∈ interruptedMarker.crashBindings, inode = interruptedMarker.active)
     (slotOutcome : ∀ bytes ∈ interruptedMarker.visible interruptedMarker.active ::

@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The interrupted-writer client theorem now covers a stop during either
+the inactive slot write or the subsequent marker fsync. Both cases
+derive the poisoned writer return after the successful WAL barrier
+and feed the exact reached files and marker inode into the same
+retry proof.
+
 The client theorem now starts from the actual modeled interruption of
 the batch's inactive slot write after the WAL append and successful sync.
 It uses the prior writer's table, files and ownership, and proves the
