@@ -336,6 +336,12 @@ lake env leanchecker Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedEarlyCheckpointReport
 lake env leanchecker Alvoki.Storage.Disk.NativeEarlyCheckpointStop
 lake env leanchecker Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
+lake env leanchecker Alvoki.Storage.Disk.Checkpoint.Run.ScheduleStop
+lake env leanchecker Alvoki.Storage.Disk.NativeOpenCheckpointScheduleStop
+lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRawSyncStop
+lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointFsyncEffects
+lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointSourceCrash
+lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointStopContinuation
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
