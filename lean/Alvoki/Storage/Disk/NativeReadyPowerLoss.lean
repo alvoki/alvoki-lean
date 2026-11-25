@@ -261,21 +261,11 @@ theorem readsSeal (observed : NativeReadyRestartReads crash input layout selecte
 
 end NativeReadyRestartReads
 
-/-- Start the next prefix at the actual aligned open after a quiet crash.
-The earlier prefix fixes the durable selection and client responses. A
-new lock acquisition and the chronological primitive reports determine
-the reached session, whose reads still use the same replay. -/
-theorem NativeReadyReadPrefix.restartsAfterPowerLoss
-    {opened : EStateM.Result IO.Error CensusOpenState SegmentedSession}
-    {initial state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
-    {reads : List RecordedSnapshotRead}
-    (prior : NativeReadyReadPrefix opened initial history log reads state)
-    (crash : NativeReadyQuietCrash state) {input : FilePath}
-    (observe : ∀ layout : CanonicalKeeperLayout crash.retry.image state.writer.history,
-      layout.target = state.writer.target → Prepared crash.retry.image layout.target layout.plan →
-      ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
-        crash.retry.image.directory.active.manifest state.writer.checkpoint,
-      Nonempty (NativeReadyRestartReads crash input layout selected)) :
+/-- The exact next aligned session and protected file observations
+after a reported crash image. -/
+abbrev NativeReadyQuietCrash.Reopened {state : NativeReadyState} (crash : NativeReadyQuietCrash state)
+    (input : FilePath) (history : List WAL.Write) (log : List DatabaseSubmissions)
+    (reads : List RecordedSnapshotRead) : Prop :=
     BoundedReopenTrace state.session.directory (· = state.writer.target) state.files crash.retry ∧
     crash.reboot.slots = [] ∧
     ∃ (layout : CanonicalKeeperLayout crash.retry.image state.writer.history)
@@ -308,8 +298,22 @@ theorem NativeReadyReadPrefix.restartsAfterPowerLoss
         SnapshotWalReplay .empty history reference ∧
         (∀ read ∈ reads, read.agrees reference) ∧
         GuardedAcquireReads state.writer.installed state.session reference ∧
-        GuardedAcquireReads next.writer.installed next.session reference := by
-  obtain ⟨valid, originalHistory, pending⟩ := prior.refines
+        GuardedAcquireReads next.writer.installed next.session reference
+
+/-- Start from a reached phase with bounded client replay. The retained
+selection may have come from an operation that stopped before returning. -/
+theorem NativeReadyQuietCrash.restarts
+    {state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
+    {reads : List RecordedSnapshotRead}
+    (crash : NativeReadyQuietCrash state) (valid : state.Valid)
+    (originalHistory : state.writer.history = history) (pending : PendingClientReplay log reads history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy history.length) {input : FilePath}
+    (observe : ∀ layout : CanonicalKeeperLayout crash.retry.image state.writer.history,
+      layout.target = state.writer.target → Prepared crash.retry.image layout.target layout.plan →
+      ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
+        crash.retry.image.directory.active.manifest state.writer.checkpoint,
+      Nonempty (NativeReadyRestartReads crash input layout selected)) :
+    crash.Reopened input history log reads := by
   let ready := valid.retained
   obtain ⟨layout, target, keeper, descriptors, offsets, prepared⟩ := ready.powerLossLayout
   let selected : SelectedIntegrityCheckpoint state.writer.published.durable
@@ -340,7 +344,7 @@ theorem NativeReadyReadPrefix.restartsAfterPowerLoss
     ⟨phase, description.symm, ownerLive, directoryLive, ⟨opening.admission.reached, rfl⟩,
       path.symm ▸ description.symm ▸ retained⟩
   have newPrefix : NativeReadyReadPrefix observed.run next history log reads next :=
-    .installed (sameFiles.symm ▸ returned) nextValid (nextHistory.trans originalHistory) pending prior.readsBounded
+    .installed (sameFiles.symm ▸ returned) nextValid (nextHistory.trans originalHistory) pending bounded
   have actualSelection := retained.resumed.selected
   rw [selectedTarget.trans target, durable] at actualSelection
   have checkpoint := actualSelection.uniqueResult ready.resumed.selected
@@ -375,5 +379,23 @@ theorem NativeReadyReadPrefix.restartsAfterPowerLoss
       next.session.guardedAcquireReads nextValid.phase fun _ floor committed =>
         nextRepresents.acquireReads nextRefines retained.resumed.bounds
           ((nextHistory.trans originalHistory).symm ▸ replayed) floor committed⟩
+
+/-- Start the next prefix at the actual aligned open after a quiet crash.
+The earlier prefix fixes the durable selection and client responses. A
+new lock acquisition and the chronological primitive reports determine
+the reached session, whose reads still use the same replay. -/
+theorem NativeReadyReadPrefix.restartsAfterPowerLoss
+    {opened : EStateM.Result IO.Error CensusOpenState SegmentedSession}
+    {initial state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
+    {reads : List RecordedSnapshotRead}
+    (prior : NativeReadyReadPrefix opened initial history log reads state)
+    (crash : NativeReadyQuietCrash state) {input : FilePath}
+    (observe : ∀ layout : CanonicalKeeperLayout crash.retry.image state.writer.history,
+      layout.target = state.writer.target → Prepared crash.retry.image layout.target layout.plan →
+      ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
+        crash.retry.image.directory.active.manifest state.writer.checkpoint,
+      Nonempty (NativeReadyRestartReads crash input layout selected)) :
+    crash.Reopened input history log reads :=
+  crash.restarts prior.refines.1 prior.refines.2.1 prior.refines.2.2 prior.readsBounded observe
 
 end Alvoki.Storage.DiskSession
