@@ -120,6 +120,7 @@ lake env leanchecker Alvoki.Storage.Disk.ClientWriteTrace
 lake env leanchecker Alvoki.Storage.Disk.ReturnedWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.BatchGroupedWriteError
 lake env leanchecker Alvoki.Storage.Disk.ClientSnapshotTransitions
+lake env leanchecker Alvoki.Storage.Disk.ClientRunMaintenance
 lake env leanchecker Alvoki.Storage.Disk.CheckpointClientTrace
 lake env leanchecker Alvoki.Storage.Disk.SegmentedAppendRecovery
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCleanReopen

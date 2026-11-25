@@ -193,6 +193,7 @@ import Alvoki.Storage.Disk.ClientWriteTrace
 import Alvoki.Storage.Disk.ReturnedWriteRecovery
 import Alvoki.Storage.Disk.BatchGroupedWriteError
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
+import Alvoki.Storage.Disk.ClientRunMaintenance
 import Alvoki.Storage.Disk.CheckpointClientTrace
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.SegmentedCollectionInventory
@@ -1279,6 +1280,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.closed
 #check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.poisoned
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.observeSnapshotUpdate
+#check_axioms Alvoki.Storage.DiskSession.RunMaintenance.outcome
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.observeRunMaintenance
 #check_axioms Alvoki.Storage.DiskSession.GuardedClientReplay.acquireAndRead
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.writes
 #check_axioms Alvoki.Storage.prepareBatch_singleton
@@ -2056,6 +2059,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ReachedWriteGroup.projected
 #check_axioms Alvoki.Storage.DiskSession.AppendCommitReports.ofReachedWriteGroup
 #check_axioms Alvoki.Storage.DiskTable.retainRunVersions_fileEffects
+#check_axioms Alvoki.Storage.DiskTable.compact_schedule
+#check_axioms Alvoki.Storage.DiskTable.retainRunVersions_schedule
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.afterRunRetention
 #check_axioms Alvoki.Storage.RepresentsWalHistory.retainRunVersions
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_bootstrapFromReports

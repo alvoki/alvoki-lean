@@ -512,4 +512,9 @@ The checkpoint cache dispatcher now builds its run writer and staged manifest wr
 
 After a bootstrap marker flush error, a reported joint power-loss survivor can now keep the staged marker inode and its surviving bytes. The restart keeps the same empty keeper and absent canonical marker. The next admitted markerless attempt uses the restarted inode image through keeper reuse. Its EEXIST and stale-name error path identifies exactly the inherited scratch inode, and returns the observed cleanup with its scratch preserved or detached. The prefix records these bytes as stale staging. The proof uses reported name and byte survivors and the same physical root and inode image at the next open. Other scratch-survival routes remain open. [Bootstrap scratch retry](../lean/Alvoki/Storage/Disk/BootstrapScratchRetry.lean)
 
+The native compaction and row-version retention calls share their reached phase and table-update schedule. A rejected
+rewrite returns false from the same ready session. A successful rewrite supplies the exact table to the existing
+client trace with the same clock, pins, WAL and files. A later successful checkpoint can publish the rewritten runs.
+[Run maintenance](../lean/Alvoki/Storage/Disk/ClientRunMaintenance.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

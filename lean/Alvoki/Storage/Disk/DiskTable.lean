@@ -900,11 +900,24 @@ def DiskTable.advanceFloor (db : DiskTable) (floor : UInt64) : IO Bool := do
 theorem DiskTable.advanceFloor_schedule (db : DiskTable) (floor : UInt64) :
     db.advanceFloor floor = DiskSession.advanceFloorWith (m := IO) db.installed db.phase.set floor := rfl
 
+/-- Commit an in-memory run rewrite only when the reached table accepts it. -/
+@[macro_inline] def DiskSession.rewriteRunWith [Monad m]
+    (installed : m DiskSession.Installed) (record : DiskSession.Phase DiskSession.Installed → m Unit)
+    (rewrite : PackedTable → Option PackedTable) : m Bool := do
+  let state ← installed
+  let some table := rewrite state.table | return false
+  record (.ready { state with table })
+  return true
+
 def DiskTable.compact (db : DiskTable) (index : Nat) : IO Bool := do
   let state ← db.installed
   let some table := state.table.compact index | return false
   db.phase.set (.ready { state with table })
   return true
+
+theorem DiskTable.compact_schedule (db : DiskTable) (index : Nat) :
+    db.compact index = DiskSession.rewriteRunWith (m := IO) db.installed db.phase.set
+      (fun table => table.compact index) := rfl
 
 /-- Rewrite one run at the current snapshot floor. Call `checkpoint`
 to publish the rewritten run, then collect the superseded generation. -/
@@ -921,6 +934,10 @@ theorem DiskTable.retainRunVersions_fileEffects (db : DiskTable) (index : Nat) :
       let some table := state.table.retainRunVersions index | return false
       db.phase.set (.ready { state with table })
       return true) := rfl
+
+theorem DiskTable.retainRunVersions_schedule (db : DiskTable) (index : Nat) :
+    db.retainRunVersions index = DiskSession.rewriteRunWith (m := IO) db.installed db.phase.set
+      (fun table => table.retainRunVersions index) := rfl
 
 /-- Dispatch the checkpoint schedule to the exact run and manifest file
 operations. The native caller caches the run array and encoded manifest. -/
