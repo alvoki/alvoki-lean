@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.BatchRecoveryPrefix
 import Alvoki.Storage.Disk.BootstrapKeeperMarkerHandoff
+import Alvoki.Storage.Disk.ClientSnapshotTransitions
 
 namespace Alvoki.Storage.DiskSession
 
@@ -40,7 +41,9 @@ end BootstrapKeeperMarkerHandoff
 /-- Start from the returned bootstrap session, acknowledge a batch, and
 continue from an interruption of the next batch at the writer installed
 by that acknowledgement. The first batch is in the ledger before the
-interruption and the second enters as a single uncertain group. -/
+interruption and the second enters as a single uncertain group. The
+returned session acquires a pin at its actual latest sequence and uses it
+for a point or range read in the same client trace. -/
 theorem BootstrapClientStart.acknowledgesThenRecovers {handle : Type} {directory : DiskDirectory}
     {descriptor : Nat} {initialResult : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession}
     (start : BootstrapClientStart directory descriptor initialResult)
@@ -73,7 +76,21 @@ theorem BootstrapClientStart.acknowledgesThenRecovers {handle : Type} {directory
         (history = acknowledged.batch ∨ history = acknowledged.batch ++ cut.batch) ∧
         SegmentedClientReadTrace directory descriptor start.writer false
           [.acknowledgedBatch acknowledged.batch, .uncertainBatch cut.batch] [] description after ∧
-        GuardedClientReplay [.acknowledgedBatch acknowledged.batch, .uncertainBatch cut.batch] [] after session := by
+        GuardedClientReplay [.acknowledgedBatch acknowledged.batch, .uncertainBatch cut.batch] [] after session ∧
+        let snapshot := after.installed.table.committed
+        ∃ (reference : Sequential.SnapshotTable UInt64) (issued : Nat × Sequential.SnapshotPin)
+          (acquired : SegmentedSession) (reader : SegmentedWriterState),
+          SnapshotWalReplay .empty history reference ∧
+          session.runAcquireAt snapshot = .ok (some issued) acquired ∧
+          issued.1 = acquired.sessionRef ∧ issued.2.sequence = snapshot ∧
+          acquired = { session with phase := .ready reader.installed } ∧
+          ∀ (sameSession : Bool), sameSession = decide (issued.1 = acquired.sessionRef) →
+            ∀ {α : Type} (request : SnapshotReadRequest α),
+              acquired.runSnapshotRead sameSession (request.read issued.2.handle) =
+                .ok (some (request.replay reference snapshot)) acquired ∧
+              SegmentedClientReadTrace directory descriptor start.writer false
+                [.acknowledgedBatch acknowledged.batch, .uncertainBatch cut.batch]
+                [request.record snapshot (request.replay reference snapshot)] description reader := by
   obtain ⟨cacheAfter, returned⟩ := written.acknowledges
   have trace : SegmentedClientReadTrace directory descriptor start.writer false
       [.acknowledgedBatch acknowledged.batch] [] descriptor (acknowledged.next target) :=
@@ -82,7 +99,21 @@ theorem BootstrapClientStart.acknowledgesThenRecovers {handle : Type} {directory
     files, owners, sameHistory, retained, continued, replay⟩ :=
     trace.reopenAfterReportedBatchMarker start observed retries readAndFinish
   have batchHistory : (acknowledged.next target).history = acknowledged.batch := rfl
-  exact ⟨cacheAfter, returned, description, after, history, layout, reported, admission, session, final,
-    opened, path, lock, phase, files, owners, sameHistory, by simpa only [batchHistory] using retained, continued, replay⟩
+  have initialReady := (start.bootstrap.writerReady start.held).toRetained
+  have ready := (continued.writes.preservesRetained initialReady).1
+  obtain ⟨model, refined, _⟩ := ready.resumed.canonical
+  have floor : after.installed.table.pins.floor ≤ after.installed.table.committed := by
+    rw [refined.pins, refined.committed]
+    exact model.floor_committed
+  have atSession : SegmentedClientReadTrace session.directory descriptor start.writer false
+      [.acknowledgedBatch acknowledged.batch, .uncertainBatch cut.batch] [] session.descriptor after := by
+    simpa only [List.cons_append, List.nil_append, path, lock] using continued
+  obtain ⟨reference, issued, acquired, reader, replayed, _, pinned, localToken, sequence, exactPhase, readNext⟩ :=
+    replay.acquireAndRead atSession phase _ floor (UInt64.le_refl _)
+  refine ⟨cacheAfter, returned, description, after, history, layout, reported, admission, session, final,
+    opened, path, lock, phase, files, owners, sameHistory, by simpa only [batchHistory] using retained, continued, replay,
+    reference, issued, acquired, reader, sameHistory ▸ replayed, pinned, localToken, sequence, exactPhase, ?_⟩
+  intro sameSession compared α request
+  simpa only [List.cons_append, List.nil_append, path, lock] using readNext sameSession compared request
 
 end Alvoki.Storage.DiskSession
