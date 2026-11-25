@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The client theorem now consumes branch-specific final repair reports.
+Lean dispatches to the aligned, prune or staged replacement proof
+and derives both the exact final callback result and file effects.
+The report indices tie the same reader, callback and final census to
+the returned session. Earlier retry traces and the primitive report
+projection still enter the theorem as premises.
+
 The client theorem now follows retries up to the admission of the last
 open. It then consumes that open's repair return and effects together.
 Lean derives the final marker binding and equality of the sealed bytes

@@ -1680,6 +1680,86 @@ theorem installsAfterAcquiredRecovery
   apply calls.runWithMarked_ready _ marker
   simp only [reopenAcquiredWith_reports, acquisition, recovery]
 
+/-- Reports for the three successful repairs reached after reading the
+selected keeper. The indices pair the actual callback with its reached
+state so the client proof cannot mix reports from different branches. -/
+inductive CapturedFinalRepair (calls : CapturedAlignedCallbacks admission)
+    {readStart : DescriptorInventory}
+    {report : CapturedMarkedReadReports admission layout published false readStart}
+    {loaded : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest loaded)
+    (files : LockedFileState FileImage) :
+    CapturedKeeperOpenReports report →
+    (DiskDirectory → Plan → Nat → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit) →
+    CensusOpenState → Prop where
+  | aligned (keeper : CapturedKeeperOpenReports report)
+      (aligned : layout.keeper.bytes.size = report.wal.keeper.calls.metadata.byteSize.toNat)
+      (noLater : retry.image.later.visible = []) (later : files.image.later.visible = [])
+      (exactRead : files.image.keeper.active = some layout.keeper.bytes)
+      (openRead : System.FilePath → EStateM IO.Error CensusOpenState (DescriptorInventory × DescriptorSlot × Nat))
+      (fsync : (DescriptorInventory × DescriptorSlot × Nat) → EStateM IO.Error CensusOpenState Unit)
+      (removeFile : System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Except IO.Error Unit))
+      (write : System.FilePath → ByteArray → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+      (renameFile : System.FilePath → System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+      (directorySync : fsync (admission.reached, admission.cached, 0) (keeper.afterRead, files) =
+        match (keeper.directoryBarrier .completed).run files with
+        | .ok value reached => .ok value (keeper.afterRead, reached)
+        | .error cause reached => .error cause (keeper.afterRead, reached))
+      {after : DescriptorInventory}
+      (keeperSync : fsync (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+        (keeper.afterRead, { files with image := files.image.syncDirectory }) =
+        .ok () (after, { files with image := files.image.syncDirectory.syncKeeper })) :
+      CapturedFinalRepair calls selected files keeper
+        (fun resolved plan size => finishBoundedMarkedOpen resolved plan size removeFile write
+          (Storage.SyncPathGroup.run (Storage.SyncHandleRouting.sync resolved.path openRead fsync)) renameFile)
+        (after, { files with image := files.image.syncDirectory.syncKeeper })
+  | replacement {vacant : TryLockObserves retry.owners directory (.ok true)}
+      (repair : CapturedLongKeeperFinish calls report vacant selected)
+      (same : files.image.syncDirectory = retry.image.syncDirectory)
+      (first : repair.authorization.fsync (admission.reached, admission.cached, 0) files =
+        .ok () { admission.held with image := retry.image.syncDirectory }) :
+      CapturedFinalRepair calls selected files repair.reader repair.repairAfterRead (repair.census, repair.settled)
+  | prune {vacant : TryLockObserves retry.owners directory (.ok true)}
+      (repair : CapturedPrunedAlignedFinish calls report vacant selected)
+      (same : files.image.syncDirectory = retry.image.syncDirectory)
+      (first : repair.authorization.fsync (admission.reached, admission.cached, 0) files =
+        .ok () { admission.held with image := retry.image.syncDirectory })
+      (later : ∀ name ∈ retry.image.later.visible, layout.range.through < name) :
+      CapturedFinalRepair calls selected files repair.reader repair.repairActions (repair.census, repair.settled)
+
+theorem CapturedFinalRepair.returns
+    {calls : CapturedAlignedCallbacks admission} {readStart : DescriptorInventory}
+    {report : CapturedMarkedReadReports admission layout published false readStart}
+    {loaded : Option (PackedTable × UInt64)}
+    {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest loaded}
+    {files : LockedFileState FileImage} {keeper finish after}
+    (repair : CapturedFinalRepair calls (report := report) selected files keeper finish after) :
+    finish directory layout.boundedPlan report.wal.keeper.calls.metadata.byteSize.toNat
+      (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
+        (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+        layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead, files) =
+      .ok () (admission.cache, after) ∧ EffectTrace layout.target files.image after.2.image := by
+  cases repair with
+  | aligned keeper aligned noLater later exactRead openRead fsync removeFile write renameFile directorySync keeperSync =>
+    simpa only [Storage.SyncHandleRouting.Cache.captureKeeper, aligned, beq_self_eq_true, ↓reduceIte] using
+      keeper.finishAligned_effects aligned noLater openRead fsync removeFile write renameFile files
+        later exactRead directorySync keeperSync
+  | replacement repair same first =>
+    have extent : report.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
+      report.wal.keeper.observesFile.extent
+    have unequal : layout.keeper.bytes.size ≠ layout.plan.keeperBytes.size :=
+      Nat.ne_of_lt (extent ▸ repair.longer)
+    simpa only [Storage.SyncHandleRouting.Cache.captureKeeper, extent, ite_eq_right unequal,
+      ↓reduceIte] using repair.repairAfterRead_returns_from files same first
+  | prune repair same first later =>
+    have extent : report.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
+      report.wal.keeper.observesFile.extent
+    have aligned := repair.repair.aligned
+    rw [repair.sameKeeper] at aligned
+    change layout.keeper.bytes.size = report.wal.keeper.calls.metadata.byteSize.toNat at aligned
+    simpa only [Storage.SyncHandleRouting.Cache.captureKeeper, extent, aligned.trans extent, beq_self_eq_true, ↓reduceIte]
+      using repair.repairActions_returns_from files same first later
+
 private theorem selectedCheckpoint_represents
     {published : CheckpointPublication.Image} {binding : Option ByteArray}
     {loaded : Option (PackedTable × UInt64)} {history : List WAL.Write}
@@ -1772,14 +1852,9 @@ theorem installsAfterAcquiredRecovery_replays
         layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead, admission.held)
       stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩ reached =
         stabilizeCapturedMarker (markerImage.visible markerImage.active) choices reached)
-    (finished : finish directory layout.boundedPlan report.wal.keeper.calls.metadata.byteSize.toNat
-      (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
-        (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
-        layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead,
-        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) =
-      .ok () (admission.cache, after) ∧
-      EffectTrace layout.target { retry.image with directory := settleMarker retry.image.directory selection }
-        after.2.image)
+    (repair : CapturedFinalRepair calls checkpointSelected
+      { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }
+      keeper finish after)
     {bootstrapFirst writer : Nat}
     {initial : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession}
     (start : BootstrapClientStart directory bootstrapFirst initial)
@@ -1822,6 +1897,7 @@ theorem installsAfterAcquiredRecovery_replays
         opened.installed session ∧ after.2.image.directory.active = layout.target.pair ∧
       after.2.image.kept = interrupted.kept := by
   intro opened prepare
+  have finished := repair.returns
   have authorized := prepared_settleMarker preparedPlan selection observedFirst
   have ⟨validRetry, keptRetry⟩ := retries.preserves
     (authorizedRepair.valid authorized.pair authorized.keeperPrefix authorized.newer)
