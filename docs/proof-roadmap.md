@@ -106,6 +106,8 @@ After the last observed owner reference drops, the shared open schedule passes t
 
 On the held marked route, the read-only projection starts with the actual admission census and derives the marked preparation from the selected stat, open, chunk and complete listing reports. Those reports use the captured root and its canonical lock child. The exact replay and repair plan are available before the repair callback. The proof assumes stable namespace observations and tracks temporary handle effects separately. [Marked read preparation](../lean/Alvoki/Storage/Disk/CapturedMarkedReads.lean)
 
+The aligned keeper projection connects the actual bounded read to the captured scan's post-close census. The same no-follow child supplies the extent and description. A successful read retains that fresh slot in the pending cache through directory authorization. The next keeper callback uses the same live slot and consumes its pending entry. The proof uses ordered drops and the projected inventory once other transient reads have finished. The integration of those transient opens and closes throughout read preparation is still open. [Captured keeper custody](../lean/Alvoki/Storage/Disk/CapturedKeeperCustody.lean)
+
 Prove a single invariant for every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and

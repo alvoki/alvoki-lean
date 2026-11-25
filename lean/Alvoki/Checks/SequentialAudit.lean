@@ -51,6 +51,7 @@ import Alvoki.Storage.Disk.CapturedMarkedReads
 import Alvoki.Storage.Disk.DelayedKeeperInventory
 import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.KeeperReadCustody
+import Alvoki.Storage.Disk.CapturedKeeperCustody
 import Alvoki.Storage.Disk.WriteGroupFsync
 import Alvoki.Storage.Disk.AppendGroupedReports
 import Alvoki.Storage.Disk.RetainedWriterReopen
@@ -2103,6 +2104,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.readKeeperWith_readError
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.Agrees.captureKeeper
 #check_axioms Alvoki.Storage.SyncHandleRouting.alignedKeeperStep
+#check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.openedKeeper
+#check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.readCensus
+#check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.readsAligned
+#check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.syncFromRead
 #check_axioms Alvoki.Storage.SyncHandleRouting.replacementKeeperBeforeRename
 #check_axioms Alvoki.WAL.Boundary.WriteEffects.markerStep_syncStaged_success
 #check_axioms Alvoki.WAL.Boundary.WriteEffects.reachedWriteGroup

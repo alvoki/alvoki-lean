@@ -56,7 +56,7 @@ theorem Cache.Agrees.captureKeeper {cache : Cache handle} {dir path : FilePath}
     exact owned.remember separate (by simp [inactive]) captured (fun _ => rfl)
   · simpa [Cache.captureKeeper, aligned] using owned
 
-private theorem file_ne_directory (dir : DiskDirectory) (file : DiskFile) : dir.file file ≠ dir.path := by
+theorem file_ne_directory (dir : DiskDirectory) (file : DiskFile) : dir.file file ≠ dir.path := by
   intro same
   have length := congrArg (fun path : FilePath => path.toString.length) same
   simp [DiskDirectory.file, String.length_append] at length
