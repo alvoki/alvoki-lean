@@ -103,7 +103,7 @@ theorem RotationDirectoryFsyncStop.reopensEffectiveAligned
     exact List.mem_singleton_self _
   obtain ⟨canSurvive, empty, _⟩ := report.selectedKeeperPayload survives payload
   have metadata : pair ∈ cut.image.metadata.crashImages := by
-    simp [pair, cut, RotationDirectoryFsyncStop.cut, RotationCreateParent.cutAtBarrier, effective,
+    simp [pair, cut, RotationDirectoryFsyncFailure.cut, RotationCreateParent.cutAtBarrier, effective,
       DirectoryPublication.Image.syncDirectory]
   have lost : WalSegmentRotation.Trace before.wal (cut.released pair true).image := .crash cut.trace pair metadata canSurvive
   have decoded : (cut.released pair true).image.metadata.active.walRange = some before.target.range := by
