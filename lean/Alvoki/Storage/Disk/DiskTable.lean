@@ -1242,6 +1242,23 @@ private def currentMarker (db : TwoSlotDiskTable) : IO (IO.FS.Handle × WAL.TwoS
         (writeSlot marker (next.slot * WAL.TwoSlot.stride).toUInt64 next.encode)
         (fsyncHandle marker) (db.marker.set (some (marker, next))) : IO Unit).adapt unknown)
 
+/-- Publication uses the cached marker handle for both the positional
+write and its sync. Only successful completion updates the cached epoch
+and makes the new installed table ready. -/
+theorem publish_fileEffects (db : TwoSlotDiskTable) (state : Installed) (nextTable : PackedTable)
+    (bytes : ByteArray) (walBytes : Nat) (rejected unknown : IO.Error → ε) :
+    db.publish state nextTable bytes walBytes rejected unknown = (do
+      let (marker, current) ← db.currentMarker.adapt rejected
+      unless current.frontier.toNat == state.walBytes do
+        throw (rejected (IO.userError "installed WAL frontier disagrees with its selected slot"))
+      let next ← (IO.ofExcept (WAL.TwoSlot.advance current walBytes)).adapt rejected
+      let active := db.table.dir.file (.walSegment state.activeFirst)
+      DiskSession.publishPreparedWrite { state with table := nextTable, walBytes := walBytes }
+        nextTable.committed db.table.phase.set
+        ((WAL.TwoSlot.publish (db.table.files.append active bytes) (db.table.files.sync active)
+          (writeSlot marker (next.slot * WAL.TwoSlot.stride).toUInt64 next.encode)
+          (fsyncHandle marker) (db.marker.set (some (marker, next))) : IO Unit).adapt unknown)) := rfl
+
 @[inline] private def writeWith (db : TwoSlotDiskTable) (key : UInt64) (value : Option UInt64)
     (rejected unknown : IO.Error → ε) : EIO ε UInt64 :=
   DiskSession.withPreparedSingleWrite key value (db.table.installed.adapt rejected) rejected

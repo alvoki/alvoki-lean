@@ -2292,9 +2292,15 @@ private def checkTwoSlotMarker (root : FilePath) : IO Unit := do
   check (selected.epoch == 2 && selected.slot == 0 && selected.frontier.toNat == 3 * WAL.frameSize &&
     !(← wal.pathExists)) "wrong two-slot selection or collection"
   let (classified, barriers) ← probeDisk bin dir (some marker) "--two-slot-check-unknown"
-    (skipFailures := 1)
-  check (classified && barriers == [marker.toString, dir.toString, active.toString,
-    active.toString, marker.toString]) "two-slot commit did not order WAL sync before slot sync"
+    (skipFailures := 1) (extraEnv := #[("ALVOKI_CHECK_MARKER_DESCRIPTOR", some marker.toString)])
+  match barriers with
+  | [opening, openDescriptor, directorySync, keeperSync, walSync, positionedWrite, slotSync, slotDescriptor] =>
+    let identity := openDescriptor.drop "marker fsync: ".length
+    check (classified && opening == marker.toString && directorySync == dir.toString &&
+      keeperSync == active.toString && walSync == active.toString && slotSync == marker.toString &&
+      openDescriptor == slotDescriptor && positionedWrite == s!"marker pwrite: {identity}")
+      "two-slot commit did not use the same marker descriptor after WAL sync"
+  | _ => throw (IO.userError "unexpected two-slot marker descriptor trace")
   let visible ← IO.FS.readBinFile marker
   let uncertain ← IO.ofExcept (WAL.TwoSlot.decode visible)
   check (uncertain.epoch == 3 && uncertain.slot == 1 && uncertain.frontier.toNat == 4 * WAL.frameSize)

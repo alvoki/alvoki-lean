@@ -112,14 +112,18 @@ bytes and replay result. The shared installer allocates a fresh snapshot
 identity for the recovered table. Modeled marker-sync errors preserve the
 reached file image through lock cleanup. Native fault injection checks errors
 before and after the marker sync with a keeper tail still pending repair.
+The native trace checks the descriptor, device and inode at reopen sync,
+slot write and publication sync. The engine assumes exclusive control of
+the database directory while its lock is held.
 
 The codec proof derives the ordered slot survivor from the reported bytes.
 A synced record needs the exact target encoding, and an interrupted write
 needs unchanged bytes outside the inactive record and an old, exact-new or
 invalid decode at that record. The remaining native refinement must justify
-these reports for the same held file and connect the WAL sync to persistence. Derive the projected retry steps from reached native events and connect the
-returned session to the common client ledger. Use the physical reports for checkpoint
-selection and segmented extents from that same attempt.
+these reports for the same held file and connect the WAL sync to persistence.
+Derive the projected retry steps from reached native events and connect the
+returned session to the common client ledger. Use the physical reports for
+checkpoint selection and segmented extents from that same attempt.
 [Slot model](../lean/Alvoki/Storage/Disk/WalOrderedTwoSlot.lean) ·
 [Decoder and schedules](../lean/Alvoki/Storage/Disk/WalTwoSlot.lean) ·
 [Write outcomes](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean) ·

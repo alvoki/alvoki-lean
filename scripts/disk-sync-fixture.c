@@ -293,6 +293,28 @@ static bool is_wal_sibling(const char *path, const char *marker) {
         strncmp(name + 1, "WAL-segment-", strlen("WAL-segment-")) == 0;
 }
 
+static void log_marker_descriptor(const char *log, const char *operation, int fd) {
+    struct stat opened;
+    if (fstat(fd, &opened) != 0) _exit(125);
+    char identity[128];
+    snprintf(identity, sizeof(identity), "%d:%ju:%ju", fd,
+        (uintmax_t)opened.st_dev, (uintmax_t)opened.st_ino);
+    log_sync(log, operation, identity);
+}
+
+ssize_t pwrite(int fd, const void *bytes, size_t size, off_t offset) {
+    ssize_t (*real_pwrite)(int, const void *, size_t, off_t) = dlsym(RTLD_NEXT, "pwrite");
+    if (real_pwrite == NULL) return fail_sync();
+    const char *marker = getenv("ALVOKI_CHECK_MARKER_DESCRIPTOR");
+    if (marker != NULL) {
+        struct stat opened, expected;
+        if (fstat(fd, &opened) == 0 && stat(marker, &expected) == 0 &&
+            opened.st_dev == expected.st_dev && opened.st_ino == expected.st_ino)
+            log_marker_descriptor(getenv("ALVOKI_CHECK_SYNC_LOG"), "marker pwrite: ", fd);
+    }
+    return real_pwrite(fd, bytes, size, offset);
+}
+
 int fsync(int fd) {
     SyncFn real_sync = (SyncFn)dlsym(RTLD_NEXT, "fsync");
     if (real_sync == NULL) return fail_sync();
@@ -308,6 +330,8 @@ int fsync(int fd) {
     if (length < 0 || (size_t)length == sizeof(path) - 1) return fail_sync();
     path[length] = '\0';
     log_sync(log, "", path);
+    if (same(path, getenv("ALVOKI_CHECK_MARKER_DESCRIPTOR")))
+        log_marker_descriptor(log, "marker fsync: ", fd);
 
     static unsigned hold_hits;
     // Both test targets are synced once during open, before the write barrier.
