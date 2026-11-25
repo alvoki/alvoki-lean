@@ -220,6 +220,29 @@ private theorem syncedInode_survivor {image reached : WalInodeImage}
     simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, settled] using bound
   simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, live] using stored
 
+/-- The successful reopen barrier persists the same marker that the
+bounded read observed. WAL repair may rely on this frontier for every
+subsequent marker survivor when the marker name is already settled. -/
+theorem reopenSync_preservesReadFrontier
+    {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
+    (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      handle marker (fun inode files => files.completeFileSync inode) (.ok () settled))
+    (current : handle.inode = marker.active)
+    (nameSettled : marker.crashBindings = [marker.active])
+    {bytes survived : ByteArray} {selected : Selection}
+    {read : USize → EStateM IO.Error Nat ByteArray} {reached : Nat}
+    (mismatch : IO.Error)
+    (observes : PrefixChunkObserves (marker.visible handle.inode) read)
+    (available : PrefixChunksAvailableUntilEof (marker.visible handle.inode) read)
+    (fits : acquisitionLimit < USize.size)
+    (returned : readPrefixUntilEofWith mismatch read acquisitionLimit ByteArray.empty 0 =
+      .ok bytes reached)
+    (accepted : decode bytes = .ok selected)
+    (survivor : ∃ inode ∈ settled.crashBindings, survived ∈ settled.crashBytes inode) :
+    decode survived = .ok selected := by
+  rw [syncedInode_survivor sync current nameSettled survivor, ← current]
+  exact (decode_of_heldRead mismatch observes available fits returned).symm.trans accepted
+
 /-- A successful barrier on each held descriptor fixes the bytes used by
 recovery. The marker encoding comes from the reported positional write;
 the WAL prefix comes from the reported append on the selected keeper. -/

@@ -19,6 +19,18 @@ theorem decode_heldRead {source : ByteArray} {read : USize → EStateM IO.Error 
   simpa using Storage.readPrefixUntilEofWith_completes mismatch observes available
     acquisitionLimit fits (offset := 0) (bytes := ByteArray.empty) (Nat.zero_le source.size)
 
+theorem decode_of_heldRead
+    {source bytes : ByteArray} {read : USize → EStateM IO.Error Nat ByteArray} {reached : Nat}
+    (mismatch : IO.Error) (observes : Storage.PrefixChunkObserves source read)
+    (available : Storage.PrefixChunksAvailableUntilEof source read)
+    (fits : acquisitionLimit < USize.size)
+    (returned : Storage.readPrefixUntilEofWith mismatch read acquisitionLimit ByteArray.empty 0 =
+      .ok bytes reached) : decode bytes = decode source := by
+  obtain ⟨bounded, result, agrees⟩ := decode_heldRead mismatch observes available fits
+  rw [returned] at result
+  have same : bytes = bounded := by injection result
+  exact same.symm ▸ agrees
+
 /-- Express a successfully decoded physical marker in the logical format
 consumed by the shared checkpoint and segmented WAL recovery. -/
 def projectBinding (visible : Bindings) (bytes : ByteArray) : Except String Bindings :=
@@ -44,12 +56,7 @@ theorem projectBinding_of_heldRead
     (accepted : decode bytes = .ok selected) :
     projectBinding visible source = .ok
       ⟨visible.manifest, some (Boundary.encode selected.frontier)⟩ := by
-  obtain ⟨bounded, result, agrees⟩ := decode_heldRead mismatch observes available fits
-  rw [returned] at result
-  have same : bytes = bounded := by injection result
-  apply projectBinding_decodes
-  rw [← agrees, ← same]
-  exact accepted
+  exact projectBinding_decodes ((decode_of_heldRead mismatch observes available fits returned).symm.trans accepted)
 
 /-- Bootstrap exposes the same zero frontier and checkpoint binding as
 the ordinary empty-WAL installer under the marker projection. -/
