@@ -453,6 +453,7 @@ import Alvoki.Storage.Disk.NativeMarkedListingWork
 import Alvoki.Storage.Disk.MaintainedRecoveryWork
 import Alvoki.Storage.Disk.NativeRotatedMaintenanceBound
 import Alvoki.Storage.Disk.RotatedMaintenanceRecoveryWork
+import Alvoki.Storage.Disk.NativeMaintenanceFrameBudget
 import Alvoki.Storage.Disk.MaintainedDirectoryWork
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
 import Alvoki.Storage.Disk.WalSegmentCollectionNames
@@ -3097,6 +3098,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MaintainedRecoveryBounds.closeAndReopenAfterRotation
 #check_axioms Alvoki.Storage.DiskSession.AdmittedCleanReopen.emptyWalWork
 #check_axioms Alvoki.Storage.DiskSession.MaintainedRecoveryBounds.closeAndReopenWorkAfterRotation
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionEvent.retainedFrames_le_submitted
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.historyLength_le_submittedFrames
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.pendingFramesAfterMaintenance_le
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.replayAttemptsAfterMaintenance_le
 #check_axioms Alvoki.Storage.DiskSession.CheckpointHeldOpen.maintainedDirectoryWork
 #check_axioms Alvoki.Storage.DiskSession.MaintainedRecoveryBounds.closeAndReopenDirectoryWork
 #check_axioms Alvoki.Storage.readPrefixUntilEofWith_requestBound
