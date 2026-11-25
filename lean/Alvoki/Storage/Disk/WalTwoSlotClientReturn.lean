@@ -1327,13 +1327,14 @@ private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × By
 
 /-- Project the marked acquisition onto the file image. The open callback
 supplies the rewound description; the bounded read only advances its cursor. -/
-def acquireMarkerFromReports (openMarker : EStateM IO.Error FileImage KeeperDescriptorIdentity)
-    (reads : WalSegmentRepair.CheckpointRunChunkReads) :
-    EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) := do
-  let handle ← openMarker
-  fun files =>
+def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
+    EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) := fun files =>
+  match reads.openRead path with
+  | .error cause => .error cause files
+  | .ok (inventory, slot, cursor) =>
+    let handle : KeeperDescriptorIdentity := ⟨slot.description, inventory.inode slot.description⟩
     match readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
-        (reads.readChunk handle.description) acquisitionLimit ByteArray.empty 0 with
+        (reads.readChunk handle.description) acquisitionLimit ByteArray.empty cursor with
     | .error cause _ => .error cause files
     | .ok bytes _ =>
       match decode bytes with
@@ -1431,8 +1432,6 @@ theorem recoveredRetries_installedReads
       (markerReads.readChunk markerFile.calls.slot.description))
     (markerAccepted : decode (marker.visible markerHandle.inode) = .ok selected)
     {stabilize : KeeperDescriptorIdentity → EStateM IO.Error FileImage Unit}
-    (openMarker : EStateM IO.Error FileImage KeeperDescriptorIdentity)
-    (markerOpened : openMarker openedFrom.image = .ok markerHandle openedFrom.image)
     (markerChoices : List (DirectoryPublication.Bindings × Option ByteArray))
     (enumerated : markerChoices.map Prod.fst = prepared.directory.crashImages)
     (presence : ∀ choice ∈ markerChoices, choice.2.isSome = choice.1.walBoundary.isSome)
@@ -1483,7 +1482,7 @@ theorem recoveredRetries_installedReads
             WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile))
         openedFrom = .ok session final ∧
       (∃ opened,
-        reopenAcquiredWith (acquireMarkerFromReports openMarker markerReads)
+        reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary))
           (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory
             (readIntegrityCheckpointSized directory readManifest
               (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
@@ -1690,12 +1689,17 @@ theorem recoveredRetries_installedReads
         WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
       liveRefs fresh acquisition read barrier boundedRepair
   obtain ⟨markerBytes, markerRead, markerDecode⟩ := decode_markerFromHeldDirectory markerFile markerAvailable
-  have markerAcquired : acquireMarkerFromReports openMarker markerReads openedFrom.image =
+  have markerAcquired : acquireMarkerFromReports markerReads (directory.file .walBoundary) openedFrom.image =
       .ok (markerHandle, selected) openedFrom.image := by
-    rw [markerDescription] at markerRead
-    simp [acquireMarkerFromReports, Bind.bind, EStateM.bind, markerOpened, markerRead,
-      markerDecode.trans markerAccepted]
-  have fullReopen := (reopenAcquiredWith_success (acquireMarkerFromReports openMarker markerReads)
+    have held : (⟨markerFile.calls.slot.description,
+        markerFile.calls.inventory.inode markerFile.calls.slot.description⟩ : KeeperDescriptorIdentity) =
+        markerHandle := by
+      cases markerHandle
+      simp only [KeeperDescriptorIdentity.mk.injEq]
+      exact ⟨markerDescription, markerDescription ▸ reachedInode⟩
+    simp [acquireMarkerFromReports, markerFile.calls.opened, markerRead,
+      markerDecode.trans markerAccepted, held]
+  have fullReopen := (reopenAcquiredWith_success (acquireMarkerFromReports markerReads (directory.file .walBoundary))
     (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
       (fun _ => pure (some (Boundary.encode selection.frontier))) readWal)
     stabilize

@@ -885,3 +885,8 @@ and the executable decoder. The client theorem derives the acquired
 pair from those reports. The raw open still projects a rewound
 descriptor, and the checkpoint and WAL callbacks still need to supply
 the intervening descriptor census and repair trace.
+
+The acquisition projection now constructs the handle identity from
+the raw open report's slot and inode map. The bounded read starts at
+the reported cursor. The client theorem no longer takes a separate
+successful marker-open equation.
