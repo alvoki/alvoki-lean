@@ -306,6 +306,7 @@ import Alvoki.Storage.Disk.NativeInitialMarkerFlushError
 import Alvoki.Storage.Disk.NativeInitialMarkerFlushSessions
 import Alvoki.Storage.Disk.NativeBootstrapMarkerDirectoryStop
 import Alvoki.Storage.Disk.NativeBootstrapMarkerDirectoryReboot
+import Alvoki.Storage.Disk.NativeBootstrapMarkerRebootTableOpen
 import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenEarlyError
@@ -1918,6 +1919,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.settlesDirectoryStep
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.readyAtSettledReboot
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.EffectiveReboot.selects
+#check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.EffectiveReboot.readsSelectedReboot
+#check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.EffectiveReboot.opensEmptyTable
 #check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.MarkerPublication.returns
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.startFromValid
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.startsNativeReadPrefixFromValid
