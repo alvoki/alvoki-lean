@@ -7,7 +7,7 @@ open WAL.Boundary (WalInodeImage)
 
 /-- All run-file barriers can complete before power is lost at the first
 directory barrier. The ordered native prefix reaches that exact callback
-with its original directory handle. An observed effective cut settles the
+with the directory handle in the reached cache. An observed effective cut settles the
 new run names. The old manifest remains selected on either outcome. -/
 theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : SegmentedWriterState}
     {writer : Nat} {handle : Type}
