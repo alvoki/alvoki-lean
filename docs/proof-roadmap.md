@@ -133,6 +133,9 @@ assume successful file sync persists the visible bytes of the named inode.
 If the slot write is interrupted after the WAL sync, the same descriptor
 model derives the surviving WAL bytes. The live marker inode supplies the
 crash bytes subject to the inactive-slot isolation and decode assumptions.
+Before the slot write starts, a crash can expose any append suffix that
+preserves the durable WAL prefix, while the unchanged marker selects
+exactly the previous history.
 The native refinement still has to connect the reached append and positional
 write to those same inodes and account for interrupted and failed effects.
 Derive the projected retry steps from reached native events and connect the

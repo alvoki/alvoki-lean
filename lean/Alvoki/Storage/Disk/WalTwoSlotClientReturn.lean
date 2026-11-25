@@ -246,6 +246,41 @@ theorem interruptedDescriptors_selectBatch
   rw [syncedInode_survivor walSync walCurrent walSettled walSurvived]
   exact interruptedBytes_selectBatch prior activeOffset advanced size unchanged target oldCount appended
 
+/-- Before the schedule issues a marker write, append and WAL sync
+may leave different suffixes on disk, but the previous durable frontier
+selects exactly the previously acknowledged history. -/
+theorem beforeSlotWrite_selectHistory
+    {marker wal : WalInodeImage} {markerHandle walHandle : KeeperDescriptorIdentity}
+    (markerCurrent : markerHandle.inode = marker.active) (walCurrent : walHandle.inode = wal.active)
+    (markerSettled : marker.crashBindings = [marker.active]) (walSettled : wal.crashBindings = [wal.active])
+    {before markerBytes walBytes : ByteArray} {current : Selection} (history : List WAL.Write)
+    (prior : decode before = .ok current)
+    (oldCount : current.frontier.toNat = (WAL.encode history).size)
+    (markerUnchanged : marker.crashBytes markerHandle.inode = [before])
+    (walPrefix : ∀ bytes ∈ wal.crashBytes walHandle.inode,
+      ∃ tail, bytes = WAL.encode history ++ tail)
+    (markerSurvived : ∃ inode ∈ marker.crashBindings, markerBytes ∈ marker.crashBytes inode)
+    (walSurvived : ∃ inode ∈ wal.crashBindings, walBytes ∈ wal.crashBytes inode) :
+    decode markerBytes = .ok current ∧
+      Boundary.select current.frontier walBytes = .ok (WAL.encode history) := by
+  obtain ⟨markerInode, markerBound, markerStored⟩ := markerSurvived
+  obtain ⟨walInode, walBound, walStored⟩ := walSurvived
+  have markerLive : markerInode = markerHandle.inode := by
+    simpa [markerSettled, markerCurrent] using markerBound
+  have walLive : walInode = walHandle.inode := by
+    simpa [walSettled, walCurrent] using walBound
+  rw [markerLive, markerUnchanged, List.mem_singleton] at markerStored
+  obtain ⟨tail, rfl⟩ := walPrefix walBytes (walLive ▸ walStored)
+  refine ⟨markerStored ▸ prior, ?_⟩
+  have fits : (WAL.encode history).size < UInt64.size := by
+    rw [← oldCount]
+    exact current.frontier.toNat_lt
+  have count : current.frontier = (WAL.encode history).size.toUInt64 := by
+    rw [← oldCount]
+    simp
+  rw [count]
+  exact Boundary.select_encoded history tail fits
+
 open DiskSession (DatabaseSubmissions DatabaseBatchRetention)
 
 private theorem recoveredFrontier_count {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
