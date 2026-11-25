@@ -508,15 +508,46 @@ theorem selectedBytes_retainBatch
 
 open WalSegmentRepair (FileImage Target EffectTrace)
 
+/-- Derive the initial retry alternatives from the physical marker
+survivors of the interrupted slot write. An absent binding can arise
+before bootstrap has settled the marker name. -/
+theorem interruptedMarker_retryChoices
+    {image : DirectoryPublication.Image} {checkpoint : Option ByteArray}
+    {before : ByteArray} {active : OrderedTwoSlot.Slot} {current : Selection}
+    {next : OrderedTwoSlot.Record UInt64}
+    (accepted : decode before = .ok current)
+    (offset : current.slot = slotIndex active)
+    (newer : current.toRecord.epoch < next.epoch)
+    (observations : ∀ pair ∈ image.active :: image.crashImages,
+      pair = ⟨checkpoint, none⟩ ∨
+      ∃ bytes,
+        OrderedTwoSlot.Survivor (decodedSlots before) active next .slotWriteUncertain (decodedSlots bytes) ∧
+        projectBinding ⟨checkpoint, none⟩ bytes = .ok pair) :
+    ∀ pair ∈ image.active :: image.crashImages,
+      pair.manifest = checkpoint ∧ (pair.walBoundary = none ∨
+        pair.walBoundary = some (Boundary.encode current.frontier) ∨
+        pair.walBoundary = some (Boundary.encode next.frontier)) := by
+  intro pair member
+  rcases observations pair member with rfl | ⟨bytes, report, projected⟩
+  · exact ⟨rfl, .inl rfl⟩
+  · obtain ⟨manifest, boundary⟩ := projectBinding_oldOrNew report accepted offset newer projected
+    exact ⟨manifest, .inr boundary⟩
+
 /-- The retry trace supplies the actual frontier used by the recovered
 table. The retained client history follows from that retry-selected marker. -/
 theorem recoveredRetries_retainUncertainBatch
     {initial prepared firstRepair after : FileImage} {target : Target}
     (beforeBarrier : UnsettledRetries initial prepared)
-    (checkpoint : Option ByteArray) (old new : UInt64)
-    (choices : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
-      pair.manifest = checkpoint ∧ (pair.walBoundary = none ∨
-        pair.walBoundary = some (Boundary.encode old) ∨ pair.walBoundary = some (Boundary.encode new)))
+    {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
+    {current : Selection} {next : OrderedTwoSlot.Record UInt64}
+    (accepted : decode before = .ok current)
+    (offset : current.slot = slotIndex active)
+    (newer : current.toRecord.epoch < next.epoch)
+    (observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
+      pair = ⟨checkpoint, none⟩ ∨
+      ∃ bytes,
+        OrderedTwoSlot.Survivor (decodedSlots before) active next .slotWriteUncertain (decodedSlots bytes) ∧
+        projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
     (selected : Selection)
     (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
     (authorizedRepair : EffectTrace target
@@ -528,12 +559,14 @@ theorem recoveredRetries_retainUncertainBatch
     {image : WalSegmentImage} {range : MarkedWalRange} {history batch : List Write}
     {base table : PackedTable} {first : Nat} {log : List DatabaseSubmissions}
     (prior : DatabaseBatchRetention log history)
-    (oldSize : old.toNat = (WAL.encode history).size)
-    (newSize : new.toNat = (WAL.encode (history ++ batch)).size)
+    (oldSize : current.frontier.toNat = (WAL.encode history).size)
+    (newSize : next.frontier.toNat = (WAL.encode (history ++ batch)).size)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first table) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
     ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
-  obtain ⟨_, binding, choice, _⟩ := retries_preservePublishedFrontier beforeBarrier checkpoint old new
+  have choices := interruptedMarker_retryChoices accepted offset newer observations
+  obtain ⟨_, binding, choice, _⟩ := retries_preservePublishedFrontier beforeBarrier checkpoint
+    current.frontier next.frontier
     choices selected observed authorizedRepair targetPair keeper later retries (List.mem_cons_self ..)
   rcases choice with oldFrontier | newFrontier
   · exact recoveredBatch_retains prior recovery binding (.inl (oldFrontier ▸ oldSize))
