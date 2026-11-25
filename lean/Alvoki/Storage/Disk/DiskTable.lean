@@ -936,4 +936,28 @@ theorem readOptionalCachedOpenFile_fileEffects (directory : DiskDirectory) (path
       readOptionalCachedOpenFileWith (m := IO) directory path path.symlinkMetadata.toBaseIO
         (fun file => IO.FS.Handle.mk file .read) IO.FS.Handle.read := rfl
 
+/-- The inventory callback checks the no-follow result before returning
+its metadata to the extent planner. -/
+@[macro_inline] def inspectWalSegmentWith [Monad m] [MonadExceptOf IO.Error m]
+    (path : FilePath) (lookup : m (Except IO.Error IO.FS.Metadata)) : m (Except IO.Error IO.FS.Metadata) := do
+  let report ← lookup
+  if let .ok metadata := report then checkPrivateRegularWith path metadata
+  pure report
+
+theorem inspectWalSegment_fileEffects (path : FilePath) :
+    inspectWalSegment path =
+      inspectWalSegmentWith (m := IO) path path.symlinkMetadata.toBaseIO := rfl
+
+theorem readSealedWalPrefix_fileEffects (path : FilePath) (count : Nat) :
+    readSealedWalPrefix path count = (do
+      let file ← IO.FS.Handle.mk path .read
+      readExactPrefixWith WalSegmentRepair.selectedWalSpanError file.read count ByteArray.empty) := rfl
+
+theorem readKeeperPrefix_fileEffects (files : SyncFiles) (path : FilePath) (count fileSize : Nat) :
+    readKeeperPrefix files path count fileSize =
+      SyncHandleRouting.readKeeperWith (fun name => IO.FS.Handle.mk name .read)
+        (fun file size => readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
+          file.read size ByteArray.empty)
+        files.remember path count fileSize := rfl
+
 end Alvoki.Storage

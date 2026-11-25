@@ -253,6 +253,7 @@ lake env leanchecker Alvoki.Storage.Disk.HeldDirectoryReadObservations
 lake env leanchecker Alvoki.Storage.Disk.ListedDirectoryAuthorization
 lake env leanchecker Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
 lake env leanchecker Alvoki.Storage.Disk.HeldMetadataReadObservations
+lake env leanchecker Alvoki.Storage.Disk.HeldWalPayloadObservations
 lake env leanchecker Alvoki.Storage.Disk.WalInventorySortWork
 lake env leanchecker Alvoki.Storage.Disk.WalInventoryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
