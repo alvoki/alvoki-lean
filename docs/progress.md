@@ -834,3 +834,7 @@ slot across allocation, bounded reads and finalization. Its finalizer
 cannot target the marker slot because the temporary open used a free
 descriptor address. The remaining lifetime premises concern the other
 reported drops between callbacks.
+
+The client theorem now takes marker liveness as membership in the actual
+post-drop census. This is the result shape of the temporary-read custody
+proof and lets the preparation proof supply liveness directly at fsync.

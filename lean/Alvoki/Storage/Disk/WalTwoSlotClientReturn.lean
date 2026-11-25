@@ -1407,7 +1407,7 @@ theorem recoveredRetries_installedReads
     (markerFree : ∀ slot ∈ markerInventory.slots, slot.address ≠ markerFile.calls.slot.address)
     (markerAllocated : markerFile.calls.inventory = markerInventory.insert markerFile.calls.slot markerFree)
     (markerDescription : markerFile.calls.slot.description = markerHandle.description)
-    (markerRetained : ∀ event ∈ markerDrops, event.removes markerFile.calls.slot.reference = false)
+    (markerRetained : markerFile.calls.slot ∈ (markerFile.calls.inventory.afterDrops markerDrops).slots)
     (markerInode : markerInventory.inode markerHandle.description = markerHandle.inode)
     (markerEffect : Storage.SyncHandleRouting.FsyncResult marker
       (marker.completeFileSync (markerInventory.inode markerHandle.description)) true (.ok () settledMarker))
@@ -1481,10 +1481,9 @@ theorem recoveredRetries_installedReads
   have logicalMarker : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
   have markerLive : markerFile.calls.slot.reference ∈
-      (markerFile.calls.inventory.afterDrops markerDrops).references markerHandle.description := by
-    rw [markerAllocated, DiskSession.DescriptorInventory.references_afterDrops,
-      DiskSession.DescriptorInventory.references_insert, ite_eq_left markerDescription]
-    exact List.mem_filter.mpr ⟨List.mem_cons_self, List.all_eq_true.mpr (by simpa using markerRetained)⟩
+      (markerFile.calls.inventory.afterDrops markerDrops).references markerHandle.description :=
+    ((markerFile.calls.inventory.afterDrops markerDrops).mem_references).mpr
+      ⟨markerFile.calls.slot, markerRetained, rfl, markerDescription⟩
   have reachedInode : markerFile.calls.inventory.inode markerHandle.description = markerHandle.inode := by
     rw [markerAllocated]
     exact markerInode
