@@ -136,18 +136,22 @@ namespace BatchAppendInterruption
 variable {directory : DiskDirectory} {before : SegmentedWriterState}
   {report : BatchAppendInterruption directory before}
 
-/-- Run the outer batch schedule through the reported stop in its first append. -/
-def runUntilAppend (report : BatchAppendInterruption directory before)
+/-- Run the submitted write interface through the reported first append.
+The same callback records the issued path and bytes for either interface. -/
+def runRequestUntilAppend (report : BatchAppendInterruption directory before) (request : WriteRequest)
     (stage : FilePath → ByteArray → ExceptT IO.Error (EStateM (FilePath × ByteArray) WriteFiles) Unit)
     (sync : Array FilePath → ExceptT IO.Error (EStateM (FilePath × ByteArray) WriteFiles) Unit)
     (rename : FilePath → FilePath → ExceptT IO.Error (EStateM (FilePath × ByteArray) WriteFiles) Unit) :
     EStateM.Result (FilePath × ByteArray) (Phase Installed × LockedFileState WriteFiles) (Except DiskWriteError UInt64) :=
   let scratch := before.files.directory.staged .walBoundary
-  runBatchWriteWithInterruption directory report.rows report.activeMetadata
+  request.runWithInterruption directory report.activeMetadata
     (fun installed events bytes => commitBytesAt directory installed.activeFirst (WAL.encodeBatch events) bytes
       (fun path data _ => .error (path, data) (report.cut.writeFiles before.history scratch))
       stage sync rename)
     (.ready before.installed, ⟨WriteFiles.initial before.history scratch, before.owners⟩)
+
+def runUntilAppend (report : BatchAppendInterruption directory before) :=
+  report.runRequestUntilAppend (.batch report.rows)
 
 /-- The outer batch call issues the first append with the old owner
 retained and the poisoned phase already installed. The stop has no
@@ -156,7 +160,7 @@ theorem Valid.stopsBatchSchedule (observed : report.Valid) (stage sync rename) :
     report.runUntilAppend stage sync rename =
       .error report.appendCall (.poisoned,
         ⟨report.cut.writeFiles before.history (before.files.directory.staged .walBoundary), before.owners⟩) := by
-  unfold runUntilAppend
+  unfold runUntilAppend runRequestUntilAppend WriteRequest.runWithInterruption
   dsimp only
   have guard := checkObservedActiveSegment observed.activeGuard
   apply runBatchWriteWithInterruption_stopped observed.nonempty observed.prepared observed.fits guard
@@ -187,7 +191,22 @@ theorem Valid.stopsSingleWriteSchedule (observed : report.Valid) {key : UInt64} 
   dsimp only
   rw [runSingleWriteWithInterruption_eq_singleton (writtenFromSingleton (singleton ▸ observed.prepared))]
   have stopped := observed.stopsBatchSchedule stage sync rename
-  simpa only [runUntilAppend, singleton] using stopped
+  simpa only [runUntilAppend, runRequestUntilAppend, WriteRequest.runWithInterruption, singleton] using stopped
+
+/-- Either submitted interface stops in the poisoned phase at the same
+issued append, leaving the actual reached files and owner. -/
+theorem Valid.stopsWriteRequest (observed : report.Valid) (request : WriteRequest)
+    (rows : request.rows = report.rows) (stage sync rename) :
+    report.runRequestUntilAppend request stage sync rename =
+      .error report.appendCall (.poisoned,
+        ⟨report.cut.writeFiles before.history (before.files.directory.staged .walBoundary), before.owners⟩) := by
+  cases request with
+  | single key value =>
+    exact observed.stopsSingleWriteSchedule rows.symm stage sync rename
+  | batch group =>
+    change group = report.rows at rows
+    subst group
+    exact observed.stopsBatchSchedule stage sync rename
 
 end BatchAppendInterruption
 
