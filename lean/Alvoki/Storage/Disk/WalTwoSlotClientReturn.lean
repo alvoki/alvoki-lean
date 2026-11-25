@@ -1477,16 +1477,19 @@ def projectMarkerSync {failure state result : Type}
 Whether the marker sync took effect or had yet to take effect, the
 surviving file choices start another attempt in the same retry lineage. -/
 theorem reopenSyncInterrupted_preservesRetry {stop : Type}
-    {initial before prepared reached : FileImage}
-    (prepare : ExceptT IO.Error (EStateM stop FileImage)
+    {initial before acquired prepared reached : FileImage}
+    (acquire : ExceptT IO.Error (EStateM stop FileImage) (KeeperDescriptorIdentity × Selection))
+    (prepare : Selection → ExceptT IO.Error (EStateM stop FileImage)
       (WalSegmentRepair.Plan × WalSegmentRepair.Reopened × Nat))
     (sync : KeeperDescriptorIdentity → EStateM stop (WalInodeImage × FileImage) (Except IO.Error Unit))
     (physical after : WalInodeImage) (handle : KeeperDescriptorIdentity)
     (finish : WalSegmentRepair.Plan → Nat → ExceptT IO.Error (EStateM stop FileImage) Unit)
     {plan : WalSegmentRepair.Plan} {opened : WalSegmentRepair.Reopened} {size : Nat}
-    {stopped : stop} (read : prepare.run before = .ok (.ok (plan, opened, size)) prepared)
+    {stopped : stop} {selected : Selection}
+    (openedMarker : acquire.run before = .ok (.ok (handle, selected)) acquired)
+    (read : (prepare selected).run acquired = .ok (.ok (plan, opened, size)) prepared)
     (cut : sync handle (physical, prepared) = .error stopped (after, reached))
-    (prior : ReportedMarkerRetries initial prepared) (selected : Selection)
+    (prior : ReportedMarkerRetries initial prepared)
     (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
     (project : WalInodeImage → FileImage)
     (source : project physical = prepared) (reachedImage : project after = reached)
@@ -1496,13 +1499,15 @@ theorem reopenSyncInterrupted_preservesRetry {stop : Type}
     {pair : DirectoryPublication.Bindings} {bytes : Option ByteArray} {names : List Nat}
     (metadata : pair ∈ reached.directory.crashImages)
     (keeper : bytes ∈ reached.keeper.crashImages) (later : names ∈ reached.later.crashImages) :
-    (reopenWith prepare (ExceptT.mk (projectMarkerSync sync physical handle)) finish).run before =
+    (reopenAcquiredWith acquire prepare (fun descriptor => ExceptT.mk (projectMarkerSync sync physical descriptor))
+      finish).run before =
       .error stopped reached ∧
       ReportedMarkerRetries initial (reached.crash pair bytes names) := by
   constructor
-  · change prepare before = .ok (.ok (plan, opened, size)) prepared at read
-    simp [reopenWith, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
-      EStateM.bind, read, projectMarkerSync, cut]
+  · change acquire before = .ok (.ok (handle, selected)) acquired at openedMarker
+    change prepare selected acquired = .ok (.ok (plan, opened, size)) prepared at read
+    simp [reopenAcquiredWith, reopenWith, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
+      EStateM.bind, openedMarker, read, projectMarkerSync, cut]
   · have projectedEffect : reached = prepared ∨
         reached = { prepared with directory := settleMarker prepared.directory selected } := by
       rw [← reachedImage]
