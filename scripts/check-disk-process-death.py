@@ -325,7 +325,7 @@ def check_batch_append_cut(binary, shim, root):
             "the fresh batch changed the checkpoint or sealed prefix")
 
 
-def check_two_slot_batch_cut(binary, shim, database, cut, rotated):
+def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False):
     database.mkdir()
     status, stderr = run_probe(binary, "--two-slot-seed", database, "rotated" if rotated else "zero")
     require(status == 0, f"could not seed the two-slot database: {stderr}")
@@ -364,8 +364,15 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated):
             status, stderr = run_probe(binary, "--two-slot-open-once", database)
             require(status != 0 and "database already open:" in stderr,
                     f"two-slot reopen did not respect the live writer lock: {stderr}")
-            owner.kill()
-            require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "two-slot writer was not killed")
+            if resume:
+                release.touch()
+                require(owner.wait(timeout=TIMEOUT) == 0, "two-slot writer failed after a short pwrite")
+                new_marker = marker.read_bytes()
+                require(new_marker[:40] != old_marker[:40] and new_marker[40:] == old_marker[40:],
+                        "resumed positional write changed bytes outside the inactive slot")
+            else:
+                owner.kill()
+                require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "two-slot writer was not killed")
         for failure in ("before", "after"):
             sync_log = Path(scratch) / f"retry-{failure}.log"
             status, stderr = run_probe(binary, "--two-slot-open-once", database, env={
@@ -383,9 +390,10 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated):
                     f"two-slot reopen went past the {failure} marker sync error")
             require(marker.read_bytes() == new_marker and wal.read_bytes() == new_wal,
                     "failed retry changed the marker or trimmed the WAL")
-    status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "new" if cut == "marker-sync" else "old")
+    published = resume or cut == "marker-sync"
+    status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "new" if published else "old")
     require(status == 0, f"could not recover and extend the two-slot batch: {stderr}")
-    retained = new_wal if cut == "marker-sync" else old_wal
+    retained = new_wal if published else old_wal
     recovered_wal = wal.read_bytes()
     require(recovered_wal.startswith(retained) and len(recovered_wal) == len(retained) + len(seed_bytes),
             "recovery did not preserve the exact prefix and append one frame")
@@ -555,6 +563,8 @@ if __name__ == "__main__":
         check_fork_exec_lock(binary, shim, root / "fork-exec")
         check_batch_append_cut(binary, shim, root / "batch-append-cut")
         for rotated in (False, True):
+            check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-short-write",
+                                     "slot-write", rotated, resume=True)
             for cut in ("wal-sync", "slot-write", "marker-sync"):
                 check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-{cut}", cut, rotated)
         for batch in (False, True):
@@ -569,5 +579,5 @@ if __name__ == "__main__":
     print("Read the manifest in two bounded phases and preserved its exact reopen and rejection outcomes.")
     print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
-    print("Recovered and extended zero and rotated two-slot keepers after publication cuts and two failed retries.")
+    print("Recovered zero and rotated two-slot keepers after short writes, publication cuts, and two failed retries.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")

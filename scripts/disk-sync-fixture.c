@@ -321,7 +321,7 @@ ssize_t pwrite(int fd, const void *bytes, size_t size, off_t offset) {
             log_marker_descriptor(getenv("ALVOKI_CHECK_SYNC_LOG"), "marker pwrite: ", fd);
     }
     const char *cut = getenv("ALVOKI_CHECK_SLOT_WRITE_HOLD");
-    if (cut != NULL) {
+    if (cut != NULL && (offset == 0 || offset == 4096)) {
         struct stat opened, expected;
         if (fstat(fd, &opened) == 0 && stat(cut, &expected) == 0 &&
             opened.st_dev == expected.st_dev && opened.st_ino == expected.st_ino) {
