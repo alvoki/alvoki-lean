@@ -2631,7 +2631,7 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
     (counted : selected.frontier.toNat = through * frameSize)
     (decoded : retry.directory.active.walRange = some ⟨watermark, through⟩)
     (survives : retry.keeper.active ∈ reached.1.keeper.crashImages)
-    (oldPrefix : selected.frontier = current.frontier →
+    (unchangedPrefix : reached.2 = report.initialMarker →
       ∃ tail, retry.keeper.active = some (prior.wal.active.bytes ++ tail))
     {markerBytes : ByteArray}
     (markerSurvives : ∃ inode ∈ reached.2.crashBindings, markerBytes ∈ reached.2.crashBytes inode)
@@ -2652,7 +2652,15 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
       unfold frameSize at count
       have throughOld : through = prior.history.length := by omega
       rw [throughOld, List.take_append_of_le_length (Nat.le_refl _), List.take_length, ← layout.activeBytes]
-      exact oldPrefix old
+      rcases report.keeperUnchangedOrWalSynced writeKeepsKeeper syncKeepsKeeper with unchanged |
+        ⟨appended, durable, wrote, synced, keeper⟩
+      · exact unchangedPrefix unchanged
+      · have persisted : retry.keeper.active ∈ durable.1.keeper.crashImages :=
+          keeper ▸ survives
+        rw [walPersists synced] at persisted
+        have exactBytes : retry.keeper.active = appended.1.keeper.active := by
+          simpa [FileImage.syncKeeper] using persisted
+        exact ⟨WAL.encode batch, exactBytes.trans (appendBytes wrote)⟩
     · have changed : reached.2 ≠ report.initialMarker := by
         intro unchanged
         obtain ⟨inode, binding, bytes⟩ := markerSurvives

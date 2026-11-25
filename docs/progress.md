@@ -2088,3 +2088,9 @@ The keeper layout proof now gets prior marker stability from the
 successful sync report on the previous marker inode. It reuses the
 same survivor lemma as the marker-before-install proof. The old WAL
 prefix and the connection to the native reopen still need to be shown.
+
+If recovery selects the old frontier after the WAL sync, the retained
+old prefix now follows from the same successful append and sync
+reports as the new-frontier case. The fully synced batch can survive
+as an unselected tail. The remaining old-prefix premise concerns the
+execution branch in which the marker image was unchanged.
