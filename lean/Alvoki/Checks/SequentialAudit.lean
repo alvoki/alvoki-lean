@@ -1721,6 +1721,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkedRetryOpen.sharedPhysicalDirectory
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkedRetryOpen.installed
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkedRetryOpen.installs
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkedAuthorizationError.returns
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.installsMarkedZeroAfterPublicationError
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.installsMarkedZeroAfterPublicationCrash
 #check_axioms Alvoki.Storage.DiskSession.BootstrapClientStart.starts
