@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.AppendCutSession
 import Alvoki.Storage.Disk.DescriptorInventory
 import Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
 
@@ -112,6 +113,29 @@ theorem runOpenWithInstallation_cachedRetryCompletes
     description.trans inventoryDescription.symm, phase, live, seenObject, vacant, exactOwners, description ▸ held,
     distinct, freshPhase, freshSession, exactImage ▸ durable, exactImage ▸ trace, selected, replay, generation, bytes,
     keeper, committed, bounds, refines, represents, noPins⟩
+
+/-- The exact cached installation supplies the append-ready witness used
+to reconstruct a retained writer. -/
+theorem CachedRetryInstalled.readyForAppend
+    {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout before.image history} {reported : CachedRetryReadReports directory layout}
+    {descriptors slot bindings published liveRefs result}
+    (installed : CachedRetryInstalled reported descriptors slot bindings published liveRefs result)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+      before.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ generation, AppendCutReady directory reported.inventory.descriptor liveRefs history published before.image
+      layout.target generation result := by
+  obtain ⟨opened, checkpoint, model, session, final, returned, path, descriptor, phase, _, _, _, _, held,
+    distinct, freshPhase, freshSession, ready, effects, selected, replay, generation, bytes, keeper, committed,
+    bounds, refines, represents, pins⟩ := installed
+  have exactBytes : opened.walBytes.toNat = (WAL.encode history).size := by
+    rw [bytes, WAL.encode_size, Nat.mul_comm]
+  have payload : session.phase = .ready ⟨opened.table, opened.generation, (WAL.encode history).size, layout.target.first⟩ := by
+    simpa only [Reopened.installed, exactBytes, keeper, CanonicalKeeperLayout.target] using phase
+  exact ⟨opened.generation, layout.through, layout.chain.keeperBytes, accepted, ordered, checkpoint, opened.table,
+    model, session, final, returned, selected, generation, replay, path, descriptor, payload, ready, effects.keepsSealed,
+    descriptor ▸ held, committed, bounds, refines, represents, pins, distinct, freshPhase, freshSession⟩
 
 /-- The selected manifest and durable run map determine the restored checkpoint. -/
 theorem _root_.Alvoki.Storage.SelectedIntegrityCheckpoint.uniqueResult {durable : CheckpointPublication.RunFiles}

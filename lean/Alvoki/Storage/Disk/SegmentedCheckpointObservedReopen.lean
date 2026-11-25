@@ -88,7 +88,7 @@ theorem CheckpointPowerCut.reopensFromChunks {files : Type} {directory : DiskDir
   have following := observed.selectedAfterWatermark offsets descriptors
   have recovered := runOpenWithInstallation_markedRetryFromChunks observed prepared.keeperPrefix prepared.newer
     following accepted ready.resumed.ordered
-  obtain ⟨_, cutReady⟩ := recovered.appendCutReady accepted ready.resumed.ordered
+  obtain ⟨_, cutReady⟩ := recovered.readyForAppend accepted ready.resumed.ordered
   have sealed : retry.image.kept = (before.wal.checkpointReopenFiles before.wal.directory none).kept :=
     lineage.keepsSealed
   obtain ⟨writerSession, writerFinal, after, writerReturn, writerPath, writerDescription, writerPhase, writerFiles,

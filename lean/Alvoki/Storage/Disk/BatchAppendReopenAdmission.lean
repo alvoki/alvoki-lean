@@ -104,7 +104,7 @@ theorem Stop.reopensAdmitted {files : Type} {input : FilePath} {retry : LockedFi
   have installed := runOpenWithAdmission_markedRetryFromChunks reported admission
     preparedLayout.keeperPrefix preparedLayout.newer
     (reported.selectedAfterWatermark exactOffsets exactDescriptors) accepted ready.resumed.ordered
-  obtain ⟨_, appendReady⟩ := installed.appendCutReady accepted ready.resumed.ordered
+  obtain ⟨_, appendReady⟩ := installed.readyForAppend accepted ready.resumed.ordered
   have visible := ready.walPair.trans (congrArg Target.pair sameTarget).symm
   have firstKeeper := (congrArg WalSegment.first (active.trans keeper) : layout.target.first = before.wal.active.first)
   obtain ⟨session, final, after, returned, path, lock, phase, files, owners, _, selected, history, _, durable, next⟩ :=

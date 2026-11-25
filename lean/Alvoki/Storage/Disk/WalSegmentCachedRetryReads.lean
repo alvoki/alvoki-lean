@@ -47,6 +47,45 @@ private theorem chainOffsets_head {history : List WAL.Write} {first : Nat} {segm
   | endOfHistory => contradiction
   | cons => exact ⟨_, rfl⟩
 
+private theorem followingAfterSelection {offsets selected : List Nat} {watermark first : Nat}
+    (chosen : selectWalSegmentReads offsets watermark = some (first, selected))
+    (ordered : selected.Pairwise (· < ·)) (head : selected.head? = some first) :
+    ∀ start ∈ selected.drop 1, watermark < start := by
+  unfold selectWalSegmentReads at chosen
+  cases maximum : (offsets.filter fun offset => decide (offset ≤ watermark)).max? with
+  | none => simp [maximum, Bind.bind, Option.bind] at chosen
+  | some greatest =>
+    have pair : (greatest, offsets.filter fun offset => decide (greatest ≤ offset)) = (first, selected) := by
+      simpa [maximum, Bind.bind, Option.bind, Pure.pure] using chosen
+    obtain ⟨rfl, selectedOffsets⟩ := Prod.mk.inj pair
+    have upper := (List.max?_eq_some_iff.mp maximum).2
+    cases selected with
+    | nil => contradiction
+    | cons start rest =>
+      have exactHead : start = greatest := Option.some.inj head
+      subst start
+      intro later member
+      have greater := (List.pairwise_cons.mp ordered).1 _ member
+      have listed := List.mem_filter.mp (selectedOffsets ▸ List.mem_cons_of_mem _ member)
+      apply Nat.lt_of_not_ge
+      intro within
+      exact Nat.not_le_of_gt greater (upper _ (List.mem_filter.mpr ⟨listed.1, decide_eq_true within⟩))
+
+/-- Every selected offset after the first is strictly above the checkpoint
+watermark. The first offset is the greatest listed offset at or below it. -/
+theorem CachedRetryReadReports.selectedAfterWatermark {directory : DiskDirectory}
+    {image : FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout image history}
+    (reported : CachedRetryReadReports directory layout)
+    {offsets : List Nat} {selected : List WalSegment}
+    (chosen : selectWalSegmentReads offsets layout.range.watermark = some (layout.first, selected.map WalSegment.first))
+    (descriptors : layout.sealed ++ [layout.keeper] = selected) :
+    ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start := by
+  rw [← descriptors] at chosen
+  have ordered := (List.pairwise_append.mp (List.pairwise_append.mp reported.ordered).1).2.1
+  obtain ⟨_, head⟩ := chainOffsets_head layout.chain (by simp)
+  exact followingAfterSelection chosen ordered (by simp [head])
+
 /-- The actual cached scan derives both the exact selected payload vector
 and the remaining visible names to prune. In particular, a healthy report
 of these names need not open any of their payloads, and gaps stay intact. -/

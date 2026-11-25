@@ -214,7 +214,7 @@ theorem Reached.installsAdmitted {files : Type} {input : FilePath} {retry : Lock
   have installed := runOpenWithAdmission_markedRetryFromChunks reported admission
     prepared.keeperPrefix prepared.newer following accepted ordered
   rw [reported.runWithAdmission_eq admission] at installed
-  obtain ⟨_, cutReady⟩ := installed.appendCutReady accepted ordered
+  obtain ⟨_, cutReady⟩ := installed.readyForAppend accepted ordered
   let wal := before.wal.appendSelectedView retry.image.directory.active history
   have sealed : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept := kept
   have spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize := ready.spans

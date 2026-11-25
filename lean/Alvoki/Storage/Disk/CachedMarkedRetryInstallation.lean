@@ -63,6 +63,16 @@ namespace MarkedRetryChunkReports
 variable {files : Type} {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout before.image history} {published : CheckpointPublication.Image}
 
+/-- The selected canonical descriptors after the first start above the
+checkpoint watermark. This property depends only on the WAL read reports. -/
+theorem selectedAfterWatermark (observed : MarkedRetryChunkReports files directory layout published)
+    {offsets : List Nat} {selected : List WalSegment}
+    (chosen : selectWalSegmentReads offsets layout.range.watermark = some (layout.first, selected.map WalSegment.first))
+    (descriptors : layout.sealed ++ [layout.keeper] = selected) :
+    ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start :=
+  observed.reported.selectedAfterWatermark chosen descriptors
+
 def markedAt (observed : MarkedRetryChunkReports files directory layout published)
     (resolved : DiskDirectory) (cache : files) :
     EStateM IO.Error FileImage Reopened :=

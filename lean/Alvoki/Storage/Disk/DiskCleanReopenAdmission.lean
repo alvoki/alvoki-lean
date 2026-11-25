@@ -100,7 +100,7 @@ theorem SegmentedWriterState.RetainedReady.closeWithAdmission {files : Type} {in
   obtain ⟨_, _, opened, _, _, _, recovered, _, _, phase, _, _, _, _, _, _, _, _, replayed,
     generation, _⟩ := ready.closeThenCachedReopen closeRan observed.reported observed.descriptors observed.slot
       observed.bindings observed.liveRefs installed
-  obtain ⟨_, appended⟩ := installed.appendCutReady accepted ready.resumed.ordered
+  obtain ⟨_, appended⟩ := installed.readyForAppend accepted ready.resumed.ordered
   have visible : before.wal.directory.active = layout.target.pair := congrArg Target.pair sameTarget ▸ ready.walPair
   obtain ⟨session, files, after, returned, path, description, installedPhase, afterFiles, owners, wal, target,
     history, _, durable, retained⟩ := appended.writerRetained ready.layout ready.valid ready.spans visible
