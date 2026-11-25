@@ -187,6 +187,7 @@ import Alvoki.Storage.Disk.MixedTraceSnapshotReads
 import Alvoki.Storage.Disk.ClientReadTrace
 import Alvoki.Storage.Disk.ClientCachedClose
 import Alvoki.Storage.Disk.ClientWriteTrace
+import Alvoki.Storage.Disk.ReturnedWriteRecovery
 import Alvoki.Storage.Disk.BatchGroupedWriteError
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
 import Alvoki.Storage.Disk.CheckpointClientTrace
@@ -1263,6 +1264,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BatchPreflightRejection.run
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runReported_eq_batch
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.ReturnedReports.refinesClient
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchFailure.refinesReopenPrefix
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedWrite
 #check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.issuingHandles
 #check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.returnedReports
 #check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.refinesClient

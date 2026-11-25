@@ -129,6 +129,8 @@ first-append interruptions, returned publication errors, and mixed checkpoint an
 through the same carried file, cache and descriptor state.
 [First client execution](../lean/Alvoki/Storage/Disk/BootstrapExecution.lean) · [Recovery prefixes](../lean/Alvoki/Storage/Disk/BatchRecoveryPrefix.lean)
 
+A returned batch-publication error supplies its exact file cut to the same retry-prefix induction. Every reported failed open, reference drop or crash retains the checkpoint manifest binding and selects the old history or the whole batch. Given the reported unlock or last-reference drop and a later admitted open with held reads of the original checkpoint run map and successful required repair calls, the client continues from the exact returned session and selected WAL. [Recovery after a returned write](../lean/Alvoki/Storage/Disk/ReturnedWriteRecovery.lean)
+
 Close the induction by operation family. Each row is complete when every reached branch under the stated contract constructs its successor from the same returned state and observations.
 
 | Entry points | Coverage to connect |
