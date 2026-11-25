@@ -57,8 +57,12 @@ The shared single and batch dispatch can now run on one raw heap with the origin
 metadata lookup and WAL callbacks. A prepared write that acknowledges must have passed the no-follow
 guard on the observed metadata, set the poisoned phase, completed publication, and set ready at the
 heap reached by the last barrier. Rejected metadata and uncertain publication preserve their exact
-errors and heaps. The remaining bridge projects filesystem and cache effects from those precise
-calls into the classified acknowledgement. [Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean)
+errors and heaps. The raw success projects to the classified dispatcher's exact returned phase,
+sequence, cache and file image. The same publication projection serves the existing cache-erasure
+proof and this raw interpreter. It uses the per-callback laws only on the actual reached steps,
+including a returned error with its reached state. The existing replay builder consumes the
+classified result when its publication evidence and descriptor custody are derived.
+[Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean) · [Raw return projection](../../lean/Alvoki/Storage/Disk/NativeRawWriteProjection.lean)
 
 `NativeReachedExecutionPrefix.keyValueRefinement` adds whole-or-none uncertain events, ready replay when
 the ending returns ready, and the existence of an allowed terminal history that agrees with prior reads.

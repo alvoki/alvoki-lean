@@ -87,12 +87,6 @@ theorem retainsKeeper {image : Type} (calls : RawWalAppendCalls heap) (view : Op
   obtain ⟨activeHandle, stillNamed⟩ := stored saved
   exact ⟨handle, activeHandle, stillNamed.trans ((keepsFlush flushed).trans ((keepsWrite wrote).trans keeper))⟩
 
-/-- Preserve the result, including its diagnostic, and project its reached heap. -/
-def projectResult {heap files value : Type} (view : heap → files) :
-    EStateM.Result IO.Error heap value → EStateM.Result IO.Error files value
-  | .ok result reached => .ok result (view reached)
-  | .error cause reached => .error cause (view reached)
-
 /-- Project the effect of the selected open or the hit on the original
 active reference. A hit does not consult the append opener. -/
 private theorem projectedSelect {heap files : Type}

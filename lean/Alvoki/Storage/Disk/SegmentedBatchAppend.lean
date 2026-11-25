@@ -354,53 +354,6 @@ structure ObservedBatchFailure {directory before} (failure : SegmentedBatchFailu
         failure.append failure.stage failure.sync failure.rename handle where
   guard : BatchActiveGuard directory before.installed
 
-private theorem markerRun_projects {handle : Type}
-    (actual : Publication.Step → EStateM IO.Error (Cache handle × WriteFiles) Unit)
-    (projected : Publication.Step → EStateM IO.Error WriteFiles Unit)
-    (steps : List Publication.Step) (initial : Cache handle × WriteFiles)
-    (agrees : ∀ (prior : List Publication.Step) step remaining reached, steps = prior ++ step :: remaining →
-      (prior.forM actual) initial = .ok () reached →
-      withoutWriteGroupCache (actual step reached) = projected step reached.2) :
-    withoutWriteGroupCache ((steps.forM actual) initial) = (steps.forM projected) initial.2 := by
-  induction steps generalizing initial with
-  | nil => rfl
-  | cons step rest ih =>
-    have first := agrees [] step rest initial rfl rfl
-    change withoutWriteGroupCache (EStateM.bind (actual step) (fun _ => rest.forM actual) initial) =
-      EStateM.bind (projected step) (fun _ => rest.forM projected) initial.2
-    unfold EStateM.bind
-    rw [← first]
-    cases next : actual step initial with
-    | error cause reached => rfl
-    | ok value after =>
-      cases value
-      change withoutWriteGroupCache ((rest.forM actual) after) = (rest.forM projected) after.2
-      apply ih
-      intro prior action remaining reached schedule recorded
-      apply agrees (step :: prior) action remaining reached (congrArg (List.cons step) schedule)
-      change EStateM.bind (actual step) (fun _ => prior.forM actual) initial = .ok () reached
-      simpa only [EStateM.bind, next] using recorded
-
-private theorem ObservedBatchPublication.publisherProjects {handle : Type}
-    {directory first bytes count initial append stage sync rename}
-    (observed : ObservedBatchPublication directory first bytes count initial append stage sync rename handle) :
-    withoutWriteGroupCache (commitBytesAt directory first bytes count
-      observed.append observed.stage observed.sync observed.rename (observed.cache, initial)) =
-      commitBytesAt directory first bytes count append stage sync rename initial := by
-  let keeper := directory.file (.walSegment first)
-  change withoutWriteGroupCache (EStateM.bind (observed.append keeper bytes) (fun _ =>
-      Publication.run (performMarkerAt directory first count observed.stage observed.sync observed.rename))
-      (observed.cache, initial)) =
-    EStateM.bind (append keeper bytes) (fun _ =>
-      Publication.run (performMarkerAt directory first count stage sync rename)) initial
-  unfold EStateM.bind
-  rw [← observed.appendProjects]
-  cases ran : observed.append keeper bytes (observed.cache, initial) with
-  | error cause reached => rfl
-  | ok value appended =>
-    cases value
-    exact markerRun_projects _ _ _ appended (observed.markerProjects appended ran)
-
 /-- Project the reached cached publication result before deciding whether
 the original write acknowledges or returns an uncertain commit. -/
 theorem ObservedBatchPublication.projectsReturn {handle : Type}
@@ -408,8 +361,14 @@ theorem ObservedBatchPublication.projectsReturn {handle : Type}
     (observed : ObservedBatchPublication directory first bytes count initial append stage sync rename handle) :
     withoutWriteGroupCache (commitBytesAt directory first bytes count
       observed.append observed.stage observed.sync observed.rename (observed.cache, initial)) =
-      commitBytesAt directory first bytes count append stage sync rename initial :=
-  observed.publisherProjects
+      commitBytesAt directory first bytes count append stage sync rename initial := by
+  rw [withoutWriteGroupCache_eq_projectResult]
+  apply commitBytesAt_projects Prod.snd directory first bytes count
+    observed.append observed.stage observed.sync observed.rename append stage sync rename (observed.cache, initial)
+  · simpa only [withoutWriteGroupCache_eq_projectResult] using observed.appendProjects
+  · intro appended returned prior step remaining reached ordered _actual ranPrefix
+    simpa only [withoutWriteGroupCache_eq_projectResult] using
+      observed.markerProjects appended returned prior step remaining reached ordered ranPrefix
 
 /-- Execute the native-shaped batch from the checked active segment. The
 returned owner and installed table are exact, and the cache is the one
@@ -421,7 +380,7 @@ theorem ObservedBatchWrite.acknowledges {handle : Type} {directory before}
       (.ready before.installed, ⟨(observed.cache, WriteFiles.initial before.history
         (before.files.directory.staged .walBoundary)), before.owners⟩) =
       .ok report.table.committed (.ready report.nextInstalled, ⟨(cacheAfter, report.written), before.owners⟩) := by
-  have projected := observed.toObservedBatchPublication.publisherProjects
+  have projected := observed.toObservedBatchPublication.projectsReturn
   rw [show commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch report.batch)
       report.nextInstalled.walBytes report.append report.stage report.sync report.rename
       (WriteFiles.initial before.history (before.files.directory.staged .walBoundary)) = .ok () report.written from
@@ -447,7 +406,7 @@ theorem ObservedBatchFailure.cachedCommitError {handle : Type} {directory before
       failure.proposed.walBytes observed.append observed.stage observed.sync observed.rename
       (observed.cache, WriteFiles.initial before.history (before.wal.directory.staged .walBoundary)) =
       .error failure.cause (cacheAfter, failure.failed) := by
-  have projected := observed.toObservedBatchPublication.publisherProjects
+  have projected := observed.toObservedBatchPublication.projectsReturn
   have ran : commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch failure.batch)
       failure.proposed.walBytes failure.append failure.stage failure.sync failure.rename
       (WriteFiles.initial before.history (before.wal.directory.staged .walBoundary)) = .error failure.cause failure.failed :=

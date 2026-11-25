@@ -75,6 +75,39 @@ structure ClassifiedWriteAcknowledgement (current : NativeReadPosition history l
   replay : InstalledClientReplay (log ++ [.acknowledgedBatch report.batch]) current.reads
     (history ++ report.batch) next.state.writer.installed next.state.session
 
+/-- Build the ready position from a projected acknowledgement.
+The source interpreter supplies this result and the exact reached
+descriptor and cache facts, independently of replay. -/
+theorem NativeReadPosition.acknowledgesProjectedReturn {history log}
+    (current : NativeReadPosition history log) (request : WriteRequest) (nonempty : request.rows ≠ [])
+    (calls : WriteRequest.Calls (DescriptorInventory × DescriptorSlot × Nat))
+    (classified : WriteRequest.ReturnedReports request current.state.session.directory current.state.writer
+      (DescriptorInventory × DescriptorSlot × Nat) calls)
+    {sequence : UInt64} {returnedPhase : Phase Installed} {reached : OpenWriteFiles}
+    (returned : calls.run request current.state.session.directory current.state.writer =
+      .ok sequence (returnedPhase, ⟨reached, current.state.writer.owners⟩))
+    (custody : NativePendingWriteCensus current.state reached.1) :
+    ∃ next : ClassifiedWriteAcknowledgement current request calls sequence reached custody,
+      returnedPhase = next.next.state.session.phase := by
+  obtain ⟨valid, beforeHistory, prior⟩ := current.readPrefix.refines
+  obtain ⟨report, observed, actualCalls, rows, sequenceEq, phaseEq, written⟩ :=
+    classified.acknowledgesOfNonemptyReturn valid.retained nonempty returned
+  obtain ⟨target, selected, retained⟩ := report.preservesRetained valid.retained
+  let state := current.state.afterClassifiedAck report target reached.1 custody
+  have stateReady : state.Valid := ⟨rfl, valid.owner, custody.ownerLive, custody.directoryLive,
+    ⟨custody.cachedAt, custody.cachedDirectory⟩, retained⟩
+  have extended : state.writer.history = history ++ report.batch :=
+    congrArg (· ++ report.batch) beforeHistory
+  have ordered : WAL.OrdinalsFrom 1 (history ++ report.batch) := extended ▸ retained.resumed.ordered
+  obtain ⟨replayed, bounded⟩ := prior.appendAcknowledged current.readPrefix.readsBounded ordered
+  let next : NativeReadPosition (history ++ report.batch) (log ++ [.acknowledgedBatch report.batch]) :=
+    ⟨.ok state.session (state.census, state.files), state, state, current.reads,
+      .installed rfl stateReady extended replayed bounded⟩
+  have exactReturn := returned.trans (congrArg (fun value =>
+    EStateM.Result.ok sequence (value, (⟨reached, current.state.writer.owners⟩ : LockedFileState OpenWriteFiles))) phaseEq)
+  exact ⟨⟨report, observed, actualCalls, rows, sequenceEq, written, target, selected, next, exactReturn,
+    rfl, rfl, rfl, rfl, next.readPrefix.guardedReplay⟩, phaseEq⟩
+
 /-- Starting from the live opened cell, classify the actual successful
 nonempty return, derive its retained-ready writer and preserve the
 previous read ledger. The raw returned cache fixes the descriptor
@@ -102,7 +135,6 @@ theorem NativeReadPosition.acknowledgesClassifiedWrite {heap : Type} {history lo
     ∃ next : ClassifiedWriteAcknowledgement current request calls sequence reached custody,
       contents returnedHeap phase = some next.next.state.session.phase ∧
       db.UsesOpenReferences next.next.state.session.directory lock files phase token := by
-  obtain ⟨valid, beforeHistory, prior⟩ := current.readPrefix.refines
   obtain ⟨_, projects⟩ := current.classifiesWriteOnOpenPhase db uses effects stored request calls cache
   rw [actual] at projects
   cases reachedPhase : contents returnedHeap phase with
@@ -111,23 +143,11 @@ theorem NativeReadPosition.acknowledgesClassifiedWrite {heap : Type} {history lo
     have returned : calls.run request current.state.session.directory current.state.writer =
         .ok sequence (returnedPhase, ⟨reached, current.state.writer.owners⟩) := by
       exact Option.some.inj (by simpa only [projectOpenWriteResult, reachedPhase, Option.map_some] using projects.symm)
-    have classified := calls.classifiesReturnedReports valid.retained request observe
-    obtain ⟨report, observed, actualCalls, rows, sequenceEq, phaseEq, written⟩ :=
-      classified.acknowledgesOfNonemptyReturn valid.retained nonempty returned
-    obtain ⟨target, selected, retained⟩ := report.preservesRetained valid.retained
-    let state := current.state.afterClassifiedAck report target reached.1 custody
-    have stateReady : state.Valid := ⟨rfl, valid.owner, custody.ownerLive, custody.directoryLive,
-      ⟨custody.cachedAt, custody.cachedDirectory⟩, retained⟩
-    have extended : state.writer.history = history ++ report.batch :=
-      congrArg (· ++ report.batch) beforeHistory
-    have ordered : WAL.OrdinalsFrom 1 (history ++ report.batch) := extended ▸ retained.resumed.ordered
-    obtain ⟨replayed, bounded⟩ := prior.appendAcknowledged current.readPrefix.readsBounded ordered
-    let next : NativeReadPosition (history ++ report.batch) (log ++ [.acknowledgedBatch report.batch]) :=
-      ⟨.ok state.session (state.census, state.files), state, state, current.reads,
-        .installed rfl stateReady extended replayed bounded⟩
-    have exactReturn := returned.trans (congrArg (fun value =>
-      EStateM.Result.ok sequence (value, (⟨reached, current.state.writer.owners⟩ : LockedFileState OpenWriteFiles))) phaseEq)
-    exact ⟨⟨report, observed, actualCalls, rows, sequenceEq, written, target, selected, next, exactReturn,
-      rfl, rfl, rfl, rfl, next.readPrefix.guardedReplay⟩, congrArg some phaseEq, uses⟩
+    have classified := calls.classifiesReturnedReports current.readPrefix.refines.1.retained request observe
+    obtain ⟨next, exactPhase⟩ := current.acknowledgesProjectedReturn request nonempty calls classified returned custody
+    have sameReferences : db.UsesOpenReferences next.next.state.session.directory lock files phase token := by
+      rw [next.exactState]
+      exact uses
+    exact ⟨next, congrArg some exactPhase, sameReferences⟩
 
 end Alvoki.Storage.DiskSession

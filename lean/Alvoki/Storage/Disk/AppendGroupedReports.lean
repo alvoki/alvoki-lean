@@ -5,12 +5,87 @@ namespace Alvoki.Storage.DiskSession
 
 open System WAL.Boundary WalSegmentCommit SyncHandleRouting
 
+/-- Preserve the result, including its diagnostic, and project its reached heap. -/
+def projectResult {heap files value : Type} (view : heap → files) :
+    EStateM.Result IO.Error heap value → EStateM.Result IO.Error files value
+  | .ok result reached => .ok result (view reached)
+  | .error cause reached => .error cause (view reached)
+
 /-- Hide the native cache from the write interpreter while retaining the
 original success or error and the file state reached by the shared group. -/
 def withoutWriteGroupCache {handle : Type} :
     EStateM.Result IO.Error (Cache handle × WriteFiles) Unit → EStateM.Result IO.Error WriteFiles Unit
   | .ok value (_, after) => .ok value after
   | .error cause (_, after) => .error cause after
+
+theorem withoutWriteGroupCache_eq_projectResult {handle : Type}
+    (result : EStateM.Result IO.Error (Cache handle × WriteFiles) Unit) :
+    withoutWriteGroupCache result = projectResult Prod.snd result := by
+  cases result with
+  | ok value reached => cases reached; rfl
+  | error cause reached => cases reached; rfl
+
+private theorem markerRun_projects {source target : Type} (observe : source → target)
+    (actual : Publication.Step → EStateM IO.Error source Unit)
+    (projected : Publication.Step → EStateM IO.Error target Unit)
+    (steps : List Publication.Step) (initial : source)
+    (agrees : ∀ (prior : List Publication.Step) step remaining reached, steps = prior ++ step :: remaining →
+      (prior.forM actual) initial = .ok () reached →
+      projectResult observe (actual step reached) = projected step (observe reached)) :
+    projectResult observe ((steps.forM actual) initial) = (steps.forM projected) (observe initial) := by
+  induction steps generalizing initial with
+  | nil => rfl
+  | cons step rest ih =>
+    have first := agrees [] step rest initial rfl rfl
+    change projectResult observe (EStateM.bind (actual step) (fun _ => rest.forM actual) initial) =
+      EStateM.bind (projected step) (fun _ => rest.forM projected) (observe initial)
+    unfold EStateM.bind
+    rw [← first]
+    cases next : actual step initial with
+    | error cause reached => rfl
+    | ok value after =>
+      cases value
+      change projectResult observe ((rest.forM actual) after) = (rest.forM projected) (observe after)
+      apply ih
+      intro prior action remaining reached schedule recorded
+      apply agrees (step :: prior) action remaining reached (congrArg (List.cons step) schedule)
+      change EStateM.bind (actual step) (fun _ => prior.forM actual) initial = .ok () reached
+      simpa only [EStateM.bind, next] using recorded
+
+/-- Project the same reached append and publication, with a local law
+at each issued callback. A failed callback keeps its diagnostic and
+the projection of its own returned state. No later callback is needed. -/
+theorem commitBytesAt_projects {source target : Type} (observe : source → target)
+    (directory : DiskDirectory) (first : Nat) (bytes : ByteArray) (count : Nat)
+    (append stage : FilePath → ByteArray → EStateM IO.Error source Unit)
+    (sync : Array FilePath → EStateM IO.Error source Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error source Unit)
+    (appendAt stageAt : FilePath → ByteArray → EStateM IO.Error target Unit)
+    (syncAt : Array FilePath → EStateM IO.Error target Unit)
+    (renameAt : FilePath → FilePath → EStateM IO.Error target Unit)
+    (entry : source)
+    (appendProjects : let path := directory.file (.walSegment first)
+      projectResult observe (append path bytes entry) = appendAt path bytes (observe entry))
+    (markerProjects : ∀ appended, append (directory.file (.walSegment first)) bytes entry = .ok () appended →
+      ∀ (prior : List Publication.Step) step remaining reached, Publication.steps = prior ++ step :: remaining →
+      let actual := performMarkerAt directory first count stage sync rename
+      (prior.forM actual) appended = .ok () reached →
+      projectResult observe (actual step reached) =
+        performMarkerAt directory first count stageAt syncAt renameAt step (observe reached)) :
+    projectResult observe (commitBytesAt directory first bytes count append stage sync rename entry) =
+      commitBytesAt directory first bytes count appendAt stageAt syncAt renameAt (observe entry) := by
+  let keeper := directory.file (.walSegment first)
+  change projectResult observe (EStateM.bind (append keeper bytes) (fun _ =>
+      Publication.run (performMarkerAt directory first count stage sync rename)) entry) =
+    EStateM.bind (appendAt keeper bytes) (fun _ =>
+      Publication.run (performMarkerAt directory first count stageAt syncAt renameAt)) (observe entry)
+  unfold EStateM.bind
+  rw [← appendProjects]
+  cases ran : append keeper bytes entry with
+  | error cause reached => rfl
+  | ok value appended =>
+    cases value
+    exact markerRun_projects observe _ _ _ appended (markerProjects appended ran)
 
 /-- The separate IO and reference observations for the actual reached
 keeper and staged-marker syncs. The keeper callback's reached state is
