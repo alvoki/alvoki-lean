@@ -393,6 +393,7 @@ lake env leanchecker Alvoki.Storage.Disk.StagedHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.SyncHandleEffects
 lake env leanchecker Alvoki.Storage.Disk.DescriptorInventory
 lake env leanchecker Alvoki.Storage.Disk.DescriptorFork
+lake env leanchecker Alvoki.Storage.Disk.LockCensusTrace
 lake env leanchecker Alvoki.Storage.Disk.DelayedKeeperInventory
 lake env leanchecker Alvoki.Storage.Disk.AppendHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.KeeperReadCustody

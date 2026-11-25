@@ -45,6 +45,7 @@ import Alvoki.Storage.Disk.StagedHandleCustody
 import Alvoki.Storage.Disk.SyncHandleEffects
 import Alvoki.Storage.Disk.DescriptorInventory
 import Alvoki.Storage.Disk.DescriptorFork
+import Alvoki.Storage.Disk.LockCensusTrace
 import Alvoki.Storage.Disk.DelayedKeeperInventory
 import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.KeeperReadCustody
@@ -2020,6 +2021,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.forkPrivate
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.mem_forkPrivate
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.forkExitExecReopen
+#check_axioms Alvoki.Storage.DiskSession.LockCensusTrace.reached
+#check_axioms Alvoki.Storage.DiskSession.LockCensusTrace.freshFlockAllowed
+#check_axioms Alvoki.Storage.DiskSession.LockCensusTrace.reopenTrace
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.delayedKeeperSync
 #check_axioms Alvoki.Storage.DiskSession.KeeperRepairSlot.lockInode
 #check_axioms Alvoki.Storage.DiskSession.KeeperRepairSlot.openedCensus

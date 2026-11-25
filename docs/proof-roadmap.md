@@ -100,7 +100,7 @@ inode and open-description identities, complete enumeration at clean EOF, lock-r
 effects that occurred before a return or interruption. The owned canonical directory stays stable and
 managed data bindings change only through observed operations under its lock. Admission may create the lock
 file before acquisition. The filesystem contract determines which effects may survive power loss. The compiler and runtime must implement the reported primitive behavior.
-[Native entry points](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Held directory observations](../lean/Alvoki/Storage/Disk/HeldDirectoryReadObservations.lean) · [Descriptor inventory](../lean/Alvoki/Storage/Disk/DescriptorInventory.lean)
+[Native entry points](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Held directory observations](../lean/Alvoki/Storage/Disk/HeldDirectoryReadObservations.lean) · [Descriptor inventory](../lean/Alvoki/Storage/Disk/DescriptorInventory.lean) · [Lock census across reported slot events](../lean/Alvoki/Storage/Disk/LockCensusTrace.lean)
 
 Prove a single invariant for every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
