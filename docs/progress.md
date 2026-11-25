@@ -1,5 +1,7 @@
 # Current handoff
 
+Snapshot and run rewrite blocks across sessions now derive their call reports from each reached table. Reads and releases use valid issuance indices and reported token comparisons. A successful explicit close or a quiet power loss uses the existing local aligned-reopen observations. The exact returned table and heap seed the following block, and one replay explains the combined trace. [Derived snapshot and rewrite sessions](../lean/Alvoki/Storage/Disk/NativeOpenedSnapshotSessions.lean)
+
 Public run compaction and version retention now join the opened-table trace. The reached table determines the Boolean result. Refusal keeps the same heap, and success stores the exact rewritten table in the opened phase cell while preserving the pins, modeled file state and client ledgers. Finite snapshot sequences can interleave either rewrite using only the existing operand and token requirements. [Public run rewrites](../lean/Alvoki/Storage/Disk/NativeOpenRunMaintenance.lean) · [Finite continuation](../lean/Alvoki/Storage/Disk/NativeOpenSnapshotTrace.lean)
 
 Finite snapshot continuations now derive their own call reports. Acquisition and floor changes use the reached table's guards. An unavailable acquisition returns `none` without changing the heap. Each read or release uses a valid issuance index and the reported token comparison at its reached heap. The sequence derives the common trace and its client replay. [Finite snapshot continuation](../lean/Alvoki/Storage/Disk/NativeOpenSnapshotTrace.lean)
