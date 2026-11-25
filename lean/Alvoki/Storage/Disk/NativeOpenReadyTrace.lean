@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
-import Alvoki.Storage.Disk.NativeOpenWrite
+import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
 
 namespace Alvoki.Storage.DiskSession
 
@@ -65,6 +65,10 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
   | write (request : WriteRequest) {prepared : NativeReadyWritePreparation start.current.ready.state}
       (reported : NativeReadyWriteReport prepared) (rows : request.rows = prepared.rows) :
       NativeOpenedReport start (.write request)
+  | writePreflight (request : WriteRequest) (calls : WriteRequest.Calls (DescriptorInventory × DescriptorSlot × Nat))
+      (cache : calls.cache = start.current.ready.state.cache)
+      (preflight : calls.ReturnsPreflight request start.current.ready.state) :
+      NativeOpenedReport start (.write request)
   | checkpoint {image : Type}
       {attempt : SegmentedCheckpointReport start.current.ready.state.session.directory start.current.ready.state.writer}
       {reports : CheckpointCompletionReports (CensusDirectoryCache × image) attempt}
@@ -93,6 +97,16 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
     reported.ReturnsOnOpenPhase request opened.phase opened.get opened.set start.reached next.reached ∧
     (∃ target, next.current.ready.state = reported.next target) ∧
     event = .acknowledged request prepared.batch ∧ next.pins = start.pins
+  | .writePreflight request calls _ _ =>
+    let state := start.current.ready.state
+    let before := WriteRequest.readyCall state.writer state.cache
+    opened.table.UsesOpenWriteSchedules state.session.directory opened.files opened.phase ∧
+    ∃ seen : NativeWritePreflightObservation state request,
+      seen.lookup = calls.lookup ∧
+      calls.run request state.session.directory state.writer = seen.resultAt before ∧
+      request.runOnOpenPhase state.session.directory calls opened.phase opened.get opened.set (start.reached, before.2.image) =
+        seen.resultAt (next.reached, before.2.image) ∧
+      event = .writePreflight request seen.response ∧ next = start
   | .checkpoint reported =>
     opened.table.UsesOpenCheckpointSchedule start.current.ready.state.session.directory opened.files opened.phase ∧
     reported.ReturnsOnOpenPhase opened.phase opened.get opened.set start.reached next.reached ∧
@@ -143,6 +157,11 @@ theorem reaches (report : NativeOpenedReport start instruction) :
         reached, directory, stored, start.pins⟩
     exact ⟨_, nextPosition, .acknowledged start.current reported request rows target next normalized state initial seed reads,
       source, raw, ⟨target, state⟩, rfl, rfl⟩
+  | writePreflight request calls cache preflight =>
+    obtain ⟨source, seen, lookup, normalized, raw, continuation⟩ :=
+      start.current.ready.preflightsClassifiedWriteOnOpenPhase opened.table start.uses opened.phaseEffects start.stored
+        request calls cache preflight
+    exact ⟨_, start, .writePreflight start.current seen continuation, source, seen, lookup, normalized, raw, rfl, rfl⟩
   | checkpoint reported =>
     obtain ⟨source, writer, _, reached, _, _, _, _, stored, raw, completed, history, _, _⟩ :=
       start.current.ready.checkpointsViaOpenReferences opened.table start.uses opened.phaseEffects start.stored reported

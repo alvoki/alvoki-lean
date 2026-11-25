@@ -367,6 +367,28 @@ def WriteRequest.runOnOpenPhase (request : WriteRequest) (directory : DiskDirect
   | .batch group => writeBatchSchedule group load DiskWriteError.rejected requireWritePreparation guard setPhase
       (fun current batch count => commit current (WAL.encodeBatch batch) count)
 
+/-- Read the actual opened cell and preserve its heap and file/cache
+projection when the fixed write callbacks return during preflight. -/
+theorem NativeReadPosition.interpretsOpenWritePreflight {history log}
+    (current : NativeReadPosition history log) (db : DiskTable)
+    {lock : IO.FS.Handle} {files : DiskTable.OpenSyncFiles} {phase : IO.Ref (Phase Installed)} {token : IO.Ref Unit}
+    (uses : db.UsesOpenReferences current.state.session.directory lock files phase token)
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)} {entry : heap}
+    (read : get phase entry = .ok current.state.session.phase entry)
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    {request : WriteRequest} (seen : NativeWritePreflightObservation current.state request)
+    (calls : WriteRequest.Calls (DescriptorInventory × DescriptorSlot × Nat))
+    (sameLookup : seen.lookup = calls.lookup) (atEntry : OpenWriteFiles) :
+    request.runOnOpenPhase current.state.session.directory calls phase get set (entry, atEntry) =
+      seen.resultAt (entry, atEntry) := by
+  unfold WriteRequest.runOnOpenPhase
+  obtain ⟨_, _, returned⟩ := current.preflightsViaOpenReferences db uses read seen atEntry
+    (fun state => heapEffect .rejected (set phase state))
+    (fun state bytes count => fileEffect .commitUnknown
+      (commitBytesAt current.state.session.directory state.activeFirst bytes count calls.append calls.stage calls.sync calls.rename))
+  rw [sameLookup] at returned
+  exact returned
+
 /-- Read the reached phase from the same cell and retain the original
 result, reached file/cache projection and held owner. -/
 def projectOpenWriteResult (contents : heap → IO.Ref (Phase Installed) → Option (Phase Installed))
@@ -437,14 +459,7 @@ theorem NativeReadPosition.classifiesWriteOnOpenPhase {history log}
       actual = seen.resultAt (entry, (WriteRequest.readyCall state.writer calls.cache).2.image) := by
     dsimp only [actual]
     rw [initialized]
-    unfold WriteRequest.runOnOpenPhase
-    obtain ⟨_, _, returned⟩ := current.preflightsViaOpenReferences db uses loaded seen
-      (WriteRequest.readyCall state.writer calls.cache).2.image
-      (fun current => heapEffect .rejected (set phase current))
-      (fun current bytes count => fileEffect .commitUnknown (commitBytesAt state.session.directory current.activeFirst bytes count
-        calls.append calls.stage calls.sync calls.rename))
-    rw [sameLookup] at returned
-    exact returned
+    exact current.interpretsOpenWritePreflight db uses loaded set seen calls sameLookup _
   generalize calls.run request state.session.directory state.writer = result at classified ⊢
   cases classified with
   | empty rows =>
