@@ -74,7 +74,8 @@ private theorem CheckpointPowerCut.newManifestHeader {directory : DiskDirectory}
 /-- At an interrupted manifest rename the reported surviving inode determines
 the selected manifest. Open reports use the same run bindings through the
 retries. The shared admitted opener installs the checkpoint and replays the
-unchanged marked WAL. -/
+unchanged marked WAL. Its returned writer continues any mixed trace reaching
+the interrupted writer with the same submission log. -/
 theorem CheckpointPowerCut.reopensAfterManifestRename {files : Type} {directory : DiskDirectory}
     {before : SegmentedWriterState} {writer : Nat} {input : FilePath}
     (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
@@ -120,7 +121,10 @@ theorem CheckpointPowerCut.reopensAfterManifestRename {files : Type} {directory 
       RepresentsWalHistory before.history model ∧
       ∃ (after : SegmentedWriterState), after.RetainedReady directory observed.slot.description ∧
         after.checkpoint = checkpoint ∧ after.installed = opened.installed ∧
-        after.files = final.image ∧ after.owners = final.owners := by
+        after.files = final.image ∧ after.owners = final.owners ∧
+        ∀ {initialDescriptor initial allowCollection log},
+          SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before →
+            SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after := by
   intro pair physical failures observes
   have pairSurvives : pair ∈ (published.segmentedCheckpointView before.wal).directory.crashImages := by
     exact List.mem_map.mpr ⟨binding, admitted binding survives, rfl⟩
@@ -159,9 +163,11 @@ theorem CheckpointPowerCut.reopensAfterManifestRename {files : Type} {directory 
   obtain ⟨_, afterFiles, afterOwners⟩ :=
     installed.atReopen ((observed.runWithAdmission_eq admission).symm.trans returned)
   let physicalReads := observed.withRunMap (runs interrupted).guaranteed retryAgrees.symm
-  exact ⟨layout, physicalReads, admission, session, final, opened, checkpoint, model,
+  refine ⟨layout, physicalReads, admission, session, final, opened, checkpoint, model,
     returned, directoryExact, slot, phase, held, finalPair, SelectedIntegrityCheckpoint.withRunMap selected agrees.symm,
     generation, replayed, committed, refinement, represents, after, installed.retained,
-    afterCheckpoint, afterTable, afterFiles, afterOwners⟩
+    afterCheckpoint, afterTable, afterFiles, afterOwners, ?_⟩
+  intro _ _ _ _ prior
+  exact .checkpointPowerLossObserved prior cut projected pairSurvives failures retryPair installed
 
 end Alvoki.Storage.DiskSession
