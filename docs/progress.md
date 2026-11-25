@@ -468,4 +468,9 @@ Successful checkpoints and reported publication failures now share the same exac
 
 An explicit close of a reached ready client preserves the replay of its submissions and recorded reads even when execution stops at that close. Failed unlock reports preserve the phase, cache, files, owner and descriptor census through any finite number of attempts. Subsequent observed drops release the lock only on the last reference to that description. Successful explicit unlock releases ownership even if aliases remain live. The three reported cache clears preserve the file image and supply the reached census. With stable bindings and the reported successful next allocations, admission and repair effects, the healthy opener uses the same lock and directory objects and yields the exact returned session with both client ledgers preserved. [Client close and reopen](../lean/Alvoki/Storage/Disk/ClientCachedClose.lean)
 
+The reached lookup and range results now determine the client read record. A successful read derives its local active pin
+from the reached token comparison and registry. Ready acquisition, release and floor updates extend the same mixed client
+trace with the returned phase and unchanged WAL submissions. Unavailable sessions return the phase error unchanged.
+[Read observations](../lean/Alvoki/Storage/Disk/ClientReadTrace.lean) · [Snapshot transitions](../lean/Alvoki/Storage/Disk/ClientSnapshotTransitions.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

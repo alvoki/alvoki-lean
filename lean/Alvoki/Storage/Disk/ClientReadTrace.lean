@@ -15,6 +15,7 @@ theorem SegmentedBatchDatabaseTrace.append
   induction suffix with
   | start => simpa using prior
   | ordinary _ step ih => simpa only [List.append_assoc] using ih.ordinary step
+  | table _ step ih => exact .table ih step
   | checkpoint _ observed installed ih => exact .checkpoint ih observed installed
   | cleanReopenObserved _ closed endpoint ih => exact .cleanReopenObserved ih closed endpoint
   | checkpointManifestStageError _ endpoint ih => exact .checkpointManifestStageError ih endpoint
@@ -142,6 +143,60 @@ inductive RecordedSnapshotRead.Observed (directory : DiskDirectory) (descriptor 
       (returned : reader.session.runSnapshotRead reader.sameSession (fun table => table.range handle lo hi) =
         .ok none reader.session) :
       Observed directory descriptor writer (.rangeDenied lo hi (reader.guard handle))
+
+/-- A successful native result identifies a local registered pin. The
+caller supplies only the handle, the reached comparison and the result. -/
+private theorem ObservedSnapshotReader.localPinOfSome (reader : ObservedSnapshotReader directory descriptor writer)
+    (handle : SnapshotHandle) (read : PackedTable → Option α) (readAt : SnapshotPin → α)
+    (fromRegistry : read writer.installed.table = (writer.installed.table.pins.find handle).map readAt)
+    (returned : reader.session.runSnapshotRead reader.sameSession read = .ok (some value) reader.session) :
+    ∃ pin : ObservedLocalPin directory descriptor writer,
+      pin.toObservedSnapshotReader = reader ∧ pin.pin.handle = handle := by
+  rw [reader.readResult, fromRegistry] at returned
+  by_cases localToken : reader.issuer = reader.session.sessionRef
+  · cases found : writer.installed.table.pins.find handle with
+    | none => simp [localToken, found] at returned
+    | some pin =>
+      change List.find? (fun pin => decide (pin.handle = handle)) writer.installed.table.pins.active = some pin at found
+      have active := List.mem_of_find?_eq_some found
+      have compared := List.find?_some (p := fun candidate : SnapshotPin => decide (candidate.handle = handle)) found
+      have sameHandle : pin.handle = handle := of_decide_eq_true compared
+      exact ⟨⟨reader, pin, active, localToken⟩, rfl, sameHandle⟩
+  · simp [localToken] at returned
+
+theorem ObservedSnapshotReader.recordLookup (reader : ObservedSnapshotReader directory descriptor writer)
+    (handle : SnapshotHandle) (key : UInt64) (result : Option (Option UInt64))
+    (returned : reader.session.runSnapshotRead reader.sameSession (fun table => table.lookup handle key) =
+      .ok result reader.session) :
+    match result with
+    | none => RecordedSnapshotRead.Observed directory descriptor writer (.lookupDenied key (reader.guard handle))
+    | some value =>
+      ∃ pin, writer.installed.table.pins.find handle = some pin ∧
+        RecordedSnapshotRead.Observed directory descriptor writer (.lookup pin.sequence key value) := by
+  cases result with
+  | none => exact .lookupDenied reader handle returned
+  | some _ =>
+    obtain ⟨pin, sameReader, rfl⟩ :=
+      reader.localPinOfSome handle _ (fun pin => writer.installed.table.lookupAt key pin.sequence) rfl returned
+    subst reader
+    exact ⟨pin.pin, writer.installed.table.pins.find_of_mem pin.active, .lookup pin returned⟩
+
+theorem ObservedSnapshotReader.recordRange (reader : ObservedSnapshotReader directory descriptor writer)
+    (handle : SnapshotHandle) (lo hi : UInt64) (result : Option (List (Compaction.Model.Entry (Option UInt64))))
+    (returned : reader.session.runSnapshotRead reader.sameSession (fun table => table.range handle lo hi) =
+      .ok result reader.session) :
+    match result with
+    | none => RecordedSnapshotRead.Observed directory descriptor writer (.rangeDenied lo hi (reader.guard handle))
+    | some entries =>
+      ∃ pin, writer.installed.table.pins.find handle = some pin ∧
+        RecordedSnapshotRead.Observed directory descriptor writer (.range pin.sequence lo hi entries) := by
+  cases result with
+  | none => exact .rangeDenied reader handle returned
+  | some _ =>
+    obtain ⟨pin, sameReader, rfl⟩ :=
+      reader.localPinOfSome handle _ (fun pin => writer.installed.table.rangeAt lo hi pin.sequence) rfl returned
+    subst reader
+    exact ⟨pin.pin, writer.installed.table.pins.find_of_mem pin.active, .range pin returned⟩
 
 private theorem ObservedLocalPin.responsesAfterSuffix
     (observed : ObservedLocalPin directory descriptor before)

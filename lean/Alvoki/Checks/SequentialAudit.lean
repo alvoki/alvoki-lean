@@ -183,6 +183,7 @@ import Alvoki.Storage.Disk.MixedTraceSnapshotReads
 import Alvoki.Storage.Disk.ClientReadTrace
 import Alvoki.Storage.Disk.ClientCachedClose
 import Alvoki.Storage.Disk.ClientWriteTrace
+import Alvoki.Storage.Disk.ClientSnapshotTransitions
 import Alvoki.Storage.Disk.CheckpointClientTrace
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.SegmentedCollectionInventory
@@ -1222,7 +1223,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.readResult
 #check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.lookupDenied_iff
 #check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.rangeDenied_iff
+#check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.recordLookup
+#check_axioms Alvoki.Storage.DiskSession.ObservedSnapshotReader.recordRange
 #check_axioms Alvoki.Storage.DiskSession.RecordedSnapshotRead.Observed.agreesAfterSuffix
+#check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.run_release
+#check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.readyTransition
+#check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.closed
+#check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.poisoned
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.observeSnapshotUpdate
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.writes
 #check_axioms Alvoki.Storage.prepareBatch_singleton
 #check_axioms Alvoki.WAL.encodeBatch_singleton

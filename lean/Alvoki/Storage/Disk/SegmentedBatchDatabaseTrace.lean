@@ -7,6 +7,7 @@ import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
 import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
 import Alvoki.Storage.Disk.SessionReadGuards
+import Alvoki.Storage.Disk.SegmentedWriterMaintenance
 import Alvoki.Storage.Disk.SegmentedBatchAppend
 import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
 import Alvoki.Storage.Disk.BatchAppendReopenAdmission
@@ -113,6 +114,9 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (step : SegmentedDatabaseTrace directory writer before allowCollection submissions descriptor after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.ordinary submissions]) descriptor after
+  | table (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (step : SegmentedTableStep before.installed.table table) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer (before.withTable table)
   | checkpoint
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       {attempt : SegmentedCheckpointReport directory before} (observed : attempt.Valid)
@@ -252,6 +256,8 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     obtain ⟨afterReady, suffix, extended, kept⟩ := step.preservesRetained beforeReady
     exact ⟨afterReady, retained ++ suffix, by rw [extended, beforeHistory, List.append_assoc],
       .append retention kept⟩
+  | table _ step ih =>
+    exact ⟨step.preservesRetained ih.1, ih.2⟩
   | checkpoint _ observed installed ih =>
     obtain ⟨beforeReady, retained, history, retention⟩ := ih
     exact ⟨(installed.preservesRetained observed beforeReady).1, retained, installed.history.trans history, retention⟩
