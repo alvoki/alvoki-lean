@@ -57,6 +57,32 @@ theorem appendThenSync_sameHandle {handle state : Type}
   simp [SyncHandleRouting.runAppendWithCache_effect, SyncHandleRouting.sync, SyncHandleRouting.Cache.resolve,
     Bind.bind, EStateM.bind, keeperNotDirectory, keeperMiss, selected, wrote, flushed]
 
+/-- A valid pending handle can take precedence over the append handle.
+Both handles still name the same inode under the cache binding invariant. -/
+theorem resolveAfterAppend_sameInode {handle state : Type}
+    {cache resolved : SyncHandleRouting.Cache handle} {directory keeper : System.FilePath}
+    {inode : handle → Nat} {bindings : state → System.FilePath → Option Nat}
+    {openRead : System.FilePath → EStateM IO.Error state handle}
+    {appended : state} {file synced : handle}
+    (notDirectory : keeper ≠ directory)
+    (active : cache.active = some (keeper, file))
+    (owned : cache.Agrees directory inode (bindings appended))
+    (selected : cache.resolve directory keeper openRead appended = .ok synced (resolved, appended)) :
+    inode synced = inode file := by
+  have appendBinding := owned.active active
+  cases pending : cache.pending.find? (fun entry => entry.1 == keeper) with
+  | none =>
+    simp [SyncHandleRouting.Cache.resolve, notDirectory, active, pending] at selected
+    exact congrArg inode selected.1.symm
+  | some entry =>
+    obtain ⟨path, captured⟩ := entry
+    have same : path = keeper := by
+      simpa using List.find?_some pending
+    subst path
+    simp [SyncHandleRouting.Cache.resolve, notDirectory, pending] at selected
+    obtain ⟨rfl, _⟩ := selected
+    exact Option.some.inj ((owned.pending pending).symm.trans appendBinding)
+
 /-- If the slot write or marker barrier fails after the WAL barrier, the
 client receives commit-unknown with exactly the reached file state.
 The marker barrier runs only after a successful slot write. Installation
