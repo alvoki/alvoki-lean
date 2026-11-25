@@ -5,6 +5,7 @@ import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.WalTwoSlotReopenProjection
 import Alvoki.Storage.Disk.BatchInterruptionDispatch
 import Alvoki.Storage.Disk.SyncHandleEffects
+import Alvoki.Storage.Disk.AppendHandleCustody
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -35,6 +36,26 @@ theorem prepared_write_reports {α σ : Type}
   cases result : publish append syncWal writeSlot syncSlot install files <;>
   simp only [DiskSession.publishPreparedWrite, DiskSession.publishPrepared, setPhase,
     commitReports, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, result]
+
+/-- With no pending handle for the keeper, the two-slot WAL barrier
+uses the exact description that wrote and flushed the preceding append. -/
+theorem appendThenSync_sameHandle {handle state : Type}
+    (cache : SyncHandleRouting.Cache handle) (before : state)
+    (directory keeper : System.FilePath) (frame : ByteArray)
+    (openAppend openRead : System.FilePath → EStateM IO.Error state handle)
+    (write : handle → ByteArray → EStateM IO.Error state Unit)
+    (flush fsync : handle → EStateM IO.Error state Unit)
+    {file : handle} {opened written appended : state}
+    (keeperNotDirectory : keeper ≠ directory)
+    (keeperMiss : cache.pending.find? (fun entry => entry.1 == keeper) = none)
+    (selected : SyncHandleRouting.selectAppendHandle cache.active openAppend keeper before = .ok file opened)
+    (wrote : write file frame opened = .ok () written)
+    (flushed : flush file written = .ok () appended) :
+    ((SyncHandleRouting.runAppendWithCache keeper frame openAppend write flush >>= fun _ =>
+      SyncHandleRouting.sync directory openRead fsync keeper) (cache, before)) =
+    SyncHandleRouting.withCache { cache with active := some (keeper, file) } (fsync file appended) := by
+  simp [SyncHandleRouting.runAppendWithCache_effect, SyncHandleRouting.sync, SyncHandleRouting.Cache.resolve,
+    Bind.bind, EStateM.bind, keeperNotDirectory, keeperMiss, selected, wrote, flushed]
 
 /-- If the slot write or marker barrier fails after the WAL barrier, the
 client receives commit-unknown with exactly the reached file state.
