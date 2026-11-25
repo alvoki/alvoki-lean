@@ -36,6 +36,48 @@ theorem prepared_write_reports {α σ : Type}
   simp only [DiskSession.publishPreparedWrite, DiskSession.publishPrepared, setPhase,
     commitReports, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, result]
 
+/-- A client acknowledgement supplies successful reports for all four
+file operations in execution order, including the marker barrier. -/
+theorem prepared_write_acknowledged {α σ : Type}
+    (next : α) (sequence : UInt64) (prior : DiskSession.Phase α)
+    (append syncWal writeSlot syncSlot install : EStateM IO.Error σ Unit)
+    {files after : σ}
+    (returned : DiskSession.publishPreparedWrite next sequence setPhase
+      (commitReports (publish append syncWal writeSlot syncSlot install)) (prior, files) =
+        .ok sequence (.ready next, after)) :
+    ∃ appended walSynced written slotSynced,
+      append files = .ok () appended ∧ syncWal appended = .ok () walSynced ∧
+      writeSlot walSynced = .ok () written ∧ syncSlot written = .ok () slotSynced ∧
+      install slotSynced = .ok () after := by
+  rw [prepared_write_reports] at returned
+  have published : publish append syncWal writeSlot syncSlot install files = .ok () after := by
+    cases outcome : publish append syncWal writeSlot syncSlot install files with
+    | error cause reached => simp [outcome] at returned
+    | ok value reached =>
+      cases value
+      simp [outcome] at returned
+      subst reached
+      rfl
+  rw [publish_reports] at published
+  cases appended : append files with
+  | error cause reached => simp [appended] at published
+  | ok value appendedFiles =>
+    cases value
+    cases walSynced : syncWal appendedFiles with
+    | error cause reached => simp [appended, walSynced] at published
+    | ok value walFiles =>
+      cases value
+      cases written : writeSlot walFiles with
+      | error cause reached => simp [appended, walSynced, written] at published
+      | ok value writtenFiles =>
+        cases value
+        cases slotSynced : syncSlot writtenFiles with
+        | error cause reached => simp [appended, walSynced, written, slotSynced] at published
+        | ok value syncedFiles =>
+          cases value
+          exact ⟨appendedFiles, walFiles, writtenFiles, syncedFiles, rfl, walSynced, written,
+            slotSynced, by simpa only [appended, walSynced, written, slotSynced] using published⟩
+
 /-- A process stop during append leaves the state reported by that append.
 No WAL sync or marker mutation is issued by the remaining schedule. -/
 theorem publish_appendInterrupted {stop image : Type}
