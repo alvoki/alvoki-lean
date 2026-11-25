@@ -408,6 +408,44 @@ theorem prepareSelected_reported (directory : Storage.DiskDirectory) (selection 
   prepareBoundedMarkedFromReaders_reported directory readCheckpoint _ readWal checkpointRead
     rfl (Boundary.decode_encode selection.frontier) walRead replayed keeperRead
 
+/-- Successful preparation preserves the state reached by the selected WAL
+read, including the descriptor effects of earlier checkpoint reads. -/
+theorem prepareSelected_stateful {state : Type} (directory : Storage.DiskDirectory)
+    (marker : ByteArray) (frontier : UInt64) (decodes : Boundary.decode marker = .ok frontier)
+    (readCheckpoint : EStateM IO.Error state (Option (Storage.PackedTable × UInt64)))
+    (readWal : Nat → UInt64 → EStateM IO.Error state (Storage.WalSegmentMarkerReads × Nat))
+    {before checked reached : state} {checkpoint : Option (Storage.PackedTable × UInt64)} (checkpointRead : readCheckpoint before = .ok checkpoint checked)
+    {reads : Storage.WalSegmentMarkerReads} {fileSize : Nat}
+    (walRead : readWal (checkpoint.getD (.empty, 0)).1.committed.toNat frontier checked = .ok (reads, fileSize) reached)
+    {payload : ByteArray} {table : Storage.PackedTable} {keeper : Nat} {bytes : ByteArray}
+    (replayed : Storage.recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1
+      frontier reads.files = .ok (payload, table))
+    (keeperRead : reads.files.getLast? = some (keeper, bytes)) :
+    prepareBoundedMarkedFromReaders directory readCheckpoint
+      (fun _ => pure (some marker)) readWal before =
+      .ok (⟨frontier.toNat / frameSize, keeper, reads.newer, bytes⟩,
+        ⟨table, (checkpoint.getD (.empty, 0)).2, frontier, keeper⟩, fileSize) reached := by
+  unfold prepareBoundedMarkedFromReaders
+  change EStateM.bind readCheckpoint _ before = _
+  rw [EStateM.bind, checkpointRead]
+  have markerRead : (pure (some marker) : EStateM IO.Error state (Option ByteArray)) checked =
+      .ok (some marker) checked := rfl
+  have decoded : (liftExcept ((Boundary.decode marker).mapError IO.userError) :
+      EStateM IO.Error state UInt64) checked = .ok frontier checked := by
+    rw [decodes]
+    rfl
+  cases h : checkpoint.getD (.empty, 0) with
+  | mk base generation =>
+    rw [h] at walRead replayed
+    change readWal base.committed.toNat frontier checked = _ at walRead
+    change Storage.recoverMarkedWalSegments base frontier reads.files = _ at replayed
+    have recovered : (liftExcept ((Storage.recoverMarkedWalSegments base frontier reads.files).mapError IO.userError) :
+        EStateM IO.Error state (ByteArray × Storage.PackedTable)) reached = .ok (payload, table) reached := by
+      rw [replayed]
+      rfl
+    simp only [h, Bind.bind, EStateM.bind, markerRead, decoded, walRead, recovered, keeperRead]
+    rfl
+
 /-- Reported cached reads satisfy the replay span check when their
 requested extents all start at or before the marker. -/
 theorem cachedPayloads_checkSpans {directory : Storage.DiskDirectory} {through : Nat}

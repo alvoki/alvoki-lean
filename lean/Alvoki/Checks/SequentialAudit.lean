@@ -2436,6 +2436,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.recoveredRetries_retainUncertainBatch
 #check_axioms Alvoki.WAL.TwoSlot.recoveredRetries_installedReads
 #check_axioms Alvoki.WAL.TwoSlot.prepareSelected_reported
+#check_axioms Alvoki.WAL.TwoSlot.prepareSelected_stateful
 #check_axioms Alvoki.WAL.TwoSlot.prepareSelected_of_retainedReplay
 #check_axioms Alvoki.WAL.TwoSlot.cachedPayloads_checkSpans
 #check_axioms Alvoki.WAL.TwoSlot.cachedPayloads_keeper
