@@ -272,6 +272,21 @@ theorem selectsKeeperSync (seen : NativeReadyWriteStaging prepared)
     Bool.false_eq_true, ↓reduceIte, miss, show seen.groupCache.active = some (prepared.keeperPath, seen.keeperHandle) from rfl,
     beq_self_eq_true]
 
+/-- The stage path consumes its pending entry before issuing the sync.
+The selected handle remains the handle returned by the fresh stage. -/
+theorem selectsStageSync (seen : NativeReadyWriteStaging prepared)
+    (openRead : FilePath → EStateM IO.Error image WriteHandle) (files : image) :
+    seen.groupCache.resolve before.session.directory.path prepared.stagedPath openRead files =
+      .ok seen.stageHandle (seen.appendCache, files) := by
+  have distinct : prepared.stagedPath ≠ before.session.directory.path :=
+    file_ne_directory before.session.directory .stagedWalBoundary
+  have hit : seen.groupCache.pending.find? (fun entry => entry.1 == prepared.stagedPath) =
+      some (prepared.stagedPath, seen.stageHandle) := by
+    simp [Cache.remember, pushPending]
+  have consumed : seen.groupCache.consume prepared.stagedPath = seen.appendCache := by
+    simp [Cache.remember, Cache.consume, pushPending, appendCache, seen.pendingEmpty]
+  simp [Cache.resolve, distinct, hit, consumed]
+
 theorem stageBindings (seen : NativeReadyWriteStaging prepared) :
     seen.stageView.child seen.root prepared.keeperName = some seen.checkedKeeper.child ∧
     seen.stageView.child seen.root "LOCK" = some seen.lockLookup.child ∧
@@ -325,19 +340,12 @@ the handle from the staged write for the marker. -/
 theorem groupReturns (seen : NativeReadyWriteFileSyncs prepared) :
     seen.sync #[prepared.keeperPath, prepared.stagedPath] (seen.groupCache, prepared.staged) =
       .ok () (seen.appendCache, prepared.bothSynced) := by
-  have hit : seen.groupCache.pending.find? (fun entry => entry.1 == prepared.stagedPath) =
-      some (prepared.stagedPath, seen.stageHandle) := by
-    simp [Cache.remember, pushPending]
-  have consumed : seen.groupCache.consume prepared.stagedPath = seen.appendCache := by
-    simp [Cache.remember, Cache.consume, pushPending, appendCache, seen.pendingEmpty]
   rw [NativeReadyWriteFileSyncs.sync, SyncPathGroup.run_pair]
   have keeper : SyncHandleRouting.sync before.session.directory.path seen.openRead seen.fsync prepared.keeperPath (seen.groupCache, prepared.staged) =
       .ok () (seen.groupCache, prepared.keeperSynced) := by
     simp only [SyncHandleRouting.sync, seen.selectsKeeperSync, seen.syncedKeeper, withCache]
   rw [keeper]
-  have distinct : prepared.stagedPath ≠ before.session.directory.path :=
-    file_ne_directory before.session.directory .stagedWalBoundary
-  simp [SyncHandleRouting.sync, Cache.resolve, distinct, hit, consumed, seen.syncedMarker, withCache]
+  simp only [SyncHandleRouting.sync, seen.selectsStageSync, seen.syncedMarker, withCache]
 
 end NativeReadyWriteFileSyncs
 

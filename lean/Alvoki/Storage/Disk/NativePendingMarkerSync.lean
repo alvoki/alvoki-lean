@@ -166,43 +166,61 @@ theorem selectsPrior (stop : NativeWriteKeeperSyncStop prepared) (valid : before
     · obtain ⟨tail, _, rfl⟩ := List.mem_map.mp survived
       exact ⟨_, rfl, readPrefix tail⟩
 
-/-- Both cache entries refer to their actual live slots when the first
-fsync stops. The pending entry is still present. -/
-structure Custody (stop : NativeWriteKeeperSyncStop prepared) : Prop where
-  inodeMap : stop.reached.1.inode = before.census.inode
-  keeperLive : stop.staging.keeperSlot ∈ stop.reached.1.slots
-  stagedLive : stop.staging.markerSlot ∈ stop.reached.1.slots
-  ownerLive : before.owner ∈ stop.reached.1.slots
-  directoryLive : before.directorySlot ∈ stop.reached.1.slots
-  keeperNamed : (stop.staging.stageView.child stop.staging.root prepared.keeperName).map stop.staging.stageView.modelObject =
-    some (stop.reached.1.inode stop.staging.keeperSlot.description)
-  stagedNamed : (stop.staging.stageView.child stop.staging.root "WAL.commit.next").map stop.staging.stageView.modelObject =
-    some (stop.reached.1.inode stop.staging.markerSlot.description)
-  priorMarkerNamed : stop.staging.stageView.child stop.staging.root "WAL.commit" = some stop.oldMarker.child
-  lockNamed : (stop.staging.stageView.child stop.staging.root "LOCK").map stop.staging.stageView.modelObject =
-    some (stop.reached.1.inode before.owner.description)
-  directoryNamed : stop.staging.stageView.modelObject stop.staging.root = stop.reached.1.inode before.directorySlot.description
-  keeperHandle : stop.staging.keeperHandle.1.inode stop.staging.keeperSlot.description =
-    stop.reached.1.inode stop.staging.keeperSlot.description
-  directoryHandle : stop.staging.directoryCapture.inode before.directorySlot.description =
-    stop.reached.1.inode before.directorySlot.description
-  separate : stop.reached.1.inode stop.staging.markerSlot.description ≠ stop.reached.1.inode stop.staging.keeperSlot.description
+end NativeWriteKeeperSyncStop
 
-theorem custody (stop : NativeWriteKeeperSyncStop prepared) (valid : before.Valid) : stop.Custody := by
-  let seen := stop.staging
+namespace NativeReadyWriteStaging
+
+variable {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
+
+/-- The original held directory and keeper remain live alongside the
+staged marker from its observed open until that temporary slot closes. -/
+structure Custody (seen : NativeReadyWriteStaging prepared)
+    (oldMarker : RunChildLookup seen.root "WAL.commit" seen.view) : Prop where
+  inodeMap : seen.afterMarkerOpen.inode = before.census.inode
+  keeperLive : seen.keeperSlot ∈ seen.afterMarkerOpen.slots
+  stagedLive : seen.markerSlot ∈ seen.afterMarkerOpen.slots
+  ownerLive : before.owner ∈ seen.afterMarkerOpen.slots
+  directoryLive : before.directorySlot ∈ seen.afterMarkerOpen.slots
+  keeperNamed : (seen.stageView.child seen.root prepared.keeperName).map seen.stageView.modelObject =
+    some (seen.afterMarkerOpen.inode seen.keeperSlot.description)
+  stagedNamed : (seen.stageView.child seen.root "WAL.commit.next").map seen.stageView.modelObject =
+    some (seen.afterMarkerOpen.inode seen.markerSlot.description)
+  priorMarkerNamed : seen.stageView.child seen.root "WAL.commit" = some oldMarker.child
+  lockNamed : (seen.stageView.child seen.root "LOCK").map seen.stageView.modelObject =
+    some (seen.afterMarkerOpen.inode before.owner.description)
+  directoryNamed : seen.stageView.modelObject seen.root = seen.afterMarkerOpen.inode before.directorySlot.description
+  keeperHandle : seen.keeperHandle.1.inode seen.keeperSlot.description =
+    seen.afterMarkerOpen.inode seen.keeperSlot.description
+  directoryHandle : seen.directoryCapture.inode before.directorySlot.description =
+    seen.afterMarkerOpen.inode before.directorySlot.description
+  separate : seen.afterMarkerOpen.inode seen.markerSlot.description ≠ seen.afterMarkerOpen.inode seen.keeperSlot.description
+
+theorem custody (seen : NativeReadyWriteStaging prepared) (valid : before.Valid)
+    (oldMarker : RunChildLookup seen.root "WAL.commit" seen.view) : seen.Custody oldMarker := by
   obtain ⟨previous, inode, keeperLive, captured, checked⟩ := seen.selectsKeeper.custody
   obtain ⟨keeper, lock, staged⟩ := seen.stageBindings
-  have oldMarker : seen.view.child seen.root "WAL.commit" = some stop.oldMarker.child := by
-    simpa only [stop.oldMarker.atRoot, stop.oldMarker.atName] using stop.oldMarker.binds
+  have markerLookup : seen.view.child seen.root "WAL.commit" = some oldMarker.child := by
+    simpa only [oldMarker.atRoot, oldMarker.atName] using oldMarker.binds
   exact ⟨inode, List.mem_cons_of_mem _ keeperLive, List.mem_cons_self,
     List.mem_cons_of_mem _ (previous _ valid.ownerLive), List.mem_cons_of_mem _ (previous _ valid.directoryLive),
     by rw [keeper, Option.map_some, seen.stageObjects]; exact congrArg some checked,
     by rw [staged, Option.map_some, seen.stageIdentity]; exact congrArg some (congrFun inode _).symm,
-    (seen.stageNames _ (by decide)).trans oldMarker,
+    (seen.stageNames _ (by decide)).trans markerLookup,
     by rw [lock, Option.map_some, seen.stageObjects]; exact congrArg some (seen.lockIdentity.trans (congrFun inode _).symm),
     by rw [seen.stageObjects]; exact seen.directoryIdentity.trans (congrFun inode _).symm,
     captured, seen.sameDirectoryInode.trans (congrFun inode _).symm,
     fun same => seen.differentFiles ((congrFun inode _).symm.trans (same.trans (congrFun inode _)))⟩
+
+end NativeReadyWriteStaging
+
+namespace NativeWriteKeeperSyncStop
+
+variable {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
+
+abbrev Custody (stop : NativeWriteKeeperSyncStop prepared) : Prop := stop.staging.Custody stop.oldMarker
+
+theorem custody (stop : NativeWriteKeeperSyncStop prepared) (valid : before.Valid) : stop.Custody :=
+  stop.staging.custody valid stop.oldMarker
 
 end NativeWriteKeeperSyncStop
 /-- The issued write keeps its held lock and exact cache. Its one
