@@ -250,6 +250,7 @@ import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkPowerLoss
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkReopen
+import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeReadyClose
 import Alvoki.Storage.Disk.NativeCloseAlignedReopen
@@ -1608,6 +1609,18 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkCrash.survivingSeal
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkCrash.survivingKeeper
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversInterruptedCoveredWalUnlink
+#check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.dispatchWithCache
+#check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.keepsOtherChild
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionInventoryReport.preservesCensus
+#check_axioms Alvoki.Storage.DiskSession.lock_ne_renderWalSegmentName
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.preparesCoveredWalRetry
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.failedCoveredCall
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.sameCensus
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.rejectsReads
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.retainsCustody
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.selects
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.returnsCoveredWalUnlinkError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPlan.plans
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPass.barrierCensus

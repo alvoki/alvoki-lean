@@ -22,7 +22,7 @@ structure CoveredWalRetrySelection (before : SegmentedWriterState) (wal : WalSeg
   accepted : before.published.AcceptsVersioned before.history.length.toUInt64 (CheckpointRepresentsPrefix before.history)
     wal.directory.active.manifest
 
-private theorem preparesCoveredWalRetry
+theorem SegmentedWriterState.RetainedReady.preparesCoveredWalRetry
     {directory : DiskDirectory} {descriptor : Nat} {before : SegmentedWriterState} {wal : WalSegmentImage}
     (ready : before.RetainedReady directory descriptor) (retry : WalSegmentCollectionRetry before.wal wal) :
     Nonempty (CoveredWalRetrySelection before wal) := by
@@ -104,7 +104,8 @@ theorem NativeReadyReadPrefix.collectionBarrierFailed
   obtain ⟨owner, lock, lockObject⟩ := reported.retainsLock
   exact ⟨stopped, effect, reported.reachesBarrier, reported.censusPreserved, ready.held, directory, owner,
     directory ▸ reported.barrier.directoryLive, owner ▸ reported.barrier.writerLive, lock, lockObject,
-    reported.unlinked.completedNamesAbsent rfl rfl, preparesCoveredWalRetry ready visible, fun sealed survives => preparesCoveredWalRetry ready (survive sealed survives),
+    reported.unlinked.completedNamesAbsent rfl rfl, ready.preparesCoveredWalRetry visible,
+    fun sealed survives => ready.preparesCoveredWalRetry (survive sealed survives),
     sameHistory, replay⟩
 
 end Alvoki.Storage.DiskSession

@@ -114,16 +114,8 @@ private theorem keepsCensus (stop : NativeCoveredWalUnlinkStop state) (drops : L
     (keeps : ∀ slot ∈ state.census.slots,
       ∀ drop ∈ stop.inventory.lifetime.drops ++ drops, drop.removes slot.reference = false) :
     stop.inventory.listing.afterClose.afterDrops drops = state.census := by
-  rw [stop.inventory.listing.afterClose_eq, DescriptorInventory.afterDrops_append]
-  refine (congrArg (fun inventory => inventory.afterDrops (stop.inventory.lifetime.drops ++ drops)) stop.startsAt).trans ?_
-  cases reached : state.census with
-  | mk slots distinct inode =>
-    simp only [DescriptorInventory.afterDrops, DescriptorInventory.mk.injEq, and_true]
-    apply List.filter_eq_self.mpr
-    intro slot member
-    apply List.all_eq_true.mpr
-    intro event seen
-    simp [keeps slot (reached ▸ member) event seen]
+  exact (stop.inventory.preservesCensus drops
+    (fun slot live drop occurred => keeps slot (stop.startsAt ▸ live) drop occurred)).trans stop.startsAt
 
 theorem sameCensus (stop : NativeCoveredWalUnlinkStop state) :
     stop.inventory.listing.afterClose = state.census ∧ stop.census = state.census := by
@@ -137,15 +129,8 @@ theorem retainsCustody (stop : NativeCoveredWalUnlinkStop state) (valid : state.
     stop.afterView.modelObject stop.inventory.lifetime.root = stop.census.inode state.directorySlot.description ∧
     stop.afterView.child stop.inventory.lifetime.root "LOCK" = some stop.inventory.lifetime.lock ∧
     stop.afterView.modelObject stop.inventory.lifetime.lock = stop.census.inode state.owner.description := by
-  have notLock : "LOCK" ≠ renderWalSegmentName stop.first := by
-    intro same
-    have lengths := congrArg String.length same
-    simp only [renderWalSegmentName, String.length_append] at lengths
-    have lockLength : "LOCK".length = 4 := by decide
-    have walPrefixLength : "WAL-segment-".length = 12 := by decide
-    omega
   refine ⟨stop.sameCensus.2.symm ▸ valid.ownerLive, stop.sameCensus.2.symm ▸ valid.directoryLive, ?_,
-    (stop.effect.frame _ notLock).trans stop.inventory.lifetime.lockEntry, ?_⟩
+    (stop.effect.frame _ (lock_ne_renderWalSegmentName stop.first)).trans stop.inventory.lifetime.lockEntry, ?_⟩
   · rw [stop.objects, stop.sameCensus.2, ← stop.sameDirectory, ← stop.startsAt]
     exact stop.inventory.lifetime.identifiesDirectory
   · rw [stop.objects, stop.sameCensus.2, ← stop.sameOwner, ← stop.startsAt]

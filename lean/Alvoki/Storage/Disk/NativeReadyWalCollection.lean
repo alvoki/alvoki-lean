@@ -12,29 +12,41 @@ private def removeWithCache
     (path : FilePath) : EStateM IO.Error CollectionFiles (Except IO.Error Unit) :=
   fun (cache, files) => withCache cache (remove path files)
 
-/-- The reported ordered unlink prefix uses no synchronization handle.
-Thread the writer's original cache to the same reached directory barrier. -/
-private theorem WalUnlinkPrefix.carriesCache
+/-- Unlinks retain the sync cache; the supplied directory callback is the
+only part of the collector that uses it. -/
+def WalCollectionReads.collectWithCache (calls : WalCollectionReads) (directory : DiskDirectory)
+    (remove : FilePath → EStateM IO.Error WalSealedUnlinkImage (Except IO.Error Unit))
+    (sync : FilePath → EStateM IO.Error CollectionFiles Unit) :
+    EStateM IO.Error (Phase Installed × LockedFileState CollectionFiles) Unit :=
+  calls.collectWithEffects directory (removeWithCache remove) sync
+
+/-- The reported unlink prefix uses no synchronization handle. Keep the
+original cache on an ordinary error or when resuming the pending suffix. -/
+theorem WalUnlinkPrefix.dispatchWithCache
     {directory : DiskDirectory} {root : DeviceInode}
     {remove : FilePath → EStateM IO.Error WalSealedUnlinkImage (Except IO.Error Unit)}
     {offsets pending removed : List Nat} {failure : Option IO.Error}
     {view afterView : DirectoryReadNamespace} {before after : WalSealedUnlinkImage}
     (unlinked : WalUnlinkPrefix directory root remove offsets view before pending failure afterView after removed)
-    (success : failure = none) (sync : FilePath → EStateM IO.Error CollectionFiles Unit)
+    (sync : FilePath → EStateM IO.Error CollectionFiles Unit)
     (installed : Installed) (cache : CensusDirectoryCache) (owners : LockOwners) :
     WalCollectionReads.continueWithEffects directory (removeWithCache remove) sync installed offsets
       (.poisoned, ⟨(cache, before), owners⟩) =
-    WalCollectionReads.continueWithEffects directory (removeWithCache remove) sync installed pending
-      (.poisoned, ⟨(cache, after), owners⟩) := by
+    match failure with
+    | some cause => .error cause (.poisoned, ⟨(cache, after), owners⟩)
+    | none => WalCollectionReads.continueWithEffects directory (removeWithCache remove) sync installed pending
+        (.poisoned, ⟨(cache, after), owners⟩) := by
   induction unlinked with
   | pause => rfl
   | next call _ accepted _ ih =>
     have issued := congrArg (withCache cache) call
     rw [WalCollectionReads.continueWithEffects_unlink _ _ _ _ _ (by exact issued), accepted]
-    exact ih success
-  | failed | failedWithoutEffect => contradiction
+    exact ih
+  | failed call _ returned | failedWithoutEffect call returned =>
+    have issued := congrArg (withCache cache) call
+    rw [WalCollectionReads.continueWithEffects_unlink _ _ _ _ _ (by exact issued), returned]
 
-private theorem WalUnlinkPrefix.keepsOtherChild
+theorem WalUnlinkPrefix.keepsOtherChild
     {directory : DiskDirectory} {root : DeviceInode} {remove}
     {offsets pending removed : List Nat} {failure : Option IO.Error}
     {view afterView : DirectoryReadNamespace} {before after : WalSealedUnlinkImage}
@@ -47,6 +59,31 @@ private theorem WalUnlinkPrefix.keepsOtherChild
     exact (ih (fun offset member => different offset (List.mem_cons_of_mem _ member))).trans
       (effect.frame name (different _ List.mem_cons_self))
   | failed _ effect _ => exact effect.frame name (different _ List.mem_cons_self)
+
+theorem lock_ne_renderWalSegmentName (first : Nat) : "LOCK" ≠ renderWalSegmentName first := by
+  intro same
+  have lengths := congrArg String.length same
+  simp only [renderWalSegmentName, String.length_append] at lengths
+  have lockLength : "LOCK".length = 4 := by decide
+  have walPrefixLength : "WAL-segment-".length = 12 := by decide
+  omega
+
+theorem WalCollectionInventoryReport.preservesCensus {calls directory descriptor wal}
+    (reported : WalCollectionInventoryReport calls directory descriptor wal) (drops : List LockReferenceDrop)
+    (keeps : ∀ slot ∈ reported.descriptors.slots,
+      ∀ drop ∈ reported.lifetime.drops ++ drops, drop.removes slot.reference = false) :
+    reported.listing.afterClose.afterDrops drops = reported.descriptors := by
+  let observedDrops := reported.lifetime.drops ++ drops
+  rw [reported.listing.afterClose_eq, DescriptorInventory.afterDrops_append]
+  change reported.descriptors.afterDrops observedDrops = reported.descriptors
+  cases reached : reported.descriptors with
+  | mk slots distinct inode =>
+    simp only [DescriptorInventory.afterDrops, DescriptorInventory.mk.injEq, and_true]
+    apply List.filter_eq_self.mpr
+    intro slot member
+    apply List.all_eq_true.mpr
+    intro event seen
+    simp [keeps slot (reached ▸ member) event seen]
 
 /-- A covered-WAL collection that reaches the final barrier from this exact ready state.
 Temporary planner reads and directory enumeration can open descriptors,
@@ -88,26 +125,15 @@ def census (reported : NativeReadyWalCollection state) : DescriptorInventory :=
   reported.barrier.reached.afterDrops reported.afterBarrier
 
 theorem censusPreserved (reported : NativeReadyWalCollection state) : reported.census = state.census := by
-  let drops := reported.inventory.lifetime.drops ++ reported.barrier.drops ++ reported.afterBarrier
-  have previous : reported.census = reported.inventory.descriptors.afterDrops drops := by
-    simp only [census, reported.reachesBarrier, reported.inventory.listing.afterClose_eq,
-      DescriptorInventory.afterDrops_append, drops]
-  refine previous.trans ((congrArg (fun census => census.afterDrops drops) reported.startsAt).trans ?_)
-  cases reached : state.census with
-  | mk slots distinct inode =>
-    simp only [DescriptorInventory.afterDrops, DescriptorInventory.mk.injEq, and_true]
-    apply List.filter_eq_self.mpr
-    intro slot member
-    apply List.all_eq_true.mpr
-    intro event seen
-    have present : slot ∈ state.census.slots := by simpa only [reached] using member
-    simp [reported.keepsSlots slot present event seen]
+  simp only [census, reported.reachesBarrier, DescriptorInventory.afterDrops_append]
+  exact (reported.inventory.preservesCensus _ (fun slot member event seen =>
+    reported.keepsSlots slot (reported.startsAt ▸ member) event (by simpa only [List.append_assoc] using seen))).trans reported.startsAt
 
 /-- Run the original planner and shared publication schedule at the
 reached phase, using the original cache for the final grouped sync. -/
 def run (reported : NativeReadyWalCollection state) :
     EStateM.Result IO.Error (Phase Installed × LockedFileState CollectionFiles) Unit :=
-  reported.calls.collectWithEffects state.session.directory (removeWithCache reported.remove)
+  reported.calls.collectWithCache state.session.directory reported.remove
     reported.barrier.group (state.session.phase, ⟨(state.cache, .start state.writer.wal), state.files.owners⟩)
 
 /-- After a successful barrier, the same ready session continues with
@@ -128,8 +154,8 @@ theorem returned (reported : NativeReadyWalCollection state) (valid : state.Vali
   have plan := valid.retained.completeObservedWalPlan reported.calls reported.inventory reported.manifest reported.marker
   have group := reported.barrier.groupReturns
   rw [reported.originalCache] at group
-  rw [run, valid.phase, WalCollectionReads.collectWithEffects_plan _ _ _ _ _ _ plan,
-    reported.unlinked.carriesCache rfl _ _ _ _, WalCollectionReads.continueWithEffects_barrier, group]
+  rw [run, WalCollectionReads.collectWithCache, valid.phase, WalCollectionReads.collectWithEffects_plan _ _ _ _ _ _ plan,
+    reported.unlinked.dispatchWithCache _ _ _ _, WalCollectionReads.continueWithEffects_barrier, group]
   cases reported.barrier.outcome <;> rfl
 
 theorem runs (reported : NativeReadyWalCollection state) (valid : state.Valid)
@@ -167,17 +193,10 @@ theorem retainsLock (reported : NativeReadyWalCollection state) :
     reported.reachedView.child reported.inventory.lifetime.root "LOCK" = some reported.inventory.lifetime.lock ∧
     reported.reachedView.modelObject reported.inventory.lifetime.lock =
       reported.barrier.reached.inode state.owner.description := by
-  have directoryLock : ∀ offset ∈ state.writer.wal.collectionOffsets, "LOCK" ≠ renderWalSegmentName offset := by
-    intro offset _ same
-    have lengths := congrArg String.length same
-    simp only [renderWalSegmentName, String.length_append] at lengths
-    have lockLength : "LOCK".length = 4 := by decide
-    have walPrefixLength : "WAL-segment-".length = 12 := by decide
-    omega
   let owner := reported.inventory.owner
   have object := reported.inventory.lifetime.identifiesLock.trans
     (congrArg (fun census => census.inode owner.description) reported.startsAt)
-  refine ⟨reported.sameWriter, (reported.unlinked.keepsOtherChild directoryLock).trans
+  refine ⟨reported.sameWriter, (reported.unlinked.keepsOtherChild (fun offset _ => lock_ne_renderWalSegmentName offset)).trans
     reported.inventory.lifetime.lockEntry, ?_⟩
   calc
     reported.reachedView.modelObject reported.inventory.lifetime.lock =
