@@ -13,9 +13,9 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {in
   {seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock}
   {fileCalls : MarkedTemporaryReadCalls heap}
 
-/-- After the marked route is chosen, the physical MANIFEST header
-returns one positive short chunk and the following request fails. -/
-structure RawManifestHeaderChunkError
+/-- The marked route observes a present regular manifest before it
+attempts to open that child for the bounded reader. -/
+structure RawPresentManifestReadStat
     (seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock)
     (fileCalls : MarkedTemporaryReadCalls heap) where
   flat : optionalMetadataWith (calls.lookup (directory.file .wal)) seed.afterPending = .ok none seed.afterPending
@@ -30,6 +30,44 @@ structure RawManifestHeaderChunkError
   stat : observations.stat (directory.file .manifest) = .ok (metadata, admission.view.modelObject child.child)
   statRaw : calls.lookup (directory.file .manifest) seed.afterPending =
     .ok ((observations.stat (directory.file .manifest)).map Prod.fst) seed.afterPending
+namespace RawPresentManifestReadStat
+
+variable (seen : RawPresentManifestReadStat (admitted := admitted) seed fileCalls)
+
+theorem readEffects :
+    fileCalls.readOptional directory (directory.file .manifest) seed.afterPending =
+      ((fileCalls.readWith (directory.file .manifest) fun file =>
+        readIntegrityManifestPrefixWith (fileCalls.readChunk file) seen.metadata.byteSize.toNat) >>= fun bytes => pure (some bytes))
+        seed.afterPending := by
+  have stat : fileCalls.stat (directory.file .manifest) seed.afterPending = .ok (.ok seen.metadata) seed.afterPending := by
+    simpa only [seen.sameLookup, seen.stat, Except.map] using seen.statRaw
+  exact fileCalls.readOptionalManifest_effects directory stat seen.regular
+
+/-- The marked worker passes a checkpoint read error through before
+the marker payload, listing or repairs. -/
+theorem stopsMarkedWorker (report : RawPresentManifestReadStat (admitted := admitted) seed fileCalls)
+    {cause : IO.Error} {reached : heap}
+    (rejected : readIntegrityCheckpointSized directory (fileCalls.readOptional directory (directory.file .manifest))
+      fileCalls.runSize fileCalls.runPrefix seed.afterPending = .error cause reached)
+    (directoryCalls : MarkedDirectoryReadCalls heap stream) (callbacks : AlignedKeeperCacheCallbacks heap)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit) (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (cache : DiskTable.OpenSyncFiles) :
+    calls.recoverMarkedWithCacheRefs fileCalls directoryCalls callbacks seed.directoryRef seed.activeRef seed.pendingRef
+      remove write rename bootstrap directory cache seed.afterPending = .error cause reached := by
+  simp only [RawOpenAdmissionCallbacks.recoverMarkedWithCacheRefs, recoverSegmentedWalWith, rejectFlatWalWith,
+    reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, report.flat, report.marked,
+    Option.isSome_none, Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure, rejected]
+
+end RawPresentManifestReadStat
+
+/-- The physical manifest header returns a positive short chunk and
+the following request fails. -/
+structure RawManifestHeaderChunkError
+    (seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock)
+    (fileCalls : MarkedTemporaryReadCalls heap)
+    extends RawPresentManifestReadStat (admitted := admitted) seed fileCalls where
   read : RawTemporaryChunkReadFailure seed fileCalls (directory.file .manifest) child (min 48 metadata.byteSize.toNat)
     seed.afterPending
   bound : retry.image.directory.active.manifest = some read.bytes
@@ -53,8 +91,6 @@ structure Released : Prop where
 
 theorem releasesSelected : seen.Released := by
   let raw := seen.read
-  have stat : fileCalls.stat (directory.file .manifest) seed.afterPending = .ok (.ok seen.metadata) seed.afterPending := by
-    simpa only [seen.sameLookup, seen.stat, Except.map] using seen.statRaw
   have header := readExactPrefixWith_shortThenError (IO.userError "integrity manifest extent changed while reading")
     (fileCalls.readChunk raw.handle) raw.positive raw.short raw.first raw.second
   have failed := readIntegrityManifestPrefixWith_headerError (fileCalls.readChunk raw.handle) seen.metadata.byteSize.toNat header
@@ -62,7 +98,7 @@ theorem releasesSelected : seen.Released := by
     (fun file => readIntegrityManifestPrefixWith (fileCalls.readChunk file) seen.metadata.byteSize.toNat) raw.openRaw failed
   rw [raw.release] at scopedError
   refine ⟨?_, raw.releases, ⟨seen.bound, seen.contents, seen.extent⟩, raw.firstBytes⟩
-  rw [fileCalls.readOptionalManifest_effects directory stat seen.regular]
+  rw [seen.toRawPresentManifestReadStat.readEffects]
   simp only [Bind.bind, EStateM.bind, scopedError]
   rfl
 
@@ -80,10 +116,8 @@ theorem stopsMarkedWorker
     (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
     (cache : DiskTable.OpenSyncFiles) :
     calls.recoverMarkedWithCacheRefs fileCalls directoryCalls callbacks seed.directoryRef seed.activeRef seed.pendingRef
-      remove write rename bootstrap directory cache seed.afterPending = .error seen.read.cause seen.read.reached := by
-  simp only [RawOpenAdmissionCallbacks.recoverMarkedWithCacheRefs, recoverSegmentedWalWith, rejectFlatWalWith,
-    reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, seen.flat, seen.marked,
-    Option.isSome_none, Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure, seen.rejectsCheckpoint]
+      remove write rename bootstrap directory cache seed.afterPending = .error seen.read.cause seen.read.reached :=
+  seen.toRawPresentManifestReadStat.stopsMarkedWorker seen.rejectsCheckpoint directoryCalls callbacks remove write rename bootstrap cache
 
 end RawManifestHeaderChunkError
 
