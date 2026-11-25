@@ -628,6 +628,27 @@ theorem canonicalLayout_settleMarker {image : FileImage} {history : List Write}
   rw [sameTarget]
   exact settledPlan
 
+/-- A marker barrier followed by repair and further retries preserves the
+selected chain while deriving a repair plan from the newly visible files. -/
+theorem canonicalLayout_afterMarkerRetries {image first after : FileImage} {history : List Write}
+    (layout : Storage.DiskSession.CanonicalKeeperLayout image history)
+    (selected : Selection)
+    (bound : image.directory.active.walBoundary = some (Boundary.encode selected.frontier))
+    (prepared : Prepared image layout.target layout.plan)
+    (repair : EffectTrace layout.target
+      { image with directory := settleMarker image.directory selected } first)
+    (retries : SettledRetries layout.target first after) :
+    ∃ retry : Storage.DiskSession.CanonicalKeeperLayout after history,
+      retry.target = layout.target ∧ retry.first = layout.first ∧
+      retry.sealed = layout.sealed ∧ retry.keeper = layout.keeper ∧ after.kept = image.kept ∧
+      Prepared after layout.target retry.plan := by
+  obtain ⟨authorized, target, _, seals, keeper, start, settled⟩ :=
+    canonicalLayout_settleMarker layout selected bound prepared
+  obtain ⟨retry, nextTarget, _, nextStart, nextSeals, nextKeeper, kept, ready⟩ :=
+    SettledRetries.canonicalLayout authorized (target.symm ▸ retries) (target.symm ▸ repair) settled
+  exact ⟨retry, nextTarget.trans target, nextStart.trans start, nextSeals.trans seals,
+    nextKeeper.trans keeper, kept, target ▸ ready⟩
+
 /-- A successful two-slot reopen uses the shared keeper repair proof
 before it installs the table and allocates a fresh snapshot identity. -/
 theorem reopenWith_installsAfterRepair

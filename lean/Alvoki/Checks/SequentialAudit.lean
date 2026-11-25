@@ -2429,6 +2429,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.reopenWith_installsAfterRepair
 #check_axioms Alvoki.WAL.TwoSlot.prepared_settleMarker
 #check_axioms Alvoki.WAL.TwoSlot.canonicalLayout_settleMarker
+#check_axioms Alvoki.WAL.TwoSlot.canonicalLayout_afterMarkerRetries
 #check_axioms Alvoki.WAL.TwoSlot.installedSnapshot_reads
 #check_axioms Alvoki.Storage.TwoSlotDiskTable.open_admission
 #check_axioms Alvoki.Storage.TwoSlotDiskTable.openMarker_fileEffects
