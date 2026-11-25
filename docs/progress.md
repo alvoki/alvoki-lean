@@ -477,4 +477,6 @@ From the exact recovered session, a supported acquisition followed by a native-s
 its response to that same client trace. The read uses the issued pin and agrees with the replay of the earlier responses.
 [Read observations](../lean/Alvoki/Storage/Disk/ClientReadTrace.lean) · [Snapshot transitions](../lean/Alvoki/Storage/Disk/ClientSnapshotTransitions.lean)
 
+A checkpoint interrupted during a run's write, flush or own file sync now has a physical safety proof. The shared callbacks derive the exact returned prefix and identify the issued operation at the cut. A partial or synced orphan can survive, while the prior manifest still selects the same inode bindings and byte payloads from each reported crash map. The proof requires local effect and survivor observations at the cut. It applies before any later reopen. [Interrupted run operation](../lean/Alvoki/Storage/Disk/Checkpoint/Run/Interruption.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

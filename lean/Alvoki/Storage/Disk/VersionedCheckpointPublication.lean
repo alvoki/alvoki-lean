@@ -71,6 +71,23 @@ theorem Image.executeVersioned_exists (initial : Image) (next : VersionedRunSet)
     (Publication.successful_replace written.manifest next.manifest.encode) (cut - (runBarrier next.files.length).length)
   exact ⟨{ written with manifest }, by simp [Image.executeVersioned, runPrefix, Publication.Image.execute, manifestPrefix]⟩
 
+/-- A cut during the private run pairs cannot publish the new generation.
+The physical namespace can still contain unselected fresh run names. -/
+theorem Image.executeVersioned_beforeRunDirectory (initial : Image) (next : VersionedRunSet) {cut : Nat}
+    (within : cut ≤ (runSteps next.files.length).length) :
+    initial.executeVersioned next cut = some initial := by
+  obtain ⟨_, ran, _⟩ := checkpoint_runs_complete initial next.runSet
+  obtain ⟨prior, prefixRan⟩ := Image.execute_take_exists ran cut
+  change initial.execute next.runSet ((runBarrier next.files.length).take cut) = some prior at prefixRan
+  have onlyRuns : (runBarrier next.files.length).take cut = (runSteps next.files.length).take cut := by
+    simp [runBarrier, List.take_append_of_le_length within]
+  have same := Image.execute_run_cut_unchanged (onlyRuns ▸ prefixRan)
+  subst prior
+  have empty : cut - (runBarrier next.files.length).length = 0 := by
+    simp [runBarrier]
+    omega
+  simp [Image.executeVersioned, prefixRan, empty, Publication.Image.execute]
+
 /-- An interruption at the first directory barrier may settle the new
 run names. Neither outcome reaches any manifest step. Before the effect,
 the publication model still omits the new generation's orphan files. -/
@@ -87,18 +104,8 @@ theorem Image.executeVersioned_atRunDirectory (initial : Image) (next : Versione
     simp [runBarrier]
   cases effective with
   | false =>
-    obtain ⟨prior, prefixRan⟩ := Image.execute_take_exists ran (runSteps next.files.length).length
-    change initial.execute next.runSet ((runBarrier next.files.length).take (runSteps next.files.length).length) =
-      some prior at prefixRan
-    have onlyRuns : (runBarrier next.files.length).take (runSteps next.files.length).length =
-        (runSteps next.files.length).take (runSteps next.files.length).length := by
-      simp [runBarrier]
-    rw [onlyRuns] at prefixRan
-    have same := Image.execute_run_cut_unchanged prefixRan
-    subst prior
-    rw [List.take_length] at prefixRan
     have computed : initial.executeVersioned next ((runSteps next.files.length).length + 0) = some initial := by
-      simp [Image.executeVersioned, barrierLength, onlyRuns, prefixRan, Publication.Image.execute]
+      exact initial.executeVersioned_beforeRunDirectory next (Nat.le_refl _)
     exact ⟨initial, computed, rfl, fun _ => rfl, by simp, fun _ _ _ => rfl⟩
   | true =>
     have computed : initial.executeVersioned next ((runSteps next.files.length).length + 1) = some written := by

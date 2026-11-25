@@ -63,7 +63,7 @@ theorem RunWriteReports.captures {handle state : Type} {path : FilePath} {bytes 
       privateFile, fileKind, reports.opened, reports.written, reports.returned,
       Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
 
-private theorem runPath_ne_directory (directory : DiskDirectory) (generation : UInt64) (index : Nat) :
+theorem runPath_ne_directory (directory : DiskDirectory) (generation : UInt64) (index : Nat) :
     directory.file (.run generation index) ≠ directory.path := by
   intro same
   have length := congrArg (fun path : FilePath => path.toString.length) same

@@ -32,9 +32,9 @@ theorem RunWriteInodeFrame.keepsStableOnSyncError {directory : DiskDirectory} {b
     · rw [synced]
       exact (effect.crashBytes oldInode distinct).trans stable.crashBytes
 
-/-- The exact earlier run pairs precede the selected pair. -/
-theorem steps_atRunPair {count index : Nat} (within : index < count) :
-    ∃ later, steps count = runSteps index ++ [.writeRun index, .syncRun index] ++ later := by
+/-- Split the run steps at the selected adjacent write and file sync. -/
+theorem runSteps_atRunPair {count index : Nat} (within : index < count) :
+    ∃ later, runSteps count = runSteps index ++ [.writeRun index, .syncRun index] ++ later := by
   let tail := count - (index + 1)
   have length : index + 1 + tail = count := by dsimp [tail]; omega
   have split : List.range count = List.range (index + 1) ++ List.range' (index + 1) tail := by
@@ -42,9 +42,15 @@ theorem steps_atRunPair {count index : Nat} (within : index < count) :
     simpa only [List.range_eq_range', Nat.one_mul, Nat.zero_add, length] using range.symm
   have order : List.range count = List.range index ++ [index] ++ List.range' (index + 1) tail := by
     rw [split, List.range_succ]
-  refine ⟨(List.range' (index + 1) tail).flatMap (fun pos => [.writeRun pos, .syncRun pos]) ++
-    [.syncRunsDirectory] ++ Publication.steps.map Step.manifest, ?_⟩
-  simp [steps, runSteps, order, List.append_assoc]
+  exact ⟨(List.range' (index + 1) tail).flatMap (fun pos => [.writeRun pos, .syncRun pos]), by
+    simp [runSteps, order, List.append_assoc]⟩
+
+/-- The exact earlier run pairs precede the selected pair. -/
+theorem steps_atRunPair {count index : Nat} (within : index < count) :
+    ∃ later, steps count = runSteps index ++ [.writeRun index, .syncRun index] ++ later := by
+  obtain ⟨later, split⟩ := runSteps_atRunPair within
+  exact ⟨later ++ [.syncRunsDirectory] ++ Publication.steps.map Step.manifest, by
+    simp [steps, split, List.append_assoc]⟩
 
 end Alvoki.Storage.CheckpointPublication
 
@@ -177,10 +183,9 @@ theorem poisonsAndReleases (report : ObservedCheckpointRunPrefix attempt) {write
   | closed => exact closed
   | references held events last => exact drops held events last
 
-/-- The earlier completed run pairs preserve the inodes and payloads
-selected by the old manifest. The returned path separation also applies
-to the selected next run. -/
-theorem priorStable (report : ObservedCheckpointRunPrefix attempt) {writer : Nat}
+/-- The completed pairs preserve the same selected inode from the entry
+census through the reached state, with the same durable bytes. -/
+theorem priorStableFromEntry (report : ObservedCheckpointRunPrefix attempt) {writer : Nat}
     (ready : before.RetainedReady directory writer)
     (entry : CheckpointRunPrefix.EntrySelection before (report.view 0))
     {raw : ByteArray} {metadata : Manifest.IntegrityCheckpoint}
@@ -189,7 +194,8 @@ theorem priorStable (report : ObservedCheckpointRunPrefix attempt) {writer : Nat
     {index : Nat} (within : index < metadata.header.runCount.toNat) :
     let path := directory.file (.run metadata.header.generation index)
     ∃ payload inode, before.published.durable metadata.header.generation index = some payload ∧
-      (report.view report.index).Stable path inode payload ∧ path ≠ report.path := by
+      (report.view 0).Stable path inode payload ∧ (report.view report.index).Stable path inode payload ∧
+      path ≠ report.path := by
   intro path
   have prior := ready.resumed.selected
   rw [← ready.walPair] at prior
@@ -210,7 +216,22 @@ theorem priorStable (report : ObservedCheckpointRunPrefix attempt) {writer : Nat
       obtain ⟨pair⟩ := report.prefixPairs previous limited
       exact pair.frame.keepsStable pair.synced pair.privateBinding (separated previous)
         (ih (Nat.le_trans (Nat.le_succ _) limited))
-  exact ⟨payload, inode, stored, stable report.index (Nat.le_refl _), separated report.index⟩
+  exact ⟨payload, inode, stored, captured, stable report.index (Nat.le_refl _), separated report.index⟩
+
+/-- The selected prior run is still stable at the reached pair, whose
+path differs from the prior run's canonical name. -/
+theorem priorStable (report : ObservedCheckpointRunPrefix attempt) {writer : Nat}
+    (ready : before.RetainedReady directory writer)
+    (entry : CheckpointRunPrefix.EntrySelection before (report.view 0))
+    {raw : ByteArray} {metadata : Manifest.IntegrityCheckpoint}
+    (binding : before.wal.directory.active.manifest = some raw)
+    (decoded : Manifest.IntegrityCheckpoint.decode raw = .ok metadata)
+    {index : Nat} (within : index < metadata.header.runCount.toNat) :
+    let path := directory.file (.run metadata.header.generation index)
+    ∃ payload inode, before.published.durable metadata.header.generation index = some payload ∧
+      (report.view report.index).Stable path inode payload ∧ path ≠ report.path := by
+  obtain ⟨payload, inode, stored, _, stable, separate⟩ := report.priorStableFromEntry ready entry binding decoded within
+  exact ⟨payload, inode, stored, stable, separate⟩
 
 end ObservedCheckpointRunPrefix
 
