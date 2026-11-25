@@ -253,6 +253,7 @@ import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 import Alvoki.Storage.Disk.NativeOpenCheckpoint
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointRunFsync
+import Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
 import Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
 import Alvoki.Storage.Disk.NativeOpenReadyTrace
 import Alvoki.Storage.Disk.NativeOpenCacheReferences
@@ -1095,6 +1096,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenPhaseCellEffects.classifiesCheckpointReturn
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rejectsCheckpointFromReturn
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.checkpointRunFsyncErrorFromReturn
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.checkpointsFromReturn
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.reachesIssue
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.stepCache
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.prefixKeepsRoutes
