@@ -167,6 +167,69 @@ theorem manifestAtEnd (report : NativeCheckpointRunObservations (image := image)
     exact ⟨inode, stable, report.stablePath stable
       (fun index _ => manifestNeRun cut.checkpoint.prepared.generation index) _ (Nat.le_refl _)⟩
 
+/-- Any effect local to the next run leaves the prior selected run
+at the same inode, with its original visible and surviving bytes. -/
+theorem priorRunAfter (report : NativeCheckpointRunObservations (image := image) state cut count)
+    {after : image} {view : RunDirectoryInodeView state.session.directory (report.inodes after) (report.runs after)}
+    (valid : state.Valid)
+    (keep : ∀ {path inode bytes}, path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation count) →
+      (report.views count).Stable path inode bytes → view.Stable path inode bytes)
+    {bytes payload : ByteArray} {metadata : Manifest.IntegrityCheckpoint} {index : Nat}
+    (binding : state.writer.wal.directory.active.manifest = some bytes)
+    (decoded : Manifest.IntegrityCheckpoint.decode bytes = .ok metadata) (within : index < metadata.header.runCount.toNat)
+    (stored : state.writer.published.durable metadata.header.generation index = some payload) :
+    ∃ inode, (report.views 0).Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload ∧
+      view.Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload := by
+  obtain ⟨inode, entry, stable⟩ := report.priorRunAtEnd valid binding decoded within stored
+  have generation := (cut.priorSelectedGeneration valid.retained binding decoded).2
+  exact ⟨inode, entry, keep (runPath_ne _ (fun equal => generation (congrArg Prod.fst equal))) stable⟩
+
+/-- Before any manifest staging, both absence and stable selected
+contents of the canonical manifest are preserved by a local run effect. -/
+theorem manifestAfter (report : NativeCheckpointRunObservations (image := image) state cut count)
+    {after : image} {view : RunDirectoryInodeView state.session.directory (report.inodes after) (report.runs after)}
+    (visible : ∀ path, path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation count) →
+      view.visible path = (report.views count).visible path)
+    (keep : ∀ {path inode bytes}, path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation count) →
+      (report.views count).Stable path inode bytes → view.Stable path inode bytes) :
+    match state.files.image.directory.active.manifest with
+    | none => view.visible (state.session.directory.file .manifest) = none
+    | some bytes => ∃ inode, (report.views 0).Stable (state.session.directory.file .manifest) inode bytes ∧
+        view.Stable (state.session.directory.file .manifest) inode bytes := by
+  have manifest := report.manifestAtEnd
+  have separate := manifestNeRun (state := state) cut.checkpoint.prepared.generation count
+  cases prior : state.files.image.directory.active.manifest with
+  | none =>
+    rw [prior] at manifest
+    exact (visible _ separate).trans manifest
+  | some bytes =>
+    rw [prior] at manifest
+    obtain ⟨inode, entry, stable⟩ := manifest
+    exact ⟨inode, entry, keep separate stable⟩
+
+/-- Select the same exact checkpoint from the guaranteed run map
+at the reached file image, using only local inode frames. -/
+theorem selectedAfter (report : NativeCheckpointRunObservations (image := image) state cut count)
+    {after : image} {view : RunDirectoryInodeView state.session.directory (report.inodes after) (report.runs after)}
+    (valid : state.Valid)
+    (keep : ∀ {path inode bytes}, path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation count) →
+      (report.views count).Stable path inode bytes → view.Stable path inode bytes)
+    (files : report.files after = state.files.image) :
+    SelectedIntegrityCheckpoint (report.runs after).guaranteed (report.files after).directory.active.manifest
+      state.writer.checkpoint := by
+  let ready := valid.retained
+  have extra : SelectedRunsAgree state.writer.wal.directory.active.manifest (report.runs after).guaranteed
+      state.writer.published.durable := by
+    intro bytes metadata binding decoded index within
+    have selected := ready.resumed.selected
+    rw [← ready.walPair] at selected
+    obtain ⟨payload, stored⟩ := selected.runExists binding decoded within
+    obtain ⟨_, _, stable⟩ := report.priorRunAfter valid keep binding decoded within stored
+    exact stable.guaranteed.trans stored.symm
+  have pair : state.files.image.directory.active = state.writer.target.pair := ready.resumed.ready.selected
+  rw [files, pair, ← ready.walPair]
+  exact SelectedIntegrityCheckpoint.withRunMap (ready.walPair.symm ▸ ready.resumed.selected) extra.symm
+
 end NativeCheckpointRunObservations
 
 namespace NativeCheckpointRunDirectoryError

@@ -168,10 +168,8 @@ theorem priorRunBytes (report : NativeCheckpointRunFileError (image := image) st
     (decoded : Manifest.IntegrityCheckpoint.decode bytes = .ok metadata) (within : index < metadata.header.runCount.toNat)
     (stored : state.writer.published.durable metadata.header.generation index = some payload) :
     ∃ inode, (report.prior.views 0).Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload ∧
-      report.view.Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload := by
-  obtain ⟨inode, entry, stable⟩ := report.prior.priorRunAtEnd valid binding decoded within stored
-  have generation := (cut.priorSelectedGeneration valid.retained binding decoded).2
-  exact ⟨inode, entry, report.stableAfter (runPath_ne _ (fun equal => generation (congrArg Prod.fst equal))) stable⟩
+      report.view.Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload :=
+  report.prior.priorRunAfter valid report.stableAfter binding decoded within stored
 
 theorem filesAtReturn (report : NativeCheckpointRunFileError (image := image) state cut) :
     report.prior.files report.after = state.files.image :=
@@ -183,32 +181,12 @@ theorem manifestAtReturn (report : NativeCheckpointRunFileError (image := image)
     | some bytes => ∃ inode, (report.prior.views 0).Stable (state.session.directory.file .manifest) inode bytes ∧
         report.view.Stable (state.session.directory.file .manifest) inode bytes := by
   rw [report.filesAtReturn]
-  have manifest := report.prior.manifestAtEnd
-  have separate := NativeCheckpointRunObservations.manifestNeRun (state := state) cut.checkpoint.prepared.generation report.index
-  cases prior : state.files.image.directory.active.manifest with
-  | none =>
-    rw [prior] at manifest
-    exact (report.frame.visibleNames _ separate).trans manifest
-  | some bytes =>
-    rw [prior] at manifest
-    obtain ⟨inode, entry, stable⟩ := manifest
-    exact ⟨inode, entry, report.stableAfter separate stable⟩
+  exact report.prior.manifestAfter report.frame.visibleNames report.stableAfter
 
 theorem selectedCheckpoint (report : NativeCheckpointRunFileError (image := image) state cut) (valid : state.Valid) :
     SelectedIntegrityCheckpoint (report.prior.runs report.after).guaranteed
-      (report.prior.files report.after).directory.active.manifest state.writer.checkpoint := by
-  let ready := valid.retained
-  have extra : SelectedRunsAgree state.writer.wal.directory.active.manifest (report.prior.runs report.after).guaranteed
-      state.writer.published.durable := by
-    intro bytes metadata binding decoded index within
-    have selected := ready.resumed.selected
-    rw [← ready.walPair] at selected
-    obtain ⟨payload, stored⟩ := selected.runExists binding decoded within
-    obtain ⟨_, _, stable⟩ := report.priorRunBytes valid binding decoded within stored
-    exact stable.guaranteed.trans stored.symm
-  have pair : state.files.image.directory.active = state.writer.target.pair := ready.resumed.ready.selected
-  rw [report.filesAtReturn, pair, ← ready.walPair]
-  exact SelectedIntegrityCheckpoint.withRunMap (ready.walPair.symm ▸ ready.resumed.selected) extra.symm
+      (report.prior.files report.after).directory.active.manifest state.writer.checkpoint :=
+  report.prior.selectedAfter valid report.stableAfter report.filesAtReturn
 
 end NativeCheckpointRunFileError
 /-- A returned checkpoint run sync error reaches the poisoned phase
