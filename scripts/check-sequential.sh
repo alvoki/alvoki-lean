@@ -121,6 +121,7 @@ lake env leanchecker Alvoki.Storage.Disk.ClosedReadyReopen
 lake env leanchecker Alvoki.Storage.Disk.ClientWriteTrace
 lake env leanchecker Alvoki.Storage.Disk.ReturnedWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.PendingClientReplay
+lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.BatchGroupedWriteError
 lake env leanchecker Alvoki.Storage.Disk.ClientSnapshotTransitions
 lake env leanchecker Alvoki.Storage.Disk.ClientRunMaintenance
@@ -180,6 +181,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionMetadata
 lake env leanchecker Alvoki.Storage.Disk.WalCollectionPreflight
 lake env leanchecker Alvoki.Storage.Disk.WalCollectionFirstUnlink
 lake env leanchecker Alvoki.Storage.Disk.WalCollectionFirstEffect
+lake env leanchecker Alvoki.Storage.Disk.WalCollectionOrderedPrefix
 lake env leanchecker Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
 lake env leanchecker Alvoki.Storage.Disk.WalSealedInodeLifetime
 lake env leanchecker Alvoki.Storage.Disk.WalHiddenSealRetry
@@ -205,6 +207,7 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationRecovery
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationStep
 lake env leanchecker Alvoki.Storage.Disk.ObservedRotationSchedule
+lake env leanchecker Alvoki.Storage.Disk.RotationCreateInterruption
 lake env leanchecker Alvoki.Storage.Disk.RotationReopenAdmission
 lake env leanchecker Alvoki.Storage.Disk.BootstrapAdmissionEffects
 lake env leanchecker Alvoki.Storage.Disk.FirstMarkedSession
@@ -404,9 +407,11 @@ lake env leanchecker Alvoki.Storage.Disk.DescriptorFork
 lake env leanchecker Alvoki.Storage.Disk.LockCensusTrace
 lake env leanchecker Alvoki.Storage.Disk.LockCensusOpenAdmission
 lake env leanchecker Alvoki.Storage.Disk.CapturedMarkedReads
+lake env leanchecker Alvoki.Storage.Disk.CapturedAlignedInstallation
 lake env leanchecker Alvoki.Storage.Disk.DelayedKeeperInventory
 lake env leanchecker Alvoki.Storage.Disk.AppendHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.KeeperReadCustody
+lake env leanchecker Alvoki.Storage.Disk.CapturedKeeperCustody
 lake env leanchecker Alvoki.Storage.Disk.WriteGroupFsync
 lake env leanchecker Alvoki.Storage.Disk.AppendGroupedReports
 lake env leanchecker Alvoki.Storage.Disk.SegmentedKeeperDescriptor

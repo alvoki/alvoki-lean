@@ -155,6 +155,30 @@ def recoverThroughReads (report : CapturedMarkedReadReports admission layout pub
     (report.walReads.prepare report.reads.readPrefix >>= finish resolved owner cache)
     (bootstrap resolved cache)
 
+/-- The held lookups and selected read result determine which continuation
+the shared recovery schedule calls. -/
+theorem recoverThroughReads_prepared (report : CapturedMarkedReadReports admission layout published)
+    (flat : optionalMetadataWith (admission.lookup (directory.file .wal)) (admission.reached, admission.held) =
+      .ok none (admission.reached, admission.held))
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    {prepared : Plan × Reopened × Nat}
+    (read : report.walReads.prepare report.reads.readPrefix (admission.reached, admission.held) =
+      .ok prepared (admission.reached, admission.held))
+    (finish : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Plan × Reopened × Nat →
+      EStateM IO.Error CensusOpenState Reopened)
+    (bootstrap : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened) :
+    report.recoverThroughReads finish bootstrap directory admission.owner admission.cache
+      (admission.reached, admission.held) =
+    finish directory admission.owner admission.cache prepared (admission.reached, admission.held) := by
+  have selectedRoute : optionalMetadataWith (admission.lookup (directory.file .walBoundary))
+      (admission.reached, admission.held) = .ok (some metadata) (admission.reached, admission.held) := by
+    simp only [optionalMetadataWith, Bind.bind, EStateM.bind, marker, Pure.pure, EStateM.pure]
+  simp only [recoverThroughReads, recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind,
+    flat, Option.isSome_none, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure,
+    selectedRoute, Option.isSome_some, read]
+
 /-- The admitted open reaches the continuation for the selected read plan
 using the lock, cache, census and namespace from that very admission.
 No report of the repair or returned table is needed to reach this point. -/
@@ -200,12 +224,8 @@ theorem reachesMarkedPreparation (report : CapturedMarkedReadReports admission l
   refine ⟨prefixReached, sameRoot, sameLock.trans (congrArg some oldObject), custody,
     ⟨opened, checkpoint, selected, replay, ?_⟩⟩
   rw [reached]
-  have selectedRoute : optionalMetadataWith (admission.lookup (directory.file .walBoundary))
-      (admission.reached, admission.held) = .ok (some metadata) (admission.reached, admission.held) := by
-    simp only [optionalMetadataWith, Bind.bind, EStateM.bind, marker, Pure.pure, EStateM.pure]
-  simp only [recoverThroughReads, recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind,
-    tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, flat, Option.isSome_none, Bool.false_eq_true,
-    ↓reduceIte, Pure.pure, EStateM.pure, selectedRoute, Option.isSome_some, prepared]
+  simp only [tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch,
+    report.recoverThroughReads_prepared flat marker prepared]
 
 end CapturedMarkedReadReports
 

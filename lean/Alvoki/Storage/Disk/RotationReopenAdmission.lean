@@ -55,7 +55,8 @@ structure RotationInFlightCut.AdmittedReopen {directory : DiskDirectory} {before
   durable : after.published.durable = before.published.durable
   retained : after.RetainedReady directory descriptor
 
-private theorem rotationRetryEffects {directory : DiskDirectory} {history : List WAL.Write} {first : Nat}
+/-- A settled rotation survivor starts a fixed-keeper effects trace. -/
+theorem BoundedReopenTrace.rotationRetryEffects {directory : DiskDirectory} {history : List WAL.Write} {first : Nat}
     {initial retry : LockedFileState FileImage} {target : Target} {plan : Plan}
     (attempts : BoundedReopenTrace directory (CheckpointRetryTarget history first) initial retry)
     (admitted : CheckpointRetryTarget history first target) (prepared : Prepared initial.image target plan)
@@ -104,7 +105,7 @@ theorem RotationInFlightCut.reopensAdmitted {directory : DiskDirectory} {before 
   have authority : CheckpointRetryTarget before.history wal.active.first chosen.target := by
     refine ⟨congrArg WalSegment.first keeper, chosen.through, ?_⟩
     simpa only [CanonicalKeeperLayout.target, keeper] using chosen.chain.keeperBytes
-  have effects := rotationRetryEffects attempts authority prepared (crashed.image.settledReopenImage_sync before.wal)
+  have effects := attempts.rotationRetryEffects authority prepared (crashed.image.settledReopenImage_sync before.wal)
   obtain ⟨selected, target, range, first, seals, active, kept, retryPrepared⟩ := effects.canonicalRetryLayout chosen prepared
   have sourceTarget := prepared.pair.symm.trans (sourcePair.trans samePair)
   have pairAtRetry := retryPrepared.pair.trans sourceTarget

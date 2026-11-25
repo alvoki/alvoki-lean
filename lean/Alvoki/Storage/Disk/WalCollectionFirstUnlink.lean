@@ -29,6 +29,47 @@ def collectWithEffects (calls : WalCollectionReads) (directory : DiskDirectory)
         (fun first => directory.file (.walSegment first)) directory.path))
       (setPhase initial.1)) initial
 
+/-- The native mutation continuation from an already poisoned phase.
+The directory sync and ready-phase update follow all listed unlinks. -/
+def continueWithEffects (directory : DiskDirectory)
+    (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
+    (syncDirectory : FilePath → EStateM IO.Error image Unit)
+    (installed : Installed) (offsets : List Nat) :
+    EStateM IO.Error (Phase Installed × LockedFileState image) Unit := do
+  RunCollection.run offsets (RunCollection.performPaths (fun path => walCollectionFileCall (removeFile path))
+    (fun path => walCollectionFileCall (syncDirectory path)) throw
+    (fun offset => directory.file (.walSegment offset)) directory.path)
+  modify (fun state : Phase Installed × LockedFileState image => (.ready installed, state.2))
+
+theorem collectWithEffects_plan (calls : WalCollectionReads) (directory : DiskDirectory)
+    (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
+    (syncDirectory : FilePath → EStateM IO.Error image Unit)
+    (installed : Installed) (before : LockedFileState image) {offsets : List Nat}
+    (planned : calls.plan directory installed = .ok offsets) :
+    calls.collectWithEffects directory removeFile syncDirectory (.ready installed, before) =
+      continueWithEffects directory removeFile syncDirectory installed offsets (.poisoned, before) := by
+  simp only [collectWithEffects, collectAfterPlan, Bind.bind, EStateM.bind, runPlan_ready, planned,
+    publishPrepared, modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet]
+  rfl
+
+theorem continueWithEffects_unlink (directory : DiskDirectory)
+    (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
+    (syncDirectory : FilePath → EStateM IO.Error image Unit)
+    (installed : Installed) (before : LockedFileState image) {first : Nat} {rest : List Nat}
+    {result : Except IO.Error Unit} {reached : image}
+    (returned : removeFile (directory.file (.walSegment first)) before.image = .ok result reached) :
+    continueWithEffects directory removeFile syncDirectory installed (first :: rest) (.poisoned, before) =
+      match RunCollection.ownedUnlinkResult result with
+      | .error cause => .error cause (.poisoned, {before with image := reached})
+      | .ok () => continueWithEffects directory removeFile syncDirectory installed rest
+          (.poisoned, {before with image := reached}) := by
+  simp only [continueWithEffects, RunCollection.run, RunCollection.steps, List.map_cons, List.cons_append,
+    List.forM_eq_forM, List.forM_cons, RunCollection.performPaths, Bind.bind, EStateM.bind, walCollectionFileCall,
+    returned]
+  cases RunCollection.ownedUnlinkResult result with
+  | error cause => simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+  | ok value => cases value; simp [Pure.pure, EStateM.pure]
+
 /-- With a nonempty successful plan, the production suffix begins by
 calling unlink at its first canonical path with the original files and
 owner. This equation does not require that unlink to return successfully. -/
@@ -78,14 +119,9 @@ theorem collectWithEffects_afterFirst (calls : WalCollectionReads) (directory : 
             (fun offset => directory.file (.walSegment offset)) directory.path)
           modify (fun state : Phase Installed × LockedFileState image => (.ready installed, state.2)))
           (.poisoned, {before with image := reached}) := by
-  rw [calls.collectWithEffects_first directory removeFile syncDirectory installed before planned]
-  cases accepted : RunCollection.ownedUnlinkResult result with
-  | error cause =>
-    simp [Bind.bind, EStateM.bind, walCollectionFileCall, returned, liftExcept, accepted, throw,
-      throwThe, MonadExceptOf.throw, EStateM.throw]
-  | ok value =>
-    cases value
-    simp [Bind.bind, EStateM.bind, walCollectionFileCall, returned, liftExcept, accepted, Pure.pure, EStateM.pure]
+  rw [calls.collectWithEffects_plan directory removeFile syncDirectory installed before planned,
+    continueWithEffects_unlink directory removeFile syncDirectory installed before returned]
+  rfl
 
 end WalCollectionReads
 
