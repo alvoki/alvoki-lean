@@ -33,18 +33,25 @@ theorem bind_pure_reached (run : EStateM IO.Error Nat α) (transform : α → β
     reached ((run >>= fun value => pure (transform value)) before) = reached (run before) := by
   cases outcome : run before <;> simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, outcome, reached]
 
-theorem mapM_bound (run : α → EStateM IO.Error Nat β) (items : List α) (before budget : Nat)
-    (each : ∀ item count, reached (run item count) ≤ count + budget) :
-    reached ((items.mapM run) before) ≤ before + budget * items.length := by
+/-- Sum item-specific budgets along the ordered loop. If an action
+fails, the remaining actions perform no work. -/
+theorem mapM_weightedBound (run : α → EStateM IO.Error Nat β) (items : List α)
+    (cost : α → Nat) (before : Nat)
+    (each : ∀ item count, reached (run item count) ≤ count + cost item) :
+    reached ((items.mapM run) before) ≤ before + (items.map cost).sum := by
   induction items generalizing before with
   | nil => simp [Pure.pure, EStateM.pure, reached]
   | cons item rest ih =>
-    simp only [List.mapM_cons, List.length_cons, Nat.mul_succ]
-    rw [Nat.add_comm (budget * rest.length) budget]
+    simp only [List.mapM_cons, List.map_cons, List.sum_cons]
     apply bind_bound (each item before)
     intro value after _
     rw [bind_pure_reached]
     exact ih after
+
+theorem mapM_bound (run : α → EStateM IO.Error Nat β) (items : List α) (before budget : Nat)
+    (each : ∀ item count, reached (run item count) ≤ count + budget) :
+    reached ((items.mapM run) before) ≤ before + budget * items.length := by
+  simpa [List.map_const', List.sum_replicate_nat, Nat.mul_comm] using mapM_weightedBound run items (fun _ => budget) before each
 
 theorem forM_bound (run : α → EStateM IO.Error Nat Unit) (items : List α) (before budget : Nat)
     (each : ∀ item count, reached (run item count) ≤ count + budget) :

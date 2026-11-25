@@ -214,66 +214,29 @@ private def recordRequest {α : Type} (size : Nat) (report : Except IO.Error α)
 private def runRequestSize (manifest : IntegrityCheckpoint) (index : Nat) : Nat :=
   ((manifest.runs[index]?).map (fun stamp => stamp.byteCount.toNat)).getD 0
 
-private def countedRun (dir : DiskDirectory) (manifest : IntegrityCheckpoint)
-    (readSize : FilePath → Except IO.Error Nat) (readPrefix : FilePath → Nat → Except IO.Error ByteArray)
-    (index : Nat) : EStateM IO.Error Nat ByteArray :=
-  readStampedRun dir manifest.runs.toArray (fun path => recordRequest 0 (readSize path))
-    (fun path bytes => recordRequest bytes (readPrefix path bytes)) manifest.header.generation index
-
-private theorem countedRun_le (dir : DiskDirectory) (manifest : IntegrityCheckpoint)
-    (readSize : FilePath → Except IO.Error Nat) (readPrefix : FilePath → Nat → Except IO.Error ByteArray)
-    (index initial : Nat) :
-    requestedBytes (countedRun dir manifest readSize readPrefix index initial) ≤
-      initial + runRequestSize manifest index := by
-  unfold countedRun readStampedRun runRequestSize
-  simp only [List.getElem?_toArray]
-  cases declared : manifest.runs[index]? with
-  | none => exact Nat.le_refl _
-  | some stamp =>
-    change requestedBytes (readExactRecoveryFileWith (m := EStateM IO.Error Nat) _ _ _ _ _ initial) ≤ initial + stamp.byteCount.toNat
-    unfold readExactRecoveryFileWith
-    cases measured : readSize (dir.file (.run manifest.header.generation index)) with
-    | error cause => simp [recordRequest, measured, Bind.bind, EStateM.bind, requestedBytes]
-    | ok actual =>
-      by_cases fits : actual = stamp.byteCount.toNat ∧ stamp.byteCount.toNat < USize.size
-      · cases read : readPrefix (dir.file (.run manifest.header.generation index)) stamp.byteCount.toNat with
-        | error cause => simp [recordRequest, measured, fits, read, Bind.bind, EStateM.bind, requestedBytes]
-        | ok payload =>
-          by_cases exact : payload.size = stamp.byteCount.toNat <;>
-            simp [recordRequest, measured, fits, read, exact, Bind.bind, EStateM.bind, requestedBytes,
-              Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
-      · simp [recordRequest, measured, fits, Bind.bind, EStateM.bind, requestedBytes,
-          throw, throwThe, MonadExceptOf.throw, EStateM.throw]
-
-private theorem checkpointRequests_le (dir : DiskDirectory) (manifest : IntegrityCheckpoint)
-    (readSize : FilePath → Except IO.Error Nat) (readPrefix : FilePath → Nat → Except IO.Error ByteArray)
-    (indices : List Nat) (initial : Nat) :
-    requestedBytes ((indices.mapM (countedRun dir manifest readSize readPrefix)) initial) ≤
-      initial + (indices.map (runRequestSize manifest)).sum := by
-  induction indices generalizing initial with
-  | nil => exact Nat.le_refl _
-  | cons index rest ih =>
-    have first := countedRun_le dir manifest readSize readPrefix index initial
-    simp only [List.mapM_cons, Bind.bind, EStateM.bind, List.map_cons, List.sum_cons]
-    cases head : countedRun dir manifest readSize readPrefix index initial with
-    | error cause final =>
-      rw [head] at first
-      simp only [requestedBytes] at first ⊢
-      omega
-    | ok payload reached =>
-      have later := ih reached
-      rw [head] at first
-      cases tail : (rest.mapM (countedRun dir manifest readSize readPrefix)) reached with
-      | error cause final =>
-        rw [tail] at later
-        simp only [requestedBytes] at first later
-        simp only [tail, requestedBytes]
-        omega
-      | ok payloads final =>
-        rw [tail] at later
-        simp only [requestedBytes] at first later
-        simp only [tail, requestedBytes, Pure.pure, EStateM.pure]
-        omega
+open RecoveryRequestCount in
+/-- A file's exact extent guard spends no payload requests. A reached
+payload call may spend at most its requested length, including on error. -/
+theorem readExactRecoveryFileWith_payloadCallsBound (path : FilePath) (expected : Nat) (mismatch : IO.Error)
+    (readSize : FilePath → Except IO.Error Nat) (readPrefix : FilePath → Nat → EStateM IO.Error Nat ByteArray)
+    (bounded : ∀ before, reached (readPrefix path expected before) ≤ before + expected) (before : Nat) :
+    reached (readExactRecoveryFileWith path expected mismatch (fun target => liftExcept (readSize target))
+      readPrefix before) ≤ before + expected := by
+  unfold readExactRecoveryFileWith
+  cases measured : readSize path with
+  | error cause =>
+    simp [measured, liftExcept, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached]
+  | ok actual =>
+    by_cases fits : actual = expected ∧ expected < USize.size
+    · cases payload : readPrefix path expected before with
+      | error cause after =>
+        simpa [measured, fits, payload, liftExcept, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure] using bounded before
+      | ok bytes after =>
+        by_cases exactSize : bytes.size = expected <;>
+          simpa [measured, fits, payload, exactSize, liftExcept, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+            throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached] using bounded before
+    · simp [measured, fits, liftExcept, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+        throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached]
 
 private theorem runRequestSizes_exact (manifest : IntegrityCheckpoint)
     (count : manifest.runs.length = manifest.header.runCount.toNat) :
@@ -285,6 +248,28 @@ private theorem runRequestSizes_exact (manifest : IntegrityCheckpoint)
   · intro index _ bound
     have within : index < manifest.runs.length := by simpa using bound
     simp [runRequestSize, List.getElem?_eq_getElem within]
+
+open RecoveryRequestCount in
+/-- Sum the reached prefix callback costs in the actual run-index loop.
+Rejections at a missing stamp, size lookup, or extent guard charge no
+payload callback at that index. -/
+theorem readIntegrityRunBytesSized_payloadCallsBound (dir : DiskDirectory) {manifest : IntegrityCheckpoint}
+    {manifestBytes : ByteArray} (decoded : IntegrityCheckpoint.decode manifestBytes = .ok manifest)
+    (readSize : FilePath → Except IO.Error Nat) (readPrefix : FilePath → Nat → EStateM IO.Error Nat ByteArray)
+    (bounded : ∀ path count before, reached (readPrefix path count before) ≤ before + count) (before : Nat) :
+    reached (readIntegrityRunBytesSized dir manifest (fun path => liftExcept (readSize path)) readPrefix before) ≤
+      before + (manifest.runs.map (fun stamp => stamp.byteCount.toNat)).sum := by
+  have each (index calls : Nat) :
+      reached (readStampedRun dir manifest.runs.toArray (fun path => liftExcept (readSize path)) readPrefix
+        manifest.header.generation index calls) ≤ calls + runRequestSize manifest index := by
+    simp only [readStampedRun, runRequestSize, List.getElem?_toArray]
+    cases declared : manifest.runs[index]? with
+    | none => exact Nat.le_refl _
+    | some stamp => exact readExactRecoveryFileWith_payloadCallsBound _ _ _ readSize readPrefix (bounded _ _) calls
+  unfold readIntegrityRunBytesSized
+  rw [readCheckpointRunBytes_eq_mapM]
+  have bound := mapM_weightedBound _ (List.range manifest.header.runCount.toNat) (runRequestSize manifest) before each
+  rwa [runRequestSizes_exact manifest (IntegrityCheckpoint.decode_spec decoded).2.2] at bound
 
 /-- Count requested run payload bytes in the executable ordered loop,
 including a prefix call that reports an error after being issued. -/
@@ -301,11 +286,18 @@ theorem countCheckpointRunBytes_bound (dir : DiskDirectory) {manifest : Integrit
     (readSize : FilePath → Except IO.Error Nat) (readPrefix : FilePath → Nat → Except IO.Error ByteArray) :
     countCheckpointRunBytes dir manifest readSize readPrefix ≤
       (manifest.runs.map (fun stamp => stamp.byteCount.toNat)).sum := by
-  unfold countCheckpointRunBytes readIntegrityRunBytesSized
-  rw [readCheckpointRunBytes_eq_mapM]
-  have bound := checkpointRequests_le dir manifest readSize readPrefix (List.range manifest.header.runCount.toNat) 0
-  rw [runRequestSizes_exact manifest (IntegrityCheckpoint.decode_spec decoded).2.2, Nat.zero_add] at bound
-  exact bound
+  have measured (path : FilePath) : recordRequest 0 (readSize path) = liftExcept (readSize path) := by
+    funext state
+    cases readSize path <;> rfl
+  have charged path count before :
+      RecoveryRequestCount.reached (recordRequest count (readPrefix path count) before) ≤ before + count := by
+    cases readPrefix path count <;> exact Nat.le_refl _
+  unfold countCheckpointRunBytes
+  simp only [measured]
+  have same (report : EStateM.Result IO.Error Nat (List ByteArray)) :
+      RecoveryRequestCount.reached report = requestedBytes report := by cases report <;> rfl
+  simpa only [Nat.zero_add, same] using readIntegrityRunBytesSized_payloadCallsBound dir decoded readSize
+    (fun path count => recordRequest count (readPrefix path count)) charged 0
 
 open RecoveryRequestCount in
 private theorem issuedStampedRun_bound (dir : DiskDirectory) (manifest : IntegrityCheckpoint)

@@ -54,6 +54,67 @@ def readCachedWalPayloads [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirect
     (required : List (Nat × IO.FS.Metadata)) : m (List (Nat × ByteArray) × Nat) :=
   readCachedWalPayloadsFrom dir through readSeal readKeeper required []
 
+open RecoveryRequestCount in
+private theorem readCachedWalPayloadsFrom_payloadCallsBound (dir : DiskDirectory) (through : Nat)
+    (readSeal : FilePath → Nat → EStateM IO.Error Nat ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error Nat ByteArray)
+    (sealBound : ∀ path count before, reached (readSeal path count before) ≤ before + count)
+    (keeperBound : ∀ path count size before, reached (readKeeper path count size before) ≤ before + count)
+    (required : List (Nat × IO.FS.Metadata)) (within : ∀ extent ∈ required, extent.1 ≤ through)
+    (read : List (Nat × ByteArray)) (before : Nat) :
+    reached (readCachedWalPayloadsFrom dir through readSeal readKeeper required read before) ≤
+      before + (through - (required.head?.map Prod.fst).getD through) * frameSize := by
+  induction required generalizing read before with
+  | nil =>
+    simp [readCachedWalPayloadsFrom, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached]
+  | cons first rest ih =>
+    obtain ⟨first, metadata⟩ := first
+    cases rest with
+    | nil =>
+      let count := (through - first) * frameSize
+      have charged := keeperBound (dir.file (.walSegment first)) count metadata.byteSize.toNat before
+      cases payload : readKeeper (dir.file (.walSegment first)) count metadata.byteSize.toNat before with
+      | error cause after =>
+        simpa [readCachedWalPayloadsFrom, Bind.bind, EStateM.bind, count, payload, reached] using charged
+      | ok bytes after =>
+        by_cases exactSize : bytes.size = (through - first) * frameSize ∧ (through - first) * frameSize ≤ metadata.byteSize.toNat <;>
+          simpa [readCachedWalPayloadsFrom, Bind.bind, EStateM.bind, count, payload, exactSize, Pure.pure, EStateM.pure,
+            throw, throwThe, MonadExceptOf.throw, EStateM.throw, reached] using charged
+    | cons next rest =>
+      obtain ⟨next, nextMetadata⟩ := next
+      by_cases forward : first < next
+      · have ends : next ≤ through := within _ (List.mem_cons_of_mem _ List.mem_cons_self)
+        have total : ((next - first) * frameSize + (through - next) * frameSize) =
+            (through - first) * frameSize := by
+          rw [← Nat.add_mul]
+          congr 1
+          omega
+        have later := fun extent member => within extent (List.mem_cons_of_mem _ member)
+        simp only [readCachedWalPayloadsFrom, forward, ite_true, List.head?_cons, Option.map_some, Option.getD_some]
+        rw [← total]
+        apply bind_bound
+          (readExactRecoveryFileWith_payloadCallsBound (dir.file (.walSegment first)) ((next - first) * frameSize)
+            selectedWalSpanError (fun _ => .ok metadata.byteSize.toNat) readSeal (sealBound _ _) before)
+        intro payload after _
+        exact ih later ((first, payload) :: read) after
+      · simp [readCachedWalPayloadsFrom, forward, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw,
+          EStateM.throw, reached]
+
+open RecoveryRequestCount in
+/-- Count primitive prefix requests over the actual selected seal and
+keeper loop, including any reached failure. Adjacent seal extents and
+the marker-bounded keeper telescope to the selected byte interval. -/
+theorem readCachedWalPayloads_payloadCallsBound (dir : DiskDirectory) (through : Nat)
+    (readSeal : FilePath → Nat → EStateM IO.Error Nat ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error Nat ByteArray)
+    (sealBound : ∀ path count before, reached (readSeal path count before) ≤ before + count)
+    (keeperBound : ∀ path count size before, reached (readKeeper path count size before) ≤ before + count)
+    (required : List (Nat × IO.FS.Metadata)) (within : ∀ extent ∈ required, extent.1 ≤ through)
+    (before : Nat) :
+    reached (readCachedWalPayloads dir through readSeal readKeeper required before) ≤
+      before + (through - (required.head?.map Prod.fst).getD through) * frameSize :=
+  readCachedWalPayloadsFrom_payloadCallsBound dir through readSeal readKeeper sealBound keeperBound required within [] before
+
 def readSelectedWithCachedExtents [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
     (watermark : Nat) (length : UInt64) (list : FilePath → m (Array IO.FS.DirEntry))
     (lstat : FilePath → m (Except IO.Error IO.FS.Metadata)) (readSeal : FilePath → Nat → m ByteArray)

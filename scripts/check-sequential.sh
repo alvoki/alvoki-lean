@@ -291,6 +291,7 @@ lake env leanchecker Alvoki.Storage.Disk.CachedWalExtentRetry
 lake env leanchecker Alvoki.Storage.Disk.CachedCheckpointExtentRetry
 lake env leanchecker Alvoki.Storage.Disk.RecoveryRequestCount
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedOpenWork
+lake env leanchecker Alvoki.Storage.Disk.SelectedRecoveryChunkWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionSpace
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionNames
 lake env leanchecker Alvoki.Storage.Disk.WalSealedSpans
