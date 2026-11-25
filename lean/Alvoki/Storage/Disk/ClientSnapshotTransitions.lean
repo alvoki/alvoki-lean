@@ -255,6 +255,55 @@ def SnapshotReadRequest.record (sequence : UInt64) : SnapshotReadRequest α → 
   | .lookup key => .lookup sequence key
   | .range lo hi => .range sequence lo hi
 
+def SnapshotReadRequest.denied (guard : SnapshotReadGuard) : SnapshotReadRequest α → RecordedSnapshotRead
+  | .lookup key => .lookupDenied key guard
+  | .range lo hi => .rangeDenied lo hi guard
+
+/-- The native return and the ledger entry use the same request and
+supplied handle. A successful response uses the registry's pin sequence. -/
+structure SnapshotReadRequest.HandleReturn (request : SnapshotReadRequest α)
+    (reader : ObservedSnapshotReader directory descriptor writer) (handle : SnapshotHandle)
+    (response : Option α) (recorded : RecordedSnapshotRead) : Prop where
+  returned : reader.session.runSnapshotRead reader.sameSession (request.read handle) = .ok response reader.session
+  records : match response with
+    | none => recorded = request.denied (reader.guard handle)
+    | some value => ∃ pin, writer.installed.table.pins.find handle = some pin ∧
+        recorded = request.record pin.sequence value
+  observed : RecordedSnapshotRead.Observed directory descriptor writer recorded
+
+/-- A ready read has outer absence exactly for a foreign token or an
+inactive local handle. A missing key remains a successful point read. -/
+theorem SnapshotReadRequest.handleDenied_iff (request : SnapshotReadRequest α)
+    (reader : ObservedSnapshotReader directory descriptor writer) (handle : SnapshotHandle) :
+    reader.session.runSnapshotRead reader.sameSession (request.read handle) = .ok none reader.session ↔
+      (reader.guard handle).rejects := by
+  cases request with
+  | lookup key => exact reader.lookupDenied_iff handle key
+  | range lo hi => exact reader.rangeDenied_iff handle lo hi
+
+theorem SnapshotReadRequest.returnsForHandle (request : SnapshotReadRequest α)
+    (reader : ObservedSnapshotReader directory descriptor writer) (handle : SnapshotHandle) :
+    ∃ response recorded, request.HandleReturn reader handle response recorded := by
+  have returned := reader.readResult (request.read handle)
+  generalize (if reader.issuer = reader.session.sessionRef then request.read handle writer.installed.table else none) =
+    response at returned
+  refine ⟨response, ?_⟩
+  cases request with
+  | lookup key =>
+    have observed := reader.recordLookup handle key response returned
+    cases response with
+    | none => exact ⟨_, returned, rfl, observed⟩
+    | some value =>
+      obtain ⟨pin, found, observed⟩ := observed
+      exact ⟨_, returned, ⟨pin, found, rfl⟩, observed⟩
+  | range lo hi =>
+    have observed := reader.recordRange handle lo hi response returned
+    cases response with
+    | none => exact ⟨_, returned, rfl, observed⟩
+    | some entries =>
+      obtain ⟨pin, found, observed⟩ := observed
+      exact ⟨_, returned, ⟨pin, found, rfl⟩, observed⟩
+
 private theorem runSnapshotRead_of_guarded (phase : session.phase = .ready installed)
     (read : PackedTable → Option α)
     (guarded : withLocalHandle (m := Except IO.Error) session.phase.installed (.ok sameSession) none

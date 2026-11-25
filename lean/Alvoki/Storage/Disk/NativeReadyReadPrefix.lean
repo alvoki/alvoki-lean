@@ -65,7 +65,7 @@ end NativeReadyState
 
 /-- The first ready session is the exact result of the selected restart.
 Local snapshot updates and reads keep its files and descriptor inventory.
-A read acquires a local pin and records its response at the reached table. -/
+Reads use an acquired or separately supplied handle at the reached table. -/
 inductive NativeReadyReadPrefix
     (opened : EStateM.Result IO.Error CensusOpenState SegmentedSession)
     (initial : NativeReadyState) (history : List WAL.Write) (log : List DatabaseSubmissions) :
@@ -90,6 +90,14 @@ inductive NativeReadyReadPrefix
       (returned : update.run state.session = .ok result (state.withTable table).session)
       (step : SegmentedTableStep state.writer.installed.table table) :
       NativeReadyReadPrefix opened initial history log reads (state.withTable table)
+  | readHandle {reads : List RecordedSnapshotRead} {state : NativeReadyState}
+      {α : Type} {request : SnapshotReadRequest α} {handle : Sequential.SnapshotHandle}
+      {reader : ObservedSnapshotReader state.session.directory state.session.descriptor state.writer}
+      {response : Option α} {recorded : RecordedSnapshotRead}
+      (prior : NativeReadyReadPrefix opened initial history log reads state)
+      (atSession : reader.session = state.session)
+      (returned : request.HandleReturn reader handle response recorded) :
+      NativeReadyReadPrefix opened initial history log (reads ++ [recorded]) state
 
 private theorem readReplay (request : SnapshotReadRequest α) (reference : SnapshotTable UInt64)
     (snapshot : UInt64) : (request.record snapshot (request.replay reference snapshot)).agrees reference := by
@@ -131,6 +139,7 @@ theorem NativeReadyReadPrefix.frames
   | installed returned _ _ _ _ => exact ⟨returned, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   | acquireRead _ _ _ _ ih => exact ih
   | snapshotUpdate _ _ _ _ ih => exact ih
+  | readHandle _ _ _ ih => exact ih
 
 /-- The ledger and exact native read results are preserved by induction
 over an arbitrary supported read prefix. -/
@@ -151,9 +160,19 @@ theorem NativeReadyReadPrefix.refines
       exact equal.symm ▸ readReplay request reference snapshot
   | snapshotUpdate _ _ _ step ih =>
     exact ⟨ih.1.tablePreserves step, ih.2⟩
+  | readHandle _ _ returned ih =>
+    obtain ⟨valid, history, reference, replayed, retained, acknowledged, submitted, responses⟩ := ih
+    refine ⟨valid, history, reference, replayed, retained, acknowledged, submitted, ?_⟩
+    intro response member
+    rcases List.mem_append.mp member with old | newest
+    · exact responses _ old
+    · obtain rfl := List.mem_singleton.mp newest
+      exact returned.observed.agreesForReplay valid.retained
+        (by simpa only [List.append_nil, history] using replayed :
+          SnapshotWalReplay .empty (_ ++ []) reference)
 
-/-- Each successful response in the native prefix records a sequence
-within the history that supported its actual pin acquisition. -/
+/-- Each successful response records a sequence within the history
+that supported its acquired or previously registered pin. -/
 theorem NativeReadyReadPrefix.readsBounded
     (observed : NativeReadyReadPrefix opened initial history log reads state) :
     ∀ read ∈ reads, read.BoundedBy history.length := by
@@ -172,6 +191,13 @@ theorem NativeReadyReadPrefix.readsBounded
       have committed := committedCount ▸ UInt64.le_iff_toNat_le.mp (acquiredAtBounds acquired).2
       cases request <;> exact committed
   | snapshotUpdate _ _ _ _ ih => exact ih
+  | readHandle prior _ returned ih =>
+    intro read member
+    rcases List.mem_append.mp member with earlier | latest
+    · exact ih read earlier
+    · obtain rfl := List.mem_singleton.mp latest
+      obtain ⟨valid, sameHistory, _⟩ := prior.refines
+      exact sameHistory ▸ returned.observed.boundedBy valid.retained
 
 /-- The same replay already observed by the prefix still explains every
 supported local snapshot in the reached ready session. -/

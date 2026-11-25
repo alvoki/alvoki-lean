@@ -229,6 +229,7 @@ import Alvoki.Storage.Disk.NativeCloseAlignedReopen
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeSnapshotExecution
+import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
 import Alvoki.Storage.Disk.NativeExecutionTrace
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeReadyWrite
@@ -1408,6 +1409,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readsBounded
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.guardedReplay
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readAt
+#check_axioms Alvoki.Storage.DiskSession.SnapshotReadRequest.handleDenied_iff
+#check_axioms Alvoki.Storage.DiskSession.SnapshotReadRequest.returnsForHandle
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.readsHandle
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperFinish.startsNativeReadPrefix
 #check_axioms Alvoki.Storage.DiskSession.CensusOpenAdmissionReports.recoverWithMarked_selects
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.readsMarker
