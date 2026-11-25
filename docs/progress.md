@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The acquired-marker session installer now uses the same client replay
+lemma as the existing cached recovery. Given the selected history and
+its recovered table representation, the exact guarded session returned
+by the marked open explains earlier responses and fresh guarded reads.
+The remaining composition must derive those premises from the native
+write, crash and retry reports.
+
 Both keeper-replacement and suffix-pruning recovery now accept the
 descriptor inventory reached by marker acquisition. The shared repair
 proofs use the reported inode map to connect the later allocation and

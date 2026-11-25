@@ -126,6 +126,20 @@ theorem SegmentedClientReadTrace.replaysPendingFirstAppend
   exact ⟨call, poisoned, initialFiles.symm ▸ stopped.trans attempts, pair,
     trace.replaysUncertainSubmission start (.inl rfl) ready.resumed.ordered, layout⟩
 
+/-- Attach the selected replay to the exact returned session once its
+ready table represents the selected history. -/
+theorem PendingClientReplay.install
+    {ready : Installed} {session : SegmentedSession} {model : SnapshotTable UInt64}
+    (pending : PendingClientReplay log reads history)
+    (phase : session.phase = .ready ready)
+    (represented : RepresentsWalHistory history model)
+    (refined : ready.table.Refines model) (bounds : ready.table.RowBounds) :
+    InstalledClientReplay log reads history ready session := by
+  obtain ⟨reference, replayed, retained, acknowledged, submitted, priorReads⟩ := pending
+  have guarded := session.guardedAcquireReads phase fun _ floor committed =>
+    represented.acquireReads refined bounds replayed floor committed
+  exact ⟨reference, replayed, retained, acknowledged, submitted, priorReads, guarded⟩
+
 /-- The replay explaining the pending client history also explains
 new guarded reads in this exact returned cached session. Both the
 selected checkpoint and returned table refer to that same history. -/
@@ -143,10 +157,7 @@ theorem _root_.Alvoki.Storage.WalSegmentRepair.CachedRetryInstalled.refinesPendi
       InstalledClientReplay log reads history ready session := by
   obtain ⟨opened, checkpoint, model, session, final, returned, _, _, phase, _, _, _, _, _, _, _, _, _, _,
     selected, recovered, _, _, _, _, bounds, refined, represented, _⟩ := installed
-  obtain ⟨reference, replayed, retained, acknowledged, submitted, priorReads⟩ := pending
-  have guarded := session.guardedAcquireReads phase fun _ floor committed =>
-    represented.acquireReads refined bounds replayed floor committed
   exact ⟨session, final, opened.installed, checkpoint, returned, phase, selected, recovered,
-    reference, replayed, retained, acknowledged, submitted, priorReads, guarded⟩
+    pending.install phase represented refined bounds⟩
 
 end Alvoki.Storage.DiskSession

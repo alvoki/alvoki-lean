@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.PendingClientReplay
 import Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
@@ -1663,6 +1664,39 @@ theorem installsAfterAcquiredRecovery
       .ok ⟨directory, admission.owner.description, .ready opened.installed, calls.nextRef, calls.nextRef + 1⟩ after := by
   apply calls.runWithMarked_ready _ marker
   simp only [reopenAcquiredWith_reports, acquisition, recovery]
+
+/-- The guarded marked opener returns a session whose reads use the
+same replay as the already selected client history. -/
+theorem installsAfterAcquiredRecovery_replays
+    (calls : CapturedAlignedCallbacks admission)
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    (acquire : DiskDirectory → EStateM IO.Error (CensusDirectoryCache × CensusOpenState)
+      (KeeperDescriptorIdentity × Selection))
+    (prepare : DiskDirectory → Selection → EStateM IO.Error (CensusDirectoryCache × CensusOpenState)
+      (Plan × Reopened × Nat))
+    (stabilize : KeeperDescriptorIdentity → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (finish : DiskDirectory → Plan → Nat → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    {handle : KeeperDescriptorIdentity} {selection : Selection}
+    {acquired : CensusDirectoryCache × CensusOpenState}
+    (acquisition : acquire directory (admission.cache, admission.reached, admission.held) =
+      .ok (handle, selection) acquired)
+    {opened : Reopened} {after : CensusOpenState}
+    (recovery : reopenWith (prepare directory selection) (stabilize handle) (finish directory) acquired =
+      .ok opened (admission.cache, after))
+    {model : Sequential.SnapshotTable UInt64}
+    (pending : PendingClientReplay log reads history)
+    (represented : RepresentsWalHistory history model)
+    (refined : opened.installed.table.Refines model) (bounds : opened.installed.table.RowBounds) :
+    ∃ session,
+      calls.runWithMarked (fun resolved cache before =>
+        match reopenAcquiredWith (acquire resolved) (prepare resolved) stabilize (finish resolved) (cache, before) with
+        | .ok (opened, _, _) (_, reached) => .ok opened reached
+        | .error cause (_, reached) => .error cause reached) =
+        .ok session after ∧ InstalledClientReplay log reads history opened.installed session := by
+  exact ⟨_, installsAfterAcquiredRecovery calls marker acquire prepare stabilize finish acquisition recovery,
+    pending.install rfl represented refined bounds⟩
 
 /-- After marker stabilization, a longer keeper uses the shared native
 replacement schedule once its first directory sync authorizes repair. -/
