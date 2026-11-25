@@ -1,10 +1,23 @@
 import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.WalSegmentReplayStability
 import Alvoki.Storage.Disk.SegmentedSessionInstall
+import Alvoki.Storage.Disk.ReadRecoveryPrefix
 
 namespace Alvoki.WAL.TwoSlot
 
 open Alvoki.Storage.DirectoryPublication
+
+/-- An exact bounded read from the held marker's rewound descriptor supplies
+the same decode as its complete bytes, including oversized rejection. -/
+theorem decode_heldRead {source : ByteArray} {read : USize → EStateM IO.Error Nat ByteArray}
+    (mismatch : IO.Error) (observes : Storage.PrefixChunkObserves source read)
+    (available : Storage.PrefixChunksAvailableUntilEof source read)
+    (fits : acquisitionLimit < USize.size) :
+    ∃ bytes, Storage.readPrefixUntilEofWith mismatch read acquisitionLimit ByteArray.empty 0 =
+      .ok bytes (min acquisitionLimit source.size) ∧ decode bytes = decode source := by
+  refine ⟨source.extract 0 (min acquisitionLimit source.size), ?_, decode_acquisitionPrefix source⟩
+  simpa using Storage.readPrefixUntilEofWith_completes mismatch observes available
+    acquisitionLimit fits (offset := 0) (bytes := ByteArray.empty) (Nat.zero_le source.size)
 
 /-- Express a successfully decoded physical marker in the logical format
 consumed by the shared checkpoint and segmented WAL recovery. -/

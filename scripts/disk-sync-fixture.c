@@ -174,6 +174,14 @@ size_t fread(void *buffer, size_t size, size_t count, FILE *stream) {
     const char *target = getenv("ALVOKI_CHECK_MARKER_READ");
     const char *log = getenv("ALVOKI_CHECK_MARKER_READ_LOG");
     size_t limit = 25;
+    size_t chunk = 7;
+    if (target == NULL) {
+        target = getenv("ALVOKI_CHECK_TWO_SLOT_READ");
+        if (target != NULL) {
+            limit = 8193;
+            chunk = 1024;
+        }
+    }
     if (target == NULL) {
         target = getenv("ALVOKI_CHECK_MANIFEST_READ");
         log = getenv("ALVOKI_CHECK_MANIFEST_READ_LOG");
@@ -188,7 +196,7 @@ size_t fread(void *buffer, size_t size, size_t count, FILE *stream) {
     // Force short reads on the selected stream. The logged
     // request is the original size, before limiting what libc receives.
     if (size != 1 || count == 0 || count > limit) _exit(125);
-    size_t read = real_read(buffer, size, count > 7 ? 7 : count, stream);
+    size_t read = real_read(buffer, size, count > chunk ? chunk : count, stream);
     int reported = errno;
     char counts[48];
     int length = snprintf(counts, sizeof(counts), "%zu %zu", count, read);

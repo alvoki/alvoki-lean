@@ -2278,6 +2278,14 @@ private def checkTwoSlotMarker (root : FilePath) : IO Unit := do
     check ((← db.writeBatch [(10, none), (11, some 11)]) == 3) "wrong two-slot batch ordinal"
   finally db.close
   rejects (DiskTable.open dir) "legacy opener accepted a two-slot WAL marker"
+  let shortReads := #[("ALVOKI_CHECK_TWO_SLOT_READ", some marker.toString)]
+  let (shortReadOpened, _) ← probeDisk bin dir none "--two-slot-open-once" (extraEnv := shortReads)
+  check shortReadOpened "two-slot reopen rejected a complete marker read in chunks"
+  let completeMarker ← IO.FS.readBinFile marker
+  IO.FS.writeBinFile marker (completeMarker.push 0)
+  let (oversizedOpened, oversizedSyncs) ← probeDisk bin dir none "--two-slot-open-once" (extraEnv := shortReads)
+  check (!oversizedOpened && oversizedSyncs.isEmpty) "two-slot reopen accepted an oversized marker"
+  IO.FS.writeBinFile marker completeMarker
   let reopened ← TwoSlotDiskTable.open dir
   try
     let some old ← reopened.acquireAt 1 | throw (IO.userError "missing earlier two-slot snapshot")

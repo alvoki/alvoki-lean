@@ -110,6 +110,21 @@ def decode (bytes : ByteArray) : Except String Selection :=
   else
     .error "invalid two-slot WAL marker length"
 
+/-- Read one byte beyond the fixed container to witness oversized files. -/
+abbrev acquisitionLimit : Nat := containerSize + 1
+
+theorem decode_acquisitionPrefix (bytes : ByteArray) :
+    decode (bytes.extract 0 (min acquisitionLimit bytes.size)) = decode bytes := by
+  by_cases covered : bytes.size ≤ acquisitionLimit
+  · simp [Nat.min_eq_right covered]
+  · have original : bytes.size ≠ containerSize := by
+      unfold acquisitionLimit at covered
+      omega
+    have capped : min acquisitionLimit bytes.size ≠ containerSize := by
+      rw [Nat.min_eq_left (Nat.le_of_not_ge covered)]
+      simp [acquisitionLimit]
+    simp [decode, original, capped]
+
 def Selection.toRecord (selected : Selection) :
     Alvoki.WAL.OrderedTwoSlot.Record UInt64 :=
   ⟨selected.epoch.toNat, selected.frontier⟩
