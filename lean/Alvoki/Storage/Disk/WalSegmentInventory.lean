@@ -151,7 +151,8 @@ def observeWalSuccessor (reports : OpenPathReadReports) (directory : DiskDirecto
 theorem observeWalSuccessor_probe {reports : OpenPathReadReports} {directory : DiskDirectory} {first : Nat}
     {present : Bool} (observed : reports.observeWalSuccessor directory first = .ok present) :
     reports.probeWalSegment directory first = .ok (if present then some first else none) := by
-  unfold observeWalSuccessor WalSegmentRotation.observeSuccessorWith readOptional readOptionalDatabaseFile at observed
+  unfold observeWalSuccessor WalSegmentRotation.observeSuccessorWith readOptional
+    readOptionalDatabaseFile readOptionalDatabaseFileWithMetadata at observed
   unfold probeWalSegment classifyWalSegmentLookup
   simp only [Pure.pure, Except.pure, Bind.bind, Except.bind] at observed
   cases lookup : reports.lstat (directory.file (.walSegment first)) with

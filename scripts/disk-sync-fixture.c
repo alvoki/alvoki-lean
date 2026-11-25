@@ -172,21 +172,28 @@ size_t fread(void *buffer, size_t size, size_t count, FILE *stream) {
     size_t (*real_read)(void *, size_t, size_t, FILE *) = dlsym(RTLD_NEXT, "fread");
     if (real_read == NULL) _exit(125);
     const char *target = getenv("ALVOKI_CHECK_MARKER_READ");
+    const char *log = getenv("ALVOKI_CHECK_MARKER_READ_LOG");
+    size_t limit = 25;
+    if (target == NULL) {
+        target = getenv("ALVOKI_CHECK_MANIFEST_READ");
+        log = getenv("ALVOKI_CHECK_MANIFEST_READ_LOG");
+        limit = 48;
+    }
     struct stat wanted, opened;
-    bool marker = target != NULL && stat(target, &wanted) == 0 && fstat(fileno(stream), &opened) == 0 &&
+    bool selected = target != NULL && stat(target, &wanted) == 0 && fstat(fileno(stream), &opened) == 0 &&
         opened.st_dev == wanted.st_dev && opened.st_ino == wanted.st_ino;
     errno = incoming;
-    if (!marker) return real_read(buffer, size, count, stream);
+    if (!selected) return real_read(buffer, size, count, stream);
 
-    // Force positive short reads on the real marker stream. The logged
+    // Force short reads on the selected stream. The logged
     // request is the original size, before limiting what libc receives.
-    if (size != 1 || count == 0 || count > 25) _exit(125);
+    if (size != 1 || count == 0 || count > limit) _exit(125);
     size_t read = real_read(buffer, size, count > 7 ? 7 : count, stream);
     int reported = errno;
     char counts[48];
     int length = snprintf(counts, sizeof(counts), "%zu %zu", count, read);
     if (length < 0 || (size_t)length >= sizeof(counts)) _exit(125);
-    log_sync(getenv("ALVOKI_CHECK_MARKER_READ_LOG"), "", counts);
+    log_sync(log, "", counts);
     errno = reported;
     return read;
 }

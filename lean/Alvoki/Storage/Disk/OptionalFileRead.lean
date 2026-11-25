@@ -22,25 +22,22 @@ read error after successful lstat, including ENOENT, is still an error. -/
 theorem OptionalPathRead.resultVisible {visible : Option ByteArray} (observed : OptionalPathRead visible)
     (path : FilePath) {value : Option ByteArray} (accepted : observed.result path = .ok value) :
     visible = value := by
+  unfold result readOptionalDatabaseFile readOptionalDatabaseFileWithMetadata at accepted
   cases lookup : observed.lookup with
   | ok metadata =>
     cases regular : metadata.type == .file
-    · simp [result, readOptionalDatabaseFile, lookup, regular, Pure.pure, Bind.bind,
-        Except.pure, Except.bind] at accepted
+    · simp [lookup, regular, Pure.pure, Bind.bind, Except.pure, Except.bind] at accepted
     · cases readResult : observed.read with
       | error error =>
-        simp [result, readOptionalDatabaseFile, lookup, regular, readResult, Pure.pure, Bind.bind,
-          Except.pure, Except.bind] at accepted
+        simp [lookup, regular, readResult, Pure.pure, Bind.bind, Except.pure, Except.bind] at accepted
       | ok bytes =>
         have regularFile : metadata.type = .file := by
           cases kind : metadata.type <;> first | rfl | (rw [kind] at regular; cases regular)
         have observedValue : some bytes = value := by
-          simpa [result, readOptionalDatabaseFile, lookup, regular, readResult, Pure.pure, Bind.bind,
-            Except.pure, Except.bind] using accepted
+          simpa [lookup, regular, readResult, Pure.pure, Bind.bind, Except.pure, Except.bind] using accepted
         exact (observed.contents _ _ lookup regularFile readResult).trans observedValue
   | error error =>
-    cases error <;> simp [result, readOptionalDatabaseFile, lookup, Pure.pure, Bind.bind,
-      Except.pure, Except.bind] at accepted
+    cases error <;> simp [lookup, Pure.pure, Bind.bind, Except.pure, Except.bind] at accepted
     rename_i name code message
     split at accepted
     · rename_i isMissing

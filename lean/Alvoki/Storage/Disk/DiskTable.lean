@@ -5,6 +5,7 @@ import Alvoki.Storage.Disk.IntegrityCheckpointRead
 import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.RunFileSelection
 import Alvoki.Storage.Disk.ReadRecoveryPrefix
+import Alvoki.Storage.Disk.ManifestAcquisition
 import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.WalBatch
@@ -147,19 +148,25 @@ theorem recoverRunSet_committedBoundary {checkpoint committed : PackedTable} (ge
 
 /-- Look up a directory entry before reading it. Only a missing entry
 reported by the lookup can supply an absent database file. -/
-@[macro_inline] def readOptionalDatabaseFile [Monad m]
-    (lookup : m (Except IO.Error IO.FS.Metadata)) (read : Unit → m ByteArray)
+@[macro_inline] def readOptionalDatabaseFileWithMetadata [Monad m]
+    (lookup : m (Except IO.Error IO.FS.Metadata)) (read : IO.FS.Metadata → m ByteArray)
     (notRegular : Unit → IO.Error) (fail : IO.Error → m (Option ByteArray)) :
     m (Option ByteArray) := do
   match ← lookup with
   | .ok metadata =>
     unless metadata.type == .file do
       return ← fail (notRegular ())
-    return some (← read ())
+    return some (← read metadata)
   | .error error@(.noFileOrDirectory _ osCode _) =>
     -- Linux ENOENT identifies a missing directory entry.
     if osCode == 2 then return none else fail error
   | .error error => fail error
+
+@[macro_inline] def readOptionalDatabaseFile [Monad m]
+    (lookup : m (Except IO.Error IO.FS.Metadata)) (read : Unit → m ByteArray)
+    (notRegular : Unit → IO.Error) (fail : IO.Error → m (Option ByteArray)) :
+    m (Option ByteArray) :=
+  readOptionalDatabaseFileWithMetadata lookup (fun _ => read ()) notRegular fail
 
 private def readOptionalFile (path : FilePath) : IO (Option ByteArray) :=
   readOptionalDatabaseFile path.symlinkMetadata.toBaseIO (fun _ => IO.FS.readBinFile path)
@@ -197,14 +204,17 @@ private def readExactPrefix (mismatch : IO.Error) (file : IO.FS.Handle) (remaini
     (bytes : ByteArray) : IO ByteArray :=
   readExactPrefixWith mismatch file.read remaining bytes
 
+/-- The locked-namespace contract relates the no-follow metadata to the
+file opened for the marker or manifest read. -/
 private def readOptionalCachedOpenFile (directory : DiskDirectory) (path : FilePath) : IO (Option ByteArray) :=
-  if path == directory.file .walBoundary then
-    readOptionalDatabaseFile path.symlinkMetadata.toBaseIO (fun _ => do
-      let file ← IO.FS.Handle.mk path .read
+  readOptionalDatabaseFileWithMetadata path.symlinkMetadata.toBaseIO (fun metadata => do
+    let file ← IO.FS.Handle.mk path .read
+    if path == directory.file .walBoundary then
       readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") file.read
-        WAL.Boundary.acquisitionLimit ByteArray.empty)
-      (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
-  else readOptionalFile path
+        WAL.Boundary.acquisitionLimit ByteArray.empty
+    else
+      readIntegrityManifestPrefixWith file.read metadata.byteSize.toNat)
+    (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
 
 private def readCheckpointRunSize (path : FilePath) : IO Nat := do
   return (← requiredRegularMetadata path).byteSize.toNat

@@ -177,6 +177,54 @@ def check_marker_length(binary, shim, database):
     check_reads(len(boundary))
 
 
+def check_manifest_acquisition(binary, shim, database):
+    database.mkdir()
+    for operation in ("--write-once", "--checkpoint-once"):
+        status, stderr = run_probe(binary, operation, database)
+        require(status == 0, f"could not prepare integrity manifest: {stderr}")
+    manifest = database / "MANIFEST"
+    accepted = manifest.read_bytes()
+    require(len(accepted) == 64, "expected one v2 run stamp in the fixture")
+    durable = {file: file.read_bytes() for file in database.glob("run-*.v3")}
+    read_log, sync_log = database.with_suffix(".reads"), database.with_suffix(".syncs")
+    env = {
+        **os.environ, "LD_PRELOAD": str(shim), "ALVOKI_CHECK_SYNC_LOG": str(sync_log),
+        "ALVOKI_CHECK_MANIFEST_READ": str(manifest), "ALVOKI_CHECK_MANIFEST_READ_LOG": str(read_log),
+    }
+
+    def check_reads(wanted):
+        require(read_log.exists(), "did not observe a read from the manifest inode")
+        sizes = [tuple(map(int, line.split())) for line in read_log.read_text().splitlines()]
+        consumed = 0
+        for requested, received in sizes:
+            end = min(48, wanted) if consumed < 48 else wanted
+            require(0 < requested <= end - consumed and 0 < received <= min(requested, 7),
+                    f"manifest read crossed its current header or stamp budget: {sizes}")
+            consumed += received
+        require(consumed == wanted, f"expected {wanted} manifest bytes, got {sizes}")
+        read_log.unlink()
+
+    bad_version = bytes((accepted[0] ^ 1,)) + accepted[1:]
+    cases = (
+        (accepted[:47], 47, "invalid integrity manifest length"),
+        (accepted[:56], 56, "integrity manifest run count mismatch"),
+        (bad_version + b"\0" * 1024, 65, "integrity manifest run count mismatch"),
+        (bad_version, 64, "invalid integrity manifest version"),
+    )
+    for malformed, wanted, diagnostic in cases:
+        manifest.write_bytes(malformed)
+        status, stderr = run_probe(binary, "--open-once", database, env=env)
+        require(status != 0 and diagnostic in stderr, f"wrong manifest rejection: {stderr}")
+        check_reads(wanted)
+        require(not sync_log.exists() and manifest.read_bytes() == malformed
+                and all(path.read_bytes() == data for path, data in durable.items()),
+                "manifest rejection reached repair or changed the selected files")
+    manifest.write_bytes(accepted)
+    status, stderr = run_probe(binary, "--check-recovered-table", database, "1", "99", env=env)
+    require(status == 0, f"manifest prefix did not reopen the exact checkpoint: {stderr}")
+    check_reads(len(accepted))
+
+
 def check_fork_exec_lock(binary, shim, database):
     database.mkdir()
     status, stderr = run_probe(binary, "--write-once", database)
@@ -435,6 +483,7 @@ if __name__ == "__main__":
         )
         check_flat_wal_before_lock(binary, root / "flat-wal-admission")
         check_marker_length(binary, shim, root / "marker-length")
+        check_manifest_acquisition(binary, shim, root / "manifest-acquisition")
         check_fork_exec_lock(binary, shim, root / "fork-exec")
         check_batch_append_cut(binary, shim, root / "batch-append-cut")
         for batch in (False, True):
@@ -446,6 +495,7 @@ if __name__ == "__main__":
                         check_process_death(binary, shim, case, after_rename, rotated, detached, batch)
     print("Rejected a dangling flat WAL before opening LOCK and preserved LOCK bytes across reopen.")
     print("Reopened a marker across short reads and rejected malformed lengths before repair within the read cap.")
+    print("Read the manifest in two bounded phases and preserved its exact reopen and rejection outcomes.")
     print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")

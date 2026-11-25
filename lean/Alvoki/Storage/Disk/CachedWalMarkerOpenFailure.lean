@@ -104,8 +104,9 @@ def CachedOpenRejection.ofMarkerPayloadReadError {directory : DiskDirectory} {be
   apply ofMarkerReadError attempt (cause := cause) checkpointRead
   rw [reported]
   have fileCheck : (IO.FS.FileType.file == IO.FS.FileType.file) = true := rfl
-  simp [OptionalPathRead.result, readOptionalDatabaseFile, found, regular, fileCheck, failed, Pure.pure, Bind.bind,
-    Except.pure, Except.bind, liftExcept, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+  simp [OptionalPathRead.result, readOptionalDatabaseFile, readOptionalDatabaseFileWithMetadata, found, regular,
+    fileCheck, failed, Pure.pure, Bind.bind, Except.pure, Except.bind, liftExcept, throw, throwThe,
+    MonadExceptOf.throw, EStateM.throw]
 
 /-- A malformed marker prevents installation. The local unlock outcome
 decides which error and lock owner return with the reached image. -/

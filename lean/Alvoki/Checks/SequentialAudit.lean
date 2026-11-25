@@ -1155,6 +1155,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.readIntegrityRunBytesSized_prefix_of_reports
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofCheckpointRunExtent
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofCheckpointRunDigest
+#check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofManifestDecodeError
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofMarkerReadError
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofMarkerPayloadReadError
 #check_axioms Alvoki.Storage.readExactPrefixWith_readError

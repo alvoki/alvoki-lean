@@ -47,7 +47,7 @@ open Manifest
 /-- Model acquisition on one opened file with a checked extent. Read
 through the fixed header, followed by the declared stamps and at most one
 oversize witness. The machine guard covers the accumulated prefix. -/
-def readIntegrityManifestPrefixWith [Monad m] [MonadExceptOf IO.Error m]
+@[inline] def readIntegrityManifestPrefixWith [Monad m] [MonadExceptOf IO.Error m]
     (read : USize → m ByteArray) (extent : Nat) : m ByteArray := do
   let mismatch := IO.userError "integrity manifest extent changed while reading"
   let header ← readExactPrefixWith mismatch read (min 48 extent) .empty

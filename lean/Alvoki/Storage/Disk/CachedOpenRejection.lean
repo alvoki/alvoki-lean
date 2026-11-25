@@ -89,6 +89,22 @@ namespace CachedOpenRejection
 
 variable {directory : DiskDirectory} {before : LockedFileState FileImage}
 
+/-- A malformed complete manifest and its observed bounded prefix cause
+the same preparation rejection before any checkpoint run or WAL read. -/
+def ofManifestDecodeError (attempt : CachedOpenAttempt directory before)
+    {source : ByteArray} {cause : String}
+    (visible : before.image.directory.active.manifest = some source)
+    (acquired : attempt.readOptional (directory.file .manifest) before.image =
+      .ok (before.image.directory.active.manifest.map
+        (fun bytes => bytes.extract 0 (Manifest.IntegrityCheckpoint.acquisitionSize bytes))) before.image)
+    (invalid : Manifest.IntegrityCheckpoint.decode source = .error cause) :
+    CachedOpenRejection directory before := by
+  refine ⟨attempt, IO.userError cause, ?_⟩
+  rw [visible] at acquired
+  simp [CachedOpenAttempt.prepare, prepareBoundedMarkedFromReaders, readIntegrityCheckpointSized,
+    acquired, Manifest.IntegrityCheckpoint.decode_acquisitionPrefix, invalid, Bind.bind, EStateM.bind,
+    liftExcept, Except.mapError, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+
 def after (rejection : CachedOpenRejection directory before) : LockedFileState FileImage :=
   (rejection.attempt.cleanupError rejection.cause before.image).2
 
