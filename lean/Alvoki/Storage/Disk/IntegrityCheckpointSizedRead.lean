@@ -115,6 +115,43 @@ theorem readIntegrityCheckpointSized_compatible (dir : DiskDirectory)
       readIntegrityCheckpoint readManifest readRun (fun report => liftExcept (report.mapError IO.userError)) :=
   readIntegrityCheckpointSized_eq_of_reports dir readManifest readSize readPrefix readRun manifestRead decoded reported
 
+/-- Successful size checks and prefix reads advance the state in the
+actual manifest-index loop. Each index enters with the state reached by
+the preceding read. -/
+theorem readIntegrityRunBytesSized_effects {state : Type} (dir : DiskDirectory)
+    (manifest : IntegrityCheckpoint) (readSize : FilePath → EStateM IO.Error state Nat)
+    (readPrefix : FilePath → Nat → EStateM IO.Error state ByteArray)
+    (atIndex : Nat → state) (payload : Nat → ByteArray)
+    (reported : ∀ index < manifest.header.runCount.toNat, ∃ stamp,
+      manifest.runs[index]? = some stamp ∧ stamp.byteCount.toNat < USize.size ∧
+      (payload index).size = stamp.byteCount.toNat ∧
+      readSize (dir.file (.run manifest.header.generation index)) (atIndex index) =
+        .ok stamp.byteCount.toNat (atIndex index) ∧
+      readPrefix (dir.file (.run manifest.header.generation index)) stamp.byteCount.toNat (atIndex index) =
+        .ok (payload index) (atIndex (index + 1))) :
+    readIntegrityRunBytesSized dir manifest readSize readPrefix (atIndex 0) =
+      .ok ((List.range manifest.header.runCount.toNat).map payload) (atIndex manifest.header.runCount.toNat) := by
+  let readRun := readStampedRun dir manifest.runs.toArray readSize readPrefix manifest.header.generation
+  have readOne (index : Nat) (within : index < manifest.header.runCount.toNat) :
+      readRun index (atIndex index) = .ok (payload index) (atIndex (index + 1)) := by
+    obtain ⟨stamp, found, fits, size, sized, read⟩ := reported index within
+    have exactRead := readExactRecoveryFileWith_accepts (dir.file (.run manifest.header.generation index))
+      stamp.byteCount.toNat runExtentError readSize readPrefix fits sized read size
+    simpa [readRun, readStampedRun, found] using exactRead
+  have readAll (start length : Nat) (within : start + length ≤ manifest.header.runCount.toNat) :
+      ((List.range' start length).mapM readRun) (atIndex start) =
+        .ok ((List.range' start length).map payload) (atIndex (start + length)) := by
+    induction length generalizing start with
+    | zero => rfl
+    | succ length ih =>
+      have first : start < manifest.header.runCount.toNat := by omega
+      have tail : start + 1 + length ≤ manifest.header.runCount.toNat := by omega
+      have endIndex : start + 1 + length = start + (length + 1) := by omega
+      simp only [List.range'_succ, List.mapM_cons, List.map_cons, Bind.bind, EStateM.bind, readOne start first,
+        ih (start + 1) tail, endIndex, Pure.pure, EStateM.pure]
+  simp only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM]
+  simpa only [List.range_eq_range', Nat.zero_add] using readAll 0 manifest.header.runCount.toNat (by simp)
+
 /-- Read-only size and prefix reports establish the exact ordered payloads
 and state reached by the prefix of the sized run loop. -/
 theorem readIntegrityRunBytesSized_prefix_of_reports {state : Type} (dir : DiskDirectory)
@@ -129,22 +166,11 @@ theorem readIntegrityRunBytesSized_prefix_of_reports {state : Type} (dir : DiskD
         .ok (payload index) initial) :
     readIntegrityRunBytesSized dir { manifest with header := { manifest.header with runCount := stop.toUInt64 } }
       readSize readPrefix initial = .ok ((List.range stop).map payload) initial := by
-  let readRun := readStampedRun dir manifest.runs.toArray readSize readPrefix manifest.header.generation
-  have readOne (index : Nat) (within : index < stop) : readRun index initial = .ok (payload index) initial := by
-    obtain ⟨stamp, found, fits, size, sized, read⟩ := reported index within
-    have exactRead := readExactRecoveryFileWith_accepts (dir.file (.run manifest.header.generation index))
-      stamp.byteCount.toNat runExtentError readSize readPrefix fits sized read size
-    simpa [readRun, readStampedRun, found, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure] using exactRead
-  have readAll (indices : List Nat) (within : ∀ index ∈ indices, index < stop) :
-      (indices.mapM readRun) initial = .ok (indices.map payload) initial := by
-    induction indices with
-    | nil => rfl
-    | cons index rest ih =>
-      have tail := ih (fun index member => within index (List.mem_cons_of_mem _ member))
-      simp [List.mapM_cons, readOne index (within index List.mem_cons_self), tail,
-        Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
-  simp only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, UInt64.toNat_ofNat_of_lt' fits]
-  exact readAll (List.range stop) (fun _ member => List.mem_range.mp member)
+  let shortened := { manifest with header := { manifest.header with runCount := stop.toUInt64 } }
+  have count : shortened.header.runCount.toNat = stop := UInt64.toNat_ofNat_of_lt' fits
+  have exact := readIntegrityRunBytesSized_effects dir shortened readSize readPrefix (fun _ => initial) payload
+    (fun index within => reported index (count ▸ within))
+  simpa only [count] using exact
 
 /-- A run with a rejected extent stops the ordered reader after the size
 callback. The shortened loop supplies the actual reached state for the

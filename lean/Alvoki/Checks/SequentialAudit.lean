@@ -54,6 +54,7 @@ import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.KeeperReadCustody
 import Alvoki.Storage.Disk.CapturedKeeperCustody
 import Alvoki.Storage.Disk.CapturedSealReadCensus
+import Alvoki.Storage.Disk.CapturedCheckpointReadCensus
 import Alvoki.Storage.Disk.WriteGroupFsync
 import Alvoki.Storage.Disk.AppendGroupedReports
 import Alvoki.Storage.Disk.RetainedWriterReopen
@@ -1662,6 +1663,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofSealExtent
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofKeeperExtent
 #check_axioms Alvoki.Storage.readIntegrityRunBytesSized_prefix_of_reports
+#check_axioms Alvoki.Storage.readIntegrityRunBytesSized_effects
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofCheckpointRunExtent
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofCheckpointRunDigest
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofManifestDecodeError
@@ -1691,6 +1693,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.ofChunkReads_readKeeper
 #check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.ofChunkReads
 #check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.readExact
+#check_axioms Alvoki.Storage.WalSegmentRepair.SizedCheckpointRunReports.readExactWithState
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.readSelected
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.completes
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_preservesCheckpointBytes
@@ -1954,6 +1957,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.readSeal
 #check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.reaches
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanWal_closed
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanWal_fromEntry
+#check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.readPrefix
+#check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.readMetadata
+#check_axioms Alvoki.Storage.DiskSession.CapturedManifestCensus.reads
+#check_axioms Alvoki.Storage.DiskSession.CapturedRunReadCensus.reads
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkerCensus.reads
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.beforeWalScan
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.selectedWalReachesKeeper
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.liveAtRead
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.closedDescription

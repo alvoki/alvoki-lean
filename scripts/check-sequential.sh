@@ -419,6 +419,7 @@ lake env leanchecker Alvoki.Storage.Disk.AppendHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.KeeperReadCustody
 lake env leanchecker Alvoki.Storage.Disk.CapturedKeeperCustody
 lake env leanchecker Alvoki.Storage.Disk.CapturedSealReadCensus
+lake env leanchecker Alvoki.Storage.Disk.CapturedCheckpointReadCensus
 lake env leanchecker Alvoki.Storage.Disk.WriteGroupFsync
 lake env leanchecker Alvoki.Storage.Disk.AppendGroupedReports
 lake env leanchecker Alvoki.Storage.Disk.SegmentedKeeperDescriptor

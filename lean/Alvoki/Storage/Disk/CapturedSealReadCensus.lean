@@ -22,17 +22,20 @@ structure TemporaryPrefixCustody {reads : CheckpointRunChunkReads} {path : FileP
   closing : released = beforeClose ++ [opened.slot.closeEvent]
   keptWhileReading : ∀ event ∈ beforeClose, event.removes opened.slot.reference = false
 
-/-- Interpret the native bounded seal callback on the observed handle.
+/-- Interpret a native exact-prefix callback on the observed handle.
 The successful projection carries the slot drops reported before the next
 open can be issued. -/
-def readTemporarySeal (reads : CheckpointRunChunkReads) (released : FilePath → List LockReferenceDrop)
+def readTemporaryPrefix (reads : CheckpointRunChunkReads) (mismatch : IO.Error)
+    (released : FilePath → List LockReferenceDrop)
     (path : FilePath) (count : Nat) : EStateM IO.Error ReadState ByteArray := fun (cache, census, files) =>
   match reads.openRead path with
   | .error cause => .error cause (cache, census, files)
   | .ok handle =>
-    match reads.readOpenedPrefix selectedWalSpanError handle count with
+    match reads.readOpenedPrefix mismatch handle count with
     | .error cause => .error cause (cache, handle.1, files)
     | .ok bytes => .ok bytes (cache, handle.1.afterDrops (released path), files)
+
+abbrev readTemporarySeal (reads : CheckpointRunChunkReads) := readTemporaryPrefix reads selectedWalSpanError
 
 namespace TemporaryPrefixCustody
 
@@ -71,22 +74,30 @@ theorem closes (custody : TemporaryPrefixCustody opened initial (released path))
   rw [reduced, ← DescriptorInventory.afterDrops_append, DescriptorInventory.references_afterDrops, custody.fresh]
   rfl
 
-/-- The held stat and actual chunk callback produce the complete seal
+/-- The held stat and actual chunk callback produce the complete file
 bytes. The reached file image and cache are unchanged and the descriptor
 census records the exact temporary lifetime. -/
+theorem readPrefix (custody : TemporaryPrefixCustody opened initial (released path)) (mismatch : IO.Error)
+    {object : DeviceInode} {bytes : ByteArray} (bound : view.child root name = some object)
+    (contents : reads.objectBytes (view.modelObject object) = some bytes) (fits : bytes.size < USize.size)
+    (cache : CensusDirectoryCache) (files : LockedFileState FileImage) :
+    readTemporaryPrefix reads mismatch released path bytes.size (cache, initial, files) =
+      .ok bytes (cache, initial.afterDrops (custody.beforeOpen ++ released path), files) := by
+  let observed := opened.observesFile bound contents
+  have exact := observed.readOpenedExactPrefix mismatch bytes.size fits (Nat.le_refl _)
+  change reads.readOpenedPrefix mismatch (opened.inventory, opened.slot, 0) bytes.size =
+      .ok (bytes.extract 0 bytes.size) at exact
+  have read : reads.readOpenedPrefix mismatch (opened.inventory, opened.slot, 0) bytes.size = .ok bytes := by
+    simpa only [ByteArray.extract_zero_size] using exact
+  simp only [readTemporaryPrefix, opened.opened, read, custody.closes.1]
+
 theorem readSeal (custody : TemporaryPrefixCustody opened initial (released path))
     {object : DeviceInode} {bytes : ByteArray} (bound : view.child root name = some object)
     (contents : reads.objectBytes (view.modelObject object) = some bytes) (fits : bytes.size < USize.size)
     (cache : CensusDirectoryCache) (files : LockedFileState FileImage) :
     readTemporarySeal reads released path bytes.size (cache, initial, files) =
-      .ok bytes (cache, initial.afterDrops (custody.beforeOpen ++ released path), files) := by
-  let observed := opened.observesFile bound contents
-  have exact := observed.readOpenedExactPrefix selectedWalSpanError bytes.size fits (Nat.le_refl _)
-  change reads.readOpenedPrefix selectedWalSpanError (opened.inventory, opened.slot, 0) bytes.size =
-      .ok (bytes.extract 0 bytes.size) at exact
-  have read : reads.readOpenedPrefix selectedWalSpanError (opened.inventory, opened.slot, 0) bytes.size = .ok bytes := by
-    simpa only [ByteArray.extract_zero_size] using exact
-  simp only [readTemporarySeal, opened.opened, read, custody.closes.1]
+      .ok bytes (cache, initial.afterDrops (custody.beforeOpen ++ released path), files) :=
+  custody.readPrefix selectedWalSpanError bound contents fits cache files
 
 end TemporaryPrefixCustody
 
@@ -159,6 +170,29 @@ theorem scanWal_closed (report : CapturedMarkedReadReports admission layout publ
     report.listing.complete).1
   rw [scanWal, listing, report.listing.afterClose_eq]
   rfl
+
+/-- The same checked stream can start after manifest and marker reads
+have already applied the reported drops before opendir. -/
+theorem scanWal_fromEntry (report : CapturedMarkedReadReports admission layout published) :
+    report.scanWal directory.path
+      (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) =
+        .ok (report.listing.scan.entries directory.path) (admission.cache, report.listing.afterClose, admission.held) := by
+  have listing := (CheckedDirectoryReadReport.scan_complete directory.path report.listing.eof report.listing.closed
+    report.listing.complete).1
+  have stillReached : (admission.reached.afterDrops report.listing.beforeOpen).afterDrops report.lifetime.drops =
+      report.listing.afterClose := by
+    rw [report.listing.afterClose_eq]
+    change (admission.reached.afterDrops report.listing.beforeOpen).afterDrops report.lifetime.drops =
+      admission.reached.afterDrops report.lifetime.drops
+    have chronology : report.lifetime.drops = report.listing.beforeOpen ++ report.listing.duringScan ++
+        [report.listing.stream.closeEvent] := report.listing.drops
+    rw [chronology]
+    simp [DescriptorInventory.afterDrops, List.filter_filter, List.all_append, Bool.and_comm, Bool.and_left_comm]
+  rw [scanWal, listing]
+  change EStateM.Result.ok (report.listing.scan.entries directory.path)
+    (admission.cache, (admission.reached.afterDrops report.listing.beforeOpen).afterDrops report.lifetime.drops,
+      admission.held) = _
+  rw [stillReached]
 
 /-- Use the real selected WAL worker with the observed checked listing and
 temporary seal effects. It begins the keeper subloop at the exact census
