@@ -81,78 +81,71 @@ theorem returns (seen : CompletedCheckpointTemporaryFile descriptors calls write
 
 end CompletedCheckpointTemporaryFile
 
-/-- Successful checkpoint observations on the exact ready writer. The
-normal file/cache dispatcher is shared with the native implementation.
-The file-only completion report gives the physical bytes and local WAL
-frames. The extra observations follow the temporary handles in that
-same run and manifest schedule. -/
-structure NativeReadyCheckpoint {image : Type} (state : NativeReadyState)
+/-- The native cache and temporary descriptor observations common to a
+checkpoint that has completed its manifest rename. -/
+structure NativeCheckpointPrefix {image : Type} (state : NativeReadyState)
     {attempt : SegmentedCheckpointReport state.session.directory state.writer}
-    (reports : CheckpointCompletionReports (CheckpointState image) attempt) where
+    {callbacks : CheckpointFileCallbacks (CheckpointState image)}
+    (observed : ReturnedCheckpointPrefix (callbacks.perform state.session.directory attempt.prepared attempt.manifest)
+      attempt.table.runs.length) where
   primitives : CheckpointPrimitiveCalls CheckpointOpenHandle image
-  callbacks : reports.callbacks = primitives.cached.callbacks state.session.directory
-  physical : reports.CloseFiles
+  callbacks : callbacks = primitives.cached.callbacks state.session.directory
   descriptors : image → DescriptorInventory
-  initialCache : (reports.observed.atRun 0).1 = state.cache
-  initialCensus : descriptors (reports.observed.atRun 0).2 = state.census
+  initialCache : (observed.atRun 0).1 = state.cache
+  initialCensus : descriptors (observed.atRun 0).2 = state.census
   capturedDirectory : DescriptorInventory
   directoryCached : state.cache.directory = some (capturedDirectory, state.directorySlot, 0)
   capturedInode : capturedDirectory.inode state.directorySlot.description = state.census.inode state.directorySlot.description
-  bindings : image → FilePath → Option Nat
-  heldBindings : ∀ raw ∈ [(reports.observed.atRun attempt.table.runs.length).2,
-                            reports.observed.renamed.2, reports.observed.completed.2],
-    bindings raw state.session.directory.path = some (state.census.inode state.directorySlot.description) ∧
-    bindings raw (state.session.directory.file .lock) = some (state.census.inode state.owner.description)
   pending : state.cache.pending = []
   runLifetime : ∀ index < attempt.table.runs.length,
     ∃ run : Compaction.CheckedRun, attempt.table.runs.toArray[index]? = some run ∧
       Nonempty (CompletedCheckpointTemporaryFile descriptors primitives.cached primitives.cached.writeRun
         (state.session.directory.file (.run attempt.prepared.generation index)) run.run.bytes
-        (reports.observed.atRun index).2 (reports.observed.atRun (index + 1)).2)
-  runsDirectory : descriptors reports.observed.runsSettled.2 =
-    descriptors (reports.observed.atRun attempt.table.runs.length).2
+        (observed.atRun index).2 (observed.atRun (index + 1)).2)
+  runsDirectory : descriptors observed.runsSettled.2 = descriptors (observed.atRun attempt.table.runs.length).2
   manifestLifetime : CompletedCheckpointTemporaryFile descriptors primitives.cached primitives.cached.writeStaged
-    (state.session.directory.file .stagedManifest) attempt.manifest reports.observed.runsSettled.2 reports.observed.stagedSynced.2
-  rename : descriptors reports.observed.renamed.2 = descriptors reports.observed.stagedSynced.2
-  finalDirectory : descriptors reports.observed.completed.2 = descriptors reports.observed.renamed.2
+    (state.session.directory.file .stagedManifest) attempt.manifest observed.runsSettled.2 observed.stagedSynced.2
+  rename : descriptors observed.renamed.2 = descriptors observed.stagedSynced.2
 
-namespace NativeReadyCheckpoint
+namespace NativeCheckpointPrefix
 
 variable {image : Type} {state : NativeReadyState}
   {attempt : SegmentedCheckpointReport state.session.directory state.writer}
-  {reports : CheckpointCompletionReports (CheckpointState image) attempt}
+  {callbacks : CheckpointFileCallbacks (CheckpointState image)}
+  {observed : ReturnedCheckpointPrefix (callbacks.perform state.session.directory attempt.prepared attempt.manifest)
+    attempt.table.runs.length}
 
-private theorem runCache (report : NativeReadyCheckpoint state reports) {index : Nat}
-    (within : index < attempt.table.runs.length) (pending : (reports.observed.atRun index).1.pending = []) :
-    (reports.observed.atRun (index + 1)).1 = (reports.observed.atRun index).1 := by
+private theorem runCache (report : NativeCheckpointPrefix state observed) {index : Nat}
+    (within : index < attempt.table.runs.length) (pending : (observed.atRun index).1.pending = []) :
+    (observed.atRun (index + 1)).1 = (observed.atRun index).1 := by
   obtain ⟨run, found, ⟨seen⟩⟩ := report.runLifetime index within
   change attempt.prepared.table.runs.toArray[index]? = some run at found
   have ran := seen.returns state.session.directory (file_ne_directory _ (.run attempt.prepared.generation index))
-    (reports.observed.atRun index).1 pending
-  have exact : (reports.callbacks.perform state.session.directory attempt.prepared attempt.manifest (.writeRun index) >>=
-        fun _ => reports.callbacks.perform state.session.directory attempt.prepared attempt.manifest (.syncRun index))
-      (reports.observed.atRun index) = .ok () ((reports.observed.atRun index).1, (reports.observed.atRun (index + 1)).2) := by
+    (observed.atRun index).1 pending
+  have exact : (callbacks.perform state.session.directory attempt.prepared attempt.manifest (.writeRun index) >>=
+        fun _ => callbacks.perform state.session.directory attempt.prepared attempt.manifest (.syncRun index))
+      (observed.atRun index) = .ok () ((observed.atRun index).1, (observed.atRun (index + 1)).2) := by
     simpa only [report.callbacks, CheckpointFileCallbacks.perform, performCheckpointFileStep, found, Bind.bind, EStateM.bind,
       Pure.pure, EStateM.pure, CheckpointCacheCalls.callbacks] using ran
-  have same := (EStateM.Result.ok.inj ((reports.observed.pairs index within).symm.trans exact)).2
+  have same := (EStateM.Result.ok.inj ((observed.pairs index within).symm.trans exact)).2
   simpa only using congrArg (Prod.fst : CheckpointState image → CensusDirectoryCache) same
 
-private theorem beforeRunsDirectory (report : NativeReadyCheckpoint state reports) (index : Nat)
+theorem beforeRunsDirectory (report : NativeCheckpointPrefix state observed) (index : Nat)
     (within : index ≤ attempt.table.runs.length) :
-    (reports.observed.atRun index).1 = state.cache ∧ report.descriptors (reports.observed.atRun index).2 = state.census := by
+    (observed.atRun index).1 = state.cache ∧ report.descriptors (observed.atRun index).2 = state.census := by
   induction index with
   | zero => exact ⟨report.initialCache, report.initialCensus⟩
   | succ index earlier =>
     have within' : index < attempt.table.runs.length := within
     obtain ⟨cache, census⟩ := earlier (Nat.le_of_lt within')
     obtain ⟨_, _, ⟨seen⟩⟩ := report.runLifetime index within'
-    have pending : (reports.observed.atRun index).1.pending = [] :=
+    have pending : (observed.atRun index).1.pending = [] :=
       (congrArg Cache.pending cache).trans report.pending
     exact ⟨(report.runCache within' pending).trans cache, seen.keepsCensus.1.trans census⟩
 
-private theorem callbackCache (report : NativeReadyCheckpoint state reports)
+theorem callbackCache (report : NativeCheckpointPrefix state observed)
     {before after : CheckpointState image} (step : CheckpointPublication.Step)
-    (returned : reports.callbacks.perform state.session.directory attempt.prepared attempt.manifest step before = .ok () after)
+    (returned : callbacks.perform state.session.directory attempt.prepared attempt.manifest step before = .ok () after)
     (unchanged : match step with
       | .syncRunsDirectory | .manifest .syncDirectory | .manifest .renameStaged => True
       | _ => False) : after.1 = before.1 := by
@@ -166,45 +159,37 @@ private theorem callbackCache (report : NativeReadyCheckpoint state reports)
   | manifest step => cases step <;> first | exact cache | contradiction
   | writeRun | syncRun => contradiction
 
-private theorem manifestCache (report : NativeReadyCheckpoint state reports)
-    (pending : reports.observed.runsSettled.1.pending = []) :
-    reports.observed.stagedSynced.1 = reports.observed.runsSettled.1 := by
-  let perform := reports.callbacks.perform state.session.directory attempt.prepared attempt.manifest
+private theorem manifestCache (report : NativeCheckpointPrefix state observed)
+    (pending : observed.runsSettled.1.pending = []) :
+    observed.stagedSynced.1 = observed.runsSettled.1 := by
+  let perform := callbacks.perform state.session.directory attempt.prepared attempt.manifest
   have returned : (perform (.manifest .writeStaged) >>= fun _ => perform (.manifest .syncStaged))
-      reports.observed.runsSettled = .ok () reports.observed.stagedSynced := by
-    simp only [perform, Bind.bind, EStateM.bind, reports.observed.stageManifest, reports.observed.syncManifest]
+      observed.runsSettled = .ok () observed.stagedSynced := by
+    simp only [perform, Bind.bind, EStateM.bind, observed.stageManifest, observed.syncManifest]
   have exact := report.manifestLifetime.returns state.session.directory (file_ne_directory _ .stagedManifest)
-    reports.observed.runsSettled.1 pending
+    observed.runsSettled.1 pending
   rw [show perform = report.primitives.cached.perform state.session.directory attempt.prepared attempt.manifest by
     simp only [perform, report.callbacks]] at returned
   have same : (report.primitives.cached.perform state.session.directory attempt.prepared attempt.manifest (.manifest .writeStaged) >>=
         fun _ => report.primitives.cached.perform state.session.directory attempt.prepared attempt.manifest (.manifest .syncStaged))
-      reports.observed.runsSettled = .ok () (reports.observed.runsSettled.1, reports.observed.stagedSynced.2) := by
+      observed.runsSettled = .ok () (observed.runsSettled.1, observed.stagedSynced.2) := by
     exact exact
   have pair := (EStateM.Result.ok.inj (returned.symm.trans same)).2
   simpa only using congrArg (Prod.fst : CheckpointState image → CensusDirectoryCache) pair
 
-private theorem beforeFinalDirectory (report : NativeReadyCheckpoint state reports) :
-    reports.observed.renamed.1 = state.cache ∧ report.descriptors reports.observed.renamed.2 = state.census := by
+theorem beforeFinalDirectory (report : NativeCheckpointPrefix state observed) :
+    observed.renamed.1 = state.cache ∧ report.descriptors observed.renamed.2 = state.census := by
   obtain ⟨cache, census⟩ := report.beforeRunsDirectory _ (Nat.le_refl _)
-  have runDir := report.callbackCache _ reports.observed.syncRunsDirectory trivial
+  have runDir := report.callbackCache _ observed.syncRunsDirectory trivial
   have pending := (congrArg Cache.pending (runDir.trans cache)).trans report.pending
   have manifest := report.manifestCache pending
-  have rename := report.callbackCache _ reports.observed.renameManifest trivial
+  have rename := report.callbackCache _ observed.renameManifest trivial
   exact ⟨rename.trans (manifest.trans (runDir.trans cache)), report.rename.trans
     (report.manifestLifetime.keepsCensus.1.trans (report.runsDirectory.trans census))⟩
 
-/-- The paired file dispatch and its reported allocation and finalizer
-preserve the original ready cache and census through checkpoint return. -/
-theorem preservesCustody (report : NativeReadyCheckpoint state reports) :
-    reports.observed.completed.1 = state.cache ∧ report.descriptors reports.observed.completed.2 = state.census := by
-  obtain ⟨cache, census⟩ := report.beforeFinalDirectory
-  have final := report.callbackCache _ reports.observed.syncManifestDirectory trivial
-  exact ⟨final.trans cache, report.finalDirectory.trans census⟩
-
-private theorem directoryFsync (report : NativeReadyCheckpoint state reports)
+theorem directoryFsync (report : NativeCheckpointPrefix state observed)
     {before after : CheckpointState image} (cached : before.1 = state.cache)
-    (returned : reports.callbacks.sync #[state.session.directory.path] before = .ok () after) :
+    (returned : callbacks.sync #[state.session.directory.path] before = .ok () after) :
     report.primitives.fsync (report.capturedDirectory, state.directorySlot, 0) before.2 = .ok () after.2 := by
   have actual : SyncPathGroup.run (sync state.session.directory.path report.primitives.openRead report.primitives.fsync)
       #[state.session.directory.path] before = .ok () after := by
@@ -221,6 +206,37 @@ private theorem directoryFsync (report : NativeReadyCheckpoint state reports)
     simp only [result, withCache, EStateM.Result.ok.injEq, true_and] at actual
     exact congrArg (EStateM.Result.ok ()) (congrArg (Prod.snd : CheckpointState image → image) actual)
 
+end NativeCheckpointPrefix
+
+/-- The successful final barrier extends the common returned prefix.
+The file-only completion report ties the actual published bytes to the
+ready writer. -/
+structure NativeReadyCheckpoint {image : Type} (state : NativeReadyState)
+    {attempt : SegmentedCheckpointReport state.session.directory state.writer}
+    (reports : CheckpointCompletionReports (CheckpointState image) attempt)
+    extends NativeCheckpointPrefix state reports.observed.toReturnedCheckpointPrefix where
+  physical : reports.CloseFiles
+  bindings : image → FilePath → Option Nat
+  heldBindings : ∀ raw ∈ [(reports.observed.atRun attempt.table.runs.length).2,
+                            reports.observed.renamed.2, reports.observed.completed.2],
+    bindings raw state.session.directory.path = some (state.census.inode state.directorySlot.description) ∧
+    bindings raw (state.session.directory.file .lock) = some (state.census.inode state.owner.description)
+  finalDirectory : descriptors reports.observed.completed.2 = descriptors reports.observed.renamed.2
+
+namespace NativeReadyCheckpoint
+
+variable {image : Type} {state : NativeReadyState}
+  {attempt : SegmentedCheckpointReport state.session.directory state.writer}
+  {reports : CheckpointCompletionReports (CheckpointState image) attempt}
+
+/-- The paired file dispatch and its reported allocation and finalizer
+preserve the original ready cache and census through checkpoint return. -/
+theorem preservesCustody (report : NativeReadyCheckpoint state reports) :
+    reports.observed.completed.1 = state.cache ∧ report.descriptors reports.observed.completed.2 = state.census := by
+  obtain ⟨cache, census⟩ := report.toNativeCheckpointPrefix.beforeFinalDirectory
+  have final := report.toNativeCheckpointPrefix.callbackCache _ reports.observed.syncManifestDirectory trivial
+  exact ⟨final.trans cache, report.finalDirectory.trans census⟩
+
 /-- Both native directory barriers use the captured descriptor for the
 same held root. The reported slot is live in the census reached by the
 temporary-file pairs, and the canonical `LOCK` still names the writer's inode. -/
@@ -236,10 +252,10 @@ theorem directoryBarriers (report : NativeReadyCheckpoint state reports) (valid 
       report.bindings raw state.session.directory.path = some (handle.1.inode state.directorySlot.description) ∧
       report.bindings raw (state.session.directory.file .lock) = some (state.census.inode state.owner.description) := by
   dsimp only
-  obtain ⟨runCache, runCensus⟩ := report.beforeRunsDirectory _ (Nat.le_refl _)
-  obtain ⟨manifestCache, manifestCensus⟩ := report.beforeFinalDirectory
-  refine ⟨report.directoryFsync runCache reports.observed.syncRunsDirectory,
-    report.directoryFsync manifestCache reports.observed.syncManifestDirectory, ?_⟩
+  obtain ⟨runCache, runCensus⟩ := report.toNativeCheckpointPrefix.beforeRunsDirectory _ (Nat.le_refl _)
+  obtain ⟨manifestCache, manifestCensus⟩ := report.toNativeCheckpointPrefix.beforeFinalDirectory
+  refine ⟨report.toNativeCheckpointPrefix.directoryFsync runCache reports.observed.syncRunsDirectory,
+    report.toNativeCheckpointPrefix.directoryFsync manifestCache reports.observed.syncManifestDirectory, ?_⟩
   intro raw member
   have custody : report.descriptors raw = state.census := by
     simp only [List.mem_cons, List.not_mem_nil, or_false] at member

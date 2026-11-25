@@ -94,6 +94,7 @@ import Alvoki.Storage.Disk.CheckpointRunPrefixCustody
 import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 import Alvoki.Storage.Disk.CheckpointObservedCompletion
 import Alvoki.Storage.Disk.NativeReadyCheckpoint
+import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 import Alvoki.Storage.Disk.CheckpointCompletionClientTrace
 import Alvoki.Storage.Disk.CheckpointCompletionHeldReopen
 import Alvoki.Storage.Disk.Checkpoint.ProcessExit
@@ -599,6 +600,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.preservesCustody
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.directoryBarriers
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.completes
+#check_axioms Alvoki.Storage.CheckpointPublication.ReturnedCheckpointPrefix.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.custody
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.Physical.selects
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.checkpointDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.checkpoints
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointCloseAndReopen
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointCloseAndReopenAfterRetries

@@ -54,7 +54,8 @@ structure CheckpointManifestDirectoryCut {directory : DiskDirectory} {before : S
       published.durable (SegmentedCheckpointReport.generation before) index
   priorRuns : SelectedRunsAgree before.wal.directory.active.manifest runs.guaranteed published.durable
 
-private theorem CheckpointPowerCut.finalDirectoryPublication {directory : DiskDirectory} {before : SegmentedWriterState}
+/-- Interpret the model at the returned rename and final directory effect. -/
+theorem CheckpointPowerCut.finalDirectoryPublication {directory : DiskDirectory} {before : SegmentedWriterState}
     {writer : Nat} (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
     (completed : cut.completed = runSteps cut.checkpoint.table.runs.length ++
       [.syncRunsDirectory, .manifest .writeStaged, .manifest .syncStaged, .manifest .renameStaged]) :
