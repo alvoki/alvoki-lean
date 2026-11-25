@@ -11,6 +11,31 @@ variable {directory : DiskDirectory} {before : LockedFileState FileImage} {histo
   {published : CheckpointPublication.Image}
   {held : HeldDirectoryMarkedRetryReports operations published}
 
+/-- A reported successful step and a healthy remaining action list
+supply the same per-action contract for the combined list. -/
+theorem _root_.Alvoki.Storage.WalSegmentRepair.ReachesAction.prependHealthy {target : Target} {initial next : FileImage} {head : Step} {rest : List Step}
+    {perform : Step → EStateM IO.Error FileImage Unit}
+    (effect : initial.effect target head = some next) (run : perform head initial = .ok () next)
+    (tail : ∀ action prior next', ReachesAction target next rest action prior →
+      prior.effect target action = some next' → perform action prior = .ok () next') :
+    ∀ action prior next', ReachesAction target initial (head :: rest) action prior →
+      prior.effect target action = some next' → perform action prior = .ok () next' := by
+  intro action prior next' reached applied
+  obtain ⟨earlier, suffix, schedule, executed⟩ := reached
+  cases earlier with
+  | nil =>
+    simp only [List.nil_append, List.cons.injEq] at schedule
+    obtain ⟨rfl, _⟩ := schedule
+    have same : initial = prior := Option.some.inj executed
+    subst prior
+    rw [effect] at applied
+    exact Option.some.inj applied ▸ run
+  | cons first earlier =>
+    simp only [List.cons_append, List.cons.injEq] at schedule
+    obtain ⟨rfl, ordered⟩ := schedule
+    simp only [List.foldlM_cons, effect, Bind.bind, Option.bind] at executed
+    exact tail action prior next' ⟨earlier, suffix, ordered, executed⟩ applied
+
 /-- One reached unlink callback and its actual parent resolution. A
 successful unlink or a reported absent target clears only the canonical
 later name in the observed namespace. -/
@@ -53,6 +78,27 @@ theorem returned (reports : HeldLaterWalUnlinks held initial bindings names fina
   | step head _ ih =>
     simpa only [List.map_cons, List.foldl_cons, List.forM_eq_forM, List.forM_cons, Bind.bind, EStateM.bind,
       Pure.pure, EStateM.pure, performPaths, RunCollection.performPaths, head.returned, head.accepted] using ih
+
+/-- Prepend the exact ordered unlink callbacks to a healthy tail. -/
+theorem prependHealthy {target : Target} {initial : FileImage} {bindings final : FilePath → Option Nat}
+    {names : List Nat} (plans : HeldLaterWalUnlinks held initial bindings names final) (plan : Plan) {rest : List Step}
+    (tail : ∀ action prior next, ReachesAction target (names.foldl FileImage.unlinkLater initial) rest action prior →
+      prior.effect target action = some next →
+      performPaths directory plan operations.removeFile throw (operations.write operations.cache)
+        (operations.sync operations.cache) operations.renameFile action prior = .ok () next) :
+    ∀ action prior next, ReachesAction target initial (names.map Step.unlink ++ rest) action prior →
+      prior.effect target action = some next →
+      performPaths directory plan operations.removeFile throw (operations.write operations.cache)
+        (operations.sync operations.cache) operations.renameFile action prior = .ok () next := by
+  induction plans with
+  | done => simpa using tail
+  | @step first current bindings reached names final head _ ih =>
+    have removed : performPaths directory plan operations.removeFile throw (operations.write operations.cache)
+        (operations.sync operations.cache) operations.renameFile (.unlink first) current =
+          .ok () (current.unlinkLater first) := by
+      simp [performPaths, RunCollection.performPaths, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+        head.returned, head.accepted]
+    exact ReachesAction.prependHealthy rfl removed (ih tail)
 
 theorem keepsBinding (reports : HeldLaterWalUnlinks held initial bindings names final) (path : FilePath)
     (untouched : ∀ first ∈ names, path ≠ directory.file (.walSegment first)) :

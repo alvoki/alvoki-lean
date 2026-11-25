@@ -688,49 +688,6 @@ theorem finishResult (reported : ListedLongKeeperSettlement rename) :
   | ok value reached => cases value; rfl
   | error cause reached => rfl
 
-private theorem prependHealthy {target : Target} {initial next : FileImage} {head : Step} {rest : List Step}
-    {perform : Step → EStateM IO.Error FileImage Unit}
-    (effect : initial.effect target head = some next) (run : perform head initial = .ok () next)
-    (tail : ∀ action prior next', ReachesAction target next rest action prior →
-      prior.effect target action = some next' → perform action prior = .ok () next') :
-    ∀ action prior next', ReachesAction target initial (head :: rest) action prior →
-      prior.effect target action = some next' → perform action prior = .ok () next' := by
-  intro action prior next' reached applied
-  obtain ⟨earlier, suffix, schedule, executed⟩ := reached
-  cases earlier with
-  | nil =>
-    simp only [List.nil_append, List.cons.injEq] at schedule
-    obtain ⟨rfl, _⟩ := schedule
-    have same : initial = prior := Option.some.inj executed
-    subst prior
-    rw [effect] at applied
-    exact Option.some.inj applied ▸ run
-  | cons first earlier =>
-    simp only [List.cons_append, List.cons.injEq] at schedule
-    obtain ⟨rfl, ordered⟩ := schedule
-    simp only [List.foldlM_cons, effect, Bind.bind, Option.bind] at executed
-    exact tail action prior next' ⟨earlier, suffix, ordered, executed⟩ applied
-
-private theorem prependUnlinks {target : Target} {initial : FileImage} {bindings final : FilePath → Option Nat}
-    {names : List Nat} (plans : HeldLaterWalUnlinks held initial bindings names final) (plan : Plan) {rest : List Step}
-    (tail : ∀ action prior next, ReachesAction target (names.foldl FileImage.unlinkLater initial) rest action prior →
-      prior.effect target action = some next →
-      performPaths directory plan operations.removeFile throw (operations.write operations.cache)
-        (operations.sync operations.cache) operations.renameFile action prior = .ok () next) :
-    ∀ action prior next, ReachesAction target initial (names.map Step.unlink ++ rest) action prior →
-      prior.effect target action = some next →
-      performPaths directory plan operations.removeFile throw (operations.write operations.cache)
-        (operations.sync operations.cache) operations.renameFile action prior = .ok () next := by
-  induction plans with
-  | done => simpa using tail
-  | @step first current bindings reached names final head _ ih =>
-    have removed : performPaths directory plan operations.removeFile throw (operations.write operations.cache)
-        (operations.sync operations.cache) operations.renameFile (.unlink first) current =
-          .ok () (current.unlinkLater first) := by
-      simp [performPaths, RunCollection.performPaths, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
-        head.returned, head.accepted]
-    exact prependHealthy rfl removed (ih tail)
-
 private theorem prependPruning (pruning : LongKeeperPruning authorization) {rest : List Step}
     (tail : ∀ action prior next, ReachesAction layout.target pruning.stageInput.image rest action prior →
       prior.effect layout.target action = some next →
@@ -742,11 +699,11 @@ private theorem prependPruning (pruning : LongKeeperPruning authorization) {rest
       prior.effect layout.target action = some next →
       performPaths directory layout.plan operations.removeFile throw (operations.write operations.cache)
         (operations.sync operations.cache) operations.renameFile action prior = .ok () next := by
-  have barrier := prependHealthy (target := layout.target) (initial := pruning.afterUnlinks)
+  have barrier := ReachesAction.prependHealthy (target := layout.target) (initial := pruning.afterUnlinks)
     (next := pruning.stageInput.image) (head := .syncPruned) (rest := rest) rfl pruning.suffixSync tail
   cases pruning with
   | empty reported => simpa [reported.noLater, LongKeeperPruning.afterUnlinks] using barrier
-  | listed reported _ _ => exact prependUnlinks reported.unlinks layout.plan barrier
+  | listed reported _ _ => exact reported.unlinks.prependHealthy layout.plan barrier
 
 /-- Per-operation results supply the whole finishing contract on the
 long-keeper route, including all reported suffix unlinks. -/
@@ -781,14 +738,14 @@ theorem healthyFinish (reported : ListedLongKeeperSettlement rename)
   unfold MarkedRetryChunkOperations.HealthyFinish
   rw [schedule]
   refine prependPruning pruning ?_
-  refine prependHealthy (next := written.image) rfl ?_ ?_
+  refine ReachesAction.prependHealthy (next := written.image) rfl ?_ ?_
   · simp only [performPaths, Publication.performReplacement, selectedBytes]
     exact stage.stageCallbacks.1
-  refine prependHealthy (next := durable.image) rfl ?_ ?_
+  refine ReachesAction.prependHealthy (next := durable.image) rfl ?_ ?_
   · simp only [performPaths, Publication.performReplacement, Array.push_empty]
     exact staged
-  refine prependHealthy (next := renamed.image) rfl renameResult ?_
-  refine prependHealthy (next := (settleKeeperBinding renamed).image) rfl final ?_
+  refine ReachesAction.prependHealthy (next := renamed.image) rfl renameResult ?_
+  refine ReachesAction.prependHealthy (next := (settleKeeperBinding renamed).image) rfl final ?_
   intro action prior next reached _
   obtain ⟨earlier, later, ordered, _⟩ := reached
   have size := congrArg List.length ordered

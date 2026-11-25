@@ -190,6 +190,7 @@ import Alvoki.Storage.Disk.DirectoryCacheCapture
 import Alvoki.Storage.Disk.ListedDirectoryAuthorization
 import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
+import Alvoki.Storage.Disk.ListedPrunedAlignedKeeper
 import Alvoki.Storage.Disk.ListedStagedKeeperRepair
 import Alvoki.Storage.Disk.ListedStagedKeeperFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperFailure
@@ -1439,6 +1440,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.continuesAfterError
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.continuesAfterError
 #check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.installs
+#check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.barrierCensus
+#check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.barriers
+#check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.keeperCustody
+#check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.syncResult
+#check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.finishResult
+#check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.healthyFinish
+#check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.installs
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperPrune.pruneCustody
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperPrune.barriers
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.stageCallbacks
