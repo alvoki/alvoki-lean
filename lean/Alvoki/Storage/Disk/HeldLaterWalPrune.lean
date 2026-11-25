@@ -8,8 +8,8 @@ open System SyncHandleRouting WalSegmentRepair
 variable {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout before.image history}
   {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
-  {published : CheckpointPublication.Image}
-  {held : HeldDirectoryMarkedRetryReports operations published}
+  {published : CheckpointPublication.Image} {readStart : DescriptorInventory}
+  {held : HeldDirectoryMarkedRetryReports operations published readStart}
 
 /-- A reported successful step and a healthy remaining action list
 supply the same per-action contract for the combined list. -/
@@ -39,7 +39,7 @@ theorem _root_.Alvoki.Storage.WalSegmentRepair.ReachesAction.prependHealthy {tar
 /-- One reached unlink callback and its actual parent resolution. A
 successful unlink or a reported absent target clears only the canonical
 later name in the observed namespace. -/
-structure HeldLaterWalUnlink (held : HeldDirectoryMarkedRetryReports operations published)
+structure HeldLaterWalUnlink (held : HeldDirectoryMarkedRetryReports operations published readStart)
     (first : Nat) (initial : FileImage) (bindings reached : FilePath → Option Nat) where
   parent : DeviceInode
   basename : String
@@ -56,7 +56,7 @@ structure HeldLaterWalUnlink (held : HeldDirectoryMarkedRetryReports operations 
 
 /-- The observations follow the actual dispatcher order and the image
 left by each unlink. -/
-inductive HeldLaterWalUnlinks (held : HeldDirectoryMarkedRetryReports operations published) :
+inductive HeldLaterWalUnlinks (held : HeldDirectoryMarkedRetryReports operations published readStart) :
     FileImage → (FilePath → Option Nat) → List Nat → (FilePath → Option Nat) → Prop where
   | done : HeldLaterWalUnlinks held initial bindings [] bindings
   | step (head : HeldLaterWalUnlink held first initial bindings reached)
@@ -257,8 +257,8 @@ theorem suffixBarrier (prune : ListedLaterWalPrune authorization) :
       .ok () (before.image.unlinkVisibleSuffix).syncDirectory := by
   intro atBarrier
   refine ⟨prune.directoryRetained, prune.lockRetained, ?_, ?_, ?_⟩
-  · simpa only [atBarrier, DescriptorInventory.afterDrops, held.listing.afterClose_eq] using prune.directoryBound
-  · simpa only [atBarrier, DescriptorInventory.afterDrops, held.listing.afterClose_eq] using prune.lockBound
+  · simpa only [atBarrier, DescriptorInventory.afterDrops, held.listing.afterClose_eq, held.objectMap] using prune.directoryBound
+  · simpa only [atBarrier, DescriptorInventory.afterDrops, held.listing.afterClose_eq, held.objectMap] using prune.lockBound
   · rw [prune.projected, SyncPathGroup.run_single]
     have captured : (keeperCache authorization).directory =
         some (operations.descriptors, held.lifetime.directorySlot, 0) := by
@@ -372,7 +372,7 @@ theorem ListedDirectoryAuthorization.finishAfterPruneError (authorization : List
 
 /-- An unlink error that survives the owned-ENOENT rule can be reported
 before or after removing its canonical child. -/
-structure HeldLaterWalUnlinkFailure (held : HeldDirectoryMarkedRetryReports operations published)
+structure HeldLaterWalUnlinkFailure (held : HeldDirectoryMarkedRetryReports operations published readStart)
     (first : Nat) (initial : FileImage) where
   parent : DeviceInode
   basename : String

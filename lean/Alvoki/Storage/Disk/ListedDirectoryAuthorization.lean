@@ -8,9 +8,9 @@ open WAL.Boundary (CheckpointRepresentsPrefix)
 variable {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout before.image history}
   {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
-  {published : CheckpointPublication.Image}
+  {published : CheckpointPublication.Image} {readStart : DescriptorInventory}
 
-private def HeldDirectoryMarkedRetryReports.heldState (_ : HeldDirectoryMarkedRetryReports operations published) :
+private def HeldDirectoryMarkedRetryReports.heldState (_ : HeldDirectoryMarkedRetryReports operations published readStart) :
     LockedFileState FileImage :=
   ⟨before.image, before.owners.set (directory.file .lock) (some operations.slot.description)⟩
 
@@ -24,7 +24,7 @@ keeper read. The sync callback used by the file-image installer must
 project the real grouped sync from the cache reached by that read. The
 projection supplies the refinement boundary for the opaque native refs.
 The complete drop report still excludes an independent explicit unlock. -/
-structure ListedDirectoryAuthorization (report : HeldDirectoryMarkedRetryReports operations published) where
+structure ListedDirectoryAuthorization (report : HeldDirectoryMarkedRetryReports operations published readStart) where
   keeper : operations.reads.ObservesFile (directory.file (.walSegment layout.keeper.first))
     (layout.keeper.bytes ++ layout.tail)
   fits : layout.keeper.bytes.size < USize.size
@@ -49,7 +49,7 @@ structure ListedDirectoryAuthorization (report : HeldDirectoryMarkedRetryReports
 
 namespace ListedDirectoryAuthorization
 
-variable {report : HeldDirectoryMarkedRetryReports operations published}
+variable {report : HeldDirectoryMarkedRetryReports operations published readStart}
 
 /-- The keeper metadata fixes the same extent for the pure installer
 callback and the cache-bearing native-shaped reader. -/
@@ -69,18 +69,18 @@ theorem lockAtBarrier (observed : ListedDirectoryAuthorization report) :
     let drops := report.lifetime.drops ++ observed.afterListing
     observed.bindings (directory.file .lock) = some (operations.descriptors.inode operations.slot.description) ∧
     ∃ refs : HeldLockReferences operations.slot.description,
-      refs.live = operations.descriptors.references operations.slot.description ∧
+      refs.live = readStart.references operations.slot.description ∧
       (refs.afterFileDrops drops directory report.heldState).owners.Owns directory operations.slot.description := by
   intro drops
-  have issuing : operations.slot.reference ∈ (operations.descriptors.afterDrops drops).references
+  have issuing : operations.slot.reference ∈ (readStart.afterDrops drops).references
       operations.slot.description := by
     simp only [drops]
     rw [← DescriptorInventory.afterDrops_append, ← report.listing.afterClose_eq]
     exact (report.listing.afterClose.afterDrops observed.afterListing).mem_references.mpr
       ⟨_, observed.lockRetained, rfl, rfl⟩
-  let refs := operations.descriptors.held operations.slot.description (DescriptorInventory.wasLive issuing)
+  let refs := readStart.held operations.slot.description (DescriptorInventory.wasLive issuing)
   have stillLive : refs.remaining drops ≠ [] := by
-    rw [operations.descriptors.held_remaining]
+    rw [readStart.held_remaining]
     exact List.ne_nil_of_mem issuing
   refine ⟨observed.lockBound, refs, rfl, ?_⟩
   rw [refs.afterFileDrops_surviving stillLive]
@@ -109,7 +109,9 @@ theorem settles (observed : ListedDirectoryAuthorization report) (completed : ob
 
 /-- Feed the projected first grouped barrier into the exact admitted
 installer. No independent successful-settlement report is needed. -/
-theorem installs {input : FilePath} (observed : ListedDirectoryAuthorization report)
+theorem installs {input : FilePath}
+    {report : HeldDirectoryMarkedRetryReports operations published}
+    (observed : ListedDirectoryAuthorization report)
     (metadata : HeldMarkedMetadata report) (completed : observed.outcome = .completed)
     (healthy : operations.HealthyFinish)
     (admission : OpenAdmissionReports input directory operations.slot)

@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The shared directory authorization and ordered suffix unlink reports now
+accept the marker-open read inventory. Lock ownership follows from the
+live reference in that inventory after the reported drops. The suffix
+barrier checks both bindings in the reached inventory and routes through
+the original cached directory handle. The final replacement and pruned
+keeper installers still need to accept these generalized reports.
+
 The held directory report now records which descriptor inventory was
 used to start the recovery reads. The cached directory handle is still
 indexed by the original admission inventory. The report ties both
