@@ -1706,6 +1706,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.prepend
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.writesThenReadsOpenPin
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preflightsViaOpenReferences
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.classifiesWriteOnOpenPhase
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.releasePin
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.advanceFloor
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.releasesViaOpenReferences

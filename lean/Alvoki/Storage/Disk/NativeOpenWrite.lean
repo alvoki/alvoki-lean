@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeOpenAcquire
 import Alvoki.Storage.Disk.NativeExecutionPendingWrite
 import Alvoki.Storage.Disk.NativeWritePreflight
+import Alvoki.Storage.Disk.NativeWriteClassification
 
 namespace Alvoki.Storage.DiskSession
 
@@ -342,5 +343,129 @@ theorem NativeReadPosition.preflightsViaOpenReferences {history log}
         simp [writeBatchSchedule, loaded, nonempty present, room, prepared, requireWritePreparation, guard, directory,
           checked, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, Except.mapError, liftExcept,
           throw, throwThe, MonadExceptOf.throw, EStateM.throw, NativeWritePreflightObservation.resultAt]
+
+/-- Interpret the original single or batch schedule on the reached phase
+cell and a fixed set of projected native file callbacks. -/
+def WriteRequest.runOnOpenPhase (request : WriteRequest) (directory : DiskDirectory)
+    (calls : Calls (DescriptorInventory × DescriptorSlot × Nat)) (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit) :
+    EStateM DiskWriteError (heap × OpenWriteFiles) UInt64 :=
+  let load : EStateM DiskWriteError (heap × OpenWriteFiles) Installed := do
+    let current ← heapEffect .rejected (get phase)
+    liftExcept ((current.installed : Except IO.Error Installed).mapError DiskWriteError.rejected)
+  let guard := fun current => liftExcept ((checkActiveSegmentWith directory current calls.lookup :
+    Except IO.Error Unit).mapError DiskWriteError.rejected)
+  let setPhase := fun current => heapEffect .rejected (set phase current)
+  let commit := fun (current : Installed) bytes count =>
+    fileEffect .commitUnknown (commitBytesAt directory current.activeFirst bytes count
+      calls.append calls.stage calls.sync calls.rename)
+  match request with
+  | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected requireWritePreparation guard
+      (fun current event next bytes => publishPreparedWrite { current with table := next, walBytes := bytes }
+        event.sequence setPhase (commit current (WAL.encodeFrame event) bytes))
+  | .batch group => writeBatchSchedule group load DiskWriteError.rejected requireWritePreparation guard setPhase
+      (fun current batch count => commit current (WAL.encodeBatch batch) count)
+
+/-- Read the reached phase from the same cell and retain the original
+result, reached file/cache projection and held owner. -/
+def projectOpenWriteResult (contents : heap → IO.Ref (Phase Installed) → Option (Phase Installed))
+    (phase : IO.Ref (Phase Installed)) (owners : LockOwners) :
+    EStateM.Result DiskWriteError (heap × OpenWriteFiles) UInt64 →
+      Option (EStateM.Result DiskWriteError (WriteCallState (DescriptorInventory × DescriptorSlot × Nat)) UInt64)
+  | .ok result (after, files) => (contents after phase).map fun current => .ok result (current, ⟨files, owners⟩)
+  | .error cause (after, files) => (contents after phase).map fun current => .error cause (current, ⟨files, owners⟩)
+
+/-- Invert the actual returned single or batch schedule on this opened
+cell. Every reached branch projects to the same committed value or
+classified diagnostic and file/cache and phase state. The primitive
+live-cell contract supplies successful get/set effects. File callbacks
+are interpreted in their existing projected image. -/
+theorem NativeReadPosition.classifiesWriteOnOpenPhase {history log}
+    (current : NativeReadPosition history log) (db : DiskTable)
+    {lock : IO.FS.Handle} {files : DiskTable.OpenSyncFiles} {phase : IO.Ref (Phase Installed)} {token : IO.Ref Unit}
+    (uses : db.UsesOpenReferences current.state.session.directory lock files phase token)
+    {contents : heap → IO.Ref (Phase Installed) → Option (Phase Installed)}
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (effects : OpenPhaseCellEffects contents get set) {entry : heap}
+    (stored : contents entry phase = some current.state.session.phase)
+    (request : WriteRequest) (calls : WriteRequest.Calls (DescriptorInventory × DescriptorSlot × Nat))
+    (cache : calls.cache = current.state.cache) :
+    let state := current.state
+    let initial := WriteFiles.initial state.writer.history (state.files.image.directory.staged .walBoundary)
+    let actual := request.runOnOpenPhase state.session.directory calls phase get set (entry, state.cache, initial)
+    db.UsesOpenWriteSchedules state.session.directory files phase ∧
+      projectOpenWriteResult contents phase state.writer.owners actual =
+        some (calls.run request state.session.directory state.writer) := by
+  intro state initial actual
+  have valid := current.readPrefix.refines.1
+  have phaseReady := valid.phase
+  have loaded := effects.reads entry phase current.state.session.phase stored
+  have initialized : (entry, state.cache, initial) = (entry, (WriteRequest.readyCall state.writer calls.cache).2.image) := by
+    rw [cache]
+    rfl
+  refine ⟨uses.writeSchedules, ?_⟩
+  have classified := request.classifiesReadyReturn valid.retained (WriteRequest.readyCall state.writer calls.cache).2
+    calls.lookup calls.append calls.stage calls.sync calls.rename
+  change ReadyWriteReturn request state.session.directory state.writer.installed calls.lookup calls.append calls.stage
+    calls.sync calls.rename (WriteRequest.readyCall state.writer calls.cache).2
+      (calls.run request state.session.directory state.writer) at classified
+  have enters (checked : CheckedWriteRequest request state.session.directory state.writer.installed calls.lookup) :
+      actual = publishPreparedWrite checked.next checked.table.committed (fun current => heapEffect .rejected (set phase current))
+        (fileEffect .commitUnknown (commitBytesAt state.session.directory state.writer.installed.activeFirst
+          (WAL.encodeBatch checked.batch) checked.next.walBytes calls.append calls.stage calls.sync calls.rename))
+        (entry, (WriteRequest.readyCall state.writer calls.cache).2.image) := by
+    have active : (checkActiveSegmentWith state.session.directory state.writer.installed calls.lookup : Except IO.Error Unit) = .ok () :=
+      checked.sameLookup ▸ checked.guard.checkedForWrite
+    dsimp only [actual]
+    rw [initialized]
+    unfold WriteRequest.runOnOpenPhase
+    refine preparedWrite_reachesPublication request rfl checked.nonempty checked.prepared checked.fits
+      (do
+        let current ← heapEffect .rejected (get phase)
+        liftExcept ((current.installed : Except IO.Error Installed).mapError DiskWriteError.rejected))
+      (fun current => liftExcept ((checkActiveSegmentWith state.session.directory current calls.lookup :
+        Except IO.Error Unit).mapError DiskWriteError.rejected))
+      (fun current => heapEffect .rejected (set phase current))
+      (fun current bytes count => fileEffect .commitUnknown (commitBytesAt state.session.directory current.activeFirst bytes count
+        calls.append calls.stage calls.sync calls.rename)) ?_ ?_
+    · simp [heapEffect, loaded, phaseReady, Phase.installed, Bind.bind, EStateM.bind, liftExcept, Pure.pure,
+        EStateM.pure, Except.pure, Except.mapError, state]
+    · simp [active, liftExcept, Pure.pure, EStateM.pure, Except.mapError]
+  have preflight (seen : NativeWritePreflightObservation current.state request) (sameLookup : seen.lookup = calls.lookup) :
+      actual = seen.resultAt (entry, (WriteRequest.readyCall state.writer calls.cache).2.image) := by
+    dsimp only [actual]
+    rw [initialized]
+    unfold WriteRequest.runOnOpenPhase
+    obtain ⟨_, _, returned⟩ := current.preflightsViaOpenReferences db uses loaded seen
+      (WriteRequest.readyCall state.writer calls.cache).2.image
+      (fun current => heapEffect .rejected (set phase current))
+      (fun current bytes count => fileEffect .commitUnknown (commitBytesAt state.session.directory current.activeFirst bytes count
+        calls.append calls.stage calls.sync calls.rename))
+    rw [sameLookup] at returned
+    exact returned
+  generalize calls.run request state.session.directory state.writer = result at classified ⊢
+  cases classified with
+  | empty rows =>
+    let seen : NativeWritePreflightObservation current.state request :=
+      ⟨calls.lookup, .ok state.writer.installed.table.committed, .empty rows⟩
+    rw [preflight seen rfl]
+    simp [projectOpenWriteResult, NativeWritePreflightObservation.resultAt, seen, stored, phaseReady, state]
+  | @rejected cause rejected =>
+    let seen : NativeWritePreflightObservation current.state request := ⟨calls.lookup, .error cause, .rejected rejected⟩
+    rw [preflight seen rfl]
+    simp [projectOpenWriteResult, NativeWritePreflightObservation.resultAt, seen, stored, phaseReady, state]
+  | acknowledged checked committed =>
+    obtain ⟨poisoned, setPoisoned, poison⟩ := effects.writes entry phase current.state.session.phase .poisoned stored
+    obtain ⟨reached, setReady, ready⟩ := effects.writes poisoned phase .poisoned (.ready checked.next) poison
+    rw [enters checked]
+    simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, heapEffect, setPoisoned, fileEffect,
+      committed, setReady, Pure.pure, EStateM.pure, projectOpenWriteResult, ready, Option.map_some]
+  | uncertain checked failed =>
+    obtain ⟨poisoned, setPoisoned, poison⟩ := effects.writes entry phase current.state.session.phase .poisoned stored
+    rw [enters checked]
+    simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, heapEffect, setPoisoned, fileEffect,
+      failed, projectOpenWriteResult, poison, Option.map_some]
 
 end Alvoki.Storage.DiskSession
