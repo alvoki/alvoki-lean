@@ -241,6 +241,7 @@ import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeObsoleteRunCollection
 import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
+import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeReadyClose
@@ -1574,6 +1575,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reachesObsoleteRunUnlinkError
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkStop.stops
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsDuringObsoleteRunUnlink
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.startsObsoleteRunUnlinkRetries
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkRetries.observesFailure
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkRetries.frames
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkRetries.crashChoices
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkRetries.retainsNamedBytes
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkRetries.completes
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectionBarrierFailed
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.releasedVacant
 #check_axioms Alvoki.Storage.DiskSession.NativeCollectionCloseFiles.lock
