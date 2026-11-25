@@ -1926,16 +1926,15 @@ theorem reopensLongAfterCapturedPreparation
         .ok opened (admission.cache, finish.census, finish.settled) ∧
     EffectTrace layout.target { retry.image with directory := settleMarker retry.image.directory selection }
       finish.settled.image := by
-  refine ⟨?_, ?_⟩
-  · apply reopensAfterCapturedPreparation report finish.reader live current effect sameBinding decoded
-      bound choices enumerated presence physical prepare prepared
-    have authorized : finish.authorization.fsync (admission.reached, admission.cached, 0)
-        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
-        .ok () { admission.held with image := retry.image.syncDirectory } := by
-      simpa only [CapturedKeeperOpenReports.directoryBarrierAfterDrops, DescriptorInventory.delayedDirectorySync,
-        DelayedDirectorySync.run, syncDirectory_afterSelectedMarker _ _ frontier] using directorySync
-    exact finish.repairAfterRead_returns_from _ authorized
-  · exact finish.repairEffects.ofSameAuthorizedImage (syncDirectory_afterSelectedMarker _ _ frontier)
+  have authorized : finish.authorization.fsync (admission.reached, admission.cached, 0)
+      { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
+      .ok () { admission.held with image := retry.image.syncDirectory } := by
+    simpa only [CapturedKeeperOpenReports.directoryBarrierAfterDrops, DescriptorInventory.delayedDirectorySync,
+      DelayedDirectorySync.run, syncDirectory_afterSelectedMarker _ _ frontier] using directorySync
+  obtain ⟨returned, effects⟩ := finish.repairAfterRead_returns_from _
+    (syncDirectory_afterSelectedMarker _ _ frontier) authorized
+  exact ⟨reopensAfterCapturedPreparation report finish.reader live current effect sameBinding decoded
+    bound choices enumerated presence physical prepare prepared _ returned, effects⟩
 
 /-- An aligned keeper with later segments uses the same ordered suffix
 repair after the marker barrier reaches the common authorized image. -/
@@ -1978,17 +1977,16 @@ theorem reopensPrunedAfterCapturedPreparation
         .ok opened (admission.cache, finish.census, finish.settled) ∧
     EffectTrace layout.target { retry.image with directory := settleMarker retry.image.directory selection }
       finish.settled.image := by
-  refine ⟨?_, ?_⟩
-  · apply reopensAfterCapturedPreparation report finish.reader live current effect sameBinding decoded
-      bound choices enumerated presence physical prepare prepared
-    have authorized : finish.authorization.fsync (admission.reached, admission.cached, 0)
-        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
-        .ok () { admission.held with image := retry.image.syncDirectory } := by
-      simpa only [CapturedKeeperOpenReports.directoryBarrier, CapturedKeeperOpenReports.directoryBarrierAfterDrops,
-        DescriptorInventory.delayedDirectorySync,
-        DelayedDirectorySync.run, syncDirectory_afterSelectedMarker _ _ frontier] using directorySync
-    exact finish.repairActions_returns_from _ authorized later
-  · exact (finish.repairEffects later).1.ofSameAuthorizedImage (syncDirectory_afterSelectedMarker _ _ frontier)
+  have authorized : finish.authorization.fsync (admission.reached, admission.cached, 0)
+      { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
+      .ok () { admission.held with image := retry.image.syncDirectory } := by
+    simpa only [CapturedKeeperOpenReports.directoryBarrier, CapturedKeeperOpenReports.directoryBarrierAfterDrops,
+      DescriptorInventory.delayedDirectorySync,
+      DelayedDirectorySync.run, syncDirectory_afterSelectedMarker _ _ frontier] using directorySync
+  obtain ⟨returned, effects⟩ := finish.repairActions_returns_from _
+    (syncDirectory_afterSelectedMarker _ _ frontier) authorized later
+  exact ⟨reopensAfterCapturedPreparation report finish.reader live current effect sameBinding decoded
+    bound choices enumerated presence physical prepare prepared _ returned, effects⟩
 
 end CapturedPreparation
 

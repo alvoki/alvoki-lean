@@ -299,6 +299,7 @@ theorem repairEffects (finish : CapturedPrunedAlignedFinish calls reads vacant s
 state. Its first directory effect supplies the common repair image. -/
 theorem repairActions_returns_from (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
     (before : LockedFileState FileImage)
+    (same : before.image.syncDirectory = retry.image.syncDirectory)
     (authorizedEffect : finish.authorization.fsync (admission.reached, admission.cached, 0) before =
       .ok () { admission.held with image := retry.image.syncDirectory })
     (later : ∀ first ∈ retry.image.later.visible, layout.range.through < first) :
@@ -306,12 +307,13 @@ theorem repairActions_returns_from (finish : CapturedPrunedAlignedFinish calls r
     let remembered := admission.cache.remember (directory.file (.walSegment layout.keeper.first)) keeper
     finish.repairActions directory layout.boundedPlan layout.plan.keeperBytes.size
       (remembered, finish.reader.afterRead, before) =
-      .ok () (admission.cache, finish.census, finish.settled) := by
+      .ok () (admission.cache, finish.census, finish.settled) ∧
+    EffectTrace layout.target before.image finish.settled.image := by
   intro keeper remembered
   have returned := finish.repairAt_returns_from before authorizedEffect later
   change finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size
     (remembered, (finish.reader.afterRead, before), finish.syncDrops) = _ at returned
-  simp only [repairActions, returned]
+  exact ⟨by simp only [repairActions, returned], (finish.repairEffects later).1.ofSameAuthorizedImage same⟩
 
 variable {reads : CapturedMarkedReadReports admission layout published}
 

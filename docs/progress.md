@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The replacement and prune callbacks now return their successful
+filesystem-effect proof with their exact result, starting at the
+marker-stabilized input. Their reopen theorems consume that single
+pair. The client theorem and retry composition still need to use
+those callback results directly.
+
 The successful replacement and suffix-prune reopen theorems now
 return the filesystem effect trace alongside the exact reopened table
 and descriptor census. The two-slot projection and rename-based repair

@@ -398,12 +398,15 @@ A marker barrier may have updated the files before the first directory
 sync. The remaining repair uses the same reported callbacks. -/
 theorem repairAfterRead_returns_from (finish : CapturedLongKeeperFinish calls report vacant selected)
     (before : LockedFileState FileImage)
+    (same : before.image.syncDirectory = retry.image.syncDirectory)
     (authorizedEffect : finish.authorization.fsync (admission.reached, admission.cached, 0) before =
       .ok () { admission.held with image := retry.image.syncDirectory }) :
     finish.repairAfterRead directory layout.boundedPlan layout.plan.keeperBytes.size
       (admission.cache, finish.reader.afterRead, before) =
-        .ok () (admission.cache, finish.census, finish.settled) := by
-  simp only [repairAfterRead, repairFromCensus, finish.repairAt_returns_from before authorizedEffect]
+        .ok () (admission.cache, finish.census, finish.settled) ∧
+    EffectTrace layout.target before.image finish.settled.image := by
+  exact ⟨by simp only [repairAfterRead, repairFromCensus, finish.repairAt_returns_from before authorizedEffect],
+    finish.repairEffects.ofSameAuthorizedImage same⟩
 
 private noncomputable def readRepair (finish : CapturedLongKeeperFinish calls report vacant selected) :
     EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit := do
