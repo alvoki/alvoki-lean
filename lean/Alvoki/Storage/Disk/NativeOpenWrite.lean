@@ -11,26 +11,41 @@ abbrev OpenWriteFiles := CensusDirectoryCache × WriteFiles
 
 variable {heap : Type}
 
+private def writeResult {before after α : Type} (classify : IO.Error → DiskWriteError)
+    (reached : before → after) :
+    EStateM.Result IO.Error before α → EStateM.Result DiskWriteError after α
+  | .ok value state => .ok value (reached state)
+  | .error cause state => .error (classify cause) (reached state)
+
 private def heapEffect {α : Type} (classify : IO.Error → DiskWriteError) (action : EStateM IO.Error heap α) :
     EStateM DiskWriteError (heap × OpenWriteFiles) α :=
-  fun (heap, files) => match action heap with
-    | .ok result after => .ok result (after, files)
-    | .error cause after => .error (classify cause) (after, files)
+  fun (heap, files) => writeResult classify (fun reached => (reached, files)) (action heap)
 
 private def fileEffect {α : Type} (classify : IO.Error → DiskWriteError) (action : EStateM IO.Error OpenWriteFiles α) :
     EStateM DiskWriteError (heap × OpenWriteFiles) α :=
-  fun (heap, files) => match action files with
-    | .ok result after => .ok result (heap, after)
-    | .error cause after => .error (classify cause) (heap, after)
+  fun (heap, files) => writeResult classify (fun reached => (heap, reached)) (action files)
 
 private def requireWritePreparation {s α : Type} : Option α → EStateM DiskWriteError s α
   | some result => pure result
   | none => throw (.rejected (IO.userError "write sequence space exhausted"))
 
-/-- On either production dispatcher, the reached ready-cell read and
-successful nonempty preflight issue the same encoded publication tail.
-The single-write route keeps its own order of preflight checks. -/
-private theorem preparedWrite_reachesPublication {s : Type}
+private abbrev WriteRequest.runWithPublication {state : Type}
+    (request : WriteRequest) (load : EStateM DiskWriteError state Installed)
+    (guard : Installed → EStateM DiskWriteError state Unit)
+    (setPhase : Phase Installed → EStateM DiskWriteError state Unit)
+    (commit : Installed → ByteArray → Nat → EStateM DiskWriteError state Unit) :
+    EStateM DiskWriteError state UInt64 :=
+  match request with
+  | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected requireWritePreparation guard
+      (fun installed event next bytes => publishPreparedWrite { installed with table := next, walBytes := bytes }
+        event.sequence setPhase (commit installed (WAL.encodeFrame event) bytes))
+  | .batch rows => writeBatchSchedule rows load DiskWriteError.rejected requireWritePreparation guard setPhase
+      (fun installed batch count => commit installed (WAL.encodeBatch batch) count)
+
+/-- The pure preparation of either request reaches its metadata guard
+before any phase assignment or publication. The guard can advance the
+heap or return a diagnostic without calling the continuation. -/
+private theorem preparedWrite_reachesGuard {s : Type}
     (request : WriteRequest) {rows : List (UInt64 × Option UInt64)}
     (submitted : request.rows = rows) (nonempty : rows ≠ [])
     {installed : Installed} {events : List WAL.Write} {table : PackedTable}
@@ -39,17 +54,11 @@ private theorem preparedWrite_reachesPublication {s : Type}
     (load : EStateM DiskWriteError s Installed) (guard : Installed → EStateM DiskWriteError s Unit)
     (setPhase : Phase Installed → EStateM DiskWriteError s Unit)
     (commit : Installed → ByteArray → Nat → EStateM DiskWriteError s Unit)
-    {entry : s} (loaded : load entry = .ok installed entry) (checked : guard installed entry = .ok () entry) :
+    {entry : s} (loaded : load entry = .ok installed entry) :
     let count := installed.walBytes + WAL.frameSize * rows.length
     let publish := publishPreparedWrite { installed with table, walBytes := count } table.committed
       setPhase (commit installed (WAL.encodeBatch events) count)
-    (match request with
-      | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected requireWritePreparation guard
-          (fun state event next bytes => publishPreparedWrite { state with table := next, walBytes := bytes }
-            event.sequence setPhase (commit state (WAL.encodeFrame event) bytes))
-      | .batch group => writeBatchSchedule group load DiskWriteError.rejected requireWritePreparation guard setPhase
-          (fun state batch count => commit state (WAL.encodeBatch batch) count)) entry =
-      publish entry := by
+    request.runWithPublication load guard setPhase commit entry = (guard installed >>= fun _ => publish) entry := by
   cases request with
   | single key value =>
     change [(key, value)] = rows at submitted
@@ -63,13 +72,33 @@ private theorem preparedWrite_reachesPublication {s : Type}
       have count : installed.walBytes + WAL.frameSize < UInt64.size := by simpa using fits
       simp only [withPreparedSingleWrite, Bind.bind, EStateM.bind, loaded, prepareWrite, written, Option.map_some,
         requireWritePreparation, Pure.pure, EStateM.pure, count, ↓reduceIte,
-        checked, List.length_singleton, Nat.mul_one, WAL.encodeBatch_singleton]
+        WriteRequest.runWithPublication, List.length_singleton, Nat.mul_one, WAL.encodeBatch_singleton]
   | batch group =>
     change group = rows at submitted
     subst rows
     have present : group.isEmpty = false := by cases group <;> simp_all
     simp only [writeBatchSchedule, Bind.bind, EStateM.bind, loaded, present, Bool.false_eq_true, ↓reduceIte,
-      fits, prepared, requireWritePreparation, Pure.pure, EStateM.pure, checked]
+      fits, prepared, requireWritePreparation, Pure.pure, EStateM.pure, WriteRequest.runWithPublication]
+
+/-- On either production dispatcher, the reached ready-cell read and
+successful nonempty preflight issue the same encoded publication tail.
+The single-write route keeps its own order of preflight checks. -/
+private theorem preparedWrite_reachesPublication {s : Type}
+    (request : WriteRequest) {rows : List (UInt64 × Option UInt64)}
+    (submitted : request.rows = rows) (nonempty : rows ≠ [])
+    {installed : Installed} {events : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch installed.table rows = some (events, table))
+    (fits : installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    (load : EStateM DiskWriteError s Installed) (guard : Installed → EStateM DiskWriteError s Unit)
+    (setPhase : Phase Installed → EStateM DiskWriteError s Unit)
+    (commit : Installed → ByteArray → Nat → EStateM DiskWriteError s Unit)
+    {entry guarded : s} (loaded : load entry = .ok installed entry) (checked : guard installed entry = .ok () guarded) :
+    let count := installed.walBytes + WAL.frameSize * rows.length
+    let publish := publishPreparedWrite { installed with table, walBytes := count } table.committed
+      setPhase (commit installed (WAL.encodeBatch events) count)
+    request.runWithPublication load guard setPhase commit entry = publish guarded := by
+  rw [preparedWrite_reachesGuard request submitted nonempty prepared fits load guard setPhase commit loaded]
+  simp only [Bind.bind, EStateM.bind, checked]
 
 private theorem BatchActiveGuard.checkedForWrite {directory installed} (seen : BatchActiveGuard directory installed) :
     (checkActiveSegmentWith directory installed seen.lookup : Except IO.Error Unit) = .ok () := by
@@ -95,12 +124,7 @@ def NativeReadyWriteReport.ReturnsOnOpenPhase {before : NativeReadyState}
   let commit := fun (state : Installed) bytes count =>
     fileEffect .commitUnknown (commitBytesAt directory state.activeFirst bytes count
       seen.calls.append seen.calls.stage seen.calls.sync seen.calls.rename)
-  (match request with
-    | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected requireWritePreparation guard
-        (fun state event next bytes => publishPreparedWrite { state with table := next, walBytes := bytes }
-          event.sequence setPhase (commit state (WAL.encodeFrame event) bytes))
-    | .batch group => writeBatchSchedule group load DiskWriteError.rejected requireWritePreparation guard setPhase
-        (fun state batch count => commit state (WAL.encodeBatch batch) count))
+  request.runWithPublication load guard setPhase commit
     (entry, before.cache, prepared.initial) = .ok prepared.table.committed (reached, seen.appendCache, prepared.settled)
 
 /-- The reported cell and file actions follow the production dispatcher
@@ -148,7 +172,7 @@ theorem NativeReadPosition.acknowledgesViaOpenReferences {history log}
   · unfold NativeReadyWriteReport.ReturnsOnOpenPhase
     intro directory load guard setPhase commit
     have loaded : load (entry, before.cache, prepared.initial) = .ok before.writer.installed (entry, before.cache, prepared.initial) := by
-      simp [load, heapEffect, before, got, ready, Phase.installed, Bind.bind, EStateM.bind, liftExcept, Pure.pure,
+      simp [load, heapEffect, writeResult, before, got, ready, Phase.installed, Bind.bind, EStateM.bind, liftExcept, Pure.pure,
         EStateM.pure, Except.pure, Except.mapError]
     have guarded : guard before.writer.installed (entry, before.cache, prepared.initial) =
         .ok () (entry, before.cache, prepared.initial) := by
@@ -159,12 +183,12 @@ theorem NativeReadPosition.acknowledgesViaOpenReferences {history log}
       load guard setPhase commit loaded guarded
     have committed : commit before.writer.installed (WAL.encodeBatch prepared.batch) prepared.count
         (poisoned, before.cache, prepared.initial) = .ok () (poisoned, seen.appendCache, prepared.settled) := by
-      simp only [commit, fileEffect, directory, before, seen.publishes]
+      simp only [commit, fileEffect, writeResult, directory, before, seen.publishes]
     rw [entered]
     change publishPreparedWrite seen.publication.nextInstalled prepared.table.committed setPhase
       (commit before.writer.installed (WAL.encodeBatch prepared.batch) prepared.count)
       (entry, before.cache, prepared.initial) = _
-    simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, setPhase, heapEffect, exclude,
+    simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, setPhase, heapEffect, writeResult, exclude,
       committed, publish, Pure.pure, EStateM.pure]
   · rw [nextState]
     exact uses
@@ -200,19 +224,14 @@ theorem NativePendingWrite.returnsViaOpenReferences {history log}
     ∃ poisoned : heap,
       get phase entry = .ok before.session.phase entry ∧
       set phase .poisoned entry = .ok () poisoned ∧ contents poisoned phase = some pending.session.phase ∧
-      (match seen.request with
-        | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected requireWritePreparation guard
-            (fun state event next bytes => publishPreparedWrite { state with table := next, walBytes := bytes }
-              event.sequence setPhase (commit state (WAL.encodeFrame event) bytes))
-        | .batch group => writeBatchSchedule group load DiskWriteError.rejected requireWritePreparation guard setPhase
-            (fun state batch count => commit state (WAL.encodeBatch batch) count))
+      seen.request.runWithPublication load guard setPhase commit
         (entry, before.cache, initial) = .error (.commitUnknown failure.cause) (poisoned, pending.cache, failure.failed) ∧
       db.UsesOpenReferences pending.session.directory lock files phase token := by
   intro before directory seen failure calls initial load guard setPhase commit
   have valid := current.readPrefix.refines.1
   have got := effects.reads entry phase before.session.phase stored
   have loaded : load (entry, before.cache, initial) = .ok before.writer.installed (entry, before.cache, initial) := by
-    simp [load, heapEffect, before, got, valid.phase, Phase.installed, Bind.bind, EStateM.bind, liftExcept,
+    simp [load, heapEffect, writeResult, before, got, valid.phase, Phase.installed, Bind.bind, EStateM.bind, liftExcept,
       Pure.pure, EStateM.pure, Except.pure, Except.mapError]
   have guarded : guard before.writer.installed (entry, before.cache, initial) =
       .ok () (entry, before.cache, initial) := by
@@ -252,13 +271,13 @@ theorem NativePendingWrite.returnsViaOpenReferences {history log}
         .error failure.cause (pending.cache, failure.failed) := by
       rw [entryCache, initialAtWal]
       exact failed
-    simp only [commit, fileEffect, failedHere]
+    simp only [commit, fileEffect, writeResult, failedHere]
   refine ⟨uses.writeSchedules, poisoned, got, exclude, poisonedPhase, ?_, uses⟩
   rw [entered]
   change publishPreparedWrite failure.proposed failure.table.committed setPhase
     (commit before.writer.installed (WAL.encodeBatch failure.batch) failure.proposed.walBytes)
     (entry, before.cache, initial) = _
-  simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, setPhase, heapEffect, exclude, committed]
+  simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, setPhase, heapEffect, writeResult, exclude, committed]
 
 /-- A checked rejection or an empty batch reads this table's phase
 cell and leaves the reached heap and file projection unchanged.
@@ -282,18 +301,13 @@ theorem NativeReadPosition.preflightsViaOpenReferences {history log}
       Except IO.Error Unit).mapError DiskWriteError.rejected)
     db.UsesOpenWriteSchedules directory files phase ∧
     NativeWritePreflightStep current seen current ∧
-    (match request with
-      | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected requireWritePreparation guard
-          (fun state event next bytes => publishPreparedWrite { state with table := next, walBytes := bytes }
-            event.sequence setPhase (commit state (WAL.encodeFrame event) bytes))
-      | .batch group => writeBatchSchedule group load DiskWriteError.rejected requireWritePreparation guard setPhase
-          (fun state batch count => commit state (WAL.encodeBatch batch) count))
+    request.runWithPublication load guard setPhase commit
       (entry, atEntry) = seen.resultAt (entry, atEntry) := by
   intro directory load guard
   refine ⟨uses.writeSchedules, current.preflightsWrite seen, ?_⟩
   have valid := current.readPrefix.refines.1
   have loaded : load (entry, atEntry) = .ok current.state.writer.installed (entry, atEntry) := by
-    simp [load, heapEffect, read, valid.phase, Phase.installed, Bind.bind, EStateM.bind, liftExcept, Pure.pure,
+    simp [load, heapEffect, writeResult, read, valid.phase, Phase.installed, Bind.bind, EStateM.bind, liftExcept, Pure.pure,
       EStateM.pure, Except.pure, Except.mapError]
   obtain ⟨lookup, response, reported⟩ := seen
   cases request with
@@ -306,7 +320,7 @@ theorem NativeReadPosition.preflightsViaOpenReferences {history log}
       | byteCount _ overflow =>
         have tooLarge : ¬ current.state.writer.installed.walBytes + WAL.frameSize < UInt64.size := by
           simpa [WriteRequest.rows] using Nat.not_lt.mpr overflow
-        simp [withPreparedSingleWrite, loaded, prepared, requireWritePreparation, tooLarge, Bind.bind, EStateM.bind,
+        simp [WriteRequest.runWithPublication, withPreparedSingleWrite, loaded, prepared, requireWritePreparation, tooLarge, Bind.bind, EStateM.bind,
           Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
           NativeWritePreflightObservation.resultAt]
       | sequence _ _ exhausted =>
@@ -314,7 +328,7 @@ theorem NativeReadPosition.preflightsViaOpenReferences {history log}
       | active _ room _ checked =>
         have fits : current.state.writer.installed.walBytes + WAL.frameSize < UInt64.size := by
           simpa [WriteRequest.rows] using room
-        simp [withPreparedSingleWrite, loaded, prepared, requireWritePreparation, fits, guard, directory, checked,
+        simp [WriteRequest.runWithPublication, withPreparedSingleWrite, loaded, prepared, requireWritePreparation, fits, guard, directory, checked,
           Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, Except.mapError, liftExcept,
           throw, throwThe, MonadExceptOf.throw, EStateM.throw, NativeWritePreflightObservation.resultAt]
   | batch rows =>
@@ -322,7 +336,7 @@ theorem NativeReadPosition.preflightsViaOpenReferences {history log}
     | empty nil =>
       change rows = [] at nil
       subst rows
-      simp [writeBatchSchedule, loaded, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+      simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
         NativeWritePreflightObservation.resultAt]
     | rejected rejected =>
       have nonempty (present : (WriteRequest.batch rows).rows ≠ []) : rows.isEmpty = false :=
@@ -330,17 +344,17 @@ theorem NativeReadPosition.preflightsViaOpenReferences {history log}
       cases rejected with
       | byteCount present overflow =>
         simp only [WriteRequest.rows] at overflow
-        simp [writeBatchSchedule, loaded, nonempty present, Nat.not_lt.mpr overflow, Bind.bind, EStateM.bind,
+        simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, nonempty present, Nat.not_lt.mpr overflow, Bind.bind, EStateM.bind,
           throw, throwThe, MonadExceptOf.throw, EStateM.throw,
           NativeWritePreflightObservation.resultAt]
       | sequence present room exhausted =>
         simp only [WriteRequest.rows] at room exhausted
-        simp [writeBatchSchedule, loaded, nonempty present, room, exhausted, requireWritePreparation,
+        simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, nonempty present, room, exhausted, requireWritePreparation,
           Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
           NativeWritePreflightObservation.resultAt]
       | active present room prepared checked =>
         simp only [WriteRequest.rows] at room prepared
-        simp [writeBatchSchedule, loaded, nonempty present, room, prepared, requireWritePreparation, guard, directory,
+        simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, nonempty present, room, prepared, requireWritePreparation, guard, directory,
           checked, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, Except.mapError, liftExcept,
           throw, throwThe, MonadExceptOf.throw, EStateM.throw, NativeWritePreflightObservation.resultAt]
 
@@ -360,12 +374,7 @@ def WriteRequest.runOnOpenPhase (request : WriteRequest) (directory : DiskDirect
   let commit := fun (current : Installed) bytes count =>
     fileEffect .commitUnknown (commitBytesAt directory current.activeFirst bytes count
       calls.append calls.stage calls.sync calls.rename)
-  match request with
-  | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected requireWritePreparation guard
-      (fun current event next bytes => publishPreparedWrite { current with table := next, walBytes := bytes }
-        event.sequence setPhase (commit current (WAL.encodeFrame event) bytes))
-  | .batch group => writeBatchSchedule group load DiskWriteError.rejected requireWritePreparation guard setPhase
-      (fun current batch count => commit current (WAL.encodeBatch batch) count)
+  request.runWithPublication load guard setPhase commit
 
 /-- A phase error is returned before preparation, the empty-batch
 fast path, or any file operation in the original write schedule. -/
@@ -380,7 +389,7 @@ theorem WriteRequest.runOnOpenPhase_rejectsPhase
     (files : OpenWriteFiles) :
     request.runOnOpenPhase directory calls phase get set (before, files) =
       .error (.rejected cause) (before, files) := by
-  cases request <;> simp [WriteRequest.runOnOpenPhase, withPreparedSingleWrite, writeBatchSchedule, heapEffect,
+  cases request <;> simp [WriteRequest.runOnOpenPhase, WriteRequest.runWithPublication, withPreparedSingleWrite, writeBatchSchedule, heapEffect, writeResult,
     Bind.bind, EStateM.bind, loaded, rejected, Except.mapError, liftExcept, throw, throwThe, MonadExceptOf.throw,
     EStateM.throw]
 
@@ -469,7 +478,7 @@ theorem NativeReadPosition.classifiesWriteOnOpenPhase {history log}
       (fun current => heapEffect .rejected (set phase current))
       (fun current bytes count => fileEffect .commitUnknown (commitBytesAt state.session.directory current.activeFirst bytes count
         calls.append calls.stage calls.sync calls.rename)) ?_ ?_
-    · simp [heapEffect, loaded, phaseReady, Phase.installed, Bind.bind, EStateM.bind, liftExcept, Pure.pure,
+    · simp [heapEffect, writeResult, loaded, phaseReady, Phase.installed, Bind.bind, EStateM.bind, liftExcept, Pure.pure,
         EStateM.pure, Except.pure, Except.mapError, state]
     · simp [active, liftExcept, Pure.pure, EStateM.pure, Except.mapError]
   have preflight (seen : NativeWritePreflightObservation current.state request) (sameLookup : seen.lookup = calls.lookup) :
@@ -492,12 +501,149 @@ theorem NativeReadPosition.classifiesWriteOnOpenPhase {history log}
     obtain ⟨poisoned, setPoisoned, poison⟩ := effects.writes entry phase current.state.session.phase .poisoned stored
     obtain ⟨reached, setReady, ready⟩ := effects.writes poisoned phase .poisoned (.ready checked.next) poison
     rw [enters checked]
-    simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, heapEffect, setPoisoned, fileEffect,
+    simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, heapEffect, writeResult, setPoisoned, fileEffect, writeResult,
       committed, setReady, Pure.pure, EStateM.pure, projectOpenWriteResult, ready, Option.map_some]
   | uncertain checked failed =>
     obtain ⟨poisoned, setPoisoned, poison⟩ := effects.writes entry phase current.state.session.phase .poisoned stored
     rw [enters checked]
-    simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, heapEffect, setPoisoned, fileEffect,
+    simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, heapEffect, writeResult, setPoisoned, fileEffect, writeResult,
       failed, projectOpenWriteResult, poison, Option.map_some]
+
+section RawWrite
+
+variable (request : WriteRequest) (directory : DiskDirectory)
+  (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+  (append stage : FilePath → ByteArray → EStateM IO.Error heap Unit)
+  (sync : Array FilePath → EStateM IO.Error heap Unit)
+  (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+  (phase : IO.Ref (Phase Installed))
+  (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+  (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+
+private def rawEffect {α : Type} (classify : IO.Error → DiskWriteError) (action : EStateM IO.Error heap α) :
+    EStateM DiskWriteError heap α :=
+  fun before => writeResult classify id (action before)
+
+private def rawWriteLoad : EStateM DiskWriteError heap Installed := do
+  let stored ← rawEffect .rejected (get phase)
+  liftExcept ((stored.installed : Except IO.Error Installed).mapError DiskWriteError.rejected)
+
+/-- Interpret the shared source write with native metadata, cache and
+file callbacks on the same heap as the original phase cell. -/
+def WriteRequest.runOnRawOpenPhase : EStateM DiskWriteError heap UInt64 :=
+  request.runWithPublication (rawWriteLoad phase get)
+    (fun installed => rawEffect .rejected (checkActiveSegmentWith directory installed lookup))
+    (fun next => rawEffect .rejected (set phase next))
+    (fun installed bytes count =>
+      rawEffect .commitUnknown (commitBytesAt directory installed.activeFirst bytes count append stage sync rename))
+
+/-- A successful pure preparation reaches the actual metadata guard.
+Its error returns before writing the phase. Success uses the reached
+guard, poison and commit heaps in order before it exposes the ready phase. -/
+theorem WriteRequest.runOnRawOpenPhase_afterPreparation
+    {installed : Installed} {batch : List WAL.Write} {table : PackedTable} {entry : heap}
+    (loaded : get phase entry = .ok (.ready installed) entry)
+    (nonempty : request.rows ≠ [])
+    (prepared : prepareBatch installed.table request.rows = some (batch, table))
+    (fits : installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size) :
+    let count := installed.walBytes + WAL.frameSize * request.rows.length
+    let next : Installed := { installed with table, walBytes := count }
+    let publish := commitBytesAt directory installed.activeFirst (WAL.encodeBatch batch) count append stage sync rename
+    request.runOnRawOpenPhase directory lookup append stage sync rename phase get set entry =
+      match checkActiveSegmentWith directory installed lookup entry with
+      | .error cause reached => .error (.rejected cause) reached
+      | .ok () guarded => match set phase .poisoned guarded with
+        | .error cause reached => .error (.rejected cause) reached
+        | .ok () poisoned => match publish poisoned with
+          | .error cause reached => .error (.commitUnknown cause) reached
+          | .ok () settled => match set phase (.ready next) settled with
+            | .error cause reached => .error (.rejected cause) reached
+            | .ok () reached => .ok table.committed reached := by
+  intro count next publish
+  have reads : rawWriteLoad phase get entry = .ok installed entry := by
+    simp [rawWriteLoad, rawEffect, loaded, writeResult, Phase.installed, Bind.bind, EStateM.bind, liftExcept,
+      Pure.pure, EStateM.pure, Except.mapError, Except.pure]
+  unfold runOnRawOpenPhase
+  rw [preparedWrite_reachesGuard request rfl nonempty prepared fits (rawWriteLoad phase get)
+    (fun state => rawEffect .rejected (checkActiveSegmentWith directory state lookup))
+    (fun next => rawEffect .rejected (set phase next))
+    (fun state bytes count => rawEffect .commitUnknown
+      (commitBytesAt directory state.activeFirst bytes count append stage sync rename)) reads]
+  simp only [Bind.bind, EStateM.bind, publishPreparedWrite, publishPrepared, rawEffect, writeResult]
+  cases guard : checkActiveSegmentWith directory installed lookup entry with
+  | error => rfl
+  | ok value guarded =>
+    cases value
+    cases exclude : set phase .poisoned guarded with
+    | error => simp [exclude]
+    | ok value poisoned =>
+      cases value
+      cases committed : publish poisoned with
+      | error => simp [exclude, publish, count, committed]
+      | ok value settled =>
+        cases value
+        cases installed : set phase (.ready next) settled <;>
+          simp [exclude, publish, next, count, committed, installed, Pure.pure, EStateM.pure]
+
+/-- A non-ready phase fails before preparation or metadata lookup,
+including for an empty batch. Preserve the actual phase-load heap. -/
+theorem WriteRequest.runOnRawOpenPhase_rejectsPhase {entry reached : heap} {atPhase : Phase Installed} {cause : IO.Error}
+    (loaded : get phase entry = .ok atPhase reached)
+    (rejected : (atPhase.installed : Except IO.Error Installed) = .error cause) :
+    request.runOnRawOpenPhase directory lookup append stage sync rename phase get set entry = .error (.rejected cause) reached := by
+  cases request <;> simp [runOnRawOpenPhase, WriteRequest.runWithPublication, rawWriteLoad, withPreparedSingleWrite,
+    writeBatchSchedule, loaded, rejected, rawEffect, writeResult, Bind.bind, EStateM.bind, liftExcept, Except.mapError,
+    throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+
+/-- An observed acknowledgement identifies each successful reached step.
+In particular, the ready setter runs at the heap after the entire
+commit, including the final directory barrier. -/
+theorem WriteRequest.runOnRawOpenPhase_acknowledges
+    {installed : Installed} {batch : List WAL.Write} {table : PackedTable}
+    {entry reached : heap} {sequence : UInt64}
+    (loaded : get phase entry = .ok (.ready installed) entry)
+    (nonempty : request.rows ≠ [])
+    (prepared : prepareBatch installed.table request.rows = some (batch, table))
+    (fits : installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size)
+    (returned : request.runOnRawOpenPhase directory lookup append stage sync rename phase get set entry = .ok sequence reached) :
+    let count := installed.walBytes + WAL.frameSize * request.rows.length
+    let next : Installed := { installed with table, walBytes := count }
+    let publish := commitBytesAt directory installed.activeFirst (WAL.encodeBatch batch) count append stage sync rename
+    ∃ guarded poisoned settled, checkActiveSegmentWith directory installed lookup entry = .ok () guarded ∧
+      set phase .poisoned guarded = .ok () poisoned ∧ publish poisoned = .ok () settled ∧
+      set phase (.ready next) settled = .ok () reached ∧ sequence = table.committed := by
+  intro count next publish
+  rw [request.runOnRawOpenPhase_afterPreparation directory lookup append stage sync rename phase get set
+    loaded nonempty prepared fits] at returned
+  change (match checkActiveSegmentWith directory installed lookup entry with
+    | .error cause reached => .error (.rejected cause) reached
+    | .ok () guarded => match set phase .poisoned guarded with
+      | .error cause reached => .error (.rejected cause) reached
+      | .ok () poisoned => match publish poisoned with
+        | .error cause reached => .error (.commitUnknown cause) reached
+        | .ok () settled => match set phase (.ready next) settled with
+          | .error cause reached => .error (.rejected cause) reached
+          | .ok () reached => .ok table.committed reached : EStateM.Result DiskWriteError heap UInt64) = .ok sequence reached at returned
+  cases guard : checkActiveSegmentWith directory installed lookup entry with
+  | error cause stopped => simp [guard] at returned
+  | ok value guarded =>
+    cases value
+    cases exclude : set phase .poisoned guarded with
+    | error cause stopped => simp [guard, exclude] at returned
+    | ok value poisoned =>
+      cases value
+      cases committed : publish poisoned with
+      | error cause stopped => simp [guard, exclude, committed] at returned
+      | ok value settled =>
+        cases value
+        cases installed : set phase (.ready next) settled with
+        | error cause stopped => simp [guard, exclude, committed, installed] at returned
+        | ok value after =>
+          cases value
+          simp only [guard, exclude, committed, installed, EStateM.Result.ok.injEq] at returned
+          obtain ⟨rfl, rfl⟩ := returned
+          exact ⟨guarded, poisoned, settled, rfl, exclude, committed, installed, rfl⟩
+
+end RawWrite
 
 end Alvoki.Storage.DiskSession
