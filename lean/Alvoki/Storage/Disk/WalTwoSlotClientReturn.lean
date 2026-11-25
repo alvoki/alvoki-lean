@@ -1846,6 +1846,43 @@ theorem settledRetriesOfBoundedReopen
   | repairing prior canonical _ effects =>
     exact .repair (beforeBarrier prior) (canonical ▸ effects)
 
+/-- A cut at the inactive slot write, after the WAL append and sync.
+The reached state supplies both the logical file image and physical
+marker image used by the retry proof. -/
+structure InterruptedBatchSlotWrite (directory : DiskDirectory) (prior : SegmentedWriterState)
+    (batch : List WAL.Write) (reached : FileImage × WalInodeImage) where
+  Stop : Type
+  rows : List (UInt64 × Option UInt64)
+  table : PackedTable
+  initialMarker : WalInodeImage
+  lookup : System.FilePath → Except IO.Error IO.FS.Metadata
+  nonempty : rows ≠ []
+  prepared : prepareBatch prior.installed.table rows = some (batch, table)
+  fits : prior.installed.walBytes + frameSize * rows.length < UInt64.size
+  guard : checkActiveSegmentWith directory prior.installed lookup = .ok ()
+  append : ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
+  syncWal : ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
+  writeSlot : ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
+  syncSlot : ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
+  install : ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
+  appended : FileImage × WalInodeImage
+  durable : FileImage × WalInodeImage
+  stopped : Stop
+  wrote : append.run (prior.files, initialMarker) = .ok (.ok ()) appended
+  walBarrier : syncWal.run appended = .ok (.ok ()) durable
+  cut : writeSlot.run durable = .error stopped reached
+
+theorem InterruptedBatchSlotWrite.stops
+    {directory : DiskDirectory} {prior : SegmentedWriterState} {batch : List WAL.Write}
+    {reached : FileImage × WalInodeImage} (report : InterruptedBatchSlotWrite directory prior batch reached) :
+    runBatchWriteWithInterruption directory report.rows report.lookup
+      (fun _ _ _ => publish report.append report.syncWal report.writeSlot report.syncSlot report.install)
+      (.ready prior.installed, ⟨(prior.files, report.initialMarker), prior.owners⟩) =
+      .error report.stopped (.poisoned, ⟨reached, prior.owners⟩) :=
+  runBatch_slotWriteInterrupted report.nonempty report.prepared report.fits report.guard
+    report.append report.syncWal report.writeSlot report.syncSlot report.install
+    report.wrote report.walBarrier report.cut
+
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
 theorem installsAfterAcquiredRecovery_replays
@@ -1916,15 +1953,17 @@ theorem installsAfterAcquiredRecovery_replays
       (Boundary.CheckpointRepresentsPrefix prior.history) retry.image.directory.active.manifest)
     {interrupted firstPrepared : FileImage} {firstRepair : LockedFileState FileImage}
     (reportedBeforeBarrier : ReportedMarkerRetries interrupted firstPrepared)
-    {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
+    {checkpoint : Option ByteArray} {active : OrderedTwoSlot.Slot}
     {current next : Selection}
-    (accepted : decode before = .ok current)
     (offset : current.slot = slotIndex active)
     (advanced : advance current (WAL.encode (prior.history ++ batch)).size = .ok next)
-    (interruptedMarker : WalInodeImage)
+    {interruptedMarker : WalInodeImage}
+    (writeCut : InterruptedBatchSlotWrite directory prior batch (interrupted, interruptedMarker))
+    (accepted : decode (writeCut.initialMarker.visible writeCut.initialMarker.active) = .ok current)
     (retainedBinding : ∀ inode ∈ interruptedMarker.crashBindings, inode = interruptedMarker.active)
     (slotOutcome : ∀ bytes ∈ interruptedMarker.visible interruptedMarker.active ::
-      interruptedMarker.crashBytes interruptedMarker.active, InterruptedSlotBytes before bytes active next)
+      interruptedMarker.crashBytes interruptedMarker.active,
+      InterruptedSlotBytes (writeCut.initialMarker.visible writeCut.initialMarker.active) bytes active next)
     (projectedBindings : ∀ pair ∈ interrupted.directory.active :: interrupted.directory.crashImages,
       pair = ⟨checkpoint, none⟩ ∨
         ∃ inode bytes, inode ∈ interruptedMarker.active :: interruptedMarker.crashBindings ∧
@@ -1955,7 +1994,11 @@ theorem installsAfterAcquiredRecovery_replays
         .ok session after ∧
       InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take layout.range.through)
         opened.installed session ∧ after.2.image.directory.active = layout.target.pair ∧
-      after.2.image.kept = interrupted.kept := by
+      after.2.image.kept = interrupted.kept ∧
+      runBatchWriteWithInterruption directory writeCut.rows writeCut.lookup
+        (fun _ _ _ => publish writeCut.append writeCut.syncWal writeCut.writeSlot writeCut.syncSlot writeCut.install)
+        (.ready prior.installed, ⟨(prior.files, writeCut.initialMarker), prior.owners⟩) =
+        .error writeCut.stopped (.poisoned, ⟨(interrupted, interruptedMarker), prior.owners⟩) := by
   intro opened prepare
   have beforeBarrier := reportedBeforeBarrier.refines
   have finished := repair.returns
@@ -1994,7 +2037,7 @@ theorem installsAfterAcquiredRecovery_replays
     omega
   have observations : ∀ pair ∈ interrupted.directory.active :: interrupted.directory.crashImages,
       pair = ⟨checkpoint, none⟩ ∨
-        ∃ bytes, InterruptedSlotBytes before bytes active next ∧
+        ∃ bytes, InterruptedSlotBytes (writeCut.initialMarker.visible writeCut.initialMarker.active) bytes active next ∧
           projectBinding ⟨checkpoint, none⟩ bytes = .ok pair := by
     intro pair member
     rcases projectedBindings pair member with absent | ⟨inode, bytes, bound, survived, projected⟩
@@ -2053,7 +2096,8 @@ theorem installsAfterAcquiredRecovery_replays
     prepare stabilize finish acquisition recovery
   exact ⟨_, returned, pending.install rfl represented refined (recoverSelected_rowBounds baseBounds replay),
     validAfter.selected,
-    effects.keepsSealed.trans (keptRetry.trans (authorizedRepair.keepsSealed.trans beforeBarrier.keepsSealed))⟩
+    effects.keepsSealed.trans (keptRetry.trans (authorizedRepair.keepsSealed.trans beforeBarrier.keepsSealed)),
+    writeCut.stops⟩
 
 /-- After marker stabilization, a longer keeper uses the shared native
 replacement schedule once its first directory sync authorizes repair. -/

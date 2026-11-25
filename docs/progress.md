@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The client theorem now starts from the actual modeled interruption of
+the batch's inactive slot write after the WAL append and successful sync.
+It uses the prior writer's table, files and ownership, and proves the
+poisoned return whose exact reached files and marker feed the retry
+proof. Local native callback and filesystem projections remain explicit.
+
 The initial retry binding alternatives now follow from raw marker
 bytes on the interrupted marker inode. Lean checks that the reported
 live and crash bindings use the same inode before applying the
