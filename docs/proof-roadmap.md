@@ -118,10 +118,15 @@ installed writer and a continued client trace are conclusions of these steps. At
 `SegmentedClientReadTrace.keyValueRefinement` and `guardedReplay` give the one abstract replay that
 explains prior responses and the returned session's supported reads.
 
-The first composition should cover bootstrap, a write or batch, a publication interruption or returned
-error, any finite sequence of failed recoveries or crashes, and a healthy reopen followed by snapshot
-acquisition and a read. Prove this with the same per-prefix invariant that will carry checkpoint, rotation
-and collection. This gives the later proofs an exact interface for consuming the reached state and observation.
+The first composition links an observed empty bootstrap, a confirmed batch, and a second batch
+interrupted during marker publication. The reported failed-recovery prefix preserves the confirmed batch
+and admits the whole uncertain batch or none of it. A healthy held open supplies the precise returned
+session. Acquiring its latest snapshot and reading through that pin extends the same client trace.
+This proof uses reported publication steps, the attempted keeper offset and local repair effects.
+The common execution induction still needs to derive those reports from the primitive events and connect
+first-append interruptions, returned publication errors, and mixed checkpoint and maintenance calls
+through the same carried file, cache and descriptor state.
+[First client execution](../lean/Alvoki/Storage/Disk/BootstrapExecution.lean) · [Recovery prefixes](../lean/Alvoki/Storage/Disk/BatchRecoveryPrefix.lean)
 
 Close the induction by operation family. Each row is complete when every reached branch under the stated contract constructs its successor from the same returned state and observations.
 
