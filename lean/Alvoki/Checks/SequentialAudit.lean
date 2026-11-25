@@ -1475,6 +1475,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.settledImage
 #check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.suffixBarrier
 #check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.finishAfterPrune
+#check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.finishAfterPruneError
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.finishAfterUnlinkError
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.continuesAfterUnlinkError
 #check_axioms Alvoki.Storage.DiskSession.HeldLaterWalBarrierFailure.barrierError

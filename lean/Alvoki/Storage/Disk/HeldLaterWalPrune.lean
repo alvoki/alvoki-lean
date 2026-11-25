@@ -275,6 +275,55 @@ theorem finishAfterPrune (prune : ListedLaterWalPrune authorization)
 
 end ListedLaterWalPrune
 
+/-- With a later name or a long keeper, the bounded finisher executes
+the same authorized unlink and suffix-sync prefix. Any error in that
+prefix returns immediately, regardless of the eventual keeper action. -/
+theorem ListedDirectoryAuthorization.finishAfterPruneError (authorization : ListedDirectoryAuthorization held)
+    (completed : authorization.outcome = .completed)
+    (prunes : before.image.later.visible ≠ [] ∨ layout.keeper.bytes.size < authorization.keeper.metadata.byteSize.toNat)
+    (later : ∀ first ∈ before.image.later.visible, layout.range.through < first)
+    {cause : IO.Error} {reached : FileImage}
+    (failed :
+      let run := performPaths directory layout.boundedPlan operations.removeFile throw
+        (operations.write operations.cache) (operations.sync operations.cache) operations.renameFile
+      ((layout.boundedPlan.newer.map Step.unlink ++ [Step.syncPruned]).forM run) before.image.syncDirectory =
+        .error cause reached) :
+    finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
+      operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
+      operations.renameFile before.image = .error cause reached := by
+  let plan := layout.boundedPlan
+  let physicalSize := authorization.keeper.metadata.byteSize.toNat
+  have size : plan.keeperBytes.size = plan.keeperSize := layout.target.trimmedSize
+  have valid : plan.valid = true :=
+    (Plan.valid_iff plan).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, later⟩
+  have fits : plan.keeperSize ≤ physicalSize := by
+    rw [show physicalSize = layout.plan.keeperBytes.size from authorization.keeper.extent, ← size]
+    change layout.keeper.bytes.size ≤ (layout.keeper.bytes ++ layout.tail).size
+    simp [ByteArray.size_append]
+  have full : (plan.newer.isEmpty && (physicalSize == plan.keeperSize)) = false := by
+    rcases prunes with names | long
+    · have nonempty : plan.newer.isEmpty = false := by
+        change before.image.later.visible.isEmpty = false
+        cases present : before.image.later.visible with
+        | nil => exact False.elim (names present)
+        | cons => rfl
+      simp [nonempty]
+    · have larger : plan.keeperSize < physicalSize := size ▸ long
+      simp [Nat.ne_of_gt larger]
+  have schedule : steps plan.newer (decide (plan.keeperSize < physicalSize)) =
+      (plan.newer.map Step.unlink ++ [Step.syncPruned]) ++
+        (if decide (plan.keeperSize < physicalSize) then Publication.steps.map Step.replace else [.syncKeeper]) := by
+    simp [steps, List.append_assoc]
+  change finishBoundedMarkedOpen directory plan physicalSize operations.removeFile (operations.write operations.cache)
+    (operations.sync operations.cache) operations.renameFile before.image = _
+  simp only [finishBoundedMarkedOpen, valid, size, beq_self_eq_true, decide_eq_true fits, Bool.and_true,
+    ite_true, full, Bool.false_eq_true, ite_false, runRepairPlan, schedule]
+  rw [List.forM_eq_forM, List.forM_append]
+  simp only [Bind.bind, EStateM.bind, authorization.settles completed]
+  rw [← List.forM_eq_forM]
+  dsimp only at failed
+  rw [failed]
+
 /-- An unlink error that survives the owned-ENOENT rule can be reported
 before or after removing its canonical child. -/
 structure HeldLaterWalUnlinkFailure (held : HeldDirectoryMarkedRetryReports operations published)
@@ -290,10 +339,9 @@ structure HeldLaterWalUnlinkFailure (held : HeldDirectoryMarkedRetryReports oper
   effect : reached = initial ∨ reached = initial.unlinkLater first
 
 /-- A failed reached unlink returns its exact error and file image. The
-remaining suffix, its barrier and the replacement are skipped. -/
+remaining suffix, its barrier and any keeper action are skipped. -/
 theorem ListedDirectoryAuthorization.finishAfterUnlinkError (authorization : ListedDirectoryAuthorization held)
     (completed : authorization.outcome = .completed)
-    (long : layout.keeper.bytes.size < authorization.keeper.metadata.byteSize.toNat)
     (later : ∀ first ∈ before.image.later.visible, layout.range.through < first)
     {earlier rest : List Nat} {first : Nat} {bindings final : FilePath → Option Nat}
     (order : before.image.later.visible = earlier ++ first :: rest)
@@ -305,10 +353,6 @@ theorem ListedDirectoryAuthorization.finishAfterUnlinkError (authorization : Lis
   let run := performPaths directory layout.boundedPlan operations.removeFile throw
     (operations.write operations.cache) (operations.sync operations.cache) operations.renameFile
   let atError := earlier.foldl FileImage.unlinkLater before.image.syncDirectory
-  have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff layout.boundedPlan).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, later⟩
-  have longer : layout.boundedPlan.keeperSize < authorization.keeper.metadata.byteSize.toNat := size ▸ long
   have reported : run (.unlink first) atError = .error failed.cause failed.reached := by
     simp [run, atError, performPaths, RunCollection.performPaths, Bind.bind, EStateM.bind, failed.reported,
       failed.propagated, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
@@ -322,19 +366,7 @@ theorem ListedDirectoryAuthorization.finishAfterUnlinkError (authorization : Lis
     have prior : ((earlier.map Step.unlink).forM run) before.image.syncDirectory =
         .ok () atError := passed.returned layout.boundedPlan
     simp only [Bind.bind, EStateM.bind, prior, List.cons_append, List.forM_eq_forM, List.forM_cons, reported]
-  have unfoldFinish := congrFun
-    (finishBoundedMarkedOpen_long directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
-      operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
-      operations.renameFile valid size longer) before.image
-  rw [unfoldFinish]
-  change (do
-    operations.sync operations.cache #[directory.path]
-    ((layout.boundedPlan.newer.map Step.unlink) ++ [Step.syncPruned]).forM run
-    run (.replace .writeStaged)
-    run (.replace .syncStaged)
-    run (.replace .renameStaged)
-    run (.replace .syncDirectory)
-    pure () : EStateM IO.Error FileImage Unit) before.image = _
-  simp only [authorization.settles completed, Bind.bind, EStateM.bind, listError]
+  have nonempty : before.image.later.visible ≠ [] := by rw [order]; simp
+  exact authorization.finishAfterPruneError completed (.inl nonempty) later listError
 
 end Alvoki.Storage.DiskSession

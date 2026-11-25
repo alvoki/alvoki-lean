@@ -13,16 +13,6 @@ variable {directory : DiskDirectory} {before : LockedFileState FileImage} {histo
   {held : HeldDirectoryMarkedRetryReports operations published}
   {authorization : ListedDirectoryAuthorization held}
 
-private theorem unlinkEffects {initial reached : FileImage} {target : Target}
-    (prior : EffectTrace target initial reached) (names : List Nat)
-    (later : ∀ first ∈ names, target.range.through < first) :
-    EffectTrace target initial (names.foldl FileImage.unlinkLater reached) := by
-  induction names generalizing reached with
-  | nil => exact prior
-  | cons first more ih =>
-    exact ih (prior.unlink (later first List.mem_cons_self))
-      (fun first listed => later first (List.mem_cons_of_mem _ listed))
-
 /-- A propagated unlink error carries the reached ordered prefix and
 the failed unlink's own effect into the same admitted open cleanup. The
 native result determines the next retry image and the unlock result
@@ -31,7 +21,6 @@ theorem ListedDirectoryAuthorization.continuesAfterUnlinkError
     (authorization : ListedDirectoryAuthorization held)
     {input : FilePath} {source : LockedFileState FileImage} {admits : Target → Prop}
     (metadata : HeldMarkedMetadata held) (completed : authorization.outcome = .completed)
-    (long : layout.keeper.bytes.size < authorization.keeper.metadata.byteSize.toNat)
     {earlier rest : List Nat} {first : Nat} {bindings final : FilePath → Option Nat}
     (order : before.image.later.visible = earlier ++ first :: rest)
     (passed : HeldLaterWalUnlinks held before.image.syncDirectory bindings earlier final)
@@ -57,14 +46,14 @@ theorem ListedDirectoryAuthorization.continuesAfterUnlinkError
     laterValid _ List.mem_cons_self
   have prefixTrace : EffectTrace layout.target before.image
       (earlier.foldl FileImage.unlinkLater before.image.syncDirectory) :=
-    unlinkEffects .authorized earlier (fun first listed => later first (order ▸ List.mem_append_left _ listed))
+    (EffectTrace.authorized (target := layout.target) (initial := before.image)).unlinks earlier (fun first listed => later first (order ▸ List.mem_append_left _ listed))
   have effect : EffectTrace layout.target before.image failed.reached := by
     rcases failed.effect with unchanged | removed
     · rw [unchanged]
       exact prefixTrace
     · rw [removed]
       exact prefixTrace.unlink (later first (order ▸ List.mem_append_right _ List.mem_cons_self))
-  have finish := authorization.finishAfterUnlinkError completed long later order passed failed
+  have finish := authorization.finishAfterUnlinkError completed later order passed failed
   have physical : authorization.keeper.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
     authorization.keeper.extent
   rw [physical] at finish
@@ -150,9 +139,9 @@ theorem barrierError (failure : HeldLaterWalBarrierFailure authorization) :
     rfl
 
 /-- The bounded finisher stops at the failed suffix barrier after the
-whole ordered unlink pass. Neither staging nor keeper publication runs. -/
+whole ordered unlink pass. No keeper action runs. -/
 theorem finishError (failure : HeldLaterWalBarrierFailure authorization)
-    (long : layout.keeper.bytes.size < authorization.keeper.metadata.byteSize.toNat)
+    (prunes : before.image.later.visible ≠ [] ∨ layout.keeper.bytes.size < authorization.keeper.metadata.byteSize.toNat)
     (later : ∀ first ∈ before.image.later.visible, layout.range.through < first) :
     let image := afterUnlinks (before := before)
     finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size
@@ -163,12 +152,6 @@ theorem finishError (failure : HeldLaterWalBarrierFailure authorization)
   intro image
   let run := performPaths directory layout.boundedPlan operations.removeFile throw
     (operations.write operations.cache) (operations.sync operations.cache) operations.renameFile
-  have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff layout.boundedPlan).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, later⟩
-  have physical : authorization.keeper.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
-    authorization.keeper.extent
-  have larger : layout.boundedPlan.keeperSize < layout.plan.keeperBytes.size := size ▸ (physical ▸ long)
   have unlinks : ((layout.boundedPlan.newer.map Step.unlink).forM run) before.image.syncDirectory = .ok () image :=
     failure.unlinks.returned layout.boundedPlan
   have barrier : run .syncPruned image =
@@ -180,26 +163,15 @@ theorem finishError (failure : HeldLaterWalBarrierFailure authorization)
         (if failure.effective then image.syncDirectory else image) := by
     rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
     simp only [Bind.bind, EStateM.bind, unlinks, List.forM_eq_forM, List.forM_cons, barrier]
-  have unfoldFinish := congrFun
-    (finishBoundedMarkedOpen_long directory layout.boundedPlan layout.plan.keeperBytes.size
-      operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
-      operations.renameFile valid size larger) before.image
-  rw [unfoldFinish]
-  change (do
-    operations.sync operations.cache #[directory.path]
-    ((layout.boundedPlan.newer.map Step.unlink) ++ [Step.syncPruned]).forM run
-    run (.replace .writeStaged)
-    run (.replace .syncStaged)
-    run (.replace .renameStaged)
-    run (.replace .syncDirectory)
-    pure () : EStateM IO.Error FileImage Unit) before.image = _
-  simp only [authorization.settles failure.completed, Bind.bind, EStateM.bind, failed]
+  have finish := authorization.finishAfterPruneError failure.completed prunes later failed
+  rw [authorization.keeper.extent] at finish
+  exact finish
 
 /-- Both failed suffix-barrier timings continue the same admitted retry.
 A reported sync effect settles the already absent later names. -/
 theorem continuesAfterError {input : FilePath} {source : LockedFileState FileImage} {admits : Target → Prop}
     (failure : HeldLaterWalBarrierFailure authorization) (metadata : HeldMarkedMetadata held)
-    (long : layout.keeper.bytes.size < authorization.keeper.metadata.byteSize.toNat)
+    (prunes : before.image.later.visible ≠ [] ∨ layout.keeper.bytes.size < authorization.keeper.metadata.byteSize.toNat)
     (admission : OpenAdmissionReports input directory operations.slot)
     (localUnlock : operations.unlock.LocalFlock)
     (keeperValid : before.image.keeper.Valid layout.target.Accepts)
@@ -222,14 +194,14 @@ theorem continuesAfterError {input : FilePath} {source : LockedFileState FileIma
       cleanup.1 = unlockError ∧ cleanup.2.owners (directory.file .lock) = some operations.slot.description := by
   have later : ∀ first ∈ before.image.later.visible, layout.range.through < first := laterValid _ List.mem_cons_self
   have unlinks : EffectTrace layout.target before.image (afterUnlinks (before := before)) :=
-    unlinkEffects .authorized _ later
+    (EffectTrace.authorized (target := layout.target) (initial := before.image)).unlinks _ later
   have reached : EffectTrace layout.target before.image
       (if failure.effective then (afterUnlinks (before := before)).syncDirectory else afterUnlinks (before := before)) := by
     cases effective : failure.effective
     · simpa only [effective, Bool.false_eq_true, ite_false] using unlinks
     · simpa only [effective, ite_true] using unlinks.syncPruned
   exact metadata.continuesAfterRepairError admission localUnlock keeperValid laterValid following accepted ordered
-    (failure.finishError long later) reached prior admitted
+    (failure.finishError prunes later) reached prior admitted
 
 end HeldLaterWalBarrierFailure
 end Alvoki.Storage.DiskSession
