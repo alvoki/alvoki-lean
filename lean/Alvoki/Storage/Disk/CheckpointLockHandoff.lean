@@ -2,17 +2,22 @@ import Alvoki.Storage.Disk.LockDescriptionLifetime
 
 namespace Alvoki.Storage.DiskSession
 
-/-- Interpret the tail of `DiskTable.checkpoint_fileEffects` after the
-ready guard and checkpoint preparation have succeeded. The shared
-publication schedule runs while the writer is poisoned. Its file
-callbacks leave lock ownership to the session scheduler. -/
-def runPreparedCheckpoint {image : Type} (prepared : Installed)
-    (perform : CheckpointPublication.Step → EStateM IO.Error image Unit) :
+/-- Interpret the prepared checkpoint's publication operations under
+the poisoned phase. An observed prefix uses `.poisoned` as its boundary
+phase. The full schedule installs the prepared writer on success. -/
+def runCheckpointActions {image : Type} (actions : EStateM IO.Error image Unit) (onSuccess : Phase Installed) :
     EStateM IO.Error (Phase Installed × LockedFileState image) Unit := do
   modify fun before => (.poisoned, before.2)
-  fun before => match CheckpointPublication.run prepared.table.runs.length perform before.2.image with
-    | .ok _ after => .ok () (.ready prepared, { before.2 with image := after })
+  fun before => match actions before.2.image with
+    | .ok _ after => .ok () (onSuccess, { before.2 with image := after })
     | .error cause after => .error cause (before.1, { before.2 with image := after })
+
+/-- Interpret the tail of `DiskTable.checkpoint_fileEffects` after
+preparation, with the ready update after all publication operations. -/
+def runPreparedCheckpoint {image : Type} (prepared : Installed)
+    (perform : CheckpointPublication.Step → EStateM IO.Error image Unit) :
+    EStateM IO.Error (Phase Installed × LockedFileState image) Unit :=
+  runCheckpointActions (CheckpointPublication.run prepared.table.runs.length perform) (.ready prepared)
 
 /-- An error from the admitted publication tail leaves its exact file
 effects under the original lock. Successful explicit close and an

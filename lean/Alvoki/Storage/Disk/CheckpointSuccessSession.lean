@@ -70,7 +70,7 @@ theorem runPreparedCheckpoint_segmentedSuccess {directory : DiskDirectory} {owne
     simpa only [List.size_toArray] using succeeded
   have ready : runPreparedCheckpoint prepared perform (.ready installed, ⟨0, owners⟩) =
       .ok () (.ready prepared, ⟨cut, owners⟩) := by
-    simp only [runPreparedCheckpoint, Bind.bind, EStateM.bind, modify, modifyGet,
+    simp only [runPreparedCheckpoint, runCheckpointActions, Bind.bind, EStateM.bind, modify, modifyGet,
       MonadStateOf.modifyGet, EStateM.modifyGet, prepared, complete]
   have exactManifest : manifest = metadata.encode :=
     Except.ok.inj (encoded.symm.trans (encodeCheckpointIntegrityManifest_exact generation runBytesFit))

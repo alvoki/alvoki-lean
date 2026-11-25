@@ -439,6 +439,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunDataInterruption.reaches
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunSyncInterruption.reaches
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunInterruption.reaches
+#check_axioms Alvoki.Storage.DiskSession.CheckpointRunInterruption.reachesIssue
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunInterruption.projection
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunInterruption.priorStable
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunInterruption.selectsPrior
@@ -738,6 +739,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.total
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.preparedFacts
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.effect
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.reachesIssue
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.rejected
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.publicationError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.preflight

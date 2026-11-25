@@ -97,6 +97,46 @@ theorem CheckpointPreflight.rejected {image : Type} {phase : Phase Installed} {c
     runCheckpointWithEffects perform (phase, files) = .error cause (phase, files) :=
   preflight.effect perform files
 
+/-- The phase and files at a checkpoint's next issued step, after its
+returned prefix. The continuation describes what the full schedule does
+if the remaining callbacks return. An interruption has its own effect
+observation at this boundary. -/
+structure CheckpointIssue {image : Type}
+    (perform : Installed → ByteArray → Step → EStateM IO.Error image Unit)
+    (phase : Phase Installed) (files : LockedFileState image) (next : Installed) (manifest : ByteArray)
+    (completed : List Step) (current : Step) (reached : image) : Prop where
+  atIssue : runCheckpointActions (completed.forM (perform next manifest)) .poisoned (phase, files) =
+    .ok () (.poisoned, ⟨reached, files.owners⟩)
+  continuation : ∃ remaining, steps next.table.runs.length = completed ++ current :: remaining ∧
+    runCheckpointWithEffects perform (phase, files) =
+      match ((current :: remaining).forM (perform next manifest)) reached with
+      | .ok () after => .ok () (.ready next, ⟨after, files.owners⟩)
+      | .error cause after => .error cause (.poisoned, ⟨after, files.owners⟩)
+
+/-- Follow the same ready guard, preparation and poisoned phase write as
+the full checkpoint before taking the exact reached callback prefix. -/
+theorem CheckpointPreflight.reachesIssue {image : Type} {phase : Phase Installed}
+    {next : Installed} {manifest : ByteArray}
+    (preflight : CheckpointPreflight phase (.ok (next, manifest)))
+    (perform : Installed → ByteArray → Step → EStateM IO.Error image Unit)
+    (files : LockedFileState image) {completed remaining : List Step} {current : Step} {reached : image}
+    (ordered : steps next.table.runs.length = completed ++ current :: remaining)
+    (returned : (completed.forM (perform next manifest)) files.image = .ok () reached) :
+    CheckpointIssue perform phase files next manifest completed current reached := by
+  have suffix : ((completed ++ current :: remaining).forM (perform next manifest)) files.image =
+      ((current :: remaining).forM (perform next manifest)) reached := by
+    rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
+    change EStateM.bind (completed.forM (perform next manifest))
+      (fun _ => (current :: remaining).forM (perform next manifest)) files.image = _
+    simp only [EStateM.bind, returned]
+  refine ⟨?_, remaining, ordered, ?_⟩
+  · simp only [runCheckpointActions, Bind.bind, EStateM.bind, modify, modifyGet, MonadStateOf.modifyGet,
+      EStateM.modifyGet, returned]
+  · rw [preflight.effect]
+    simp only [runPreparedCheckpoint, runCheckpointActions, CheckpointPublication.run, Bind.bind, EStateM.bind, modify, modifyGet,
+      MonadStateOf.modifyGet, EStateM.modifyGet, ordered, suffix]
+    cases ((current :: remaining).forM (perform next manifest)) reached <;> rfl
+
 /-- The native file dispatch uses the exact generation, run bytes and
 manifest produced by preparation, even when a publication callback fails. -/
 structure CheckpointFileCallbacks (state : Type) where

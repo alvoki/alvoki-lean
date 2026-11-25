@@ -187,6 +187,15 @@ theorem reaches (observed : CheckpointRunInterruption runs) :
     simp only [EStateM.bind, past]
     simp [List.forM_eq_forM, List.forM_cons, List.forM_nil, Bind.bind, EStateM.bind, observed.wrote, Pure.pure, EStateM.pure]
 
+/-- The original writer has entered its poisoned phase at this issue,
+with the cache and files reached by the actual returned prefix. -/
+theorem reachesIssue (observed : CheckpointRunInterruption runs) :
+    CheckpointIssue (runs.callbacks.perform directory) (.ready before.installed)
+      ⟨runs.atRun 0, before.owners⟩ attempt.prepared attempt.manifest
+      observed.completed observed.current observed.atStep := by
+  obtain ⟨preflight, ⟨remaining, ordered⟩, returned⟩ := observed.reaches
+  exact preflight.reachesIssue (runs.callbacks.perform directory) ⟨runs.atRun 0, before.owners⟩ ordered returned
+
 /-- Irrespective of whether the issued operation counts as a complete
 effect, the logical publication still selects the prior checkpoint. -/
 theorem projection (observed : CheckpointRunInterruption runs) (effective : Bool) :

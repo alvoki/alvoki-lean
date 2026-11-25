@@ -276,7 +276,7 @@ theorem SegmentedBatchDatabaseTrace.checkpointFromObservedSteps {state : Type}
       (.ready before.installed, ⟨reports.observed.atRun 0, before.owners⟩) =
         .ok () (.ready after.installed, ⟨reports.observed.completed, after.owners⟩) := by
     rw [reports.preflight.effect, installed.installed, installed.owners]
-    simp only [runPreparedCheckpoint, Bind.bind, EStateM.bind, modify, modifyGet, MonadStateOf.modifyGet,
+    simp only [runPreparedCheckpoint, runCheckpointActions, Bind.bind, EStateM.bind, modify, modifyGet, MonadStateOf.modifyGet,
       EStateM.modifyGet, ran]
   have bindings := reports.bindings
   have published := reports.observed.manifestSettled reports.manifest attempt.manifest bindings.stageManifest
