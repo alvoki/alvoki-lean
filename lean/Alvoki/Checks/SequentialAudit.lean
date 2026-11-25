@@ -190,6 +190,7 @@ import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.CheckedDirectoryRead
 import Alvoki.Storage.Disk.HeldDirectoryReadObservations
 import Alvoki.Storage.Disk.DirectoryCacheCapture
+import Alvoki.Storage.Disk.DirectoryCacheOpenAdmissionError
 import Alvoki.Storage.Disk.ListedDirectoryAuthorization
 import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
@@ -1423,6 +1424,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.syncFilesOpen_schedule
 #check_axioms Alvoki.Storage.DiskSession.runSyncFilesOpen_openError
 #check_axioms Alvoki.Storage.DiskSession.DirectoryCacheOpenReports.captures
+#check_axioms Alvoki.Storage.DiskSession.DirectoryCacheFailureCensus.lockReferences
+#check_axioms Alvoki.Storage.DiskSession.DirectoryCacheInitFailure.run_error
+#check_axioms Alvoki.Storage.DiskSession.DirectoryCacheOpenErrorReports.openError
+#check_axioms Alvoki.Storage.DiskSession.DirectoryCacheOpenErrorReports.continuesAfterError
 #check_axioms Alvoki.Storage.DiskSession.MarkedRetryChunkOperations.capturedDirectoryFromOpen
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.sameDirectoryObject
 #check_axioms Alvoki.Storage.DiskSession.RunChunkPathReport.observesFile

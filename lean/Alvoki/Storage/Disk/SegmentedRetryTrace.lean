@@ -182,6 +182,51 @@ theorem BoundedReopenAttempt.errorFiles {directory : DiskDirectory} {admits : Ta
     rw [BoundedReopenAttempt.run, runOpenWithInstallation_outcome, denied] at ran
     exact Or.inl (congrArg LockedFileState.image (EStateM.Result.error.inj ran).2.symm)
 
+/-- A successfully acquired open stopped while opening its directory
+cache. Its effects are the cache callback's reached state and local unlock. -/
+structure DirectoryCacheInitFailure {image : Type} (files : Type) (directory : DiskDirectory)
+    (before : LockedFileState image) where
+  descriptor : Nat
+  nextRef : Nat
+  acquisition : TryLockObserves before.owners directory (.ok true)
+  unlock : UnlockReport
+  localUnlock : unlock.LocalFlock
+  openFiles : EStateM IO.Error image files
+  cause : IO.Error
+  reached : image
+  failed : openFiles before.image = .error cause reached
+
+namespace DirectoryCacheInitFailure
+
+variable {files image : Type} {directory : DiskDirectory} {before : LockedFileState image}
+
+def error (failure : DirectoryCacheInitFailure files directory before) : IO.Error :=
+  match failure.unlock with
+  | .success => failure.cause
+  | .failure cleanup _ => cleanup
+
+def after (failure : DirectoryCacheInitFailure files directory before) : LockedFileState image :=
+  ⟨failure.reached, before.owners.set (directory.file .lock)
+    (match failure.unlock with
+     | .success => none
+     | .failure _ _ => some failure.descriptor)⟩
+
+theorem run_error (failure : DirectoryCacheInitFailure files directory before)
+    (recover : files → EStateM IO.Error image Reopened) :
+    runOpenWithInstallation directory failure.descriptor failure.nextRef (.ok true) failure.unlock
+      (failure.openFiles >>= recover) before = .error failure.error failure.after := by
+  have failed : (failure.openFiles >>= recover) before.image = .error failure.cause failure.reached := by
+    simp only [Bind.bind, EStateM.bind, failure.failed]
+  rw [runOpenWithInstallation_acquiredRecoveryError _ _ _ _ _ _ failed]
+  cases report : failure.unlock with
+  | success => simp [error, after, report]
+  | failure cleanup released =>
+    have retained : released = false := by
+      simpa [UnlockReport.LocalFlock, report] using failure.localUnlock
+    simp [error, after, report, retained]
+
+end DirectoryCacheInitFailure
+
 /-- A finite retry can cross failed opens, observed drops of lock references,
 and power losses. Failed opens record their exact returned image and owner.
 The callback contract determines whether the directory barrier took effect. -/
@@ -192,6 +237,9 @@ inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Pr
       (attempt : BoundedReopenAttempt) (acquisition : TryLockObserves before.owners directory attempt.acquired)
       (localUnlock : attempt.unlock.LocalFlock) (reports : attempt.Reports directory before.image admits)
       (ran : attempt.run directory before = .error cause after) : BoundedReopenTrace directory admits initial after
+  | cacheInitializationFailed {before files} (prior : BoundedReopenTrace directory admits initial before)
+      (failure : DirectoryCacheInitFailure files directory before) (unchanged : failure.reached = before.image) :
+      BoundedReopenTrace directory admits initial failure.after
   | cachedRejected {before} (prior : BoundedReopenTrace directory admits initial before)
       (rejection : CachedOpenRejection directory before) :
       BoundedReopenTrace directory admits initial rejection.after
@@ -270,6 +318,7 @@ theorem BoundedReopenTrace.trans {directory admits initial middle after}
   induction later with
   | empty => exact earlier
   | failed _ attempt acquisition unlock reports ran ih => exact .failed ih attempt acquisition unlock reports ran
+  | cacheInitializationFailed _ failure unchanged ih => exact .cacheInitializationFailed ih failure unchanged
   | cachedRejected _ rejection ih => exact .cachedRejected ih rejection
   | cachedAuthorizationFailed _ failure admitted ih => exact .cachedAuthorizationFailed ih failure admitted
   | cachedRepairFailed _ attempt admitted prepared effects ran ih =>
@@ -288,6 +337,10 @@ theorem BoundedReopenTrace.continuesLineage {directory : DiskDirectory} {admits 
   | empty => exact prior
   | failed _ attempt acquisition _ reports ran ih =>
     exact ih.afterFailure unique (attempt.errorFiles acquisition reports ran)
+  | cacheInitializationFailed _ failure unchanged ih =>
+    change ReopenLineage source admits failure.reached
+    rw [unchanged]
+    exact ih
   | cachedRejected _ _ ih => exact ih
   | cachedAuthorizationFailed _ failure admitted ih => exact ih.afterFailure unique (failure.errorFiles admitted)
   | cachedRepairFailed _ attempt admitted prepared effects _ ih =>

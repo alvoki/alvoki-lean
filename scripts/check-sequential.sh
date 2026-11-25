@@ -257,6 +257,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
 lake env leanchecker Alvoki.Storage.Disk.CheckedDirectoryRead
 lake env leanchecker Alvoki.Storage.Disk.HeldDirectoryReadObservations
 lake env leanchecker Alvoki.Storage.Disk.DirectoryCacheCapture
+lake env leanchecker Alvoki.Storage.Disk.DirectoryCacheOpenAdmissionError
 lake env leanchecker Alvoki.Storage.Disk.ListedDirectoryAuthorization
 lake env leanchecker Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
 lake env leanchecker Alvoki.Storage.Disk.ListedAlignedKeeperRepair
