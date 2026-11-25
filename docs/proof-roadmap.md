@@ -86,13 +86,47 @@ The Linux adapter reads the strict v2 checkpoint and marker-bounded WAL segments
 
 ## End-to-end storage guarantees
 
-The top-level target is **refinement of the executable storage engine to the abstract database across crashes**. For every execution admitted by the filesystem model, there is a legal abstract history that explains its successful reads, acknowledgements, and reopened states. The history includes every acknowledged write in order and may include an unacknowledged write that became durable. Every applied write originates in a submitted operation. Writes that did not survive a crash are dropped from that session's history before considering submissions in the next session.
+The top-level target is **refinement of the executable storage engine to the abstract database across crashes**. For every execution admitted by the filesystem model, there is a legal abstract history that explains its successful reads, acknowledgements, and reopened states. The history includes every acknowledged write in order and may include an unacknowledged write or whole batch that survives recovery. Every applied write originates in a submitted operation. Writes that did not survive a crash are dropped from that session's history before considering submissions in the next session.
 
 The Linux adapter uses a shared exact-prefix loop for checkpoint runs, WAL seals and the keeper. Given truthful chunk and cursor reports on a stable opened file, the loop yields the exact requested bytes or preserves the reported error at the reached cursor. Healthy bounded chunks imply completion. Proving that each native file open and read supplies those reports still requires identity from stat to open and from the open description to the active namespace. [Prefix read proof](../lean/Alvoki/Storage/Disk/ReadRecoveryPrefix.lean)
 
-The refinement must apply to the protocol used by the Linux adapter, under explicit filesystem and resource assumptions. Keep the working-directory change and failed directory sync followed by retry as fault fixtures. Include crashes during recovery itself. The theorem and fixtures should account for these traces through the same file operation contract. [Disk guarantees](#disk-guarantees-to-prove)
+### Completion checklist for native key-value refinement
 
-`SegmentedDatabaseTrace.keyValueRefinement` gives one abstract replay for the acknowledged and retained history and every supported point and range snapshot of the final writer in an admitted mixed trace from bootstrap. The remaining adapter refinement must derive these trace edges from the native execution and carry descriptor identity, file effects and the relevant resource assumptions through the whole run. [Mixed trace](../lean/Alvoki/Storage/Disk/SegmentedDatabaseTrace.lean)
+- [ ] Interpret the actual `DiskTable` entry points through their `*_schedule` and `*_fileEffects` equalities. Connect phase and
+  snapshot operations to the same installed session, including acquisition, release, floor changes, lookup and range. Derive
+  each client-trace step by induction over those executions, from initial admission through repeated crashes and new sessions.
+  Apply `SegmentedClientReadTrace` to explain the recorded responses and reads from each returned ready session. The execution
+  premise should describe the reached native calls and their outcomes independently of membership in the proved trace. Include
+  prefixes ending in error, with the reached state available for any later retry.
+  [Native entry points](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Client replay](../lean/Alvoki/Storage/Disk/ClientReadTrace.lean)
+- [ ] State the Linux boundary in terms of primitive facts. On the supported local filesystem, the owned directory and no-follow
+  guards relate each checked binding to the device and inode actually opened or affected. Record exact bytes and cursors,
+  complete stable enumeration at clean EOF, live open descriptions and lock reference events, and the visible and durable
+  effects of each reached mutation. Include errors after an effect and the possible survivors of a power loss. The Lean proof
+  must derive the chosen manifest and ordered run bytes, the marker-selected WAL, and the next phase and session from those
+  facts. The runtime and compiler must implement the recorded primitive behavior.
+  [Held directory observations](../lean/Alvoki/Storage/Disk/HeldDirectoryReadObservations.lean) · [Descriptor inventory](../lean/Alvoki/Storage/Disk/DescriptorInventory.lean) · [Linux sync binding](../lean/native/fsync.c)
+
+Close the induction by operation family. Each row is complete when every reached branch under the stated contract constructs its successor from the same returned state and observations.
+
+| Entry points | Coverage to connect |
+|---|---|
+| `open` | Combine `open_admission` and `open_fileTargets` over one reported descriptor inventory. Join markerless bootstrap and all four marked finishes (aligned or longer keeper, with or without later names) to the client trace. Carry rejected input, failed bootstrap or repair, and repeated interrupted reopen through actual cleanup into the next admission. [Bootstrap](../lean/Alvoki/Storage/Disk/BootstrapClientTrace.lean) · [Marked finish](../lean/Alvoki/Storage/Disk/ListedMarkedFinish.lean) · [Failed reopen](../lean/Alvoki/Storage/Disk/BoundedReopenFailure.lean) |
+| Write and rotation | Lift the shared publication schedules for `write` and `writeBatch` to the same submission log. Derive unchanged preflight rejection, acknowledged completion, and uncertain retention across errors, process exit and power loss. Select all or none of an uncertain batch. Thread `rotateWal` and its error and crash survivors into the next append on the exact keeper. [Single-write guard](../lean/Alvoki/Storage/Disk/SingleWritePreflight.lean) · [Observed batch](../lean/Alvoki/Storage/Disk/SegmentedBatchAppend.lean) · [Rotation handoff](../lean/Alvoki/Storage/Disk/RotationSessionHandoff.lean) |
+| Checkpoint | Route `checkpoint` preflight, successful publication and every reached run or manifest failure and crash cut through a common handoff. Derive the visible and durable bindings and selected run bytes at the next open, including a reachable nonempty WAL tail, without asking the caller for a matching checkpoint or a ready writer. [Completed checkpoint and held open](../lean/Alvoki/Storage/Disk/CheckpointCompletionHeldReopen.lean) · [Checkpoint cuts and recovery](../lean/Alvoki/Storage/Disk/CheckpointCutSession.lean) |
+| Close and ownership | Apply `close_schedule` to ready, poisoned and repeated close. Carry the exact unlock result, cache and reference changes into later admission. Process death follows the observed description drops, including inherited slots. Power loss follows the filesystem survivor contract. [Close retries](../lean/Alvoki/Storage/Disk/CheckpointRunDirectoryClose.lean) · [Lock references](../lean/Alvoki/Storage/Disk/LockDescriptionLifetime.lean) |
+| Collection and retention | Use the reached checked inventory and effect-time identities for `collectCoveredWal` and `collectObsoleteRuns`. Derive safety at every unlink and barrier cut, with the correct ready or poisoned state. Join `retainRunVersions` and compaction to checkpoint and reopen while preserving selected files and supported reads. [WAL error handoff](../lean/Alvoki/Storage/Disk/SegmentedCollectionLockHandoff.lean) · [Run collection](../lean/Alvoki/Storage/Disk/VersionedRunCollection.lean) · [Retention and reopen](../lean/Alvoki/Storage/Disk/RunRetentionCollection.lean) |
+
+Track healthy recovery and reclamation progress against eventual successful required I/O, adequate resources and scheduled
+maintenance. Bound recovery work and named payload from the exact admitted state. Bound allocated blocks separately using
+filesystem allocation and release facts for staged files and unlinked inodes with live descriptors.
+[Recovery progress](../lean/Alvoki/Storage/Disk/CachedRecoveryProgress.lean) · [Garbage collection contract](#garbage-collection-contract)
+
+Prioritize a new case proof when it closes a branch in this induction or supplies a missing primitive fact shared across
+branches. Reuse the resulting lemma across callers. Keep the working-directory change and failed directory sync followed by
+retry as regression fixtures for the same operation contract.
+
+### Filesystem assumptions and detailed proof targets
 
 The first marked-state slice assumes an owned, already durable directory with stable names, non-aliasing staging and live files, one sequential writer and a durable matching checkpoint. In-place append must preserve the previously synced WAL prefix even on interruption. File sync establishes durable file contents. Same-directory rename changes the visible binding atomically, and directory sync settles the visible names. A crash before that barrier may retain the old binding or the new one. Process death can leave unsynced effects visible. The Linux adapter syncs retained or newly opened descriptors and attempts every member of a grouped barrier even when a member reports an error. Failed syncs may have applied some or all of their effects. The native fault fixtures inject errors before and after the underlying `fsync`. Model the identity and lifetime of the same open descriptions, including each reached effect. The kernel, filesystem and storage-device behavior during power loss remains part of the contract. [Linux binding](../lean/native/fsync.c) · [Native fault fixture](../scripts/disk-sync-fixture.c)
 
