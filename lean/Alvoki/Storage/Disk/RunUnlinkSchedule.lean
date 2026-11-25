@@ -185,6 +185,29 @@ private theorem RunUnlinkRetry.collectionSteps {approved : List RunAddress} {ini
       | syncDirectory => exact .sync prior
     exact later effect (fun next member => eligible next (List.mem_cons_of_mem _ member))
 
+private theorem collectionStepApproved {approved names : List RunAddress}
+    (eligible : ∀ name ∈ names, name ∈ approved) {name : RunAddress}
+    (present : .unlink name ∈ RunCollection.steps names) : name ∈ approved := by
+  unfold RunCollection.steps at present
+  rcases List.mem_append.mp present with unlink | barrier
+  · obtain ⟨selected, chosen, same⟩ := List.mem_map.mp unlink
+    exact RunCollection.Step.unlink.inj same ▸ eligible selected chosen
+  · contradiction
+
+/-- An interruption can leave the effects of a prefix of the same ordered
+schedule, including the interrupted callback if its effect already reached
+the directory. Its concrete crash survivor is chosen in the next step. -/
+theorem RunUnlinkRetry.interruptedSchedule {approved : List RunAddress} {initial before : RunUnlinkImage}
+    (prior : RunUnlinkRetry approved initial before) (names : List RunAddress)
+    (eligible : ∀ name ∈ names, name ∈ approved) (cut : Nat) :
+    RunUnlinkRetry approved initial
+      (((RunCollection.steps names).take cut).foldl RunUnlinkImage.applyCollectionStep before) := by
+  apply prior.collectionSteps
+  intro action present
+  cases action with
+  | unlink _ => exact collectionStepApproved eligible (List.mem_of_mem_take present)
+  | syncDirectory => trivial
+
 /-- Every reported result of the ordered schedule extends the admissible
 retry trace. Subsequent crashes therefore use the proved namespace and
 checkpoint-preservation invariants. -/
@@ -195,24 +218,15 @@ theorem RunUnlinkRetry.runSchedule {error : Type} {approved : List RunAddress} {
     (reports : RunUnlinkEffectContract perform) :
     match RunCollection.run names perform before with
     | .ok _ after | .error _ after => RunUnlinkRetry approved initial after := by
-  have allowed : ∀ action ∈ RunCollection.steps names,
-      match action with | .unlink name => name ∈ approved | .syncDirectory => True := by
-    intro action present
-    unfold RunCollection.steps at present
-    rcases List.mem_append.mp present with unlink | barrier
-    · obtain ⟨name, chosen, rfl⟩ := List.mem_map.mp unlink
-      exact eligible name chosen
-    · obtain rfl := List.mem_singleton.mp barrier
-      trivial
   have outcome := runUnlinkSchedule_outcome names before perform reports
   cases ran : RunCollection.run names perform before with
   | ok _ after =>
     rw [ran] at outcome
     rw [outcome, ← foldl_collectionSteps]
-    exact prior.collectionSteps _ allowed
+    simpa only [List.take_length] using prior.interruptedSchedule names eligible (RunCollection.steps names).length
   | error _ after =>
     rw [ran] at outcome
     obtain ⟨cut, rfl⟩ := outcome
-    exact prior.collectionSteps _ (fun action chosen => allowed action (List.mem_of_mem_take chosen))
+    exact prior.interruptedSchedule names eligible cut
 
 end Alvoki.Storage.CheckpointPublication

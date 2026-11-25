@@ -323,6 +323,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.RunUnlinkEffectContract.ofPaths
 #check_axioms Alvoki.Storage.CheckpointPublication.runUnlinkSchedule_outcome
 #check_axioms Alvoki.Storage.CheckpointPublication.RunUnlinkRetry.runSchedule
+#check_axioms Alvoki.Storage.CheckpointPublication.RunUnlinkRetry.interruptedSchedule
+#check_axioms Alvoki.Storage.LockedRunInventory.finishOlderPass_absent
 #check_axioms Alvoki.Storage.validateRunCollectionGeneration_ok_iff
 #check_axioms Alvoki.Storage.retainRunGeneration_false_iff
 #check_axioms Alvoki.Storage.selectRunFilesWith_pure
@@ -928,6 +930,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.run_eq_schedule
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.selected_eligible
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.preservesRetained
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.extendsRetry
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.crashAtCut
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.completeAfterRetries
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.collectObsoleteRuns
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromBootstrap
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromBootstrapRun

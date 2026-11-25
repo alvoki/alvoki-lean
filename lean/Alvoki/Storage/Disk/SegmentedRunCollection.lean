@@ -140,6 +140,23 @@ theorem selected_eligible {descriptor : Nat} (ready : state.RetainedReady direct
   reports.inventory.selectOlderRunsAt_iff reports.held
     (validateObservedRunGeneration_ok_iff.mp (reports.preflight ready)).2
 
+/-- Both returned outcomes extend the same approved namespace lineage.
+Each retry supplies its own checked visible inventory. -/
+theorem extendsRetry {descriptor : Nat} (ready : state.RetainedReady directory descriptor)
+    (reports : SegmentedRunCollectionReports directory state before)
+    {approved : List RunAddress} {initial : RunUnlinkImage} (prior : RunUnlinkRetry approved initial before)
+    (covers : ∀ address ∈ reports.selected, address ∈ approved) :
+    RunUnlinkRetry approved initial reports.reached := by
+  have effects := prior.runSchedule reports.selected covers reports.perform reports.effects
+  rw [← reports.run_eq_schedule ready] at effects
+  cases execution : reports.run <;> simpa only [reached, execution] using effects
+
+private theorem selectedOlder {descriptor : Nat} (ready : state.RetainedReady directory descriptor)
+    (reports : SegmentedRunCollectionReports directory state before) :
+    ∀ address ∈ reports.selected, address.1 < state.installed.generation := by
+  rintro ⟨generation, index⟩ chosen
+  exact ((reports.selected_eligible ready).mp chosen).2.1
+
 /-- Use the exact returned namespace on success or failure, including a
 completed deletion or barrier that reported an error. The continued writer
 is ready and every admitted run crash map keeps its old selected checkpoint. -/
@@ -147,16 +164,73 @@ theorem preservesRetained {descriptor : Nat} (ready : state.RetainedReady direct
     (reports : SegmentedRunCollectionReports directory state before) :
     (state.afterRunCollection reports.reached.guaranteed).RetainedReady directory descriptor ∧
       ∀ survived ∈ reports.reached.crashImages,
-        SelectedIntegrityCheckpoint survived state.target.pair.manifest state.checkpoint := by
-  have older : ∀ address ∈ reports.selected, address.1 < state.installed.generation := by
-    rintro ⟨generation, index⟩ chosen
-    exact ((reports.selected_eligible ready).mp chosen).2.1
-  have effects := (RunUnlinkRetry.start (approved := reports.selected) before).runSchedule reports.selected
-    (fun _ chosen => chosen) reports.perform reports.effects
-  rw [← reports.run_eq_schedule ready] at effects
-  cases execution : reports.run <;>
-    simpa only [reached, execution] using
-      ready.afterRunCollection (by simpa only [execution] using effects) older reports.known
+        SelectedIntegrityCheckpoint survived state.target.pair.manifest state.checkpoint :=
+  ready.afterRunCollection (reports.extendsRetry ready (.start before) (fun _ chosen => chosen))
+    (reports.selectedOlder ready) reports.known
+
+/-- A reported interruption chooses a prefix of the checked native
+unlink/barrier schedule. A machine crash then selects an admitted run map
+at that cut, with the exact old checkpoint still available. The next
+writer must acquire and reopen through its own reported observations. -/
+theorem crashAtCut {descriptor : Nat} (ready : state.RetainedReady directory descriptor)
+    (reports : SegmentedRunCollectionReports directory state before)
+    {approved : List RunAddress} {initial : RunUnlinkImage} (prior : RunUnlinkRetry approved initial before)
+    (covers : ∀ address ∈ reports.selected, address ∈ approved) (cut : Nat) {survived : RunFiles}
+    (survivor : survived ∈ (((RunCollection.steps reports.selected).take cut).foldl
+      RunUnlinkImage.applyCollectionStep before).crashImages) :
+    RunUnlinkRetry approved initial (.settled survived) ∧
+      SelectedIntegrityCheckpoint survived state.target.pair.manifest state.checkpoint := by
+  have atCut := (RunUnlinkRetry.start (approved := reports.selected) before).interruptedSchedule
+    reports.selected (fun _ chosen => chosen) cut
+  exact ⟨(prior.interruptedSchedule reports.selected covers cut).crash survivor,
+    (ready.afterRunCollection atCut (reports.selectedOlder ready) reports.known).2 survived survivor⟩
+
+/-- A healthy retry on a complete current inventory ends a finite lineage
+of admitted partial passes or crashes. It durably removes every eligible
+name, including names already hidden at retry entry. It keeps original
+known bytes outside the older unheld set and selects the exact current
+checkpoint from the sole surviving run map. -/
+theorem completeAfterRetries {descriptor : Nat} (ready : state.RetainedReady directory descriptor)
+    (reports : SegmentedRunCollectionReports directory state before)
+    {approved : List RunAddress} {initial : RunUnlinkImage} (prior : RunUnlinkRetry approved initial before)
+    (approvedOlderUnheld : ∀ address ∈ approved,
+      address.1 < state.installed.generation ∧ address.1 ∉ reports.held)
+    (covers : ∀ address ∈ reports.selected, address ∈ approved)
+    (complete : ∀ generation index bytes, before.visible generation index = some bytes →
+      generation < state.installed.generation → generation ∉ reports.held →
+      renderRunFileName generation index ∈ reports.inventory.names ∧
+        reports.inventory.kindAt (directory.file (.run generation index)) = .ok .file)
+    (healthy : RunUnlinkScheduleHealthy before (RunCollection.steps reports.selected) reports.perform) :
+    let after := before.finishPass reports.selected
+    reports.run = .ok () after ∧ RunUnlinkRetry approved initial after ∧
+      after.crashImages = [after.visible] ∧ after.guaranteed = after.visible ∧
+      (∀ generation index, after.visible generation index =
+        if (generation, index) ∈ reports.selected then none else before.visible generation index) ∧
+      (∀ generation index, generation < state.installed.generation → generation ∉ reports.held →
+        after.DurablyAbsent (generation, index)) ∧
+      (∀ generation index bytes, state.installed.generation ≤ generation ∨ generation ∈ reports.held →
+        initial.guaranteed generation index = some bytes → after.guaranteed generation index = some bytes) ∧
+      (state.afterRunCollection after.guaranteed).RetainedReady directory descriptor ∧
+      SelectedIntegrityCheckpoint after.visible state.target.pair.manifest state.checkpoint := by
+  intro after
+  have returned := (reports.run_eq_schedule ready).trans
+    (runUnlinkSchedule_success _ before reports.perform reports.effects healthy)
+  have reached : reports.reached = after := by simp only [SegmentedRunCollectionReports.reached, returned, after]
+  have lineage := reports.extendsRetry ready prior covers
+  have preserved := reports.preservesRetained ready
+  rw [reached] at lineage preserved
+  have sameMap : after.guaranteed = after.visible :=
+    congrArg Image.durable (RunUnlinkImage.project_settled after.visible state.published.manifest)
+  have matching := (validateObservedRunGeneration_ok_iff.mp (reports.preflight ready)).2
+  refine ⟨returned, lineage, rfl, sameMap,
+    fun generation index => (before.finishPass_binding reports.selected (generation, index)).1,
+    reports.inventory.finishOlderPass_absent before reports.held matching complete, ?_,
+    preserved.1, preserved.2 after.visible List.mem_cons_self⟩
+  intro generation index bytes keepGeneration known
+  apply lineage.keepsKnown (name := (generation, index)) known
+  intro chosen
+  obtain ⟨older, unheld⟩ := approvedOlderUnheld _ chosen
+  exact keepGeneration.elim (fun le => UInt64.not_lt.mpr le older) unheld
 
 end SegmentedRunCollectionReports
 end Alvoki.Storage.DiskSession

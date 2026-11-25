@@ -28,6 +28,29 @@ theorem LockedRunInventory.selectOlderRunsAt_iff {dir : DiskDirectory} {regularA
     exact ⟨listed, olderThanInstalledGeneration matching older,
       retainRunGeneration_false_iff.mpr ⟨older, unheld⟩, regular⟩
 
+/-- A complete eligible inventory leaves every older unheld run durably
+absent. The barrier also settles names already hidden by an earlier unlink. -/
+theorem LockedRunInventory.finishOlderPass_absent {dir : DiskDirectory} {regularAt : FilePath → Prop}
+    (inventory : LockedRunInventory dir regularAt) (before : RunUnlinkImage)
+    {installed : UInt64} {current : Option UInt64} (held : List UInt64) (matching : current.getD 0 = installed)
+    (complete : ∀ generation index bytes, before.visible generation index = some bytes →
+      generation < installed → generation ∉ held →
+      renderRunFileName generation index ∈ inventory.names ∧
+        inventory.kindAt (dir.file (.run generation index)) = .ok .file) :
+    ∀ generation index, generation < installed → generation ∉ held →
+      (before.finishPass (selectRunFiles dir current (retainRunGeneration installed held)
+        inventory.kindAt inventory.names)).DurablyAbsent (generation, index) := by
+  intro generation index older unheld
+  cases visible : before.visible generation index with
+  | none =>
+    simpa [RunUnlinkImage.DurablyAbsent, visible] using before.finishPass_binding
+      (selectRunFiles dir current (retainRunGeneration installed held) inventory.kindAt inventory.names)
+      (generation, index)
+  | some bytes =>
+    obtain ⟨listed, regular⟩ := complete generation index bytes visible older unheld
+    exact RunUnlinkImage.finishPass_absent
+      ((inventory.selectOlderRunsAt_iff held matching).mpr ⟨listed, older, unheld, regular⟩)
+
 /-- The v1 model preflight supplies the matching generation. -/
 theorem LockedRunInventory.selectOlderRuns_iff {dir : DiskDirectory} {regularAt : FilePath → Prop}
     (inventory : LockedRunInventory dir regularAt) {installed generation : UInt64} {index : Nat}

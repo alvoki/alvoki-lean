@@ -39,15 +39,7 @@ theorem IntegrityRunCollectionReports.completePass {directory : DiskDirectory} {
     rw [checked]
     simp only [pure_bind, selectRunFilesWith_pure, selected]
   refine ⟨ran.trans (runUnlinkSchedule_success _ before reports.perform reports.effects healthy), ?_, ?_⟩
-  · intro generation index older unheld
-    cases visible : before.visible generation index with
-    | none =>
-      simpa [RunUnlinkImage.DurablyAbsent, visible] using
-        before.finishPass_binding reports.selected (generation, index)
-    | some bytes =>
-      obtain ⟨listed, regular⟩ := complete generation index bytes visible older unheld
-      exact RunUnlinkImage.finishPass_absent
-        ((reports.inventory.selectOlderRunsAt_iff reports.held matching).mpr ⟨listed, older, unheld, regular⟩)
+  · exact reports.inventory.finishOlderPass_absent before reports.held matching complete
   · intro generation index bytes retained known
     apply (RunUnlinkRetry.start (approved := reports.selected) before).finishPass.keepsKnown
       (name := (generation, index)) known
