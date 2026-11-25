@@ -396,6 +396,65 @@ theorem commitAfterRename (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs
   simp only [grouped, moved]
   exact (calls.rootBarrier cache loaded).2
 
+private theorem rootBarrierReturned (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
+    {before reached : heap} (returned : calls.group directory.path cache.directory cache.active cache.pending
+      #[directory.path] before = .ok () reached) :
+    ∃ issued handle, calls.readDirectory cache.directory before = .ok (some handle) issued ∧
+      calls.fsync handle issued = .ok () reached := by
+  cases loaded : calls.readDirectory cache.directory before with
+  | error =>
+    rw [group, SyncPathGroup.run_single] at returned
+    simp [syncPath, syncWithHandles, Bind.bind, EStateM.bind, loaded] at returned
+  | ok contents issued =>
+    cases contents with
+    | none =>
+      rw [group, SyncPathGroup.run_single] at returned
+      simp [syncPath, syncWithHandles, loaded, Bind.bind, EStateM.bind, throw, throwThe,
+        MonadExceptOf.throw, EStateM.throw] at returned
+    | some handle =>
+      rw [(calls.rootBarrier cache loaded).2] at returned
+      cases synced : calls.fsync handle issued with
+      | error => simp [synced] at returned
+      | ok value after =>
+        cases value
+        simp [synced] at returned
+        subst reached
+        exact ⟨issued, handle, rfl, synced⟩
+
+/-- Invert the successful return of the publication following a reached
+append and stage. The grouped file barrier, rename, and original cached
+root fsync are successive callbacks in that one execution. -/
+theorem publicationReturned (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
+    (append : RawWalAppendCalls heap) (stage : RawWalStageCalls heap)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {first count : Nat} {bytes : ByteArray}
+    {entry appended staged reached : heap}
+    (wrote : append.run cache.active (directory.file (.walSegment first)) bytes entry = .ok () appended)
+    (remembered : stage.run cache.pending (directory.file .stagedWalBoundary) (WAL.Boundary.encode count.toUInt64)
+      appended = .ok () staged)
+    (returned : WalSegmentCommit.commitBytesAt directory first bytes count (append.run cache.active)
+      (stage.run cache.pending) (calls.group directory.path cache.directory cache.active cache.pending) rename entry =
+      .ok () reached) :
+    ∃ grouped renamed issued handle,
+      calls.group directory.path cache.directory cache.active cache.pending
+        #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .ok () grouped ∧
+      rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) grouped = .ok () renamed ∧
+      calls.readDirectory cache.directory renamed = .ok (some handle) issued ∧
+      calls.fsync handle issued = .ok () reached := by
+  rw [calls.commitAfterStaging cache append stage rename wrote remembered] at returned
+  cases grouped : calls.group directory.path cache.directory cache.active cache.pending
+      #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged with
+  | error => simp [grouped] at returned
+  | ok value groupedAt =>
+    cases value
+    cases moved : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) groupedAt with
+    | error => simp [grouped, moved] at returned
+    | ok value renamed =>
+      cases value
+      have barrier : calls.group directory.path cache.directory cache.active cache.pending #[directory.path] renamed =
+          .ok () reached := by simpa only [grouped, moved] using returned
+      obtain ⟨issued, handle, loaded, synced⟩ := calls.rootBarrierReturned cache barrier
+      exact ⟨groupedAt, renamed, issued, handle, rfl, moved, loaded, synced⟩
+
 /-- Use the append's active entry and staging's returned pending entry
 instead of supplying a second handle selection. Even a failed keeper
 fsync feeds its reached heap to the marker path. -/

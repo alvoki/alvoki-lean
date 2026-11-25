@@ -6,6 +6,19 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
+/-- Local storage law for a successful regular-file fsync on a literal
+handle. The observed file sync preserves the namespace and live bytes. -/
+abbrev RawSyncCalls.FileReturnEffect {heap image : Type} {directory : DiskDirectory}
+    (calls : RawSyncCalls heap) (view : OpenCloseHeapView heap image) (inodes : heap → WalInodeImage)
+    {runs : heap → RunUnlinkImage} (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap))
+    (path : FilePath) (handle : IO.FS.Handle) (issued reached : heap) : Prop :=
+  calls.fsync handle issued = .ok () reached →
+    let inode := (view.descriptors issued).inode (view.handle issued handle).2.1.description
+    (observe issued).visible path = some inode ∧
+    inodes reached = (inodes issued).completeFileSync inode ∧
+    (observe reached).visible = (observe issued).visible ∧
+    (observe reached).crashBindings = (observe issued).crashBindings
+
 /-- Invert success of the actual file group using the two dispatch
 equations. A returned error from either fsync excludes group success,
 even when the later fsync still ran. -/
@@ -96,18 +109,10 @@ theorem RawSyncCalls.groupedReturnedStorage {heap image : Type} (calls : RawSync
       (view.handle staged markerHandle).2.1.description = markerInode)
     (keeperPayload : (inodes staged).visible keeperInode = keeperBytes)
     (markerPayload : (inodes consumed).visible markerInode = markerBytes)
-    (keeperEffect : ∀ after, calls.fsync keeperHandle staged = .ok () after →
-      let inode := (view.descriptors staged).inode (view.handle staged keeperHandle).2.1.description
-      (observe staged).visible (directory.file (.walSegment first)) = some inode ∧
-      inodes after = (inodes staged).completeFileSync inode ∧
-      (observe after).visible = (observe staged).visible ∧
-      (observe after).crashBindings = (observe staged).crashBindings)
-    (markerEffect : calls.fsync markerHandle consumed = .ok () reached →
-      let inode := (view.descriptors consumed).inode (view.handle consumed markerHandle).2.1.description
-      (observe consumed).visible (directory.file .stagedWalBoundary) = some inode ∧
-      inodes reached = (inodes consumed).completeFileSync inode ∧
-      (observe reached).visible = (observe consumed).visible ∧
-      (observe reached).crashBindings = (observe consumed).crashBindings)
+    (keeperEffect : ∀ after, calls.FileReturnEffect view inodes observe (directory.file (.walSegment first))
+      keeperHandle staged after)
+    (markerEffect : calls.FileReturnEffect view inodes observe (directory.file .stagedWalBoundary)
+      markerHandle consumed reached)
     (distinct : keeperInode ≠ markerInode) {footprint : FilePath → Prop}
     (consumeFrame : (observe (reachedState (calls.fsync keeperHandle staged))).storageObservation.Frames
       (fun path => path = directory.file (.walSegment first) ∨ footprint path) (observe consumed).storageObservation)
@@ -125,6 +130,73 @@ theorem RawSyncCalls.groupedReturnedStorage {heap image : Type} (calls : RawSync
   rw [keeperSelected, keeperPayload] at keeperEffect
   rw [markerSelected, markerPayload] at markerEffect
   exact keeperEffect.2.pairedStored markerEffect.2 keeperEffect.1 markerEffect.1 distinct consumeFrame unrelated
+
+/-- Use the actual cached routes after append and stage. The keeper
+payload is carried from the append return. The staged marker's payload
+passes through the first fsync and the reached pending-cell removal. -/
+theorem RawSyncCalls.groupedStorageFromStaging {heap image : Type} (calls : RawSyncCalls heap)
+    {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles}
+    (cache : OpenSyncCacheRefs files directory.path) (view : OpenCloseHeapView heap image) {first count : Nat}
+    {appended staged consumed reached : heap} {keeperHandle markerHandle : IO.FS.Handle}
+    (activeKeeper : view.active appended cache.active = some (directory.file (.walSegment first), keeperHandle))
+    (keeperMiss : (view.pending appended cache.pending).find?
+      (fun entry => entry.1 == directory.file (.walSegment first)) = none)
+    (remembered : view.literalCacheAt staged cache.directory cache.active cache.pending =
+      (view.literalCacheAt appended cache.directory cache.active cache.pending).remember
+        (directory.file .stagedWalBoundary) markerHandle)
+    (loadedKeeper : calls.readPending cache.pending staged = .ok (view.pending staged cache.pending) staged)
+    (loadedActive : calls.readActive cache.active staged = .ok (view.active staged cache.active) staged)
+    (loadedMarker : let atKeeper := reachedState (calls.fsync keeperHandle staged)
+      calls.readPending cache.pending atKeeper = .ok (view.pending staged cache.pending) atKeeper)
+    (removed : calls.setPending cache.pending
+      ((view.pending staged cache.pending).filter (fun entry => entry.1 != directory.file .stagedWalBoundary))
+      (reachedState (calls.fsync keeperHandle staged)) = .ok () consumed)
+    (grouped : calls.group directory.path cache.directory cache.active cache.pending
+      #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .ok () reached)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap))
+    (keeperTarget : RawFsyncTarget view appended staged keeperHandle)
+    (markerTarget : RawFsyncTarget view staged consumed markerHandle)
+    {keeperInode markerInode : Nat} {priorBytes bytes : ByteArray}
+    (keeperSelected : (view.handle appended keeperHandle).1.inode
+      (view.handle appended keeperHandle).2.1.description = keeperInode)
+    (markerSelected : (view.handle staged markerHandle).1.inode
+      (view.handle staged markerHandle).2.1.description = markerInode)
+    (appendBytes : (inodes appended).visible keeperInode = priorBytes ++ bytes)
+    (keptByStage : (inodes staged).visible keeperInode = (inodes appended).visible keeperInode)
+    (stagedBytes : ∃ inode, (observe staged).visible (directory.file .stagedWalBoundary) = some inode ∧
+      (inodes staged).visible inode = WAL.Boundary.encode count.toUInt64)
+    (keptByConsume : let afterKeeper := reachedState (calls.fsync keeperHandle staged)
+      (observe consumed).visible (directory.file .stagedWalBoundary) =
+        (observe afterKeeper).visible (directory.file .stagedWalBoundary) ∧
+      (inodes consumed).visible markerInode = (inodes afterKeeper).visible markerInode)
+    (keeperEffect : ∀ after, calls.FileReturnEffect view inodes observe (directory.file (.walSegment first))
+      keeperHandle staged after)
+    (markerEffect : calls.FileReturnEffect view inodes observe (directory.file .stagedWalBoundary)
+      markerHandle consumed reached)
+    (distinct : keeperInode ≠ markerInode) {footprint : FilePath → Prop}
+    (consumeFrame : (observe (reachedState (calls.fsync keeperHandle staged))).storageObservation.Frames
+      (fun path => path = directory.file (.walSegment first) ∨ footprint path) (observe consumed).storageObservation)
+    (unrelated : ∀ path, footprint path → ∀ inode, (observe staged).storageObservation.files.names path = some inode →
+      inode ≠ keeperInode ∧ inode ≠ markerInode) :
+    (observe reached).storageObservation.files.Stored (directory.file (.walSegment first)) (priorBytes ++ bytes) ∧
+    (observe reached).storageObservation.files.Stored (directory.file .stagedWalBoundary)
+      (WAL.Boundary.encode count.toUInt64) ∧
+    (observe staged).storageObservation.Frames footprint (observe reached).storageObservation := by
+  obtain ⟨keeperRoute, markerRoute, _⟩ :=
+    calls.groupedFromStaging cache view activeKeeper keeperMiss remembered loadedKeeper loadedActive loadedMarker removed
+  obtain ⟨keeperReturned, markerReturned⟩ := calls.groupedFileReturns cache keeperRoute markerRoute grouped
+  obtain ⟨_, syncedKeeper, keptNames, _⟩ := keeperEffect _ keeperReturned
+  have markerAtIssue := (markerEffect markerReturned).1
+  rw [markerTarget.inode, markerSelected] at markerAtIssue
+  obtain ⟨stagedInode, namedStage, payload⟩ := stagedBytes
+  have same := Option.some.inj (markerAtIssue.symm.trans
+    (keptByConsume.1.trans ((congrFun keptNames _).trans namedStage)))
+  subst stagedInode
+  have sameBytes := congrArg (fun image => image.visible markerInode) syncedKeeper
+  exact calls.groupedReturnedStorage cache view keeperRoute markerRoute grouped inodes runs observe keeperTarget markerTarget
+    keeperSelected markerSelected (keptByStage.trans appendBytes) (keptByConsume.2.trans (sameBytes.trans payload))
+    keeperEffect markerEffect distinct consumeFrame unrelated
 
 /-- Move the synced staged inode to the canonical marker, then use the
 same directory handle selected by the publication. Every selectable
