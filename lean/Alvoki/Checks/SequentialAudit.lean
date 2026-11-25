@@ -3518,6 +3518,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.reopenSync_preservesReadFrontier
 #check_axioms Alvoki.WAL.TwoSlot.reopenSync_projectsCrashBinding
 #check_axioms Alvoki.WAL.TwoSlot.reopenSync_projectsCrashBindings
+#check_axioms Alvoki.WAL.TwoSlot.completedMarkerSync_projectsRepairDirectory
 #check_axioms Alvoki.WAL.TwoSlot.reopenSync_projectsRepairDirectory
 #check_axioms Alvoki.WAL.TwoSlot.reopenSync_projectsAcquiredMarker
 #check_axioms Alvoki.WAL.TwoSlot.reopenSync_repairPreservesFrontier

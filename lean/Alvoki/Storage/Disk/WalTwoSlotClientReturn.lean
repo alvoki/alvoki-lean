@@ -641,8 +641,7 @@ A present name uses the bytes of its surviving inode, while an absent
 name preserves the manifest and leaves the marker absent. -/
 theorem reopenSync_projectsCrashBinding
     {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
-    (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
-      handle marker (fun inode files => files.completeFileSync inode) (.ok () settled))
+    (completed : settled = marker.completeFileSync marker.active)
     (current : handle.inode = marker.active)
     (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
     {selected : Selection} (observed : decode (marker.visible handle.inode) = .ok selected)
@@ -658,7 +657,7 @@ theorem reopenSync_projectsCrashBinding
   | none =>
     cases boundary : before.walBoundary <;> simp_all
   | some bytes =>
-    have exactBytes := syncedInode_survivor sync current sameBinding (physical bytes rfl)
+    have exactBytes := completeFileSync_survivor completed sameBinding (physical bytes rfl)
     have decoded : decode bytes = .ok selected := by rw [exactBytes, ← current]; exact observed
     change projectBinding before bytes = _
     rw [projectBinding_decodes decoded]
@@ -668,8 +667,7 @@ theorem reopenSync_projectsCrashBinding
 reopen barrier. The list preserves each manifest and marker-presence choice. -/
 theorem reopenSync_projectsCrashBindings
     {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
-    (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
-      handle marker (fun inode files => files.completeFileSync inode) (.ok () settled))
+    (completed : settled = marker.completeFileSync marker.active)
     (current : handle.inode = marker.active)
     (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
     {selected : Selection} (observed : decode (marker.visible handle.inode) = .ok selected)
@@ -686,7 +684,7 @@ theorem reopenSync_projectsCrashBindings
   induction choices with
   | nil => rfl
   | cons choice rest ih =>
-    have head := reopenSync_projectsCrashBinding sync current sameBinding observed choice.1
+    have head := reopenSync_projectsCrashBinding completed current sameBinding observed choice.1
       (presence choice (List.mem_cons_self ..)) (physical choice (List.mem_cons_self ..))
     have tail := ih (fun item member => presence item (List.mem_cons_of_mem _ member))
       (fun item member => physical item (List.mem_cons_of_mem _ member))
@@ -705,6 +703,32 @@ def projectRepairDirectory (directory : DirectoryPublication.Image) (visible : B
 
 /-- A successful descriptor barrier yields the exact directory image
 that precedes shared keeper repair. Staging is untouched by file sync. -/
+theorem completedMarkerSync_projectsRepairDirectory
+    {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
+    (completed : settled = marker.completeFileSync marker.active)
+    (current : handle.inode = marker.active)
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selected : Selection} (observed : decode (marker.visible handle.inode) = .ok selected)
+    (directory : DirectoryPublication.Image)
+    (bound : directory.active.walBoundary.isSome = true)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode) :
+    projectRepairDirectory directory (marker.visible handle.inode) choices = .ok (settleMarker directory selected) := by
+  have crashes := reopenSync_projectsCrashBindings completed current sameBinding observed choices presence physical
+  have active := projectBinding_decodes (visible := directory.active) observed
+  have activeMap : directory.active.walBoundary.map (fun _ => Boundary.encode selected.frontier) =
+      some (Boundary.encode selected.frontier) := by
+    cases boundary : directory.active.walBoundary <;> simp_all
+  rw [enumerated] at crashes
+  simp only [projectRepairDirectory, Bind.bind, Except.bind, active, crashes, Pure.pure, Except.pure]
+  simp [settleMarker, activeMap]
+
+/-- A successful syscall report witnesses the completed effect on the
+active marker inode. The projection itself also applies to a sync that
+completed before an error or interruption. -/
 theorem reopenSync_projectsRepairDirectory
     {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
     (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
@@ -720,14 +744,11 @@ theorem reopenSync_projectsRepairDirectory
     (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
       ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode) :
     projectRepairDirectory directory (marker.visible handle.inode) choices = .ok (settleMarker directory selected) := by
-  have crashes := reopenSync_projectsCrashBindings sync current sameBinding observed choices presence physical
-  have active := projectBinding_decodes (visible := directory.active) observed
-  have activeMap : directory.active.walBoundary.map (fun _ => Boundary.encode selected.frontier) =
-      some (Boundary.encode selected.frontier) := by
-    cases boundary : directory.active.walBoundary <;> simp_all
-  rw [enumerated] at crashes
-  simp only [projectRepairDirectory, Bind.bind, Except.bind, active, crashes, Pure.pure, Except.pure]
-  simp [settleMarker, activeMap]
+  have effect := sync.effect.completed_of_return ⟨settled, rfl⟩
+  rw [sync.sameInode, current] at effect
+  have completed : settled = marker.completeFileSync marker.active := by injection effect
+  exact completedMarkerSync_projectsRepairDirectory completed current sameBinding observed
+    directory bound choices enumerated presence physical
 
 /-- The repair directory follows from the successful bounded read and sync
 of one held marker descriptor. No separate decode of its full bytes is needed. -/
@@ -1493,8 +1514,17 @@ theorem reopenSyncInterrupted_preservesRetry {stop : Type}
     (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
     (project : WalInodeImage → FileImage)
     (source : project physical = prepared) (reachedImage : project after = reached)
-    (persisted : project (physical.completeFileSync handle.inode) =
-      { prepared with directory := settleMarker prepared.directory selected })
+    (current : handle.inode = physical.active)
+    (sameBinding : ∀ inode ∈ physical.crashBindings, inode = physical.active)
+    (decoded : decode (physical.visible handle.inode) = .ok selected)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = prepared.directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (survivors : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ after.crashBindings, bytes ∈ after.crashBytes inode)
+    (projection : after = physical.completeFileSync physical.active →
+      ∀ directory, projectRepairDirectory prepared.directory (physical.visible handle.inode) choices =
+        .ok directory → project after = { prepared with directory })
     (inventory : DiskSession.DescriptorInventory)
     (captured : inventory.inode handle.description = handle.inode)
     (effect : after = physical ∨
@@ -1514,10 +1544,13 @@ theorem reopenSyncInterrupted_preservesRetry {stop : Type}
   · have projectedEffect : reached = prepared ∨
         reached = { prepared with directory := settleMarker prepared.directory selected } := by
       rw [← reachedImage]
-      rw [captured] at effect
-      rcases effect with rfl | rfl
-      · exact Or.inl source
-      · exact Or.inr persisted
+      rw [captured, current] at effect
+      rcases effect with unchanged | completed
+      · exact Or.inl (unchanged.symm ▸ source)
+      · have bound : prepared.directory.active.walBoundary.isSome = true := by simp [observed]
+        have directory := completedMarkerSync_projectsRepairDirectory completed current sameBinding decoded
+          prepared.directory bound choices enumerated presence survivors
+        exact Or.inr (projection completed _ directory)
     exact .powerLoss (.markerInterrupted prior selected observed projectedEffect) metadata keeper later
 
 /-- The descriptor's error report determines which retry image is
