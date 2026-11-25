@@ -460,6 +460,41 @@ def run (finish : CapturedAlignedFinish calls report vacant selected) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
   calls.runWithFinish report finish.finishAt
 
+/-- The aligned repair starts at the reported vacant admission. Its
+captured directory and keeper barriers preserve the admitted pair. -/
+theorem installsAfterVacancy (finish : CapturedAlignedFinish calls report vacant selected)
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    (keeperValid : retry.image.keeper.Valid layout.target.Accepts)
+    (laterValid : retry.image.later.Beyond layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ session final, finish.run = .ok session (finish.census, final) ∧
+      final.image.directory.active = retry.image.directory.active ∧
+      CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
+        published calls.liveRefs (.ok session final) := by
+  have prepared : Prepared retry.image layout.target layout.plan :=
+    ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
+  let after := retry.image.syncDirectory.syncKeeper
+  have visible : retry.image.syncDirectory.keeper.active = some layout.target.trimmed := by
+    change retry.image.keeper.active = some layout.keeper.bytes
+    simpa only [finish.keeperTailEmpty, ByteArray.append_empty] using layout.visible
+  have emptyNames : retry.image.syncDirectory.later.DurablyEmpty := by
+    simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.DurablyEmpty, LaterNames.settled,
+      finish.repair.noLater]
+  have effects : EffectTrace layout.target retry.image after := EffectTrace.aligned .authorized emptyNames visible
+  have ready : after.Ready layout.target := by
+    have safe := effects.valid prepared.pair prepared.keeperPrefix prepared.newer
+    exact ⟨safe.selected, safe.settled, visible, congrArg (fun bytes => [bytes]) visible, emptyNames⟩
+  obtain ⟨session, returned, installed⟩ :=
+    CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := report) vacant marker laterValid
+      following accepted ordered selected finish.finishAt finish.finishAt_returns ready effects
+  exact ⟨session, _, returned, rfl, installed⟩
+
 /-- The shared open and aligned repair install the table selected by the
 checked reads at this admission. The proof follows the reported directory
 and keeper syncs before allocating the returned session. -/
@@ -492,25 +527,11 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
       report.reads.ObservesSelected directory retry.image.directory.active.manifest published.durable ∧
       CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
         published calls.liveRefs (.ok session final) := by
-  have prepared : Prepared retry.image layout.target layout.plan :=
-    ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
-  let after := retry.image.syncDirectory.syncKeeper
-  have visible : retry.image.syncDirectory.keeper.active = some layout.target.trimmed := by
-    change retry.image.keeper.active = some layout.keeper.bytes
-    simpa only [finish.keeperTailEmpty, ByteArray.append_empty] using layout.visible
-  have emptyNames : retry.image.syncDirectory.later.DurablyEmpty := by
-    simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.DurablyEmpty, LaterNames.settled,
-      finish.repair.noLater]
-  have effects : EffectTrace layout.target retry.image after := EffectTrace.aligned .authorized emptyNames visible
-  have ready : after.Ready layout.target := by
-    have safe := effects.valid prepared.pair prepared.keeperPrefix prepared.newer
-    exact ⟨safe.selected, safe.settled, visible, congrArg (fun bytes => [bytes]) visible, emptyNames⟩
-  obtain ⟨prefixReached, vacant, _, _, _, oldObject, _, _⟩ :=
+  obtain ⟨prefixReached, _, _, _, _, oldObject, _, _⟩ :=
     trace.capturesAfterAdmission earlier last admission distinct distinctCached lockObject (calls.recoverWithFinish report finish.finishAt)
   have sameLock := report.sameObjects.2.1.trans (congrArg some oldObject)
-  obtain ⟨session, returned, installed⟩ :=
-    CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := report) vacant marker laterValid
-      following accepted ordered selected finish.finishAt finish.finishAt_returns ready effects
+  obtain ⟨session, _, returned, _, installed⟩ :=
+    finish.installsAfterVacancy marker keeperValid laterValid following accepted ordered
   have sameObjects : finish.census.inode = admission.reached.inode := by
     unfold census
     rw [finish.repair.opened]
