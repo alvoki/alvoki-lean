@@ -13,6 +13,11 @@ def NativeMarkerPublicationStop.OnOpenedPhase (current : NativeOpenedPosition op
     (view : OpenCloseHeapView heap FileImage) : Prop :=
   let state := current.current.ready.state
   match stop with
+  | .keeperSync stopped =>
+    NativePendingKeeperSync current.current.ready stopped ∧
+    ∃ poisoned, view.phase poisoned opened.phase = some .poisoned ∧
+      ∀ rename, stopped.onOpenPhase opened rename (current.reached, state.cache, state.census, prepared.initial) =
+        .error prepared.keeperPath (poisoned, stopped.staging.groupCache, stopped.reached)
   | .stagedSync stopped =>
     NativePendingStagedMarkerSync current.current.ready stopped ∧
     ∃ poisoned, view.phase poisoned opened.phase = some .poisoned ∧
@@ -34,6 +39,9 @@ theorem NativeMarkerPublicationStop.stopsOnOpenedPhase (current : NativeOpenedPo
     {view : OpenCloseHeapView heap FileImage} (samePhase : view.phase = opened.contents) :
     stop.OnOpenedPhase current view := by
   cases stop with
+  | keeperSync stopped =>
+    obtain ⟨_, pending, poisoned, _, _, poison, _, issue⟩ := current.stopsWriteAtKeeperSync stopped
+    exact ⟨pending, poisoned, samePhase.symm ▸ poison, issue⟩
   | stagedSync stopped =>
     obtain ⟨_, pending, poisoned, _, _, poison, _, issue⟩ := current.stopsWriteAtStagedMarkerSync stopped
     exact ⟨pending, poisoned, samePhase.symm ▸ poison, issue⟩
@@ -85,13 +93,13 @@ def NativeOpenedStoppedMarkerReport.event
     NativeExecutionEvent :=
   .interruptedMarkerRecovered request input seen.prepared.batch retained
 
-/-- The staged file sync leaves the prior directory marker. A reported
+/-- The file syncs leave the prior directory marker. A reported
 effective final directory sync settles the new marker. -/
 def NativeMarkerPublicationCrash.settledDirectory {state : NativeReadyState}
     {prepared : NativeReadyWritePreparation state} {stop : NativeMarkerPublicationStop prepared}
     (crash : NativeMarkerPublicationCrash stop) : Prop :=
   match stop with
-  | .stagedSync _ => crash.usesNewMarker = false
+  | .keeperSync _ | .stagedSync _ => crash.usesNewMarker = false
   | .rename _ => True
   | .directorySync stopped _ _ => stopped.applied = true → crash.usesNewMarker = true
 
@@ -99,6 +107,7 @@ theorem NativeMarkerPublicationCrash.settledWhenEffective {state : NativeReadySt
     {prepared : NativeReadyWritePreparation state} {stop : NativeMarkerPublicationStop prepared}
     (crash : NativeMarkerPublicationCrash stop) (valid : state.Valid) : crash.settledDirectory := by
   cases stop with
+  | keeperSync _ => exact crash.oldMarkerAfterKeeperSync valid
   | stagedSync _ => exact crash.oldMarkerAfterStagedSync valid
   | rename _ => trivial
   | directorySync _ _ _ => exact crash.newMarkerAfterDirectoryEffect valid
@@ -115,8 +124,8 @@ structure NativeOpenedStoppedMarkerReport.Returned
   rebootProjection : (view.descriptors seen.rebooted, view.files seen.rebooted) = (seen.crash.raw.reboot, seen.crash.retry)
   emptyCensus : (view.descriptors seen.rebooted).slots = []
   noLater : seen.crash.retry.image.later.visible = []
-  tail : seen.plan.layout.tail.size = if seen.crash.usesNewMarker then 0 else (WAL.encode seen.prepared.batch).size
-  repair : seen.reader.RepairForMarker (plan := seen.plan)
+  tail : seen.plan.layout.tail.size = if seen.crash.usesNewMarker then 0 else seen.crash.keeperTail.size
+  repair : seen.reader.RepairForTail (plan := seen.plan)
   lockObject : names seen.rebooted (current.current.ready.state.session.directory.file .lock) =
     some ((view.handle seen.physical.raw.afterFlock seen.physical.raw.lock).1.inode
       (view.handle seen.physical.raw.afterFlock seen.physical.raw.lock).2.1.description)

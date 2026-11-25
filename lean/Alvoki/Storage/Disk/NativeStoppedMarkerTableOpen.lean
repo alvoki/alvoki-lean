@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.NativePendingMarkerDirectoryOpenPhase
-import Alvoki.Storage.Disk.NativePendingStagedMarkerSyncOpenPhase
+import Alvoki.Storage.Disk.NativePendingGroupedSyncOpenPhase
 import Alvoki.Storage.Disk.NativeExecutionTrace
 
 namespace Alvoki.Storage.DiskSession
@@ -46,50 +46,39 @@ noncomputable abbrev RawStoppedMarkerReopenEffects.openTable
       allocatePhase allocateToken stream remove stage rename) :=
   seen.toRawHealthyMarkedOpenEffects.openTable
 
-def NativeMarkerPublicationCrashReads.RepairForMarker
+def NativeMarkerPublicationCrashReads.RepairForTail
     (reader : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected) : Prop :=
-    match reader.opening.finish with
-    | .aligned _ => crash.usesNewMarker = true
-    | .prunedAligned _ => False
-    | .longer _ => crash.usesNewMarker = false
+  match reader.opening.finish with
+  | .aligned _ => plan.layout.tail.size = 0
+  | .prunedAligned _ => False
+  | .longer _ => 0 < plan.layout.tail.size
 
-/-- The exact measured extent rules out the other repair route. The
-original marker requires a shorter replacement and the new marker
-allows the aligned keeper to stay in place. -/
-theorem NativeMarkerPublicationCrashReads.usesRepairForMarker
-    (reader : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected) (valid : state.Valid) :
-    reader.RepairForMarker (plan := plan) := by
-  unfold NativeMarkerPublicationCrashReads.RepairForMarker
+/-- The measured keeper extent selects the healthy repair for the same
+surviving bytes. The empty suffix uses the aligned path, and any
+excess bytes require keeper replacement. -/
+theorem NativeMarkerPublicationCrashReads.usesRepairForTail
+    (reader : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected) :
+    reader.RepairForTail (plan := plan) := by
+  unfold NativeMarkerPublicationCrashReads.RepairForTail
   have extent := reader.opening.reads.wal.keeper.observesFile.extent
   change reader.opening.reads.wal.keeper.calls.metadata.byteSize.toNat =
     (plan.layout.keeper.bytes ++ plan.layout.tail).size at extent
-  rw [ByteArray.size_append, plan.tailSize valid] at extent
+  rw [ByteArray.size_append] at extent
   have size : plan.layout.boundedPlan.keeperSize = plan.layout.keeper.bytes.size := plan.layout.target.trimmedSize.symm
   have noLater : plan.layout.boundedPlan.newer = [] := plan.noLater
-  have nonempty : 0 < (WAL.encode prepared.batch).size := by
-    rw [WAL.encode_size, (prepareBatch_spec prepared.prepared).1]
-    exact Nat.mul_pos (by decide) (Nat.pos_of_ne_zero (prepared.nonempty ∘ List.length_eq_zero_iff.mp))
   have repair := reader.opening.finish.usesMeasuredRepair
   cases outcome : reader.opening.finish with
   | aligned _ =>
     rw [outcome] at repair
-    cases marker : crash.usesNewMarker with
-    | false =>
-      simp only [marker, Bool.false_eq_true, ite_false] at extent
-      obtain ⟨aligned, _⟩ := repair
-      omega
-    | true => rfl
+    obtain ⟨aligned, _⟩ := repair
+    omega
   | prunedAligned _ =>
     rw [outcome] at repair
     exact repair.2 noLater
   | longer _ =>
     rw [outcome] at repair
-    cases marker : crash.usesNewMarker with
-    | false => rfl
-    | true =>
-      simp only [marker, ite_true, Nat.add_zero] at extent
-      have longer : plan.layout.boundedPlan.keeperSize < reader.opening.reads.wal.keeper.calls.metadata.byteSize.toNat := repair
-      omega
+    have longer : plan.layout.boundedPlan.keeperSize < reader.opening.reads.wal.keeper.calls.metadata.byteSize.toNat := repair
+    omega
 
 private def NativeMarkerPublicationCrashReads.markedReport (reader : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected)
     (valid : state.Valid) (pending : PendingClientReplay log reads plan.history)
@@ -134,8 +123,8 @@ def RawStoppedMarkerReopenEffects.Returned
     let state := current.current.ready.state
     (view.descriptors rebooted, view.files rebooted) = (crash.raw.reboot, crash.retry) ∧
     (view.descriptors rebooted).slots = [] ∧ crash.retry.image.later.visible = [] ∧
-    plan.layout.tail.size = (if crash.usesNewMarker then 0 else (WAL.encode prepared.batch).size) ∧
-    reader.RepairForMarker (plan := plan) ∧
+    plan.layout.tail.size = (if crash.usesNewMarker then 0 else crash.keeperTail.size) ∧
+    reader.RepairForTail (plan := plan) ∧
     names rebooted (state.session.directory.file .lock) = some ((view.handle seen.raw.afterFlock seen.raw.lock).1.inode
       (view.handle seen.raw.afterFlock seen.raw.lock).2.1.description) ∧
     names rebooted state.session.directory.path = some ((view.handle seen.seed.afterPending seen.seed.handle).1.inode
@@ -194,7 +183,7 @@ theorem RawStoppedMarkerReopenEffects.returns
     installed.startsAtCheckpointReopen chosen next workerReturned.symm nextReturned cache owner slot phaseEffects opened.ptrEq
   have valid := current.current.ready.readPrefix.refines.1
   refine ⟨Prod.ext seen.raw.entryCensus seen.raw.entryFiles, ?_, plan.noLater, plan.tailSize valid,
-    reader.usesRepairForMarker (plan := plan) valid, ?_, ?_, ?_, ?_, retained, next, cacheOpen, makeCache,
+    reader.usesRepairForTail (plan := plan), ?_, ?_, ?_, ?_, retained, next, cacheOpen, makeCache,
     handle, start, cacheAction, cacheSource, reopened, ?_, ?_, currentEq, lock, files.symm ▸ installed.cacheReferences,
     files.symm ▸ installed.cacheDirectory, contents, getEq, setEq, compareEq, token, pins, sameFiles, sameCensus, sameCache⟩
   · rw [seen.raw.entryCensus]
@@ -342,6 +331,47 @@ theorem NativeOpenedPosition.opensAfterStoppedStagedMarkerSync
   have old := crash.oldMarkerAfterStagedSync current.current.ready.readPrefix.refines.1
   exact ⟨source, pending, ⟨poisoned, samePhase.symm ▸ poison, interrupted⟩, old,
     seen.returns current samePhase bootstrap assemble constructs⟩
+
+end
+
+section
+
+variable (current : NativeOpenedPosition opened)
+  {prepared : NativeReadyWritePreparation current.current.ready.state} {stopped : NativeWriteKeeperSyncStop prepared}
+  {crash : NativeMarkerPublicationCrash (.keeperSync stopped)} {plan : crash.Plan}
+  {reader : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected}
+
+/-- A stop at the first grouped fsync keeps the original marker. One
+reported survivor of that same effect supplies the raw reopened table. -/
+theorem NativeOpenedPosition.opensAfterStoppedKeeperSync
+    (seen : RawStoppedMarkerReopenEffects reader view calls init names bytes rebooted phaseIdentity tokenIdentity
+      allocatePhase allocateToken stream remove stage rename)
+    (samePhase : view.phase = opened.contents)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    (constructs : ∀ resolved lock files, DiskTable.OpenReferenceAssembly resolved lock files (assemble resolved lock files)) :
+    let state := current.current.ready.state
+    opened.table.UsesOpenWriteSchedules state.session.directory opened.files opened.phase ∧
+    NativePendingKeeperSync current.current.ready stopped ∧
+    (∃ poisoned, view.phase poisoned opened.phase = some .poisoned ∧
+      ∀ replace, stopped.onOpenPhase opened replace (current.reached, state.cache, state.census, prepared.initial) =
+        .error prepared.keeperPath (poisoned, stopped.staging.groupCache, stopped.reached)) ∧
+    crash.usesNewMarker = false ∧ plan.layout.tail = crash.keeperTail ∧
+    (stopped.effect = .complete → crash.keeperTail = WAL.encode prepared.batch) ∧ seen.Returned current bootstrap assemble := by
+  intro state
+  obtain ⟨source, pending, poisoned, _, _, poison, _, interrupted⟩ := current.stopsWriteAtKeeperSync stopped
+  have valid := current.current.ready.readPrefix.refines.1
+  have old := crash.oldMarkerAfterKeeperSync valid
+  have tail := plan.tailBytes valid
+  rw [old] at tail
+  refine ⟨source, pending, ⟨poisoned, samePhase.symm ▸ poison, interrupted⟩, old, tail, ?_,
+    seen.returns current samePhase bootstrap assemble constructs⟩
+  intro complete
+  apply crash.completeKeeperTail
+  change (stopped.cut.interrupt prepared.marker prepared.staged).crashTails = _
+  unfold NativeWriteKeeperSyncStop.cut
+  rw [complete]
+  rfl
 
 end
 

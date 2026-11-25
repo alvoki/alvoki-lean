@@ -414,7 +414,7 @@ import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
 import Alvoki.Storage.Disk.NativeStoppedMarkerTableOpen
 import Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
-import Alvoki.Storage.Disk.NativePendingStagedMarkerSyncOpenPhase
+import Alvoki.Storage.Disk.NativePendingGroupedSyncOpenPhase
 import Alvoki.Storage.Disk.NativePendingMarkerStageWrite
 import Alvoki.Storage.Disk.NativeGroupedPendingWrite
 import Alvoki.Storage.Disk.NativeWritePreflight
@@ -2416,8 +2416,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversInterruptedMarker
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.plans
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.Plan.tailSize
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.Plan.tailBytes
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.Plan.tailSizeWhenComplete
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationStop.keeperChoices
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.oldMarkerAfterKeeperSync
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsWriteAtKeeperSync
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedKeeperSync
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversInterruptedMarkerFrom
-#check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrashReads.usesRepairForMarker
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrashReads.usesRepairForTail
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedMarkerRename
 #check_axioms Alvoki.Storage.DiskSession.RawStoppedMarkerReopenEffects.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteRenamed.reachesMarkerDirectory

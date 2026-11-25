@@ -6,9 +6,10 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentCommit WalSegmentRepair WAL.Boundary
 
-/-- At these issued operations the keeper's full file sync has returned.
-The pending write still has no ordinary result. -/
+/-- A marked write stops at one reported publication callback. The
+pending write has no ordinary result. -/
 inductive NativeMarkerPublicationStop {state : NativeReadyState} (prepared : NativeReadyWritePreparation state) where
+  | keeperSync (stop : NativeWriteKeeperSyncStop prepared)
   | stagedSync (stop : NativeWriteStagedMarkerSyncStop prepared)
   | rename (stop : NativeWriteMarkerRenameStop prepared)
   | directorySync (stop : NativeWriteMarkerDirectoryStop prepared)
@@ -21,26 +22,29 @@ namespace NativeMarkerPublicationStop
 variable {state : NativeReadyState} {prepared : NativeReadyWritePreparation state}
 
 def request : NativeMarkerPublicationStop prepared → WriteRequest
-  | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.request
+  | .keeperSync stop | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.request
 
 def files : NativeMarkerPublicationStop prepared → FileImage
-  | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.files
+  | .keeperSync stop | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.files
 
 def cut : NativeMarkerPublicationStop prepared → MarkerInterruption
-  | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.cut
+  | .keeperSync stop | .stagedSync stop | .rename stop | .directorySync stop _ _ => stop.cut
 
 def staging : NativeMarkerPublicationStop prepared → NativeReadyWriteStaging prepared
+  | .keeperSync stop => stop.staging
   | .stagedSync stop => stop.staging
   | .rename stop => stop.synced.toNativeReadyWriteStaging
   | .directorySync stop _ _ => stop.renamed.toNativeReadyWriteFileSyncs.toNativeReadyWriteStaging
 
 def oldMarkerChild : NativeMarkerPublicationStop prepared → DeviceInode
+  | .keeperSync stop => stop.oldMarker.child
   | .stagedSync stop => stop.oldMarker.child
   | .rename stop => stop.oldMarker.child
   | .directorySync _ oldMarker _ => oldMarker.child
 
 def Reached {history log} (current : NativeReadPosition history log)
     {prepared : NativeReadyWritePreparation current.state} : NativeMarkerPublicationStop prepared → Prop
+  | .keeperSync stop => NativePendingKeeperSync current stop
   | .stagedSync stop => NativePendingStagedMarkerSync current stop
   | .rename stop => NativePendingMarkerRename current stop
   | .directorySync stop _ _ => NativePendingMarkerDirectory current stop
@@ -48,6 +52,7 @@ def Reached {history log} (current : NativeReadPosition history log)
 theorem reaches (current : NativeReadPosition history log) {prepared : NativeReadyWritePreparation current.state}
     (stop : NativeMarkerPublicationStop prepared) : stop.Reached current := by
   cases stop with
+  | keeperSync stopped => exact current.stopsAtKeeperSync stopped
   | stagedSync stopped => exact current.stopsAtStagedMarkerSync stopped
   | rename stopped => exact current.stopsAtMarkerRename stopped
   | directorySync stopped _ _ => exact current.stopsAtMarkerDirectory stopped
@@ -55,6 +60,10 @@ theorem reaches (current : NativeReadPosition history log) {prepared : NativeRea
 theorem batchCut (stop : NativeMarkerPublicationStop prepared) (valid : state.Valid) :
     BatchCutProjection stop.files (prepared.modeledMarkerCut stop.cut) := by
   cases stop with
+  | keeperSync stopped =>
+    apply prepared.projectMarkerCut valid stopped.cut
+    simp only [MarkerInterruption.reachedBatch, (prepared.extended valid).1]
+    rfl
   | stagedSync stopped => exact stopped.batchCut valid
   | rename stopped => exact stopped.batchCut valid
   | directorySync stopped _ _ => exact stopped.batchCut valid
@@ -63,24 +72,32 @@ theorem kept (stop : NativeMarkerPublicationStop prepared) :
     stop.files.kept = state.files.image.kept := by
   cases stop <;> rfl
 
-theorem keeperSurvives (stop : NativeMarkerPublicationStop prepared) (valid : state.Valid) :
-    some (state.writer.wal.active.bytes ++ WAL.encode prepared.batch) ∈ stop.files.keeper.crashImages := by
+/-- Only the first file sync can leave less than the whole attempted
+tail. Use the exact reached effect to determine its surviving choices. -/
+def keeperTails : NativeMarkerPublicationStop prepared → List ByteArray
+  | .keeperSync stopped => stopped.reached.2.crashTails
+  | .stagedSync _ | .rename _ | .directorySync _ _ _ => [WAL.encode prepared.batch]
+
+theorem keeperChoices (stop : NativeMarkerPublicationStop prepared) (valid : state.Valid) :
+    stop.files.keeper.crashImages = stop.keeperTails.map (fun tail => some (state.writer.wal.active.bytes ++ tail)) := by
   cases stop with
+  | keeperSync stopped =>
+    change stopped.reached.2.crashTails.map (fun tail =>
+      some (WAL.encode (state.writer.history.drop state.writer.wal.active.first) ++ tail)) = _
+    rw [valid.retained.layout.activeBytes]
+    rfl
   | stagedSync stopped =>
     obtain ⟨_, _, _, active, durable⟩ := stopped.choices valid
-    change _ ∈ stopped.files.keeper.crashImages
+    change stopped.files.keeper.crashImages = [some (state.writer.wal.active.bytes ++ WAL.encode prepared.batch)]
     rw [durable, active]
-    exact List.mem_singleton_self _
   | rename stopped =>
     obtain ⟨_, _, _, active, durable⟩ := stopped.choices valid
-    change _ ∈ stopped.files.keeper.crashImages
+    change stopped.files.keeper.crashImages = [some (state.writer.wal.active.bytes ++ WAL.encode prepared.batch)]
     rw [durable, active]
-    exact List.mem_singleton_self _
   | directorySync stopped _ _ =>
     obtain ⟨_, _, _, active, durable⟩ := stopped.choices valid
-    change _ ∈ stopped.files.keeper.crashImages
+    change stopped.files.keeper.crashImages = [some (state.writer.wal.active.bytes ++ WAL.encode prepared.batch)]
     rw [durable, active]
-    exact List.mem_singleton_self _
 
 end NativeMarkerPublicationStop
 
@@ -93,6 +110,8 @@ structure NativeMarkerPublicationCrash {state : NativeReadyState} {prepared : Na
   survived : (if usesNewMarker then
       ⟨state.files.image.directory.active.manifest, some prepared.marker⟩ else state.writer.target.pair) ∈
     stop.files.directory.crashImages
+  keeperTail : ByteArray
+  tailSurvived : keeperTail ∈ stop.keeperTails
   later : List Nat
   laterSurvived : later ∈ stop.files.later.crashImages
   namespaceView : DirectoryReadNamespace
@@ -120,7 +139,7 @@ def pair (crash : NativeMarkerPublicationCrash stop) : DirectoryPublication.Bind
   else state.writer.target.pair
 
 def retry (crash : NativeMarkerPublicationCrash stop) : LockedFileState FileImage :=
-  ⟨stop.files.crash crash.pair (some (state.writer.wal.active.bytes ++ WAL.encode prepared.batch)) crash.later,
+  ⟨stop.files.crash crash.pair (some (state.writer.wal.active.bytes ++ crash.keeperTail)) crash.later,
     state.writer.owners.set (state.session.directory.file .lock) none⟩
 
 theorem vacant (crash : NativeMarkerPublicationCrash stop) :
@@ -130,7 +149,8 @@ theorem vacant (crash : NativeMarkerPublicationCrash stop) :
 theorem powerLoss (crash : NativeMarkerPublicationCrash stop) (valid : state.Valid) :
     BoundedReopenTrace state.session.directory (BatchRetryTarget state.writer.history prepared.batch state.writer.wal.active.first)
       ⟨stop.files, state.writer.owners⟩ crash.retry :=
-  .powerLoss .empty crash.survived (stop.keeperSurvives valid) crash.laterSurvived
+  .powerLoss .empty crash.survived
+    ((stop.keeperChoices valid).symm ▸ List.mem_map_of_mem crash.tailSurvived) crash.laterSurvived
 
 theorem sameRoot (crash : NativeMarkerPublicationCrash stop) :
     crash.raw.names state.session.directory.path = some (state.census.inode state.directorySlot.description) := by
@@ -205,15 +225,14 @@ theorem selects (crash : NativeMarkerPublicationCrash stop) (valid : state.Valid
 
 end NativeMarkerPublicationCrash
 
-/-- A staged marker's file sync does not replace the active marker.
-The reboot selects the old marker even when that file sync took effect. -/
-theorem NativeMarkerPublicationCrash.oldMarkerAfterStagedSync {state : NativeReadyState}
-    {prepared : NativeReadyWritePreparation state} {stopped : NativeWriteStagedMarkerSyncStop prepared}
-    (crash : NativeMarkerPublicationCrash (.stagedSync stopped)) (valid : state.Valid) :
+private theorem NativeMarkerPublicationCrash.oldMarkerOfSingleton {state : NativeReadyState}
+    {prepared : NativeReadyWritePreparation state} {stop : NativeMarkerPublicationStop prepared}
+    (crash : NativeMarkerPublicationCrash stop) (valid : state.Valid)
+    (old : stop.files.directory.crashImages = [state.writer.target.pair]) :
     crash.usesNewMarker = false := by
   have survived := crash.survived
-  change crash.pair ∈ stopped.files.directory.crashImages at survived
-  rw [(stopped.choices valid).2.1] at survived
+  change crash.pair ∈ stop.files.directory.crashImages at survived
+  rw [old] at survived
   have prior := List.mem_singleton.mp survived
   have marker := (congrArg DirectoryPublication.Bindings.walBoundary prior).trans
     (valid.retained.selectPriorKeeper ByteArray.empty).1
@@ -226,6 +245,40 @@ theorem NativeMarkerPublicationCrash.oldMarkerAfterStagedSync {state : NativeRea
     have batch := (prepareBatch_spec prepared.prepared).1
     simp only [List.length_append] at count
     exact False.elim (prepared.nonempty (List.length_eq_zero_iff.mp (show prepared.rows.length = 0 by omega)))
+
+/-- The first grouped fsync can affect only the keeper data. -/
+theorem NativeMarkerPublicationCrash.oldMarkerAfterKeeperSync {state : NativeReadyState}
+    {prepared : NativeReadyWritePreparation state} {stopped : NativeWriteKeeperSyncStop prepared}
+    (crash : NativeMarkerPublicationCrash (.keeperSync stopped)) (valid : state.Valid) :
+    crash.usesNewMarker = false :=
+  crash.oldMarkerOfSingleton valid (stopped.selectsPrior valid).2.1
+
+/-- The staged marker's file sync leaves the active marker in place. -/
+theorem NativeMarkerPublicationCrash.oldMarkerAfterStagedSync {state : NativeReadyState}
+    {prepared : NativeReadyWritePreparation state} {stopped : NativeWriteStagedMarkerSyncStop prepared}
+    (crash : NativeMarkerPublicationCrash (.stagedSync stopped)) (valid : state.Valid) :
+    crash.usesNewMarker = false :=
+  crash.oldMarkerOfSingleton valid (stopped.choices valid).2.1
+
+/-- The later publication cuts keep the complete batch bytes regardless
+of the marker that survives. A completed first fsync does so as well. -/
+theorem NativeMarkerPublicationCrash.completeKeeperTail {state : NativeReadyState}
+    {prepared : NativeReadyWritePreparation state} {stop : NativeMarkerPublicationStop prepared}
+    (crash : NativeMarkerPublicationCrash stop) (complete : stop.keeperTails = [WAL.encode prepared.batch]) :
+    crash.keeperTail = WAL.encode prepared.batch := by
+  have tail := crash.tailSurvived
+  rw [complete] at tail
+  exact List.mem_singleton.mp tail
+
+theorem NativeMarkerPublicationCrash.keeperTailWhenPublished {state : NativeReadyState}
+    {prepared : NativeReadyWritePreparation state} {stop : NativeMarkerPublicationStop prepared}
+    (crash : NativeMarkerPublicationCrash stop) (valid : state.Valid) (published : crash.usesNewMarker = true) :
+    crash.keeperTail = WAL.encode prepared.batch := by
+  cases stop with
+  | keeperSync _ => exact Bool.noConfusion ((crash.oldMarkerAfterKeeperSync valid).symm.trans published)
+  | stagedSync _ => exact crash.completeKeeperTail rfl
+  | rename _ => exact crash.completeKeeperTail rfl
+  | directorySync _ _ _ => exact crash.completeKeeperTail rfl
 
 /-- The next captured opener consumes the selected reboot inventory.
 The raw directory and all its child identities agree with that report. -/
@@ -273,7 +326,7 @@ structure NativeMarkerPublicationCrashContinuation {history log} (current : Nati
       seen.toNativeWriteCrashReads.ReadsSurvivor prepared.markerPath
         (WAL.Boundary.encode (WAL.encode (history ++ retained)).size.toUInt64) ∧
       seen.toNativeWriteCrashReads.ReadsSurvivor prepared.keeperPath
-        (current.state.writer.wal.active.bytes ++ WAL.encode prepared.batch)
+        (current.state.writer.wal.active.bytes ++ crash.keeperTail)
   replay : InstalledClientReplay (log ++ [.uncertainBatch prepared.batch]) current.reads
     (history ++ retained) next.state.writer.installed next.state.session
 
@@ -337,13 +390,13 @@ theorem plans (crash : NativeMarkerPublicationCrash stop) (valid : state.Valid) 
   exact ⟨⟨chosen, allowed, marker, layout, walLayout, walValid, first, sameKeeper, descriptors, offsets, repair,
     kept.trans (stop.kept.trans ready.sealedFiles), manifest.symm ▸ ready.resumed.selected, accepted, ordered, noLater⟩⟩
 
-/-- The same fully synced keeper is aligned for the new marker and
-has exactly the attempted batch's excess length for the old marker. -/
-theorem Plan.tailSize {crash : NativeMarkerPublicationCrash stop} (plan : crash.Plan) (valid : state.Valid) :
-    plan.layout.tail.size = if crash.usesNewMarker then 0 else (WAL.encode prepared.batch).size := by
-  have counted := congrArg ByteArray.size (Option.some.inj plan.layout.visible.symm)
-  change (plan.layout.keeper.bytes ++ plan.layout.tail).size =
-    (state.writer.wal.active.bytes ++ WAL.encode prepared.batch).size at counted
+/-- The selected prior marker keeps the reported excess tail. A new
+marker selects exactly the complete durable group, with no excess. -/
+theorem Plan.tailBytes {crash : NativeMarkerPublicationCrash stop} (plan : crash.Plan) (valid : state.Valid) :
+    plan.layout.tail = if crash.usesNewMarker then ByteArray.empty else crash.keeperTail := by
+  have bytes := Option.some.inj plan.layout.visible.symm
+  change plan.layout.keeper.bytes ++ plan.layout.tail =
+    state.writer.wal.active.bytes ++ crash.keeperTail at bytes
   have starts : state.writer.wal.active.first ≤ state.writer.history.length := by
     rw [← valid.retained.layout.activeEnd]
     exact valid.retained.layout.forward _ (List.mem_append_right _ (by simp))
@@ -351,16 +404,28 @@ theorem Plan.tailSize {crash : NativeMarkerPublicationCrash stop} (plan : crash.
   have keeper : plan.layout.keeper.bytes = WAL.encode (plan.history.drop state.writer.wal.active.first) := by
     rw [plan.sameKeeper]
     rfl
-  rw [keeper.trans (congrArg (fun rows => WAL.encode (rows.drop state.writer.wal.active.first)) selected)] at counted
+  rw [keeper.trans (congrArg (fun rows => WAL.encode (rows.drop state.writer.wal.active.first)) selected)] at bytes
   cases marker : crash.usesNewMarker with
   | false =>
-    simp only [marker, Bool.false_eq_true, ite_false, List.append_nil, ← valid.retained.layout.activeBytes,
-      ByteArray.size_append] at counted ⊢
-    omega
+    simp only [marker, Bool.false_eq_true, ite_false, List.append_nil, ← valid.retained.layout.activeBytes] at bytes ⊢
+    exact (ByteArray.append_right_inj _).mp bytes
   | true =>
+    have complete := crash.keeperTailWhenPublished valid marker
     simp only [marker, ite_true, List.drop_append_of_le_length starts, WAL.encode_append,
-      ← valid.retained.layout.activeBytes, ByteArray.size_append] at counted ⊢
-    omega
+      ← valid.retained.layout.activeBytes, complete] at bytes ⊢
+    exact (ByteArray.append_right_inj _).mp (bytes.trans ByteArray.append_empty.symm)
+
+theorem Plan.tailSize {crash : NativeMarkerPublicationCrash stop} (plan : crash.Plan) (valid : state.Valid) :
+    plan.layout.tail.size = if crash.usesNewMarker then 0 else crash.keeperTail.size := by
+  rw [plan.tailBytes valid]
+  split <;> rfl
+
+/-- For the later publication cuts, the keeper's only possible tail
+is the full batch, yielding the same measured lengths. -/
+theorem Plan.tailSizeWhenComplete {crash : NativeMarkerPublicationCrash stop} (plan : crash.Plan) (valid : state.Valid)
+    (complete : stop.keeperTails = [WAL.encode prepared.batch]) :
+    plan.layout.tail.size = if crash.usesNewMarker then 0 else (WAL.encode prepared.batch).size := by
+  rw [plan.tailSize valid, crash.completeKeeperTail complete]
 
 end NativeMarkerPublicationCrash
 
@@ -401,7 +466,7 @@ theorem NativeReadPosition.recoversInterruptedMarkerFrom (current : NativeReadPo
   have keeperPath : current.state.session.directory.file (.walSegment layout.keeper.first) = prepared.keeperPath := by
     exact congrArg (fun offset => current.state.session.directory.file (.walSegment offset))
       (first.trans (ready.active.symm.trans ready.resumed.keeper.symm))
-  have keeperBytes : layout.keeper.bytes ++ layout.tail = current.state.writer.wal.active.bytes ++ WAL.encode prepared.batch :=
+  have keeperBytes : layout.keeper.bytes ++ layout.tail = current.state.writer.wal.active.bytes ++ crash.keeperTail :=
     Option.some.inj layout.visible.symm
   rw [keeperPath, keeperBytes] at keeperRead
   let next : NativeReadPosition (history ++ retained) (log ++ [.uncertainBatch prepared.batch]) :=
