@@ -49,7 +49,8 @@ theorem uncertain_batch_selects_prefix
     (oldFits : (WAL.encode history).size < UInt64.size)
     (nextFits : (WAL.encode (history ++ batch)).size < UInt64.size)
     (oldBytes : ∃ tail, physical = WAL.encode history ++ tail)
-    (nextBytes : ∃ tail, physical = WAL.encode (history ++ batch) ++ tail) :
+    (nextBytes : after active.other = some next →
+      ∃ tail, physical = WAL.encode (history ++ batch) ++ tail) :
     ∃ chosen events,
       recover (fun frontier => (Boundary.select frontier physical).isOk) after = .ok chosen ∧
       (events = history ∨ events = history ++ batch) ∧
@@ -58,13 +59,21 @@ theorem uncertain_batch_selects_prefix
     obtain ⟨tail, exactBytes⟩ := oldBytes
     rw [oldCount, exactBytes]
     exact Boundary.select_encoded history tail oldFits
-  have readNext : Boundary.select next.frontier physical = .ok (WAL.encode (history ++ batch)) := by
-    obtain ⟨tail, exactBytes⟩ := nextBytes
-    rw [nextCount, exactBytes]
-    exact Boundary.select_encoded (history ++ batch) tail nextFits
-  have selected := report.recovery (fun frontier => (Boundary.select frontier physical).isOk)
-    present older newer (by simp [readOld, Except.isOk, Except.toBool]) (fun _ => by simp [readNext, Except.isOk, Except.toBool])
-  exact selected.elim (fun accepted => ⟨old, history, accepted, .inl rfl, readOld⟩)
-    (fun accepted => ⟨next, history ++ batch, accepted, .inr rfl, readNext⟩)
+  have oldValid : (Boundary.select old.frontier physical).isOk = true := by
+    simp [readOld, Except.isOk, Except.toBool]
+  cases report with
+  | uncertainOld =>
+    exact ⟨old, history, recover_targetOld before active _ present oldValid older, .inl rfl, readOld⟩
+  | uncertainInvalid =>
+    exact ⟨old, history, recover_targetInvalid before active _ present oldValid, .inl rfl, readOld⟩
+  | uncertainNew =>
+    obtain ⟨tail, exactBytes⟩ := nextBytes (writeTarget_updatesOther ..)
+    have readNext : Boundary.select next.frontier physical = .ok (WAL.encode (history ++ batch)) := by
+      rw [nextCount, exactBytes]
+      exact Boundary.select_encoded (history ++ batch) tail nextFits
+    have selection := recover_targetNew before active
+      (fun frontier => (Boundary.select frontier physical).isOk) present newer
+    exact ⟨next, history ++ batch, by simpa [readNext, Except.isOk, Except.toBool] using selection,
+      .inr rfl, readNext⟩
 
 end Alvoki.WAL.TwoSlot
