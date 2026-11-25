@@ -2362,12 +2362,17 @@ theorem installsAfterAcquiredRecovery_replays
     (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
     (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
       ∃ inode ∈ settledMarker.crashBindings, bytes ∈ settledMarker.crashBytes inode)
-    (syncProjection :
+    {reachedDirectory : DirectoryPublication.Image}
+    (reachedDirectoryReport :
+      projectRepairDirectory retry.image.directory (markerImage.visible markerImage.active) choices =
+        .ok reachedDirectory)
+    (syncReturned :
       let reached := (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
         (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
         layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead, admission.held)
       stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩ reached =
-        stabilizeCapturedMarker (markerImage.visible markerImage.active) choices reached)
+        .ok () (reached.1, reached.2.1,
+          { reached.2.2 with image := { reached.2.2.image with directory := reachedDirectory } }))
     (repair : CapturedFinalRepair calls checkpointSelected
       { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }
       keeper finish after)
@@ -2564,9 +2569,8 @@ theorem installsAfterAcquiredRecovery_replays
       (stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩)
       (finish directory) (admission.cache, file.calls.inventory, admission.held) =
         .ok opened (admission.cache, after) := by
-    simp only [reopenWith_reports, prepare, opened, prepared, syncProjection,
-      stabilizeCapturedMarker, show admission.held.image.directory = retry.image.directory from rfl,
-      projected]
+    have sameDirectory := Except.ok.inj (reachedDirectoryReport.symm.trans projected)
+    simp only [reopenWith_reports, prepare, opened, prepared, syncReturned, sameDirectory]
     erw [finished.1]
   have returned := installsAfterAcquiredRecovery calls marker
     (fun resolved => acquireMarkerInCensus markerReads (resolved.file .walBoundary) rewind)

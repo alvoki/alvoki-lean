@@ -1064,6 +1064,12 @@ the exact reached cache. The sync result identifies the descriptor
 whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
+The held client recovery proof now takes the marker sync's exact
+successful callback return and its directory observation. Lean derives
+that the observed directory is the settled marker image from the sync
+effect on the held inode. The callback report still supplies the reached
+state and preserves the cache, descriptor inventory and lock.
+
 The held recovery proof now derives the acquired selection and
 descriptor inventory in one step from the reported rewind and bounded
 reads. That rewind also enters the composed client recovery theorem
