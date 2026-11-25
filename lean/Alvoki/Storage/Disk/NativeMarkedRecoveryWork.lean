@@ -14,39 +14,42 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
   {vacant : TryLockObserves retry.owners directory (.ok true)}
   {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
 
-namespace MarkedReadyOpenObservations
+namespace CapturedMarkedReadReports
 
-variable (reported : MarkedReadyOpenObservations input directory inventory retry layout published vacant selected)
+variable {admission : CensusOpenAdmissionReports input directory inventory retry}
+  (reports : CapturedMarkedReadReports admission layout published)
 
 /-- The eventual worker carries this stream directly into its checked WAL
 extent inspection. Count the reported directory calls before name filtering. -/
 def directoryWork : DirectoryReadWork :=
-  (CheckedDirectoryReadReport.scanned reported.reads.listing.scan).work
+  (CheckedDirectoryReadReport.scanned reports.listing.scan).work
 
-/-- Count primitive run and WAL chunks with the callbacks of the installed
+/-- Count primitive run and WAL chunks with the callbacks of the prepared
 opener. In particular the counted keeper reads the selected prefix, while
 its full observed size only selects the repair route. -/
 noncomputable def payloadReadRequests : Nat :=
-  reported.reads.walReads.payloadReadRequests reported.reads.reads
+  reports.walReads.payloadReadRequests reports.reads
 
 /-- Checkpoint bytes and the retained WAL interval bound the selected
 payload callbacks. The cap does not include the metadata reads, directory
 calls or the primitive operations inside a repair callback. -/
 theorem payloadReadRequests_le
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
     (prepared : Prepared retry.image layout.target layout.plan)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start) :
-    reported.payloadReadRequests ≤
+    reports.payloadReadRequests ≤
       ((checkpoint.getD (.empty, 0)).1.runs.map (·.run.bytes.size)).sum +
         (layout.range.through - layout.first) * frameSize :=
-  reported.reads.walReads.payloadReadRequests_le reported.reads.reads selected
-    (reported.reads.metadata.manifestRead layout.decoded) (reported.reads.metadata.markerRead layout.decoded)
+  reports.walReads.payloadReadRequests_le reports.reads selected
+    (reports.metadata.manifestRead layout.decoded) (reports.metadata.markerRead layout.decoded)
     following (prepared.newer _ List.mem_cons_self)
 
 /-- Count the two reported metadata readers on their chosen opened
 descriptions. Stat and open are outside this chunk counter. -/
 def metadataReadRequests : Nat :=
-  let reads := reported.reads.reads
+  let reads := reports.reads
   recoveryCalls Prod.snd (reads.countMetadata directory (directory.file .manifest) (0, 0)) +
     recoveryCalls Prod.snd (reads.countMetadata directory (directory.file .walBoundary) (0, 0))
 
@@ -54,10 +57,10 @@ def metadataReadRequests : Nat :=
 exact selected manifest extent when present. The marker retains its EOF
 witness in the twenty-five-call budget. -/
 theorem metadataReadRequests_le :
-    reported.metadataReadRequests ≤
+    reports.metadataReadRequests ≤
       (retry.image.directory.active.manifest.map ByteArray.size).getD 0 + WAL.Boundary.acquisitionLimit := by
-  have marker := reported.reads.reads.countMetadata_le directory (directory.file .walBoundary) (0, 0)
-  have bound := reported.reads.reads.countMetadata_le directory (directory.file .manifest) (0, 0)
+  have marker := reports.reads.countMetadata_le directory (directory.file .walBoundary) (0, 0)
+  have bound := reports.reads.countMetadata_le directory (directory.file .manifest) (0, 0)
   simp only [beq_self_eq_true, ↓reduceIte, Nat.zero_add] at marker
   have different : (directory.file .manifest == directory.file .walBoundary) = false := by
     apply beq_eq_false_iff_ne.mpr
@@ -68,14 +71,14 @@ theorem metadataReadRequests_le :
     exact (by decide : "MANIFEST" ≠ "WAL.commit") ((String.append_right_inj _).mp paths)
   simp only [different, Bool.false_eq_true, ↓reduceIte, Nat.zero_add] at bound
   have manifest : recoveryCalls Prod.snd
-      (reported.reads.reads.countMetadata directory (directory.file .manifest) (0, 0)) ≤
+      (reports.reads.countMetadata directory (directory.file .manifest) (0, 0)) ≤
       (retry.image.directory.active.manifest.map ByteArray.size).getD 0 := by
     cases visible : retry.image.directory.active.manifest with
     | none =>
-      obtain ⟨_, name, details, stat⟩ := reported.reads.metadata.manifestMissing visible
+      obtain ⟨_, name, details, stat⟩ := reports.metadata.manifestMissing visible
       simpa [stat, Except.toOption] using bound
     | some bytes =>
-      obtain ⟨⟨file⟩, _⟩ := reported.reads.metadata.manifestFile bytes visible
+      obtain ⟨⟨file⟩, _⟩ := reports.metadata.manifestFile bytes visible
       have seen := file.observesFile
       simpa [seen.stat, seen.extent, Except.toOption] using bound
   exact Nat.add_le_add manifest marker
@@ -84,13 +87,46 @@ theorem metadataReadRequests_le :
 name and the terminal read. Only the resulting whole listing enters the
 extent scan. -/
 theorem directoryWork_exact :
+    reports.directoryWork.opendirCalls = 1 ∧
+    reports.directoryWork.readdirCalls = reports.listing.scan.names.length + 1 ∧
+    reports.directoryWork.closedirCalls = 1 ∧
+    reports.catalog.list directory.path = .ok (reports.listing.scan.entries directory.path) := by
+  obtain ⟨returned, _⟩ := CheckedDirectoryReadReport.scan_complete directory.path
+    reports.listing.eof reports.listing.closed reports.listing.complete
+  exact ⟨rfl, rfl, rfl, reports.listed.trans returned⟩
+
+end CapturedMarkedReadReports
+
+namespace MarkedReadyOpenObservations
+
+variable (reported : MarkedReadyOpenObservations input directory inventory retry layout published vacant selected)
+
+abbrev directoryWork : DirectoryReadWork := reported.reads.directoryWork
+
+noncomputable abbrev payloadReadRequests : Nat := reported.reads.payloadReadRequests
+
+theorem payloadReadRequests_le
+    (prepared : Prepared retry.image layout.target layout.plan)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start) :
+    reported.payloadReadRequests ≤
+      ((checkpoint.getD (.empty, 0)).1.runs.map (·.run.bytes.size)).sum +
+        (layout.range.through - layout.first) * frameSize :=
+  reported.reads.payloadReadRequests_le selected prepared following
+
+abbrev metadataReadRequests : Nat := reported.reads.metadataReadRequests
+
+theorem metadataReadRequests_le :
+    reported.metadataReadRequests ≤
+      (retry.image.directory.active.manifest.map ByteArray.size).getD 0 + WAL.Boundary.acquisitionLimit :=
+  reported.reads.metadataReadRequests_le
+
+theorem directoryWork_exact :
     reported.directoryWork.opendirCalls = 1 ∧
     reported.directoryWork.readdirCalls = reported.reads.listing.scan.names.length + 1 ∧
     reported.directoryWork.closedirCalls = 1 ∧
-    reported.reads.catalog.list directory.path = .ok (reported.reads.listing.scan.entries directory.path) := by
-  obtain ⟨returned, _⟩ := CheckedDirectoryReadReport.scan_complete directory.path
-    reported.reads.listing.eof reported.reads.listing.closed reported.reads.listing.complete
-  exact ⟨rfl, rfl, rfl, reported.reads.listed.trans returned⟩
+    reported.reads.catalog.list directory.path = .ok (reported.reads.listing.scan.entries directory.path) :=
+  reported.reads.directoryWork_exact
 
 /-- The shared finisher counts one unlink callback per selected later name.
 The other requests depend on the observed keeper extent and on whether

@@ -380,6 +380,7 @@ import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 import Alvoki.Storage.Disk.SelectedRecoveryChunkWork
 import Alvoki.Storage.Disk.MetadataRecoveryChunkWork
 import Alvoki.Storage.Disk.NativeMarkedRecoveryWork
+import Alvoki.Storage.Disk.NativeMarkedFirstBarrierWork
 import Alvoki.Storage.Disk.NativeRejectedOpenWork
 import Alvoki.Storage.Disk.NativeMarkedListingWork
 import Alvoki.Storage.Disk.MaintainedRecoveryWork
@@ -2697,6 +2698,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedReadyOpenObservations.directoryWork_exact
 #check_axioms Alvoki.Storage.DiskSession.MarkedReadyOpenObservations.repairWork_exact
 #check_axioms Alvoki.Storage.DiskSession.MarkedReadyOpenObservations.installsWithWork
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedFirstBarrierError.syncFails
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedFirstBarrierError.finishes
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedFirstBarrierError.stopsRecovery
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedFirstBarrierError.returnsWithWork
 #check_axioms Alvoki.Storage.DiskSession.NativeManifestDecodeError.countedManifest_projects
 #check_axioms Alvoki.Storage.DiskSession.NativeManifestDecodeError.countedManifest_le
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenRejectionRoute.chunkRequests_le
