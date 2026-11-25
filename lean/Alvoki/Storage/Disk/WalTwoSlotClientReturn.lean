@@ -796,6 +796,27 @@ def InterruptedSlotBytes (before bytes : ByteArray) (active : Slot) (next : Sele
       decodeSlot bytes (slotIndex active.other) = none ∨
       decodeSlot bytes (slotIndex active.other) = some next)
 
+/-- If each changed byte in a surviving container lies in the reported
+transfer trace, filesystem isolation reduces to the proven syscall
+address bound. The report must include any effect of the in-flight
+write, and separately constrain the decoding of the torn record. -/
+theorem SlotWriteTransfers.interruptedBytes
+    {current next : Selection} {frontier : Nat} {active : Slot}
+    (offset : current.slot = slotIndex active) (advanced : advance current frontier = .ok next)
+    {addresses : List Nat} {final : Nat}
+    (transferred : SlotWriteTransfers (next.slot * stride) 0 addresses final)
+    {before bytes : ByteArray} (size : bytes.size = containerSize)
+    (attributed : ∀ position, bytes.get! position ≠ before.get! position → position ∈ addresses)
+    (decoded : decodeSlot bytes (slotIndex active.other) = decodeSlot before (slotIndex active.other) ∨
+      decodeSlot bytes (slotIndex active.other) = none ∨ decodeSlot bytes (slotIndex active.other) = some next) :
+    InterruptedSlotBytes before bytes active next := by
+  refine ⟨size, ?_, decoded⟩
+  intro position outside
+  by_cases same : bytes.get! position = before.get! position
+  · exact same
+  · have inside := (transferred.inactiveRecord offset advanced).2 position (attributed position same)
+    omega
+
 /-- After the successful WAL barrier, any marker bytes surviving an
 interrupted positional write on the live marker can expose only the
 previous history or the whole newly durable batch. The slot isolation
@@ -2074,9 +2095,16 @@ theorem installsAfterAcquiredRecovery_replays
     {interruptedMarker : WalInodeImage}
     (writeCut : InterruptedBatchMarkerPublication directory prior batch next (interrupted, interruptedMarker))
     (accepted : decode (writeCut.initialMarker.visible writeCut.initialMarker.active) = .ok current)
+    {transferredAddresses : List Nat} {finalCursor : Nat}
+    (transfers : SlotWriteTransfers (next.slot * stride) 0 transferredAddresses finalCursor)
     (slotOutcome : ∀ bytes ∈ interruptedMarker.visible interruptedMarker.active ::
       interruptedMarker.crashBytes interruptedMarker.active,
-      InterruptedSlotBytes (writeCut.initialMarker.visible writeCut.initialMarker.active) bytes active next)
+      bytes.size = containerSize ∧
+      (∀ position, bytes.get! position ≠ (writeCut.initialMarker.visible writeCut.initialMarker.active).get! position →
+        position ∈ transferredAddresses) ∧
+      (decodeSlot bytes (slotIndex active.other) =
+          decodeSlot (writeCut.initialMarker.visible writeCut.initialMarker.active) (slotIndex active.other) ∨
+        decodeSlot bytes (slotIndex active.other) = none ∨ decodeSlot bytes (slotIndex active.other) = some next))
     {liveMarker : Option ByteArray} {crashMarkers : List (Option ByteArray)}
     (liveBytes : ∀ bytes, liveMarker = some bytes → bytes = interruptedMarker.visible interruptedMarker.active)
     (crashBytes : ∀ bytes, some bytes ∈ crashMarkers → bytes ∈ interruptedMarker.crashBytes interruptedMarker.active)
@@ -2168,7 +2196,9 @@ theorem installsAfterAcquiredRecovery_replays
     obtain ⟨raw, projection, source⟩ := candidate
     cases raw with
     | none => exact .inl (Except.ok.inj projection).symm
-    | some bytes => exact .inr ⟨bytes, slotOutcome bytes (source bytes rfl), projection⟩
+    | some bytes =>
+      obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes (source bytes rfl)
+      exact .inr ⟨bytes, transfers.interruptedBytes offset advanced size attributed decoded, projection⟩
   have choicesBefore := interruptedMarker_retryChoices accepted offset newer observations
   have choice := (beforeBarrier.selectsOldOrNew checkpoint current.frontier next.frontier choicesBefore observedFirst).2
   have bytes := choice.imp (fun old => old ▸ oldSize) (fun all => all ▸ newSize)

@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The client theorem uses the modeled positional-write transfer sequence
+to discharge the outside-slot byte equality. The filesystem premise
+attributes each changed surviving byte to that sequence, including any
+effects of a syscall in flight at the cut. Container length and the
+permitted torn-record decode outcomes remain separate assumptions.
+
 The positioned marker write now has a Lean bound for the entire
 short-write transfer sequence, starting at the slot selected by
 `advance`. All reported byte transfers stay within the inactive
