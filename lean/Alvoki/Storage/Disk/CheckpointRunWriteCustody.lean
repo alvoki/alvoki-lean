@@ -75,6 +75,38 @@ theorem steps_split_runPair {count index : Nat} (within : index < count) :
     later.flatMap (fun i => [.writeRun i, .syncRun i]) ++ [.syncRunsDirectory] ++ Publication.steps.map Step.manifest,
     by simp [steps, runSteps, order, List.append_assoc]⟩
 
+/-- Route the adjacent checked run steps to the handle captured by the
+same write. A returned fsync error still consumes that pending entry. -/
+theorem performCheckpointRunPair_route
+    (directory : DiskDirectory) (generation : UInt64) (table : PackedTable) (manifest : ByteArray)
+    {index : Nat} {run : Compaction.CheckedRun} (selected : table.runs.toArray[index]? = some run)
+    {handle : Type} (cache : Cache handle) {before flushed : WalInodeImage} (captured : handle)
+    (writeRun writeStage : FilePath → ByteArray → EStateM IO.Error (Cache handle × WalInodeImage) Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error (Cache handle × WalInodeImage) Unit)
+    (openRead : FilePath → EStateM IO.Error WalInodeImage handle)
+    (fsync : handle → EStateM IO.Error WalInodeImage Unit) :
+    let path := directory.file (.run generation index)
+    let perform := performCheckpointFileStep directory generation table.runs.toArray (directory.file .stagedManifest)
+      manifest (fun found => match found with
+        | some run => pure run
+        | none => throw (IO.userError "checkpoint run index is out of bounds"))
+      writeRun writeStage (SyncPathGroup.run (sync directory.path openRead fsync)) rename
+    writeRun path run.run.bytes (cache, before) = .ok () (cache.remember path captured, flushed) →
+    ((perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (cache, before)) =
+      match fsync captured flushed with
+      | .ok () after => .ok () (cache.consume path, after)
+      | .error cause after => .error (IO.userError s!"sync failed for '{path}': {cause}") (cache.consume path, after) := by
+  intro path perform staged
+  have route := syncRemembered (dir := directory.path) (path := path) (cache := cache)
+    (runPath_ne_directory directory generation index) captured openRead fsync flushed
+  have wrote : perform (.writeRun index) (cache, before) = .ok () (cache.remember path captured, flushed) := by
+    simpa only [perform, performCheckpointFileStep, selected, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+      using staged
+  change ((perform (.writeRun index) >>= fun _ => SyncPathGroup.run (sync directory.path openRead fsync) #[path])
+    (cache, before)) = _
+  simp only [Bind.bind, EStateM.bind, wrote, SyncPathGroup.run_single, route]
+  cases fsync captured flushed <;> rfl
+
 /-- At the selected run's two adjacent dispatch steps, use exactly the
 checked array bytes and sync the live description used to write and flush
 them. The file barrier consumes its pending entry even on error. A
@@ -127,24 +159,13 @@ theorem performCheckpointRunPair_observed
     · exact within
     · rw [List.getElem?_eq_none (Nat.le_of_not_gt within)] at selected
       contradiction
-  have routed : ((perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (cache, before)) =
-      match fsync captured flushed with
-      | .ok () after => .ok () (cache.consume path, after)
-      | .error cause after => .error (IO.userError s!"sync failed for '{path}': {cause}") (cache.consume path, after) := by
-    have staged : writeRun path run.run.bytes (cache, before) = .ok () (cache.remember path captured, flushed) := by
-      have capturedRun := writes.captures
-      change writeCheckpointRunWith writes.lookup writes.openWrite writes.write writes.flush path run.run.bytes
-          pure before = .ok captured flushed at capturedRun
-      simp only [writeRun, stageFreshWithCache, capturedRun]
-    have route := syncRemembered (dir := directory.path) (path := path) (cache := cache)
-      (runPath_ne_directory directory generation index) captured openRead fsync flushed
-    have wrote : perform (.writeRun index) (cache, before) = .ok () (cache.remember path captured, flushed) := by
-      simpa only [perform, performCheckpointFileStep, selected, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
-        using staged
-    change ((perform (.writeRun index) >>= fun _ => SyncPathGroup.run (sync directory.path openRead fsync) #[path])
-      (cache, before)) = _
-    simp only [Bind.bind, EStateM.bind, wrote, SyncPathGroup.run_single, route]
-    cases returned : fsync captured flushed <;> rfl
+  have staged : writeRun path run.run.bytes (cache, before) = .ok () (cache.remember path captured, flushed) := by
+    have capturedRun := writes.captures
+    change writeCheckpointRunWith writes.lookup writes.openWrite writes.write writes.flush path run.run.bytes
+        pure before = .ok captured flushed at capturedRun
+    simp only [writeRun, stageFreshWithCache, capturedRun]
+  have routed := performCheckpointRunPair_route directory generation table manifest selected cache captured
+    writeRun writeStage rename openRead fsync staged
   refine ⟨steps_split_runPair within, ⟨observed, rfl, rfl, bound⟩, ?_, ?_, ?_⟩
   · rw [routed]
     generalize fsync captured flushed = returned at effect ⊢
