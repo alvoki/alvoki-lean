@@ -110,6 +110,8 @@ The aligned keeper projection connects the actual bounded read to the captured s
 
 The healthy aligned route with no later WAL names now composes that preparation with the two reached syncs and the shared session allocation. The returned session contains the table derived from the selected manifest, exact checkpoint runs and retained WAL. The reported keeper open and subsequent slot drops give the tracked final census, with the new lock and directory slots live. Temporary run and seal descriptors remain covered by their local read reports. [Aligned open installation](../lean/Alvoki/Storage/Disk/CapturedAlignedInstallation.lean)
 
+The aligned continuation derives the cache update and reached census at the selected keeper read from its primitive open and chunk reports. Both grouped syncs use that cache, and the second consumes the pending keeper before its observed syscall. The aligned installation proof uses those syscall effects and slot drops directly. The listed-repair reports still expose their file-only sync projections for the other proofs. [Stateful aligned continuation](../lean/Alvoki/Storage/Disk/CapturedAlignedInstallation.lean)
+
 Prove a single invariant for every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and

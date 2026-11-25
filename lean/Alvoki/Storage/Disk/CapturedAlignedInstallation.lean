@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CapturedMarkedReads
+import Alvoki.Storage.Disk.CapturedKeeperCustody
 import Alvoki.Storage.Disk.HeldWalInstallation
 
 namespace Alvoki.Storage.DiskSession
@@ -174,14 +174,192 @@ def census (finish : CapturedAlignedFinish calls report vacant selected) : Descr
   finish.authorization.keeper.inventory.afterDrops
     (finish.repair.beforeAuthorization ++ finish.repair.afterAuthorization ++ finish.afterKeeper)
 
+theorem sameKeeper (finish : CapturedAlignedFinish calls report vacant selected) :
+    finish.authorization.keeper = report.wal.keeper.observesFile :=
+  (calls.wal report vacant).keeperObserved finish.authorization
+
+/-- The aligned installation's own observed keeper allocation and first
+barrier census supply the keeper-read custody. They describe the same
+read-only payload report used by the installed table. -/
+def readCustody (finish : CapturedAlignedFinish calls report vacant selected) : CapturedKeeperOpenReports report := by
+  have same := finish.sameKeeper
+  refine {
+    beforeOpen := finish.repair.beforeKeeper
+    free := ?_
+    fresh := ?_
+    opened := ?_
+    duringRead := finish.repair.beforeAuthorization
+    keeperRetained := ?_
+    ownerRetained := ?_
+    directoryRetained := ?_ }
+  · have available := finish.repair.available
+    rw [same] at available
+    exact available
+  · have fresh := finish.repair.fresh
+    rw [same] at fresh
+    exact fresh
+  · have opened := finish.repair.opened
+    simp only [same] at opened
+    exact opened
+  · have keeper := finish.repair.barrierCensus.1
+    rw [same] at keeper
+    exact keeper
+  · have owner := finish.repair.barrierCensus.2.1
+    rw [same] at owner
+    exact owner
+  · have cached := finish.repair.barrierCensus.2.2.1
+    rw [same] at cached
+    exact cached
+
+private theorem keeperDescription_ne_cached (finish : CapturedAlignedFinish calls report vacant selected) :
+    report.wal.keeper.calls.slot.description ≠ admission.cached.description := by
+  have cached := finish.authorization.directoryRetained
+  rw [finish.repair.firstDrops, ← DescriptorInventory.afterDrops_append] at cached
+  have atOpen : admission.cached ∈ finish.readCustody.atOpen.slots := (List.mem_filter.mp cached).1
+  intro same
+  have member := finish.readCustody.atOpen.mem_references.mpr ⟨admission.cached, atOpen, rfl, same.symm⟩
+  change admission.cached.reference ∈
+    ((report.listing.afterClose.afterDrops finish.readCustody.beforeOpen).references report.wal.keeper.calls.slot.description) at member
+  rw [finish.readCustody.fresh] at member
+  exact List.not_mem_nil member
+
+private abbrev KeeperRepairState := CensusDirectoryCache × CensusOpenState
+
+private def fileAction {result : Type} (action : EStateM IO.Error FileImage result) :
+    EStateM IO.Error KeeperRepairState result := fun (cache, census, before) =>
+  match action before.image with
+  | .ok value after => .ok value (cache, census, { before with image := after })
+  | .error cause after => .error cause (cache, census, { before with image := after })
+
+private def openForSync (finish : CapturedAlignedFinish calls report vacant selected) (name : FilePath) :
+    EStateM IO.Error CensusOpenState (DescriptorInventory × DescriptorSlot × Nat) := fun (census, before) =>
+  match finish.authorization.openRead name before with
+  | .ok opened after => .ok opened (census, after)
+  | .error cause after => .error cause (census, after)
+
+/-- Both reached fsyncs use the same callbacks as the settled file-image
+proof, with the measured drops applied at each successful return. -/
+private def fsyncWithCensus (finish : CapturedAlignedFinish calls report vacant selected)
+    (handle : DescriptorInventory × DescriptorSlot × Nat) : EStateM IO.Error CensusOpenState Unit :=
+  fun (census, before) =>
+    match finish.authorization.fsync handle before with
+    | .ok () after =>
+      let drops := if handle.2.1.description = admission.cached.description then
+        finish.repair.afterAuthorization else finish.afterKeeper
+      .ok () (census.afterDrops drops, after)
+    | .error cause after => .error cause (census, after)
+
+private def actions (finish : CapturedAlignedFinish calls report vacant selected) (resolved : DiskDirectory)
+    (plan : Plan) (size : Nat) : EStateM IO.Error KeeperRepairState Unit :=
+  finishBoundedMarkedOpen resolved plan size
+    (fun path => fileAction (calls.removeFile path))
+    (fun path bytes state => fileAction (calls.write state.1 path bytes) state)
+    (SyncPathGroup.run (sync resolved.path finish.openForSync finish.fsyncWithCensus))
+    (fun source target => fileAction (calls.renameFile source target))
+
+private def rawTail (finish : CapturedAlignedFinish calls report vacant selected) :
+    EStateM IO.Error KeeperRepairState Unit := do
+  let _ ← finish.readCustody.readKeeper
+  finish.actions directory layout.boundedPlan report.wal.keeper.calls.metadata.byteSize.toNat
+
+private theorem keeperAligned (finish : CapturedAlignedFinish calls report vacant selected) :
+    layout.keeper.bytes.size = report.wal.keeper.calls.metadata.byteSize.toNat := by
+  have extent := finish.repair.aligned
+  rw [finish.sameKeeper] at extent
+  exact extent
+
+private theorem keeperTailEmpty (finish : CapturedAlignedFinish calls report vacant selected) :
+    layout.tail = ByteArray.empty := by
+  have measured := finish.keeperAligned.trans report.wal.keeper.observesFile.extent
+  rw [ByteArray.size_append] at measured
+  exact ByteArray.size_eq_zero_iff.mp (by omega)
+
+/-- Derive the cache-bearing keeper read and the two reached syncs from
+the aligned installation's existing primitive observations. The pending
+entry comes from that read and is consumed by the keeper sync. -/
+theorem rawTail_returns (finish : CapturedAlignedFinish calls report vacant selected) :
+    finish.rawTail (admission.cache, finish.readCustody.atOpen, admission.held) =
+      .ok () (admission.cache, finish.census, { admission.held with image := retry.image.syncDirectory.syncKeeper }) := by
+  let observed := finish.readCustody
+  have aligned := finish.keeperAligned
+  have authCensus : observed.afterRead.afterDrops finish.repair.afterAuthorization =
+      finish.authorization.keeper.inventory.afterDrops
+        (finish.repair.beforeAuthorization ++ finish.repair.afterAuthorization) := by
+    unfold CapturedKeeperOpenReports.afterRead observed readCustody
+    dsimp only
+    rw [DescriptorInventory.afterDrops_append, finish.sameKeeper]
+    rfl
+  have retained (ref : DescriptorSlot)
+      (live : ref ∈ (finish.authorization.keeper.inventory.afterDrops
+        (finish.repair.beforeAuthorization ++ finish.repair.afterAuthorization)).slots) :
+      ∀ event ∈ finish.repair.afterAuthorization, event.removes ref.reference = false := by
+    have kept := List.all_eq_true.mp (List.mem_filter.mp live).2
+    intro event inDrops
+    have selected := kept event (List.mem_append_right _ inDrops)
+    cases reports : event.removes ref.reference <;> simp_all
+  have first :
+      finish.fsyncWithCensus (admission.reached, admission.cached, 0) (observed.afterRead, admission.held) =
+      .ok () (observed.afterRead.afterDrops finish.repair.afterAuthorization,
+        { admission.held with image := retry.image.syncDirectory }) := by
+    have raw := finish.authorization.effect
+    change finish.authorization.fsync (admission.reached, admission.cached, 0) admission.held = _ at raw
+    rw [show finish.authorization.outcome = .completed from finish.repair.completed] at raw
+    have ended : finish.authorization.fsync (admission.reached, admission.cached, 0) admission.held =
+        .ok () { admission.held with image := retry.image.syncDirectory } := raw
+    simp [fsyncWithCensus, ended]
+  have second : finish.authorization.fsync (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+      { admission.held with image := retry.image.syncDirectory } =
+    .ok () { admission.held with image := retry.image.syncDirectory.syncKeeper } := by
+    have actual := finish.repair.outcome.completed_of_return finish.succeeded
+    change finish.authorization.fsync (finish.authorization.keeper.inventory, finish.authorization.keeper.slot, 0)
+      { admission.held with image := retry.image.syncDirectory } =
+      .ok () { admission.held with image := retry.image.syncDirectory.syncKeeper } at actual
+    rw [finish.sameKeeper] at actual
+    exact actual
+  have keeperAt : ∀ event ∈ finish.repair.afterAuthorization,
+      event.removes report.wal.keeper.calls.slot.reference = false := by
+    have keeping := retained _ finish.repair.keeperRetained
+    rw [finish.sameKeeper] at keeping
+    exact keeping
+  have routed := observed.syncFromRead aligned finish.repair.noLater finish.openForSync finish.fsyncWithCensus
+    (fun path => fileAction (calls.removeFile path))
+    (fun path bytes state => fileAction (calls.write state.1 path bytes) state)
+    (fun source target => fileAction (calls.renameFile source target)) finish.repair.afterAuthorization keeperAt
+    (retained _ finish.repair.lockRetained) first
+  change finish.rawTail (admission.cache, observed.atOpen, admission.held) = _
+  rw [show finish.rawTail (admission.cache, observed.atOpen, admission.held) = _ from routed.2.2.2]
+  simp only [fsyncWithCensus, second, ite_eq_right finish.keeperDescription_ne_cached]
+  rw [authCensus, DescriptorInventory.afterDrops_append]
+  rfl
+
 private def finishAt (finish : CapturedAlignedFinish calls report vacant selected) (resolved : DiskDirectory)
     (_owner : DescriptorSlot) (cache : CensusDirectoryCache) (prepared : Plan × Reopened × Nat) :
-    EStateM IO.Error CensusOpenState Reopened := fun (openCensus, before) =>
+    EStateM IO.Error CensusOpenState Reopened := fun (_, before) =>
   let (plan, opened, size) := prepared
-  match finishBoundedMarkedOpen resolved plan size calls.removeFile (calls.write cache) (calls.sync cache)
-      calls.renameFile before.image with
-  | .ok () reached => .ok opened (finish.census, { before with image := reached })
-  | .error cause reached => .error cause (openCensus, { before with image := reached })
+  let handle := (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+  let remembered := cache.remember (resolved.file (.walSegment plan.keeper)) handle
+  match finish.actions resolved plan size (remembered, finish.readCustody.afterRead, before) with
+  | .ok () (_, reached) => .ok opened reached
+  | .error cause (_, reached) => .error cause reached
+
+/-- Restore the state effects of the selected keeper callback at the
+read-only worker's boundary. The continuation begins after its read, and
+the same raw tail proves the pending cache and census passed to repair. -/
+theorem finishAt_returns (finish : CapturedAlignedFinish calls report vacant selected) (opened : Reopened) :
+    finish.finishAt directory admission.owner admission.cache
+      (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) =
+      .ok opened (finish.census, { admission.held with image := retry.image.syncDirectory.syncKeeper }) := by
+  have returned := finish.rawTail_returns
+  have read := finish.readCustody.readsAligned finish.keeperAligned
+  unfold rawTail at returned
+  simp only [Bind.bind, EStateM.bind, read] at returned
+  have measured : report.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size := by
+    rw [← finish.keeperAligned]
+    simp only [CanonicalKeeperLayout.plan, finish.keeperTailEmpty, ByteArray.append_empty]
+  rw [measured] at returned
+  have keeperPath : (directory.file (.walSegment layout.boundedPlan.keeper)) =
+      directory.file (.walSegment layout.keeper.first) := rfl
+  simp only [finishAt, keeperPath, returned]
 
 private def bootstrapAt (calls : CapturedAlignedCallbacks admission) (_resolved : DiskDirectory)
     (cache : CensusDirectoryCache) : EStateM IO.Error CensusOpenState Reopened := fun (openCensus, before) =>
@@ -236,7 +414,6 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
       CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
         published calls.liveRefs (.ok session final) := by
   let vacant := trace.freshFlockAllowed.mpr last
-  let operations := calls.operations report vacant
   let sizes := SizedCheckpointRunReports.ofChunkReads (checkpoint := checkpoint) selected report.reads
     report.stat report.chunkReads
   obtain ⟨opened, actualCheckpoint, model, preparedRead, exactCheckpoint, replay, generation, bytes,
@@ -245,20 +422,22 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
       sizes (report.metadata.manifestRead layout.decoded) (report.metadata.markerRead layout.decoded)
   have prepared : Prepared retry.image layout.target layout.plan :=
     ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
-  obtain ⟨after, repaired, ready, effects⟩ :=
-    finishMarkedOpen_completes prepared directory operations.removeFile (operations.write operations.cache)
-      (operations.sync operations.cache) operations.renameFile (finish.authorization.settles finish.repair.completed)
-      (finish.repair.healthyFinish finish.succeeded)
-  have bounded : finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size
-      calls.removeFile (calls.write admission.cache) (calls.sync admission.cache) calls.renameFile retry.image =
-      .ok () after := by
-    rw [layout.boundedPlan_eq_extract, finishBoundedMarkedOpen_eq_full _ _ prepared.valid]
-    exact repaired
+  let after := retry.image.syncDirectory.syncKeeper
+  have visible : retry.image.syncDirectory.keeper.active = some layout.target.trimmed := by
+    change retry.image.keeper.active = some layout.keeper.bytes
+    simpa only [finish.keeperTailEmpty, ByteArray.append_empty] using layout.visible
+  have emptyNames : retry.image.syncDirectory.later.DurablyEmpty := by
+    simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.DurablyEmpty, LaterNames.settled,
+      finish.repair.noLater]
+  have effects : EffectTrace layout.target retry.image after := EffectTrace.aligned .authorized emptyNames visible
+  have ready : after.Ready layout.target := by
+    have safe := effects.valid prepared.pair prepared.keeperPrefix prepared.newer
+    exact ⟨safe.selected, safe.settled, visible, congrArg (fun bytes => [bytes]) visible, emptyNames⟩
   have reached : report.recoverThroughReads finish.finishAt (bootstrapAt calls) directory admission.owner admission.cache
       (admission.reached, admission.held) =
       .ok opened (finish.census, { admission.held with image := after }) := by
     rw [report.recoverThroughReads_prepared calls.flat marker preparedRead]
-    simp only [finishAt, CensusOpenAdmissionReports.held, bounded]
+    exact finish.finishAt_returns opened
   let final : LockedFileState FileImage := { admission.held with image := after }
   let session : SegmentedSession := ⟨directory, admission.owner.description, .ready opened.installed,
     calls.nextRef, calls.nextRef + 1⟩
