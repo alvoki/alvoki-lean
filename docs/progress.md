@@ -2106,3 +2106,8 @@ The interrupted append branch now obtains the prior keeper prefix
 from the shared physical append image and the selected crash survivor.
 It needs the callback report to identify that image. The interrupted
 WAL sync branch still needs its corresponding physical observation.
+
+The stopped WAL sync now uses the reported keeper image before or
+after the sync effect. Before the effect it reuses the append survivor
+proof. After the effect it reuses the same flushed-prefix proof as a
+completed sync. The layout proof derives the prefix in both cases.

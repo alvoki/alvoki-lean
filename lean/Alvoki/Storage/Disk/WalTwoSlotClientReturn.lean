@@ -2636,12 +2636,13 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
       (report.append active (WAL.encode batch)).run (prior.files, report.initialMarker) =
         .error report.stopped reached →
       ∃ cut : FirstAppendCut, reached.1.keeper = (cut.physical prior).keeper)
-    (syncCutPrefix : ∀ appended,
+    (syncCutImage : ∀ appended,
       let active := directory.file (.walSegment prior.installed.activeFirst)
       (report.append active (WAL.encode batch)).run (prior.files, report.initialMarker) =
         .ok (.ok ()) appended →
       (report.syncWal active).run appended = .error report.stopped reached →
-      ∃ tail, retry.keeper.active = some (prior.wal.active.bytes ++ tail))
+      (∃ cut : FirstAppendCut, reached.1.keeper = (cut.physical prior).keeper) ∨
+        reached.1.keeper = appended.1.syncKeeper.keeper)
     {markerBytes : ByteArray}
     (markerSurvives : ∃ inode ∈ reached.2.crashBindings, markerBytes ∈ reached.2.crashBytes inode)
     (selectedBytes : decode markerBytes = .ok selected)
@@ -2653,6 +2654,16 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
     (previousSelection : decode (previousMarker.visible previousMarker.active) = .ok current) :
     ∃ plan : DiskSession.CanonicalKeeperLayout retry ((prior.history ++ batch).take through),
       plan.range.watermark = watermark ∧ plan.keeper.first = prior.wal.active.first := by
+  have flushedPrefix {appended : FileImage × WalInodeImage}
+      (wrote : (report.append (directory.file (.walSegment prior.installed.activeFirst)) (WAL.encode batch)).run
+        (prior.files, report.initialMarker) = .ok (.ok ()) appended)
+      (persisted : reached.1.keeper = appended.1.syncKeeper.keeper) :
+      ∃ tail, retry.keeper.active = some (prior.wal.active.bytes ++ tail) := by
+    have flushed := survives
+    rw [persisted] at flushed
+    have exactBytes : retry.keeper.active = appended.1.keeper.active := by
+      simpa [FileImage.syncKeeper] using flushed
+    exact ⟨WAL.encode batch, exactBytes.trans (appendBytes wrote)⟩
   have visible : ∃ tail, retry.keeper.active = some
       (WAL.encode (((prior.history ++ batch).take through).drop prior.wal.active.first) ++ tail) := by
     by_cases old : selected.frontier = current.frontier
@@ -2665,18 +2676,15 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
         ⟨appended, wrote, ⟨syncCut, _⟩ | ⟨durable, synced, cut⟩⟩
       · obtain ⟨cut, projection⟩ := appendCutImage appendCut
         exact cut.survivorKeepsPrefix layout (projection ▸ survives)
-      · exact syncCutPrefix appended wrote syncCut
+      · rcases syncCutImage appended wrote syncCut with ⟨cut, projection⟩ | persisted
+        · exact cut.survivorKeepsPrefix layout (projection ▸ survives)
+        · exact flushedPrefix wrote persisted
       · have keeper : reached.1.keeper = durable.1.keeper := by
           rcases cut with writeCut | ⟨written, writeReturned, syncCut | ⟨_, _, _, keepsKeeper⟩⟩
           · exact writeKeepsKeeper durable _ writeCut
           · exact (syncKeepsKeeper written syncCut).trans (writeKeepsKeeper durable _ writeReturned)
           · exact keepsKeeper.trans (writeKeepsKeeper durable _ writeReturned)
-        have persisted : retry.keeper.active ∈ durable.1.keeper.crashImages :=
-          keeper ▸ survives
-        rw [walPersists synced] at persisted
-        have exactBytes : retry.keeper.active = appended.1.keeper.active := by
-          simpa [FileImage.syncKeeper] using persisted
-        exact ⟨WAL.encode batch, exactBytes.trans (appendBytes wrote)⟩
+        exact flushedPrefix wrote (keeper.trans (walPersists synced))
     · have changed : reached.2 ≠ report.initialMarker := by
         intro unchanged
         obtain ⟨inode, binding, bytes⟩ := markerSurvives
