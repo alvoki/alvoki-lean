@@ -97,6 +97,7 @@ import Alvoki.Storage.Disk.NativeReadyCheckpoint
 import Alvoki.Storage.Disk.NativeCheckpointPreflight
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 import Alvoki.Storage.Disk.NativeCheckpointErrorReopen
+import Alvoki.Storage.Disk.NativeCheckpointErrorPowerLoss
 import Alvoki.Storage.Disk.CheckpointCompletionClientTrace
 import Alvoki.Storage.Disk.CheckpointCompletionHeldReopen
 import Alvoki.Storage.Disk.Checkpoint.ProcessExit
@@ -623,6 +624,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointAlignedReads.readsSelected
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensCheckpointDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCheckpointDirectoryError
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.Physical.retrySupport
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointErrorCrash.losesPower
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointErrorCrash.classification
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointErrorCrash.reachedFiles
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointErrorCrash.plans
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointCrashAlignedReads.readsSelected
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCheckpointAfterPowerLoss
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCheckpointCrash
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.checkpoints
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rejectsCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointCloseAndReopen
