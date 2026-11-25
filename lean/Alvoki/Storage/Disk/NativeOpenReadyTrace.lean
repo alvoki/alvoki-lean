@@ -118,7 +118,11 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
       NativeOpenedReport start .planWalCollection
   | collectObsoleteRuns (held : List UInt64)
       (observed : NativeObsoleteRunCollection start.current.ready.state)
-      (seen : OpenObsoleteRunObservation start held observed) : NativeOpenedReport start (.collectObsoleteRuns held)
+      (seen : OpenObsoleteRunObservation start held observed.toNativeObsoleteRunPass) :
+      NativeOpenedReport start (.collectObsoleteRuns held)
+  | obsoleteRunBarrierError (held : List UInt64) (failed : NativeObsoleteRunBarrierError start.current.ready.state)
+      (seen : OpenObsoleteRunObservation start held failed.toNativeObsoleteRunPass) :
+      NativeOpenedReport start (.collectObsoleteRuns held)
   | collectCoveredWal (observed : NativeReadyWalCollection start.current.ready.state)
       (completed : observed.barrier.outcome = .completed) :
       NativeOpenedReport start .collectCoveredWal
@@ -305,7 +309,11 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
       | .error cause => .error cause next.reached) ∧
     event = .walCollectionPlan observed.extents.result ∧ next = start
   | .collectObsoleteRuns held _ seen =>
-    seen.Reached next ∧ event = .collectedObsoleteRuns held
+    seen.Reached next ∧ seen.calls.run opened held seen.directory seen.active seen.pending start.reached =
+      .ok () next.reached ∧ event = .collectedObsoleteRuns held
+  | .obsoleteRunBarrierError held failed seen =>
+    seen.Reached next ∧ seen.calls.run opened held seen.directory seen.active seen.pending start.reached =
+      .error failed.diagnostic next.reached ∧ event = .obsoleteRunCollectionError held failed.diagnostic
   | .collectCoveredWal observed completed =>
     opened.table.UsesOpenWalCollectionSchedule start.current.ready.state.session.directory opened.files opened.phase ∧
     observed.runOnOpenPhase opened
@@ -548,8 +556,14 @@ theorem reaches (report : NativeOpenedReport start instruction) :
     obtain ⟨source, raw, step, _, _, _, _, _⟩ := start.plansWalCollection observed
     exact ⟨_, start, step, source, raw, rfl, rfl⟩
   | collectObsoleteRuns held observed seen =>
-    obtain ⟨next, returned, step⟩ := NativeOpenedPosition.collectsObsoleteRuns seen
-    exact ⟨_, next, step, returned, rfl⟩
+    obtain ⟨next, returned, step⟩ := NativeOpenedPosition.collectsObsoleteRuns observed seen
+    have actual := returned.returned
+    unfold NativeObsoleteRunPass.collectorResult at actual
+    rw [observed.completed] at actual
+    exact ⟨_, next, step, returned, actual, rfl⟩
+  | obsoleteRunBarrierError held failed seen =>
+    obtain ⟨next, returned, diagnostic, step⟩ := NativeOpenedPosition.reachesObsoleteRunBarrierError failed seen
+    exact ⟨_, next, step, returned, diagnostic, rfl⟩
   | collectCoveredWal observed completed =>
     obtain ⟨next, source, raw, state, pins, step⟩ := start.collectsCoveredWal observed completed
     exact ⟨_, next, step, source, raw, state, pins, rfl⟩

@@ -2140,6 +2140,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rejectsCoveredWalPlan
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.collectsObsoleteRuns
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.reachesObsoleteRunBarrierError
+#check_axioms Alvoki.Storage.DiskSession.OpenObsoleteRunObservation.Reached.startsNextPass
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.returned
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.runs
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsCustody

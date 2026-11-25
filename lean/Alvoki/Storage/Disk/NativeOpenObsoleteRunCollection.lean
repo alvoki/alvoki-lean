@@ -113,7 +113,7 @@ def OpenCloseHeapView.obsoleteRunFrame (view : OpenCloseHeapView heap RunUnlinkI
 
 structure OpenObsoleteRunObservation {heap : Type} {opened : NativeOpenedHandle heap}
     (current : NativeOpenedPosition opened) (held : List UInt64)
-    (pass : NativeObsoleteRunCollection current.current.ready.state) where
+    (pass : NativeObsoleteRunPass current.current.ready.state) where
   view : OpenCloseHeapView heap RunUnlinkImage
   active : IO.Ref (Option (FilePath × IO.FS.Handle))
   pending : IO.Ref (List (FilePath × IO.FS.Handle))
@@ -180,7 +180,7 @@ private theorem projectsKind {heap frame files : Type} {project : heap → files
   | error cause => exact NativeFileEffectProjection.failure _ _ _
 
 variable {heap : Type} {opened : NativeOpenedHandle heap} {start : NativeOpenedPosition opened}
-  {held : List UInt64} {pass : NativeObsoleteRunCollection start.current.ready.state}
+  {held : List UInt64} {pass : NativeObsoleteRunPass start.current.ready.state}
 
 private theorem OpenObsoleteRunObservation.projectsSelector (seen : OpenObsoleteRunObservation start held pass) :
     let installed := start.current.ready.state.writer.installed
@@ -224,20 +224,20 @@ def OpenObsoleteRunObservation.Barrier (seen : OpenObsoleteRunObservation start 
     seen.view.handle issued file = (pass.capture, start.current.ready.state.directorySlot, 0) ∧
     seen.view.descriptors issued = pass.issueCensus ∧
     (seen.view.files issued).image = pass.atBarrier ∧
-    seen.calls.fsync file issued = .ok () reached
+    seen.calls.fsync file issued = pass.fsyncResult reached
 
 private theorem OpenObsoleteRunObservation.syncsReached (seen : OpenObsoleteRunObservation start held pass)
     (issued : heap) (atBarrier : (seen.view.files issued).image = pass.atBarrier)
     (kept : seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory issued =
       seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory start.reached) :
     ∃ reached,
-      seen.calls.sync opened.directory seen.directory seen.active seen.pending opened.directory.path issued = .ok () reached ∧
-      seen.Barrier issued reached ∧ (seen.view.files reached).image = pass.atBarrier.syncDirectory ∧
+      seen.calls.sync opened.directory seen.directory seen.active seen.pending opened.directory.path issued =
+        pass.collectorResult reached ∧ seen.Barrier issued reached ∧ (seen.view.files reached).image = pass.after ∧
       seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory reached =
         seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory issued := by
   have cache := (congrArg OpenObsoleteRunFrame.cache kept).trans seen.cache
   have census := ((congrArg OpenObsoleteRunFrame.census kept).trans seen.census).trans
-    pass.toNativeObsoleteRunPass.barrierCensus.1.symm
+    pass.barrierCensus.1.symm
   change seen.view.descriptors issued = pass.issueCensus at census
   have captured := (congrArg Cache.directory cache).trans pass.cached
   change (seen.view.directory issued seen.directory).map (seen.view.handle issued) =
@@ -247,21 +247,41 @@ private theorem OpenObsoleteRunObservation.syncsReached (seen : OpenObsoleteRunO
   rw [raw] at lookup
   obtain ⟨projection, frame⟩ := seen.syncs issued file raw
   have expected : pass.fsync (pass.capture, start.current.ready.state.directorySlot, 0) (pass.issueCensus, pass.atBarrier) =
-      .ok () (pass.returnCensus, pass.atBarrier.syncDirectory) := by
-    have observed := pass.synced
-    rw [pass.completed] at observed
-    exact observed
+      pass.fsyncResult (pass.returnCensus, pass.after) := pass.synced
   rw [handle, census, atBarrier, expected] at projection
-  cases synced : seen.calls.fsync file issued with
-  | error cause reached => simp [synced, NativeFileEffectProjection.result] at projection
-  | ok value reached =>
-    cases value
-    simp only [synced, NativeFileEffectProjection.result, EStateM.Result.ok.injEq, true_and] at projection
-    have physical := congrArg Prod.snd projection
-    refine ⟨reached, ?_, ⟨file, lookup, handle, census, atBarrier, synced⟩, physical, ?_⟩
-    · rw [OpenObsoleteRunCallbacks.sync, SyncPathGroup.run_single]
-      simp [syncWithHandles, Bind.bind, EStateM.bind, lookup, synced, Pure.pure, EStateM.pure]
-    · simpa only [synced, NativeFileEffectProjection.reached] using frame
+  let actual := seen.calls.fsync file issued
+  let reached := NativeFileEffectProjection.reached actual
+  have sameStatus : actual = pass.fsyncResult reached := by
+    calc
+      actual = NativeFileEffectProjection.result (fun _ => reached)
+          (NativeFileEffectProjection.result (fun after => (seen.view.descriptors after, (seen.view.files after).image)) actual) := by
+        dsimp only [reached]
+        cases actual <;> rfl
+      _ = NativeFileEffectProjection.result (fun _ => reached) (pass.fsyncResult (pass.returnCensus, pass.after)) :=
+        congrArg (NativeFileEffectProjection.result (fun _ => reached)) projection
+      _ = pass.fsyncResult reached := by
+        unfold NativeObsoleteRunPass.fsyncResult
+        cases pass.outcome <;> rfl
+  have sameImage : (seen.view.files reached).image = pass.after := by
+    calc
+      _ = (NativeFileEffectProjection.reached
+          (NativeFileEffectProjection.result (fun after => (seen.view.descriptors after, (seen.view.files after).image)) actual)).2 := by
+        dsimp only [reached]
+        cases actual <;> rfl
+      _ = (NativeFileEffectProjection.reached (pass.fsyncResult (pass.returnCensus, pass.after))).2 :=
+        congrArg (fun result => (NativeFileEffectProjection.reached result).2) projection
+      _ = _ := by
+        unfold NativeObsoleteRunPass.fsyncResult
+        cases pass.outcome <;> rfl
+  refine ⟨reached, ?_, ⟨file, lookup, handle, census, atBarrier, sameStatus⟩, sameImage, frame⟩
+  rw [OpenObsoleteRunCallbacks.sync, SyncPathGroup.run_single]
+  simp only [syncWithHandles, beq_self_eq_true, ↓reduceIte, Bind.bind, EStateM.bind,
+    lookup, Pure.pure, EStateM.pure]
+  change seen.calls.fsync file issued = pass.fsyncResult reached at sameStatus
+  rw [sameStatus]
+  cases effect : pass.outcome <;>
+    simp only [NativeObsoleteRunPass.fsyncResult, NativeObsoleteRunPass.collectorResult, effect,
+      ← congrArg DiskDirectory.path start.directory] <;> rfl
 
 /-- The reached preflight succeeded, then the common ordered unlink
 dispatcher reached the exact directory barrier on the original cache. -/
@@ -286,9 +306,9 @@ structure OpenObsoleteRunObservation.Reached (seen : OpenObsoleteRunObservation 
     (next : NativeOpenedPosition opened) : Prop where
   source : UsesObsoleteRunCollectionSchedule opened.table opened.directory opened.phase
     seen.active seen.pending seen.directory held
-  returned : seen.calls.run opened held seen.directory seen.active seen.pending start.reached = .ok () next.reached
+  returned : seen.calls.run opened held seen.directory seen.active seen.pending start.reached = pass.collectorResult next.reached
   entered : seen.Entered next.reached
-  physical : (seen.view.files next.reached).image = pass.atBarrier.syncDirectory
+  physical : (seen.view.files next.reached).image = pass.after
   frame : seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory next.reached =
     seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory start.reached
   cache : seen.view.cacheAt next.reached seen.directory seen.active seen.pending = next.current.ready.state.cache
@@ -302,8 +322,8 @@ structure OpenObsoleteRunObservation.Reached (seen : OpenObsoleteRunObservation 
   pins : next.pins = start.pins
 
 private theorem OpenObsoleteRunObservation.returns (seen : OpenObsoleteRunObservation start held pass) :
-    ∃ reached, seen.calls.run opened held seen.directory seen.active seen.pending start.reached = .ok () reached ∧
-      seen.Entered reached ∧ (seen.view.files reached).image = pass.atBarrier.syncDirectory ∧
+    ∃ reached, seen.calls.run opened held seen.directory seen.active seen.pending start.reached = pass.collectorResult reached ∧
+      seen.Entered reached ∧ (seen.view.files reached).image = pass.after ∧
       seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory reached =
         seen.view.obsoleteRunFrame opened seen.active seen.pending seen.directory start.reached := by
   have valid := start.current.ready.readPrefix.refines.1
@@ -344,30 +364,73 @@ private theorem OpenObsoleteRunObservation.returns (seen : OpenObsoleteRunObserv
   simp only [Bind.bind, EStateM.bind, unlinks]
   simp only [List.forM_eq_forM, List.forM_cons, List.forM_nil, RunCollection.performPaths, Bind.bind, EStateM.bind,
     synced, Pure.pure, EStateM.pure]
+  cases pass.collectorResult reached <;> rfl
+
+private theorem OpenObsoleteRunObservation.continues (seen : OpenObsoleteRunObservation start held pass)
+    (ready : NativeReadPosition start.current.history start.current.submissions)
+    (state : ready.state = pass.next) (reads : ready.reads = start.current.ready.reads) :
+    ∃ next : NativeOpenedPosition opened,
+      next.current = ⟨start.current.history, start.current.submissions, ready⟩ ∧ seen.Reached next := by
+  have session : ready.state.session = start.current.ready.state.session := by rw [state]; rfl
+  have census : ready.state.census = start.current.ready.state.census := state ▸ pass.barrierCensus.2
+  obtain ⟨reached, returned, entered, physical, frame⟩ := seen.returns
+  have kept := congrArg OpenObsoleteRunFrame.phase frame
+  let next : NativeOpenedPosition opened :=
+    ⟨⟨start.current.history, start.current.submissions, ready⟩, reached,
+      (congrArg (·.directory) session).trans start.directory,
+      by rw [session]; exact kept.trans start.stored, start.pins⟩
+  have uses := start.uses
+  rw [start.directory] at uses
+  refine ⟨next, rfl, obsoleteRunCollectionSchedule uses seen.references seen.cachePath held, returned, entered,
+    physical, frame, ?_, ?_, ?_, ?_, state, reads, rfl, rfl, rfl⟩
+  · exact ((congrArg OpenObsoleteRunFrame.cache frame).trans seen.cache).trans (congrArg NativeReadyState.cache state).symm
+  · exact ((congrArg OpenObsoleteRunFrame.census frame).trans seen.census).trans census.symm
+  · exact ((congrArg OpenObsoleteRunFrame.owner frame).trans seen.owner).trans (congrArg NativeReadyState.owner state).symm
+  · apply ((congrArg OpenObsoleteRunFrame.owners frame).trans seen.locked).trans
+    rw [show next.current.ready.state = ready.state from rfl, state]
+    rfl
 
 /-- Successful collection uses the submitted holds at the selector
 and the common collector edge at the very same returned writer. -/
 theorem NativeOpenedPosition.collectsObsoleteRuns
-    (seen : OpenObsoleteRunObservation start held pass) :
+    (completed : NativeObsoleteRunCollection start.current.ready.state)
+    (seen : OpenObsoleteRunObservation start held completed.toNativeObsoleteRunPass) :
     ∃ next : NativeOpenedPosition opened,
       seen.Reached next ∧ NativeExecutionStep start.current (.collectedObsoleteRuns held) next.current := by
-  obtain ⟨reached, returned, entered, physical, frame⟩ := seen.returns
-  obtain ⟨ready, step⟩ := start.current.ready.collectsObsoleteRuns pass
-  have kept := congrArg OpenObsoleteRunFrame.phase frame
-  let next : NativeOpenedPosition opened :=
-    ⟨⟨start.current.history, start.current.submissions, ready⟩, reached,
-      (congrArg (·.directory) step.session).trans start.directory,
-      by rw [step.session]; exact kept.trans start.stored, start.pins⟩
-  have uses := start.uses
-  rw [start.directory] at uses
-  have cache := ((congrArg OpenObsoleteRunFrame.cache frame).trans seen.cache).trans step.cache.symm
-  have census := ((congrArg OpenObsoleteRunFrame.census frame).trans seen.census).trans step.census.symm
-  have owner := ((congrArg OpenObsoleteRunFrame.owner frame).trans seen.owner).trans step.owner.symm
-  have locked := ((congrArg OpenObsoleteRunFrame.owners frame).trans seen.locked).trans
-    (congrArg LockedFileState.owners step.files).symm
-  refine ⟨next, ⟨obsoleteRunCollectionSchedule uses seen.references seen.cachePath held, returned, entered, physical, frame,
-    cache, census, owner, locked, step.state, step.reads, rfl, rfl, rfl⟩, ?_⟩
-  rw [← seen.holds]
-  exact .collectObsoleteRuns start.current pass ready step
+  obtain ⟨ready, step⟩ := start.current.ready.collectsObsoleteRuns completed
+  obtain ⟨next, reached, returned⟩ := seen.continues ready step.state step.reads
+  refine ⟨next, returned, ?_⟩
+  rw [reached, ← seen.holds]
+  exact .collectObsoleteRuns start.current completed ready step
+
+/-- Both ordinary directory fsync errors return the exact diagnostic.
+The reached namespace, its crash choices and the previous read ledger
+stay with the original ready handle. -/
+theorem NativeOpenedPosition.reachesObsoleteRunBarrierError
+    (failed : NativeObsoleteRunBarrierError start.current.ready.state)
+    (seen : OpenObsoleteRunObservation start held failed.toNativeObsoleteRunPass) :
+    ∃ next : NativeOpenedPosition opened,
+      seen.Reached next ∧
+      seen.calls.run opened held seen.directory seen.active seen.pending start.reached = .error failed.diagnostic next.reached ∧
+      NativeExecutionStep start.current (.obsoleteRunCollectionError held failed.diagnostic) next.current := by
+  obtain ⟨ready, step⟩ := start.current.ready.reachesObsoleteRunBarrierError failed
+  obtain ⟨next, reached, returned⟩ := seen.continues ready step.state step.reads
+  refine ⟨next, returned, ?_, ?_⟩
+  · have actual := returned.returned
+    unfold NativeObsoleteRunPass.collectorResult at actual
+    rcases failed.failed with effect | effect <;> rw [effect] at actual <;> exact actual
+  · rw [reached, ← seen.holds]
+    exact .obsoleteRunCollectionError start.current failed ready step
+
+/-- A subsequent report using the same raw heap view and input holds
+starts from the exact namespace returned by the earlier pass. -/
+theorem OpenObsoleteRunObservation.Reached.startsNextPass
+    {seen : OpenObsoleteRunObservation start held pass} {next : NativeOpenedPosition opened}
+    (returned : seen.Reached next) {retry : NativeObsoleteRunPass next.current.ready.state}
+    (later : OpenObsoleteRunObservation next held retry) (sameView : later.view = seen.view) :
+    retry.initial = pass.after ∧ retry.reports.held = pass.reports.held := by
+  have input := later.initial
+  rw [sameView] at input
+  exact ⟨input.symm.trans returned.physical, later.holds.trans seen.holds.symm⟩
 
 end Alvoki.Storage.DiskSession
