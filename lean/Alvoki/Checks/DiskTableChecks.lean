@@ -2318,7 +2318,9 @@ private def checkTwoSlotMarker (root : FilePath) : IO Unit := do
   let payload ← IO.FS.readBinFile active
   let short := payload.extract 0 (payload.size - WAL.frameSize)
   IO.FS.writeBinFile active short
-  rejects (TwoSlotDiskTable.open dir) "two-slot reopen fell back from a valid selected slot with short WAL"
+  let (openedWithShortWal, shortWalSyncs) ← probeDisk bin dir none "--two-slot-open-once"
+  check (!openedWithShortWal && shortWalSyncs.isEmpty)
+    "two-slot reopen synced or fell back with missing data at a valid selected frontier"
   check ((← IO.FS.readBinFile marker) == visible && (← IO.FS.readBinFile active) == short)
     "two-slot reopen changed files before validating the selected WAL"
   IO.FS.writeBinFile active payload

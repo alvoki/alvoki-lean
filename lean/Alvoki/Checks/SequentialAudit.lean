@@ -2180,3 +2180,4 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.runBatch_slotWriteInterrupted
 #check_axioms Alvoki.WAL.TwoSlot.recoveredRetries_retainUncertainBatch
 #check_axioms Alvoki.WAL.TwoSlot.prepareSelected_reported
+#check_axioms Alvoki.WAL.TwoSlot.reopenWith_prepareError
