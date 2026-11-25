@@ -8,6 +8,10 @@ import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.NativeSnapshotExecution
 import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
+import Alvoki.Storage.Disk.NativeCheckpointErrorReopen
+import Alvoki.Storage.Disk.NativeCheckpointPreflight
+import Alvoki.Storage.Disk.NativeWalPlanningQuery
+import Alvoki.Storage.Disk.NativeReadyRotation
 
 namespace Alvoki.Storage.DiskSession
 
@@ -25,7 +29,11 @@ inductive NativeExecutionEvent : Type 1 where
   | readOrRestart (event : NativeReadRecoveryEvent)
   | acknowledged (request : WriteRequest) (batch : List WAL.Write)
   | checkpoint
+  | checkpointRejected (error : IO.Error)
+  | checkpointErrorRecovered (input : FilePath) (error : IO.Error)
   | collectCoveredWal
+  | walCollectionPlan (result : Except IO.Error (List Nat))
+  | rotatedWal
   | closedAndReopened (input : FilePath) (result : Except IO.Error Unit)
   | uncertainWriteRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (attempted retained : List WAL.Write)
@@ -141,6 +149,42 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (returned : NativeSnapshotHandleRead current.ready observed request result recorded next) :
       NativeExecutionStep current (.snapshotHandleRead observed.issuer observed.handle request result recorded)
         ⟨current.history, current.submissions, next⟩
+  | checkpointRejected (current : NativeExecutionPosition) (cause : IO.Error)
+      (returned : NativeCheckpointRejectedStep current.ready cause current.ready) :
+      NativeExecutionStep current (.checkpointRejected cause) current
+  | recoverCheckpointError (current : NativeExecutionPosition) {input : FilePath}
+      (observed : NativeCheckpointReopenObservation current.ready.state input)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeCheckpointReopenContinuation current.ready observed next) :
+      NativeExecutionStep current (.checkpointErrorRecovered input observed.diagnostic)
+        ⟨current.history, current.submissions, next⟩
+  | planWalCollection (current : NativeExecutionPosition)
+      (observed : NativeWalPlanningObservation current.ready.state)
+      (returned :
+        let state := current.ready.state
+        let reached := (state.session.phase, ⟨(state.cache, state.files.image), state.files.owners⟩)
+        observed.calls.runPlan state.session.directory reached = match observed.extents.result with
+          | .ok offsets => .ok offsets reached
+          | .error cause => .error cause reached) :
+      NativeExecutionStep current (.walCollectionPlan observed.extents.result) current
+  | rotateCreated (current : NativeExecutionPosition) (reported : NativeReadyCreatedRotation current.ready.state)
+      (next : NativeReadPosition current.history current.submissions)
+      (returned : NativeCreatedRotationContinuation current.ready next reported) :
+      NativeExecutionStep current .rotatedWal ⟨current.history, current.submissions, next⟩
+  | rotateExisting (current : NativeExecutionPosition) (reported : NativeReadyExistingRotation current.ready.state)
+      (next : NativeReadPosition current.history current.submissions)
+      (returned : NativeExistingRotationContinuation current.ready next reported) :
+      NativeExecutionStep current .rotatedWal ⟨current.history, current.submissions, next⟩
+  | rotateEmpty (current : NativeExecutionPosition)
+      (returned : ∀ {image : Type} (files : image)
+        (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+        (read : FilePath → EStateM IO.Error (CensusDirectoryCache × image) (Option ByteArray))
+        (create sync : FilePath → EStateM IO.Error (CensusDirectoryCache × image) Unit)
+        (release : CensusDirectoryCache → image → image),
+        let state := current.ready.state
+        let before := (state.session.phase, ⟨(state.cache, files), state.files.owners⟩)
+        runObservedRotationWithReset state.session.directory lookup read create sync release before = .ok () before) :
+      NativeExecutionStep current .rotatedWal current
 
 /-- Interpret the submitted single or batch write with the reported
 primitive effects and start the next position from its actual result. -/
@@ -191,6 +235,18 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.reads⟩
   case snapshotHandleRead returned => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], returned.reads⟩
+  case checkpointRejected =>
+    simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads]
+  case recoverCheckpointError reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case planWalCollection =>
+    simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads]
+  case rotateCreated returned => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.frame.reads⟩
+  case rotateExisting returned => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.frame.reads⟩
+  case rotateEmpty =>
+    simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads]
 
 theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep before event after) :
     event.uncertainBatchWhole := by
@@ -250,7 +306,10 @@ inductive NativeExecutionInstruction : Type 1 where
   | write (request : WriteRequest)
   | restart (input : FilePath)
   | checkpoint
+  | checkpointThenCloseAndReopen (input : FilePath)
   | collectCoveredWal
+  | planWalCollection
+  | rotateWal
   | closeAndReopen (input : FilePath)
   | writeThenCloseAndReopen (request : WriteRequest) (input : FilePath)
   | collectThenCloseAndReopen (input : FilePath)
@@ -266,7 +325,11 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .write request, .writePreflight submitted _ => submitted = request
   | .restart input, .readOrRestart (.restart resolvedInput) => resolvedInput = input
   | .checkpoint, .checkpoint => True
+  | .checkpoint, .checkpointRejected _ => True
+  | .checkpointThenCloseAndReopen input, .checkpointErrorRecovered opened _ => opened = input
   | .collectCoveredWal, .collectCoveredWal => True
+  | .planWalCollection, .walCollectionPlan _ => True
+  | .rotateWal, .rotatedWal => True
   | .closeAndReopen input, .closedAndReopened opened _ => opened = input
   | .writeThenCloseAndReopen request input, .uncertainWriteRecovered submitted opened _ _ _ =>
     submitted = request ∧ opened = input
@@ -308,6 +371,12 @@ inductive NativeExecutionObservation (state : NativeReadyState) : Type 1 where
   | writePreflight (request : WriteRequest) (observed : NativeWritePreflightObservation state request)
   | snapshotControl (observed : NativeSnapshotUpdateObservation state α)
   | snapshotHandleRead (observed : NativeSnapshotHandleObservation state.session) (request : SnapshotReadRequest α)
+  | checkpointRejected (cause : IO.Error) (preflight : CheckpointPreflight (.ready state.writer.installed) (.error cause))
+  | checkpointThenCloseAndReopen (input : FilePath) (observed : NativeCheckpointReopenObservation state input)
+  | planWalCollection (observed : NativeWalPlanningObservation state)
+  | rotateCreated (reported : NativeReadyCreatedRotation state)
+  | rotateExisting (reported : NativeReadyExistingRotation state)
+  | rotateEmpty (empty : state.writer.installed.walBytes / WAL.frameSize ≤ state.writer.installed.activeFirst)
 
 def NativeExecutionObservation.instruction : NativeExecutionObservation state → NativeExecutionInstruction
   | .snapshot sequence request _ _ => .snapshot sequence request
@@ -321,6 +390,10 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation state �
   | .writePreflight request _ => .write request
   | .snapshotControl observed => .snapshotControl observed.update
   | .snapshotHandleRead observed request => .snapshotHandleRead observed.issuer observed.handle request
+  | .checkpointRejected _ _ => .checkpoint
+  | .checkpointThenCloseAndReopen input _ => .checkpointThenCloseAndReopen input
+  | .planWalCollection _ => .planWalCollection
+  | .rotateCreated _ | .rotateExisting _ | .rotateEmpty _ => .rotateWal
 
 theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     (observed : NativeExecutionObservation current.ready.state) :
@@ -358,6 +431,25 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | snapshotHandleRead observed request =>
     obtain ⟨result, recorded, next, returned⟩ := current.ready.readsHandle observed request
     exact ⟨_, _, .snapshotHandleRead current observed request result recorded next returned, rfl, rfl, HEq.rfl⟩
+  | checkpointRejected cause preflight =>
+    exact ⟨_, current, .checkpointRejected current cause (current.ready.rejectsCheckpoint preflight), trivial⟩
+  | checkpointThenCloseAndReopen _ observed =>
+    obtain ⟨next, reopened⟩ := current.ready.recoversCheckpointDirectoryError observed
+    exact ⟨_, _, .recoverCheckpointError current observed next reopened, rfl⟩
+  | planWalCollection observed =>
+    exact ⟨_, current, .planWalCollection current observed (current.ready.plansWalCollection observed).1, trivial⟩
+  | rotateCreated reported =>
+    obtain ⟨next, rotated⟩ := current.ready.rotatesCreated reported
+    exact ⟨_, _, .rotateCreated current reported next rotated, trivial⟩
+  | rotateExisting reported =>
+    obtain ⟨next, rotated⟩ := current.ready.rotatesExisting reported
+    exact ⟨_, _, .rotateExisting current reported next rotated, trivial⟩
+  | rotateEmpty empty =>
+    refine ⟨_, current, .rotateEmpty current ?_, trivial⟩
+    intro image files lookup read create sync release
+    dsimp only
+    rw [current.ready.readPrefix.refines.1.phase]
+    exact runObservedRotationWithReset_empty _ _ _ lookup read create sync release empty
 
 /-- Supply the primitive reports for the next prescribed instruction
 at its reached state. The whole trace and its endpoint are derived from
