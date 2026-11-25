@@ -1338,7 +1338,10 @@ theorem recoveredRetries_installedReads
     (readSeal : System.FilePath → Nat → EStateM IO.Error FileImage ByteArray)
     (readKeeper : System.FilePath → Nat → Nat → EStateM IO.Error FileImage ByteArray)
     {stabilize : EStateM IO.Error FileImage Unit}
-    {finish : WalSegmentRepair.Plan → Nat → EStateM IO.Error FileImage Unit}
+    (removeFile : System.FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : System.FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array System.FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : System.FilePath → System.FilePath → EStateM IO.Error FileImage Unit)
     (prior : DatabaseBatchRetention log history)
     (oldSize : current.frontier.toNat = (WAL.encode history).size)
     (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
@@ -1378,7 +1381,9 @@ theorem recoveredRetries_installedReads
       selected.frontier, target.first⟩)
     (barrier : stabilize prepared = .ok ()
       { prepared with directory := settleMarker prepared.directory selected })
-    (repaired : finish ⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩ keeperMetadata.byteSize.toNat
+    (repaired : WalSegmentRepair.finishBoundedMarkedOpen directory
+      ⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩
+      keeperMetadata.byteSize.toNat removeFile write sync renameFile
       { prepared with directory := settleMarker prepared.directory selected } = .ok () after)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
     (sealedRead : ∀ file ∈ sealed, prepared.kept file.1 = some file.2)
@@ -1403,7 +1408,9 @@ theorem recoveredRetries_installedReads
           (readIntegrityCheckpointSized directory readManifest
             (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
           (fun _ => pure (some (Boundary.encode selected.frontier))) (fun start length => WalSegmentRepair.readSelectedWithCachedExtents directory start length
-            list lstat readSeal readKeeper)) stabilize finish)
+            list lstat readSeal readKeeper)) stabilize
+          (fun bounded size =>
+            WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile))
         openedFrom = .ok session final ∧
       final.image = after ∧ final.owners.Owns directory descriptor ∧
       session.sessionRef ∉ liveRefs ∧
@@ -1540,7 +1547,10 @@ theorem recoveredRetries_installedReads
         opened, keeperMetadata.byteSize.toNat) prepared :=
     openedResult.symm ▸ read
   obtain ⟨session, final, returned, installed, reached, owner, freshSession⟩ :=
-    reopenWith_installsPrepared (unlock := unlock) liveRefs fresh acquisition preparedRead barrier repaired
+    reopenWith_installsPrepared (unlock := unlock)
+      (finish := fun bounded size =>
+        WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
+      liveRefs fresh acquisition preparedRead barrier repaired
   have physical bytes survives := retries.replayUnchanged authorizedRepair authorized base sealed
     sealedRead markerRead (Boundary.decode_encode selected.frontier) checked (bytes := bytes) survives
   have layoutPlan : layout.plan = plan := by
