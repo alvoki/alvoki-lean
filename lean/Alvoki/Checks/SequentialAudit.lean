@@ -259,6 +259,7 @@ import Alvoki.Storage.Disk.NativeExecutionPrefix
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 import Alvoki.Storage.Disk.NativeReadyWrite
+import Alvoki.Storage.Disk.NativePendingMarkerSync
 import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
@@ -1693,6 +1694,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.acknowledges
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.cachedSelectionForNext
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.acknowledgesAgain
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.stopsPublication
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteStaging.selectsKeeperSync
+#check_axioms Alvoki.Storage.DiskSession.NativeWriteKeeperSyncStop.stopsGroup
+#check_axioms Alvoki.Storage.DiskSession.NativeWriteKeeperSyncStop.stopsWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeWriteKeeperSyncStop.custody
+#check_axioms Alvoki.Storage.DiskSession.NativeWriteKeeperSyncStop.selectsPrior
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtKeeperSync
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.acknowledgesWrite
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.replaysClient
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysClientAtManifestDirectory
