@@ -73,14 +73,16 @@ noncomputable abbrev CheckpointPrimitiveCalls.checkpointStepUntilStop {heap : Ty
 callbacks and the observed file primitives. An outer stop passes over
 ordinary error handling and the final ready setter. -/
 noncomputable def runCheckpointOnOpenPhaseUntilSyncStop {heap : Type}
-    (opened : NativeOpenedHandle heap) (directory : DiskDirectory)
+    (directory : DiskDirectory) (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
     (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap) :
     CheckpointStopM heap Unit :=
-  withPreparedCheckpoint (do (← phaseAction (opened.get opened.phase)).installed) validate
-    (fun next manifest => publishPrepared (fun phase => phaseAction (opened.set opened.phase phase))
+  withPreparedCheckpoint (do (← phaseAction (get phase)).installed) validate
+    (fun next manifest => publishPrepared (fun nextPhase => phaseAction (set phase nextPhase))
       (CheckpointPublication.run next.table.runs.length
         (tagStop (primitives.checkpointStepUntilStop directory fsync next manifest)))
-      (phaseAction (opened.set opened.phase (.ready next))))
+      (phaseAction (set phase (.ready next))))
 
 variable {heap : Type} {opened : NativeOpenedHandle heap}
 
@@ -110,8 +112,9 @@ the original opened position, using each successful prefix once. -/
 theorem NativeOpenedPosition.checkpointStopsFromWhole (current : NativeOpenedPosition opened)
     (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
     {step : Step} {reason : FilePath} {reached : CheckpointWorld heap}
-    (stopped : (runCheckpointOnOpenPhaseUntilSyncStop opened current.current.ready.state.session.directory
-      primitives fsync).run (current.current.ready.state.cache, current.reached) = .error (step, reason) reached) :
+    (stopped : (runCheckpointOnOpenPhaseUntilSyncStop current.current.ready.state.session.directory
+      opened.phase opened.get opened.set primitives fsync).run
+        (current.current.ready.state.cache, current.reached) = .error (step, reason) reached) :
     Nonempty (NativeCheckpointSourceStop current primitives fsync step reason reached) := by
   let state := current.current.ready.state
   let directory := state.session.directory
@@ -161,16 +164,16 @@ theorem NativeOpenedPosition.checkpointStopsFromWhole (current : NativeOpenedPos
 
 private theorem successfulCheckpointStepsFrame {value : Type}
     (perform : Step → ExceptT IO.Error (EStateM FilePath (CheckpointWorld heap)) Unit)
-    (observe : heap → value) (completed : List Step)
+    (observe : CheckpointWorld heap → value) (completed : List Step)
     (frame : ∀ step ∈ completed, ∀ before after,
-      (perform step).run before = .ok (.ok ()) after → observe after.2 = observe before.2)
+      (perform step).run before = .ok (.ok ()) after → observe after = observe before)
     {before after : CheckpointWorld heap}
     (returned : (completed.forM perform).run before = .ok (.ok ()) after) :
-    observe after.2 = observe before.2 := by
+    observe after = observe before := by
   induction completed generalizing before with
   | nil =>
     have same := (EStateM.Result.ok.inj returned).2
-    exact congrArg (fun world : CheckpointWorld heap => observe world.2) same.symm
+    exact congrArg observe same.symm
   | cons step remaining ih =>
     change (ExceptT.bind (perform step) (fun _ => remaining.forM perform)).run before = _ at returned
     rw [run_bind] at returned
@@ -197,7 +200,7 @@ theorem NativeCheckpointSourceStop.phaseAtStop {current : NativeOpenedPosition o
       opened.contents after.2 opened.phase = opened.contents before.2 opened.phase)
     (stoppedKeeps : opened.contents reached.2 opened.phase = opened.contents stop.atIssue.2 opened.phase) :
     opened.contents reached.2 opened.phase = some .poisoned := by
-  have completed := successfulCheckpointStepsFrame _ (fun heap => opened.contents heap opened.phase)
+  have completed := successfulCheckpointStepsFrame _ (fun world => opened.contents world.2 opened.phase)
     stop.completed returnedKeeps stop.returnedPrefix
   exact stoppedKeeps.trans (completed.trans stop.poisonStored)
 
@@ -256,6 +259,92 @@ theorem NativeCheckpointSourceStop.runFileIssue {index : Nat}
   have stage := prefixBeforeRunSync stop.ordered
   exact ⟨stage.1, stage.2, primitives.issuedFsync stop.stoppedStep⟩
 
+private theorem checkpointRunWriteReturned
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (directory : DiskDirectory)
+    (fsync : CheckpointFsync heap) (next : Installed) (manifest : ByteArray) (index : Nat)
+    {before after : CheckpointWorld heap}
+    (returned : (primitives.checkpointStepUntilStop directory fsync next manifest (.writeRun index)).run before =
+      .ok (.ok ()) after) :
+    let path := directory.file (.run next.generation index)
+    ∃ run handle, next.table.runs.toArray[index]? = some run ∧
+      primitives.cached.writeRun path run.run.bytes before.2 = .ok handle after.2 ∧
+      after.1 = before.1.remember path handle := by
+  intro path
+  obtain ⟨cache, raw⟩ := before
+  cases found : next.table.runs.toArray[index]? with
+  | none =>
+    simp [CheckpointFileCallbacks.performUntilSyncStop, performCheckpointFileStep, found,
+      Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.run, ExceptT.mk, EStateM.bind,
+      Pure.pure, EStateM.pure, MonadExceptOf.throw, throw, throwThe] at returned
+  | some run =>
+    have write := (primitives.cached.callbacks directory).performRunWriteUntilSyncStop
+      (primitives.syncUntilStop directory.path fsync) directory next manifest found (cache, raw)
+    rw [write] at returned
+    simp only [CheckpointCacheCalls.callbacks] at returned
+    cases wrote : primitives.cached.writeRun (directory.file (.run next.generation index)) run.run.bytes raw with
+    | error cause reached =>
+      simp [stageFreshWithCache, wrote] at returned
+    | ok handle flushed =>
+      simp only [stageFreshWithCache, wrote] at returned
+      have reachedWrite := (EStateM.Result.ok.inj returned).2
+      exact ⟨run, handle, rfl, (congrArg Prod.snd reachedWrite) ▸ wrote, (congrArg Prod.fst reachedWrite).symm⟩
+
+/-- The last returned step before a run fsync installs the exact
+descriptor selected by that fsync. Extract both effects from the same
+prefix. The ordinary write callback includes guard, open and flush. -/
+theorem NativeCheckpointSourceStop.runFileUsesWrittenHandle {index : Nat}
+    (stop : NativeCheckpointSourceStop current primitives fsync (.syncRun index) reason reached) :
+    let directory := current.current.ready.state.session.directory
+    let path := directory.file (.run stop.next.generation index)
+    let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
+    ∃ beforeWrite run handle,
+      ((runSteps index).forM perform).run (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) beforeWrite ∧
+      stop.next.table.runs.toArray[index]? = some run ∧
+      primitives.cached.writeRun path run.run.bytes beforeWrite.2 = .ok handle stop.atIssue.2 ∧
+      stop.atIssue.1 = beforeWrite.1.remember path handle ∧
+      reached.1 = stop.atIssue.1.consume path ∧
+      fsync handle stop.atIssue.2 = .error reason reached.2 := by
+  intro directory path perform
+  have stage := stop.runFileIssue
+  have completed := stop.returnedPrefix
+  rw [stage.2.1, List.forM_eq_forM, List.forM_append] at completed
+  change (ExceptT.bind ((runSteps index).forM perform)
+    (fun _ => ExceptT.bind (perform (.writeRun index)) (fun _ => pure ()))).run
+      (current.current.ready.state.cache, stop.poisoned) = _ at completed
+  rw [run_bind] at completed
+  cases ran : ((runSteps index).forM perform).run (current.current.ready.state.cache, stop.poisoned) with
+  | error rejected after => rw [ran] at completed; cases completed
+  | ok returned beforeWrite =>
+    rw [ran] at completed
+    cases returned with
+    | error cause => cases completed
+    | ok value =>
+      cases value
+      change (ExceptT.bind (perform (.writeRun index)) (fun _ => pure ())).run beforeWrite = _ at completed
+      rw [run_bind] at completed
+      have lastWrite : (perform (.writeRun index)).run beforeWrite = .ok (.ok ()) stop.atIssue := by
+        cases wrote : (perform (.writeRun index)).run beforeWrite with
+        | error rejected after => rw [wrote] at completed; cases completed
+        | ok returned after =>
+          rw [wrote] at completed
+          cases returned with
+          | error cause => cases completed
+          | ok value =>
+            cases value
+            exact congrArg (EStateM.Result.ok (Except.ok () : Except IO.Error Unit))
+              (EStateM.Result.ok.inj completed).2
+      obtain ⟨run, handle, selectedRun, wrote, staged⟩ :=
+        checkpointRunWriteReturned primitives directory fsync stop.next stop.manifest index lastWrite
+      obtain ⟨selected, atEffect, resolved, issued⟩ := stage.2.2
+      change stop.atIssue.1.resolve directory.path path primitives.openRead stop.atIssue.2 = _ at resolved
+      rw [staged, Cache.resolveRemembered (file_ne_directory _ _) handle primitives.openRead stop.atIssue.2] at resolved
+      obtain ⟨rfl, cacheAndHeap⟩ := EStateM.Result.ok.inj resolved
+      have sameCache := congrArg Prod.fst cacheAndHeap
+      have sameHeap := congrArg Prod.snd cacheAndHeap
+      refine ⟨beforeWrite, run, handle, rfl, selectedRun, wrote, staged, ?_, sameHeap.symm ▸ issued⟩
+      rw [staged]
+      simpa [Cache.consume, Cache.remember, pushPending, path] using sameCache.symm
+
 theorem NativeCheckpointSourceStop.runsDirectoryIssue
     (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached) :
     let dir := current.current.ready.state.session.directory.path
@@ -264,5 +353,100 @@ theorem NativeCheckpointSourceStop.runsDirectoryIssue
       stop.atIssue.1.resolve dir dir primitives.openRead stop.atIssue.2 =
         .ok handle (reached.1, atEffect) ∧ fsync handle atEffect = .error reason reached.2 := by
   exact ⟨prefixBeforeRunsDirectory stop.ordered, primitives.issuedFsync stop.stoppedStep⟩
+
+private theorem resolveKeepsDirectory (cache : CensusDirectoryCache) (dir path : FilePath)
+    (openRead : FilePath → EStateM IO.Error heap CheckpointOpenHandle) (before : heap) :
+    (reachedState (cache.resolve dir path openRead before)).1.directory = cache.directory := by
+  by_cases isDirectory : path = dir
+  · cases found : cache.directory <;> simp [Cache.resolve, isDirectory, found, reachedState]
+  · cases pending : cache.pending.find? (fun entry => entry.1 == path) with
+    | some found => simp [Cache.resolve, isDirectory, pending, Cache.consume, reachedState]
+    | none =>
+      have reopened : (reachedState (withCache cache (openRead path before))).1.directory = cache.directory := by
+        cases openRead path before <;> rfl
+      cases active : cache.active with
+      | none => simpa only [Cache.resolve, isDirectory, beq_iff_eq, ↓reduceIte, pending, active] using reopened
+      | some found =>
+        by_cases same : found.1 = path
+        · simp [Cache.resolve, isDirectory, pending, active, same, reachedState]
+        · simpa only [Cache.resolve, isDirectory, beq_iff_eq, ↓reduceIte, pending, active, same] using reopened
+
+private theorem checkpointSyncKeepsDirectory
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    (dir path : FilePath) {before after : CheckpointWorld heap}
+    (returned : (primitives.syncUntilStop dir fsync #[path]).run before = .ok (.ok ()) after) :
+    after.1.directory = before.1.directory := by
+  obtain ⟨cache, raw⟩ := before
+  have frame := resolveKeepsDirectory cache dir path primitives.openRead raw
+  have success : ∃ atSync, checkpointSyncUntilStop dir primitives.openRead fsync path (cache, raw) = .ok (.ok ()) atSync ∧
+      after = atSync := by
+    let sync := checkpointSyncUntilStop dir primitives.openRead fsync
+    change (SyncPathGroup.run sync #[path]).run (cache, raw) = _ at returned
+    cases issued : (sync path).run (cache, raw) with
+    | error reason reached =>
+      change sync path (cache, raw) = _ at issued
+      simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil,
+        MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe, ExceptT.tryCatch, Bind.bind, ExceptT.bind,
+        ExceptT.run, ExceptT.mk, EStateM.bind, StateT.pure, Pure.pure, ExceptT.pure, issued] at returned
+    | ok result reached =>
+      change sync path (cache, raw) = _ at issued
+      cases result with
+      | error cause =>
+        simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil,
+          MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe, ExceptT.tryCatch, Bind.bind, ExceptT.bind,
+          ExceptT.run, ExceptT.mk, EStateM.bind, StateT.pure, Pure.pure, ExceptT.pure, ExceptT.bindCont,
+          MonadExceptOf.throw, throw, throwThe, EStateM.pure, issued] at returned
+      | ok resultValue =>
+        cases resultValue
+        simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil,
+          MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe, ExceptT.tryCatch, Bind.bind, ExceptT.bind,
+          ExceptT.run, ExceptT.mk, EStateM.bind, StateT.pure, Pure.pure, ExceptT.pure, ExceptT.bindCont,
+          MonadExceptOf.throw, throw, throwThe, EStateM.pure, issued] at returned
+        exact ⟨reached, issued, returned.symm⟩
+  obtain ⟨atSync, sync, rfl⟩ := success
+  cases resolved : cache.resolve dir path primitives.openRead raw with
+  | error cause reached => simp [checkpointSyncUntilStop, resolved] at sync
+  | ok handle atEffect =>
+    obtain ⟨selectedCache, heapAtEffect⟩ := atEffect
+    simp only [resolved, reachedState] at frame
+    cases ran : fsync handle heapAtEffect with
+    | error reason reached => simp [checkpointSyncUntilStop, resolved, ran] at sync
+    | ok result reached =>
+      simp only [checkpointSyncUntilStop, resolved, ran] at sync
+      cases result <;> cases sync
+      exact frame
+
+/-- All preceding run pairs leave the original directory descriptor in
+its cache slot. The next barrier issues on that exact descriptor. -/
+theorem NativeCheckpointSourceStop.runsDirectoryUsesCachedHandle
+    (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached) :
+    ∃ handle, current.current.ready.state.cache.directory = some handle ∧
+      reached.1 = stop.atIssue.1 ∧ fsync handle stop.atIssue.2 = .error reason reached.2 := by
+  let directory := current.current.ready.state.session.directory
+  have issued := stop.runsDirectoryIssue
+  have frame : ∀ step ∈ stop.completed, ∀ before after,
+      (primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest step).run before =
+        .ok (.ok ()) after → after.1.directory = before.1.directory := by
+    intro step member before after returned
+    rw [issued.1] at member
+    simp only [runSteps, List.mem_flatMap, List.mem_range, List.mem_cons, List.not_mem_nil, or_false] at member
+    obtain ⟨index, within, write | sync⟩ := member
+    · subst step
+      obtain ⟨_, _, _, _, staged⟩ := checkpointRunWriteReturned
+        primitives directory fsync stop.next stop.manifest index returned
+      rw [staged]; rfl
+    · subst step
+      exact checkpointSyncKeepsDirectory primitives fsync directory.path
+        (directory.file (.run stop.next.generation index)) returned
+  have kept := successfulCheckpointStepsFrame _ (fun world => world.1.directory)
+    stop.completed frame stop.returnedPrefix
+  obtain ⟨handle, heapAtEffect, resolved, effect⟩ := issued.2
+  simp only [Cache.resolve, beq_self_eq_true, ↓reduceIte] at resolved
+  cases cached : stop.atIssue.1.directory with
+  | none => rw [cached] at resolved; cases resolved
+  | some original =>
+    rw [cached] at resolved
+    obtain ⟨rfl, same⟩ := EStateM.Result.ok.inj resolved
+    exact ⟨original, kept.symm.trans cached, (congrArg Prod.fst same).symm, (congrArg Prod.snd same).symm ▸ effect⟩
 
 end Alvoki.Storage.DiskSession

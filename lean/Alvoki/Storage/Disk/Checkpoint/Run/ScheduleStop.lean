@@ -75,45 +75,6 @@ theorem run_firstStop {image : Type} {count : Nat}
       (perform step).run atIssue = .error path after :=
   forM_firstStop (steps count) perform stopped
 
-/-- A successful returned prefix followed by a stopped callback is
-enough to run the whole schedule to the same outer stop and reached heap. -/
-theorem run_stopsAt {image : Type} {count : Nat}
-    {perform : Step → ExceptT IO.Error (EStateM FilePath image) Unit}
-    {done remaining : List Step} {step : Step} {path : FilePath} {before atIssue after : image}
-    (ordered : steps count = done ++ step :: remaining)
-    (completed : (done.forM perform).run before = .ok (.ok ()) atIssue)
-    (stopped : (perform step).run atIssue = .error path after) :
-    (run count (tagStop perform)).run before = .error (step, path) after := by
-  change ((steps count).forM (tagStop perform)).run before = _
-  rw [ordered]
-  clear ordered
-  induction done generalizing before with
-  | nil =>
-    have tagged : (tagStop perform step).run before = .error (step, path) after := by
-      have same := (EStateM.Result.ok.inj completed).2
-      rw [← same] at stopped
-      change perform step before = _ at stopped
-      simp only [tagStop, ExceptT.run, stopped]
-    change (ExceptT.bind (tagStop perform step) (fun _ => remaining.forM (tagStop perform))).run before = _
-    rw [run_bind, tagged]
-  | cons prev rest ih =>
-    change (ExceptT.bind (perform prev) (fun _ => rest.forM perform)).run before = _ at completed
-    rw [run_bind] at completed
-    cases call : (perform prev).run before with
-    | error reason reached => rw [call] at completed; cases completed
-    | ok result reached =>
-      rw [call] at completed
-      cases result with
-      | error cause => cases completed
-      | ok value =>
-        have tagged : (tagStop perform prev).run before = .ok (.ok value) reached := by
-          change perform prev before = _ at call
-          simp only [tagStop, ExceptT.run, call]
-        change (ExceptT.bind (tagStop perform prev) (fun _ =>
-          (rest ++ step :: remaining).forM (tagStop perform))).run before = _
-        rw [run_bind, tagged]
-        exact ih completed
-
 private theorem runSteps_nodup (count : Nat) : (runSteps count).Nodup := by
   induction count with
   | zero => simp [runSteps]
@@ -183,7 +144,7 @@ namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication
 
-private def returned {image α : Type} (call : EStateM IO.Error image α) :
+private abbrev returned {image α : Type} (call : EStateM IO.Error image α) :
     ExceptT IO.Error (EStateM FilePath image) α :=
   fun before => match call before with
     | .ok result reached => .ok (.ok result) reached
@@ -203,34 +164,18 @@ def CheckpointFileCallbacks.performUntilSyncStop {image : Type} (calls : Checkpo
     (fun path bytes => returned (calls.writeStaged path bytes)) sync
     (fun source target => returned (calls.rename source target))
 
-variable {image : Type} (calls : CheckpointFileCallbacks image)
-  (sync : Array FilePath → ExceptT IO.Error (EStateM FilePath image) Unit)
-  (directory : DiskDirectory) (next : Installed) (manifest : ByteArray)
-  {before after : image} {path : FilePath}
-
-/-- A stopped run sync reached the same selected write and prior run
-pairs in the complete file schedule. Its callback gets the canonical run path. -/
-theorem CheckpointFileCallbacks.firstRunSyncStop {index : Nat}
-    (stopped : (run next.table.runs.length
-      (tagStop (calls.performUntilSyncStop sync directory next manifest))).run before = .error (.syncRun index, path) after) :
-    let done := runSteps index ++ [.writeRun index]
-    index < next.table.runs.length ∧ ∃ remaining atIssue,
-      steps next.table.runs.length = done ++ .syncRun index :: remaining ∧
-      (done.forM (calls.performUntilSyncStop sync directory next manifest)).run before = .ok (.ok ()) atIssue ∧
-      (sync #[directory.file (.run next.generation index)]).run atIssue = .error path after := by
-  obtain ⟨done, remaining, atIssue, ordered, returnedPrefix, cut⟩ := run_firstStop stopped
-  obtain ⟨within, rfl⟩ := prefixBeforeRunSync ordered
-  exact ⟨within, remaining, atIssue, ordered, returnedPrefix, cut⟩
-
-/-- A stopped first directory sync reached all returned run pairs
-before the canonical directory callback. The manifest suffix is unreached. -/
-theorem CheckpointFileCallbacks.firstRunsDirectoryStop
-    (stopped : (run next.table.runs.length
-      (tagStop (calls.performUntilSyncStop sync directory next manifest))).run before = .error (.syncRunsDirectory, path) after) :
-    ∃ atIssue,
-      ((runSteps next.table.runs.length).forM (calls.performUntilSyncStop sync directory next manifest)).run before =
-        .ok (.ok ()) atIssue ∧ (sync #[directory.path]).run atIssue = .error path after := by
-  obtain ⟨done, _, atIssue, ordered, returnedPrefix, cut⟩ := run_firstStop stopped
-  exact ⟨atIssue, prefixBeforeRunsDirectory ordered ▸ returnedPrefix, cut⟩
+/-- A returned write step records the actual write result and cache. -/
+theorem CheckpointFileCallbacks.performRunWriteUntilSyncStop {image : Type}
+    (calls : CheckpointFileCallbacks image) (sync : Array FilePath → ExceptT IO.Error (EStateM FilePath image) Unit)
+    (directory : DiskDirectory) (next : Installed) (manifest : ByteArray) {index : Nat}
+    {run : Compaction.CheckedRun} (found : next.table.runs.toArray[index]? = some run) (before : image) :
+    (calls.performUntilSyncStop sync directory next manifest (.writeRun index)).run before =
+      match calls.writeRun (directory.file (.run next.generation index)) run.run.bytes before with
+      | .ok value after => .ok (.ok value) after
+      | .error cause after => .ok (.error cause) after := by
+  simp only [performUntilSyncStop, performCheckpointFileStep, found, Bind.bind,
+    ExceptT.bind, ExceptT.bindCont, ExceptT.run, ExceptT.mk, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure,
+    returned]
+  cases calls.writeRun (directory.file (.run next.generation index)) run.run.bytes before <;> rfl
 
 end Alvoki.Storage.DiskSession
