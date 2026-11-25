@@ -1676,14 +1676,15 @@ theorem acquireMarkerWithInventory_sharedReader {state : Type}
 
 def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
     EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) :=
-  acquireMarkerWithInventory (fun _ files => files) reads path
+  acquireMarkerWithInventoryUsing (readMarkerBytesWith (EStateM.pure ())) (fun _ files => files) reads path
 
 /-- The native acquisition projection retains the opened marker slot
 in the state passed to checkpoint preparation. -/
 def acquireMarkerInCensus (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
     EStateM IO.Error (DiskSession.CensusDirectoryCache × DiskSession.CensusOpenState)
       (KeeperDescriptorIdentity × Selection) :=
-  acquireMarkerWithInventory (fun inventory (cache, _, files) => (cache, inventory, files)) reads path
+  acquireMarkerWithInventoryUsing (readMarkerBytesWith (EStateM.pure ()))
+    (fun inventory (cache, _, files) => (cache, inventory, files)) reads path
 
 theorem acquireMarkerInCensus_returns
     {reads : WalSegmentRepair.CheckpointRunChunkReads} {directory : DiskDirectory}
@@ -1698,8 +1699,9 @@ theorem acquireMarkerInCensus_returns
       .ok (⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩, selected)
         (before.1, file.calls.inventory, before.2.2) := by
   obtain ⟨bytes, returned, agrees⟩ := decode_markerFromHeldDirectory file available
+  rw [acquireMarkerInCensus, acquireMarkerWithInventory_sharedReader]
   cases before
-  simp [acquireMarkerInCensus, acquireMarkerWithInventory, acquireMarkerWithInventoryUsing, checkPrivateRegularWith, file.calls.stat,
+  simp [acquireMarkerWithInventory, acquireMarkerWithInventoryUsing, checkPrivateRegularWith, file.calls.stat,
     file.calls.regular, privateFile, file.calls.opened, returned,
     show (IO.FS.FileType.file == .file) = true from rfl,
     Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept, agrees.trans decoded]
@@ -3026,7 +3028,8 @@ theorem recoveredRetries_installedReads
       cases markerHandle
       simp only [KeeperDescriptorIdentity.mk.injEq]
       exact ⟨markerDescription, markerDescription ▸ reachedInode⟩
-    simp [acquireMarkerFromReports, acquireMarkerWithInventory, acquireMarkerWithInventoryUsing, checkPrivateRegularWith, markerFile.calls.stat,
+    rw [acquireMarkerFromReports, acquireMarkerWithInventory_sharedReader]
+    simp [acquireMarkerWithInventory, acquireMarkerWithInventoryUsing, checkPrivateRegularWith, markerFile.calls.stat,
       markerFile.calls.regular, markerPrivate, markerFile.calls.opened, markerRead,
       show (IO.FS.FileType.file == .file) = true from rfl,
       Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept,

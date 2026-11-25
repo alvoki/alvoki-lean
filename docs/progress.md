@@ -1066,8 +1066,8 @@ inode, including when the cache routes sync through a pending handle.
 
 The acquisition model now takes its bounded reader as an argument.
 Lean proves equality with the shared native reader once the primitive
-open and rewind have been projected to their reached cursor. The
-existing recovery proofs continue to use the same acquisition result.
+open and rewind have been projected to their reached cursor. Both recovery projections now use that shared reader and apply the
+equality before reasoning about the descriptor, marker bytes and selection.
 
 The native-shaped marker read now has an explicit proof edge from
 the read-write open to the rewind and bounded read on the returned
