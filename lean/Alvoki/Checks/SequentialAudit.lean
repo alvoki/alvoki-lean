@@ -269,6 +269,7 @@ import Alvoki.Storage.Disk.NativePendingMarkerRename
 import Alvoki.Storage.Disk.NativeGroupedKeeperSyncError
 import Alvoki.Storage.Disk.NativePendingMarkerDirectory
 import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
+import Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
@@ -1776,6 +1777,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.markerObject
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.selects
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversInterruptedMarker
+#check_axioms Alvoki.Storage.DiskSession.NativeGroupedWriteSyncError.groupReturns
+#check_axioms Alvoki.Storage.DiskSession.NativeGroupedWriteSyncError.projectedGroup
+#check_axioms Alvoki.Storage.DiskSession.NativeGroupedWriteSyncError.returnsUnknown
+#check_axioms Alvoki.Storage.DiskSession.NativeGroupedWriteSyncError.markerFrame
+#check_axioms Alvoki.Storage.DiskSession.NativeGroupedMarkerSyncError.finalFiles
+#check_axioms Alvoki.Storage.DiskSession.NativeGroupedMarkerSyncError.fileSelection
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.returnsGroupedMarkerError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.acknowledgesWrite
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.replaysClient
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysClientAtManifestDirectory
