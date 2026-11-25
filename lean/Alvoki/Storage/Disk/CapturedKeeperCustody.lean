@@ -7,13 +7,13 @@ open System SyncHandleRouting WalSegmentRepair
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
   {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
-  {published : CheckpointPublication.Image}
+  {published : CheckpointPublication.Image} {renameMarker : Bool}
 
 /-- The keeper's observed open follows the closed directory stream in
 the tracked descriptor census. Any other temporary reads have finished
 and retain no slot in this projection. Drops during the keeper reads
 preserve the issuing keeper, lock and cached directory slots. -/
-structure CapturedKeeperOpenReports (report : CapturedMarkedReadReports admission layout published) where
+structure CapturedKeeperOpenReports (report : CapturedMarkedReadReports admission layout published renameMarker) where
   beforeOpen : List LockReferenceDrop
   free : ∀ slot ∈ (report.listing.afterClose.afterDrops beforeOpen).slots,
     slot.address ≠ report.wal.keeper.calls.slot.address
@@ -27,7 +27,7 @@ structure CapturedKeeperOpenReports (report : CapturedMarkedReadReports admissio
 
 namespace CapturedKeeperOpenReports
 
-variable {report : CapturedMarkedReadReports admission layout published}
+variable {report : CapturedMarkedReadReports admission layout published renameMarker}
 
 def atOpen (captured : CapturedKeeperOpenReports report) : DescriptorInventory :=
   report.listing.afterClose.afterDrops captured.beforeOpen

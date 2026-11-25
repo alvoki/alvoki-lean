@@ -124,12 +124,12 @@ end TemporaryPrefixCustody
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
   {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
-  {published : CheckpointPublication.Image}
+  {published : CheckpointPublication.Image} {renameMarker : Bool}
 
 /-- Read the selected seal extents in their worker order. Each report
 starts from the previous temporary reader's reached census. The last
 selected extent is the actual keeper from the held stat/open reports. -/
-inductive CapturedSealReadChainWith (report : CapturedMarkedReadReports admission layout published)
+inductive CapturedSealReadChainWith (report : CapturedMarkedReadReports admission layout published renameMarker)
     (released : FilePath → List LockReferenceDrop) (retains : DescriptorSlot → Prop) :
     List (Nat × IO.FS.Metadata) → DescriptorInventory → List LockReferenceDrop → Prop where
   | keeper {initial} : CapturedSealReadChainWith report released retains
@@ -146,13 +146,13 @@ inductive CapturedSealReadChainWith (report : CapturedMarkedReadReports admissio
         (next, nextMetadata) :: rest) initial (custody.beforeOpen ++ released (directory.file (.walSegment segment.first)) ++ drops)
 
 /-- A chain without any additional retained descriptor. -/
-abbrev CapturedSealReadChain (report : CapturedMarkedReadReports admission layout published)
+abbrev CapturedSealReadChain (report : CapturedMarkedReadReports admission layout published renameMarker)
     (released : FilePath → List LockReferenceDrop) :=
   CapturedSealReadChainWith report released (fun _ => False)
 
 namespace CapturedSealReadChainWith
 
-variable {report : CapturedMarkedReadReports admission layout published} {released : FilePath → List LockReferenceDrop}
+variable {report : CapturedMarkedReadReports admission layout published renameMarker} {released : FilePath → List LockReferenceDrop}
   {retains : DescriptorSlot → Prop}
   {required : List (Nat × IO.FS.Metadata)} {initial : DescriptorInventory} {drops : List LockReferenceDrop}
 
@@ -273,13 +273,13 @@ namespace CapturedMarkedReadReports
 
 /-- Interpret the successful checked scan at the reached census. The
 stream opens, reads and closes in the same captured parent. -/
-def scanWal (report : CapturedMarkedReadReports admission layout published) (path : FilePath) :
+def scanWal (report : CapturedMarkedReadReports admission layout published renameMarker) (path : FilePath) :
     EStateM IO.Error ReadState (Array IO.FS.DirEntry) := fun (cache, census, files) =>
   match (CheckedDirectoryReadReport.scanned report.listing.scan).result path with
   | .ok entries => .ok entries (cache, census.afterDrops report.lifetime.drops, files)
   | .error cause => .error cause (cache, census, files)
 
-theorem scanWal_closed (report : CapturedMarkedReadReports admission layout published) :
+theorem scanWal_closed (report : CapturedMarkedReadReports admission layout published renameMarker) :
     report.scanWal directory.path (admission.cache, admission.reached, admission.held) =
       .ok (report.listing.scan.entries directory.path) (admission.cache, report.listing.afterClose, admission.held) := by
   have listing := (CheckedDirectoryReadReport.scan_complete directory.path report.listing.eof report.listing.closed
@@ -289,7 +289,7 @@ theorem scanWal_closed (report : CapturedMarkedReadReports admission layout publ
 
 /-- The same checked stream can start after manifest and marker reads
 have already applied the reported drops before opendir. -/
-theorem scanWal_fromEntry (report : CapturedMarkedReadReports admission layout published) :
+theorem scanWal_fromEntry (report : CapturedMarkedReadReports admission layout published renameMarker) :
     report.scanWal directory.path
       (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) =
         .ok (report.listing.scan.entries directory.path) (admission.cache, report.listing.afterClose, admission.held) := by
@@ -312,14 +312,14 @@ theorem scanWal_fromEntry (report : CapturedMarkedReadReports admission layout p
 
 /-- Interpret the native no-follow extent probe and its private regular
 file guard. The catalog supplies the raw metadata observation. -/
-def inspectWal (report : CapturedMarkedReadReports admission layout published) (path : FilePath) :
+def inspectWal (report : CapturedMarkedReadReports admission layout published renameMarker) (path : FilePath) :
     EStateM IO.Error ReadState (Except IO.Error IO.FS.Metadata) :=
   inspectWalSegmentWith path (pure (report.catalog.inventory.reports.lstat path))
 
 /-- Every listed canonical name passes the native inspection, including
 older seals and later names whose payloads are not read. The resulting
 extent scan is the one used by the catalog selection theorem. -/
-theorem guardedWalScan (report : CapturedMarkedReadReports admission layout published) {names : List String}
+theorem guardedWalScan (report : CapturedMarkedReadReports admission layout published renameMarker) {names : List String}
     (listed : ∀ name ∈ names, name ∈ report.catalog.inventory.names) :
     readWalSegmentExtentsWith directory report.inspectWal names =
       readWalSegmentExtentsWith directory
@@ -352,7 +352,7 @@ theorem guardedWalScan (report : CapturedMarkedReadReports admission layout publ
 temporary seal effects. It begins the keeper subloop at the exact census
 after the listing has closed and every selected seal read has released its
 temporary slot. The keeper still uses the original cache and file image. -/
-theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission layout published)
+theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission layout published renameMarker)
     (captured : CapturedKeeperOpenReports report)
     {count : UInt64} (aligned : count.toNat % WAL.frameSize = 0)
     (covers : layout.range.watermark ≤ count.toNat / WAL.frameSize)
@@ -416,7 +416,7 @@ end CapturedMarkedReadReports
 with the same retained marker slot. The scan and seal finalizers each
 close their own temporary descriptions. -/
 theorem CapturedKeeperOpenReports.preservesSlotAtOpen
-    {report : CapturedMarkedReadReports admission layout published}
+    {report : CapturedMarkedReadReports admission layout published renameMarker}
     (keeper : CapturedKeeperOpenReports report)
     {released : FilePath → List LockReferenceDrop} {required : List (Nat × IO.FS.Metadata)}
     {slot : DescriptorSlot}
@@ -431,7 +431,7 @@ theorem CapturedKeeperOpenReports.preservesSlotAtOpen
 /-- Opening and reading the keeper leaves a separate marker descriptor
 live in the census returned by the bounded read. -/
 theorem CapturedKeeperOpenReports.preservesSlotAfterRead
-    {report : CapturedMarkedReadReports admission layout published}
+    {report : CapturedMarkedReadReports admission layout published renameMarker}
     (keeper : CapturedKeeperOpenReports report) {slot : DescriptorSlot}
     (present : slot ∈ keeper.atOpen.slots)
     (retained : ∀ event ∈ keeper.duringRead, event.removes slot.reference = false) :

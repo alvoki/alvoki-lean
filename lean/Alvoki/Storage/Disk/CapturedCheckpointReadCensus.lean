@@ -38,11 +38,11 @@ end TemporaryPrefixCustody
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
   {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
-  {published : CheckpointPublication.Image}
+  {published : CheckpointPublication.Image} {renameMarker : Bool}
 
 /-- The manifest is read first. The missing branch uses the observed
 no-follow ENOENT and allocates no temporary description. -/
-inductive CapturedManifestCensus (report : CapturedMarkedReadReports admission layout published)
+inductive CapturedManifestCensus (report : CapturedMarkedReadReports admission layout published renameMarker)
     (released : FilePath → List LockReferenceDrop) : List LockReferenceDrop → Prop where
   | missing (bound : retry.image.directory.active.manifest = none) : CapturedManifestCensus report released []
   | present {bytes : ByteArray} (bound : retry.image.directory.active.manifest = some bytes)
@@ -51,7 +51,7 @@ inductive CapturedManifestCensus (report : CapturedMarkedReadReports admission l
       (custody : TemporaryPrefixCustody file.calls admission.reached (released (directory.file .manifest))) :
       CapturedManifestCensus report released (custody.beforeOpen ++ released (directory.file .manifest))
 
-theorem CapturedManifestCensus.reads {report : CapturedMarkedReadReports admission layout published}
+theorem CapturedManifestCensus.reads {report : CapturedMarkedReadReports admission layout published renameMarker}
     {released : FilePath → List LockReferenceDrop} {drops : List LockReferenceDrop}
     (manifest : CapturedManifestCensus report released drops) :
     readTemporaryMetadata report.reads directory released (directory.file .manifest)
@@ -60,7 +60,7 @@ theorem CapturedManifestCensus.reads {report : CapturedMarkedReadReports admissi
           (admission.cache, admission.reached.afterDrops drops, admission.held) := by
   cases manifest with
   | missing bound =>
-    obtain ⟨_, name, message, absent⟩ := report.metadata.manifestMissing bound
+    obtain ⟨_, name, message, absent⟩ := report.manifestReports.manifestMissing bound
     have noDrops : admission.reached.afterDrops [] = admission.reached := by
       cases admission.reached with
       | mk slots distinct inode =>
@@ -78,7 +78,7 @@ theorem CapturedManifestCensus.reads {report : CapturedMarkedReadReports admissi
 /-- An absent manifest leaves the held slot alone. A present manifest
 uses a separate temporary descriptor whose finalizer preserves it. -/
 theorem CapturedManifestCensus.preservesSlot
-    {report : CapturedMarkedReadReports admission layout published}
+    {report : CapturedMarkedReadReports admission layout published renameMarker}
     {released : FilePath → List LockReferenceDrop} {drops : List LockReferenceDrop}
     (manifest : CapturedManifestCensus report released drops)
     {slot : DescriptorSlot} (present : slot ∈ admission.reached.slots)
@@ -104,7 +104,7 @@ def runReadDrops (events : Nat → List LockReferenceDrop) : Nat → List LockRe
 
 /-- For each actual selected generation/index, the raw opened description
 comes from the previous census, and its observed release closes the step. -/
-structure CapturedRunReadCensus (report : CapturedMarkedReadReports admission layout published)
+structure CapturedRunReadCensus (report : CapturedMarkedReadReports admission layout published renameMarker)
     (initial : DescriptorInventory) where
   events : Nat → List LockReferenceDrop
   released : FilePath → List LockReferenceDrop
@@ -123,7 +123,7 @@ structure CapturedRunReadCensus (report : CapturedMarkedReadReports admission la
 Each report accounts for the ambient drops. Free-address allocation
 accounts for the temporary descriptor's own finalizer. -/
 theorem CapturedRunReadCensus.preservesSlot
-    {report : CapturedMarkedReadReports admission layout published}
+    {report : CapturedMarkedReadReports admission layout published renameMarker}
     {initial : DescriptorInventory} (runs : CapturedRunReadCensus report initial)
     {slot : DescriptorSlot} (present : slot ∈ initial.slots)
     {bytes : ByteArray} {manifest : IntegrityCheckpoint}
@@ -156,7 +156,7 @@ theorem CapturedRunReadCensus.preservesSlot
     rw [custody.closes.1] at retained
     simpa only [runReadDrops, ← DescriptorInventory.afterDrops_append, ordered] using retained
 
-def CapturedMarkedReadReports.readCheckpointFromCensus (report : CapturedMarkedReadReports admission layout published)
+def CapturedMarkedReadReports.readCheckpointFromCensus (report : CapturedMarkedReadReports admission layout published renameMarker)
     (metadataRelease runRelease : FilePath → List LockReferenceDrop) :
     EStateM IO.Error ReadState (Option (PackedTable × UInt64)) :=
   readIntegrityCheckpointSized directory
@@ -166,7 +166,7 @@ def CapturedMarkedReadReports.readCheckpointFromCensus (report : CapturedMarkedR
 
 /-- The executable sized checkpoint reader produces the selected table
 from the durable run map and reaches the census left by exactly those runs. -/
-theorem CapturedRunReadCensus.reads {report : CapturedMarkedReadReports admission layout published}
+theorem CapturedRunReadCensus.reads {report : CapturedMarkedReadReports admission layout published renameMarker}
     {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
     (manifest : CapturedManifestCensus report metadataRelease manifestDrops)
     (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))

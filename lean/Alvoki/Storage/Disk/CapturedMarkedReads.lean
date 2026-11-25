@@ -62,7 +62,7 @@ append-open, acquisition and cache initialization. The stream and every
 selected stat and open resolve in that capture's same canonical namespace. -/
 structure CapturedMarkedReadReports (admission : CensusOpenAdmissionReports input directory inventory retry)
     {history : List WAL.Write} (layout : CanonicalKeeperLayout retry.image history)
-    (published : CheckpointPublication.Image) where
+    (published : CheckpointPublication.Image) (renameMarker : Bool := true) where
   lock : DeviceInode
   lockEntry : admission.view.child admission.root "LOCK" = some lock
   identifiesLock : admission.view.modelObject lock = admission.reached.inode admission.owner.description
@@ -78,8 +78,11 @@ structure CapturedMarkedReadReports (admission : CensusOpenAdmissionReports inpu
   listed : catalog.list directory.path = (CheckedDirectoryReadReport.scanned listing.scan).result directory.path
   reads : CheckpointRunChunkReads
   stat : ∀ path, catalog.inventory.reports.lstat path = (reads.stat path).map Prod.fst
-  metadata : DirectoryMetadataReadReports directory admission.view admission.root reads
-    catalog.inventory.reports.readOptional retry.image.directory.active
+  metadata : if renameMarker then
+      DirectoryMetadataReadReports directory admission.view admission.root reads
+        catalog.inventory.reports.readOptional retry.image.directory.active
+    else DirectoryManifestReadReports directory admission.view admission.root reads
+      catalog.inventory.reports.readOptional retry.image.directory.active.manifest
   runs : ∀ bytes manifest, retry.image.directory.active.manifest = some bytes →
     IntegrityCheckpoint.decode bytes = .ok manifest → ∀ index, index < manifest.header.runCount.toNat →
     ∀ payload, published.durable manifest.header.generation index = some payload →
@@ -95,14 +98,22 @@ namespace CapturedMarkedReadReports
 variable {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
   {published : CheckpointPublication.Image}
 
-def lifetime (report : CapturedMarkedReadReports admission layout published) :
+theorem manifestReports {renameMarker : Bool}
+    (report : CapturedMarkedReadReports admission layout published renameMarker) :
+    DirectoryManifestReadReports directory admission.view admission.root report.reads
+      report.catalog.inventory.reports.readOptional retry.image.directory.active.manifest := by
+  cases renameMarker
+  · exact report.metadata
+  · exact DirectoryMetadataReadReports.manifestReports report.metadata
+
+def lifetime {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker) :
     HeldDirectoryReadLifetime admission.reached admission.owner :=
   admission.readLifetime report.lock report.lockEntry report.identifiesLock report.drops report.ownerRetained
     report.directoryRetained
 
 /-- The locked catalog uses the owner installed by this very admission.
 Only the entries and metadata are taken from the catalog report. -/
-def inventoryWithOwner (report : CapturedMarkedReadReports admission layout published) :
+def inventoryWithOwner {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker) :
     CachedRetryReadInventory directory layout :=
   { report.catalog with
     inventory :=
@@ -111,11 +122,11 @@ def inventoryWithOwner (report : CapturedMarkedReadReports admission layout publ
         descriptor := admission.owner.description
         held := admission.opened.held } }
 
-def walReads (report : CapturedMarkedReadReports admission layout published) :
+def walReads {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker) :
     CachedRetryReadReports directory layout :=
   report.wal.toCachedReads report.inventoryWithOwner report.stat
 
-theorem sameObjects (report : CapturedMarkedReadReports admission layout published) :
+theorem sameObjects {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker) :
     report.bindings directory.path = some (admission.reached.inode admission.cached.description) ∧
     report.bindings (directory.file .lock) = some (admission.reached.inode admission.owner.description) ∧
     report.catalog.inventory.names.Perm (admission.view.names admission.root) ∧ report.listing.Custody := by
@@ -129,7 +140,7 @@ theorem sameObjects (report : CapturedMarkedReadReports admission layout publish
     rw [← report.catalog.names, listed, ← root]
     exact names
 
-theorem chunkReads (report : CapturedMarkedReadReports admission layout published) :
+theorem chunkReads {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker) :
     report.reads.ObservesSelected directory retry.image.directory.active.manifest published.durable := by
   intro bytes manifest visible decoded index within payload stored
   obtain ⟨_, bound, contents, ⟨call⟩⟩ := report.runs bytes manifest visible decoded index within payload stored

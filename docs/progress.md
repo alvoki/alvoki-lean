@@ -931,3 +931,10 @@ uses manifest selection, the canonical child and its bounded callback.
 The rename-backed metadata report projects to that same proof. This
 allows a two-slot preparation report to supply manifest evidence without
 also asserting a rename-format marker read.
+
+The captured read reports now support a marker that was acquired before
+checkpoint preparation. In that case they require manifest observations,
+and the same run, scan, seal and keeper reports used by rename-backed
+recovery. The preparation composition still needs to connect the
+reached checkpoint and post-keeper censuses to the two-slot marker's
+retained descriptor and repair effects.
