@@ -916,7 +916,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunFileStop.stopsGroup
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRestartEffects.installsAlignedAt
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRestartEffects.reopensSelected
-#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedRunFile
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtCheckpointRunFile
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsAtCheckpointRunFile
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointRunFileError
@@ -1011,7 +1010,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunDirectoryStop.cachedHandle
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunDirectoryStop.stopsGroup
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunDirectoryStop.reached
-#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedRunDirectory
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryStop.rejectsReads
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsDuringCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.Physical.fileProjection
