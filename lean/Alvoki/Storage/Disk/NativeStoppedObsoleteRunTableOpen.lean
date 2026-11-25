@@ -91,7 +91,7 @@ theorem NativeOpenedPosition.opensAfterStoppedObsoleteRunUnlink
     contents, getEq, setEq, compareEq, pins, sameFiles, sameCensus, sameCache⟩ :=
     raw.installsAligned survivorValid history target keeper descriptors offsets prepared next rfl reached
       remove write rename bootstrap assemble constructs effects ptrEq
-  have sameCutCensus := (congrArg Prod.fst raw.admission.reboot.previous).trans (congrArg Prod.fst stopped.files).symm
+  have sameCutCensus := raw.admission.reboot.previousCensus.trans (congrArg Prod.fst stopped.files).symm
   refine ⟨stopped.stopped, sameCutCensus, ?_, ?_, Prod.ext raw.admission.raw.entryCensus raw.admission.raw.entryFiles, ?_,
     next, cacheOpen, makeCache, handle, start, reopened, rfl, ?_, cacheAction, cacheSource, ran, currentEq, lock, references,
     cacheDirectory, contents, getEq, setEq, compareEq, pins, sameFiles, sameCensus, sameCache⟩

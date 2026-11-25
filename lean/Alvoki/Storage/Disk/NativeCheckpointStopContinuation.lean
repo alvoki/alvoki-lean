@@ -6,6 +6,58 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting WalSegmentRepair
 open WAL.Boundary (WalInodeImage)
 
+private theorem skipUnparsedWalName [Monad m] [LawfulMonad m] [MonadExceptOf IO.Error m]
+    (directory : DiskDirectory) (lstat : FilePath → m (Except IO.Error IO.FS.Metadata))
+    (earlier later : List String) {name : String} (unparsed : parseWalSegmentName name = none) :
+    readWalSegmentExtentsWith directory lstat (earlier ++ name :: later) =
+      readWalSegmentExtentsWith directory lstat (earlier ++ later) := by
+  have skipped : readWalSegmentExtentWith directory lstat name = pure none := by
+    simp [readWalSegmentExtentWith, unparsed]
+  let measure := readWalSegmentExtentWith directory lstat
+  have inventory : (earlier ++ name :: later).filterMapM measure = (earlier ++ later).filterMapM measure := by
+    induction earlier with
+    | nil => simp [measure, skipped]
+    | cons first rest ih => simp only [List.cons_append, List.filterMapM_cons, ih]
+  simp only [readWalSegmentExtentsWith, ← show measure = readWalSegmentExtentWith directory lstat from rfl, inventory]
+
+/-- The marked WAL selector ignores MANIFEST.next at any listing position.
+Both successful listing observations use the same reached heap. All
+selected extent and payload callbacks therefore see the same execution. -/
+theorem readSelectedWithCachedExtents_ignoresStagedManifest {heap : Type}
+    (directory : DiskDirectory) (watermark : Nat) (length : UInt64)
+    (list listWithScratch : FilePath → EStateM IO.Error heap (Array IO.FS.DirEntry))
+    (lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    (readSeal : FilePath → Nat → EStateM IO.Error heap ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray)
+    {before reached : heap} {entries entriesWithScratch : Array IO.FS.DirEntry}
+    (listed : list directory.path before = .ok entries reached)
+    (listedWithScratch : listWithScratch directory.path before = .ok entriesWithScratch reached)
+    (earlier later : List String)
+    (names : entries.toList.map (·.fileName) = earlier ++ later)
+    (namesWithScratch : entriesWithScratch.toList.map (·.fileName) = earlier ++ "MANIFEST.next" :: later)
+    (checked : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize) :
+    readSelectedWithCachedExtents directory watermark length listWithScratch lstat readSeal readKeeper before =
+      readSelectedWithCachedExtents directory watermark length list lstat readSeal readKeeper before := by
+  have inventory : readWalSegmentExtentsWith directory lstat (entriesWithScratch.toList.map (·.fileName)) =
+      readWalSegmentExtentsWith directory lstat (entries.toList.map (·.fileName)) := by
+    rw [namesWithScratch, names]
+    apply skipUnparsedWalName directory lstat earlier later
+    cases parsed : parseWalSegmentName "MANIFEST.next" with
+    | none => rfl
+    | some first =>
+      have collision : directory.file .stagedManifest = directory.file (.walSegment first) :=
+        (directory.walSegment_path_of_parsed parsed).symm
+      obtain ⟨_, impossible⟩ := DiskDirectory.walSegment_exclusive collision
+      cases impossible
+  simp [readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checked, listed, listedWithScratch, inventory, Pure.pure]
+
+/-- The reboot image used by marked recovery projects the selected files.
+The reached staging metadata can vary independently of that projection. -/
+theorem SegmentedWriterState.powerLossFiles_stagedMetadata (state : SegmentedWriterState)
+    (directory : DiskDirectory) (staged : DirectoryPublication.Entry → Option (ByteArray × Bool)) :
+    ({ state with files := { state.files with directory := { state.files.directory with staged } } }
+      : SegmentedWriterState).powerLossFiles directory = state.powerLossFiles directory := rfl
+
 variable {heap : Type} {opened : NativeOpenedHandle heap} {current : NativeOpenedPosition opened}
   {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
   {stage : CheckpointPublication.Step} {reason : FilePath} {reached : CheckpointWorld heap}
@@ -71,13 +123,12 @@ theorem NativeCheckpointSourceStop.manifestSyncPreservesSelected
   exact stable.frame (consume.trans frame.2)
 
 /-- The optional reboot starts at the source stop's exact heap. It chooses
-one joint survivor of the reached protected files. The normalized file
-image frames the old logical checkpoint and WAL. Physical run bindings
-can change outside that projection. -/
+one joint survivor of the reached protected files. The original census,
+selected names and bytes are observed on that heap and at the reboot.
+Other names, including a staged manifest, have their own crash choices. -/
 theorem NativeCheckpointSourceStop.observesReboot
     (stop : NativeCheckpointSourceStop current primitives fsync stage reason reached)
     (stable : NativeReadyStorage current.current.ready.state (storage reached.2))
-    (previous : view.files reached.2 = current.current.ready.state.files)
     (names : FilePath → Option Nat) (chosen : names ∈ (storage reached.2).crashNames)
     (contents : Nat → ByteArray)
     (durable : ∀ path,
@@ -97,6 +148,6 @@ theorem NativeCheckpointSourceStop.observesReboot
       (current.current.ready.state.cache, current.reached) = .error (stage, reason) reached ∧
     RawQuietRebootEntry crash view (fun atHeap => (storage atHeap).files.names) bytes reached.2 rebooted
       (view.descriptors reached.2) := by
-  exact ⟨stop.stoppedCall, ⟨Prod.ext rfl previous, fun _ _ => rfl, survivorNames, survivorBytes⟩⟩
+  exact ⟨stop.stoppedCall, ⟨rfl, fun _ _ => rfl, survivorNames, survivorBytes⟩⟩
 
 end Alvoki.Storage.DiskSession

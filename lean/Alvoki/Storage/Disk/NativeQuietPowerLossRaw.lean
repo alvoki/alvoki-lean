@@ -12,7 +12,7 @@ structure RawQuietRebootEntry {heap : Type} {state : NativeReadyState}
     (crash : NativeReadyQuietCrash state) (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray)
     (before after : heap) (beforeCensus : DescriptorInventory := state.census) : Prop where
-  previous : (view.descriptors before, view.files before) = (beforeCensus, state.files)
+  previousCensus : view.descriptors before = beforeCensus
   liveNames : ∀ path, state.crashPath path → names before path = crash.live.names path
   survivorNames : ∀ path, state.crashPath path → names after path = crash.names path
   survivorBytes : ∀ path, checkpointSurvivorPath state.session.directory state.writer state.writer.target.pair.manifest path →
