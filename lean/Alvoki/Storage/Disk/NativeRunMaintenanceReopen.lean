@@ -103,7 +103,7 @@ private theorem NativeCloseAlignedReads.replayTable
   have checkpoint := loadedSelected.uniqueResult selected
   exact ⟨session, (opening.finish.census, final), reopened, returned, phase, checkpoint ▸ replayed⟩
 
-private theorem preservesRunAtFlush {before checkpoint : PackedTable} {index : Nat} {run : Compaction.CheckedRun}
+theorem RunMaintenance.preservesRunAtFlush {before checkpoint : PackedTable} {index : Nat} {run : Compaction.CheckedRun}
     (flushed : (flushForCheckpoint before id : Except String PackedTable) = .ok checkpoint)
     (selected : before.runs[index]? = some run) :
     checkpoint.runs[index]? = some run := by
@@ -159,6 +159,34 @@ theorem outputAt (request : RunMaintenance) {before after : PackedTable}
 end RunMaintenance
 
 variable {history : List WAL.Write} {log : List DatabaseSubmissions}
+
+/-- A successful checkpoint continues the bounded read ledger at its
+exact returned ready state. -/
+def NativeReadPosition.afterCheckpoint (current : NativeReadPosition history log)
+    (checkpoint : NativeReadyCheckpoint state reports) {writer : SegmentedWriterState}
+    (completed : checkpoint.Completed writer) (sameHistory : writer.history = history) : NativeReadPosition history log :=
+  let next := checkpoint.next writer
+  ⟨.ok next.session (next.census, next.files), next, next, current.reads,
+    .installed rfl completed.valid sameHistory current.readPrefix.refines.2.2 current.readPrefix.readsBounded⟩
+
+/-- When the checkpoint covers the whole WAL, the exact ready table
+returned by the reported close and aligned open is its restored base. -/
+theorem NativeCloseReopenStep.loadsCompleteCheckpoint {current next : NativeReadPosition history log} {input : FilePath}
+    {close : NativeCloseReopenObservation current.state input} (reopened : NativeCloseReopenStep current close next)
+    {base : PackedTable} {generation : UInt64}
+    (checkpointBase : current.state.writer.checkpoint = some (base, generation))
+    (baseClock : base.committed.toNat = current.state.writer.history.length) :
+    next.state.writer.installed.table = base := by
+  obtain ⟨plan, selected, opened, actual, _, _, _, _, _, _, _⟩ := reopened.exactOpen
+  have prior := current.readPrefix.refines.1.retained
+  obtain ⟨session, _, _, ran, phase, replayed⟩ := opened.replayTable plan prior
+  have sameSession := (EStateM.Result.ok.inj (ran.symm.trans actual)).1
+  have loaded := Phase.ready.inj (next.readPrefix.refines.1.phase.symm.trans (sameSession ▸ phase))
+  have noWalReplay : recoverSelected base (WAL.encode current.state.writer.history) = .ok base := by
+    simpa only [List.append_nil, replay, List.foldlM_nil, Pure.pure, Except.pure] using
+      recoverSelected_encoded base current.state.writer.history [] (by simpa using prior.resumed.ordered) baseClock.symm
+  rw [checkpointBase] at replayed
+  exact (congrArg Installed.table loaded).trans (Except.ok.inj (replayed.symm.trans noWalReplay))
 
 /-- The rewrite, checkpoint return and reopen are reports from consecutive
 reached states. The selected run in the returned table comes from the
@@ -233,19 +261,16 @@ theorem NativeReadPosition.rewritesRunCheckpointAndReopens
   have reached := rewrite.reached
   rw [updated] at reached
   obtain ⟨rfl, rewrittenState⟩ := reached
-  obtain ⟨priorValid, historyEq, pending⟩ := current.readPrefix.refines
+  obtain ⟨priorValid, historyEq, _⟩ := current.readPrefix.refines
   have rewriteValid := rewrittenState ▸ rewrittenPosition.readPrefix.refines.1
   obtain ⟨writer, completed, published⟩ := checkpoint.completesWithPublication rewriteValid
-  let checkpointed : NativeReadPosition history log :=
-    let state := checkpoint.next writer
-    ⟨.ok state.session (state.census, state.files), state, state, current.reads,
-      .installed rfl completed.valid (completed.sameHistory.trans historyEq) pending current.readPrefix.readsBounded⟩
+  let checkpointed := current.afterCheckpoint checkpoint completed (completed.sameHistory.trans historyEq)
   obtain ⟨close, closeOK, sameName⟩ := observe writer completed
   obtain ⟨next, reopened⟩ := checkpointed.closesAndReopens close
   obtain ⟨source, output, sourceAt, outputAt, ownHistory⟩ := request.outputAt updated
   have rewritePins := (request.update_spec updated).2.2
   have publishedAt : attempt.table.runs[index]? = some output :=
-    preservesRunAtFlush reports.preflight.preparedFacts.1 outputAt
+    RunMaintenance.preservesRunAtFlush reports.preflight.preparedFacts.1 outputAt
   obtain ⟨file, physical, released⟩ := binding.completes publishedAt
   obtain ⟨base, checkpointBase, data, baseClock⟩ := published.restored
   have reopenedValid := next.readPrefix.refines.1
@@ -257,17 +282,7 @@ theorem NativeReadPosition.rewritesRunCheckpointAndReopens
     rw [checkpointBase]
     rfl
   obtain ⟨plan, selected, opened, actual, returned, _, _, _, _, _, reads⟩ := reopened.exactOpen
-  obtain ⟨session, final, recovered, ran, phase, replayed⟩ := opened.replayTable plan completed.valid.retained
-  have sameSession := (EStateM.Result.ok.inj (ran.symm.trans actual)).1
-  have loaded := Phase.ready.inj (reopenedValid.phase.symm.trans (sameSession ▸ phase))
-  have noWalReplay : recoverSelected base (WAL.encode writer.history) = .ok base := by
-    have ordered : WAL.OrdinalsFrom 1 writer.history := completed.valid.retained.resumed.ordered
-    simpa only [List.append_nil, replay, List.foldlM_nil, Pure.pure, Except.pure] using
-      recoverSelected_encoded base writer.history [] (by simpa using ordered) baseClock.symm
-  change recoverSelected (writer.checkpoint.getD (.empty, 0)).1 (WAL.encode writer.history) = _ at replayed
-  rw [checkpointBase] at replayed
-  have exactTable : next.state.writer.installed.table = base :=
-    (congrArg Installed.table loaded).trans (Except.ok.inj (replayed.symm.trans noWalReplay))
+  have exactTable := reopened.loadsCompleteCheckpoint checkpointBase baseClock
   have loadedOutput : next.state.writer.installed.table.runs[index]? = some output := by
     rw [exactTable, data.runs]
     exact publishedAt
