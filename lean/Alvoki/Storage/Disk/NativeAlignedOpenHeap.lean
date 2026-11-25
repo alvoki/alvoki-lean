@@ -74,6 +74,9 @@ structure MarkedHeapInstallation
     .ok opened (view.descriptors reached, view.files reached)
   nativeReturned : report.opening.finish.run report.opening.chronology =
     .ok state.session (state.census, state.files)
+  cacheCaptured : state.cache = report.opening.admission.cache
+  ownerCaptured : state.owner = report.opening.admission.owner
+  directoryCaptured : state.directorySlot = report.opening.admission.cached
   installed : opened.installed = state.writer.installed
   cacheReferences : files.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef
   cacheDirectory : files.AtDirectory directory.path
@@ -110,6 +113,60 @@ structure MarkedHeapInstallation
       start.current.history = history ∧ start.current.submissions = log ∧
       start.current.ready.reads = recorded ∧ start.pins = []
 
+/-- Start the raw opened-table trace at the already reached position of
+the same marked return and admission. The raw heap has that position's
+cache, file image and census, and the common position carries its ledger. -/
+theorem MarkedHeapInstallation.startsAtReportedPosition
+    {report : MarkedOpenSuccessReports input directory history log recorded}
+    {view : OpenCloseHeapView heap FileImage} {init : OpenSyncCacheCallbacks heap} {entry : heap}
+    {seed : OpenSyncCacheAllocations report.opening.admission.opened view init entry}
+    {lock : IO.FS.Handle} {lockIdentity : IO.FS.Handle → Nat}
+    {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+    {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+    {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)} {reached : heap}
+    (installed : MarkedHeapInstallation report view init entry seed lock lockIdentity phaseIdentity tokenIdentity
+      allocatePhase allocateToken reached) (next : NativeReadPosition history log)
+    (sameReturn : report.opening.finish.run report.opening.chronology = next.opened)
+    (reported : next.opened = .ok next.state.session (next.state.census, next.state.files))
+    (nextCache : next.state.cache = report.opening.admission.cache)
+    (nextOwner : next.state.owner = report.opening.admission.owner)
+    (nextDirectorySlot : next.state.directorySlot = report.opening.admission.cached)
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (effects : OpenPhaseCellEffects view.phase get set)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
+    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
+      handle.table = installed.table ∧ handle.directory = directory ∧ handle.lock = lock ∧ handle.files = installed.files ∧
+      handle.phase = installed.allocation.phase ∧ handle.token = installed.allocation.token ∧ handle.contents = view.phase ∧
+      handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧
+      start.current = ⟨history, log, next⟩ ∧ start.reached = installed.allocation.afterToken ∧ start.pins = [] ∧
+      view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
+      view.cacheAt start.reached seed.directoryRef seed.activeRef seed.pendingRef = next.state.cache ∧
+      next.state.owner = installed.state.owner ∧ next.state.directorySlot = installed.state.directorySlot ∧
+      lockIdentity handle.lock = next.state.session.descriptor ∧
+      phaseIdentity handle.phase = next.state.session.phaseRef ∧ tokenIdentity handle.token = next.state.session.sessionRef := by
+  obtain ⟨sameSession, sameFiles⟩ := EStateM.Result.ok.inj (installed.nativeReturned.symm.trans (sameReturn.trans reported))
+  obtain ⟨handle, original, table, path, sameLock, files, phase, token, contents, getEq, setEq, compared, _,
+    originalState, _, _, _, _⟩ := installed.fromOpen get set effects ptrEq
+  have nextDirectory : next.state.session.directory = handle.directory := by
+    rw [← sameSession, ← originalState]
+    exact original.directory
+  have stored : handle.contents installed.allocation.afterToken handle.phase = some next.state.session.phase := by
+    rw [contents, phase, ← sameSession]
+    exact installed.phaseStored
+  let start := NativeOpenedPosition.fromOpen handle ⟨history, log, next⟩ installed.allocation.afterToken nextDirectory stored
+  refine ⟨handle, start, table, path, sameLock, files, phase, token, contents, getEq, setEq, compared, rfl, rfl, rfl,
+    installed.filesPreserved.trans (congrArg Prod.snd sameFiles),
+    installed.censusPreserved.trans (congrArg Prod.fst sameFiles),
+    installed.cachePreserved.trans (installed.cacheCaptured.trans nextCache.symm),
+    nextOwner.trans installed.ownerCaptured.symm, nextDirectorySlot.trans installed.directoryCaptured.symm, ?_, ?_, ?_⟩
+  · rw [sameLock, ← sameSession]
+    exact installed.lockRef
+  · rw [phase, ← sameSession]
+    exact installed.phaseRef
+  · rw [token, ← sameSession]
+    exact installed.tokenRef
+
 /-- Allocate the real phase and token after a marked repair whose returned
 checkpoint, WAL, file image, descriptor census and cache have been matched
 to the reached raw heap. Each allocation frames the existing cache. -/
@@ -139,7 +196,7 @@ theorem MarkedOpenSuccessReports.installsFromRepairedHeap
         CacheAllocationFrame view seed.directoryRef seed.activeRef seed.pendingRef allocation.afterPhase allocation.afterToken) :
     Nonempty (MarkedHeapInstallation report view init entry seed lock lockIdentity phaseIdentity tokenIdentity
       allocatePhase allocateToken reached) := by
-  obtain ⟨state, final, opened, returnedWorker, installed, returned, reachedState, path, cache, _, _, _, ready⟩ :=
+  obtain ⟨state, final, opened, returnedWorker, installed, returned, reachedState, path, cache, owner, cachedDirectory, _, ready⟩ :=
     report.recoversBeforeInstallation
   obtain ⟨exactOpened, exactWorker⟩ := worker
   rw [exactWorker] at returnedWorker
@@ -166,6 +223,9 @@ theorem MarkedOpenSuccessReports.installsFromRepairedHeap
     assemble := _
     recovered := exactWorker
     nativeReturned := returned.trans (congrArg (EStateM.Result.ok state.session) reachedState)
+    cacheCaptured := cache
+    ownerCaptured := owner
+    directoryCaptured := cachedDirectory
     installed := installed
     cacheReferences := usesCache
     cacheDirectory := atPath
