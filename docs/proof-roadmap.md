@@ -176,6 +176,8 @@ The same execution can reopen after a reported power loss following the final ch
 
 The ready execution now includes `compact` and `retainRunVersions` for the prescribed run index. The original native schedule determines rejection or the exact successor table. The commit sequence, pins, installed WAL replay, physical checkpoint and original session anchor remain available to the next instruction. A subsequent checkpoint therefore takes the rewritten table at its reached state. [Native run maintenance](../lean/Alvoki/Storage/Disk/NativeRunMaintenance.lean)
 
+References released by a finite rejected-open lineage now supply the exact starting inventory for a healthy chronological aligned reopen. Vacancy and the full owner map follow from the reported cleanup and last reference drops. The continuation reads the same selected checkpoint and WAL objects, preserves the old ledger and joins the ready execution with precisely the prescribed retry paths and final open path. The native execution can also continue from the exact run-collection barrier error state. The endpoint theorem includes a returned rotation barrier error and a call stopped at the issued checkpoint barrier, with their reached file images and allowed recovery choices. [Recovery after rejected opens](../lean/Alvoki/Storage/Disk/NativeRejectedOpenAlignedRecovery.lean) · [Native execution prefix](../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean)
+
 Extend the invariant to every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and

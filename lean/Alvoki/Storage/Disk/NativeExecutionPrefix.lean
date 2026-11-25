@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 import Alvoki.Storage.Disk.NativePendingRotation
+import Alvoki.Storage.Disk.NativePendingCheckpoint
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 
@@ -53,9 +54,12 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
       (owner : cut.slot = current.ready.state.owner)
   | checkpointError {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointDirectoryError (image := image) current.ready.state cut) (physical : reported.Physical)
+  | interruptedCheckpoint {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (stop : NativeCheckpointDirectoryStop (image := image) current.ready.state cut)
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause)
   | interruptedRotation (stop : NativeRotationDirectoryStop current.ready.state)
+  | rotationError (cause : IO.Error) (failure : NativeRotationDirectoryFailure current.ready.state (some cause))
 
 namespace NativeExecutionEnd
 
@@ -68,8 +72,10 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .interruptedClose _ _ => .close
   | .interruptedCloseAfterUncertainWrite pending _ _ => .writeThenClose pending.write.request
   | .checkpointError _ _ => .checkpoint
+  | .interruptedCheckpoint _ => .checkpoint
   | .collectionError _ _ _ => .collectCoveredWal
   | .interruptedRotation _ => .rotateWal
+  | .rotationError _ _ => .rotateWal
 
 def uncertainBatch : NativeExecutionEnd current → Option (List WAL.Write)
   | .uncertainWrite pending | .closeAfterUncertainWrite pending _ => some pending.write.failure.batch
@@ -127,12 +133,14 @@ def Reached : NativeExecutionEnd current → Prop
       ∀ pair ∈ (physical.files reported.after).directory.crashImages,
         pair.walBoundary = current.ready.state.writer.wal.directory.active.walBoundary ∧
         cut.PendingReplay (physical.runs reported.after) pair.manifest current.submissions current.ready.reads
+  | .interruptedCheckpoint stop => NativePendingCheckpoint current.ready stop
   | .collectionError reported cause _ =>
       reported.run = .error (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}")
         (.poisoned, ⟨(current.ready.state.cache, reported.pending.image), reported.pending.owners⟩) ∧
       ∀ sealed ∈ reported.pending.image.crashSealed,
         Nonempty (CoveredWalRetrySelection current.ready.state.writer { reported.pending.image.visible with sealed })
   | .interruptedRotation stop => NativePendingRotation current.ready stop
+  | .rotationError cause failure => NativeReturnedRotationError current.ready cause failure
 
 theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   cases ending with
@@ -165,11 +173,13 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
     obtain ⟨stopped, phase, files, inventory, _, _, bound, _⟩ := pending.stopsDuringClose cut owner clear
     exact ⟨stopped, phase, files, inventory, bound⟩
   | checkpointError reported physical => exact current.ready.readPrefix.checkpointDirectoryError reported physical
+  | interruptedCheckpoint stop => exact current.ready.stopsDuringCheckpoint stop
   | collectionError reported _ failed =>
     obtain ⟨returned, _, _, _, _, _, _, _, _, _, _, _, _, survivors, _⟩ :=
       current.ready.readPrefix.collectionBarrierFailed reported failed
     exact ⟨returned, survivors⟩
   | interruptedRotation stop => exact current.ready.stopsDuringRotation stop
+  | rotationError cause failure => exact current.ready.rotationReturnsError cause failure
 
 def ReadyReplay : NativeExecutionEnd current → Prop
   | .ready => InstalledClientReplay current.submissions current.ready.reads current.history
@@ -204,7 +214,8 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
   | interruptedCloseAfterUncertainWrite pending =>
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
-  | ready | close | rejectedOpensAfterClose | interruptedClose | checkpointError | collectionError | interruptedRotation =>
+  | ready | close | rejectedOpensAfterClose | interruptedClose | checkpointError | interruptedCheckpoint
+  | collectionError | interruptedRotation | rotationError =>
     refine ⟨current.history, .inl rfl, ?_, current.ready.readPrefix.readsBounded⟩
     all_goals simpa [submissions, uncertainBatch] using current.ready.readPrefix.refines.2.2
 
@@ -239,10 +250,15 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
   | checkpointError {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointDirectoryError (image := image) current.ready.state cut) (physical : reported.Physical) :
       NativeExecutionEndObservation current .checkpoint
+  | interruptedCheckpoint {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (stop : NativeCheckpointDirectoryStop (image := image) current.ready.state cut) :
+      NativeExecutionEndObservation current .checkpoint
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause) :
       NativeExecutionEndObservation current .collectCoveredWal
   | interruptedRotation (stop : NativeRotationDirectoryStop current.ready.state) :
+      NativeExecutionEndObservation current .rotateWal
+  | rotationError (cause : IO.Error) (failure : NativeRotationDirectoryFailure current.ready.state (some cause)) :
       NativeExecutionEndObservation current .rotateWal
 
 theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObservation current requested) :
@@ -270,13 +286,15 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
     change NativeExecutionEndInstruction.writeThenClose pending.write.request = .writeThenClose write.request
     rw [same]
   | checkpointError reported physical => exact ⟨.checkpointError reported physical, rfl, NativeExecutionEnd.reached _⟩
+  | interruptedCheckpoint stop => exact ⟨.interruptedCheckpoint stop, rfl, NativeExecutionEnd.reached _⟩
   | collectionError reported cause failed => exact ⟨.collectionError reported cause failed, rfl, NativeExecutionEnd.reached _⟩
   | interruptedRotation stop => exact ⟨.interruptedRotation stop, rfl, NativeExecutionEnd.reached _⟩
+  | rotationError cause failure => exact ⟨.rotationError cause failure, rfl, NativeExecutionEnd.reached _⟩
 
 /-- The exact empty bootstrap starts one native execution. Completed
 instructions retain their ordered replay. The final report retains
 the reached native state and permitted history, including when it
-stops at an issued unlock or WAL rotation barrier. -/
+stops at an issued unlock or directory barrier. -/
 theorem BootstrapKeeperMarkerHandoff.executesPrefixFromEmpty
     {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
     {calls : BootstrapOpenCalls (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory before}
