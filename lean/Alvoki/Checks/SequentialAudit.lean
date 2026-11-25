@@ -214,6 +214,7 @@ import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.ObsoleteRunInodeLifetime
 import Alvoki.Storage.Disk.NativeObsoleteRunBlockRelease
 import Alvoki.Storage.Disk.NativeObsoleteRunReleaseBudget
+import Alvoki.Storage.Disk.NativeRunPhysicalBudget
 import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.MixedTraceSnapshotReads
 import Alvoki.Storage.Disk.ClientReadTrace
@@ -1958,6 +1959,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunCollectionReports.releasesObsoleteBlocks
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunCollectionReports.accountsReleasedBlocks
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunCollectionReports.observesEligibleRuns
+#check_axioms Alvoki.Storage.DiskSession.BlockPoolObservation.balances
+#check_axioms Alvoki.Storage.DiskSession.CheckpointRunCollectionReports.boundsFinalFootprint
 #check_axioms Alvoki.Storage.WalSealedUnlinkReports.reachesBarrier
 #check_axioms Alvoki.Storage.WalSealedUnlinkImage.completeSealed_absent
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.reclaimsAtEffectiveBarrier

@@ -249,6 +249,7 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.ObsoleteRunInodeLifetime
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunBlockRelease
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunReleaseBudget
+lake env leanchecker Alvoki.Storage.Disk.NativeRunPhysicalBudget
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionRetry
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionLiveReopen
