@@ -333,6 +333,7 @@ import Alvoki.Storage.Disk.NativeRawManifestChunkError
 import Alvoki.Storage.Disk.NativeRawManifestOpenError
 import Alvoki.Storage.Disk.NativeRawManifestStatError
 import Alvoki.Storage.Disk.NativeRawSelectedMarkerStatError
+import Alvoki.Storage.Disk.NativeRawSelectedMarkerDecodeError
 import Alvoki.Storage.Disk.NativeRawMarkerChunkError
 import Alvoki.Storage.Disk.NativeRawFinalizedManifestError
 import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
@@ -2028,6 +2029,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.finalizedAttempt
 #check_axioms Alvoki.Storage.DiskSession.RawPresentManifestCheckpointPrefix.reachesMarker
 #check_axioms Alvoki.Storage.DiskSession.RawPresentManifestMarkerPrefix.reachesScan
+#check_axioms Alvoki.Storage.DiskSession.RawPresentManifestMarkerRead.reachesDecoder
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.stopsAfterPresentManifest
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.returnsAfterPresentManifest
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.finalizedPresentAttempt
@@ -2067,6 +2069,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerStatError.rejectsMarker
 #check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerStatError.stopsMarkedWorker
 #check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerStatError.finalizedAttempt
+#check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerDecodeError.readsRejectedBytes
+#check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerDecodeError.stopsMarkedWorker
+#check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerDecodeError.finalizedAttempt
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.missingManifest
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.releasesSelected
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.stopsMarkedWorker

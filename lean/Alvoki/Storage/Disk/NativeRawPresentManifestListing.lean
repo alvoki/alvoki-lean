@@ -122,8 +122,8 @@ variable {durable : CheckpointPublication.RunFiles} {checkpoint : Option (Packed
   {directoryCalls : MarkedDirectoryReadCalls heap stream} {slotOf : heap → stream → DescriptorSlot}
 
 /-- Read the selected marker from the heap reached by the accepted
-checkpoint. The reported effects end at the checked listing's entry. -/
-structure RawPresentManifestMarkerPrefix
+checkpoint. The reported effects end at the marker decoder's entry. -/
+structure RawPresentManifestMarkerRead
     (selected : RawPresentManifestCheckpointPrefix (admitted := admitted) seed fileCalls durable checkpoint) where
   flat : optionalMetadataWith (calls.lookup (directory.file .wal)) seed.afterPending = .ok none seed.afterPending
   sameLookup : fileCalls.stat = calls.lookup
@@ -132,31 +132,48 @@ structure RawPresentManifestMarkerPrefix
     .ok (some routeMetadata) seed.afterPending
   bytes : ByteArray
   bound : retry.image.directory.active.walBoundary = some bytes
-  through : UInt64
-  decoded : WAL.Boundary.decode bytes = .ok through
-  checked : through.toNat % WAL.frameSize = 0 ∧ (checkpoint.getD (.empty, 0)).1.committed.toNat ≤ through.toNat / WAL.frameSize
   marker : HeldMetadataFile selected.reads (directory.file .walBoundary) "WAL.commit" admission.view admission.root bytes
   stat : calls.lookup (directory.file .walBoundary) selected.beforeMarker =
     .ok ((selected.reads.stat (directory.file .walBoundary)).map Prod.fst) selected.beforeMarker
-  atScan : heap
+  afterMarker : heap
   drops : List LockReferenceDrop
   custody : TemporaryPrefixCustody marker.calls (view.descriptors selected.beforeMarker) drops
   read : RawTemporaryReadReport selected.reads seed fileCalls (directory.file .walBoundary) drops
     (fun file => readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (fileCalls.readChunk file)
-      WAL.Boundary.acquisitionLimit ByteArray.empty) bytes selected.beforeMarker atScan
+      WAL.Boundary.acquisitionLimit ByteArray.empty) bytes selected.beforeMarker afterMarker
 
-theorem RawPresentManifestMarkerPrefix.reachesScan (seen : RawPresentManifestMarkerPrefix selected) :
+theorem RawPresentManifestMarkerRead.reachesDecoder (seen : RawPresentManifestMarkerRead selected) :
     readIntegrityCheckpointSized directory (fileCalls.readOptional directory (directory.file .manifest))
       fileCalls.runSize fileCalls.runPrefix seed.afterPending = .ok checkpoint selected.beforeMarker ∧
-    fileCalls.readOptional directory (directory.file .walBoundary) selected.beforeMarker = .ok (some seen.bytes) seen.atScan ∧
-    MarkedReadCacheFrame seed seed.afterPending seen.atScan ∧
-    (view.descriptors seen.atScan).inode = admission.reached.inode := by
+    fileCalls.readOptional directory (directory.file .walBoundary) selected.beforeMarker = .ok (some seen.bytes) seen.afterMarker ∧
+    MarkedReadCacheFrame seed seed.afterPending seen.afterMarker ∧
+    (view.descriptors seen.afterMarker).inode = admission.reached.inode := by
   obtain ⟨loaded, frame, inode⟩ := selected.reachesMarker
   have stat := seen.stat
   rw [seen.marker.calls.stat] at stat
   exact ⟨loaded, fileCalls.readOptionalMarker directory (by simpa only [seen.sameLookup, Except.map] using stat) seen.marker.calls.regular
       seen.read.returns.1, frame.trans seen.read.returns.2,
     (congrArg DescriptorInventory.inode (seen.read.censusAfter seen.custody).1).trans inode⟩
+
+/-- The checked directory listing is reached after the acquired marker
+passes decoding and its extent checks against the accepted checkpoint. -/
+structure RawPresentManifestMarkerPrefix
+    (selected : RawPresentManifestCheckpointPrefix (admitted := admitted) seed fileCalls durable checkpoint)
+    extends RawPresentManifestMarkerRead selected where
+  through : UInt64
+  decoded : WAL.Boundary.decode bytes = .ok through
+  checked : through.toNat % WAL.frameSize = 0 ∧ (checkpoint.getD (.empty, 0)).1.committed.toNat ≤ through.toNat / WAL.frameSize
+
+abbrev RawPresentManifestMarkerPrefix.atScan (seen : RawPresentManifestMarkerPrefix selected) : heap :=
+  seen.afterMarker
+
+theorem RawPresentManifestMarkerPrefix.reachesScan (seen : RawPresentManifestMarkerPrefix selected) :
+    readIntegrityCheckpointSized directory (fileCalls.readOptional directory (directory.file .manifest))
+      fileCalls.runSize fileCalls.runPrefix seed.afterPending = .ok checkpoint selected.beforeMarker ∧
+    fileCalls.readOptional directory (directory.file .walBoundary) selected.beforeMarker = .ok (some seen.bytes) seen.atScan ∧
+    MarkedReadCacheFrame seed seed.afterPending seen.atScan ∧
+    (view.descriptors seen.atScan).inode = admission.reached.inode :=
+  seen.toRawPresentManifestMarkerRead.reachesDecoder
 
 variable {markerPrefix : RawPresentManifestMarkerPrefix selected}
 
