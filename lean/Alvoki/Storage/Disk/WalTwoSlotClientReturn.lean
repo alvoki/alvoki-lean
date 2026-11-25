@@ -1367,6 +1367,7 @@ theorem recoveredRetries_installedReads
       .ok extents scannedState)
     (selectedExtents : WalSegmentRepair.selectWalExtentsThrough extents base.committed.toNat
       (selected.frontier.toNat / frameSize) = some (required, newer))
+    (laterNames : newer = prepared.later.visible)
     {sealed : List (Nat × ByteArray)} {keeperMetadata : IO.FS.Metadata} {atKeeper : FileImage}
     (sealReads : WalSegmentRepair.CachedWalKeeperReached directory readSeal target.first
       keeperMetadata required scannedState atKeeper)
@@ -1401,9 +1402,8 @@ theorem recoveredRetries_installedReads
       match projectRepairDirectory prepared.directory (marker.visible markerHandle.inode) markerChoices with
       | .ok directory => .ok () { prepared with directory }
       | .error cause => .error (IO.userError cause) prepared)
-    (repaired : WalSegmentRepair.finishBoundedMarkedOpen directory
-      ⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩
-      keeperMetadata.byteSize.toNat removeFile write sync renameFile
+    (keeperExtent : keeperMetadata.byteSize.toNat = plan.keeperBytes.size)
+    (repaired : WalSegmentRepair.finishMarkedOpen directory plan removeFile write sync renameFile
       { prepared with directory := settleMarker prepared.directory selected } = .ok () after)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
     (sealedRead : ∀ file ∈ sealed, prepared.kept file.1 = some file.2)
@@ -1573,11 +1573,25 @@ theorem recoveredRetries_installedReads
   have barrier : stabilize prepared = .ok ()
       { prepared with directory := settleMarker prepared.directory selected } := by
     rw [stabilizeReport, projected]
+  have keeperPrefixBytes : plan.keeperBytes.extract 0 plan.keeperSize = target.trimmed := by
+    have size : plan.keeperSize = target.trimmed.size := by
+      rw [WalSegmentRepair.Plan.keeperSize, preparedPlan.through, preparedPlan.start, target.trimmedSize]
+    rw [full, size, ByteArray.extract_append_eq_left rfl]
+  have boundedPlan : (⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩ :
+      WalSegmentRepair.Plan) = { plan with keeperBytes := plan.keeperBytes.extract 0 plan.keeperSize } := by
+    rw [through, ← preparedPlan.through, ← preparedPlan.start, laterNames, ← preparedPlan.names, keeperPrefixBytes]
+  have boundedRepair : WalSegmentRepair.finishBoundedMarkedOpen directory
+      ⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩
+      keeperMetadata.byteSize.toNat removeFile write sync renameFile
+      { prepared with directory := settleMarker prepared.directory selected } = .ok () after := by
+    rw [boundedPlan, keeperExtent, WalSegmentRepair.finishBoundedMarkedOpen_eq_full
+      directory plan preparedPlan.valid removeFile write sync renameFile]
+    exact repaired
   obtain ⟨session, final, returned, installed, reached, owner, freshSession⟩ :=
     reopenWith_installsPrepared (unlock := unlock)
       (finish := fun bounded size =>
         WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
-      liveRefs fresh acquisition preparedRead barrier repaired
+      liveRefs fresh acquisition preparedRead barrier boundedRepair
   have physical bytes survives := retries.replayUnchanged authorizedRepair authorized base sealed
     sealedRead logicalMarker (Boundary.decode_encode selected.frontier) checked (bytes := bytes) survives
   have layoutPlan : layout.plan = plan := by
