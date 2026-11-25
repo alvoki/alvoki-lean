@@ -130,6 +130,19 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       {admission : OpenAdmissionReports input directory observed.slot}
       (endpoint : AdmittedCleanReopen closed observed admission after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after
+  | readyProcessExit {files : Type} {input : System.FilePath} {inventory : DescriptorInventory}
+      {cached : DescriptorSlot} {retry : LockedFileState FileImage}
+      {layout : CanonicalKeeperLayout retry.image before.history}
+      {observed : MarkedRetryChunkReports files directory layout before.published}
+      {admission : OpenAdmissionReports input directory observed.slot}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (exit : ReadyProcessExit inventory writer cached)
+      (attempts : BoundedReopenTrace directory (· = before.target)
+        (exit.reached directory ⟨before.files, before.owners⟩) retry)
+      (sameLock : observed.descriptors.inode observed.slot.description = inventory.inode exit.lock.description)
+      (distinct : observed.slot.description ≠ writer)
+      (installed : ReadyReopenInstallation observed admission after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after
   | checkpointManifestStageError {input : System.FilePath}
       {attempt : SegmentedCheckpointReport directory before}
       {report : ObservedManifestStageFailure attempt} {manifest runs}
@@ -264,6 +277,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | cleanReopenObserved _ _ endpoint ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨endpoint.writer.retained, retained, endpoint.writer.history.trans history, retention⟩
+  | readyProcessExit _ _ _ _ _ installed ih =>
+    obtain ⟨_, retained, history, retention⟩ := ih
+    exact ⟨installed.writer.retained, retained, installed.writer.history.trans history, retention⟩
   | checkpointManifestStageError _ endpoint ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨endpoint.retained, retained, endpoint.history.trans history, retention⟩
@@ -697,30 +713,9 @@ theorem SegmentedBatchDatabaseTrace.guardedAcquireReads
       DatabaseBatchRetention log last.history ∧
       log.flatMap DatabaseSubmissions.acknowledged <+ last.history ∧
       last.history <+ log.flatMap DatabaseSubmissions.submitted ∧
-      ∀ snapshot, last.installed.table.pins.floor ≤ snapshot → snapshot ≤ last.installed.table.committed →
-        ∃ (issued : Nat × SnapshotPin) (pinned : PackedTable) (after : SegmentedSession),
-          SegmentedSession.runAcquireAt snapshot session = .ok (some issued) after ∧
-          after.phase = .ready { last.installed with table := pinned } ∧
-          issued.1 = after.sessionRef ∧ issued.2.sequence = snapshot ∧ issued.2 ∈ pinned.pins.active ∧
-          ∀ sameSession : Bool, sameSession = decide (issued.1 = after.sessionRef) →
-            (∀ key, withLocalHandle (m := Except IO.Error) after.phase.installed (.ok sameSession) none
-                (fun state => pure (state.table.lookup issued.2.handle key)) =
-              .ok (some (reference.table.lookup key snapshot))) ∧
-            ∀ start stop, withLocalHandle (m := Except IO.Error) after.phase.installed (.ok sameSession) none
-                (fun state => pure (state.table.range issued.2.handle start stop)) =
-              .ok (some (reference.table.range start stop snapshot)) := by
+      GuardedAcquireReads last.installed session reference := by
   obtain ⟨reference, replayed, retained, acknowledged, submitted, reads⟩ := trace.keyValueRefinement bootstrap held
-  refine ⟨reference, replayed, retained, acknowledged, submitted, ?_⟩
-  intro snapshot floor committed
-  obtain ⟨pin, pinned, acquired, lookup, range⟩ := reads snapshot floor committed
-  let after := { session with phase := .ready { last.installed with table := pinned } }
-  have pinSpec := PackedTable.acquireAt_spec acquired
-  refine ⟨(session.sessionRef, pin), pinned, after, SegmentedSession.runAcquireAt_ready readyPhase acquired,
-    rfl, rfl, pinSpec.sequence, pinSpec.active, ?_⟩
-  intro sameSession compared
-  have localToken : sameSession = true := compared.trans (decide_eq_true rfl)
-  rw [localToken]
-  exact ⟨fun key => congrArg Except.ok (lookup key), fun start stop => congrArg Except.ok (range start stop)⟩
+  exact ⟨reference, replayed, retained, acknowledged, submitted, session.guardedAcquireReads readyPhase reads⟩
 
 /-- Reacquiring an earlier pin's sequence preserves its reads while the
 final writer still retains that sequence. -/

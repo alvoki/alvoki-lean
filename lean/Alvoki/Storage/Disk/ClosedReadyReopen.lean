@@ -36,17 +36,17 @@ private theorem exactKeeperAfterEffects {target : Target} {initial after : FileI
   | crash _ _ survives _ prior =>
     exact Publication.Image.settled_valid (prior.crashValid _ survives)
 
-/-- Every failure and modeled crash after close keeps the same marker and
+/-- Every failure and modeled crash from a settled ready file image keeps the same marker and
 retained seal bytes. The selected-target condition of the retry trace is
 derived from the settled writer and each reached repair's reports. -/
-theorem SegmentedWriterState.RetainedReady.refinesClosedReopenPrefix {directory writer before retry}
+theorem SegmentedWriterState.RetainedReady.refinesReadyReopenPrefix {directory writer before retry} {owners : LockOwners}
     (ready : SegmentedWriterState.RetainedReady directory writer before)
     (reported : ReportedReopenPrefix directory before.wal.active.first
-      (SegmentedCleanReopenReport.released directory before) retry) :
-    BoundedReopenTrace directory (· = before.target) (SegmentedCleanReopenReport.released directory before) retry ∧
+      ⟨before.files, owners⟩ retry) :
+    BoundedReopenTrace directory (· = before.target) ⟨before.files, owners⟩ retry ∧
       retry.image.directory.active = before.target.pair ∧ retry.image.kept = before.files.kept ∧
       Nonempty (ClosedReadyReopenLayout before retry) ∧ retry.image.later.visible = [] := by
-  let released := SegmentedCleanReopenReport.released directory before
+  let released : LockedFileState FileImage := ⟨before.files, owners⟩
   obtain ⟨source⟩ := ready.cleanReopenLayout
   have selection {current} (prior : BoundedReopenTrace directory (· = before.target) released current) :
       ∃ selected : ClosedReadyReopenLayout before current,
@@ -80,6 +80,18 @@ theorem SegmentedWriterState.RetainedReady.refinesClosedReopenPrefix {directory 
       congrArg WalSegment.first selected.keeper, selected.prepared⟩
   obtain ⟨selected, pair, kept, empty⟩ := selection attempts
   exact ⟨attempts, pair, kept, ⟨selected⟩, empty⟩
+
+/-- Every failure and modeled crash after close keeps the same marker and
+retained seal bytes. The selected-target condition of the retry trace is
+derived from the settled writer and each reached repair's reports. -/
+theorem SegmentedWriterState.RetainedReady.refinesClosedReopenPrefix {directory writer before retry}
+    (ready : SegmentedWriterState.RetainedReady directory writer before)
+    (reported : ReportedReopenPrefix directory before.wal.active.first
+      (SegmentedCleanReopenReport.released directory before) retry) :
+    BoundedReopenTrace directory (· = before.target) (SegmentedCleanReopenReport.released directory before) retry ∧
+      retry.image.directory.active = before.target.pair ∧ retry.image.kept = before.files.kept ∧
+      Nonempty (ClosedReadyReopenLayout before retry) ∧ retry.image.later.visible = [] :=
+  ready.refinesReadyReopenPrefix reported
 
 /-- Close the current ready writer, then use any reported failed marked
 opens before the next healthy admission. Each attempt starts at the

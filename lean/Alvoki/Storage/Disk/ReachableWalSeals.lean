@@ -25,6 +25,9 @@ theorem SegmentedBatchDatabaseTrace.preservesPositiveSeals
   | cleanReopenObserved _ _ endpoint ih =>
     rw [endpoint.writer.wal]
     exact ih
+  | readyProcessExit _ _ _ _ _ installed ih =>
+    rw [installed.writer.wal]
+    exact ih
   | checkpointManifestStageError _ endpoint ih =>
     rw [endpoint.wal]
     exact ih

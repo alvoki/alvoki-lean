@@ -187,6 +187,42 @@ theorem SegmentedSession.runRelease_preservesReads {session : SegmentedSession} 
       Except.ok (installed.table.range pin.handle start stop)
     simp only [PackedTable.range, before, after, Option.map_some, PackedTable.rangeAt_eq, same.describe]
 
+
+/-- Every supported sequence can acquire a pin in the reached session.
+Its own token gives the point and ordered range results of the replay. -/
+def GuardedAcquireReads (installed : Installed) (session : SegmentedSession)
+    (reference : Sequential.SnapshotTable UInt64) : Prop :=
+  ∀ snapshot, installed.table.pins.floor ≤ snapshot → snapshot ≤ installed.table.committed →
+    ∃ (issued : Nat × SnapshotPin) (pinned : PackedTable) (after : SegmentedSession),
+      SegmentedSession.runAcquireAt snapshot session = .ok (some issued) after ∧
+      after.phase = .ready { installed with table := pinned } ∧
+      issued.1 = after.sessionRef ∧ issued.2.sequence = snapshot ∧ issued.2 ∈ pinned.pins.active ∧
+      ∀ sameSession : Bool, sameSession = decide (issued.1 = after.sessionRef) →
+        (∀ key, withLocalHandle (m := Except IO.Error) after.phase.installed (.ok sameSession) none
+            (fun state => pure (state.table.lookup issued.2.handle key)) =
+          .ok (some (reference.table.lookup key snapshot))) ∧
+        ∀ start stop, withLocalHandle (m := Except IO.Error) after.phase.installed (.ok sameSession) none
+            (fun state => pure (state.table.range issued.2.handle start stop)) =
+          .ok (some (reference.table.range start stop snapshot))
+
+theorem SegmentedSession.guardedAcquireReads {installed : Installed} {session : SegmentedSession}
+    {reference : Sequential.SnapshotTable UInt64} (phase : session.phase = .ready installed)
+    (read : ∀ snapshot, installed.table.pins.floor ≤ snapshot → snapshot ≤ installed.table.committed →
+      ∃ pin pinned, installed.table.acquireAt snapshot = some (pin, pinned) ∧
+        (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+        ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot)) :
+    GuardedAcquireReads installed session reference := by
+  intro snapshot floor committed
+  obtain ⟨pin, pinned, acquired, lookup, range⟩ := read snapshot floor committed
+  let after := { session with phase := .ready { installed with table := pinned } }
+  have pinSpec := PackedTable.acquireAt_spec acquired
+  refine ⟨(session.sessionRef, pin), pinned, after, SegmentedSession.runAcquireAt_ready phase acquired,
+    rfl, rfl, pinSpec.sequence, pinSpec.active, ?_⟩
+  intro sameSession compared
+  have localToken : sameSession = true := compared.trans (decide_eq_true rfl)
+  rw [localToken]
+  exact ⟨fun key => congrArg Except.ok (lookup key), fun start stop => congrArg Except.ok (range start stop)⟩
+
 end Alvoki.Storage.DiskSession
 
 namespace Alvoki.WAL.Boundary
