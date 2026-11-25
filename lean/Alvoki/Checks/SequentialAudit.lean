@@ -200,6 +200,7 @@ import Alvoki.Storage.Disk.DiskOpenAdmission
 import Alvoki.Storage.Disk.DiskBootstrapAdmission
 import Alvoki.Storage.Disk.ObservedBootstrapCache
 import Alvoki.Storage.Disk.BootstrapZeroKeeperCustody
+import Alvoki.Storage.Disk.BootstrapKeeperDirectoryError
 import Alvoki.Storage.Disk.BootstrapMarkerCustody
 import Alvoki.Storage.Disk.BootstrapKeeperMarkerHandoff
 import Alvoki.Storage.Disk.BootstrapMarkerSyncError
@@ -1489,6 +1490,17 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapReusedZeroKeeper.callbacks
 #check_axioms Alvoki.Storage.DiskSession.BootstrapReusedZeroKeeper.settledKeeper
 #check_axioms Alvoki.Storage.DiskSession.BootstrapReusedZeroKeeper.rotationHealthy
+#check_axioms Alvoki.Storage.DiskSession.BootstrapFreshZeroKeeperPrefix.filePrefix
+#check_axioms Alvoki.Storage.DiskSession.BootstrapReusedZeroKeeperPrefix.filePrefix
+#check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperFilePrefix.syncedCustody
+#check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperFilePrefix.projectDirectory
+#check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperFilePrefix.rotationError
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperDirectoryError.directoryBarrier
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperDirectoryError.keeper
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperDirectoryError.worker
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperDirectoryError.returns
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperDirectoryError.crashSelection
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperDirectoryError.retryMarkerless
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.reachesMarker
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.settledEmpty
 #check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.rotationHealthy
