@@ -211,6 +211,7 @@ import Alvoki.Storage.Disk.BootstrapKeeperDirectoryError
 import Alvoki.Storage.Disk.BootstrapKeeperFileError
 import Alvoki.Storage.Disk.BootstrapMarkerCustody
 import Alvoki.Storage.Disk.BootstrapKeeperMarkerHandoff
+import Alvoki.Storage.Disk.BootstrapExecution
 import Alvoki.Storage.Disk.BootstrapMarkerSyncError
 import Alvoki.Storage.Disk.BootstrapMarkerRenameError
 import Alvoki.Storage.Disk.BootstrapMarkerDirectoryError
@@ -1576,6 +1577,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.preservesKeeper
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.publishes
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.installs
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.startFromEmpty
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerStaging.staged
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerStaging.writeProjected
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerStaging.syncPending
