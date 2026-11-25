@@ -209,6 +209,7 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationStep
 lake env leanchecker Alvoki.Storage.Disk.ObservedRotationSchedule
 lake env leanchecker Alvoki.Storage.Disk.RotationCreateInterruption
+lake env leanchecker Alvoki.Storage.Disk.RotationCreatePhysical
 lake env leanchecker Alvoki.Storage.Disk.RotationReopenAdmission
 lake env leanchecker Alvoki.Storage.Disk.BootstrapAdmissionEffects
 lake env leanchecker Alvoki.Storage.Disk.FirstMarkedSession
