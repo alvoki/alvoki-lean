@@ -107,19 +107,24 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
       (selected : SelectedIntegrityCheckpoint before.published.durable
         retry.image.directory.active.manifest before.checkpoint)
       (observations : FirstAppendReopenObservations input directory inventory retry layout before.published vacant selected)
-      (session : SegmentedSession) (final : LockedFileState FileImage) (ready : Installed),
+      (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState),
       layout.target = before.target ∧
       observations.finish.run = .ok session (observations.finish.census, final) ∧
       final.image.directory.active = before.target.pair ∧
-      session.phase = .ready ready ∧
+      session.directory = directory ∧ session.descriptor = observations.admission.owner.description ∧
+      session.phase = .ready after.installed ∧
+      after.files = final.image ∧ after.owners = final.owners ∧ after.RetainedReady directory session.descriptor ∧
+      after.target = before.target ∧ after.history = before.history ∧ after.checkpoint = before.checkpoint ∧
+      after.installed.generation = before.installed.generation ∧ after.published.durable = before.published.durable ∧
+      after.wal.sealed = before.wal.sealed ∧
       observations.admission.owner ∈ observations.finish.census.slots ∧
       observations.admission.cached ∈ observations.finish.census.slots ∧
       observations.reads.reads.ObservesSelected directory retry.image.directory.active.manifest before.published.durable ∧
       CachedRetryInstalled (before := retry) observations.reads.walReads observations.admission.reached
         observations.admission.owner observations.reads.bindings before.published observations.callbacks.liveRefs
         (.ok session final) ∧
-      recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok ready.table ∧
-      InstalledClientReplay (log ++ [.uncertainBatch report.batch]) recorded before.history ready session := by
+      recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table ∧
+      InstalledClientReplay (log ++ [.uncertainBatch report.batch]) recorded before.history after.installed session := by
   dsimp only
   have beforeReady := (client.writes.preservesRetained (start.bootstrap.writerReady start.held).toRetained).1
   obtain ⟨_, _, attempts, pair, pending, layout, prepared⟩ :=
@@ -138,8 +143,26 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
   obtain ⟨actual, reached, ready, checkpoint, indexed, phase, loaded, recovered, refined⟩ :=
     CachedRetryInstalled.refinesPendingClient installed pending
   obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj indexed
+  obtain ⟨_, appendReady⟩ := CachedRetryInstalled.readyForAppend installed accepted beforeReady.resumed.ordered
+  have visible : before.wal.directory.active = layout.target.pair :=
+    beforeReady.walPair.trans (congrArg Target.pair prepared.target).symm
+  obtain ⟨nextSession, nextFinal, after, exactReturn, path, lock, nextPhase, files, owners,
+    wal, target, history, _, durable, nextReady⟩ :=
+    appendReady.writerRetained beforeReady.layout beforeReady.valid beforeReady.spans visible prepared.first
+      (prepared.kept.trans beforeReady.sealedFiles)
+  obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj exactReturn
+  have sameInstalled := Phase.ready.inj (phase.symm.trans nextPhase)
+  subst ready
+  have sameTarget := target.trans prepared.target
+  have restored := nextReady.resumed.selected
+  rw [sameTarget, durable] at restored
+  have sameCheckpoint := restored.uniqueResult beforeReady.resumed.selected
+  have generation : after.installed.generation = before.installed.generation := by
+    rw [nextReady.resumed.generation, sameCheckpoint, ← beforeReady.resumed.generation]
+  have sealed : after.wal.sealed = before.wal.sealed := by rw [wal]
   exact ⟨observed.stopsWriteRequest request rows stage sync rename, attempts, layout, selected, observations, session,
-    final, ready, prepared.target, returned, samePair.trans pair, phase, owner, cached, observations.reads.chunkReads, installed,
-    loaded.uniqueResult selected ▸ recovered, refined⟩
+    final, after, prepared.target, returned, samePair.trans pair, path, lock, nextPhase, files, owners,
+    lock.symm ▸ nextReady, sameTarget, history, sameCheckpoint, generation, durable, sealed,
+    owner, cached, observations.reads.chunkReads, installed, loaded.uniqueResult selected ▸ recovered, refined⟩
 
 end Alvoki.Storage.DiskSession
