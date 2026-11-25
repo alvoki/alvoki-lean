@@ -396,7 +396,7 @@ theorem NativeOpenedPosition.opensAfterStoppedMarkerStageWrite
     opened.table.UsesOpenWriteSchedules state.session.directory opened.files opened.phase ∧
     NativePendingMarkerStageWrite current.current.ready stopped ∧
     (∃ poisoned, view.phase poisoned opened.phase = some .poisoned ∧
-      ∀ detach create flush sync replace, stopped.onOpenPhase opened detach create flush sync replace
+      ∀ flush sync replace, stopped.onOpenPhase opened flush sync replace
         (current.reached, state.cache, state.census, prepared.initial) =
           .error (prepared.stagedPath, prepared.marker) (poisoned, stopped.allocated.appendCache, stopped.reached)) ∧
     crash.usesNewMarker = false ∧ plan.layout.tail = crash.keeperTail ∧ seen.Returned current bootstrap assemble := by

@@ -16,7 +16,7 @@ def NativeMarkerPublicationStop.OnOpenedPhase (current : NativeOpenedPosition op
   | .stageWrite stopped =>
     NativePendingMarkerStageWrite current.current.ready stopped ∧
     ∃ poisoned, view.phase poisoned opened.phase = some .poisoned ∧
-      ∀ detach create flush sync rename, stopped.onOpenPhase opened detach create flush sync rename
+      ∀ flush sync rename, stopped.onOpenPhase opened flush sync rename
         (current.reached, state.cache, state.census, prepared.initial) =
           .error (prepared.stagedPath, prepared.marker) (poisoned, stopped.allocated.appendCache, stopped.reached)
   | .keeperSync stopped =>

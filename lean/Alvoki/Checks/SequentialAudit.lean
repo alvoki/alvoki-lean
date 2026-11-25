@@ -2497,6 +2497,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedStagedMarkerSync
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteStageAllocation.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.stopsStage
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.staleDetachReturns
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.stopsWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.fileChoices
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.batchCut

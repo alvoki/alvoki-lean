@@ -11,19 +11,18 @@ private abbrev StageWriteInterrupted := ExceptT IO.Error
 variable {heap : Type} {state : NativeReadyState} {prepared : NativeReadyWritePreparation state}
 
 noncomputable def NativeMarkerStageWriteStop.onOpenPhase (seen : NativeMarkerStageWriteStop prepared)
-    (opened : NativeOpenedHandle heap) (detach : FilePath → StageWriteInterrupted Unit)
-    (create : FilePath → StageWriteInterrupted CheckpointOpenHandle) (flush : CheckpointOpenHandle → StageWriteInterrupted Unit)
+    (opened : NativeOpenedHandle heap) (flush : CheckpointOpenHandle → StageWriteInterrupted Unit)
     (sync : Array FilePath → StageWriteInterrupted Unit) (rename : FilePath → FilePath → StageWriteInterrupted Unit) :=
   seen.request.runWithInterruptionOnOpenPhase state.session.directory seen.allocated.activeGuard.lookup
     (fun installed bytes count => commitBytesAt state.session.directory installed.activeFirst bytes count
       (fun path payload => observeReturnedWriteCall seen.allocated.afterSelect (seen.allocated.append path payload))
-      (seen.stage detach create flush) sync rename)
+      (seen.stage flush) sync rename)
     opened.phase opened.get opened.set
 
 variable {opened : NativeOpenedHandle heap}
 
 /-- The opened write leaves its phase poisoned at the staged data
-write. The first successful exclusive create supplied this descriptor,
+write. The successful exclusive create supplied this descriptor,
 and the outer stop carries the full submitted marker bytes. -/
 theorem NativeOpenedPosition.stopsWriteAtMarkerStageWrite (current : NativeOpenedPosition opened)
     {prepared : NativeReadyWritePreparation current.current.ready.state} (seen : NativeMarkerStageWriteStop prepared) :
@@ -34,8 +33,8 @@ theorem NativeOpenedPosition.stopsWriteAtMarkerStageWrite (current : NativeOpene
       opened.get opened.phase current.reached = .ok state.session.phase current.reached ∧
       opened.set opened.phase .poisoned current.reached = .ok () poisoned ∧
       opened.contents poisoned opened.phase = some .poisoned ∧
-      ∀ detach create flush sync rename,
-        seen.onOpenPhase opened detach create flush sync rename (current.reached, state.cache, state.census, prepared.initial) =
+      ∀ flush sync rename,
+        seen.onOpenPhase opened flush sync rename (current.reached, state.cache, state.census, prepared.initial) =
           .error (prepared.stagedPath, prepared.marker) (poisoned, seen.allocated.appendCache, seen.reached) := by
   intro state
   have valid := current.current.ready.readPrefix.refines.1
@@ -51,10 +50,10 @@ theorem NativeOpenedPosition.stopsWriteAtMarkerStageWrite (current : NativeOpene
       guard.extent, regular, Except.bind, Bind.bind, Except.pure, Pure.pure]
   refine ⟨current.uses.writeSchedules, current.current.ready.stopsAtMarkerStageWrite seen,
     poisoned, loaded, excluded, poison, ?_⟩
-  intro detach create flush sync rename
+  intro flush sync rename
   unfold NativeMarkerStageWriteStop.onOpenPhase
   apply seen.request.stopsPublicationOnOpenPhase state.session.directory seen.rows prepared.nonempty prepared.prepared
     prepared.fits checked _ (valid.phase ▸ loaded) excluded
-  exact seen.stopsPublication detach create flush sync rename
+  exact seen.stopsPublication flush sync rename
 
 end Alvoki.Storage.DiskSession
