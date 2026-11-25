@@ -15,6 +15,10 @@ inductive DirectoryCacheFailureCensus (directory : DiskDirectory) (bindings : Fi
       (bound : bindings directory.path = some (initial.inode raw.description)) :
       DirectoryCacheFailureCensus directory bindings initial (initial.insert raw free)
 
+theorem DirectoryCacheFailureCensus.inodes {directory bindings initial reached}
+    (census : DirectoryCacheFailureCensus directory bindings initial reached) : reached.inode = initial.inode := by
+  cases census <;> rfl
+
 /-- An allocated directory slot belongs to a fresh description. Neither
 raw error changes the references of the acquired lock description. -/
 theorem DirectoryCacheFailureCensus.lockReferences {directory bindings initial reached} {owner : DescriptorSlot}
@@ -74,6 +78,19 @@ def CachedOpenPrefixFailure.projectFiles {census image files : Type} {directory 
   reached := failure.reached.2
   failed := by rw [show failure.prepare (initial, before.image) = .error failure.cause failure.reached from failure.failed]
 
+/-- The accepted descriptor drives the same lock, cache and recovery
+suffix whether admission records its raw allocation or projects it away. -/
+def runAdmittedCachedOpenAt {files image : Type} (directory : DiskDirectory) (slot : DescriptorSlot)
+    (flock : DescriptorSlot → Except IO.Error Bool) (nextRef : Nat) (unlock : UnlockReport)
+    (openFiles : DiskDirectory → DescriptorSlot → EStateM IO.Error image files)
+    (lookup : FilePath → EStateM IO.Error image (Except IO.Error IO.FS.Metadata))
+    (marked bootstrap : DiskDirectory → files → EStateM IO.Error image Reopened) :
+    EStateM IO.Error (LockedFileState image) SegmentedSession :=
+  runOpenWithInstallation directory slot.description nextRef (flock slot) unlock (do
+    let cache ← openFiles directory slot
+    recoverSegmentedWalWith (rejectFlatWalWith directory (optionalMetadataWith (lookup (directory.file .wal))))
+      (optionalMetadataWith (lookup (directory.file .walBoundary))) (marked directory cache) (bootstrap directory cache))
+
 /-- Interpret the admitted cached opener on observed callbacks. The lock
 returned by admission guards initialization and the two route probes. -/
 def runAdmittedCachedOpen {files image : Type} {input : FilePath} {directory : DiskDirectory} {owner : DescriptorSlot}
@@ -85,10 +102,7 @@ def runAdmittedCachedOpen {files image : Type} {input : FilePath} {directory : D
     EStateM.Result IO.Error (LockedFileState image) SegmentedSession :=
   DiskTable.withOpenAdmission input (fun path => liftExcept (admission.realPath path))
     (fun path => pure (admission.lookup path)) (fun path => liftExcept (admission.openAppend path))
-    (fun resolved slot => runOpenWithInstallation resolved slot.description nextRef (flock slot) unlock (do
-      let cache ← openFiles resolved slot
-      recoverSegmentedWalWith (rejectFlatWalWith resolved (optionalMetadataWith (lookup (resolved.file .wal))))
-        (optionalMetadataWith (lookup (resolved.file .walBoundary))) (marked resolved cache) (bootstrap resolved cache)))
+    (fun resolved slot => runAdmittedCachedOpenAt resolved slot flock nextRef unlock openFiles lookup marked bootstrap)
     before
 
 namespace DirectoryCacheOpenErrorReports
@@ -152,7 +166,9 @@ theorem continuesAfterError {input : FilePath} {source : LockedFileState FileIma
   intro failed
   refine ⟨?_, .cachedPrefixFailed prior failed rfl, rfl, rfl, observed.census.lockReferences observed.lockLive, ?_⟩
   · unfold runWithAdmission runAdmittedCachedOpen
-    rw [admission.admits, observed.acquired]
+    rw [admission.admits]
+    unfold runAdmittedCachedOpenAt
+    rw [observed.acquired]
     exact observed.nativeFailure.run_error _
   · exact failed.cleanupOutcome
 

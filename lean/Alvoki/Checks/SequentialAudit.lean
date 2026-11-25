@@ -235,6 +235,7 @@ import Alvoki.Storage.Disk.NativeOpenReferences
 import Alvoki.Storage.Disk.NativeOpenAcquire
 import Alvoki.Storage.Disk.NativeOpenPinRead
 import Alvoki.Storage.Disk.NativeOpenEarlyError
+import Alvoki.Storage.Disk.NativeCacheOpenRejection
 import Alvoki.Storage.Disk.NativeContendedOpen
 import Alvoki.Storage.Disk.NativeManifestDecodeError
 import Alvoki.Storage.Disk.NativeOpenListingError
@@ -1586,6 +1587,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorUnlock.admitsAfterFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.stopsBeforeRecovery
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.disposes
+#check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.censusInodes
 #check_axioms Alvoki.Storage.DiskSession.NativeContendedOpen.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeContendedOpen.keepsAuthority
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.refusesContendedOpen

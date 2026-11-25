@@ -35,6 +35,8 @@ private theorem NativeRejectedOpenLineage.framesOwners
   | start vacant => exact ⟨vacant, fun _ _ => rfl⟩
   | attempted _ _ _ _ disposed prior =>
     exact ⟨prior.1, fun _ other => (disposed.keepsOtherLock other).trans (prior.2 _ other)⟩
+  | cacheInitializationFailed _ _ attempt _ drops prior =>
+    exact ⟨prior.1, fun path other => ((attempt.disposes drops).2.2 path other).trans (prior.2 path other)⟩
 
 /-- When the final reported disposition allows another attempt, both
 the original release and the latest state leave the same lock vacant.

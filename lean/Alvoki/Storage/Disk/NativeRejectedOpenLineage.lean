@@ -3,6 +3,8 @@ import Alvoki.Storage.Disk.NativeManifestDecodeError
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeReadyClose
 
+import Alvoki.Storage.Disk.NativeCacheOpenRejection
+
 namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
@@ -235,6 +237,13 @@ inductive NativeRejectedOpenLineage (directory : DiskDirectory) (lock root : Nat
       NativeRejectedOpenLineage directory lock root first (inputs ++ [input]) (errors ++ [attempt.diagnostic])
         after (attempt.route.cleanup.canRetry after.1)
 
+  | cacheInitializationFailed {inputs errors before}
+      (prior : NativeRejectedOpenLineage directory lock root first inputs errors before true)
+      (input : FilePath) (attempt : NativeCacheOpenRejection input directory before)
+      (objects : attempt.sameObjects lock root) (drops : List LockReferenceDrop) :
+      NativeRejectedOpenLineage directory lock root first (inputs ++ [input])
+        (errors ++ [attempt.failure.projectedFailure.error]) (attempt.afterDrops drops) (attempt.availableAfter drops)
+
 /-- Keep the direct marker-route entry for callers with that specific report. -/
 theorem NativeRejectedOpenLineage.rejected
     (prior : NativeRejectedOpenLineage directory lock root first inputs errors before true) (input : FilePath)
@@ -254,6 +263,11 @@ theorem NativeRejectedOpenLineage.preserves
     obtain ⟨inodes, image⟩ := disposal.preserves
     exact ⟨inodes.trans (attempt.route.censusInodes.trans prior.1),
       image.trans prior.2.1, by simp [prior.2.2.1], disposal.canRetry_iff⟩
+
+  | cacheInitializationFailed _ _ attempt _ drops prior =>
+    have disposed := attempt.disposes drops
+    exact ⟨(attempt.censusInodes drops).trans prior.1, disposed.1.trans prior.2.1,
+      by simp [prior.2.2.1], disposed.2.1⟩
 
 theorem NativeReadPosition.startsRejectedOpenLineage (current : NativeReadPosition history log)
     (close : NativeReadyClose current.state) (success : close.report.result = .ok ()) :
