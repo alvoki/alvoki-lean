@@ -892,4 +892,6 @@ The same finite execution proof now starts from either the exact empty bootstrap
 
 A competing native open can now be recorded while the current writer still holds its lock. The no-follow check and append-open identify the same canonical LOCK object through separate path lookups. The contender receives the exact lock error using its own temporary description. Its reported slot drop restores the original census. The current writer keeps the same lock, selected files and key-value replay. [Contended native open](../lean/Alvoki/Storage/Disk/NativeContendedOpen.lean)
 
+The interrupted final covered-WAL directory sync now continues through a reported reboot in the common execution. The aligned opener uses the reported surviving seal bindings and exact original checkpoint and keeper bytes. When the directory sync took effect, no planned seal survives by its canonical name. The completed recovery preserves the same acknowledged writes and prior read ledger. [Covered WAL barrier and exact reopen](../lean/Alvoki/Storage/Disk/NativeCoveredWalDirectoryReopen.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
