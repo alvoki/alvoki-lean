@@ -1020,6 +1020,11 @@ the exact reached cache. The sync result identifies the descriptor
 whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
+Reported marker retry traces can be joined at the same reached file
+image. This allows the writer's crash observation and a subsequent
+reopen trace to be checked separately and then passed as one trace
+to client recovery.
+
 A machine stop during reopen marker sync now extends the same reported
 retry trace as a returned error. The reopen schedule skips keeper
 repair at the stop. The reported barrier effect and the surviving

@@ -1384,6 +1384,18 @@ inductive ReportedMarkerRetries (initial : FileImage) : FileImage → Prop where
       (payload : bytes ∈ before.keeper.crashImages) (later : names ∈ before.later.crashImages) :
       ReportedMarkerRetries initial (before.crash pair bytes names)
 
+/-- Prepend an observed crash or failed open to a later retry trace. -/
+theorem ReportedMarkerRetries.trans {initial middle final : FileImage}
+    (earlier : ReportedMarkerRetries initial middle)
+    (suffix : ReportedMarkerRetries middle final) : ReportedMarkerRetries initial final := by
+  induction suffix with
+  | start => exact earlier
+  | markerSync _ report project source selection observed persisted ih =>
+    exact .markerSync ih report project source selection observed persisted
+  | markerInterrupted _ selection observed effect ih =>
+    exact .markerInterrupted ih selection observed effect
+  | powerLoss _ metadata keeper later ih => exact .powerLoss ih metadata keeper later
+
 theorem ReportedMarkerRetries.refines {initial after : FileImage}
     (reported : ReportedMarkerRetries initial after) : UnsettledRetries initial after := by
   induction reported with
