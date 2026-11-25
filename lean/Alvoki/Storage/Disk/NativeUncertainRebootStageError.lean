@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeMarkedLongStageCreateError
+import Alvoki.Storage.Disk.NativeMarkedBarrierRetryReopen
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 
 namespace Alvoki.Storage.DiskSession
@@ -144,9 +145,12 @@ theorem NativePendingWrite.rejectsOldMarkerStageAfterPowerLoss
       report.reads.bindings (before.state.session.directory.file .lock) = some (before.state.census.inode before.state.owner.description) ∧
       report.ReadsCheckpoint ∧ report.ReadsWal ∧
       PendingClientReplay pending.submissions before.reads history ∧
-      ∀ read ∈ before.reads, read.BoundedBy history.length := by
+      (∀ read ∈ before.reads, read.BoundedBy history.length) ∧
+      ∃ seed : NativeMarkedBarrierSeed (crash.reboot, crash.retry) before.state.writer.history
+          before.state.writer.published before.state.writer.checkpoint, seed.layout = layout := by
   obtain ⟨valid, earlierHistory, earlierReplay⟩ := before.readPrefix.refines
-  obtain ⟨_, _, manifest, chosen, allowed, _, _, _, layout, _, descriptors, offsets, prepared, accepted, ordered⟩ :=
+  obtain ⟨_, kept, manifest, chosen, allowed, _, walLayout, walValid, layout, first, descriptors, offsets,
+    prepared, accepted, ordered⟩ :=
     pending.write.failure.refinesReopenPrefixWithWal valid.retained crash.reported
   have old := selectedOldHistory valid.retained manifest oldMarker layout allowed
   subst chosen
@@ -166,6 +170,8 @@ theorem NativePendingWrite.rejectsOldMarkerStageAfterPowerLoss
   have replay := earlierReplay.appendUncertain (batch := pending.write.failure.batch) before.readPrefix.readsBounded
     (.inl rfl) (earlierHistory ▸ ordered)
   exact ⟨layout, report, fun bootstrap install => (returns bootstrap install).1,
-    files, checkpoint, ownerLive, directoryLive, release, directory, lock, report.readsCheckpoint, report.readsWal, replay⟩
+    files, checkpoint, ownerLive, directoryLive, release, directory, lock, report.readsCheckpoint, report.readsWal,
+    replay.1, replay.2, ⟨layout, prepared, selected, accepted, following, ordered, _, walLayout, walValid,
+      valid.retained.spans, prepared.pair, first, kept⟩, rfl⟩
 
 end Alvoki.Storage.DiskSession

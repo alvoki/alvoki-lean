@@ -483,6 +483,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeMarkedFirstUnlinkError
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedUnlinkRetryReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedLongStageCreateError
 lake env leanchecker Alvoki.Storage.Disk.NativeUncertainRebootStageError
+lake env leanchecker Alvoki.Storage.Disk.NativeUncertainStageRetry
 lake env leanchecker Alvoki.Storage.Disk.NativeRejectedOpenWork
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedListingWork
 lake env leanchecker Alvoki.Storage.Disk.MaintainedRecoveryWork
