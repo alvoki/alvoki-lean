@@ -215,6 +215,7 @@ lake env leanchecker Alvoki.Storage.Disk.ObservedRotationSchedule
 lake env leanchecker Alvoki.Storage.Disk.RotationCreateInterruption
 lake env leanchecker Alvoki.Storage.Disk.RotationCreatePhysical
 lake env leanchecker Alvoki.Storage.Disk.RotationSuccessorFsyncStop
+lake env leanchecker Alvoki.Storage.Disk.RotationDirectoryFsyncStop
 lake env leanchecker Alvoki.Storage.Disk.RotationReopenAdmission
 lake env leanchecker Alvoki.Storage.Disk.BootstrapAdmissionEffects
 lake env leanchecker Alvoki.Storage.Disk.FirstMarkedSession
