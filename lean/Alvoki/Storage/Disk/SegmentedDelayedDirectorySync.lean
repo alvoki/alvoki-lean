@@ -85,7 +85,7 @@ theorem DelayedDirectorySync.continuesLineage {directory : DiskDirectory} (repor
     (admitted : admits target) (prepared : Prepared before.image target plan) :
     ReopenLineage source admits (report.after before).image := by
   have settled : ReopenLineage source admits before.image.syncDirectory :=
-    prior.afterFailure unique (.inr ⟨target, plan, admitted, prepared, .authorized⟩)
+    prior.afterRepairEffects unique (.inr ⟨target, plan, admitted, prepared, .authorized⟩)
   cases observed : report.outcome with
   | completed => simpa only [after, run, observed] using settled
   | errorBeforeEffect _ => simpa only [after, run, observed] using prior
