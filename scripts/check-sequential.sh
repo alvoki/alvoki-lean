@@ -303,6 +303,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeGroupedKeeperSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerDirectory
 lake env leanchecker Alvoki.Storage.Disk.NativeWriteCrashReads
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
+lake env leanchecker Alvoki.Storage.Disk.NativeStoppedMarkerRenameTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerStageWrite

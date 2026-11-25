@@ -243,55 +243,116 @@ structure NativeMarkerPublicationCrashContinuation {history log} (current : Nati
   replay : InstalledClientReplay (log ++ [.uncertainBatch prepared.batch]) current.reads
     (history ++ retained) next.state.writer.installed next.state.session
 
-theorem NativeReadPosition.recoversInterruptedMarker (current : NativeReadPosition history log)
-    {prepared : NativeReadyWritePreparation current.state} {stop : NativeMarkerPublicationStop prepared}
-    (crash : NativeMarkerPublicationCrash stop) {input : FilePath}
-    (observe : ∀ chosen, ∀ layout : CanonicalKeeperLayout crash.retry.image chosen,
-      (chosen = current.state.writer.history ∨ chosen = current.state.writer.history ++ prepared.batch) →
-      Prepared crash.retry.image layout.target layout.plan →
-      ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
-        crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
-      Nonempty (NativeMarkerPublicationCrashReads crash input layout selected)) :
-    ∃ retained next, NativeMarkerPublicationCrashContinuation current crash input retained next := by
-  obtain ⟨valid, earlierHistory, replay⟩ := current.readPrefix.refines
+namespace NativeMarkerPublicationCrash
+
+variable {state : NativeReadyState} {prepared : NativeReadyWritePreparation state}
+  {stop : NativeMarkerPublicationStop prepared}
+
+def wal (crash : NativeMarkerPublicationCrash stop) (history : List WAL.Write) : WalSegmentImage :=
+  state.writer.wal.appendSelectedView crash.retry.image.directory.active history
+
+/-- One plan for the checkpoint and WAL bytes selected by the reported
+survivor. Its history is fixed by the surviving marker. -/
+structure Plan (crash : NativeMarkerPublicationCrash stop) where
+  history : List WAL.Write
+  allowed : history = state.writer.history ∨ history = state.writer.history ++ prepared.batch
+  marker : crash.retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64)
+  layout : CanonicalKeeperLayout crash.retry.image history
+  walLayout : (crash.wal history).ReadLayout history
+  walValid : (crash.wal history).Valid history
+  first : layout.target.first = (crash.wal history).active.first
+  sameKeeper : layout.keeper = (crash.wal history).active
+  descriptors : layout.sealed ++ [layout.keeper] = (crash.wal history).readDescriptors layout.range.watermark
+  offsets : selectWalSegmentReads ((crash.wal history).segments.map WalSegment.first) layout.range.watermark =
+    some (layout.first, ((crash.wal history).readDescriptors layout.range.watermark).map WalSegment.first)
+  repair : Prepared crash.retry.image layout.target layout.plan
+  kept : crash.retry.image.kept = ((crash.wal history).checkpointReopenFiles (crash.wal history).directory none).kept
+  selected : SelectedIntegrityCheckpoint state.writer.published.durable crash.retry.image.directory.active.manifest
+    state.writer.checkpoint
+  accepted : state.writer.published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+    crash.retry.image.directory.active.manifest
+  ordered : WAL.OrdinalsFrom 1 history
+  noLater : crash.retry.image.later.visible = []
+
+theorem plans (crash : NativeMarkerPublicationCrash stop) (valid : state.Valid) : Nonempty crash.Plan := by
   let ready := valid.retained
-  have oldRange : current.state.writer.wal.directory.active.walRange =
-      some ⟨current.state.writer.target.range.watermark, current.state.writer.history.length⟩ := by
+  have oldRange : state.writer.wal.directory.active.walRange =
+      some ⟨state.writer.target.range.watermark, state.writer.history.length⟩ := by
     rw [ready.walPair, ← ready.resumed.through]
-    exact current.state.writer.target.decoded
+    exact state.writer.target.decoded
   have checkpoint := (congrArg DirectoryPublication.Bindings.manifest ready.walPair).symm ▸ ready.resumed.accepted
   obtain ⟨_, refined, represented⟩ := ready.resumed.canonical
-  have count : current.state.writer.history.length = current.state.writer.installed.table.committed.toNat :=
+  have count : state.writer.history.length = state.writer.installed.table.committed.toNat :=
     represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
-  have fits : (WAL.encode (current.state.writer.history ++ prepared.batch)).size < UInt64.size :=
+  have fits : (WAL.encode (state.writer.history ++ prepared.batch)).size < UInt64.size :=
     (prepared.extended valid).1.symm ▸ (show prepared.count < UInt64.size from prepared.fits)
   have projected := stop.batchCut valid
   change BatchCutProjection stop.files
-    ((writeFilesAfter (runBatchEffects current.state.writer.history prepared.batch
-      (stop.cut.writeEffects prepared.tails (current.state.files.image.directory.staged .walBoundary))
-      (current.state.files.image.directory.staged .walBoundary))).reopenSegment
-      current.state.writer.wal.active.first current.state.writer.history current.state.files.image.directory.active.manifest)
+    ((writeFilesAfter (runBatchEffects state.writer.history prepared.batch
+      (stop.cut.writeEffects prepared.tails (state.files.image.directory.staged .walBoundary))
+      (state.files.image.directory.staged .walBoundary))).reopenSegment
+      state.writer.wal.active.first state.writer.history state.files.image.directory.active.manifest)
     at projected
-  have directoryFiles : current.state.files.image.directory = current.state.writer.wal.directory := ready.directoryFiles
+  have directoryFiles : state.files.image.directory = state.writer.wal.directory := ready.directoryFiles
   rw [directoryFiles] at projected
-  obtain ⟨kept, manifest, chosen, allowed, marker, walLayout, walValid, layout, _, first, _, descriptors, offsets,
-    repair, _, accepted, ordered, _⟩ :=
+  obtain ⟨kept, manifest, chosen, allowed, marker, walLayout, walValid, layout, _, first, sameKeeper, descriptors, offsets,
+    repair, noLater, accepted, ordered, _⟩ :=
     (crash.powerLoss valid).selectsAfterBatchCut ready.layout ready.valid oldRange ready.resumed.ordered
       count prepared.prepared fits checkpoint _ projected
   have manifest := manifest.trans (congrArg DirectoryPublication.Bindings.manifest ready.walPair)
-  let selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
-      crash.retry.image.directory.active.manifest current.state.writer.checkpoint :=
-    manifest.symm ▸ ready.resumed.selected
-  have allowedInWriter := allowed
-  obtain ⟨seen⟩ := observe chosen layout allowed repair selected
+  exact ⟨⟨chosen, allowed, marker, layout, walLayout, walValid, first, sameKeeper, descriptors, offsets, repair,
+    kept.trans (stop.kept.trans ready.sealedFiles), manifest.symm ▸ ready.resumed.selected, accepted, ordered, noLater⟩⟩
+
+/-- The same fully synced keeper is aligned for the new marker and
+has exactly the attempted batch's excess length for the old marker. -/
+theorem Plan.tailSize {crash : NativeMarkerPublicationCrash stop} (plan : crash.Plan) (valid : state.Valid) :
+    plan.layout.tail.size = if crash.usesNewMarker then 0 else (WAL.encode prepared.batch).size := by
+  have counted := congrArg ByteArray.size (Option.some.inj plan.layout.visible.symm)
+  change (plan.layout.keeper.bytes ++ plan.layout.tail).size =
+    (state.writer.wal.active.bytes ++ WAL.encode prepared.batch).size at counted
+  have starts : state.writer.wal.active.first ≤ state.writer.history.length := by
+    rw [← valid.retained.layout.activeEnd]
+    exact valid.retained.layout.forward _ (List.mem_append_right _ (by simp))
+  have selected := crash.selects valid plan.allowed plan.marker
+  have keeper : plan.layout.keeper.bytes = WAL.encode (plan.history.drop state.writer.wal.active.first) := by
+    rw [plan.sameKeeper]
+    rfl
+  rw [keeper.trans (congrArg (fun rows => WAL.encode (rows.drop state.writer.wal.active.first)) selected)] at counted
+  cases marker : crash.usesNewMarker with
+  | false =>
+    simp only [marker, Bool.false_eq_true, ite_false, List.append_nil, ← valid.retained.layout.activeBytes,
+      ByteArray.size_append] at counted ⊢
+    omega
+  | true =>
+    simp only [marker, ite_true, List.drop_append_of_le_length starts, WAL.encode_append,
+      ← valid.retained.layout.activeBytes, ByteArray.size_append] at counted ⊢
+    omega
+
+end NativeMarkerPublicationCrash
+
+/-- Reuse the same admitted selected reader in the normalized continuation
+and at the raw opened-table boundary. -/
+theorem NativeReadPosition.recoversInterruptedMarkerFrom (current : NativeReadPosition history log)
+    {prepared : NativeReadyWritePreparation current.state} {stop : NativeMarkerPublicationStop prepared}
+    (crash : NativeMarkerPublicationCrash stop) {input : FilePath} (plan : crash.Plan)
+    (seen : NativeMarkerPublicationCrashReads crash input plan.layout plan.selected) :
+    ∃ retained next, NativeMarkerPublicationCrashContinuation current crash input retained next ∧
+      plan.history = history ++ retained ∧ next.opened = seen.opening.finish.run seen.opening.chronology ∧
+      next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
+      next.state.cache = seen.opening.admission.cache ∧ next.state.owner = seen.opening.admission.owner ∧
+      next.state.directorySlot = seen.opening.admission.cached := by
+  obtain ⟨valid, earlierHistory, replay⟩ := current.readPrefix.refines
+  let ready := valid.retained
+  obtain ⟨chosen, allowedInWriter, marker, layout, walLayout, walValid, first, _, descriptors, offsets, repair, kept,
+    selected, accepted, ordered, _⟩ := plan
   have allowed : chosen = history ∨ chosen = history ++ prepared.batch :=
-    allowed.imp (·.trans earlierHistory) (·.trans (congrArg (· ++ prepared.batch) earlierHistory))
+    allowedInWriter.imp (·.trans earlierHistory) (·.trans (congrArg (· ++ prepared.batch) earlierHistory))
   obtain ⟨pending, bounded⟩ := replay.appendUncertain current.readPrefix.readsBounded allowed ordered
   obtain ⟨reached, seed, cache, census, owner, directorySlot, pair, durable, checkpointEq, path, _, _,
     phaseFresh, sessionFresh⟩ :=
     seen.opening.finish.startsNativeReadPrefix seen.opening.chronology seen.opening.markerFound repair
       (seen.opening.reads.walReads.selectedAfterWatermark offsets descriptors) accepted ordered walLayout walValid
-      ready.spans repair.pair first (kept.trans (stop.kept.trans ready.sealedFiles)) pending bounded
+      ready.spans repair.pair first kept pending bounded
   let retained := if crash.usesNewMarker then prepared.batch else []
   have whole : retained = [] ∨ retained = prepared.batch := by
     dsimp only [retained]
@@ -311,12 +372,27 @@ theorem NativeReadPosition.recoversInterruptedMarker (current : NativeReadPositi
   rw [keeperPath, keeperBytes] at keeperRead
   let next : NativeReadPosition (history ++ retained) (log ++ [.uncertainBatch prepared.batch]) :=
     ⟨seen.opening.finish.run seen.opening.chronology, reached, reached, current.reads, seed⟩
-  exact ⟨retained, next, stop.reaches current, whole, rfl, rfl,
+  exact ⟨retained, next, ⟨stop.reaches current, whole, rfl, rfl,
     fun same => phaseFresh (same.symm ▸ seen.previousTokens.1),
     fun same => sessionFresh (same.symm ▸ seen.previousTokens.2),
     checkpointEq, durable, (congrArg DirectoryPublication.Bindings.walBoundary pair).trans marker,
     ⟨layout, selected, seen, rfl, seed.frames.1, rfl, path, cache, census, owner, directorySlot,
       seen.lock.trans crash.sameLock, seen.directory.trans crash.sameRoot, markerRead, keeperRead⟩,
-    next.readPrefix.guardedReplay⟩
+    next.readPrefix.guardedReplay⟩, rfl, rfl, seed.frames.1, cache, owner, directorySlot⟩
+
+theorem NativeReadPosition.recoversInterruptedMarker (current : NativeReadPosition history log)
+    {prepared : NativeReadyWritePreparation current.state} {stop : NativeMarkerPublicationStop prepared}
+    (crash : NativeMarkerPublicationCrash stop) {input : FilePath}
+    (observe : ∀ chosen, ∀ layout : CanonicalKeeperLayout crash.retry.image chosen,
+      (chosen = current.state.writer.history ∨ chosen = current.state.writer.history ++ prepared.batch) →
+      Prepared crash.retry.image layout.target layout.plan →
+      ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+        crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
+      Nonempty (NativeMarkerPublicationCrashReads crash input layout selected)) :
+    ∃ retained next, NativeMarkerPublicationCrashContinuation current crash input retained next := by
+  obtain ⟨plan⟩ := crash.plans current.readPrefix.refines.1
+  obtain ⟨seen⟩ := observe plan.history plan.layout plan.allowed plan.repair plan.selected
+  obtain ⟨retained, next, reopened, _⟩ := current.recoversInterruptedMarkerFrom crash plan seen
+  exact ⟨retained, next, reopened⟩
 
 end Alvoki.Storage.DiskSession
