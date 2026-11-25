@@ -54,33 +54,48 @@ theorem SegmentedClientReadTrace.replaysPendingBatchMarker
     retry.image.directory.active.manifest = before.wal.directory.active.manifest ∧
     ∃ history, (history = before.history ∨ history = before.history ++ cut.batch) ∧
       retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) ∧
-      PendingClientReplay (log ++ [.uncertainBatch cut.batch]) reads history := by
+      PendingClientReplay (log ++ [.uncertainBatch cut.batch]) reads history ∧
+      ∃ layout : CanonicalKeeperLayout retry.image history,
+        layout.target.first = before.wal.active.first ∧ Prepared retry.image layout.target layout.plan := by
   have ready := (trace.writes.preservesRetained (start.bootstrap.writerReady start.held).toRetained).1
-  obtain ⟨_, kept, manifest, history, selected, marker, _⟩ := observed.refinesReopenPrefix ready retries
-  refine ⟨kept, manifest, history, selected, marker, trace.replaysUncertainSubmission start selected ?_⟩
+  obtain ⟨_, kept, manifest, history, selected, marker, layout⟩ := observed.refinesReopenPrefix ready retries
+  refine ⟨kept, manifest, history, selected, marker, trace.replaysUncertainSubmission start selected ?_, layout⟩
   rcases selected with rfl | rfl
   · exact ready.resumed.ordered
   · exact (observed.preparedHistory ready).2.2
 
-/-- A reported write error and its later retry prefix have the same
-pre-install guarantee. The selected history accounts for the whole
-uncertain submission or none of it. -/
+/-- The reported write error supplies its exact held origin for later
+retry events. The selected history already accounts for the whole
+uncertain submission or none of it at that origin. -/
 theorem SegmentedClientReadTrace.replaysPendingWriteError
-    {directory : DiskDirectory} {first writer : Nat} {before : SegmentedWriterState}
+    {handle : Type} {directory : DiskDirectory} {first writer : Nat} {before : SegmentedWriterState}
     {initial : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession}
     (start : BootstrapClientStart directory first initial)
     (trace : SegmentedClientReadTrace directory first start.writer allowCollection log reads writer before)
-    (failure : SegmentedBatchFailure directory before)
+    (request : WriteRequest) (failure : SegmentedBatchFailure directory before)
+    (observed : ObservedBatchFailure failure handle) (rows : request.rows = failure.rows)
     {retry : LockedFileState FileImage}
-    (retries : ReportedReopenPrefix directory before.wal.active.first failure.released retry) :
+    (retries : ReportedReopenPrefix directory before.wal.active.first ⟨failure.released.image, before.owners⟩ retry) :
+    ∃ cacheAfter, (WriteRequest.Calls.ofFailure observed).run request directory before =
+      .error (.commitUnknown failure.cause) (.poisoned, ⟨(cacheAfter, failure.failed), before.owners⟩) ∧
     retry.image.kept = failure.released.image.kept ∧
     retry.image.directory.active.manifest = before.wal.directory.active.manifest ∧
     ∃ history, (history = before.history ∨ history = before.history ++ failure.batch) ∧
       retry.image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) ∧
-      PendingClientReplay (log ++ [.uncertainBatch failure.batch]) reads history := by
+      PendingClientReplay (log ++ [.uncertainBatch failure.batch]) reads history ∧
+      ∃ layout : CanonicalKeeperLayout retry.image history,
+        layout.target.first = before.wal.active.first ∧ Prepared retry.image layout.target layout.plan := by
   have ready := (trace.writes.preservesRetained (start.bootstrap.writerReady start.held).toRetained).1
-  obtain ⟨_, kept, manifest, history, selected, marker, _⟩ := failure.refinesReopenPrefix ready retries
-  refine ⟨kept, manifest, history, selected, marker, trace.replaysUncertainSubmission start selected ?_⟩
+  obtain ⟨cacheAfter, returned⟩ := observed.commitUnknown
+  have same := request.runReported_eq_batch ready
+    (WriteRequest.readyCall (handle := handle) before observed.cache).2
+    observed.guard.lookup observed.append observed.stage observed.sync observed.rename
+  change (WriteRequest.Calls.ofFailure observed).run request directory before = _ at same
+  simp only [← ready.directoryFiles] at returned
+  rw [rows] at same
+  obtain ⟨_, kept, manifest, history, selected, marker, layout⟩ := failure.refinesReopenPrefix ready retries
+  refine ⟨cacheAfter, same.trans returned, kept, manifest, history, selected, marker,
+    trace.replaysUncertainSubmission start selected ?_, layout⟩
   rcases selected with rfl | rfl
   · exact ready.resumed.ordered
   · obtain ⟨_, refined, represented⟩ := ready.resumed.canonical
@@ -103,11 +118,12 @@ theorem SegmentedClientReadTrace.replaysPendingFirstAppend
     BoundedReopenTrace directory (fun target => target = before.target)
       ⟨FirstAppendCut.projectReached before reached.2.image, reached.2.owners⟩ retry ∧
     retry.image.directory.active = before.target.pair ∧
-    PendingClientReplay (log ++ [.uncertainBatch report.batch]) reads before.history := by
+    PendingClientReplay (log ++ [.uncertainBatch report.batch]) reads before.history ∧
+    ∃ layout : CanonicalKeeperLayout retry.image before.history, BatchAppendInterruption.PreparedRetry before layout := by
   have ready := (trace.writes.preservesRetained (start.bootstrap.writerReady start.held).toRetained).1
   obtain ⟨call, poisoned, initialFiles⟩ := observed.reachedFileState outer
-  obtain ⟨attempts, stopped, pair, _⟩ := stop.refinesReopenPrefix ready retries
+  obtain ⟨attempts, stopped, pair, layout⟩ := stop.refinesReopenPrefix ready retries
   exact ⟨call, poisoned, initialFiles.symm ▸ stopped.trans attempts, pair,
-    trace.replaysUncertainSubmission start (.inl rfl) ready.resumed.ordered⟩
+    trace.replaysUncertainSubmission start (.inl rfl) ready.resumed.ordered, layout⟩
 
 end Alvoki.Storage.DiskSession

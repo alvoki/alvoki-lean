@@ -7,13 +7,14 @@ open System WAL.Boundary WalSegmentCommit WalSegmentRepair SyncHandleRouting
 
 /-- The exact file cut after a reported publication error supplies the
 allowed target for each reached failed recovery. The observed prefix retains
-the manifest binding and prior seals even if recovery stops here. -/
+the manifest binding and prior seals even if recovery stops here. The
+starting owner comes from the caller’s observed lock state. -/
 theorem SegmentedBatchFailure.refinesReopenPrefix {directory : DiskDirectory} {before : SegmentedWriterState}
-    {writer : Nat} {retry : LockedFileState FileImage}
+    {writer : Nat} {owners : LockOwners} {retry : LockedFileState FileImage}
     (failure : SegmentedBatchFailure directory before) (ready : before.RetainedReady directory writer)
-    (reported : ReportedReopenPrefix directory before.wal.active.first failure.released retry) :
+    (reported : ReportedReopenPrefix directory before.wal.active.first ⟨failure.released.image, owners⟩ retry) :
     BoundedReopenTrace directory (BatchRetryTarget before.history failure.batch before.wal.active.first)
-      failure.released retry ∧
+      ⟨failure.released.image, owners⟩ retry ∧
     retry.image.kept = failure.released.image.kept ∧
     retry.image.directory.active.manifest = before.wal.directory.active.manifest ∧
     ∃ history, (history = before.history ∨ history = before.history ++ failure.batch) ∧
@@ -37,7 +38,7 @@ theorem SegmentedBatchFailure.refinesReopenPrefix {directory : DiskDirectory} {b
     represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
   have select {current : LockedFileState FileImage}
       (attempts : BoundedReopenTrace directory (BatchRetryTarget before.history failure.batch before.wal.active.first)
-        failure.released current) :=
+        ⟨failure.released.image, owners⟩ current) :=
     attempts.selectsAfterBatchCut ready.layout ready.valid oldRange ready.resumed.ordered count failure.prepared
       fits checkpoint failure.effects projected
   have attempts := reported.refines fun earlier => by
