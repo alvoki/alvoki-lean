@@ -110,6 +110,7 @@ import Alvoki.Storage.Disk.NativeCheckpointManifestRenameError
 import Alvoki.Storage.Disk.NativeCheckpointManifestRenameReboot
 import Alvoki.Storage.Disk.NativeCheckpointManifestRenameRetry
 import Alvoki.Storage.Disk.NativePendingCheckpoint
+import Alvoki.Storage.Disk.NativePendingCheckpointOpenPhase
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeCheckpointErrorReopen
 import Alvoki.Storage.Disk.NativeCheckpointErrorPowerLoss
@@ -898,6 +899,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensCheckpointSurvivor
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRebootContinuation.checkpointWatermark
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversStoppedCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsCheckpointOnOpenPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.Physical.selects
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.checkpointDirectoryError
