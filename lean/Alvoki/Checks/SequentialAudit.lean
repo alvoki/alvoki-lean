@@ -2781,6 +2781,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.stabilizesAfterKeeperRead
 #check_axioms Alvoki.WAL.TwoSlot.reopensAfterCapturedPreparation
 #check_axioms Alvoki.WAL.TwoSlot.reopensAlignedAfterCapturedPreparation
+#check_axioms Alvoki.WAL.TwoSlot.reopensLongAfterCapturedPreparation
 #check_axioms Alvoki.WAL.TwoSlot.prepareSelected_reported
 #check_axioms Alvoki.WAL.TwoSlot.prepareSelected_stateful
 #check_axioms Alvoki.WAL.TwoSlot.prepareSelected_of_retainedReplay

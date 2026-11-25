@@ -10,7 +10,7 @@ import Alvoki.Storage.Disk.BatchInterruptionDispatch
 import Alvoki.Storage.Disk.SyncHandleEffects
 import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.DescriptorInventory
-import Alvoki.Storage.Disk.CapturedCheckpointReadCensus
+import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -1554,6 +1554,52 @@ theorem reopensAlignedAfterCapturedPreparation
   have returned := captured.finishAlignedFromCache aligned noLater openRead fsync
     removeFile write renameFile directorySync
   simpa only [keeperSync] using returned
+
+/-- After marker stabilization, a longer keeper uses the shared native
+replacement schedule once its first directory sync authorizes repair. -/
+theorem reopensLongAfterCapturedPreparation
+    (report : CapturedMarkedReadReports admission layout published false)
+    (calls : CapturedAlignedCallbacks admission)
+    (vacant : TryLockObserves retry.owners directory (.ok true))
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (finish : CapturedLongKeeperFinish calls report vacant selected)
+    {marker settled : WalInodeImage} {slot : DescriptorSlot}
+    (live : slot ∈ finish.reader.afterRead.slots)
+    (current : admission.reached.inode slot.description = marker.active)
+    (effect : Storage.SyncHandleRouting.FsyncResult marker
+      (marker.completeFileSync marker.active) true (.ok () settled))
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selection : Selection} (decoded : decode (marker.visible marker.active) = .ok selection)
+    (bound : retry.image.directory.active.walBoundary.isSome = true)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = retry.image.directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode)
+    {before : CensusDirectoryCache × CensusOpenState} {opened : Reopened}
+    (prepare : EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Plan × Reopened × Nat))
+    (prepared : prepare before =
+      .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size)
+        (admission.cache, finish.reader.afterRead, admission.held))
+    (directorySync : finish.authorization.fsync (admission.reached, admission.cached, 0)
+      { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
+      .ok () { admission.held with image := retry.image.syncDirectory }) :
+    reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices)
+      (finish.repairAfterRead directory) before =
+        .ok opened (admission.cache, finish.census, finish.settled) := by
+  have projected := stabilizesAfterKeeperRead report finish.reader live current effect sameBinding decoded
+    bound choices enumerated presence physical
+  have barrier : stabilizeCapturedMarker (marker.visible marker.active) choices
+      (admission.cache, finish.reader.afterRead, admission.held) =
+      .ok () (admission.cache, finish.reader.afterRead,
+        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) := by
+    change (match projectRepairDirectory retry.image.directory (marker.visible marker.active) choices with
+      | .error cause => _
+      | .ok settled => _) = _
+    rw [projected]
+    rfl
+  simp only [reopenWith_reports, prepared, barrier, finish.repairAfterRead_returns_from _ directorySync]
 
 end CapturedPreparation
 

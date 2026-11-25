@@ -1033,3 +1033,11 @@ common authorized image, the existing prune, stage, file sync, rename
 and final directory sync proof applies directly. The same proof
 still supplies the rename-backed reopen. Its full report currently
 also includes rename-specific admission premises.
+
+The longer-keeper report now accepts the shared captured reads without
+a rename-format marker observation. The two-slot reopen uses that
+report to prove the temporary keeper release, pruning, replacement
+write, file sync, rename and final directory sync from the
+marker-settled state. The theorem takes the successful first directory
+sync as a primitive report. The aligned case with later names still
+needs the corresponding composition.

@@ -11,7 +11,8 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
   {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
   {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
   {published : CheckpointPublication.Image}
-  {calls : CapturedAlignedCallbacks admission} {report : CapturedMarkedReadReports admission layout published}
+  {calls : CapturedAlignedCallbacks admission} {renameMarker : Bool}
+  {report : CapturedMarkedReadReports admission layout published renameMarker}
   {vacant : TryLockObserves retry.owners directory (.ok true)} {checkpoint : Option (PackedTable × UInt64)}
   {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
 
@@ -22,7 +23,7 @@ private abbrev ReplacementState := CensusDirectoryCache × ReplacementSyncState
 precedes the authorization barrier, the ordered unlinks and the suffix
 directory barrier before staged replacement. -/
 structure CapturedLongKeeperFinish (calls : CapturedAlignedCallbacks admission)
-    (report : CapturedMarkedReadReports admission layout published)
+    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
     (vacant : TryLockObserves retry.owners directory (.ok true))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) where
@@ -466,6 +467,8 @@ private theorem finishAt_returns (finish : CapturedLongKeeperFinish calls report
   have repaired := finish.readRepair_returns
   simp only [readRepair, Bind.bind, EStateM.bind, finish.readAndClose.1] at repaired
   rw [finishAt, repaired]
+
+variable {report : CapturedMarkedReadReports admission layout published}
 
 /-- The native-shaped open with the reached long replacement callbacks.
 Ready state and the two fresh reference identities are allocated only
