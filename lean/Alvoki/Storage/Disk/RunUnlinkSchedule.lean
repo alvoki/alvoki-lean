@@ -141,6 +141,29 @@ theorem runUnlinkSchedule_success {error : Type} (names : List RunAddress) (befo
   rw [← foldl_collectionSteps before names]
   exact runCollectionSteps_success _ perform reports before healthy
 
+private theorem runCollectionSteps_outcome {error : Type} (actions : List (RunCollection.Step RunAddress))
+    (before : RunUnlinkImage)
+    (perform : RunCollection.Step RunAddress → EStateM error RunUnlinkImage Unit)
+    (reports : RunUnlinkEffectContract perform) :
+    match (actions.forM perform) before with
+    | .ok _ after => after = actions.foldl RunUnlinkImage.applyCollectionStep before
+    | .error _ after => ∃ cut, after = (actions.take cut).foldl RunUnlinkImage.applyCollectionStep before := by
+  have outcomes := Publication.run_effects_outcome (fun state action => some (state.applyCollectionStep action))
+    perform (by
+      intro action state
+      have report := reports action state
+      cases applied : perform action state <;> simpa only [applied, Option.some.injEq, eq_comm] using report)
+    actions before
+  cases applied : (actions.forM perform) before with
+  | ok _ after =>
+    rw [applied, foldlM_collectionSteps] at outcomes
+    exact (Option.some.inj outcomes).symm
+  | error _ after =>
+    rw [applied] at outcomes
+    obtain ⟨cut, outcome⟩ := outcomes
+    rw [foldlM_collectionSteps] at outcome
+    exact ⟨cut, (Option.some.inj outcome).symm⟩
+
 /-- Success of the actual finite schedule completes the durable pass. A
 reported failure returns exactly the effect of a prefix, which can include
 the operation that returned an error. -/
@@ -150,22 +173,37 @@ theorem runUnlinkSchedule_outcome {error : Type} (names : List RunAddress) (befo
     match RunCollection.run names perform before with
     | .ok _ after => after = before.finishPass names
     | .error _ after => ∃ cut, after = ((RunCollection.steps names).take cut).foldl RunUnlinkImage.applyCollectionStep before := by
-  have outcomes := Publication.run_effects_outcome (fun state action => some (state.applyCollectionStep action))
-    perform (by
-      intro action state
-      have report := reports action state
-      cases applied : perform action state <;> simpa only [applied, Option.some.injEq, eq_comm] using report)
-    (RunCollection.steps names) before
+  have outcome := runCollectionSteps_outcome (RunCollection.steps names) before perform reports
   unfold RunCollection.run
-  cases applied : ((RunCollection.steps names).forM perform) before with
+  cases ran : ((RunCollection.steps names).forM perform) before with
   | ok _ after =>
-    rw [applied, foldlM_collectionSteps] at outcomes
-    exact (Option.some.inj outcomes).symm.trans (foldl_collectionSteps before names)
+    rw [ran] at outcome
+    exact outcome.trans (foldl_collectionSteps before names)
   | error _ after =>
-    rw [applied] at outcomes
-    obtain ⟨cut, outcome⟩ := outcomes
-    rw [foldlM_collectionSteps] at outcome
-    exact ⟨cut, (Option.some.inj outcome).symm⟩
+    rw [ran] at outcome
+    exact outcome
+
+/-- The reached unlink prefix determines the state passed to the last
+callback. Its actual return is the whole pass's return. If synchronization
+takes effect on that state, it settles the exact finished run map. -/
+theorem runUnlinkSchedule_reachesBarrier {error : Type} (names : List RunAddress)
+    {before atBarrier : RunUnlinkImage} (perform : RunCollection.Step RunAddress → EStateM error RunUnlinkImage Unit)
+    (reports : RunUnlinkEffectContract perform)
+    (unlinked : ((names.map RunCollection.Step.unlink).forM perform) before = .ok () atBarrier) :
+    RunCollection.run names perform before = perform .syncDirectory atBarrier ∧
+      atBarrier.syncDirectory = before.finishPass names := by
+  have prefixEffect := runCollectionSteps_outcome (names.map RunCollection.Step.unlink) before perform reports
+  rw [unlinked] at prefixEffect
+  constructor
+  · rw [List.forM_eq_forM] at unlinked
+    simp only [RunCollection.run, RunCollection.steps, List.forM_eq_forM, List.forM_append, List.forM_cons,
+      List.forM_nil, Bind.bind, EStateM.bind, unlinked, Pure.pure, EStateM.pure]
+    cases perform .syncDirectory atBarrier with
+    | ok completed _ => cases completed; rfl
+    | error _ _ => rfl
+  · rw [show atBarrier = (names.map RunCollection.Step.unlink).foldl RunUnlinkImage.applyCollectionStep before
+      from prefixEffect, ← foldl_collectionSteps before names]
+    simp only [RunCollection.steps, List.foldl_append, List.foldl_cons, List.foldl_nil, RunUnlinkImage.applyCollectionStep]
 
 private theorem RunUnlinkRetry.collectionSteps {approved : List RunAddress} {initial before : RunUnlinkImage}
     (prior : RunUnlinkRetry approved initial before) (actions : List (RunCollection.Step RunAddress))

@@ -94,6 +94,31 @@ inductive RunUnlinkRetry (approved : List RunAddress) : RunUnlinkImage → RunUn
   | crash (prior : RunUnlinkRetry approved initial before) (survives : files ∈ before.crashImages) :
       RunUnlinkRetry approved initial (.settled files)
 
+/-- Once a name is durably absent, later unlink, sync and crash steps
+within this collection lineage cannot restore it. -/
+theorem RunUnlinkRetry.keepsAbsent {approved : List RunAddress} {initial after : RunUnlinkImage}
+    (retry : RunUnlinkRetry approved initial after) {name : RunAddress} (absent : initial.DurablyAbsent name) :
+    after.DurablyAbsent name := by
+  induction retry with
+  | start => exact absent
+  | @unlink before removed _ _ prior =>
+    refine ⟨?_, ?_⟩
+    · simp [RunUnlinkImage.unlink, RunFiles.eraseName, prior.1]
+    · intro files survives
+      rcases RunUnlinkImage.unlink_crashImages.mp survives with unchanged | ⟨earlier, earlierSurvives, rfl⟩
+      · exact prior.2 _ unchanged
+      · simp [RunFiles.eraseName, prior.2 _ earlierSurvives]
+  | sync _ prior =>
+    refine ⟨prior.1, ?_⟩
+    intro files survives
+    obtain rfl := List.mem_singleton.mp survives
+    exact prior.1
+  | crash _ survives prior =>
+    refine ⟨prior.2 _ survives, ?_⟩
+    intro files chosen
+    obtain rfl := List.mem_singleton.mp chosen
+    exact prior.2 _ survives
+
 /-- A known binding at an unapproved address survives any retry, even when
 unrelated bindings in the starting namespace are still unsettled. -/
 theorem RunUnlinkRetry.keepsKnown {approved : List RunAddress} {initial after : RunUnlinkImage}
@@ -259,6 +284,19 @@ theorem RunUnlinkImage.finishPass_binding (start : RunUnlinkImage) (selected : L
 theorem RunUnlinkImage.finishPass_absent {start : RunUnlinkImage} {selected : List RunAddress} {name : RunAddress}
     (chosen : name ∈ selected) : (start.finishPass selected).DurablyAbsent name := by
   simpa only [ite_eq_left chosen, DurablyAbsent] using start.finishPass_binding selected name
+
+/-- A settled pass removes exactly the chosen live names and also makes
+the absence of every already hidden name durable. -/
+theorem RunUnlinkImage.finishPass_absent_iff (start : RunUnlinkImage) (selected : List RunAddress)
+    (name : RunAddress) :
+    (start.finishPass selected).DurablyAbsent name ↔ name ∈ selected ∨ start.visible name.1 name.2 = none := by
+  obtain ⟨visible, crash⟩ := start.finishPass_binding selected name
+  by_cases chosen : name ∈ selected
+  · simp [chosen, finishPass_absent chosen]
+  · rw [or_iff_right chosen]
+    simp only [chosen, ↓reduceIte] at visible crash
+    exact ⟨fun absent => visible.symm.trans absent.1,
+      fun absent => ⟨visible.trans absent, fun files survived => (crash files survived).trans absent⟩⟩
 
 end Alvoki.Storage.CheckpointPublication
 

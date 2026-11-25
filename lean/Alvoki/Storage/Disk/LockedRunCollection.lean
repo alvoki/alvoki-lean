@@ -41,14 +41,12 @@ theorem LockedRunInventory.finishOlderPass_absent {dir : DiskDirectory} {regular
       (before.finishPass (selectRunFiles dir current (retainRunGeneration installed held)
         inventory.kindAt inventory.names)).DurablyAbsent (generation, index) := by
   intro generation index older unheld
+  apply (before.finishPass_absent_iff _ (generation, index)).mpr
   cases visible : before.visible generation index with
-  | none =>
-    simpa [RunUnlinkImage.DurablyAbsent, visible] using before.finishPass_binding
-      (selectRunFiles dir current (retainRunGeneration installed held) inventory.kindAt inventory.names)
-      (generation, index)
+  | none => exact .inr rfl
   | some bytes =>
     obtain ⟨listed, regular⟩ := complete generation index bytes visible older unheld
-    exact RunUnlinkImage.finishPass_absent
+    exact .inl
       ((inventory.selectOlderRunsAt_iff held matching).mpr ⟨listed, older, unheld, regular⟩)
 
 /-- The v1 model preflight supplies the matching generation. -/

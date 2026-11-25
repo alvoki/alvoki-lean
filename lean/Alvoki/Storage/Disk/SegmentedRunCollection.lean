@@ -232,5 +232,30 @@ theorem completeAfterRetries {descriptor : Nat} (ready : state.RetainedReady dir
   obtain ⟨older, unheld⟩ := approvedOlderUnheld _ chosen
   exact keepGeneration.elim (fun le => UInt64.not_lt.mpr le older) unheld
 
+/-- For one run name, the reached unlink prefix and an effective final
+barrier suffice. The name was selected by this pass or already absent
+at entry. A reported error after settlement has the same durability
+consequence. Later collection retries preserve that absence. -/
+theorem reclaimsAfterEffectiveBarrier {descriptor : Nat} (ready : state.RetainedReady directory descriptor)
+    (reports : SegmentedRunCollectionReports directory state before) {name : RunAddress}
+    (collectible : name ∈ reports.selected ∨ before.visible name.1 name.2 = none)
+    {atBarrier : RunUnlinkImage}
+    (unlinked : ((reports.selected.map RunCollection.Step.unlink).forM reports.perform) before = .ok () atBarrier)
+    (synced : reports.perform .syncDirectory atBarrier = .ok () atBarrier.syncDirectory ∨
+      ∃ cause, reports.perform .syncDirectory atBarrier = .error cause atBarrier.syncDirectory) :
+    reports.run = reports.perform .syncDirectory atBarrier ∧
+      reports.reached = before.finishPass reports.selected ∧ reports.reached.DurablyAbsent name ∧
+      ∀ {approved : List RunAddress} {later : RunUnlinkImage}, RunUnlinkRetry approved reports.reached later →
+        later.DurablyAbsent name := by
+  obtain ⟨barrier, exactImage⟩ := runUnlinkSchedule_reachesBarrier reports.selected reports.perform reports.effects unlinked
+  have ran := (reports.run_eq_schedule ready).trans barrier
+  have settled : reports.reached = before.finishPass reports.selected := by
+    rcases synced with synced | ⟨_, synced⟩ <;>
+      simp only [reached, ran, synced, exactImage]
+  have absent : reports.reached.DurablyAbsent name := by
+    rw [settled]
+    exact (before.finishPass_absent_iff reports.selected name).mpr collectible
+  exact ⟨ran, settled, absent, fun retry => retry.keepsAbsent absent⟩
+
 end SegmentedRunCollectionReports
 end Alvoki.Storage.DiskSession
