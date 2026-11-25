@@ -8,7 +8,8 @@ export PATH="$ELAN_HOME/bin:$PATH"
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 cd lean
-lake build Alvoki.Checks.AxiomPolicy RunMergeProofs CodecVariants Alvoki.Storage
+lake build Alvoki.Checks.AxiomPolicy RunMergeProofs CodecVariants Alvoki.Storage \
+  Alvoki.Storage.Disk.WalTwoSlotClientReturn Alvoki.Storage.Disk.WalTwoSlotReopenProjection
 lake env lean Alvoki/Checks/ProofRoadmapAudit.lean
 lake env lean Alvoki/Checks/SequentialAudit.lean
 
@@ -419,6 +420,10 @@ lake env leanchecker Alvoki.Storage.Disk.CheckpointHistory
 lake env leanchecker Alvoki.Storage.Publication.DiskPublication
 lake env leanchecker Alvoki.Storage.Publication.DiskPublicationModel
 lake env leanchecker Alvoki.Storage.Disk.WalBoundary
+lake env leanchecker Alvoki.Storage.Disk.WalOrderedTwoSlot
+lake env leanchecker Alvoki.Storage.Disk.WalTwoSlot
+lake env leanchecker Alvoki.Storage.Disk.WalTwoSlotClientReturn
+lake env leanchecker Alvoki.Storage.Disk.WalTwoSlotReopenProjection
 lake env leanchecker Alvoki.Storage.Disk.WalBoundaryModel
 lake env leanchecker Alvoki.Storage.Disk.WalWritePublicationModel
 lake env leanchecker Alvoki.Storage.Disk.MarkedWalReopenModel
