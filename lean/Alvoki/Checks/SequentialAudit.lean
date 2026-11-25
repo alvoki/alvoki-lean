@@ -130,6 +130,7 @@ import Alvoki.Storage.Disk.RotationLockHandoff
 import Alvoki.Storage.Disk.RotationRetrySession
 import Alvoki.Storage.Disk.SegmentedRotationRecovery
 import Alvoki.Storage.Disk.SegmentedRotationStep
+import Alvoki.Storage.Disk.ObservedRotationSchedule
 import Alvoki.Storage.Disk.BootstrapAdmissionEffects
 import Alvoki.Storage.Disk.FirstMarkedSession
 import Alvoki.Storage.Disk.WalSegmentCheckpointPublication
@@ -311,6 +312,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.bootstrapSegmented_fileEffects
 #check_axioms Alvoki.Storage.DiskTable.writeWithOutcome_fileEffects
 #check_axioms Alvoki.Storage.DiskTable.rotateWal_fileEffects
+#check_axioms Alvoki.Storage.DiskTable.rotateWal_schedule
 #check_axioms Alvoki.Storage.CheckpointForRecovery.loads
 #check_axioms Alvoki.Storage.CheckpointForRecovery.recoverSelected_rowBounds
 #check_axioms Alvoki.Storage.CheckpointForRecovery.of_flushForCheckpoint
@@ -1016,6 +1018,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.preservesRetainedReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.selectedRetainedReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRotationReport.retainedIdentities
+#check_axioms Alvoki.Storage.DiskSession.runObservedRotation_empty
+#check_axioms Alvoki.Storage.DiskSession.runObservedRotation_publishError
+#check_axioms Alvoki.Storage.DiskSession.ObservedRotation.rotates
+#check_axioms Alvoki.Storage.DiskSession.ObservedRotation.reopensAfterClose
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetainedCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.checkpointErrorCached

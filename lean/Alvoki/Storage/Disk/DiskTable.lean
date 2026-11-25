@@ -506,6 +506,26 @@ theorem DiskTable.rotateWal_fileEffects (db : DiskTable) : db.rotateWal = (do
       db.files.active.set none
       db.phase.set (.ready { state with activeFirst := successor })) := rfl
 
+/-- Rotate only a nonempty active segment. Clear the old append handle
+after successor publication and before exposing the updated ready phase. -/
+@[macro_inline] def DiskSession.rotateWalSchedule [Monad m]
+    (installed : m Installed) (guard : Installed → m Unit) (setPhase : DiskSession.Phase Installed → m Unit)
+    (publish : Nat → m Unit) (clearActive : m Unit) : m Unit := do
+  let state ← installed
+  let successor := state.walBytes / WAL.frameSize
+  if state.activeFirst < successor then
+    guard state
+    DiskSession.publishPrepared setPhase (publish successor) do
+      clearActive
+      setPhase (.ready { state with activeFirst := successor })
+
+theorem DiskTable.rotateWal_schedule (db : DiskTable) : db.rotateWal =
+    DiskSession.rotateWalSchedule (m := IO) db.installed
+      (fun state => checkActiveSegmentWith db.dir state FilePath.symlinkMetadata) db.phase.set
+      (fun successor => WalSegmentRotation.runAt db.dir successor
+        (fun path => readEmptyWalSegment path "WAL segment successor is not empty") db.files.create
+        (fun path => db.files.syncPaths #[path])) (db.files.active.set none) := rfl
+
 /-- The outcome of a failed write at the WAL mutation boundary. -/
 inductive DiskWriteError where
   /-- This submission was rejected before attempting to append a WAL frame. -/

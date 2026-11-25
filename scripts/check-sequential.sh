@@ -147,6 +147,7 @@ lake env leanchecker Alvoki.Storage.Disk.RotationRetrySession
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationRecovery
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationStep
+lake env leanchecker Alvoki.Storage.Disk.ObservedRotationSchedule
 lake env leanchecker Alvoki.Storage.Disk.BootstrapAdmissionEffects
 lake env leanchecker Alvoki.Storage.Disk.FirstMarkedSession
 lake env leanchecker Alvoki.Storage.Disk.RunGenerationCollection
