@@ -1749,9 +1749,11 @@ theorem installsAfterAcquiredRecovery_replays
     (start : BootstrapClientStart directory bootstrapFirst initial)
     (trace : SegmentedClientReadTrace directory bootstrapFirst start.writer allowCollection log reads writer prior)
     {batch : List WAL.Write}
-    {image : WalSegmentImage}
-    {base : PackedTable} {first : Nat}
-    (selected : WalSegmentRecovery image layout.target.pair layout.range (prior.history ++ batch) base first table)
+    {checkpointModel : Sequential.SnapshotTable UInt64}
+    (baseClock : (loaded.getD (.empty, 0)).1.committed.toNat = layout.range.watermark)
+    (baseRefines : (loaded.getD (.empty, 0)).1.Refines checkpointModel)
+    (baseBounds : (loaded.getD (.empty, 0)).1.RowBounds)
+    (baseHistory : RepresentsWalHistory (history.take layout.range.watermark) checkpointModel)
     {interrupted firstRepair : FileImage}
     (beforeBarrier : UnsettledRetries interrupted retry.image)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
@@ -1784,7 +1786,7 @@ theorem installsAfterAcquiredRecovery_replays
         | .error cause (_, reached) => .error cause reached) =
         .ok session after ∧
       InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take layout.range.through)
-        opened.installed session := by
+        opened.installed session ∧ after.2.image.directory.active = layout.target.pair := by
   intro opened prepare
   obtain ⟨_, _, markerPayload, frontier, present, markerDecoded, count⟩ :=
     DirectoryPublication.Bindings.walRange_accounting layout.decoded
@@ -1794,17 +1796,38 @@ theorem installsAfterAcquiredRecovery_replays
   obtain ⟨acquisition, prepared, markerLive, sameInode⟩ := preparesFromHeldMarker file privateFile available report
     manifest runs checkpointSelected chronology selection decoded (sameFrontier.symm ▸ count) orderedLayout replay keeper
     seals offsets retained following later keepsMarker listingDrops keeperDrops
-  obtain ⟨_, _, previous, _, _, _⟩ := trace.keyValueRefinement start.bootstrap start.held
   have authorized := prepared_settleMarker preparedPlan selection observed
   have ⟨validAfter, _⟩ := retries.preserves
     (authorizedRepair.valid authorized.pair authorized.keeperPrefix authorized.newer)
-  have selectedAfter : WalSegmentRecovery image after.2.image.directory.active layout.range
-      (prior.history ++ batch) base first table :=
-    validAfter.selected.symm ▸ selected
-  have whole := (recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
-    observations selection observed authorizedRepair preparedPlan retries previous oldSize selectedAfter).2.2
-  obtain ⟨reference, replayed, retained, acknowledged, bounded, priorReads⟩ :=
-    trace.replaysUncertainSubmission start whole (sameHistory ▸ orderedLayout)
+  obtain ⟨_, epoch, newSize, _, _⟩ := advance_fields advanced
+  have newer : current.toRecord.epoch < next.toRecord.epoch := by
+    change current.epoch.toNat < next.epoch.toNat
+    omega
+  have choicesBefore := interruptedMarker_retryChoices accepted offset newer observations
+  have choice := (beforeBarrier.selectsOldOrNew checkpoint current.frontier next.frontier choicesBefore observed).2
+  have bytes := choice.imp (fun old => old ▸ oldSize) (fun all => all ▸ newSize)
+  have chosenCount := sameFrontier.symm ▸ count
+  have lengthChoice : layout.range.through = prior.history.length ∨
+      layout.range.through = (prior.history ++ batch).length := by
+    rw [chosenCount, WAL.encode_size, WAL.encode_size] at bytes
+    unfold frameSize at bytes
+    omega
+  have whole : (prior.history ++ batch).take layout.range.through = prior.history ∨
+      (prior.history ++ batch).take layout.range.through = prior.history ++ batch := by
+    rcases lengthChoice with old | all
+    · exact .inl (by rw [old, List.take_append_of_le_length (Nat.le_refl _), List.take_length])
+    · exact .inr (all.symm ▸ List.take_length)
+  have pending := trace.replaysUncertainSubmission start whole (sameHistory ▸ orderedLayout)
+  let covered := history.take layout.range.watermark
+  let suffix := history.drop layout.range.watermark
+  have split : covered ++ suffix = history := List.take_append_drop ..
+  have coveredLength : covered.length = (loaded.getD (.empty, 0)).1.committed.toNat := by
+    have watermark := (DirectoryPublication.Bindings.walRange_accounting layout.decoded).2.1
+    simp [covered, baseClock, ← layout.through, Nat.min_eq_left watermark]
+  have played := (recoverSelected_encoded (loaded.getD (.empty, 0)).1 covered suffix
+    (split.symm ▸ orderedLayout) coveredLength).symm.trans (by simpa only [split] using replay)
+  obtain ⟨model, playedModel, refined⟩ := replay_refines baseRefines played
+  have represented := sameHistory ▸ (split ▸ baseHistory.append playedModel)
   have projected := stabilizesAfterKeeperRead report keeper markerLive (sameInode.trans markerInode)
     effect sameBinding (markerBytes ▸ decoded) (by rw [observed]; rfl) choices enumerated presence physical
   have recovery : reopenWith (prepare directory selection)
@@ -1818,11 +1841,8 @@ theorem installsAfterAcquiredRecovery_replays
   have returned := installsAfterAcquiredRecovery calls marker
     (fun resolved => acquireMarkerInCensus markerReads (resolved.file .walBoundary))
     prepare stabilize finish acquisition recovery
-  refine ⟨_, returned, reference, replayed, retained, acknowledged, bounded, priorReads, ?_⟩
-  apply DiskSession.SegmentedSession.guardedAcquireReads rfl
-  intro snapshot floor committed
-  exact selectedAfter.acquireReads replayed floor
-    (selectedAfter.count ▸ UInt64.le_iff_toNat_le.mp committed)
+  exact ⟨_, returned, pending.install rfl represented refined (recoverSelected_rowBounds baseBounds replay),
+    validAfter.selected⟩
 
 /-- After marker stabilization, a longer keeper uses the shared native
 replacement schedule once its first directory sync authorizes repair. -/

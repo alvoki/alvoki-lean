@@ -867,6 +867,14 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The chronological marked-open theorem now constructs the installed
+table's replay refinement from the selected checkpoint and WAL replay.
+It no longer takes an independent canonical recovery witness for the
+same table. The interrupted marker and pre-barrier retry reports give
+the old-or-whole selection, while settled retries preserve the returned
+directory binding. The native finish and retry reports and the
+checkpoint's link to the prior history still need to be composed.
+
 The client theorem derives the returned directory's selected binding
 from the first repair and settled retries. It transports the canonical
 WAL recovery proof from the selected repair target to that returned
