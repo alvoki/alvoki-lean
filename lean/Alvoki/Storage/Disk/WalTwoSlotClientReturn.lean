@@ -444,6 +444,48 @@ theorem routedWalSync_survivor
   rw [appendInode]
   exact syncedInode_survivor sync syncInode binding survived
 
+/-- A successful append followed by the cache-routed sync preserves
+the appended inode's flushed bytes in every reported WAL crash survivor. -/
+theorem appendThenSync_survivor
+    (cache : SyncHandleRouting.Cache KeeperDescriptorIdentity) (before : WalInodeImage)
+    (directory keeper : System.FilePath) (frame : ByteArray)
+    (openAppend openRead : System.FilePath → EStateM IO.Error WalInodeImage KeeperDescriptorIdentity)
+    (write : KeeperDescriptorIdentity → ByteArray → EStateM IO.Error WalInodeImage Unit)
+    (flush fsync : KeeperDescriptorIdentity → EStateM IO.Error WalInodeImage Unit)
+    (bindings : WalInodeImage → System.FilePath → Option Nat)
+    {file : KeeperDescriptorIdentity} {opened written appended durable : WalInodeImage}
+    (notDirectory : keeper ≠ directory)
+    (owned : cache.Agrees directory KeeperDescriptorIdentity.inode (bindings before))
+    (fresh : ∀ {captured after}, openAppend keeper before = .ok captured after →
+      bindings after keeper = some captured.inode)
+    (selected : SyncHandleRouting.selectAppendHandle cache.active openAppend keeper before = .ok file opened)
+    (wrote : write file frame opened = .ok () written)
+    (flushed : flush file written = .ok () appended)
+    (bindingsPreserved : bindings appended = bindings before)
+    (selectedPreserved : bindings appended keeper = bindings opened keeper)
+    (live : bindings appended keeper = some appended.active)
+    {returnedCache : SyncHandleRouting.Cache KeeperDescriptorIdentity}
+    (returned : (SyncHandleRouting.runAppendWithCache keeper frame openAppend write flush >>= fun _ =>
+      SyncHandleRouting.sync directory openRead fsync keeper) (cache, before) =
+        .ok () (returnedCache, durable))
+    (syncEffect : ∀ synced, fsync synced appended = .ok () durable →
+      FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+        synced appended (fun inode files => files.completeFileSync inode) (.ok () durable))
+    (binding : ∀ inode ∈ appended.crashBindings, inode = appended.active)
+    {bytes : ByteArray} (survived : ∃ inode ∈ durable.crashBindings, bytes ∈ durable.crashBytes inode) :
+    bytes = appended.visible file.inode := by
+  obtain ⟨appendResult, activeOwned⟩ := SyncHandleRouting.runAppendWithCache_owned frame openAppend write flush
+    bindings KeeperDescriptorIdentity.inode owned fresh selected wrote flushed bindingsPreserved selectedPreserved
+  obtain ⟨synced, resolved, lookup, _, _⟩ :=
+    resolveAfterAppend_sameInode (openRead := openRead) (appended := appended)
+      (bindings := bindings) notDirectory rfl activeOwned
+  simp only [Bind.bind, EStateM.bind, appendResult, SyncHandleRouting.sync, lookup] at returned
+  have syncReturned : fsync synced appended = .ok () durable := by
+    cases result : fsync synced appended <;>
+      simp_all [SyncHandleRouting.withCache]
+  exact routedWalSync_survivor notDirectory rfl activeOwned live lookup (syncEffect synced syncReturned)
+    binding survived
+
 /-- An error after the marker file has reached durable storage does not
 undo that effect. Every surviving binding to the marker inode reads the
 complete successor, even though the write returned commit-unknown. -/

@@ -1003,6 +1003,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The successful WAL append and cache-routed sync now feed one crash
+survivor theorem. The append report supplies the flushed handle and
+the exact reached cache. The sync result identifies the descriptor
+whose persistence report yields the surviving bytes of the appended
+inode, including when the cache routes sync through a pending handle.
+
 A machine stop during reopen marker sync now extends the same reported
 retry trace as a returned error. The reopen schedule skips keeper
 repair at the stop. The reported barrier effect and the surviving
