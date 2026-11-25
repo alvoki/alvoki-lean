@@ -174,6 +174,7 @@ import Alvoki.Storage.Disk.CachedRecoveryProgress
 import Alvoki.Storage.Disk.CachedMarkedRetryInstallation
 import Alvoki.Storage.Disk.DiskOpenAdmission
 import Alvoki.Storage.Disk.DiskBootstrapAdmission
+import Alvoki.Storage.Disk.ObservedBootstrapCache
 import Alvoki.Storage.Disk.SegmentedCleanCachedReopen
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
 import Alvoki.Storage.Disk.CachedWalChunkReports
@@ -1290,6 +1291,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_markedRetryFromChunks
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithAdmission_markedRetryFromChunks
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.fromObservedBootstrap
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCacheOpen.captures
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.entries
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.canonicalLock
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.retained
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.fromBootstrapWithCapturedCache
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.uniqueResult
 #check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.sameInstalled
 #check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.guardedSnapshotReads

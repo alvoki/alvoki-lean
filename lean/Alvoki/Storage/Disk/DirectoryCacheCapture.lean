@@ -19,10 +19,10 @@ theorem runSyncFilesOpen_openError {state handle : Type} {openDirectory : EState
 fresh slot with the reported object identity, alongside the held lock.
 The scope is one open and reference initialization, with inode identity
 and the actual slot allocation supplied by the observation. -/
-structure DirectoryCacheOpenReports (directory : DiskDirectory) (initial : DescriptorInventory)
-    (owner cached : DescriptorSlot) (before : LockedFileState FileImage)
+structure DirectoryCacheOpenReports {image : Type} (directory : DiskDirectory) (initial : DescriptorInventory)
+    (owner cached : DescriptorSlot) (before : LockedFileState image)
     (view : DirectoryReadNamespace) (root : DeviceInode) where
-  opened : FilePath → EStateM IO.Error (DescriptorInventory × LockedFileState FileImage)
+  opened : FilePath → EStateM IO.Error (DescriptorInventory × LockedFileState image)
     (DescriptorInventory × DescriptorSlot × Nat)
   lockLive : owner ∈ initial.slots
   free : ∀ slot ∈ initial.slots, slot.address ≠ cached.address
@@ -32,7 +32,7 @@ structure DirectoryCacheOpenReports (directory : DiskDirectory) (initial : Descr
   returned : opened directory.path (initial, before) =
     .ok (initial.insert cached free, cached, 0) (initial.insert cached free, before)
 
-theorem DirectoryCacheOpenReports.captures {directory initial owner cached before view root}
+theorem DirectoryCacheOpenReports.captures {image directory initial owner cached view root} {before : LockedFileState image}
     (observed : DirectoryCacheOpenReports directory initial owner cached before view root) :
     let reached := initial.insert cached observed.free
     runSyncFilesOpen (observed.opened directory.path) (initial, before) =

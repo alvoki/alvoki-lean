@@ -291,6 +291,7 @@ lake env leanchecker Alvoki.Storage.Disk.CachedRecoveryProgress
 lake env leanchecker Alvoki.Storage.Disk.CachedMarkedRetryInstallation
 lake env leanchecker Alvoki.Storage.Disk.DiskOpenAdmission
 lake env leanchecker Alvoki.Storage.Disk.DiskBootstrapAdmission
+lake env leanchecker Alvoki.Storage.Disk.ObservedBootstrapCache
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCleanCachedReopen
 lake env leanchecker Alvoki.Storage.Disk.DiskCleanReopenAdmission
 lake env leanchecker Alvoki.Storage.Disk.CachedWalChunkReports

@@ -11,34 +11,23 @@ private def bootstrapMetadata (lookup : FilePath → Except IO.Error IO.FS.Metad
     Except IO.Error (Option IO.FS.Metadata) :=
   optionalMetadataWith (.ok (lookup path))
 
-/-- Reached native observations for an admitted markerless open. The
-successful lock belongs to the live slot returned by append-open, and its
-object is still bound at the canonical lock path. The reached directory
-cache supplies the create, write and sync callbacks used by bootstrap. -/
-structure BootstrapOpenReports (files : Type) (directory : DiskDirectory)
+/-- Reached primitive callbacks and markerless probes before certifying the
+directory cache, listing, and publication results. -/
+structure BootstrapOpenCalls (files : Type) (directory : DiskDirectory)
     (before : LockedFileState WalSegmentRotation.State) where
-  descriptors : DescriptorInventory
   slot : DescriptorSlot
-  live : slot ∈ descriptors.slots
-  bindings : FilePath → Option Nat
-  lockObject : bindings (directory.file .lock) = some (descriptors.inode slot.description)
   flock : DescriptorSlot → Except IO.Error Bool
   acquired : flock slot = .ok true
   acquisition : TryLockObserves before.owners directory (flock slot)
   nextRef : Nat
   unlock : UnlockReport
   openFiles : FilePath → EStateM IO.Error WalSegmentRotation.State files
-  cache : files
-  initialized : openFiles directory.path before.image = .ok cache before.image
   lookup : FilePath → Except IO.Error IO.FS.Metadata
   flatAbsent : ∃ name message, lookup (directory.file .wal) = .error (.noFileOrDirectory name 2 message)
   markerAbsent : before.image.metadata.active.walBoundary = none ∧
     ∃ name message, lookup (directory.file .walBoundary) = .error (.noFileOrDirectory name 2 message)
   marked : DiskDirectory → files → EStateM IO.Error WalSegmentRotation.State Reopened
   list : FilePath → Except IO.Error (Array IO.FS.DirEntry)
-  entries : Array IO.FS.DirEntry
-  listed : list directory.path = .ok entries
-  clear : entries.any (fun entry => conflictsWithBootstrap entry.fileName) = false
   readEmpty : FilePath → Except IO.Error (Option ByteArray)
   zeroRead : readEmpty (directory.file (.walSegment 0)) = .ok before.image.observeSuccessor
   stage : Option IO.FS.Metadata
@@ -49,14 +38,41 @@ structure BootstrapOpenReports (files : Type) (directory : DiskDirectory)
   write : files → FilePath → ByteArray → EStateM IO.Error WalSegmentRotation.State Unit
   sync : files → Array FilePath → EStateM IO.Error WalSegmentRotation.State Unit
   renameFile : FilePath → FilePath → EStateM IO.Error WalSegmentRotation.State Unit
-  rotation : ∀ done step todo prior next, WalSegmentRotation.steps before.image.observeSuccessor.isSome = done ++ step :: todo →
+
+namespace BootstrapOpenCalls
+
+variable {files : Type} {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
+
+abbrev RotationHealthy (calls : BootstrapOpenCalls files directory before) (cache : files) : Prop :=
+  ∀ done step todo prior next, WalSegmentRotation.steps before.image.observeSuccessor.isSome = done ++ step :: todo →
     before.image.execute done = some prior → prior.step step = some next →
-    WalSegmentRotation.performPaths directory 0 (createEmpty cache) (fun path => sync cache #[path]) step prior = .ok () next
-  marker : ∀ done step todo prior next, Publication.steps = done ++ step :: todo →
+    WalSegmentRotation.performPaths directory 0 (calls.createEmpty cache) (fun path => calls.sync cache #[path])
+      step prior = .ok () next
+
+abbrev MarkerHealthy (calls : BootstrapOpenCalls files directory before) (cache : files) : Prop :=
+  ∀ done step todo prior next, Publication.steps = done ++ step :: todo →
     let settled : WalSegmentRotation.State := ⟨before.image.metadata.syncDirectory, .durable⟩
     done.foldlM bootstrapMarkerStep settled = some prior → bootstrapMarkerStep prior step = some next →
-    Publication.performReplacement (write cache · (WAL.Boundary.encode 0)) (sync cache) renameFile
+    Publication.performReplacement (calls.write cache · (WAL.Boundary.encode 0)) (calls.sync cache) calls.renameFile
       (directory.file .stagedWalBoundary) directory.path (fun _ => directory.file .walBoundary) #[] step prior = .ok () next
+
+end BootstrapOpenCalls
+
+/-- An admitted markerless open uses the lock returned by append-open.
+Its reached directory cache supplies the create, write and sync callbacks. -/
+structure BootstrapOpenReports (files : Type) (directory : DiskDirectory)
+    (before : LockedFileState WalSegmentRotation.State) extends BootstrapOpenCalls files directory before where
+  descriptors : DescriptorInventory
+  live : slot ∈ descriptors.slots
+  bindings : FilePath → Option Nat
+  lockObject : bindings (directory.file .lock) = some (descriptors.inode slot.description)
+  cache : files
+  initialized : openFiles directory.path before.image = .ok cache before.image
+  entries : Array IO.FS.DirEntry
+  listed : list directory.path = .ok entries
+  clear : entries.any (fun entry => conflictsWithBootstrap entry.fileName) = false
+  rotation : toBootstrapOpenCalls.RotationHealthy cache
+  marker : toBootstrapOpenCalls.MarkerHealthy cache
 
 namespace BootstrapOpenReports
 
