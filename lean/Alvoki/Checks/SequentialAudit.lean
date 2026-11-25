@@ -272,6 +272,7 @@ import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
 import Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 import Alvoki.Storage.Disk.NativePendingMarkerStageWrite
+import Alvoki.Storage.Disk.NativeGroupedPendingWrite
 import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
@@ -1799,6 +1800,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.fileChoices
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerStageWriteStop.batchCut
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtMarkerStageWrite
+#check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.observedFailure
+#check_axioms Alvoki.Storage.DiskSession.BatchGroupedWriteError.returnsError
+#check_axioms Alvoki.Storage.DiskSession.NativeGroupedWriteSyncError.recoveryBindings
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtGroupedSyncError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.acknowledgesWrite
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.replaysClient
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysClientAtManifestDirectory
