@@ -854,3 +854,14 @@ reported drops between callbacks.
 The client theorem now takes marker liveness as membership in the actual
 post-drop census. This is the result shape of the temporary-read custody
 proof and lets the preparation proof supply liveness directly at fsync.
+
+The branch includes `main` through `efd63a5`. The rename-backed
+aligned reopen after a sequence of returned early errors now carries
+the exact reached census and prior client read ledger. Its retry lineage
+provides a model for the two-slot opener. The marker acquisition and
+stabilization in that opener must still be threaded through the reached
+preparation and repair reports.
+
+The merged zero-keeper creation failure proof unfolds the shared
+bootstrap worker with its selected marker encoder. This preserves the
+rename path's early-error proof on the two-slot experiment branch.

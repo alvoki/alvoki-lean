@@ -69,7 +69,7 @@ theorem worker (seen : BootstrapZeroCreateError listed) :
     rw [seen.projected, seen.create]
     rfl
   rw [calls.reachesPublication captured.cache listed.entries.1 listed.entries.2, empty]
-  simp only [bootstrapEmptyWith, WalSegmentRotation.runAt_fileEffects, WalSegmentRotation.observeSuccessorWith,
+  simp only [bootstrapEmptyWith, bootstrapEmptyWithMarker, WalSegmentRotation.runAt_fileEffects, WalSegmentRotation.observeSuccessorWith,
     Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, Bool.false_eq_true, ↓reduceIte, failed]
 
 /-- The original owner is still live when the failed create hands control
