@@ -702,7 +702,9 @@ theorem reopenSync_repairPreservesFrontier
     (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
     {selected : Selection} (observed : decode (marker.visible handle.inode) = .ok selected)
     {initial after : FileImage} {directory : DirectoryPublication.Image} {target : Target}
-    {bytes : ByteArray} (bound : initial.directory.active.walBoundary = some bytes)
+    {plan : WalSegmentRepair.Plan}
+    (prepared : WalSegmentRepair.Prepared initial target plan)
+    (bound : initial.directory.active.walBoundary = some (Boundary.encode selected.frontier))
     (choices : List (DirectoryPublication.Bindings × Option ByteArray))
     (enumerated : choices.map Prod.fst = initial.directory.crashImages)
     (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
@@ -710,9 +712,6 @@ theorem reopenSync_repairPreservesFrontier
       ∃ inode ∈ settled.crashBindings, payload ∈ settled.crashBytes inode)
     (projected : projectRepairDirectory initial.directory (marker.visible handle.inode) choices = .ok directory)
     (trace : EffectTrace target { initial with directory := directory } after)
-    (pair : directory.active = target.pair)
-    (keeper : initial.keeper.Valid target.Accepts)
-    (later : initial.later.Beyond target.range.through)
     {survivor : DirectoryPublication.Bindings}
     (chosen : survivor ∈ after.directory.active :: after.directory.crashImages) :
     survivor.walBoundary = some (Boundary.encode selected.frontier) := by
@@ -720,7 +719,9 @@ theorem reopenSync_repairPreservesFrontier
     initial.directory (by simp [bound]) choices enumerated presence physical
   have same := Except.ok.inj (projected.symm.trans projectedSync)
   subst directory
-  exact repair_preserves_settledMarker initial selected bound trace pair keeper later chosen
+  have authorized := prepared_settleMarker prepared selected bound
+  exact repair_preserves_settledMarker initial selected bound trace authorized.pair
+    authorized.keeperPrefix authorized.newer chosen
 
 /-- A machine stop during the reopen barrier never enters WAL repair.
 Whether the marker sync took effect or had yet to take effect, the
