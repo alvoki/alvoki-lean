@@ -257,6 +257,7 @@ import Alvoki.Storage.Disk.NativeRawOpenAdmission
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
 import Alvoki.Storage.Disk.NativePrunedAlignedKeeperCache
 import Alvoki.Storage.Disk.NativeAlignedOpenHeap
+import Alvoki.Storage.Disk.NativePrunedAlignedOpenHeap
 import Alvoki.Storage.Disk.NativeBootstrapCacheMutations
 import Alvoki.Storage.Disk.NativeBootstrapCacheChronology
 import Alvoki.Storage.Disk.NativeBootstrapKeeperPhysical
@@ -1701,6 +1702,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.PrunedWalUnlinkHeaps.returns
 #check_axioms Alvoki.Storage.DiskSession.PrunedAlignedKeeperCacheReport.returns
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromAlignedCache
+#check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromRepairedHeap
+#check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromPrunedAlignedCache
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.bootstrapCacheSchedules
 #check_axioms Alvoki.Storage.DiskSession.BootstrapPendingObservation.returns
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapDirectoryBarrier.selectsRoot
