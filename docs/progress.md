@@ -1003,6 +1003,11 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+A reported reopen marker-sync error now extends the pre-authorization
+retry trace with the exact file image returned after cleanup. Both
+before-effect and after-effect errors preserve the keeper, and the
+trace feeds the existing client-replay proof.
+
 The shared native admission proof now repeats the flat-WAL probe
 under the acquired lock before allocating the cache, as required by
 the two-slot open schedule. The successful probe supplies the same
