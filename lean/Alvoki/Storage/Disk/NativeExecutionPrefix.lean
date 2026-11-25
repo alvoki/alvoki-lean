@@ -5,6 +5,7 @@ import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 import Alvoki.Storage.Disk.NativePendingRotation
 import Alvoki.Storage.Disk.NativePendingCheckpoint
 import Alvoki.Storage.Disk.NativePendingFirstAppend
+import Alvoki.Storage.Disk.NativePendingMarkerSync
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
@@ -46,6 +47,8 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
   | uncertainWrite (pending : NativePendingWrite current.ready)
   | interruptedFirstAppend {prepared : NativeReadyWritePreparation current.ready.state}
       (stop : NativeFirstAppendStop prepared)
+  | interruptedKeeperSync {prepared : NativeReadyWritePreparation current.ready.state}
+      (stop : NativeWriteKeeperSyncStop prepared)
   | closeAfterUncertainWrite (pending : NativePendingWrite current.ready) (close : NativePendingClose pending)
   | close (reported : NativeReadyClose current.ready.state)
   | rejectedOpensAfterClose (sequence : NativeRejectedOpenSequence current)
@@ -74,6 +77,7 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .ready => .ready
   | .uncertainWrite pending => .write pending.write.request
   | .interruptedFirstAppend stop => .write stop.request
+  | .interruptedKeeperSync stop => .write stop.request
   | .closeAfterUncertainWrite pending _ => .writeThenClose pending.write.request
   | .close _ => .close
   | .rejectedOpensAfterClose sequence => .closeThenOpenAttempts sequence.inputs
@@ -88,7 +92,8 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
 
 def uncertainBatch : NativeExecutionEnd current → Option (List WAL.Write)
   | .uncertainWrite pending | .closeAfterUncertainWrite pending _ => some pending.write.failure.batch
-  | .interruptedFirstAppend (prepared := prepared) _ => some prepared.batch
+  | .interruptedFirstAppend (prepared := prepared) _ | .interruptedKeeperSync (prepared := prepared) _ =>
+    some prepared.batch
   | .interruptedCloseAfterUncertainWrite pending _ _ => some pending.write.failure.batch
   | _ => none
 
@@ -103,6 +108,7 @@ def Reached : NativeExecutionEnd current → Prop
       .ok current.ready.initial.session (current.ready.initial.census, current.ready.initial.files)
   | .uncertainWrite pending => pending.write.returnedAt pending.cache
   | .interruptedFirstAppend stop => NativePendingFirstAppend current.ready stop
+  | .interruptedKeeperSync stop => NativePendingKeeperSync current.ready stop
   | .closeAfterUncertainWrite pending closed =>
       pending.write.returnedAt pending.cache ∧
       closed.report.run = match closed.report.result with
@@ -169,6 +175,7 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   | ready => exact current.ready.readPrefix.frames.1
   | uncertainWrite pending => exact pending.returned
   | interruptedFirstAppend stop => exact current.ready.stopsAtFirstAppend stop
+  | interruptedKeeperSync stop => exact current.ready.stopsAtKeeperSync stop
   | closeAfterUncertainWrite pending close =>
     refine ⟨pending.returned, ?_⟩
     have result := close.returns
@@ -237,6 +244,9 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
   | interruptedFirstAppend stop =>
     have reached := current.ready.stopsAtFirstAppend stop
     exact ⟨current.history, .inl rfl, reached.replay, reached.bounded⟩
+  | interruptedKeeperSync stop =>
+    have reached := current.ready.stopsAtKeeperSync stop
+    exact ⟨current.history, .inl rfl, reached.replay, reached.bounded⟩
   | closeAfterUncertainWrite pending close =>
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := close.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
@@ -261,6 +271,8 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
       NativeExecutionEndObservation current (.write write.request)
   | interruptedFirstAppend {prepared : NativeReadyWritePreparation current.ready.state}
       (stop : NativeFirstAppendStop prepared) : NativeExecutionEndObservation current (.write stop.request)
+  | interruptedKeeperSync {prepared : NativeReadyWritePreparation current.ready.state}
+      (stop : NativeWriteKeeperSyncStop prepared) : NativeExecutionEndObservation current (.write stop.request)
   | closeAfterUncertainWrite (write : NativeReadyWriteFailure current.ready.state)
       (inspect : ∀ cache, write.returnedAt cache → Nonempty (NativePendingWriteCensus current.ready.state cache))
       (close : ∀ pending : NativePendingWrite current.ready, pending.write = write → Nonempty (NativePendingClose pending)) :
@@ -304,6 +316,7 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
     change NativeExecutionEndInstruction.write pending.write.request = .write write.request
     rw [same]
   | interruptedFirstAppend stop => exact ⟨.interruptedFirstAppend stop, rfl, NativeExecutionEnd.reached _⟩
+  | interruptedKeeperSync stop => exact ⟨.interruptedKeeperSync stop, rfl, NativeExecutionEnd.reached _⟩
   | closeAfterUncertainWrite write inspect close =>
     obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite write inspect
     obtain ⟨closed⟩ := close pending same
