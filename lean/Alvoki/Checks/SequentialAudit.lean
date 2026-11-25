@@ -135,6 +135,7 @@ import Alvoki.Storage.Disk.CheckpointSuccessSession
 import Alvoki.Storage.Disk.SegmentedCheckpointStep
 import Alvoki.Storage.Disk.SegmentedWriterTrace
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
+import Alvoki.Storage.Disk.SegmentedRunCollection
 import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.SegmentedCollectionInventory
@@ -921,6 +922,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.preservesReady
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.preservesRetained
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.afterRunCollection
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.run_eq_schedule
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.selected_eligible
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.preservesRetained
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.collectObsoleteRuns
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromBootstrap
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromBootstrapRun
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.pinnedReads

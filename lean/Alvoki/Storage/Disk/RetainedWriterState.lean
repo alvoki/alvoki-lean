@@ -64,7 +64,7 @@ theorem SegmentedWriterState.RetainedReady.collectionOffsets_exact {directory de
 
 /-- The observed manifest's strict checkpoint and installed generation
 provide the generation check in the executable WAL planner. -/
-private theorem SelectedIntegrityCheckpoint.collectionGeneration {durable binding checkpoint}
+theorem SelectedIntegrityCheckpoint.collectionGeneration {durable binding checkpoint}
     (selected : SelectedIntegrityCheckpoint durable binding checkpoint) :
     let generation := (checkpoint.getD (.empty, 0)).2
     validateIntegrityRunCollectionGeneration generation binding = .ok (binding.map fun _ => generation) := by

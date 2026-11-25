@@ -148,6 +148,12 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (installed : report.AdmittedReopen (files := files) stop input retry descriptor after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.uncertainBatch report.batch]) descriptor after
+  | collectRuns {runs : CheckpointPublication.RunUnlinkImage}
+      (enabled : allowCollection = true)
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (reports : SegmentedRunCollectionReports directory before runs) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer
+        (before.afterRunCollection reports.reached.guaranteed)
 
 private theorem appendUncertainBatch {initial before after batch retained : List WAL.Write}
     {log : List DatabaseSubmissions} (retention : DatabaseBatchRetention log retained)
@@ -197,6 +203,23 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | batchAppendAdmitted _ _ installed ih =>
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history (.inl installed.history)⟩
+  | collectRuns _ _ reports ih =>
+    obtain ⟨ready, retained, history, retention⟩ := ih
+    exact ⟨(reports.preservesRetained ready).1, retained, history, retention⟩
+
+/-- Keep the submission log, installed table and lock across a reported
+run collection outcome. A crash run map retains the same strict checkpoint
+under the still-settled manifest used by the unchanged WAL. -/
+theorem SegmentedBatchDatabaseTrace.collectObsoleteRuns
+    {runs : CheckpointPublication.RunUnlinkImage}
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor) (enabled : allowCollection = true)
+    (reports : SegmentedRunCollectionReports directory before runs) :
+    SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer
+      (before.afterRunCollection reports.reached.guaranteed) ∧
+    ∀ survived ∈ reports.reached.crashImages,
+      SelectedIntegrityCheckpoint survived before.target.pair.manifest before.checkpoint :=
+  ⟨.collectRuns enabled trace reports, (reports.preservesRetained (trace.preservesRetained initialReady).1).2⟩
 
 /-- Continue the mixed history at the exact reported clean reopen. Explicit
 unlock and reacquisition change the session while the checkpoint binding

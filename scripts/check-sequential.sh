@@ -106,6 +106,7 @@ lake env leanchecker Alvoki.Storage.Disk.RetainedWriterReopen
 lake env leanchecker Alvoki.Storage.Disk.RetainedCollectionPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionStep
+lake env leanchecker Alvoki.Storage.Disk.SegmentedRunCollection
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionRetry
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionLiveReopen

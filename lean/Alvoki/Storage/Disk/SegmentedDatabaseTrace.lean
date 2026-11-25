@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.SegmentedCollectionPowerLoss
 import Alvoki.Storage.Disk.SegmentedCollectionRetry
 import Alvoki.Storage.Disk.SegmentedCollectionLiveReopen
 import Alvoki.Storage.Disk.SegmentedCollectionCachedReopen
+import Alvoki.Storage.Disk.SegmentedRunCollection
 import Alvoki.Storage.Disk.SegmentedAppendRecovery
 import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
@@ -153,6 +154,12 @@ inductive SegmentedDatabaseTrace (directory : DiskDirectory) (initialDescriptor 
       (report : SegmentedCollectionReopenReport directory before writer descriptor)
       (observed : report.Valid) (endpoint : report.Installs after) :
       SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
+  | collectRuns {log descriptor before} {runs : CheckpointPublication.RunUnlinkImage}
+      (enabled : allowCollection = true)
+      (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor before)
+      (reports : SegmentedRunCollectionReports directory before runs) :
+      SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log descriptor
+        (before.afterRunCollection reports.reached.guaranteed)
 
 private theorem retainsInterruptedAppend {initial before after : List WAL.Write} {log retained event}
     (history : before = initial ++ retained) (submitted : MarkedSessionRetention log retained)
@@ -273,6 +280,9 @@ private theorem SegmentedDatabaseTrace.preservesReadiness {directory initialDesc
     obtain ⟨before, _, retained, history, submitted⟩ := ih
     exact ⟨endpoint.preservesRetained observed before,
       (fun disabled => by simp [disabled] at enabled), retained, endpoint.history.trans history, submitted⟩
+  | collectRuns _ _ reports ih =>
+    obtain ⟨before, fullChain, retained, history, submitted⟩ := ih
+    exact ⟨(reports.preservesRetained before).1, fullChain, retained, history, submitted⟩
 
 theorem SegmentedDatabaseTrace.preservesReady {directory initialDescriptor initial log descriptor last}
     (trace : SegmentedDatabaseTrace directory initialDescriptor initial false log descriptor last)
