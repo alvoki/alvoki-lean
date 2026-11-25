@@ -300,6 +300,23 @@ theorem acknowledgedWrite_selectBatch {α : Type}
     walCurrent markerCurrent walSettled markerSettled walSurvived markerSurvived history batch
     prior advanced size unchanged writtenBytes appendedBytes
 
+/-- A successful short positional write advances the cursor by the
+reported count. Every byte covered by that syscall is inside the target
+record, and the next cursor still satisfies the original length bound.
+An interrupted syscall that transfers no bytes leaves the cursor alone. -/
+theorem slotWrite_cursor (active : Slot) {cursor remaining transferred : Nat}
+    (length : cursor + remaining = 40)
+    (reported : transferred ≤ remaining) :
+    let start := slotIndex active.other * stride
+    (∀ index < transferred, start ≤ start + cursor + index ∧
+      start + cursor + index < start + 40) ∧
+    (cursor + transferred) + (remaining - transferred) = 40 := by
+  dsimp
+  constructor
+  · intro index inWrite
+    constructor <;> omega
+  · omega
+
 /-- Filesystem contract for one surviving marker container after an
 interrupted positional write to its inactive record. -/
 def InterruptedSlotBytes (before bytes : ByteArray) (active : Slot) (next : Selection) : Prop :=

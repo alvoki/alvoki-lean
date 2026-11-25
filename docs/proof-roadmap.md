@@ -132,7 +132,12 @@ from successful sync reports on the held WAL and marker inodes. The reports
 assume successful file sync persists the visible bytes of the named inode.
 If the slot write is interrupted after the WAL sync, the same descriptor
 model derives the surviving WAL bytes. The live marker inode supplies the
-crash bytes subject to the inactive-slot isolation and decode assumptions.
+crash bytes subject to the inactive-slot isolation and decode assumptions. The
+short-write cursor proof checks that each reported byte count keeps the
+next request inside the selected record. The native fixture resumes after
+a 17-byte write and checks recovery of the acknowledged batch. The bound
+on syscall offsets concerns visible writes. Crash isolation across the
+two slots remains a storage assumption.
 Before the slot write starts, a crash can expose any append suffix that
 preserves the durable WAL prefix, while the unchanged marker selects
 exactly the previous history.
