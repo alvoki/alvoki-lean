@@ -431,6 +431,38 @@ def check_two_slot_effective_sync_error(binary, shim, database, rotated, fail_wa
             "reopen did not extend the expected recovered history")
 
 
+def check_two_slot_first_batch_cut(binary, shim, database):
+    database.mkdir()
+    status, stderr = run_probe(binary, "--two-slot-open-once", database)
+    require(status == 0, f"could not bootstrap two-slot database: {stderr}")
+    marker = database / "WAL.commit"
+    wal = database / "WAL-segment-0"
+    before = marker.read_bytes()
+    before_wal = wal.read_bytes()
+    with tempfile.TemporaryDirectory() as scratch:
+        ready = Path(scratch) / "slot.pid"
+        with native_process(binary, "--two-slot-submit-first-batch", database, sync_pid_file=ready, env={
+            **os.environ,
+            "LD_PRELOAD": str(shim),
+            "ALVOKI_CHECK_SLOT_WRITE_HOLD": str(marker),
+            "ALVOKI_CHECK_SLOT_WRITE_PREFIX": "17",
+            "ALVOKI_CHECK_SYNC_PID": str(ready),
+            "ALVOKI_CHECK_SYNC_RELEASE": str(Path(scratch) / "release"),
+        }) as owner:
+            require(wait_for_cut(owner, ready, "first batch marker write") == owner.pid,
+                    "first batch marker write paused in the wrong process")
+            partial = marker.read_bytes()
+            require(partial[:4096] == before[:4096] and partial[4113:] == before[4113:]
+                    and partial[4096:4113] != before[4096:4113],
+                    "first batch partial write escaped the second slot")
+            require(len(wal.read_bytes()) > len(before_wal), "first batch did not reach the WAL")
+            owner.kill()
+            require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "first batch writer was not killed")
+    status, stderr = run_probe(binary, "--two-slot-open-once", database)
+    require(status == 0, f"could not reopen after tearing the second slot: {stderr}")
+    require(wal.read_bytes() == before_wal, "reopen retained an uncommitted first batch")
+
+
 def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False, prefix=17, full_marker=None):
     database.mkdir()
     status, stderr = run_probe(binary, "--two-slot-seed", database, "rotated" if rotated else "zero")
@@ -698,6 +730,7 @@ if __name__ == "__main__":
                 database = root / f"close-cut-{int(effective)}-{int(poisoned)}"
                 check_fork_exec_lock(binary, shim, database, effective, poisoned)
         check_batch_append_cut(binary, shim, root / "batch-append-cut")
+        check_two_slot_first_batch_cut(binary, shim, root / "two-slot-first-batch-cut")
         for rotated in (False, True):
             for fail_wal in (False, True):
                 check_two_slot_effective_sync_error(

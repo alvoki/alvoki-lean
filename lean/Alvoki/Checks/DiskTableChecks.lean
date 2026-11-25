@@ -2495,6 +2495,10 @@ def main (args : List String) : IO Unit := do
       check ((← db.write 7 (some 99)) == 1) "wrong seeded sequence"
       if layout == "rotated" then db.rotateWal
     finally db.close
+  | ["--two-slot-submit-first-batch", path] =>
+    let db ← TwoSlotDiskTable.open ⟨path⟩
+    try check ((← db.writeBatch [(7, none), (8, some 123)]) == 2) "wrong first batch sequence"
+    finally db.close
   | ["--two-slot-submit-batch", path] =>
     let db ← TwoSlotDiskTable.open ⟨path⟩
     try check ((← db.writeBatch [(7, none), (8, some 123)]) == 3) "wrong batch sequence"
