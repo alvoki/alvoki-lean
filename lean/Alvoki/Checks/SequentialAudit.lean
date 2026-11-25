@@ -210,6 +210,7 @@ import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedRunCollection
 import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.ObsoleteRunInodeLifetime
+import Alvoki.Storage.Disk.NativeObsoleteRunBlockRelease
 import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.MixedTraceSnapshotReads
 import Alvoki.Storage.Disk.ClientReadTrace
@@ -1912,6 +1913,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RunInodeLinkReports.noLinks
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.selectedInodeSlotsDropped
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.selectedInodeNoLinksOrSlots
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunInodeReport.detachesOriginal
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunInodeReport.releasesBlocks
+#check_axioms Alvoki.Storage.DiskSession.CheckpointRunCollectionReports.releasesObsoleteBlocks
 #check_axioms Alvoki.Storage.WalSealedUnlinkReports.reachesBarrier
 #check_axioms Alvoki.Storage.WalSealedUnlinkImage.completeSealed_absent
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.reclaimsAtEffectiveBarrier

@@ -117,6 +117,16 @@ theorem preservesCensus (seen : NativeObsoleteRunPlan state) : seen.listing.afte
       · simp [DescriptorSlot.closeEvent, LockReferenceDrop.removes, process]
   exact stays state.census seen.listing.stream free
 
+/-- The exact metadata at the selected no-follow probe is regular. -/
+theorem reportedRegular (seen : NativeObsoleteRunPlan state) {generation : UInt64} {index : Nat}
+    (listed : renderRunFileName generation index ∈ seen.reports.inventory.names)
+    (older : generation < state.writer.installed.generation) (unheld : generation ∉ seen.reports.held)
+    {metadata : IO.FS.Metadata} (reported : seen.stat (state.session.directory.file (.run generation index)) = .ok metadata)
+    (regular : seen.reports.inventory.kindAt (state.session.directory.file (.run generation index)) = .ok .file) :
+    metadata.type = .file := by
+  simpa [runKindAt, reported, regular, Bind.bind, Except.bind, Pure.pure, Except.pure]
+    using seen.kind generation index listed older unheld
+
 private theorem selectsFromLstat (seen : NativeObsoleteRunPlan state) :
     selectRunFilesWith (m := Except IO.Error) state.session.directory
       (seen.reports.observed.map fun _ => state.writer.installed.generation)
