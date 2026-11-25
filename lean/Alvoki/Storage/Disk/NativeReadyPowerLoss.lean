@@ -137,7 +137,7 @@ structure NativeReadyRestartReads {state : NativeReadyState} (crash : NativeRead
   earlierTokens : state.session.phaseRef ∈ opening.callbacks.liveRefs ∧ state.session.sessionRef ∈ opening.callbacks.liveRefs
   metadataRelease : FilePath → List LockReferenceDrop
   manifestDrops : List LockReferenceDrop
-  manifest : CapturedManifestCensus opening.reads metadataRelease manifestDrops
+  manifest : CapturedManifestCensus opening.reads metadataRelease opening.admission.reached manifestDrops
   runs : CapturedRunReadCensus opening.reads (opening.admission.reached.afterDrops manifestDrops)
   markerRead : CapturedMarkerCensus opening.reads ((opening.admission.reached.afterDrops manifestDrops).afterDrops
     (runReadDrops runs.events (selectedRunCount crash.retry.image.directory.active.manifest))) metadataRelease

@@ -1054,3 +1054,15 @@ the exact raw-open descriptor census along with the decoded selection
 while preserving the held files and cache. The full composition still
 needs to use that post-acquisition census as the initial census of the
 checkpoint reader, distinct from the earlier lock-and-cache admission.
+
+The chronological manifest and checkpoint-run proofs now start from
+an explicit descriptor inventory. The rename callers pass the admitted
+lock-and-directory census. The two-slot acquisition can pass its
+post-open census to the same checkpoint proof. The WAL scan reports
+still need to use that new starting inventory.
+
+The two-slot opener now has a composed marker-and-checkpoint read
+proof. It starts at lock and cache admission, takes the actual
+marker-open inventory into the manifest and run readers, and returns
+the selected marker and checkpoint with the inventory reached by
+those reads.

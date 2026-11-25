@@ -520,7 +520,7 @@ checkpoint and WAL supplies the same returned table and continues into
 replacement using the temporary keeper's reached close census. -/
 theorem installsFromCensus (finish : CapturedLongKeeperFinish calls report vacant selected)
     {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
-    (manifest : CapturedManifestCensus report metadataRelease manifestDrops)
+    (manifest : CapturedManifestCensus report metadataRelease admission.reached manifestDrops)
     (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
     (markerRead : CapturedMarkerCensus report ((admission.reached.afterDrops manifestDrops).afterDrops
       (runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest))) metadataRelease)

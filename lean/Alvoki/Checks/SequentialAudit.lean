@@ -2780,6 +2780,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.recoveredRetries_retainUncertainBatch
 #check_axioms Alvoki.WAL.TwoSlot.recoveredRetries_installedReads
 #check_axioms Alvoki.WAL.TwoSlot.preparesFromHeldMarker
+#check_axioms Alvoki.WAL.TwoSlot.acquiresAndReadsCheckpoint
 #check_axioms Alvoki.WAL.TwoSlot.stabilizesAfterKeeperRead
 #check_axioms Alvoki.WAL.TwoSlot.reopensAfterCapturedPreparation
 #check_axioms Alvoki.WAL.TwoSlot.reopensAlignedAfterCapturedPreparation

@@ -1387,12 +1387,42 @@ variable {input : System.FilePath} {directory : DiskDirectory} {inventory : Desc
   {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
   {published : CheckpointPublication.Image}
 
+/-- The checkpoint callbacks start at the census returned by opening
+the marker, using the same held lock and cached directory. -/
+theorem acquiresAndReadsCheckpoint
+    (report : CapturedMarkedReadReports admission layout published false)
+    {payload : ByteArray}
+    (file : HeldMetadataFile report.reads (directory.file .walBoundary) "WAL.commit"
+      admission.view admission.root payload)
+    (privateFile : file.calls.metadata.numLinks = 1)
+    (available : PrefixChunksAvailableUntilEof payload (report.reads.readChunk file.calls.slot.description))
+    {selection : Selection} (decoded : decode payload = .ok selection)
+    {release : System.FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
+    (manifest : CapturedManifestCensus report release file.calls.inventory manifestDrops)
+    (runs : CapturedRunReadCensus report (file.calls.inventory.afterDrops manifestDrops))
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) :
+    ((do
+      let marker ← acquireMarkerInCensus report.reads (directory.file .walBoundary)
+      let checkpoint ← report.readCheckpointFromCensus release runs.released
+      pure (marker, checkpoint)) :
+      EStateM IO.Error (CensusDirectoryCache × CensusOpenState)
+        ((KeeperDescriptorIdentity × Selection) × Option (PackedTable × UInt64)))
+      (admission.cache, admission.reached, admission.held) =
+      .ok ((⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩, selection), checkpoint)
+        (admission.cache,
+          (file.calls.inventory.afterDrops manifestDrops).afterDrops
+            (runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest)), admission.held) := by
+  have acquired := acquireMarkerInCensus_returns file privateFile available decoded
+    (admission.cache, admission.reached, admission.held)
+  simp only [Bind.bind, EStateM.bind, acquired, runs.reads manifest selected, Pure.pure, EStateM.pure]
+
 /-- The prepared table and plan use the exact checkpoint and WAL
 callbacks. The reached state carries both the keeper and marker slots. -/
 theorem preparesFromHeldMarker
     (report : CapturedMarkedReadReports admission layout published false)
     {metadataRelease : System.FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
-    (manifest : CapturedManifestCensus report metadataRelease manifestDrops)
+    (manifest : CapturedManifestCensus report metadataRelease admission.reached manifestDrops)
     (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)

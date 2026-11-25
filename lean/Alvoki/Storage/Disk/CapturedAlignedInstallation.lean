@@ -566,7 +566,7 @@ return its reached census. Both grouped barriers use that state before
 the open returns the exact replayed table. -/
 theorem installsFromCensus (finish : CapturedAlignedFinish calls report vacant selected)
     {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
-    (manifest : CapturedManifestCensus report metadataRelease manifestDrops)
+    (manifest : CapturedManifestCensus report metadataRelease admission.reached manifestDrops)
     (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
     (markerRead : CapturedMarkerCensus report ((admission.reached.afterDrops manifestDrops).afterDrops
       (runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest))) metadataRelease)
