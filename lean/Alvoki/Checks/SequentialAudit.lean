@@ -1578,6 +1578,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.publishes
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.installs
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.startFromEmpty
+#check_axioms Alvoki.Storage.DiskSession.BootstrapClientStart.acknowledgesThenRecovers
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerStaging.staged
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerStaging.writeProjected
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerStaging.syncPending

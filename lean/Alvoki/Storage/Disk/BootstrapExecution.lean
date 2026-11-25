@@ -1,9 +1,9 @@
-import Alvoki.Storage.Disk.BootstrapClientTrace
+import Alvoki.Storage.Disk.BatchRecoveryPrefix
 import Alvoki.Storage.Disk.BootstrapKeeperMarkerHandoff
 
 namespace Alvoki.Storage.DiskSession
 
-open System SyncHandleRouting WalSegmentRepair
+open System SyncHandleRouting WalSegmentRepair WAL.Boundary
 
 namespace BootstrapKeeperMarkerHandoff
 
@@ -36,4 +36,53 @@ theorem startFromEmpty {input : FilePath} (observed : BootstrapKeeperMarkerHando
     keeperName, markerName, keeperBytes, markerBytes⟩
 
 end BootstrapKeeperMarkerHandoff
+
+/-- Start from the returned bootstrap session, acknowledge a batch, and
+continue from an interruption of the next batch at the writer installed
+by that acknowledgement. The first batch is in the ledger before the
+interruption and the second enters as a single uncertain group. -/
+theorem BootstrapClientStart.acknowledgesThenRecovers {handle : Type} {directory : DiskDirectory}
+    {descriptor : Nat} {initialResult : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession}
+    (start : BootstrapClientStart directory descriptor initialResult)
+    (acknowledged : SegmentedBatchAppendReport directory start.writer)
+    (written : ObservedBatchWrite acknowledged handle) {target : Target}
+    (selection : acknowledged.Selects target)
+    {cut : SegmentedBatchMarkerPowerLossReport directory (acknowledged.next target) descriptor}
+    (observed : cut.Reached) {retry : LockedFileState FileImage}
+    (retries : ReportedReopenPrefix directory (acknowledged.next target).wal.active.first cut.inFlight retry)
+    {input : FilePath}
+    (readAndFinish : ∀ history, ∀ layout : CanonicalKeeperLayout retry.image history,
+      (history = (acknowledged.next target).history ∨
+        history = (acknowledged.next target).history ++ cut.batch) →
+      layout.target.first = (acknowledged.next target).wal.active.first →
+      Nonempty (PrimitiveCheckpointHeldOpen input directory layout (acknowledged.next target).published)) :
+    ∃ cacheAfter,
+      runBatchWrite directory acknowledged.rows written.guard.lookup written.append written.stage written.sync written.rename
+        (.ready start.writer.installed, ⟨(written.cache, WriteFiles.initial start.writer.history
+          (start.writer.files.directory.staged .walBoundary)), start.writer.owners⟩) =
+        .ok acknowledged.table.committed
+          (.ready (acknowledged.next target).installed, ⟨(cacheAfter, acknowledged.written), start.writer.owners⟩) ∧
+      ∃ (description : Nat) (after : SegmentedWriterState) (history : List WAL.Write)
+        (layout : CanonicalKeeperLayout retry.image history)
+        (reported : MarkedRetryChunkReports (Cache CheckpointOpenHandle) directory layout (acknowledged.next target).published)
+        (admission : OpenAdmissionReports input directory reported.slot) (session : SegmentedSession)
+        (final : LockedFileState FileImage),
+        reported.runWithAdmission admission = .ok session final ∧
+        session.directory = directory ∧ session.descriptor = description ∧ session.phase = .ready after.installed ∧
+        after.files = final.image ∧ after.owners = final.owners ∧ after.history = history ∧
+        (history = acknowledged.batch ∨ history = acknowledged.batch ++ cut.batch) ∧
+        SegmentedClientReadTrace directory descriptor start.writer false
+          [.acknowledgedBatch acknowledged.batch, .uncertainBatch cut.batch] [] description after ∧
+        GuardedClientReplay [.acknowledgedBatch acknowledged.batch, .uncertainBatch cut.batch] [] after session := by
+  obtain ⟨cacheAfter, returned⟩ := written.acknowledges
+  have trace : SegmentedClientReadTrace directory descriptor start.writer false
+      [.acknowledgedBatch acknowledged.batch] [] descriptor (acknowledged.next target) :=
+    (start.starts false).advance (.acknowledgedBatch .start acknowledged selection)
+  obtain ⟨description, after, history, layout, reported, admission, session, final, opened, path, lock, phase,
+    files, owners, sameHistory, retained, continued, replay⟩ :=
+    trace.reopenAfterReportedBatchMarker start observed retries readAndFinish
+  have batchHistory : (acknowledged.next target).history = acknowledged.batch := rfl
+  exact ⟨cacheAfter, returned, description, after, history, layout, reported, admission, session, final,
+    opened, path, lock, phase, files, owners, sameHistory, by simpa only [batchHistory] using retained, continued, replay⟩
+
 end Alvoki.Storage.DiskSession
