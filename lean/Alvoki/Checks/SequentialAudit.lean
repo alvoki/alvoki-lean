@@ -1387,6 +1387,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runBatchWrite_acknowledges
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.censusAfterClose
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.physicalCustody
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.bindingFrames
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.nextCacheBindings
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.groupReturns
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.publishes
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.acknowledges

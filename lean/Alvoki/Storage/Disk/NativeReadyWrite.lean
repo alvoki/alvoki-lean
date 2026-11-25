@@ -15,7 +15,6 @@ structure NativeReadyWritePreparation (before : NativeReadyState) where
   nonempty : rows ≠ []
   prepared : prepareBatch before.writer.installed.table rows = some (batch, table)
   fits : before.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size
-  guard : BatchActiveGuard before.session.directory before.writer.installed
   tails : List ByteArray
 
 namespace NativeReadyWritePreparation
@@ -24,6 +23,9 @@ variable {before : NativeReadyState}
 
 abbrev keeperPath (_prepared : NativeReadyWritePreparation before) : FilePath :=
   before.session.directory.file (.walSegment before.writer.installed.activeFirst)
+
+abbrev keeperName (_prepared : NativeReadyWritePreparation before) : String :=
+  renderWalSegmentName before.writer.installed.activeFirst
 
 abbrev stagedPath (_prepared : NativeReadyWritePreparation before) : FilePath :=
   before.session.directory.file .stagedWalBoundary
@@ -72,7 +74,8 @@ end NativeReadyWritePreparation
 /-- The first append after reopen uses a cold active cache. The successful
 append and marker allocations extend the reached inventory in order.
 The reported staging close is the only additional descriptor drop before
-return. The filesystem supplies the individual callback effects. -/
+return. The filesystem supplies raw results and namespace frames under
+the held lock, with no concurrent rebinding by other processes. -/
 structure NativeReadyWriteReport {before : NativeReadyState} (prepared : NativeReadyWritePreparation before) where
   cold : before.cache.active = none
   pendingEmpty : before.cache.pending = []
@@ -88,20 +91,34 @@ structure NativeReadyWriteReport {before : NativeReadyState} (prepared : NativeR
   keeperFree : ∀ old ∈ before.census.slots, old.address ≠ keeperSlot.address
   keeperFresh : before.census.references keeperSlot.description = []
   keeperOffset : Nat
-  checkedKeeper : RunChildLookup root (renderWalSegmentName before.writer.installed.activeFirst) view
-  openedKeeper : RunChildLookup root (renderWalSegmentName before.writer.installed.activeFirst) view
+  checkedKeeper : RunChildLookup root prepared.keeperName view
+  lstat : FilePath → Except IO.Error (IO.FS.Metadata × Nat)
+  metadata : IO.FS.Metadata
+  statReturned : lstat prepared.keeperPath = .ok (metadata, view.modelObject checkedKeeper.child)
+  regular : metadata.type = .file
+  privateFile : metadata.numLinks = 1
+  extent : metadata.byteSize.toNat = before.writer.installed.walBytes - before.writer.installed.activeFirst * WAL.frameSize
+  openedKeeper : RunChildLookup root prepared.keeperName view
   keeperIdentity : view.modelObject openedKeeper.child = before.census.inode keeperSlot.description
   markerSlot : DescriptorSlot
   markerFree : ∀ old ∈ (before.census.insert keeperSlot keeperFree).slots, old.address ≠ markerSlot.address
   markerFresh : (before.census.insert keeperSlot keeperFree).references markerSlot.description = []
   markerOffset : Nat
   stageView : DirectoryReadNamespace
+  stageObjects : stageView.modelObject = view.modelObject
+  stageNames : ∀ name, name ≠ "WAL.commit.next" → stageView.child root name = view.child root name
   openedMarker : RunChildLookup root "WAL.commit.next" stageView
   stageIdentity : stageView.modelObject openedMarker.child = before.census.inode markerSlot.description
   differentFiles : before.census.inode markerSlot.description ≠ before.census.inode keeperSlot.description
   publishedView : DirectoryReadNamespace
+  renameObjects : publishedView.modelObject = stageView.modelObject
+  renameNames : ∀ name, name ≠ "WAL.commit.next" → name ≠ "WAL.commit" →
+    publishedView.child root name = stageView.child root name
   publishedMarker : RunChildLookup root "WAL.commit" publishedView
-  renameIdentity : publishedView.modelObject publishedMarker.child = stageView.modelObject openedMarker.child
+  renameChild : publishedMarker.child = openedMarker.child
+  settledView : DirectoryReadNamespace
+  directoryObjects : settledView.modelObject = publishedView.modelObject
+  directoryNames : ∀ name, settledView.child root name = publishedView.child root name
   openAppend : FilePath → EStateM IO.Error WriteFiles WriteHandle
   appendWrite : WriteHandle → ByteArray → EStateM IO.Error WriteFiles Unit
   appendFlush : WriteHandle → EStateM IO.Error WriteFiles Unit
@@ -135,6 +152,17 @@ structure NativeReadyWriteReport {before : NativeReadyState} (prepared : NativeR
 namespace NativeReadyWriteReport
 
 variable {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
+
+/-- The production active-file guard projects the metadata from the
+identity-bearing no-follow stat of the exact checked child. -/
+def activeGuard (seen : NativeReadyWriteReport prepared) : BatchActiveGuard before.session.directory before.writer.installed where
+  lookup := fun path => (seen.lstat path).map Prod.fst
+  metadata := seen.metadata
+  reached := by rw [show before.session.directory.file (.walSegment before.writer.installed.activeFirst) = prepared.keeperPath from rfl,
+    seen.statReturned]; rfl
+  regular := seen.regular
+  privateFile := seen.privateFile
+  extent := seen.extent
 
 abbrev afterKeeperOpen (seen : NativeReadyWriteReport prepared) : DescriptorInventory :=
   before.census.insert seen.keeperSlot seen.keeperFree
@@ -186,9 +214,9 @@ same object, including after the observed staged-handle release. -/
 theorem physicalCustody (seen : NativeReadyWriteReport prepared) (valid : before.Valid) :
     seen.checkedKeeper.child = seen.openedKeeper.child ∧
     seen.view.modelObject seen.checkedKeeper.child = seen.census.inode seen.keeperSlot.description ∧
-    seen.publishedView.modelObject seen.publishedMarker.child = seen.census.inode seen.markerSlot.description ∧
+    seen.settledView.modelObject seen.publishedMarker.child = seen.census.inode seen.markerSlot.description ∧
     seen.census.inode seen.markerSlot.description ≠ seen.census.inode seen.keeperSlot.description ∧
-    seen.directoryCapture.inode before.directorySlot.description = seen.view.modelObject seen.root ∧
+    seen.directoryCapture.inode before.directorySlot.description = seen.settledView.modelObject seen.root ∧
     seen.view.modelObject seen.lockLookup.child = seen.census.inode before.owner.description ∧
     seen.keeperSlot ∈ seen.afterMarkerOpen.slots ∧ seen.markerSlot ∈ seen.afterMarkerOpen.slots ∧
     before.owner ∈ seen.census.slots ∧ before.directorySlot ∈ seen.census.slots ∧
@@ -198,14 +226,47 @@ theorem physicalCustody (seen : NativeReadyWriteReport prepared) (valid : before
   have same := seen.checkedKeeper.child_eq bound
   rw [seen.censusAfterClose]
   exact ⟨same, (congrArg seen.view.modelObject same).trans seen.keeperIdentity,
-    seen.renameIdentity.trans seen.stageIdentity, seen.differentFiles,
-    seen.sameDirectoryInode.trans seen.directoryIdentity.symm, seen.lockIdentity,
+    by rw [seen.directoryObjects, seen.renameObjects, seen.renameChild]; exact seen.stageIdentity, seen.differentFiles,
+    by rw [seen.directoryObjects, seen.renameObjects, seen.stageObjects]; exact seen.sameDirectoryInode.trans seen.directoryIdentity.symm,
+    seen.lockIdentity,
     List.mem_cons_of_mem _ List.mem_cons_self, List.mem_cons_self,
     List.mem_cons_of_mem _ valid.ownerLive, List.mem_cons_of_mem _ valid.directoryLive, seen.keeperFresh, seen.markerFresh⟩
 
+private theorem rootedChild {root name view} (lookup : RunChildLookup root name view) :
+    view.child root name = some lookup.child := by
+  simpa only [lookup.atRoot, lookup.atName] using lookup.binds
+
+/-- The canonical keeper and lock stay bound to their original children
+at the grouped sync, at directory fsync after rename, and on return. -/
+structure BindingFrames (seen : NativeReadyWriteReport prepared) : Prop where
+  keeperAtGroup : seen.stageView.child seen.root prepared.keeperName = some seen.checkedKeeper.child
+  lockAtGroup : seen.stageView.child seen.root "LOCK" = some seen.lockLookup.child
+  keeperAtBarrier : seen.publishedView.child seen.root prepared.keeperName = some seen.checkedKeeper.child
+  lockAtBarrier : seen.publishedView.child seen.root "LOCK" = some seen.lockLookup.child
+  keeperAtReturn : seen.settledView.child seen.root prepared.keeperName = some seen.checkedKeeper.child
+  lockAtReturn : seen.settledView.child seen.root "LOCK" = some seen.lockLookup.child
+  markerAtReturn : seen.settledView.child seen.root "WAL.commit" = some seen.openedMarker.child
+
+theorem bindingFrames (seen : NativeReadyWriteReport prepared) : seen.BindingFrames := by
+  have differentStage : prepared.keeperName ≠ "WAL.commit.next" := by
+    intro same
+    have samePrefix := congrArg (fun name : String => name.toList.take 4) same
+    simp [NativeReadyWritePreparation.keeperName, renderWalSegmentName, String.toList_append] at samePrefix
+  have differentMarker : prepared.keeperName ≠ "WAL.commit" := by
+    intro same
+    have samePrefix := congrArg (fun name : String => name.toList.take 4) same
+    simp [NativeReadyWritePreparation.keeperName, renderWalSegmentName, String.toList_append] at samePrefix
+  have keeperStaged := (seen.stageNames _ differentStage).trans (rootedChild seen.checkedKeeper)
+  have lockStaged := (seen.stageNames "LOCK" (by decide)).trans (rootedChild seen.lockLookup)
+  have keeperRenamed := (seen.renameNames _ differentStage differentMarker).trans keeperStaged
+  have lockRenamed := (seen.renameNames "LOCK" (by decide) (by decide)).trans lockStaged
+  exact ⟨keeperStaged, lockStaged, keeperRenamed, lockRenamed,
+    (seen.directoryNames _).trans keeperRenamed, (seen.directoryNames _).trans lockRenamed,
+    (seen.directoryNames _).trans ((rootedChild seen.publishedMarker).trans (congrArg some seen.renameChild))⟩
+
 noncomputable def calls (seen : NativeReadyWriteReport prepared) : WriteRequest.Calls WriteHandle where
   cache := before.cache
-  lookup := prepared.guard.lookup
+  lookup := seen.activeGuard.lookup
   append := fun path bytes => runAppendWithCache path bytes seen.openAppend seen.appendWrite seen.appendFlush
   stage := fun path bytes => stageFreshWithCache path bytes
     (writeFreshStagedWith seen.tryStage seen.detachStale seen.createStage seen.stageWrite seen.stageFlush)
@@ -374,6 +435,26 @@ noncomputable def next (seen : NativeReadyWriteReport prepared) (target : Target
     census := seen.census
     cache := seen.appendCache }
 
+/-- The next append's canonical path still denotes the live active
+handle in the returned cache, and the same root and lock bindings remain. -/
+theorem nextCacheBindings (seen : NativeReadyWriteReport prepared) (valid : before.Valid) (target : Target) :
+    (seen.next target).cache.directory = some (seen.directoryCapture, (seen.next target).directorySlot, 0) ∧
+    (seen.next target).cache.active = some ((seen.next target).session.directory.file
+      (.walSegment (seen.next target).writer.installed.activeFirst), seen.keeperHandle) ∧
+    (seen.next target).cache.pending = [] ∧
+    seen.settledView.modelObject seen.root = seen.directoryCapture.inode (seen.next target).directorySlot.description ∧
+    (seen.settledView.child seen.root (renderWalSegmentName (seen.next target).writer.installed.activeFirst)).map
+      seen.settledView.modelObject = some ((seen.next target).census.inode seen.keeperSlot.description) ∧
+    (seen.settledView.child seen.root "LOCK").map seen.settledView.modelObject =
+      some ((seen.next target).census.inode (seen.next target).owner.description) := by
+  obtain ⟨_, keeper, _, _, directory, lock, _, _, _, _, _, _⟩ := seen.physicalCustody valid
+  refine ⟨seen.directoryCached, rfl, seen.pendingEmpty, directory.symm, ?_, ?_⟩
+  · change (seen.settledView.child seen.root prepared.keeperName).map seen.settledView.modelObject = _
+    rw [seen.bindingFrames.keeperAtReturn, seen.directoryObjects, seen.renameObjects, seen.stageObjects]
+    exact congrArg some keeper
+  · rw [seen.bindingFrames.lockAtReturn, seen.directoryObjects, seen.renameObjects, seen.stageObjects]
+    exact congrArg some lock
+
 /-- Both public write entry points acknowledge the same exact reached
 files and cache. The next writer retains the same owner and session
 references, with the newly selected history and active append slot. -/
@@ -398,7 +479,7 @@ theorem acknowledges (seen : NativeReadyWriteReport prepared) (valid : before.Va
   have returned : seen.calls.run request before.session.directory before.writer =
       .ok prepared.table.committed (.ready seen.publication.nextInstalled, ⟨(seen.appendCache, prepared.settled), before.writer.owners⟩) := by
     rw [WriteRequest.Calls.run, request.runReported_eq_batch valid.retained, rows]
-    exact runBatchWrite_acknowledges prepared.guard prepared.nonempty prepared.prepared prepared.fits seen.publishes
+    exact runBatchWrite_acknowledges seen.activeGuard prepared.nonempty prepared.prepared prepared.fits seen.publishes
   exact ⟨target, selected, ⟨rfl, valid.owner, keepLive _ valid.ownerLive, keepLive _ valid.directoryLive,
       ⟨seen.directoryCapture, seen.directoryCached⟩, retained⟩,
     returned, rfl, rfl, rfl, rfl, appendLive⟩
