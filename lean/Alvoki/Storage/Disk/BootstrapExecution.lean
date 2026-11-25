@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.BatchRecoveryPrefix
 import Alvoki.Storage.Disk.BatchInterruptionDispatch
 import Alvoki.Storage.Disk.BootstrapKeeperMarkerHandoff
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
+import Alvoki.Storage.Disk.NativeReadyReadPrefix
 
 namespace Alvoki.Storage.DiskSession
 
@@ -36,6 +37,63 @@ theorem startFromEmpty {input : FilePath} (observed : BootstrapKeeperMarkerHando
     observed.installs admission valid false
   exact ⟨⟨_, after, bootstrap, returned, rfl, rfl, rfl, ready.held⟩, image, rfl,
     keeperName, markerName, keeperBytes, markerBytes⟩
+
+/-- The final marker close belongs to the observed file barrier. The
+directory barrier then keeps the two live descriptors of this admission. -/
+structure ReturnedCensus (marker : BootstrapMarkerCustody listed) where
+  stageReleased : ∃ prior, marker.afterFile = prior ++ [marker.slot.closeEvent]
+  directoryDrops : List LockReferenceDrop
+  lockRetained : calls.slot ∈ (marker.inventory.afterDrops
+    (marker.beforeFile ++ marker.afterFile ++ directoryDrops)).slots
+  cacheRetained : captured.cached ∈ (marker.inventory.afterDrops
+    (marker.beforeFile ++ marker.afterFile ++ directoryDrops)).slots
+
+def ReturnedCensus.reached (effects : ReturnedCensus marker) : DescriptorInventory :=
+  marker.inventory.afterDrops (marker.beforeFile ++ marker.afterFile ++ effects.directoryDrops)
+
+theorem ReturnedCensus.stageClosed (effects : ReturnedCensus marker) :
+    effects.reached.references marker.slot.description = [] := by
+  obtain ⟨prior, finalized⟩ := effects.stageReleased
+  unfold reached BootstrapMarkerStaging.inventory
+  have ordered : marker.beforeFile ++ (prior ++ [marker.slot.closeEvent]) ++ effects.directoryDrops =
+      (marker.beforeFile ++ prior ++ [marker.slot.closeEvent]) ++ effects.directoryDrops := by
+    simp only [List.append_assoc]
+  rw [finalized, ordered, ← DescriptorInventory.afterDrops_append, DescriptorInventory.insert_thenClose,
+    DescriptorInventory.references_afterDrops, DescriptorInventory.references_afterDrops, marker.fresh]
+  rfl
+
+/-- The successful native bootstrap from the empty managed directory
+supplies the session and file projection for the same ready read prefix.
+The census follows its actual marker allocation and reported releases. -/
+theorem startsNativeReadPrefixFromEmpty {input : FilePath} (observed : BootstrapKeeperMarkerHandoff keeper marker)
+    (admission : OpenAdmissionReports input directory calls.slot)
+    (empty : before.image = ⟨DirectoryPublication.Image.settled ⟨none, none⟩, .absent⟩)
+    (effects : ReturnedCensus marker) :
+    ∃ (start : BootstrapClientStart directory calls.slot.description (calls.run admission)),
+      let state : NativeReadyState :=
+        ⟨start.session, start.writer, effects.reached, captured.cache, calls.slot, captured.cached⟩
+      calls.run admission = .ok state.session start.final ∧
+      state.files.owners = start.final.owners ∧ state.files.image.directory = start.final.image.metadata ∧
+      state.writer.history = [] ∧
+      effects.reached.references marker.slot.description = [] ∧
+      observed.afterMarkerNames (renderWalSegmentName 0) = [some keeper.keeperChild] ∧
+      observed.afterMarkerNames "WAL.commit" = [some marker.stageChild.child] ∧
+      ((marker.inodeState.completeFileSync marker.inodeState.active).settleBinding).crashBytes
+        keeper.settledImage.active = [ByteArray.empty] ∧
+      ((marker.inodeState.completeFileSync marker.inodeState.active).settleBinding).crashBytes
+        marker.inodeState.active = [WAL.Boundary.encode 0] ∧
+      NativeReadyReadPrefix (.ok state.session (state.census, state.files)) state [] [] [] state := by
+  obtain ⟨start, _, emptyHistory, keeperName, markerName, keeperBytes, markerBytes⟩ :=
+    observed.startFromEmpty admission empty
+  let state : NativeReadyState :=
+    ⟨start.session, start.writer, effects.reached, captured.cache, calls.slot, captured.cached⟩
+  have ready := (start.bootstrap.writerReady start.held).toRetained
+  have valid : state.Valid :=
+    ⟨start.installed, start.lockDescription.symm, effects.lockRetained, effects.cacheRetained,
+      ⟨captured.reached, rfl⟩, start.canonicalDirectory.symm ▸ start.lockDescription.symm ▸ ready⟩
+  have pending : PendingClientReplay [] [] [] := ⟨.empty, .nil _, .start, .slnil, .slnil, by simp⟩
+  exact ⟨start, start.returned, rfl, rfl, emptyHistory, effects.stageClosed,
+    keeperName, markerName, keeperBytes, markerBytes, .installed rfl valid emptyHistory pending⟩
 
 end BootstrapKeeperMarkerHandoff
 
