@@ -262,6 +262,7 @@ import Alvoki.Storage.Disk.NativePrunedAlignedKeeperCache
 import Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
 import Alvoki.Storage.Disk.NativeMarkedWalExtentsHeap
 import Alvoki.Storage.Disk.NativeMarkedSealHeap
+import Alvoki.Storage.Disk.NativeAlignedMarkedWorker
 import Alvoki.Storage.Disk.NativeLongKeeperReadHeap
 import Alvoki.Storage.Disk.NativeAlignedOpenHeap
 import Alvoki.Storage.Disk.NativePrunedAlignedOpenHeap
@@ -1735,6 +1736,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.selects
 #check_axioms Alvoki.Storage.DiskSession.MarkedSealReadChain.reaches
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.reachesKeeper
+#check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.recoversWithSelectedPreparation
+#check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.recoversFromOpenedCache
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromAlignedCache
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromRepairedHeap
 #check_axioms Alvoki.Storage.DiskSession.MarkedHeapInstallation.startsAtReportedPosition
