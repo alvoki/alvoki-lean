@@ -894,3 +894,7 @@ successful marker-open equation.
 The acquisition projection now checks the no-follow stat before opening
 the marker. Its successful branch uses the native private-regular-file
 guard, including the one-link requirement, before reading any bytes.
+
+The client proof identifies the marker handle with the description and
+inode in the held-open report. One identity equation now supplies both
+the description used by bounded reads and the inode targeted by fsync.

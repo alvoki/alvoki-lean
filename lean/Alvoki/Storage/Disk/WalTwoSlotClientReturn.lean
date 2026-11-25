@@ -1415,19 +1415,20 @@ theorem recoveredRetries_installedReads
       prepared.kept entry.1 = some bytes)
     (keeperRead : readKeeper (directory.file (.walSegment target.first)) target.trimmed.size
       keeperMetadata.byteSize.toNat atKeeper = .ok target.trimmed prepared)
-    {marker settledMarker : WalInodeImage} {markerHandle : KeeperDescriptorIdentity}
+    {marker settledMarker : WalInodeImage}
     {markerReads : WalSegmentRepair.CheckpointRunChunkReads}
     {markerView : DiskSession.DirectoryReadNamespace} {markerRoot : DiskSession.DeviceInode}
     (markerFile : DiskSession.HeldMetadataFile markerReads (directory.file .walBoundary)
-      "WAL.commit" markerView markerRoot (marker.visible markerHandle.inode))
+      "WAL.commit" markerView markerRoot (marker.visible marker.active))
     (markerPrivate : markerFile.calls.metadata.numLinks = 1)
     (markerInventory : DiskSession.DescriptorInventory)
     (markerDrops : List DiskSession.LockReferenceDrop)
     (markerFree : ∀ slot ∈ markerInventory.slots, slot.address ≠ markerFile.calls.slot.address)
     (markerAllocated : markerFile.calls.inventory = markerInventory.insert markerFile.calls.slot markerFree)
-    (markerDescription : markerFile.calls.slot.description = markerHandle.description)
     (markerRetained : markerFile.calls.slot ∈ (markerFile.calls.inventory.afterDrops markerDrops).slots)
-    (markerInode : markerInventory.inode markerHandle.description = markerHandle.inode)
+    (markerHandle : KeeperDescriptorIdentity)
+    (markerIdentity : markerHandle = ⟨markerFile.calls.slot.description,
+      markerFile.calls.inventory.inode markerFile.calls.slot.description⟩)
     (markerEffect : Storage.SyncHandleRouting.FsyncResult marker
       (marker.completeFileSync (markerInventory.inode markerHandle.description)) true (.ok () settledMarker))
     (markerCurrent : markerHandle.inode = marker.active)
@@ -1513,18 +1514,22 @@ theorem recoveredRetries_installedReads
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
   have logicalMarker : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
+  have markerDescription : markerFile.calls.slot.description = markerHandle.description :=
+    (congrArg KeeperDescriptorIdentity.description markerIdentity).symm
+  have reachedInode : markerFile.calls.inventory.inode markerHandle.description = markerHandle.inode := by
+    rw [markerIdentity]
+  have markerInode : markerInventory.inode markerHandle.description = markerHandle.inode := by
+    rw [markerAllocated] at reachedInode
+    exact reachedInode
   have markerLive : markerFile.calls.slot.reference ∈
       (markerFile.calls.inventory.afterDrops markerDrops).references markerHandle.description :=
     ((markerFile.calls.inventory.afterDrops markerDrops).mem_references).mpr
       ⟨markerFile.calls.slot, markerRetained, rfl, markerDescription⟩
-  have reachedInode : markerFile.calls.inventory.inode markerHandle.description = markerHandle.inode := by
-    rw [markerAllocated]
-    exact markerInode
   let markerSync := FsyncObservation.ofInventory markerFile.calls.inventory markerDrops
     KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode markerHandle
     markerFile.calls.slot.reference markerLive reachedInode marker
     (fun inode (files : WalInodeImage) => files.completeFileSync inode) (by rwa [markerAllocated])
-  obtain ⟨manifestWatermark, checkpointCovered, marker, length, binding, decoded, absolute⟩ :=
+  obtain ⟨manifestWatermark, checkpointCovered, logicalMarkerBytes, length, binding, decoded, absolute⟩ :=
     DirectoryPublication.Bindings.walRange_accounting target.decoded
   have sameMarker := Option.some.inj (binding.symm.trans logicalMarker)
   have sameLength := Except.ok.inj ((sameMarker ▸ decoded).symm.trans (Boundary.decode_encode _))
@@ -1692,7 +1697,12 @@ theorem recoveredRetries_installedReads
       (finish := fun bounded size =>
         WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
       liveRefs fresh acquisition read barrier boundedRepair
-  obtain ⟨markerBytes, markerRead, markerDecode⟩ := decode_markerFromHeldDirectory markerFile markerAvailable
+  have available : PrefixChunksAvailableUntilEof (marker.visible marker.active)
+      (markerReads.readChunk markerFile.calls.slot.description) := by
+    simpa only [markerCurrent] using markerAvailable
+  obtain ⟨markerBytes, markerRead, markerDecode⟩ := decode_markerFromHeldDirectory markerFile available
+  have decodedMarker : decode markerBytes = .ok selected :=
+    markerDecode.trans (by simpa only [markerCurrent] using markerAccepted)
   have markerAcquired : acquireMarkerFromReports markerReads (directory.file .walBoundary) openedFrom.image =
       .ok (markerHandle, selected) openedFrom.image := by
     have held : (⟨markerFile.calls.slot.description,
@@ -1705,7 +1715,7 @@ theorem recoveredRetries_installedReads
       markerFile.calls.regular, markerPrivate, markerFile.calls.opened, markerRead,
       show (IO.FS.FileType.file == .file) = true from rfl,
       Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept,
-      markerDecode.trans markerAccepted, held]
+      decodedMarker, held]
   have fullReopen := (reopenAcquiredWith_success (acquireMarkerFromReports markerReads (directory.file .walBoundary))
     (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
       (fun _ => pure (some (Boundary.encode selection.frontier))) readWal)
@@ -1733,7 +1743,7 @@ theorem recoveredRetries_installedReads
       (layoutTarget.symm ▸ authorizedRepair) (layoutTarget.symm ▸ retries)
   have retryPlan : WalSegmentRepair.Prepared after target retry.plan := by
     simpa only [layoutTarget] using retryPrepared
-  refine ⟨⟨markerBytes, markerRead, markerDecode.trans markerAccepted⟩, ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
+  refine ⟨⟨markerBytes, (by simpa only [markerCurrent] using markerRead), decodedMarker⟩, ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
     retrySeals, retryKeeper, retryPlan, session, final, reference,
     opened.installed, pin, pinned, returned, ⟨opened, fullReopen, installed⟩, reached, reached.symm ▸ ready,
     reached.symm ▸ authorizedRepair, owner, freshSession, replayed, installed, acquired, points, ranges⟩
