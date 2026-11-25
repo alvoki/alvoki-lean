@@ -182,6 +182,7 @@ import Alvoki.Storage.Disk.DiskBootstrapAdmission
 import Alvoki.Storage.Disk.ObservedBootstrapCache
 import Alvoki.Storage.Disk.ObservedBootstrapFailure
 import Alvoki.Storage.Disk.ObservedBootstrapRetry
+import Alvoki.Storage.Disk.MarkerlessBootstrapRetryInstallation
 import Alvoki.Storage.Disk.MarkedBootstrapRetryInstallation
 import Alvoki.Storage.Disk.SegmentedCleanCachedReopen
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
@@ -1348,6 +1349,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.validAfterPublicationError
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCacheOpen.retrySelects
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.retryAfterPublicationError
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.markerAbsentFromScan
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.installsMarkerlessRetry
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.installsMarkerlessAfterPublicationError
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.installsMarkerlessAfterPublicationCrash
 #check_axioms Alvoki.Storage.WalSegmentRepair.BootstrapValid.markedZero
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkedRetryOpen.capturedDirectory
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkedRetryOpen.sharedPhysicalDirectory
