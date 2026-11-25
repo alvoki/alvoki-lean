@@ -1450,6 +1450,64 @@ theorem stabilizesAfterKeeperRead
   exact reopenSync_projectsRepairDirectory observed rfl sameBinding decoded
     retry.image.directory bound choices enumerated presence physical
 
+/-- Project the successful marker barrier into the repair state. File
+sync changes the selected marker projection, retaining the cache,
+descriptor census, and lock owner used by the next callback. -/
+def stabilizeCapturedMarker (visible : ByteArray)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray)) :
+    EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit :=
+  fun (cache, census, files) =>
+    match projectRepairDirectory files.image.directory visible choices with
+    | .error cause => .error (IO.userError cause) (cache, census, files)
+    | .ok settled => .ok () (cache, census, { files with image := { files.image with directory := settled } })
+
+/-- The reported successful marker sync authorizes the bounded repair
+on the exact reached keeper state. A successful finish returns the
+same plan's opened table and the repair's reached state. -/
+theorem reopensAfterCapturedPreparation
+    (report : CapturedMarkedReadReports admission layout published false)
+    (captured : CapturedKeeperOpenReports report)
+    {marker settled : WalInodeImage} {slot : DescriptorSlot}
+    (live : slot ∈ captured.afterRead.slots)
+    (current : admission.reached.inode slot.description = marker.active)
+    (effect : Storage.SyncHandleRouting.FsyncResult marker
+      (marker.completeFileSync marker.active) true (.ok () settled))
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selection : Selection} (decoded : decode (marker.visible marker.active) = .ok selection)
+    (bound : retry.image.directory.active.walBoundary.isSome = true)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = retry.image.directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode)
+    {before after : CensusDirectoryCache × CensusOpenState}
+    {cache : CensusDirectoryCache} {opened : Reopened} {size : Nat}
+    (prepare : EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Plan × Reopened × Nat))
+    (prepared : prepare before = .ok (layout.boundedPlan, opened, size) (cache, captured.afterRead, admission.held))
+    (removeFile : System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Except IO.Error Unit))
+    (write : System.FilePath → ByteArray → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (sync : Array System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (renameFile : System.FilePath → System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (finished : finishBoundedMarkedOpen directory layout.boundedPlan size removeFile write sync renameFile
+      (cache, captured.afterRead,
+        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) =
+      .ok () after) :
+    reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices)
+        (fun plan extent => finishBoundedMarkedOpen directory plan extent removeFile write sync renameFile) before =
+      .ok opened after := by
+  have projected := stabilizesAfterKeeperRead report captured live current effect sameBinding decoded
+    bound choices enumerated presence physical
+  have barrier : stabilizeCapturedMarker (marker.visible marker.active) choices
+      (cache, captured.afterRead, admission.held) =
+      .ok () (cache, captured.afterRead,
+        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) := by
+    change (match projectRepairDirectory retry.image.directory (marker.visible marker.active) choices with
+      | .error cause => _
+      | .ok settled => _) = _
+    rw [projected]
+    rfl
+  simp only [reopenWith_reports, prepared, barrier, finished]
+
 end CapturedPreparation
 
 /-- The same retry-selected recovery explains the retained submissions and

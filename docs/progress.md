@@ -988,3 +988,10 @@ from the census returned by the bounded keeper read. Under the
 reported successful fsync and surviving bindings, it computes the
 exact directory image that authorizes repair. This route covers the
 barrier issued without additional descriptor drops after the read.
+
+The captured reopen now composes preparation, marker stabilization and
+the bounded repair worker. Given the reported successful repair
+callbacks, the exact marker-settled image and the same keeper census and
+cache enter repair, and its reached state accompanies the reopened
+table. The native repair reports and the session installation still
+need to be connected to this composition.
