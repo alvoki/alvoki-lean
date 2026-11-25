@@ -68,6 +68,7 @@ import Alvoki.Storage.Disk.MarkedWriteReopenProgress
 import Alvoki.Storage.Disk.OptionalFileRead
 import Alvoki.Storage.Disk.CheckpointFileDispatch
 import Alvoki.Storage.Disk.CheckpointRunWriteCustody
+import Alvoki.Storage.Disk.CheckpointObservedCompletion
 import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.MarkedOpenControl
 import Alvoki.Storage.Disk.DiskLockLifecycle
@@ -282,6 +283,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.run_performCheckpointFileStep_io
 #check_axioms Alvoki.Storage.CheckpointPublication.RunWriteReports.captures
 #check_axioms Alvoki.Storage.CheckpointPublication.performCheckpointRunPair_observed
+#check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.returns
+#check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.durableRuns
+#check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.manifestSettled
+#check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.returnsCounted
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.checkpointFromObservedSteps
 #check_axioms Alvoki.Storage.commitWalWrite_fileEffects
 #check_axioms Alvoki.Storage.bootstrapSegmented_fileEffects
 #check_axioms Alvoki.Storage.DiskTable.writeWithOutcome_fileEffects

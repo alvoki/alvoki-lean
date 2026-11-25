@@ -94,6 +94,9 @@ theorem performCheckpointRunPair_observed
         observed.issuer = slot.reference ∧ observed.effective = effective ∧ bindings path = some observed.effectInode) ∧
       FsyncResult (cache.consume path, flushed) (cache.consume path, persist inode flushed) effective
         ((perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (cache, before)) ∧
+      (∀ after, fsync captured flushed = .ok () after →
+        (perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (cache, before) =
+          .ok () (cache.consume path, after)) ∧
       (persist inode flushed).crashBytes inode = [run.run.bytes] := by
   intro path captured inode persist writeRun perform bound visible effective effect
   let observed := FsyncObservation.ofInventory inventory drops
@@ -105,8 +108,11 @@ theorem performCheckpointRunPair_observed
     · exact within
     · rw [List.getElem?_eq_none (Nat.le_of_not_gt within)] at selected
       contradiction
-  refine ⟨steps_split_runPair within, ⟨observed, rfl, rfl, bound⟩, ?_, ?_⟩
-  · have staged : writeRun path run.run.bytes (cache, before) = .ok () (cache.remember path captured, flushed) := by
+  have routed : ((perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (cache, before)) =
+      match fsync captured flushed with
+      | .ok () after => .ok () (cache.consume path, after)
+      | .error cause after => .error (IO.userError s!"sync failed for '{path}': {cause}") (cache.consume path, after) := by
+    have staged : writeRun path run.run.bytes (cache, before) = .ok () (cache.remember path captured, flushed) := by
       have capturedRun := writes.captures
       change writeCheckpointRunWith writes.lookup writes.openWrite writes.write writes.flush path run.run.bytes
           pure before = .ok captured flushed at capturedRun
@@ -116,12 +122,16 @@ theorem performCheckpointRunPair_observed
     have wrote : perform (.writeRun index) (cache, before) = .ok () (cache.remember path captured, flushed) := by
       simpa only [perform, performCheckpointFileStep, selected, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
         using staged
-    change FsyncResult _ _ _
-      ((perform (.writeRun index) >>= fun _ => SyncPathGroup.run (sync directory.path openRead fsync) #[path])
-        (cache, before))
+    change ((perform (.writeRun index) >>= fun _ => SyncPathGroup.run (sync directory.path openRead fsync) #[path])
+      (cache, before)) = _
     simp only [Bind.bind, EStateM.bind, wrote, SyncPathGroup.run_single, route]
+    cases returned : fsync captured flushed <;> rfl
+  refine ⟨steps_split_runPair within, ⟨observed, rfl, rfl, bound⟩, ?_, ?_, ?_⟩
+  · rw [routed]
     generalize fsync captured flushed = returned at effect ⊢
     cases effect <;> constructor
+  · intro after complete
+    rw [routed, complete]
   · simp [persist, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, visible]
 
 end Alvoki.Storage.CheckpointPublication
