@@ -950,3 +950,8 @@ checked directory scan in one stateful execution. It returns the
 selected checkpoint, exact listing and post-close descriptor census.
 The full preparation proof still needs to consume that listing and
 carry the post-keeper state into stabilization and repair.
+
+The actual bounded preparation worker now consumes the checkpoint
+result at the exact WAL scan entry state when the frontier is already
+held. The proof rewrites only the outer checkpoint bind on each side
+and leaves the read and replay continuation intact.

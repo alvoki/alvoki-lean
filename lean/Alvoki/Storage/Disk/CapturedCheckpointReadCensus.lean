@@ -232,6 +232,53 @@ theorem CapturedMarkedReadReports.checkpointThenScan
   simp only [Bind.bind, EStateM.bind, report.checkpointAtScan manifest runs selected chronology,
     report.scanWal_fromEntry, Pure.pure, EStateM.pure]
 
+private theorem bindAtReportedSuccess {ε σ α β : Type}
+    {first : EStateM ε σ α} {run : α → EStateM ε σ β}
+    {before after : σ} {value : α} (returned : first before = .ok value after) :
+    (first >>= run) before = run value after := by
+  change EStateM.bind first run before = _
+  unfold EStateM.bind
+  rw [returned]
+
+/-- With the marker already acquired, the selected manifest and run
+reads reach the census used by the checked WAL directory scan. -/
+theorem CapturedMarkedReadReports.prepareFromHeldFrontier
+    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
+    (manifest : CapturedManifestCensus report metadataRelease manifestDrops)
+    (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (chronology : report.listing.beforeOpen = manifestDrops ++
+      runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest))
+    (frontier : UInt64) (readWal : Nat → UInt64 → EStateM IO.Error ReadState (WalSegmentMarkerReads × Nat)) :
+    prepareBoundedMarkedFromReaders directory (report.readCheckpointFromCensus metadataRelease runs.released)
+      (fun _ => pure (some (WAL.Boundary.encode frontier))) readWal
+      (admission.cache, admission.reached, admission.held) =
+    prepareBoundedMarkedFromReaders directory (pure checkpoint)
+      (fun _ => pure (some (WAL.Boundary.encode frontier))) readWal
+      (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) := by
+  let readBoundary : FilePath → EStateM IO.Error ReadState (Option ByteArray) :=
+    fun _ => pure (some (WAL.Boundary.encode frontier))
+  let readCheckpoint := report.readCheckpointFromCensus metadataRelease runs.released
+  let initial : ReadState := (admission.cache, admission.reached, admission.held)
+  let reached : ReadState :=
+    (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held)
+  have observed : readCheckpoint initial = .ok checkpoint reached :=
+    report.checkpointAtScan manifest runs selected chronology
+  change prepareBoundedMarkedFromReaders directory readCheckpoint readBoundary readWal initial =
+    prepareBoundedMarkedFromReaders directory (pure checkpoint) readBoundary readWal reached
+  have immediate : (pure checkpoint : EStateM IO.Error ReadState _) reached =
+      .ok checkpoint reached := rfl
+  conv =>
+    lhs
+    unfold prepareBoundedMarkedFromReaders
+    rw [bindAtReportedSuccess observed]
+  conv =>
+    rhs
+    unfold prepareBoundedMarkedFromReaders
+    rw [bindAtReportedSuccess immediate]
+
 /-- The marker is opened after the selected runs. Its bounded EOF read
 uses that exact description and the finalizer releases its temporary slot. -/
 structure CapturedMarkerCensus (report : CapturedMarkedReadReports admission layout published)
