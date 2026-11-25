@@ -220,18 +220,25 @@ theorem NativeOpenedTrace.closesThenOpensAligned
       (reader : NativeCloseAlignedReads observed.files input observed.inventory plan.layout selected)
       (seen : RawAlignedReopenEffects reader view openCalls init after phaseIdentity tokenIdentity
         allocatePhase allocateToken stream)
+      (cacheOpen : IO DiskTable.OpenSyncFiles)
       (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
         IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
       (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
       current.closeOnOpenedCells closeCalls active pending directory = .ok () after ∧
       opened.contents after opened.phase = some .closed ∧
       view.files after = state.releasedFiles ∧ view.descriptors after = observed.inventory ∧
+      DiskTable.OpenSyncFiles.IsOpenAction state.session.directory.path cacheOpen ∧
+      cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk state.session.directory.path .read)
+        (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
+        (fun value => liftM (IO.mkRef value)) makeCache ∧
       reader.run = next.opened ∧ next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
       NativeCloseSelectedReads reader ∧ NativeCloseReopenStep current.current.ready observed next ∧
       NativeExecutionTrace initial.current (events ++ [.closedAndReopened input (.ok ())]) start.current ∧
       seen.openTable remove write rename bootstrap assemble makeCache = .ok handle.table start.reached ∧
       start.current = ⟨current.current.history, current.current.submissions, next⟩ ∧
       handle.lock = seen.admission.raw.lock ∧
+      handle.files.UsesCacheReferences seen.admission.seed.activeRef seen.admission.seed.pendingRef
+        seen.admission.seed.directoryRef ∧ handle.files.AtDirectory state.session.directory.path ∧
       tokenIdentity handle.token = next.state.session.sessionRef ∧
       handle.get = opened.get ∧ handle.set = opened.set ∧ handle.ptrEq = opened.ptrEq ∧ start.pins = [] ∧
       view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
@@ -260,16 +267,17 @@ theorem NativeOpenedTrace.closesThenOpensAligned
     simpa only [state, rows] using previous
   have bounded : ∀ read ∈ current.current.ready.reads, read.BoundedBy state.writer.history.length := by
     simpa only [state, rows] using current.current.ready.readPrefix.readsBounded
-  obtain ⟨installed, _, makeCache, _, _, rawOpen⟩ :=
+  obtain ⟨installed, cacheOpen, makeCache, cacheAction, cacheSource, rawOpen⟩ :=
     RawAlignedReopenEffects.opens valid.retained pendingReplay bounded seen remove write rename bootstrap assemble constructs
   have phaseEffects : OpenPhaseCellEffects view.phase opened.get opened.set := by
     rw [samePhase]
     exact opened.phaseEffects
-  obtain ⟨handle, start, reachedPosition, table, lock, _, _, _, getEq, setEq, compared, tokenRef, reachedHeap, pins,
+  obtain ⟨handle, start, reachedPosition, table, lock, cacheFiles, _, _, getEq, setEq, compared, tokenRef, reachedHeap, pins,
     sameFiles, sameCensus, sameCache⟩ := startsAtSameHistory installed rows next nextOpened
       nextReturned cache owner slot phaseEffects opened.ptrEq
-  refine ⟨source, next, after, plan, selected, reader, seen, makeCache, handle, start,
-    returned, shut, files, census, nextOpened, nextReturned, reads, reopened, ?_, ?_, reachedPosition, lock, tokenRef,
+  refine ⟨source, next, after, plan, selected, reader, seen, cacheOpen, makeCache, handle, start,
+    returned, shut, files, census, cacheAction, cacheSource, nextOpened, nextReturned, reads, reopened, ?_, ?_,
+    reachedPosition, lock, cacheFiles.symm ▸ installed.cacheReferences, cacheFiles.symm ▸ installed.cacheDirectory, tokenRef,
     getEq, setEq, compared, pins, sameFiles, sameCensus, sameCache⟩
   · rw [reachedPosition]
     exact trace
