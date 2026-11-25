@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
-import Alvoki.Storage.Disk.NativeMarkedOpenHeap
+import Alvoki.Storage.Disk.NativeOpenReadyTrace
 
 namespace Alvoki.Storage.DiskSession
 
@@ -109,7 +109,18 @@ theorem MarkedOpenSuccessReports.installsFromAlignedCache
       view.files allocation.afterToken = state.files ∧ view.descriptors allocation.afterToken = state.census ∧
       lockIdentity lock = state.session.descriptor ∧ phaseIdentity allocation.phase = state.session.phaseRef ∧
       tokenIdentity allocation.token = state.session.sessionRef ∧
-      NativeReadyReadPrefix (.ok state.session (state.census, state.files)) state history log recorded state := by
+      NativeReadyReadPrefix (.ok state.session (state.census, state.files)) state history log recorded state ∧
+      ∀ (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+        (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit),
+        OpenPhaseCellEffects view.phase get set →
+        ∀ (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool),
+        ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
+          handle.table = db ∧ handle.directory = directory ∧ handle.lock = lock ∧ handle.files = files ∧
+          handle.phase = allocation.phase ∧ handle.token = allocation.token ∧ handle.contents = view.phase ∧
+          handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧
+          start.reached = allocation.afterToken ∧ start.current.ready.state = state ∧
+          start.current.history = history ∧ start.current.submissions = log ∧
+          start.current.ready.reads = recorded ∧ start.pins = [] := by
   obtain ⟨state, final, opened, worker, installed, returned, reached, path, cache, _, _, _, ready⟩ :=
     report.recoversBeforeInstallation
   obtain ⟨exactOpened, exactWorker⟩ := report.opening.finish.recoversAligned report.opening.chronology finish
@@ -135,20 +146,28 @@ theorem MarkedOpenSuccessReports.installsFromAlignedCache
   have cacheReached : view.cacheAt seen.reached seed.directoryRef seed.activeRef seed.pendingRef = state.cache := by
     have projected := seen.returns (fun _ => pure (.ok ())) (fun _ _ => pure ()) (fun _ _ => pure ())
     exact (congrArg Prod.fst projected.2.2.2.2).trans cache.symm
+  have readyStored : view.phase allocation.afterToken allocation.phase = some state.session.phase := by
+    rw [session]
+    exact stored
   refine ⟨state, exactOpened, allocation, files, _, _, recovered, installed, usesCache, atPath,
     ⟨cacheOpen, makeCache, actualCache, cacheSource, allocatedCache⟩, constructor, allocated, ?_,
-    references, ?_, tokenFrame.cache.trans (phaseFrame.cache.trans cacheReached),
+    references, readyStored, tokenFrame.cache.trans (phaseFrame.cache.trans cacheReached),
     tokenFrame.files.trans (phaseFrame.files.trans (congrArg Prod.snd matched)),
-    tokenFrame.census.trans (phaseFrame.census.trans (congrArg Prod.fst matched)), ?_, ?_, ?_, ready⟩
+    tokenFrame.census.trans (phaseFrame.census.trans (congrArg Prod.fst matched)), ?_, ?_, ?_, ready, ?_⟩
   · intro remove write rename
     simp only [Bind.bind, EStateM.bind, (seen.returns remove write rename).1, allocated]
-  · rw [session]
-    exact stored
   · rw [session]
     exact locked
   · rw [session]
     exact phase
   · rw [session]
     exact token
+  · intro get set effects ptrEq
+    let handle : NativeOpenedHandle heap :=
+      ⟨_, directory, lock, files, allocation.phase, allocation.token, references, view.phase, get, set, effects, ptrEq⟩
+    let current : NativeExecutionPosition :=
+      ⟨history, log, ⟨.ok state.session (state.census, state.files), state, state, recorded, ready⟩⟩
+    let initial := NativeOpenedPosition.fromOpen handle current allocation.afterToken path readyStored
+    exact ⟨handle, initial, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 end Alvoki.Storage.DiskSession
