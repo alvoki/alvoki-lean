@@ -451,6 +451,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeMarkedFirstBarrierWork
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedFirstBarrierRetries
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedBarrierRetryReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedFirstUnlinkError
+lake env leanchecker Alvoki.Storage.Disk.NativeMarkedUnlinkRetryReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeRejectedOpenWork
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedListingWork
 lake env leanchecker Alvoki.Storage.Disk.MaintainedRecoveryWork
