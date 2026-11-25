@@ -1574,8 +1574,17 @@ theorem reopenSyncError_preservesRetry
     (project : WalInodeImage → FileImage)
     (priorImage : project physical = prepared)
     (reachedImage : project after = reached)
-    (syncImage : project (physical.completeFileSync handle.inode) =
-      { prepared with directory := settleMarker prepared.directory selection }) :
+    (current : handle.inode = physical.active)
+    (sameBinding : ∀ inode ∈ physical.crashBindings, inode = physical.active)
+    (decoded : decode (physical.visible handle.inode) = .ok selection)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = prepared.directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (survivors : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ after.crashBindings, bytes ∈ after.crashBytes inode)
+    (projection : after = physical.completeFileSync physical.active →
+      ∀ directory, projectRepairDirectory prepared.directory (physical.visible handle.inode) choices =
+        .ok directory → project after = { prepared with directory }) :
     ∃ error final,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
         (do
@@ -1583,16 +1592,26 @@ theorem reopenSyncError_preservesRetry
             (projectMarkerSync syncMarker physical) finish
           pure opened) before = .error error final ∧
       ReportedMarkerRetries initial final.image ∧ final.image.keeper = prepared.keeper := by
-  have retry : ReportedMarkerRetries initial reached := by
-    rw [← reachedImage]
-    exact .markerSync prior sync project priorImage selection observed syncImage
-  have keeper : reached.keeper = prepared.keeper := by
+  have aligned : ReportedMarkerRetries initial reached ∧ reached.keeper = prepared.keeper := by
     have effect := sync.effect
-    rw [sync.sameInode] at effect
+    rw [sync.sameInode, current] at effect
     generalize sync.effective = effective at effect
     cases effect with
-    | errorBefore => exact congrArg FileImage.keeper (reachedImage.symm.trans priorImage)
-    | errorAfter => rw [← reachedImage, syncImage]
+    | errorBefore =>
+      have same : reached = prepared := reachedImage.symm.trans priorImage
+      exact ⟨same ▸ prior, congrArg FileImage.keeper same⟩
+    | errorAfter =>
+      have bound : prepared.directory.active.walBoundary.isSome = true := by simp [observed]
+      have settledDirectory := completedMarkerSync_projectsRepairDirectory rfl current sameBinding decoded
+        prepared.directory bound choices enumerated presence survivors
+      have settled := projection rfl _ settledDirectory
+      have syncImage : project (physical.completeFileSync handle.inode) =
+          { prepared with directory := settleMarker prepared.directory selection } := by
+        simpa only [current] using settled
+      have retry : ReportedMarkerRetries initial reached := by
+        rw [← reachedImage]
+        exact .markerSync prior sync project priorImage selection observed syncImage
+      exact ⟨retry, by rw [← reachedImage, settled]⟩
   have projectedFailure : projectMarkerSync syncMarker physical handle prepared = .error cause reached := by
     simp only [projectMarkerSync, barrier]
   have reopened : reopenAcquiredWith acquire prepare
@@ -1600,7 +1619,7 @@ theorem reopenSyncError_preservesRetry
     simp only [reopenAcquiredWith_reports, openedMarker, reopenWith_reports, read, projectedFailure]
   rw [DiskSession.runOpenWithInstallation_outcome, DiskSession.runOpenWithImage_acquired]
   simp only [Bind.bind, EStateM.bind, reopened]
-  cases unlock <;> exact ⟨_, _, rfl, retry, keeper⟩
+  cases unlock <;> exact ⟨_, _, rfl, aligned.1, aligned.2⟩
 
 /-- Derive the initial retry alternatives from the physical marker
 survivors of the interrupted slot write. An absent binding can arise
