@@ -106,8 +106,11 @@ live descriptor. Its private inode effect leaves the previously selected checkpo
 in each joint crash map. Reboot carries the selected names and bytes and the exact census. The
 normalized selected image is independent of the reached staging metadata. A surviving
 `MANIFEST.next` contributes no extent probe or read to the marked WAL selector, at any listing
-position. Raw admission and the canonical selected reads still supply the observations for
-installation. For a selected run read that
+position. The selector filters parsed names from the one reported listing without another
+directory call. A single frame fold carries the selected names and bytes across each finalized
+read-only attempt into the reached aligned installer. The short run-read failure obtains the
+crash child and its bytes from the actual admitted child and read frames. Admission and worker
+effects still supply the local observations for installation. For a selected run read that
 returns an ordinary error after a short chunk, the shared retry proof carries the selected names
 and bytes through temporary, cache and lock disposal. It starts the aligned open from the reached
 failure heap with the original callbacks.

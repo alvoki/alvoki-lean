@@ -2111,6 +2111,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawFlockRejection.preserves
 #check_axioms Alvoki.Storage.DiskSession.RawFlockRejection.returns
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.preserves
+#check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.frames
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.reopensAligned
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensAfterRejectedOpensAt
 #check_axioms Alvoki.Storage.DiskSession.MarkedHeapInstallation.startsAtSameHistory
@@ -2161,6 +2162,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointChunkReadError.preservesSelectedFiles
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.ScopeFileFrames.preserves
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.readsAfterOpenFrame
+#check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.childAfterOpenFrame
+#check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.reopensAfterReadOnlyAttempts
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.reopensAfterReadOnlyRejection
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.reopensAfterRunChunkRejection
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.reopensAfterManifestRejection
@@ -2419,6 +2422,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncIssuesRawSync
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncPreservesSelected
 #check_axioms Alvoki.Storage.DiskSession.readSelectedWithCachedExtents_ignoresStagedManifest
+#check_axioms Alvoki.Storage.DiskSession.readSelectedWithCachedExtents_projectsWalNames
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.powerLossFiles_stagedMetadata
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.phaseAtStop
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.runFileUsesWrittenHandle

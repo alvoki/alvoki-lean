@@ -15,6 +15,13 @@ error heap and proves that the original phase is poisoned there. The WAL selecti
 release, crash and recovery transitions remain separate.
 [Raw uncertain return](../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean)
 
+After a selected reboot, one frame now carries the exact selected paths and inode bytes
+through any reported sequence of finalized read-only open attempts. The aligned installer
+uses the reached retry heap. The short run-read proof derives its survivor child from the
+child actually admitted before the failed read. The marked WAL selector projects one actual
+listing at its returned heap, including when a surviving `MANIFEST.next` is present.
+[Open chronology](../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean) · [Checkpoint stop](../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
+
 The fresh marked bootstrap establishes ready storage on the exact returned heap. The observed
 keeper and marker barriers give the empty keeper and zero marker. Exact child observations
 preserve the lock binding and manifest absence. The phase and token allocations carry the
