@@ -255,6 +255,7 @@ import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
 import Alvoki.Storage.Disk.ListedPrunedAlignedKeeper
 import Alvoki.Storage.Disk.ListedPrunedAlignedKeeperFailure
 import Alvoki.Storage.Disk.ListedStagedKeeperRepair
+import Alvoki.Storage.Disk.KeeperDirectoryInterruption
 import Alvoki.Storage.Disk.ListedMarkedFinish
 import Alvoki.Storage.Disk.ListedStagedKeeperFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperFailure
@@ -1922,6 +1923,16 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.lockAtRename
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.reachesRename
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.finishAfterError
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.custody
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.resolvesDirectory
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.finishesFromIssue
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.groupedCallback
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.admittedAtIssue
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.stoppedBindings
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.projectsStoppedInodes
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.stoppedEffects
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.crashSurvivor
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.exits
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.settlementCustody
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.settledInode
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.syncResult

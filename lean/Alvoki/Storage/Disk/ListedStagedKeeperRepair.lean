@@ -567,11 +567,10 @@ theorem finishAfterError (rename : ListedLongKeeperRename stage) (failed : renam
 
 end ListedLongKeeperRename
 
-/-- The final directory sync keeps using the directory handle captured by
-the held open. Both it and the lock survive the same descriptor history
-through staging and rename. The observed grouped callback settles the
-replacement binding only when the syscall takes effect. -/
-structure ListedLongKeeperSettlement (rename : ListedLongKeeperRename stage) where
+/-- The issued final directory barrier uses the retained directory
+description after successful rename. The observation stops at the
+actual callback input, where the directory and lock slots are still live. -/
+structure ListedLongKeeperDirectoryIssue (rename : ListedLongKeeperRename stage) where
   completed : rename.outcome = .completed
   afterRename : List LockReferenceDrop
   directoryRetained : held.lifetime.directorySlot ∈
@@ -584,15 +583,6 @@ structure ListedLongKeeperSettlement (rename : ListedLongKeeperRename stage) whe
   keeperBound : bindings (directory.file (.walSegment layout.keeper.first)) =
     rename.renamedBindings (directory.file (.walSegment layout.keeper.first))
   stageAbsent : bindings (directory.file .stagedWal) = rename.renamedBindings (directory.file .stagedWal)
-  outcome : DelayedDirectorySyncOutcome
-  effect :
-    let durable := scratch (pruning.stageInput) layout.keeper.bytes true
-    let renamed := afterKeeperRename durable layout.keeper.bytes
-    authorization.fsync (operations.descriptors, held.lifetime.directorySlot, 0) renamed =
-      match outcome with
-      | .completed => .ok () (settleKeeperBinding renamed)
-      | .errorBeforeEffect cause => .error cause renamed
-      | .errorAfterEffect cause => .error cause (settleKeeperBinding renamed)
   projected :
     let durable := scratch (pruning.stageInput) layout.keeper.bytes true
     let renamed := afterKeeperRename durable layout.keeper.bytes
@@ -601,6 +591,93 @@ structure ListedLongKeeperSettlement (rename : ListedLongKeeperRename stage) whe
     operations.sync operations.cache #[directory.path] renamed.image =
       projectDirectorySync (grouped authorization #[directory.path]
         (operations.cache.consume (directory.file .stagedWal), renamed))
+
+namespace ListedLongKeeperDirectoryIssue
+
+variable {rename : ListedLongKeeperRename stage}
+
+/-- The live replacement and the original acquired owner at the issue. -/
+def files (_issued : ListedLongKeeperDirectoryIssue rename) : LockedFileState FileImage :=
+  afterKeeperRename (scratch pruning.stageInput layout.keeper.bytes true) layout.keeper.bytes
+
+/-- The staged-file barrier consumed this name's pending cache entry. -/
+def cache (_issued : ListedLongKeeperDirectoryIssue rename) : Cache Handle :=
+  operations.cache.consume (directory.file .stagedWal)
+
+/-- The inventory reached by the original opener when it issues fsync. -/
+def inventory (issued : ListedLongKeeperDirectoryIssue rename) : DescriptorInventory :=
+  stage.inventory.afterDrops (stage.beforeSync ++ rename.afterStageSync ++ issued.afterRename)
+
+/-- Interpret the directory effect independently of any callback return. -/
+def stopped (issued : ListedLongKeeperDirectoryIssue rename) (effective : Bool) : LockedFileState FileImage :=
+  if effective then settleKeeperBinding issued.files else issued.files
+
+/-- Both original issuing slots survive the final barrier, and its
+effect-time keeper binding is the exact inode published by rename. -/
+theorem custody (issued : ListedLongKeeperDirectoryIssue rename) :
+    let atSync := issued.inventory
+    held.lifetime.directorySlot ∈ atSync.slots ∧ operations.slot ∈ atSync.slots ∧
+    issued.bindings directory.path = some (atSync.inode held.lifetime.directorySlot.description) ∧
+    issued.bindings (directory.file .lock) = some (atSync.inode operations.slot.description) ∧
+    issued.bindings (directory.file .stagedWal) = none ∧
+    issued.bindings (directory.file (.walSegment layout.keeper.first)) = some (stage.inventory.inode stage.slot.description) := by
+  intro atSync
+  have effective : rename.outcome.effective = true := by rw [issued.completed]; rfl
+  refine ⟨issued.directoryRetained, issued.lockRetained, ?_, ?_,
+    issued.stageAbsent.trans (rename.renamedSource effective),
+    issued.keeperBound.trans (rename.renamedKeeper effective)⟩
+  · simp only [atSync, inventory, DescriptorInventory.afterDrops, stage.captured, DescriptorInventory.insert,
+      held.listing.afterClose_eq]
+    exact issued.directoryBound
+  · simp only [atSync, inventory, DescriptorInventory.afterDrops, stage.captured, DescriptorInventory.insert,
+      held.listing.afterClose_eq]
+    exact issued.lockBound
+
+private theorem renamed (issued : ListedLongKeeperDirectoryIssue rename) :
+    let durable := scratch pruning.stageInput layout.keeper.bytes true
+    operations.renameFile (directory.file .stagedWal) (directory.file (.walSegment layout.keeper.first)) durable.image =
+      .ok () issued.files.image := by
+  simpa only [issued.completed, files] using rename.reported
+
+/-- The native cache resolver supplies the exact directory handle before
+invoking fsync. The directory route leaves the reached cache in place. -/
+theorem resolvesDirectory (issued : ListedLongKeeperDirectoryIssue rename) :
+    issued.cache.resolve directory.path directory.path authorization.openRead issued.files =
+      .ok (operations.descriptors, held.lifetime.directorySlot, 0) (issued.cache, issued.files) := by
+  simp [Cache.resolve, cache, Cache.consume, held.capturedDirectory]
+
+/-- The program after the returned rename calls the exact grouped
+directory barrier. This equality imposes no outcome on that barrier. -/
+theorem finishesFromIssue (issued : ListedLongKeeperDirectoryIssue rename) :
+    finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
+      operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
+      operations.renameFile before.image = operations.sync operations.cache #[directory.path] issued.files.image := by
+  rw [rename.reachesRename]
+  simp only [Bind.bind, EStateM.bind]
+  rw [issued.renamed]
+  change (operations.sync operations.cache #[directory.path] >>= fun _ => pure ()) issued.files.image = _
+  simp only [Bind.bind, EStateM.bind]
+  cases operations.sync operations.cache #[directory.path] issued.files.image with
+  | ok value reached => cases value; rfl
+  | error cause reached => rfl
+
+theorem groupedCallback (issued : ListedLongKeeperDirectoryIssue rename) :
+    operations.sync operations.cache #[directory.path] issued.files.image =
+      projectDirectorySync (grouped authorization #[directory.path] (issued.cache, issued.files)) :=
+  issued.projected issued.renamed
+
+end ListedLongKeeperDirectoryIssue
+
+/-- A returned final directory sync adds the outcome and effect to the
+same issued call that also supports an interrupted execution. -/
+structure ListedLongKeeperSettlement (rename : ListedLongKeeperRename stage)
+    extends ListedLongKeeperDirectoryIssue rename where
+  outcome : DelayedDirectorySyncOutcome
+  effect : authorization.fsync (operations.descriptors, held.lifetime.directorySlot, 0) toListedLongKeeperDirectoryIssue.files =
+    match outcome with
+    | .completed => .ok () (toListedLongKeeperDirectoryIssue.stopped true)
+    | .errorBeforeEffect cause => .error cause toListedLongKeeperDirectoryIssue.files
+    | .errorAfterEffect cause => .error cause (toListedLongKeeperDirectoryIssue.stopped true)
 
 namespace ListedLongKeeperSettlement
 
@@ -614,18 +691,8 @@ theorem settlementCustody (reported : ListedLongKeeperSettlement rename) :
     reported.bindings directory.path = some (atSync.inode held.lifetime.directorySlot.description) ∧
     reported.bindings (directory.file .lock) = some (atSync.inode operations.slot.description) ∧
     reported.bindings (directory.file .stagedWal) = none ∧
-    reported.bindings (directory.file (.walSegment layout.keeper.first)) = some (stage.inventory.inode stage.slot.description) := by
-  intro atSync
-  have effective : rename.outcome.effective = true := by rw [reported.completed]; rfl
-  refine ⟨reported.directoryRetained, reported.lockRetained, ?_, ?_,
-    reported.stageAbsent.trans (rename.renamedSource effective),
-    reported.keeperBound.trans (rename.renamedKeeper effective)⟩
-  · simp only [atSync, DescriptorInventory.afterDrops, stage.captured, DescriptorInventory.insert,
-      held.listing.afterClose_eq]
-    exact reported.directoryBound
-  · simp only [atSync, DescriptorInventory.afterDrops, stage.captured, DescriptorInventory.insert,
-      held.listing.afterClose_eq]
-    exact reported.lockBound
+    reported.bindings (directory.file (.walSegment layout.keeper.first)) = some (stage.inventory.inode stage.slot.description) :=
+  reported.toListedLongKeeperDirectoryIssue.custody
 
 /-- When the final sync takes effect, its reached image has exactly the
 crash bytes of the replacement inode now bound to the keeper path. -/
@@ -654,18 +721,11 @@ theorem syncResult (reported : ListedLongKeeperSettlement rename) :
       | .errorAfterEffect cause =>
         .error (IO.userError s!"sync failed for '{directory.path}': {cause}") (settleKeeperBinding renamed).image := by
   intro durable renamed
-  have routed : operations.renameFile (directory.file .stagedWal) (directory.file (.walSegment layout.keeper.first))
-      durable.image = .ok () renamed.image := by
-    simpa only [reported.completed] using rename.reported
-  rw [reported.projected routed, grouped, SyncPathGroup.run_single]
-  let cache := operations.cache.consume (directory.file .stagedWal)
-  have finalRoute : sync directory.path authorization.openRead authorization.fsync directory.path (cache, renamed) =
-      withCache cache (authorization.fsync (operations.descriptors, held.lifetime.directorySlot, 0) renamed) := by
-    simp [sync, Cache.resolve, cache, Cache.consume, held.capturedDirectory]
-  rw [finalRoute]
-  have settledEffect := reported.effect
-  change authorization.fsync (operations.descriptors, held.lifetime.directorySlot, 0) renamed = _ at settledEffect
-  rw [settledEffect]
+  let issue := reported.toListedLongKeeperDirectoryIssue
+  change operations.sync operations.cache #[directory.path] issue.files.image = _
+  rw [issue.groupedCallback, grouped, SyncPathGroup.run_single]
+  simp only [sync, issue.resolvesDirectory]
+  rw [reported.effect]
   cases reported.outcome <;> rfl
 
 /-- After the reported successful rename, the actual bounded finisher
@@ -675,18 +735,8 @@ theorem finishResult (reported : ListedLongKeeperSettlement rename) :
     let renamed := afterKeeperRename durable layout.keeper.bytes
     finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
       operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
-      operations.renameFile before.image = operations.sync operations.cache #[directory.path] renamed.image := by
-  intro durable renamed
-  rw [rename.reachesRename]
-  have routed : operations.renameFile (directory.file .stagedWal) (directory.file (.walSegment layout.keeper.first))
-      durable.image = .ok () renamed.image := by simpa only [reported.completed] using rename.reported
-  simp only [Bind.bind, EStateM.bind]
-  rw [routed]
-  change (operations.sync operations.cache #[directory.path] >>= fun _ => pure ()) renamed.image = _
-  simp only [Bind.bind, EStateM.bind]
-  cases operations.sync operations.cache #[directory.path] renamed.image with
-  | ok value reached => cases value; rfl
-  | error cause reached => rfl
+      operations.renameFile before.image = operations.sync operations.cache #[directory.path] renamed.image :=
+  reported.toListedLongKeeperDirectoryIssue.finishesFromIssue
 
 private theorem prependPruning (pruning : LongKeeperPruning authorization) {rest : List Step}
     (tail : ∀ action prior next, ReachesAction layout.target pruning.stageInput.image rest action prior →
