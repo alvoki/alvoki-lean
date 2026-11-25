@@ -5,7 +5,8 @@ import Alvoki.Storage.Disk.RunUnlinkEffects
 namespace Alvoki.Storage.CheckpointPublication
 
 open System
-open DiskSession
+open DiskSession SyncHandleRouting
+open WAL.Boundary (WalInodeImage)
 
 private theorem runSteps_returned {state : Type} (perform : Step → EStateM IO.Error state Unit)
     (count : Nat) (atRun : Nat → state)
@@ -134,6 +135,39 @@ structure CheckpointBindingReports {state : Type} {perform : Step → EStateM IO
   syncManifest : (manifest observed.staged).step bytes .syncStaged = some (manifest observed.stagedSynced)
   renameManifest : (manifest observed.stagedSynced).step bytes .renameStaged = some (manifest observed.renamed)
   finalManifest : (manifest observed.renamed).step bytes .syncDirectory = some (manifest observed.completed)
+
+/-- Build the `syncedRun` part of the checkpoint binding report from the
+exact run-pair returns and the observed inode bindings. The file sync
+preserves the pathname binding. The run namespace at the same returned
+state uses the known synced inode bytes at that address. -/
+theorem SuccessfulCheckpointSteps.syncedRunsFromInodes {handle : Type}
+    {perform : Step → EStateM IO.Error (Cache handle × WalInodeImage) Unit}
+    (directory : DiskDirectory) (generation : UInt64) (table : PackedTable)
+    (observed : SuccessfulCheckpointSteps perform table.runs.length)
+    (runs : Cache handle × WalInodeImage → RunUnlinkImage)
+    (bindings : WalInodeImage → FilePath → Option Nat)
+    (projects : ∀ index < table.runs.length,
+      let endpoint := observed.atRun (index + 1)
+      (runs endpoint).visible generation index =
+        knownSyncedRunBytes directory (bindings endpoint.2) endpoint.2 generation index)
+    (reported : ∀ index < table.runs.length,
+      ∃ (run : Compaction.CheckedRun) (cache : Cache handle) (flushed : WalInodeImage) (inode : Nat),
+      let pathname := directory.file (.run generation index)
+      table.runs.toArray[index]? = some run ∧
+      (perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (observed.atRun index) =
+        .ok () (cache, flushed.completeFileSync inode) ∧
+      bindings flushed pathname = some inode ∧
+      bindings (flushed.completeFileSync inode) pathname = bindings flushed pathname ∧
+      flushed.visible inode = run.run.bytes) :
+    ∀ index < table.runs.length,
+      (runs (observed.atRun (index + 1))).visible generation index = (table.runs.map (·.run.bytes))[index]? := by
+  intro index within
+  obtain ⟨run, cache, flushed, inode, selected, returned, bound, unchanged, contents⟩ := reported index within
+  have endpoint := (EStateM.Result.ok.inj ((observed.pairs index within).symm.trans returned)).2
+  have atIndex : table.runs[index]? = some run := by simpa only [List.getElem?_toArray] using selected
+  rw [projects index within, endpoint]
+  rw [knownSyncedRunBytes_ofFileSync (unchanged.trans bound) contents]
+  simp only [List.getElem?_map, atIndex, Option.map_some]
 
 /-- Project the reached file or cache state while retaining the reported
 success or error. -/

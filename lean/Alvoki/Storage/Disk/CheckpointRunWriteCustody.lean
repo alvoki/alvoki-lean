@@ -8,6 +8,25 @@ namespace Alvoki.Storage.CheckpointPublication
 open System DiskSession SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
+/-- Project bytes known to be synced through one canonical run binding.
+An absent result carries no claim of pathname absence. A visible object
+whose data has several crash choices also has no known synced payload. -/
+def knownSyncedRunBytes (directory : DiskDirectory) (bindings : FilePath → Option Nat)
+    (image : WalInodeImage) (generation : UInt64) (index : Nat) : Option ByteArray := do
+  let inode ← bindings (directory.file (.run generation index))
+  let visible := image.visible inode
+  if image.crashBytes inode = [visible] then some visible else none
+
+/-- A complete sync settles the bytes of one inode. A separate observed
+pathname binding identifies which run address can use those bytes. -/
+theorem knownSyncedRunBytes_ofFileSync {directory : DiskDirectory} {bindings : FilePath → Option Nat}
+    {generation : UInt64} {index inode : Nat} {flushed : WalInodeImage} {bytes : ByteArray}
+    (bound : bindings (directory.file (.run generation index)) = some inode)
+    (visible : flushed.visible inode = bytes) :
+    knownSyncedRunBytes directory bindings (flushed.completeFileSync inode) generation index = some bytes := by
+  simp [knownSyncedRunBytes, bound, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync,
+    visible, Bind.bind, Option.bind]
+
 /-- The open, write and flush observations for one reached checkpoint run.
 The optional no-follow lookup admits an absent or private regular name.
 Each subsequent callback uses the description returned by the actual open. -/

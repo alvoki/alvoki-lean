@@ -283,6 +283,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.run_performCheckpointFileStep_io
 #check_axioms Alvoki.Storage.CheckpointPublication.RunWriteReports.captures
 #check_axioms Alvoki.Storage.CheckpointPublication.performCheckpointRunPair_observed
+#check_axioms Alvoki.Storage.CheckpointPublication.knownSyncedRunBytes_ofFileSync
+#check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.syncedRunsFromInodes
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.returns
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.durableRuns
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.manifestSettled
