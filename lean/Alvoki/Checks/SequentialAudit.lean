@@ -1399,6 +1399,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.HeldMarkedMetadata.continuesAfterRepairError
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.finishError
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.continuesAfterSyncError
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.continuesAfterError
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.continuesAfterError
 #check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.installs
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperPrune.pruneCustody
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperPrune.barriers
