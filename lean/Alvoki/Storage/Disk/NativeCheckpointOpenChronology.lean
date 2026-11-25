@@ -123,6 +123,7 @@ attempt allocates its own cache. The retry starts at the actual final
 lock-drop heap and reads from the framed selected objects there. -/
 theorem RawQuietRebootEntry.reopensAfterManifestRejection
     (entry : RawQuietRebootEntry crash view names bytes before rebooted beforeCensus)
+    (booted : (view.descriptors rebooted, view.files rebooted) = (crash.reboot, crash.retry))
     (raw : RawAlignedCheckpointReopenEffects reader.opening reader.capturedChronology view calls init retryHeap
       phaseIdentity tokenIdentity allocatePhase allocateToken stream)
     (seen : RawManifestStatError (admitted := admitted) seed raw.fileCalls)
@@ -151,9 +152,8 @@ theorem RawQuietRebootEntry.reopensAfterManifestRejection
       installReady opened.installed allocatePhase allocateToken
         (fun phase token => pure (assemble resolved lock cache phase token))
     let failed := seen.finalizedAttempt disposal raw.directoryCalls raw.callbacks remove write rename bootstrap install finalized
-    (∃ makeCache,
-      finishFailedOpen (calls.runOpen input init makeCache (disposal.errorScope failed.recover)) release admitted.lock rebooted =
-        .error failed.diagnostic retryHeap) ∧
+    disposal.Finalized failed.recover failed.cause finalized ∧
+    (view.descriptors retryHeap, view.files retryHeap) = (view.descriptors rebooted, view.files rebooted) ∧
     (∀ path payload,
       checkpointSurvivorPath current.state.session.directory current.state.writer current.state.writer.target.pair.manifest path →
       reader.ReadsSurvivor path payload →
@@ -163,13 +163,13 @@ theorem RawQuietRebootEntry.reopensAfterManifestRejection
       reader.ReachedSession next.state history log current.reads ∧
       Nonempty (raw.ReturnedAt next remove write rename bootstrap assemble get set ptrEq)) := by
   intro install failed
-  obtain ⟨_, makeCache, _, _, returned, _⟩ := failed.returns
-  refine ⟨⟨makeCache, ?_⟩, ?_, raw.reopensQuietSelection current remove write rename bootstrap assemble ptrEq target keeper
+  refine ⟨disposal.returnsAfterLockFinalization failed.recover failed.cause failed.rejected finalized,
+    (Prod.ext raw.raw.entryCensus raw.raw.entryFiles).trans booted.symm,
+    ?_, raw.reopensQuietSelection current remove write rename bootstrap assemble ptrEq target keeper
     descriptors offsets prepared constructs effects⟩
-  · exact returned.trans (congrArg (EStateM.Result.error failed.diagnostic) sameHeap.symm)
-  · intro path payload selectedPath observed
-    rw [sameHeap]
-    exact entry.readsAfterManifestRejection seen disposal finalized frames selectedPath observed
+  intro path payload selectedPath observed
+  rw [sameHeap]
+  exact entry.readsAfterManifestRejection seen disposal finalized frames selectedPath observed
 
 end
 

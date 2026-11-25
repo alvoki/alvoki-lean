@@ -347,6 +347,7 @@ import Alvoki.Storage.Disk.NativeTemporaryChunkReadFailure
 import Alvoki.Storage.Disk.NativeRawManifestChunkError
 import Alvoki.Storage.Disk.NativeRawManifestOpenError
 import Alvoki.Storage.Disk.NativeRawManifestStatError
+import Alvoki.Storage.Disk.NativeCheckpointOpenChronology
 import Alvoki.Storage.Disk.NativeRawSelectedMarkerStatError
 import Alvoki.Storage.Disk.NativeRawSelectedMarkerDecodeError
 import Alvoki.Storage.Disk.NativeRawAlignedWalDecodeError
@@ -2152,6 +2153,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readOptionalStatError
 #check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.rejectsCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.finalizedAttempt
+#check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.FileFrames.preserves
+#check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.readsAfterManifestRejection
+#check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.reopensAfterManifestRejection
 #check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerStatError.rejectsMarker
 #check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerStatError.stopsMarkedWorker
 #check_axioms Alvoki.Storage.DiskSession.RawSelectedMarkerStatError.finalizedAttempt
@@ -2694,6 +2698,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.barrierCrashVacant
 #check_axioms Alvoki.Storage.DiskSession.CheckpointBarrierLockOpenFailure.returns
 #check_axioms Alvoki.Storage.DiskSession.CheckpointBarrierRetryPrefix.reached
+#check_axioms Alvoki.Storage.DiskSession.CheckpointSurvivingFiles.Frames.trans
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.reopensPhysicalBarrierAligned
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.guardedReplay
