@@ -28,14 +28,21 @@ marker stage is permitted only alongside a checked empty segment zero. -/
 
 /-- Finish markerless bootstrap after the locked directory checks. Segment
 zero must be durable before publishing the zero marker. -/
-@[macro_inline] def bootstrapEmptyWith [Monad m] [MonadExceptOf IO.Error m] (directory : DiskDirectory)
-    (empty : Option ByteArray) (createEmpty : FilePath → m Unit)
+@[macro_inline] def bootstrapEmptyWithMarker [Monad m] [MonadExceptOf IO.Error m] (directory : DiskDirectory)
+    (empty : Option ByteArray) (staged : FilePath) (marker : ByteArray) (createEmpty : FilePath → m Unit)
     (write : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
     (renameFile : FilePath → FilePath → m Unit) : m Reopened := do
   WalSegmentRotation.runAt directory 0 (fun _ => pure empty) createEmpty (fun path => sync #[path])
-  Publication.run (Publication.performReplacement (write · (WAL.Boundary.encode 0))
-    sync renameFile (directory.file .stagedWalBoundary) directory.path (fun _ => directory.file .walBoundary) #[])
+  Publication.run (Publication.performReplacement (write · marker)
+    sync renameFile staged directory.path (fun _ => directory.file .walBoundary) #[])
   pure ⟨.empty, 0, 0, 0⟩
+
+@[macro_inline] def bootstrapEmptyWith [Monad m] [MonadExceptOf IO.Error m] (directory : DiskDirectory)
+    (empty : Option ByteArray) (createEmpty : FilePath → m Unit)
+    (write : FilePath → ByteArray → m Unit) (sync : Array FilePath → m Unit)
+    (renameFile : FilePath → FilePath → m Unit) : m Reopened :=
+  bootstrapEmptyWithMarker directory empty (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0)
+    createEmpty write sync renameFile
 
 @[macro_inline] def bootstrapSegmentedWith [Monad m] [MonadExceptOf IO.Error m] (directory : DiskDirectory)
     (list : FilePath → m (Array IO.FS.DirEntry)) (readEmpty : FilePath → m (Option ByteArray))

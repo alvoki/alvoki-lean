@@ -1149,10 +1149,8 @@ private def bootstrap (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentR
   if let some metadata ← optionalMetadata staged then
     unless metadata.type == .file && empty.isSome do
       throw (IO.userError "invalid staged two-slot WAL marker")
-  WalSegmentRotation.runAt dir 0 (fun _ => pure empty) files.create (fun path => files.syncPaths #[path])
-  Publication.run (Publication.performReplacement (files.stage · WAL.TwoSlot.initial)
-    files.syncPaths IO.FS.rename staged dir.path (fun _ => dir.file .walBoundary) #[])
-  return ⟨.empty, 0, 0, 0⟩
+  WalSegmentRepair.bootstrapEmptyWithMarker dir empty staged WAL.TwoSlot.initial
+    files.create files.stage files.syncPaths IO.FS.rename
 
 private def reopen (dir : DiskDirectory) (files : SyncFiles) (marker : IO.FS.Handle)
     (selection : WAL.TwoSlot.Selection) : IO WalSegmentRepair.Reopened :=

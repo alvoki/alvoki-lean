@@ -196,6 +196,30 @@ private theorem bootstrapRotation_completes (directory : DiskDirectory) (before 
 
 /-- Successful reached reports give the worker the exact final image of
 the ordered marker effects on the settled zero segment. -/
+theorem bootstrapEmptyWithMarker_completesAt (directory : DiskDirectory) (before : State)
+    (staged : FilePath) (markerBytes : ByteArray)
+    (valid : BootstrapValid before) (empty : Option ByteArray) (seen : before.observeSuccessor = empty)
+    (createEmpty : FilePath → BootstrapM Unit) (write : FilePath → ByteArray → BootstrapM Unit)
+    (sync : Array FilePath → BootstrapM Unit) (renameFile : FilePath → FilePath → BootstrapM Unit) :
+    let rotate := WalSegmentRotation.performPaths directory 0 createEmpty (fun path => sync #[path])
+    let publish := Publication.performReplacement (write · markerBytes)
+      sync renameFile staged directory.path (fun _ => directory.file .walBoundary) #[]
+    let settled : State := ⟨before.metadata.syncDirectory, .durable⟩
+    (∀ done step todo prior next, WalSegmentRotation.steps empty.isSome = done ++ step :: todo →
+      before.execute done = some prior → prior.step step = some next → rotate step prior = .ok () next) →
+    (∀ done step todo prior next, Publication.steps = done ++ step :: todo →
+      done.foldlM bootstrapMarkerStep settled = some prior → bootstrapMarkerStep prior step = some next →
+      publish step prior = .ok () next) →
+    ∀ after, Publication.steps.foldlM bootstrapMarkerStep settled = some after →
+      bootstrapEmptyWithMarker directory empty staged markerBytes createEmpty write sync renameFile before =
+      .ok ⟨.empty, 0, 0, 0⟩ after ∧ BootstrapReady after := by
+  intro rotate publish settled rotation marker after completed
+  obtain ⟨rotates, runRotation⟩ := bootstrapRotation_completes directory before empty seen createEmpty sync rotation
+  have published := runReachedSteps bootstrapMarkerStep publish completed marker
+  refine ⟨?_, completeMarker (valid.rotatePrefix rotates) rfl completed⟩
+  dsimp only [publish, settled] at published
+  simp only [bootstrapEmptyWithMarker, Bind.bind, EStateM.bind, Pure.pure, runRotation, Publication.run, published, EStateM.pure]
+
 theorem bootstrapEmptyWith_completesAt (directory : DiskDirectory) (before : State)
     (valid : BootstrapValid before) (empty : Option ByteArray) (seen : before.observeSuccessor = empty)
     (createEmpty : FilePath → BootstrapM Unit) (write : FilePath → ByteArray → BootstrapM Unit)
@@ -211,13 +235,9 @@ theorem bootstrapEmptyWith_completesAt (directory : DiskDirectory) (before : Sta
       publish step prior = .ok () next) →
     ∀ after, Publication.steps.foldlM bootstrapMarkerStep settled = some after →
       bootstrapEmptyWith directory empty createEmpty write sync renameFile before =
-      .ok ⟨.empty, 0, 0, 0⟩ after ∧ BootstrapReady after := by
-  intro rotate publish settled rotation marker after completed
-  obtain ⟨rotates, runRotation⟩ := bootstrapRotation_completes directory before empty seen createEmpty sync rotation
-  have published := runReachedSteps bootstrapMarkerStep publish completed marker
-  refine ⟨?_, completeMarker (valid.rotatePrefix rotates) rfl completed⟩
-  dsimp only [publish, settled] at published
-  simp only [bootstrapEmptyWith, Bind.bind, EStateM.bind, Pure.pure, runRotation, Publication.run, published, EStateM.pure]
+      .ok ⟨.empty, 0, 0, 0⟩ after ∧ BootstrapReady after :=
+  bootstrapEmptyWithMarker_completesAt directory before (directory.file .stagedWalBoundary)
+    (WAL.Boundary.encode 0) valid empty seen createEmpty write sync renameFile
 
 /-- Once the empty successor is observed, successful primitive reports at
 the reached steps complete the native bootstrap worker with a ready image. -/
@@ -263,7 +283,7 @@ theorem bootstrapEmptyWith_writeStagedError (directory : DiskDirectory) (before 
   obtain ⟨rotates, runRotation⟩ := bootstrapRotation_completes directory before empty seen createEmpty sync rotation
   have validSettled := valid.rotatePrefix rotates
   refine ⟨?_, ⟨⟨?_, ?_⟩, fun _ _ _ => keeper⟩⟩
-  · rw [bootstrapEmptyWith]
+  · rw [bootstrapEmptyWith, bootstrapEmptyWithMarker]
     dsimp only [settled] at failed
     simp only [Publication.run_performReplacement, Bind.bind, EStateM.bind, Pure.pure, runRotation, failed]
   · rw [active, crash]
@@ -297,7 +317,7 @@ theorem bootstrapEmptyWith_syncStagedError (directory : DiskDirectory) (before :
     · exact validWritten
     · exact (markerStep_valid validWritten durable applied).1
   refine ⟨?_, preserves⟩
-  rw [bootstrapEmptyWith]
+  rw [bootstrapEmptyWith, bootstrapEmptyWithMarker]
   have single : (#[].push (directory.file .stagedWalBoundary)) = #[directory.file .stagedWalBoundary] := rfl
   dsimp only [settled] at writeOk
   simp only [Publication.run_performReplacement, Bind.bind, EStateM.bind, Pure.pure,
@@ -331,7 +351,7 @@ theorem bootstrapEmptyWith_renameError (directory : DiskDirectory) (before : Sta
     · exact validSynced
     · exact (markerStep_valid validSynced durable applied).1
   refine ⟨?_, preserves⟩
-  rw [bootstrapEmptyWith]
+  rw [bootstrapEmptyWith, bootstrapEmptyWithMarker]
   have single : (#[].push (directory.file .stagedWalBoundary)) = #[directory.file .stagedWalBoundary] := rfl
   dsimp only [settled] at writeOk
   simp only [Publication.run_performReplacement, Bind.bind, EStateM.bind, Pure.pure,
@@ -368,7 +388,7 @@ theorem bootstrapEmptyWith_directoryError (directory : DiskDirectory) (before : 
     · exact validRenamed
     · exact (markerStep_valid validRenamed durable applied).1
   refine ⟨?_, preserves⟩
-  rw [bootstrapEmptyWith]
+  rw [bootstrapEmptyWith, bootstrapEmptyWithMarker]
   have single : (#[].push (directory.file .stagedWalBoundary)) = #[directory.file .stagedWalBoundary] := rfl
   dsimp only [settled] at writeOk
   simp only [Publication.run_performReplacement, Bind.bind, EStateM.bind, Pure.pure,

@@ -231,7 +231,7 @@ theorem worker (observed : BootstrapKeeperFileError route) (valid : BootstrapVal
         simp [WalSegmentRotation.runAt, WalSegmentRotation.observeSuccessorWith, WalSegmentRotation.run,
           WalSegmentRotation.steps, WalSegmentRotation.performPaths, List.forM_eq_forM, Bind.bind, EStateM.bind,
           Pure.pure, EStateM.pure, report.readEmpty.2.1, file]
-    simp only [bootstrapEmptyWith, Bind.bind, EStateM.bind, rotation]
+    simp only [bootstrapEmptyWith, bootstrapEmptyWithMarker, Bind.bind, EStateM.bind, rotation]
   · refine ⟨binding.1 ▸ valid.metadata, ?_⟩
     intro pair choice marker
     rw [binding.1] at choice

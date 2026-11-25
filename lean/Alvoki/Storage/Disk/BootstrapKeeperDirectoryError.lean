@@ -199,7 +199,7 @@ theorem worker (observed : BootstrapKeeperDirectoryError route) (valid : Bootstr
     .error observed.error observed.reached.1 at rotation
   refine ⟨?_, observed.validReached valid⟩
   rw [calls.reachesPublication captured.cache listed.entries.1 listed.entries.2]
-  simp only [bootstrapEmptyWith, Bind.bind, EStateM.bind, rotation]
+  simp only [bootstrapEmptyWith, bootstrapEmptyWithMarker, Bind.bind, EStateM.bind, rotation]
 
 def final (observed : BootstrapKeeperDirectoryError route) : LockedFileState WalSegmentRotation.State :=
   ⟨observed.reached.1, before.owners.set (directory.file .lock)
