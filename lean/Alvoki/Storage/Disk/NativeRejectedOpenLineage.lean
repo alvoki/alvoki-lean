@@ -127,7 +127,8 @@ inductive NativeOpenRejectionRoute {input : FilePath} {directory : DiskDirectory
 
 namespace NativeOpenRejectionRoute
 
-variable {admission : CensusOpenAdmissionReports input directory inventory retry}
+variable {retry : LockedFileState FileImage}
+  {admission : CensusOpenAdmissionReports input directory inventory retry}
 
 def census : NativeOpenRejectionRoute admission → DescriptorInventory
   | .marker _ _ => admission.reached

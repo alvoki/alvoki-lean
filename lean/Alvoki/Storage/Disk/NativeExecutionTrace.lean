@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.BootstrapExecution
 import Alvoki.Storage.Disk.BootstrapZeroCreateRetry
+import Alvoki.Storage.Disk.BootstrapCreateErrorLineage
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeReadyCheckpoint
 import Alvoki.Storage.Disk.NativeReadyWalCollection
@@ -25,6 +26,7 @@ import Alvoki.Storage.Disk.NativePoisonedCloseReopen
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
 import Alvoki.Storage.Disk.NativeRotationErrorReopen
+import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 
@@ -50,6 +52,7 @@ inductive NativeExecutionEvent : Type 1 where
   | walCollectionPlan (result : Except IO.Error (List Nat))
   | rotatedWal
   | rotationErrorRecovered (input : FilePath) (error : IO.Error)
+  | rotationCrashRecovered (input : FilePath) (error : IO.Error) (activeFirst : Nat)
   | collectedObsoleteRuns (held : List UInt64)
   | obsoleteRunCollectionError (held : List UInt64) (error : IO.Error)
   | collectedObsoleteRunsAfterRetries (held : List UInt64) (errors : List IO.Error)
@@ -294,6 +297,15 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       NativeExecutionStep current
         (.rotationErrorRecovered input (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}"))
         ⟨current.history, current.submissions, next⟩
+  | recoverRotationCrash (current : NativeExecutionPosition) {input : FilePath} {cause : IO.Error}
+      {failure : NativeRotationDirectoryFailure current.ready.state (some cause)}
+      (crash : NativeRotationErrorCrash failure)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeRotationCrashReopen current.ready next crash input) :
+      NativeExecutionStep current
+        (.rotationCrashRecovered input (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}")
+          next.state.writer.installed.activeFirst)
+        ⟨current.history, current.submissions, next⟩
 
 /-- Interpret the submitted single or batch write with the reported
 primitive effects and start the next position from its actual result. -/
@@ -382,6 +394,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simpa [NativeExecutionEvent.reads] using returned.reads.trans reads⟩
   case recoverRotationError reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverRotationCrash reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
 
 theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep before event after) :
     event.uncertainBatchWhole := by
@@ -449,6 +463,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | planWalCollection
   | rotateWal
   | rotateThenCloseAndReopen (input : FilePath)
+  | rotateThenPowerLossAndReopen (input : FilePath)
   | collectObsoleteRuns (held : List UInt64)
   | retryObsoleteRunCollection (held : List UInt64) (failedAttempts : Nat)
   | rewriteRun (request : RunMaintenance)
@@ -479,6 +494,7 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .planWalCollection, .walCollectionPlan _ => True
   | .rotateWal, .rotatedWal => True
   | .rotateThenCloseAndReopen input, .rotationErrorRecovered opened _ => opened = input
+  | .rotateThenPowerLossAndReopen input, .rotationCrashRecovered opened _ _ => opened = input
   | .collectObsoleteRuns held, .collectedObsoleteRuns issued => issued = held
   | .collectObsoleteRuns held, .obsoleteRunCollectionError issued _ => issued = held
   | .closeThenRetryAndReopen inputs input, .rejectedOpenSequenceRecovered attempted opened _ =>
@@ -549,6 +565,13 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
   | rotateThenCloseAndReopen (input : FilePath) (cause : IO.Error)
       (failure : NativeRotationDirectoryFailure current.state (some cause))
       (observe : ∀ valid : current.state.Valid, Nonempty (NativeRotationErrorReopenObservation failure valid input))
+  | rotateThenPowerLossAndReopen (input : FilePath) {cause : IO.Error}
+      {failure : NativeRotationDirectoryFailure current.state (some cause)}
+      (crash : NativeRotationErrorCrash failure)
+      (observe : ∀ plan : crash.Plan current.readPrefix.refines.1,
+        ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+          crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
+        Nonempty (NativeRotationCrashReads crash input plan selected))
   | checkpointThenPowerLossAndReopen (input : FilePath) (observed : NativeCheckpointCrashObservation current.state input)
   | collectObsoleteRuns (observed : NativeObsoleteRunCollection current.state)
   | retryObsoleteRunCollection {held errors initial before}
@@ -573,7 +596,8 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .interruptedCheckpointThenReopen input _ => .interruptedCheckpointThenReopen input
   | .writeThenCloseAndReopen observed => .writeThenCloseAndReopen observed.write.request observed.input
   | .writeThenPowerLossAndReopen input observed => .writeThenPowerLossAndReopen observed.write.request input
-  | .writeThenInterruptedCloseAndReopen input write _ _ => .writeThenInterruptedCloseAndReopen write.request input
+  | .writeThenInterruptedCloseAndReopen input failedWrite _ _ =>
+    .writeThenInterruptedCloseAndReopen failedWrite.request input
   | .collectThenCloseAndReopen input _ => .collectThenCloseAndReopen input
   | .writePreflight request _ => .write request
   | .snapshotControl observed => .snapshotControl observed.update
@@ -583,6 +607,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .planWalCollection _ => .planWalCollection
   | .rotateCreated _ | .rotateExisting _ | .rotateEmpty _ => .rotateWal
   | .rotateThenCloseAndReopen input _ _ _ => .rotateThenCloseAndReopen input
+  | .rotateThenPowerLossAndReopen input _ _ => .rotateThenPowerLossAndReopen input
   | .checkpointThenPowerLossAndReopen input _ => .checkpointThenPowerLossAndReopen input
   | .collectObsoleteRuns observed => .collectObsoleteRuns observed.reports.held
   | .retryObsoleteRunCollection (held := held) (errors := errors) _ _ _ _ => .retryObsoleteRunCollection held errors.length
@@ -665,6 +690,9 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     obtain ⟨observed⟩ := observe current.ready.readPrefix.refines.1
     obtain ⟨next, reopened⟩ := current.ready.recoversRotationError observed
     exact ⟨_, _, .recoverRotationError current observed next reopened, rfl⟩
+  | rotateThenPowerLossAndReopen _ crash observe =>
+    obtain ⟨next, reopened⟩ := current.ready.recoversRotationPowerLoss crash observe
+    exact ⟨_, _, .recoverRotationCrash current crash next reopened, rfl⟩
   | checkpointThenPowerLossAndReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.recoversCheckpointCrash observed
     exact ⟨_, _, .recoverCheckpointCrash current observed next reopened, rfl⟩
@@ -796,5 +824,36 @@ theorem BootstrapZeroCreateError.executesAfterCreateError
   let start : NativeExecutionPosition :=
     ⟨[], [], ⟨.ok state.session (state.census, state.files), state, state, [], readyPrefix⟩⟩
   exact ⟨boot, start, failed, returned, rfl, rfl, rfl, rfl, NativeExecutionTrace.executes start⟩
+
+/-- Every failed first keeper create contributes its own returned diagnostic.
+The successful projected bootstrap uses the last attempt's reached files
+and inventory before starting the ordinary native execution. -/
+theorem BootstrapCreateErrorLineage.executesAfterCreateErrors
+    {directory : DiskDirectory} {before atFiles : LockedFileState WalSegmentRotation.State}
+    {first : ReleasedBootstrapCreateError directory before} {last : ReleasedBootstrapCreateError directory atFiles}
+    {attempts : List ((files : LockedFileState WalSegmentRotation.State) × ReleasedBootstrapCreateError directory files)}
+    (lineage : BootstrapCreateErrorLineage first attempts last) {input : FilePath}
+    {calls : BootstrapOpenCalls (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory last.retry}
+    {captured : BootstrapCacheOpen calls.toBootstrapAdmissionCalls} {listed : BootstrapCheckedListing captured}
+    {keeper : BootstrapZeroKeeperRoute listed} {marker : BootstrapMarkerCustody listed}
+    {opening : OpenAdmissionReports input directory calls.slot}
+    (acquired : CapturedBootstrapAdmission captured opening last.inventory)
+    (namespaceView : captured.view = last.error.afterView) (root : captured.root = last.captured.root)
+    (publication : BootstrapKeeperMarkerHandoff keeper marker)
+    (effects : BootstrapKeeperMarkerHandoff.ReturnedCensus marker) :
+    ∃ (boot : BootstrapClientStart directory calls.slot.description (calls.run opening))
+      (start : NativeExecutionPosition),
+      (∀ receipt ∈ attempts, receipt.2.calls.run receipt.2.admission =
+        .error receipt.2.error.diagnostic receipt.2.error.final) ∧
+      calls.run opening = .ok start.ready.state.session boot.final ∧ start.ready.state.census = effects.reached ∧
+      start.history = [] ∧ start.submissions = [] ∧ start.ready.reads = [] ∧
+      ∀ instructions, NativeExecutionTrace.Reports start instructions →
+        ∃ events endPosition, NativeExecutionInstructions instructions events ∧ NativeExecutionTrace start events endPosition ∧
+          InstalledClientReplay endPosition.submissions endPosition.ready.reads endPosition.history
+            endPosition.ready.state.writer.installed endPosition.ready.state.session := by
+  obtain ⟨boot, start, _, opened, census, history, submissions, reads, executes⟩ :=
+    last.error.executesAfterCreateError last.cleanup last.admission last.disposed acquired namespaceView root publication effects
+  exact ⟨boot, start, fun receipt included => (lineage.returns receipt included).1, opened, census, history, submissions,
+    reads, executes⟩
 
 end Alvoki.Storage.DiskSession
