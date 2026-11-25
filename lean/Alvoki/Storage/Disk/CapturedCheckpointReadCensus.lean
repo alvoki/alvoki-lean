@@ -233,7 +233,7 @@ theorem CapturedMarkedReadReports.beforeKeeper (report : CapturedMarkedReadRepor
     (later : ∀ start ∈ retry.image.later.visible, layout.range.through < start)
     (readKeeper : FilePath → Nat → Nat → EStateM IO.Error ReadState ByteArray) :
     let walRead := fun watermark length => readSelectedWithCachedExtents directory watermark length report.scanWal
-      (fun path => liftExcept (.ok (report.catalog.inventory.reports.lstat path) : Except IO.Error _))
+      report.inspectWal
       (readTemporarySeal report.reads released) readKeeper
     admission.owner ∈ captured.atOpen.slots ∧ admission.cached ∈ captured.atOpen.slots ∧
     report.listing.opened.inode report.listing.stream.description = admission.reached.inode admission.cached.description ∧

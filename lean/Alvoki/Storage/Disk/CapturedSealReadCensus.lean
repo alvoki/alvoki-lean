@@ -237,6 +237,44 @@ theorem scanWal_fromEntry (report : CapturedMarkedReadReports admission layout p
       admission.held) = _
   rw [stillReached]
 
+/-- Interpret the native no-follow extent probe and its private regular
+file guard. The catalog supplies the raw metadata observation. -/
+def inspectWal (report : CapturedMarkedReadReports admission layout published) (path : FilePath) :
+    EStateM IO.Error ReadState (Except IO.Error IO.FS.Metadata) :=
+  inspectWalSegmentWith path (pure (report.catalog.inventory.reports.lstat path))
+
+/-- Every listed canonical name passes the native inspection, including
+older seals and later names whose payloads are not read. The resulting
+extent scan is the one used by the catalog selection theorem. -/
+theorem guardedWalScan (report : CapturedMarkedReadReports admission layout published) {names : List String}
+    (listed : ∀ name ∈ names, name ∈ report.catalog.inventory.names) :
+    readWalSegmentExtentsWith directory report.inspectWal names =
+      readWalSegmentExtentsWith directory
+        (fun path => liftExcept (.ok (report.catalog.inventory.reports.lstat path) : Except IO.Error _)) names := by
+  have probes : names.filterMapM (readWalSegmentExtentWith directory report.inspectWal) =
+      names.filterMapM (readWalSegmentExtentWith directory
+        (fun path => liftExcept (.ok (report.catalog.inventory.reports.lstat path) : Except IO.Error _))) := by
+    induction names with
+    | nil => rfl
+    | cons name rest ih =>
+      have tail := ih (fun later member => listed later (List.mem_cons_of_mem _ member))
+      have head : readWalSegmentExtentWith directory report.inspectWal name =
+          readWalSegmentExtentWith directory
+            (fun path => liftExcept (.ok (report.catalog.inventory.reports.lstat path) : Except IO.Error _)) name := by
+        cases parsed : parseWalSegmentName name with
+        | none => simp [readWalSegmentExtentWith, parsed]
+        | some first =>
+          have rendering := parseWalSegmentName_eq_some_iff.mp parsed
+          have member := (report.catalog.present first).mp (rendering ▸ listed name List.mem_cons_self)
+          obtain ⟨metadata, found, regular, privateFile⟩ := report.catalog.regular first member
+          have inspected : report.inspectWal (directory.file (.walSegment first)) = pure (.ok metadata) := by
+            simp [inspectWal, inspectWalSegmentWith, found, checkPrivateRegularWith, regular, privateFile,
+              show (IO.FS.FileType.file == .file) = true from rfl]
+          simp [readWalSegmentExtentWith, parsed, inspected, found, liftExcept]
+      rw [List.filterMapM_cons, List.filterMapM_cons, head, tail]
+  unfold readWalSegmentExtentsWith
+  rw [probes]
+
 /-- Use the real selected WAL worker with the observed checked listing and
 temporary seal effects. It begins the keeper subloop at the exact census
 after the listing has closed and every selected seal read has released its
@@ -259,7 +297,7 @@ theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission l
     admission.owner ∈ captured.atOpen.slots ∧ admission.cached ∈ captured.atOpen.slots ∧
     ∃ earlier : List (Nat × ByteArray), earlier.map Prod.fst = required.dropLast.map Prod.fst ∧
       readSelectedWithCachedExtents directory layout.range.watermark count report.scanWal
-        (fun path => liftExcept (.ok (report.catalog.inventory.reports.lstat path) : Except IO.Error _))
+        report.inspectWal
         (readTemporarySeal report.reads released) readKeeper
           (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) =
       (do
@@ -276,12 +314,16 @@ theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission l
     (count.toNat / WAL.frameSize) readKeeper
   refine ⟨lives report.listing.custody.lockRetained (fun event member => (retained event member).1),
     lives report.listing.custody.cacheRetained (fun event member => (retained event member).2), earlier, offsets, ?_⟩
-  have scannedState : (readWalSegmentExtentsWith directory
-      (fun path => liftExcept (.ok (report.catalog.inventory.reports.lstat path) : Except IO.Error _))
-      ((report.listing.scan.entries directory.path).toList.map (·.fileName)) :
-      EStateM IO.Error ReadState _) (admission.cache, report.listing.afterClose, admission.held) =
+  have listed := (CheckedDirectoryReadReport.scan_complete directory.path report.listing.eof report.listing.closed
+    report.listing.complete).1
+  have entries := Except.ok.inj (report.catalog.listed.symm.trans (report.listed.trans listed))
+  have names : (report.listing.scan.entries directory.path).toList.map (·.fileName) =
+      report.catalog.inventory.names := entries ▸ report.catalog.names
+  have scannedState : readWalSegmentExtentsWith directory report.inspectWal
+      ((report.listing.scan.entries directory.path).toList.map (·.fileName))
+      (admission.cache, report.listing.afterClose, admission.held) =
       .ok extents (admission.cache, report.listing.afterClose, admission.held) := by
-    rw [readWalSegmentExtentsWith_liftReports, scanned]
+    rw [report.guardedWalScan (fun name member => names ▸ member), readWalSegmentExtentsWith_liftReports, scanned]
     rfl
   simp only [readSelectedWithCachedExtents, aligned, covers, and_self, ↓reduceIte, Bind.bind, EStateM.bind,
     report.scanWal_fromEntry, scannedState, selected, Pure.pure, EStateM.pure]
