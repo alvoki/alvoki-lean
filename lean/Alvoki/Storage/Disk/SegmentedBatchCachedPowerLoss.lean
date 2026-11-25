@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.SegmentedBatchMarkerProcessExit
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
-import Alvoki.Storage.Disk.DiskOpenAdmission
+import Alvoki.Storage.Disk.BatchCutReopenAdmission
 
 namespace Alvoki.Storage.DiskSession
 
@@ -198,43 +198,11 @@ theorem Reached.installsAdmitted {files : Type} {input : FilePath} {retry : Lock
         Nonempty (OpenAdmissionReports input directory reported.slot)) :
     ∃ descriptor after, AdmittedRetry (files := files) cut input retry descriptor after := by
   let effects := cut.cut.writeEffects cut.appendCrashTails (before.wal.directory.staged .walBoundary)
-  have oldRange : before.wal.directory.active.walRange = some ⟨before.target.range.watermark, before.history.length⟩ := by
-    rw [ready.walPair, ← ready.resumed.through]
-    exact before.target.decoded
-  have oldAccepted := (congrArg DirectoryPublication.Bindings.manifest ready.walPair).symm ▸ ready.resumed.accepted
-  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
-  have count : before.history.length = before.installed.table.committed.toNat :=
-    represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
-  obtain ⟨kept, manifest, history, allowed, _, layout, valid, selected, _, first, _, descriptors, offsets,
-    prepared, _, accepted, ordered, _, _⟩ :=
-    attempts.selectsAfterBatchCut ready.layout ready.valid oldRange ready.resumed.ordered count observed.prepared
-      (observed.preparedHistory ready).2.1 oldAccepted effects cut.physicalProjection
-  obtain ⟨reported, ⟨admission⟩⟩ := reads history selected allowed first
-  have following := reported.selectedAfterWatermark offsets descriptors
-  have installed := runOpenWithAdmission_markedRetryFromChunks reported admission
-    prepared.keeperPrefix prepared.newer following accepted ordered
-  rw [reported.runWithAdmission_eq admission] at installed
-  obtain ⟨_, cutReady⟩ := installed.readyForAppend accepted ordered
-  let wal := before.wal.appendSelectedView retry.image.directory.active history
-  have sealed : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept := kept
-  have spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize := ready.spans
-  obtain ⟨session, final, after, returned, path, slot, phase, files, owners, _, target, exactHistory, _, durable, next⟩ :=
-    cutReady.writerRetained layout valid spans rfl first sealed
-  have readyAfter : after.RetainedReady directory reported.slot.description := reported.inventoryDescription ▸ next
-  have oldManifest := manifest.trans (congrArg DirectoryPublication.Bindings.manifest ready.walPair)
-  have oldCheckpoint : SelectedIntegrityCheckpoint before.published.durable retry.image.directory.active.manifest
-      before.checkpoint := oldManifest.symm ▸ ready.resumed.selected
-  have loaded := readyAfter.resumed.selected
-  rw [durable, target] at loaded
-  have checkpoint := loaded.uniqueResult oldCheckpoint
-  have generation : after.installed.generation = before.installed.generation := by
-    rw [readyAfter.resumed.generation, checkpoint, ← ready.resumed.generation]
-  have held : final.owners.Owns directory reported.slot.description := owners ▸ readyAfter.held
-  have pair : final.image.directory.active = retry.image.directory.active :=
-    files ▸ (readyAfter.resumed.ready.selected.trans (congrArg Target.pair target))
-  exact ⟨reported.slot.description, after, attempts, ⟨history, selected, reported, admission, session, final,
-    (reported.runWithAdmission_eq admission).trans returned, path, slot.trans reported.inventoryDescription,
-    phase, held, files, owners, pair, exactHistory⟩, exactHistory ▸ allowed, checkpoint, generation, durable, readyAfter⟩
+  obtain ⟨descriptor, after, opened⟩ :=
+    attempts.reopensBatchCutAdmitted ready observed.prepared (observed.preparedHistory ready).2.1
+      effects rfl cut.physicalProjection reads
+  exact ⟨descriptor, after, attempts, opened.reopened, opened.history, opened.checkpoint,
+    opened.generation, opened.durable, opened.retained⟩
 
 end SegmentedBatchMarkerPowerLossReport
 end Alvoki.Storage.DiskSession

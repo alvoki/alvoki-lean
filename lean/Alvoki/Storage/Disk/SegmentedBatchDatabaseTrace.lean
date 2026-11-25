@@ -113,6 +113,13 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (installed : report.Installs after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
         (log ++ [.uncertainBatch report.failure.batch]) descriptor after
+  | batchErrorAdmitted {files handle : Type} {input : System.FilePath} {retry : LockedFileState FileImage}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (failure : SegmentedBatchFailure directory before) (observed : ObservedBatchFailure failure handle)
+      {release : SegmentedFailureRelease writer}
+      (installed : observed.AdmittedReopen (files := files) release input retry descriptor after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch failure.batch]) descriptor after
   | batchPowerLoss
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (cut : SegmentedBatchMarkerPowerLossReport directory before writer) (observed : cut.Valid)
@@ -206,6 +213,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | batchMarkerAdmitted _ _ _ installed ih =>
     obtain ⟨_, _, history, retention⟩ := ih
     exact ⟨installed.retained, appendUncertainBatch retention history installed.history⟩
+  | batchErrorAdmitted _ _ _ installed ih =>
+    obtain ⟨_, _, history, retention⟩ := ih
+    exact ⟨installed.installation.retained, appendUncertainBatch retention history installed.installation.history⟩
   | batchAppendPowerLoss _ _ _ installed ih
   | batchAppendProcessExit _ _ _ installed ih
   | batchAppendAdmitted _ _ installed ih =>
@@ -366,6 +376,24 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterObservedBatchError {handle : Type
   cases report.release with
   | closed => exact closed
   | references held drops last => exact dropped held drops last
+
+/-- Continue from the exact poisoned result through the admitted native
+open and record one uncertain batch. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterObservedBatchErrorWithAdmission {files handle : Type}
+    {input : System.FilePath} {retry : LockedFileState FileImage}
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (failure : SegmentedBatchFailure directory before) (observed : ObservedBatchFailure failure handle)
+    (release : SegmentedFailureRelease writer)
+    (attempts : BoundedReopenTrace directory (BatchRetryTarget before.history failure.batch before.wal.active.first)
+      failure.released retry)
+    (reads : BatchCutReopenObservations directory before failure.batch files input retry) :
+    ∃ descriptor after, observed.AdmittedReopen (files := files) release input retry descriptor after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch failure.batch]) descriptor after := by
+  obtain ⟨descriptor, after, installed⟩ :=
+    observed.reopensAdmitted (trace.preservesRetained initialReady).1 release attempts reads
+  exact ⟨descriptor, after, installed, .batchErrorAdmitted trace failure observed installed⟩
 
 /-- Extend the mixed trace through a batch interrupted by machine power
 loss and the next healthy cached installation. The batch contributes one
