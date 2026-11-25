@@ -45,6 +45,31 @@ theorem installs
   refine ⟨?_, constructor.usesReferences observed.phase observed.token, observed.keepsPhase.trans observed.initialized⟩
   simp only [installReady, Bind.bind, EStateM.bind, observed.phaseAllocated, observed.tokenAllocated, Pure.pure, EStateM.pure]
 
+/-- The marked worker supplies the recovered table and the marker to
+the two-slot opener's three reference allocations in order. -/
+theorem installsWithRecoveredMarker
+    {marker : Type} {entry afterMarker : heap}
+    {recover : EStateM IO.Error heap (Installed × marker)}
+    {selected : marker} (recovered : recover entry = .ok (installed, selected) before)
+    (observed : OpenReferenceAllocations allocatePhase allocateToken phaseContents installed before)
+    {directory : DiskDirectory} {lock : IO.FS.Handle} {syncFiles : DiskTable.OpenSyncFiles}
+    {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+    (constructor : DiskTable.OpenReferenceAssembly directory lock syncFiles assemble)
+    (allocateMarker : Option marker → EStateM IO.Error heap (IO.Ref (Option marker)))
+    {cell : IO.Ref (Option marker)}
+    (markerAllocated : allocateMarker (some selected) observed.afterToken = .ok cell afterMarker)
+    (keepsPhase : phaseContents afterMarker observed.phase = phaseContents observed.afterToken observed.phase) :
+    (do
+      let (reopened, selected) ← recover
+      let table ← installReady reopened allocatePhase allocateToken (fun phase token => pure (assemble phase token))
+      let cell ← allocateMarker (some selected)
+      pure (table, cell)) entry = .ok (assemble observed.phase observed.token, cell) afterMarker ∧
+    (assemble observed.phase observed.token).UsesOpenReferences directory lock syncFiles observed.phase observed.token ∧
+    phaseContents afterMarker observed.phase = some (.ready installed) := by
+  obtain ⟨_, references, ready⟩ := observed.installs constructor
+  exact ⟨by simp only [Bind.bind, EStateM.bind, recovered, installReady, observed.phaseAllocated, observed.tokenAllocated, markerAllocated, Pure.pure, EStateM.pure],
+    references, keepsPhase.trans ready⟩
+
 end OpenReferenceAllocations
 
 variable {input : FilePath} {directory : DiskDirectory} {history : List WAL.Write}

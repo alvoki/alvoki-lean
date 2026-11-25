@@ -1707,6 +1707,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.recoversBeforeInstallation
 #check_axioms Alvoki.Storage.DiskTable.openReferenceAssembly
 #check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.installs
+#check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.installsWithRecoveredMarker
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.returnsReadyWithReferences
 #check_axioms Alvoki.Storage.DiskSession.EmptyOpenSuccessReports.recoversBeforeInstallation
 #check_axioms Alvoki.Storage.DiskSession.EmptyOpenSuccessReports.installsReachedPhase

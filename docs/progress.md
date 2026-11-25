@@ -1060,6 +1060,13 @@ the exact reached cache. The sync result identifies the descriptor
 whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
+The two-slot installer now has a shared reference-allocation proof.
+The marked worker's returned table and marker determine the arguments
+of the three allocations. The marker reference is allocated after the
+existing phase and token, and the phase still contains the recovered
+table at the final return. The raw worker result and allocation effects
+remain observations.
+
 The client recovery theorem now returns both the replay certificate
 and the provenance of every surviving keeper payload when the marker
 image changed. The provenance uses the same interrupted writer report
