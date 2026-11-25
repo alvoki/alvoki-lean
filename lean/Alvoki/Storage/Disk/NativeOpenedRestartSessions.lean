@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 import Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
+import Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
@@ -153,6 +154,9 @@ inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
   | close {input : FilePath} (seen : NativeOpenedAlignedCloseReport before.position input view)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.closeAndReopen input) [.closedAndReopened input (.ok ())] next
+  | closeAfterFailedUnlock {input : FilePath} (seen : NativeOpenedFailedCloseReport before.position input view)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.closeAndReopen input) [.closedAndReopened input (.error seen.cause)] next
   | checkpointRename {input : FilePath} (seen : NativeOpenedManifestRenameReport before.position input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.checkpointRenameReboot input) [seen.event] next
@@ -184,6 +188,7 @@ theorem NativeOpenedSessionTrace.common (trace : NativeOpenedSessionTrace view n
     | calls ran => exact prior.append ran.common
     | quiet _ returned => exact .step prior returned.common
     | close _ returned => exact .step prior returned.common
+    | closeAfterFailedUnlock _ returned => exact .step prior returned.common
     | checkpointRename _ returned => exact .step prior returned.common
     | stoppedCheckpoint _ returned => exact .step prior returned.common
     | uncertainWrite _ returned => exact .step prior returned.common
@@ -197,6 +202,8 @@ inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
   | quiet (input : FilePath) (report : NativeQuietRestartReport before input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.quietRestart input)
   | close (input : FilePath) (report : NativeOpenedAlignedCloseReport before.position input view) :
+      NativeOpenedSessionReport view names bytes before (.closeAndReopen input)
+  | closeAfterFailedUnlock (input : FilePath) (report : NativeOpenedFailedCloseReport before.position input view) :
       NativeOpenedSessionReport view names bytes before (.closeAndReopen input)
   | checkpointRename (input : FilePath) (report : NativeOpenedManifestRenameReport before.position input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.checkpointRenameReboot input)
@@ -218,6 +225,9 @@ theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport vi
   | close input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .close seen returned⟩
+  | closeAfterFailedUnlock input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .closeAfterFailedUnlock seen returned⟩
   | checkpointRename input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .checkpointRename seen returned⟩

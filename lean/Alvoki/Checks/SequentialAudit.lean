@@ -363,6 +363,7 @@ import Alvoki.Storage.Disk.NativeReadyPowerLoss
 import Alvoki.Storage.Disk.NativeQuietPowerLossRaw
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 import Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
+import Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
@@ -2120,6 +2121,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.append
 #check_axioms Alvoki.Storage.DiskSession.NativeQuietRestartReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedAlignedCloseReport.reaches
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedFailedCloseReport.releases
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedFailedCloseReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedManifestRenameReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedStoppedCheckpointReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedUncertainWriteReport.reaches
