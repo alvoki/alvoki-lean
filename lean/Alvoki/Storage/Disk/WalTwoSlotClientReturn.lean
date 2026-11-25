@@ -2891,7 +2891,9 @@ theorem recoveredRetries_installedReads
     {openedFrom : LockedFileState FileImage}
     {survivingBindings : DirectoryPublication.Bindings}
     {survivingKeeper : Option ByteArray} {survivingNames : List Nat}
-    (metadataSurvived : survivingBindings ∈ initial.directory.crashImages)
+    {survivingMarker : Option ByteArray}
+    (markerSurvived : survivingMarker ∈ crashMarkers)
+    (survivorProjects : projectMarkerBytes checkpoint survivingMarker = .ok survivingBindings)
     (keeperSurvived : survivingKeeper ∈ initial.keeper.crashImages)
     (namesSurvived : survivingNames ∈ initial.later.crashImages)
     (openRetry : ReportedMarkerRetries
@@ -3150,6 +3152,26 @@ theorem recoveredRetries_installedReads
       obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes physical
       exact .inr ⟨bytes, interruptedBytes_ofCounts offset advanced transfersFit size
         (fun position changed => (attributed position changed).symm) decoded, projected⟩
+  have metadataSurvived : survivingBindings ∈ initial.directory.crashImages := by
+    have forward {source : List (Option ByteArray)} {bindings : List DirectoryPublication.Bindings}
+        (mapped : source.mapM (projectMarkerBytes checkpoint) = .ok bindings)
+        (member : survivingMarker ∈ source) : survivingBindings ∈ bindings := by
+      induction source generalizing bindings with
+      | nil => simp at member
+      | cons raw rest ih =>
+        cases head : projectMarkerBytes checkpoint raw with
+        | error => simp [List.mapM_cons, head, Bind.bind, Except.bind] at mapped
+        | ok value =>
+          cases tail : rest.mapM (projectMarkerBytes checkpoint) with
+          | error => simp [List.mapM_cons, head, tail, Bind.bind, Except.bind] at mapped
+          | ok projected =>
+            have same : value :: projected = bindings := by
+              simpa [List.mapM_cons, head, tail, Bind.bind, Except.bind, Pure.pure, Except.pure] using mapped
+            subst bindings
+            rcases List.mem_cons.mp member with equal | later
+            · exact List.mem_cons.mpr (.inl (Except.ok.inj (survivorProjects.symm.trans (equal ▸ head))))
+            · exact List.mem_cons_of_mem _ (ih tail later)
+    exact forward projectedCrash markerSurvived
   have crash : ReportedMarkerRetries initial
       (initial.crash survivingBindings survivingKeeper survivingNames) :=
     .powerLoss .start metadataSurvived keeperSurvived namesSurvived
