@@ -13,7 +13,8 @@ variable {heap handle : Type} {directory : DiskDirectory}
 The guard and setters frame the file projection. The append and each
 issued publication callback carry their own result, including the
 reached cache. The logical dispatcher derives its acknowledgement
-from this projection of the same raw return. -/
+from this projection of the same raw return. The checked request and
+the commit it actually issued suffice to classify that return. -/
 theorem WriteRequest.runOnRawOpenPhase_projectsAcknowledged
     (request : WriteRequest) (ready : writer.RetainedReady directory descriptor) (calls : Calls handle)
     (observe : heap → Cache handle × WriteFiles)
@@ -56,7 +57,12 @@ theorem WriteRequest.runOnRawOpenPhase_projectsAcknowledged
         performMarkerAt directory first count calls.stage calls.sync calls.rename step (observe before)) :
     let count := writer.installed.walBytes + WAL.frameSize * request.rows.length
     let next : Installed := { writer.installed with table, walBytes := count }
-    calls.run request directory writer = .ok sequence (.ready next, ⟨observe reached, writer.owners⟩) := by
+    calls.run request directory writer = .ok sequence (.ready next, ⟨observe reached, writer.owners⟩) ∧
+    ∃ checked : CheckedWriteRequest request directory writer.installed calls.lookup,
+      checked.batch = batch ∧ checked.next = next ∧
+      commitBytesAt directory writer.installed.activeFirst (WAL.encodeBatch checked.batch)
+        checked.next.walBytes calls.append calls.stage calls.sync calls.rename (readyCall writer calls.cache).2.image =
+        .ok () (observe reached) := by
   intro count next
   obtain ⟨guarded, poisoned, settled, guard, excluded, committed, installed, number, checked, lookedUp⟩ :=
     request.runOnRawOpenPhase_acknowledges directory lookup append stage sync rename phase get set
@@ -75,6 +81,7 @@ theorem WriteRequest.runOnRawOpenPhase_projectsAcknowledged
         .ok () (observe reached) := by
     simpa only [projectResult, setFrames installed] using projected.symm
   have accepted := runBatchWrite_acknowledges projectedGuard nonempty prepared fits imageReturn
+  refine ⟨?_, ⟨⟨batch, table, nonempty, fits, prepared, projectedGuard, rfl⟩, rfl, rfl, imageReturn⟩⟩
   rw [Calls.run, request.runReported_eq_batch ready, number]
   exact accepted
 
