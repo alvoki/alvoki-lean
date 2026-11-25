@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The session replay theorem derives marker acquisition from its bounded
+file-read reports. It composes preparation, marker stabilization and
+repair in order, carrying the opened marker census into preparation
+and the reached keeper census and settled marker into repair. It still
+takes the outcome of each later callback and the retry traces as premises.
+
 The returned-session replay theorem now derives its old-or-whole
 selection from the reported pre-barrier and settled retry traces.
 The pre-barrier trace ends at the admitted files and the settled trace

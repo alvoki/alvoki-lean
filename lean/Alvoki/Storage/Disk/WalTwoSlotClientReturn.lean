@@ -1687,19 +1687,30 @@ theorem installsAfterAcquiredRecovery_replays
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
-    (acquire : DiskDirectory → EStateM IO.Error (CensusDirectoryCache × CensusOpenState)
-      (KeeperDescriptorIdentity × Selection))
+    {markerReads : CheckpointRunChunkReads} {payload : ByteArray}
+    (file : HeldMetadataFile markerReads (directory.file .walBoundary) "WAL.commit"
+      admission.view admission.root payload)
+    (privateFile : file.calls.metadata.numLinks = 1)
+    (available : PrefixChunksAvailableUntilEof payload (markerReads.readChunk file.calls.slot.description))
+    {selection : Selection} (decoded : decode payload = .ok selection)
     (prepare : DiskDirectory → Selection → EStateM IO.Error (CensusDirectoryCache × CensusOpenState)
       (Plan × Reopened × Nat))
     (stabilize : KeeperDescriptorIdentity → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
     (finish : DiskDirectory → Plan → Nat → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
-    {handle : KeeperDescriptorIdentity} {selection : Selection}
-    {acquired : CensusDirectoryCache × CensusOpenState}
-    (acquisition : acquire directory (admission.cache, admission.reached, admission.held) =
-      .ok (handle, selection) acquired)
     {opened : Reopened} {after : CensusOpenState}
-    (recovery : reopenWith (prepare directory selection) (stabilize handle) (finish directory) acquired =
-      .ok opened (admission.cache, after))
+    (report : CapturedMarkedReadReports admission layout published false file.calls.inventory)
+    (keeper : CapturedKeeperOpenReports report)
+    {extent : Nat} {cache : CensusDirectoryCache}
+    (prepared : prepare directory selection (admission.cache, file.calls.inventory, admission.held) =
+      .ok (layout.boundedPlan, opened, extent) (cache, keeper.afterRead, admission.held))
+    (stabilized : stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩
+      (cache, keeper.afterRead, admission.held) =
+      .ok () (cache, keeper.afterRead,
+        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }))
+    (finished : finish directory layout.boundedPlan extent
+      (cache, keeper.afterRead,
+        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) =
+      .ok () (admission.cache, after))
     {bootstrapFirst writer : Nat}
     {initial : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession}
     (start : BootstrapClientStart directory bootstrapFirst initial)
@@ -1729,7 +1740,8 @@ theorem installsAfterAcquiredRecovery_replays
     (ordered : WAL.OrdinalsFrom 1 ((prior.history ++ batch).take range.through)) :
     ∃ session,
       calls.runWithMarked (fun resolved cache before =>
-        match reopenAcquiredWith (acquire resolved) (prepare resolved) stabilize (finish resolved) (cache, before) with
+        match reopenAcquiredWith (acquireMarkerInCensus markerReads (resolved.file .walBoundary))
+            (prepare resolved) stabilize (finish resolved) (cache, before) with
         | .ok (opened, _, _) (_, reached) => .ok opened reached
         | .error cause (_, reached) => .error cause reached) =
         .ok session after ∧
@@ -1740,7 +1752,16 @@ theorem installsAfterAcquiredRecovery_replays
     observations selection observed authorizedRepair preparedPlan retries previous oldSize selected).2.2
   obtain ⟨reference, replayed, retained, acknowledged, bounded, priorReads⟩ :=
     trace.replaysUncertainSubmission start whole ordered
-  have returned := installsAfterAcquiredRecovery calls marker acquire prepare stabilize finish acquisition recovery
+  have acquisition := acquireMarkerInCensus_returns file privateFile available decoded
+    (admission.cache, admission.reached, admission.held)
+  have recovery : reopenWith (prepare directory selection)
+      (stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩)
+      (finish directory) (admission.cache, file.calls.inventory, admission.held) =
+        .ok opened (admission.cache, after) := by
+    simp only [reopenWith_reports, prepared, stabilized, finished]
+  have returned := installsAfterAcquiredRecovery calls marker
+    (fun resolved => acquireMarkerInCensus markerReads (resolved.file .walBoundary))
+    prepare stabilize finish acquisition recovery
   refine ⟨_, returned, reference, replayed, retained, acknowledged, bounded, priorReads, ?_⟩
   apply DiskSession.SegmentedSession.guardedAcquireReads rfl
   intro snapshot floor committed
