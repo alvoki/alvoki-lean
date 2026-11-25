@@ -101,28 +101,30 @@ theorem OpenPathReadReports.walSegmentExtents_offsets (reports : OpenPathReadRep
     change _ = Except.ok ((extents.map Prod.fst).mergeSort)
     exact congrArg Except.ok (List.map_mergeSort (fun _ _ _ _ => rfl))
 
-private theorem readWalSegmentExtent_metadata {reports : OpenPathReadReports} {directory : DiskDirectory}
+private theorem readWalSegmentExtent_metadata {directory : DiskDirectory}
+    {probe : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)}
     {name : String} {entry : Nat × IO.FS.Metadata}
-    (seen : readWalSegmentExtentWith (m := Except IO.Error) directory (fun path => .ok (reports.lstat path)) name =
-      .ok (some entry)) :
-    reports.lstat (directory.file (.walSegment entry.1)) = .ok entry.2 := by
+    (seen : readWalSegmentExtentWith directory probe name = .ok (some entry)) :
+    probe (directory.file (.walSegment entry.1)) = .ok (.ok entry.2) := by
   cases parsed : parseWalSegmentName name with
   | none => simp [readWalSegmentExtentWith, parsed, Pure.pure, Except.pure] at seen
   | some first =>
     simp only [readWalSegmentExtentWith, parsed, Bind.bind, Except.bind] at seen
-    cases observed : reports.lstat (directory.file (.walSegment first)) with
-    | ok metadata =>
-      rw [observed] at seen
-      by_cases regular : metadata.type == .file
-      · simp [classifyWalSegmentLookup, regular, Pure.pure, Except.pure, Except.toOption] at seen
-        subst entry
-        exact observed
-      · simp [classifyWalSegmentLookup, regular, throw] at seen
-    | error cause =>
-      rw [observed] at seen
-      cases cause <;> try contradiction
-      rename_i file osCode details
-      by_cases missing : osCode = 2 <;> simp [classifyWalSegmentLookup, missing, Pure.pure, Except.pure, throw] at seen
+    cases probed : probe (directory.file (.walSegment first)) with
+    | error cause => rw [probed] at seen; contradiction
+    | ok report =>
+      rw [probed] at seen
+      cases report with
+      | ok metadata =>
+        by_cases regular : metadata.type == .file
+        · simp [classifyWalSegmentLookup, regular, Pure.pure, Except.pure, Except.toOption] at seen
+          subst entry
+          exact probed
+        · simp [classifyWalSegmentLookup, regular, throw] at seen
+      | error cause =>
+        cases cause <;> try contradiction
+        rename_i file osCode details
+        by_cases missing : osCode = 2 <;> simp [classifyWalSegmentLookup, missing, Pure.pure, Except.pure, throw] at seen
 
 private theorem filterMapM_member {α β ε : Type} {f : α → Except ε (Option β)} {l : List α} {out : List β}
     (ran : l.filterMapM f = .ok out) {entry : β} (member : entry ∈ out) :
@@ -150,20 +152,29 @@ private theorem filterMapM_member {α β ε : Type} {f : α → Except ε (Optio
           · obtain ⟨source, listed, reported⟩ := ih tail later
             exact ⟨source, List.mem_cons_of_mem _ listed, reported⟩
 
-theorem OpenPathReadReports.walSegmentExtents_metadata {reports : OpenPathReadReports} {directory : DiskDirectory}
+/-- Each selected extent comes from its own successful canonical probe. -/
+theorem readWalSegmentExtentsWith_metadata {directory : DiskDirectory}
+    {probe : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata)}
     {names : List String} {extents : List (Nat × IO.FS.Metadata)}
-    (read : readWalSegmentExtentsWith (m := Except IO.Error) directory (fun path => .ok (reports.lstat path)) names = .ok extents)
+    (read : readWalSegmentExtentsWith directory probe names = .ok extents)
     {entry : Nat × IO.FS.Metadata} (member : entry ∈ extents) :
-    reports.lstat (directory.file (.walSegment entry.1)) = .ok entry.2 := by
+    probe (directory.file (.walSegment entry.1)) = .ok (.ok entry.2) := by
   unfold readWalSegmentExtentsWith at read
   simp only [Bind.bind, Except.bind] at read
-  cases scans : names.filterMapM (readWalSegmentExtentWith (m := Except IO.Error) directory (fun path => .ok (reports.lstat path))) with
+  cases scans : names.filterMapM (readWalSegmentExtentWith directory probe) with
   | error => rw [scans] at read; contradiction
   | ok entries =>
     simp only [scans, Pure.pure, Except.pure, Except.ok.injEq] at read
     subst extents
     obtain ⟨_, _, reported⟩ := filterMapM_member scans (List.mem_mergeSort.mp member)
     exact readWalSegmentExtent_metadata reported
+
+theorem OpenPathReadReports.walSegmentExtents_metadata {reports : OpenPathReadReports} {directory : DiskDirectory}
+    {names : List String} {extents : List (Nat × IO.FS.Metadata)}
+    (read : readWalSegmentExtentsWith (m := Except IO.Error) directory (fun path => .ok (reports.lstat path)) names = .ok extents)
+    {entry : Nat × IO.FS.Metadata} (member : entry ∈ extents) :
+    reports.lstat (directory.file (.walSegment entry.1)) = .ok entry.2 :=
+  Except.ok.inj (readWalSegmentExtentsWith_metadata read member)
 
 theorem OpenPathReadReports.walCollectionOffsets_eq_extents (reports : OpenPathReadReports) (directory : DiskDirectory)
     (keeper : Nat) {pair : DirectoryPublication.Bindings} {range : MarkedWalRange}

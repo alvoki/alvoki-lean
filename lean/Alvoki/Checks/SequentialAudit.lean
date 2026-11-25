@@ -246,6 +246,7 @@ import Alvoki.Storage.Disk.HeldLaterWalPrune
 import Alvoki.Storage.Disk.HeldLaterWalPruneFailure
 import Alvoki.Storage.Disk.HeldMetadataReadObservations
 import Alvoki.Storage.Disk.HeldWalPayloadObservations
+import Alvoki.Storage.Disk.HeldWalDecodeRejection
 import Alvoki.Storage.Disk.HeldWalInstallation
 import Alvoki.Storage.Disk.WalInventoryWork
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
@@ -815,6 +816,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_length
 #check_axioms Alvoki.WAL.decodeOrdinalsFromWithWork_spec
 #check_axioms Alvoki.WAL.decodeOrdinalsFromWithWork_firstFailure
+#check_axioms Alvoki.WAL.decodeOrdinalsFrom_error_at
 #check_axioms Alvoki.WAL.decodeOrdinals_append_encoded
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_eq_recoverSelected
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_refines
@@ -1645,6 +1647,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.UncheckpointedCachedReadReports.reopens
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.run_error
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.immediateReacquire
+#check_axioms Alvoki.Storage.DiskSession.HeldWalDecodeReads.FailureAt.decoderError
+#check_axioms Alvoki.Storage.readWalSegmentExtentsWith_metadata
+#check_axioms Alvoki.Storage.DiskSession.HeldWalDecodeReads.listingCustody
+#check_axioms Alvoki.Storage.DiskSession.HeldWalDecodeReads.readSelected
+#check_axioms Alvoki.Storage.DiskSession.HeldWalDecodeReads.certified
+#check_axioms Alvoki.Storage.DiskSession.HeldWalDecodeReads.firstFailure
+#check_axioms Alvoki.Storage.DiskSession.HeldWalDecodeReads.runWithAdmission_error
+#check_axioms Alvoki.Storage.DiskSession.HeldWalDecodeReads.afterLastDrop
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenTrace.afterCachedLastDrop
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenAuthorizationFailure.run_error
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenAuthorizationFailure.errorFiles

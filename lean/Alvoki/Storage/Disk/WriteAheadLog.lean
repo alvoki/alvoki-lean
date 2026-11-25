@@ -596,4 +596,60 @@ theorem decodeOrdinalsFromWithWork_firstFailure (first : Nat) (bytes : ByteArray
   simpa only [decodeOrdinalsFromWithWork, Nat.zero_add] using
     decodeOrdinalsWithWorkFrom_firstFailure bytes first 0 (bytes.size / frameSize) [] result
 
+private theorem decodeFrom_error_at (bytes : ByteArray) (ordinal offset remaining : Nat)
+    (reversed : List Write) (index : Nat) {cause : String}
+    (within : index < remaining)
+    (earlier : ∀ position, position < index → ∃ event,
+      decodeFrame (bytes.extract (offset + position * frameSize) (offset + position * frameSize + frameSize)) =
+        .ok event ∧ event.sequence.toNat = ordinal + position)
+    (defect : let frame := decodeFrame (bytes.extract (offset + index * frameSize) (offset + index * frameSize + frameSize))
+      frame = .error cause ∨ ∃ event, frame = .ok event ∧ event.sequence.toNat ≠ ordinal + index ∧
+        cause = "WAL frame sequence does not match its ordinal") :
+    decodeFrom true bytes ordinal offset remaining reversed = .error cause := by
+  induction index generalizing ordinal offset remaining reversed with
+  | zero =>
+    cases remaining with
+    | zero => omega
+    | succ remaining =>
+      simp only [Nat.zero_mul, Nat.add_zero] at defect
+      rcases defect with malformed | ⟨event, frame, wrong, message⟩
+      · simp [decodeFrom, malformed]
+      · subst cause
+        simp [decodeFrom, frame, wrong]
+  | succ index ih =>
+    cases remaining with
+    | zero => omega
+    | succ remaining =>
+      obtain ⟨event, frame, order⟩ := earlier 0 (by omega)
+      simp only [Nat.zero_mul, Nat.add_zero] at frame order
+      simp only [decodeFrom, frame, order, bne_self_eq_false, Bool.and_false, Bool.false_eq_true, ↓reduceIte,
+        advanceOrdinal]
+      have position (index : Nat) :
+          offset + (index + 1) * frameSize = offset + frameSize + index * frameSize := by
+        rw [Nat.add_mul, Nat.one_mul]
+        omega
+      have numbered (index : Nat) : ordinal + (index + 1) = ordinal + 1 + index := by omega
+      apply ih (within := by omega)
+      · intro previous before
+        have frame := earlier (previous + 1) (by omega)
+        rw [position previous, numbered previous] at frame
+        exact frame
+      · dsimp only at defect ⊢
+        rw [position index, numbered index] at defect
+        exact defect
+
+/-- Given a first malformed or wrongly numbered frame in the input, the
+actual ordinal decoder returns its precise diagnostic. -/
+theorem decodeOrdinalsFrom_error_at (first : Nat) (bytes : ByteArray) (index : Nat) {cause : String}
+    (within : index < bytes.size / frameSize)
+    (earlier : ∀ position, position < index → ∃ event,
+      decodeFrame (bytes.extract (position * frameSize) (position * frameSize + frameSize)) = .ok event ∧
+        event.sequence.toNat = first + position)
+    (defect : let frame := decodeFrame (bytes.extract (index * frameSize) (index * frameSize + frameSize))
+      frame = .error cause ∨ ∃ event, frame = .ok event ∧ event.sequence.toNat ≠ first + index ∧
+        cause = "WAL frame sequence does not match its ordinal") :
+    decodeOrdinalsFrom first bytes = .error cause :=
+  decodeFrom_error_at bytes first 0 (bytes.size / frameSize) [] index within
+    (by simpa only [Nat.zero_add] using earlier) (by simpa only [Nat.zero_add] using defect)
+
 end Alvoki.WAL
