@@ -262,6 +262,7 @@ import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 import Alvoki.Storage.Disk.NativeReadyWrite
 import Alvoki.Storage.Disk.NativePendingMarkerSync
+import Alvoki.Storage.Disk.NativePendingMarkerRename
 import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
@@ -1708,7 +1709,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyKeeperSelection.selects
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyKeeperSelection.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyKeeperSelection.cachedResult
-#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.censusAfterClose
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.physicalCustody
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.bindingFrames
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteReport.nextCacheBindings
@@ -1724,6 +1724,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteKeeperSyncStop.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteKeeperSyncStop.selectsPrior
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtKeeperSync
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteFileSyncs.censusAfterClose
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteFileSyncs.groupReturns
+#check_axioms Alvoki.Storage.DiskSession.NativeWriteMarkerRenameStop.stopsWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeWriteMarkerRenameStop.custody
+#check_axioms Alvoki.Storage.DiskSession.NativeWriteMarkerRenameStop.choices
+#check_axioms Alvoki.Storage.DiskSession.NativeWriteMarkerRenameStop.batchCut
+#check_axioms Alvoki.Storage.DiskSession.NativeWriteMarkerRenameStop.selects
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtMarkerRename
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.acknowledgesWrite
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.replaysClient
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysClientAtManifestDirectory

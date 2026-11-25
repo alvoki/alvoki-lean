@@ -173,6 +173,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeExecutionClose
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWrite
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerSync
+lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerRename
 lake env leanchecker Alvoki.Storage.Disk.NativeWritePreflight
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
