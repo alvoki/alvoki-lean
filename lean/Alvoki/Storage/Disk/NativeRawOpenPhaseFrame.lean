@@ -62,13 +62,11 @@ structure RawOpenPhaseFrame (observe : heap → Option (Phase Installed))
   openDirectory : ∀ path, KeepsPhase observe (init.openDirectory path)
   newRef : ∀ {γ : Type} (value : γ), KeepsPhase observe (init.newRef value)
 
-theorem RawOpenPhaseFrame.runOpen {calls : RawOpenAdmissionCallbacks heap} {init : OpenSyncCacheCallbacks heap}
-    (frame : RawOpenPhaseFrame observe calls init) (input : FilePath)
-    (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
-      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
-    {recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α}
-    (worker : ∀ directory lock cache, KeepsPhase observe (recover directory lock cache)) :
-    KeepsPhase observe (calls.runOpen input init makeCache recover) := by
+private theorem RawOpenPhaseFrame.withAdmission {calls : RawOpenAdmissionCallbacks heap}
+    {init : OpenSyncCacheCallbacks heap} (frame : RawOpenPhaseFrame observe calls init) (input : FilePath)
+    {continueOpen : DiskDirectory → IO.FS.Handle → EStateM IO.Error heap α}
+    (continueFrame : ∀ directory lock, KeepsPhase observe (continueOpen directory lock)) :
+    KeepsPhase observe (DiskTable.withOpenAdmission input calls.realPath calls.lookup calls.openAppend continueOpen) := by
   have metadata (path : FilePath) : KeepsPhase observe (optionalMetadataWith (calls.lookup path)) := by
     unfold optionalMetadataWith
     apply (frame.stat path).bind
@@ -81,7 +79,7 @@ theorem RawOpenPhaseFrame.runOpen {calls : RawOpenAdmissionCallbacks heap} {init
     split
     · exact .pure _
     · exact .throw _
-  unfold RawOpenAdmissionCallbacks.runOpen DiskTable.withOpenAdmission
+  unfold DiskTable.withOpenAdmission
   apply resolved.bind
   intro directory
   have noFlat : KeepsPhase observe
@@ -94,31 +92,9 @@ theorem RawOpenPhaseFrame.runOpen {calls : RawOpenAdmissionCallbacks heap} {init
     · exact .pure _
   apply noFlat.bind
   intro _
-  have held (lock : IO.FS.Handle) : KeepsPhase observe (openWithLock (calls.flock lock)
-      (fun _ => IO.userError s!"database already open: {directory.path}") (fun _ => calls.unlock lock) fun _ => do
-        let cache ← openSyncFilesWith (init.openDirectory directory.path) init.newRef init.newRef init.newRef makeCache
-        recover directory lock cache) := by
-    unfold openWithLock
-    have initialized : KeepsPhase observe (openSyncFilesWith (init.openDirectory directory.path)
-        init.newRef init.newRef init.newRef makeCache) := by
-      unfold openSyncFilesWith
-      exact (frame.openDirectory directory.path).bind fun handle =>
-        (frame.newRef (some handle)).bind fun directoryRef =>
-          (frame.newRef none).bind fun active =>
-            (frame.newRef []).bind fun pending => .pure (makeCache directoryRef active pending)
-    have finished := (initialized.bind (worker directory lock)).handle
-      (fun cause => (frame.unlock lock).bind (fun _ => .throw cause))
-    apply (frame.flock lock).bind
-    intro acquired
-    cases acquired with
-    | false =>
-      simpa [tryCatchThe, MonadExcept.tryCatch, throw, throwThe] using
-        (KeepsPhase.throw (observe := observe) (α := Unit)
-          (IO.userError s!"database already open: {directory.path}")).bind (fun _ => finished)
-    | true => simpa [tryCatchThe, MonadExcept.tryCatch, throw, throwThe] using finished
   apply (metadata (directory.file .lock)).bind
   intro binding
-  have append := (frame.openAppend (directory.file .lock)).bind held
+  have append := (frame.openAppend (directory.file .lock)).bind (continueFrame directory)
   cases binding with
   | none => exact append
   | some lockMetadata =>
@@ -128,6 +104,42 @@ theorem RawOpenPhaseFrame.runOpen {calls : RawOpenAdmissionCallbacks heap} {init
       · exact .pure _
       · exact .throw _
     exact checked.bind fun _ => append
+
+/-- The fixed ordinary admission prefix preserves the old reference
+through the reached resolution, metadata guards and append. -/
+theorem RawOpenPhaseFrame.beforeFlock {calls : RawOpenAdmissionCallbacks heap} {init : OpenSyncCacheCallbacks heap}
+    (frame : RawOpenPhaseFrame observe calls init) (input : FilePath) :
+    KeepsPhase observe (calls.beforeFlock input) :=
+  frame.withAdmission input fun directory lock => .pure (directory, lock)
+
+theorem RawOpenPhaseFrame.runOpen {calls : RawOpenAdmissionCallbacks heap} {init : OpenSyncCacheCallbacks heap}
+    (frame : RawOpenPhaseFrame observe calls init) (input : FilePath)
+    (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
+    {recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α}
+    (worker : ∀ directory lock cache, KeepsPhase observe (recover directory lock cache)) :
+    KeepsPhase observe (calls.runOpen input init makeCache recover) := by
+  unfold RawOpenAdmissionCallbacks.runOpen
+  apply frame.withAdmission input
+  intro directory lock
+  unfold openWithLock
+  have initialized : KeepsPhase observe (openSyncFilesWith (init.openDirectory directory.path)
+      init.newRef init.newRef init.newRef makeCache) := by
+    unfold openSyncFilesWith
+    exact (frame.openDirectory directory.path).bind fun handle =>
+      (frame.newRef (some handle)).bind fun directoryRef =>
+        (frame.newRef none).bind fun active =>
+          (frame.newRef []).bind fun pending => .pure (makeCache directoryRef active pending)
+  have finished := (initialized.bind (worker directory lock)).handle
+    (fun cause => (frame.unlock lock).bind (fun _ => .throw cause))
+  apply (frame.flock lock).bind
+  intro acquired
+  cases acquired with
+  | false =>
+    simpa [tryCatchThe, MonadExcept.tryCatch, throw, throwThe] using
+      (KeepsPhase.throw (observe := observe) (α := Unit)
+        (IO.userError s!"database already open: {directory.path}")).bind (fun _ => finished)
+  | true => simpa [tryCatchThe, MonadExcept.tryCatch, throw, throwThe] using finished
 
 /-- On the successful route, new phase and token allocations leave the
 original cell unchanged when their primitive effects preserve that cell. -/
@@ -197,6 +209,10 @@ theorem RawFinalizedOpenAttempts.keepsPhase {start reached : heap} {errors : Lis
     observe reached = observe start := by
   induction attempts with
   | empty => rfl
+  | @beforeFlock _ entry _ input refused prior =>
+    have kept := (admissionFrame.beforeFlock input) entry
+    rw [refused.failed] at kept
+    exact kept.trans prior
   | attempt _ _ input seen prior =>
     exact (seen.keepsPhase admissionFrame (worker input _ seen) (dispose input _ seen) releaseLock).trans prior
 

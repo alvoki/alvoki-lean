@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeRawFinalizedOpenError
+import Alvoki.Storage.Disk.NativeRawOpenReturn
 
 namespace Alvoki.Storage.DiskSession
 
@@ -58,6 +59,37 @@ theorem returns :
 
 end RawFinalizedOpenAttempt
 
+/-- An ordinary admission error before a lock handle is returned.
+This route records failures whose local effects leave the tracked file
+and descriptor projections unchanged. -/
+structure RawBeforeFlockRejection (view : OpenCloseHeapView heap FileImage) (calls : RawOpenAdmissionCallbacks heap)
+    (input : FilePath) (entry : heap) where
+  cause : IO.Error
+  reached : heap
+  failed : calls.beforeFlock input entry = .error cause reached
+  census : view.descriptors reached = view.descriptors entry
+  files : view.files reached = view.files entry
+
+/-- Classify the actual first failed prefix and return its error on
+its reached heap. The held callbacks cannot run before a lock handle
+has been returned. -/
+theorem RawBeforeFlockRejection.returns
+    (seen : RawBeforeFlockRejection view calls input entry)
+    (init : OpenSyncCacheCallbacks heap)
+    (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
+    (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α) :
+    RawOpenPrefixReturn calls input entry (.error seen.cause seen.reached) ∧
+    calls.runOpen input init makeCache recover entry = .error seen.cause seen.reached ∧
+    RawOpenReturn calls input entry
+      (fun resolved => openSyncFilesWith (init.openDirectory resolved.path) init.newRef init.newRef init.newRef makeCache)
+      recover (calls.runOpen input init makeCache recover entry) := by
+  have prefixFailed : RawOpenPrefixReturn calls input entry (.error seen.cause seen.reached) :=
+    seen.failed ▸ calls.classifiesBeforeFlock input entry
+  have returned : calls.runOpen input init makeCache recover entry = .error seen.cause seen.reached := by
+    rw [calls.runsAfterPrefix, seen.failed]
+  exact ⟨prefixFailed, returned, returned.symm ▸ .beforeFlock prefixFailed⟩
+
 /-- The next attempt receives the exact caller-visible heap of its
 predecessor. A surviving lock alias after failed unlock can stop an
 admitted retry at the current result. -/
@@ -65,6 +97,10 @@ inductive RawFinalizedOpenAttempts (view : OpenCloseHeapView heap FileImage) (di
     (calls : RawOpenAdmissionCallbacks heap) (init : OpenSyncCacheCallbacks heap)
     (release : IO.FS.Handle → heap → heap) (start : heap) : List (FilePath × IO.Error) → heap → Prop where
   | empty : RawFinalizedOpenAttempts view directory calls init release start [] start
+  | beforeFlock {earlier : List (FilePath × IO.Error)} {entry : heap}
+      (prior : RawFinalizedOpenAttempts view directory calls init release start earlier entry)
+      (input : FilePath) (seen : RawBeforeFlockRejection view calls input entry) :
+      RawFinalizedOpenAttempts view directory calls init release start (earlier ++ [(input, seen.cause)]) seen.reached
   | attempt {earlier : List (FilePath × IO.Error)} {entry : heap}
       (prior : RawFinalizedOpenAttempts view directory calls init release start earlier entry)
       (vacant : TryLockObserves (view.files entry).owners directory (.ok true))
@@ -80,6 +116,9 @@ theorem RawFinalizedOpenAttempts.preserves {start reached : heap} {returns : Lis
     (view.files reached).image = (view.files start).image := by
   induction seen with
   | empty => exact ⟨rfl, rfl⟩
+  | beforeFlock _ _ refused earlier =>
+    exact ⟨(congrArg DescriptorInventory.inode refused.census).trans earlier.1,
+      (congrArg LockedFileState.image refused.files).trans earlier.2⟩
   | attempt _ _ _ attempt earlier =>
     obtain ⟨_, _, _, _, _, sameInodes, sameFiles, _⟩ := attempt.returns
     exact ⟨sameInodes.trans earlier.1, sameFiles.trans earlier.2⟩

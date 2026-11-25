@@ -2033,6 +2033,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveObsoleteRunCollection
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveRunMaintenance
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.reclosesWithoutEffects
+#check_axioms Alvoki.Storage.DiskSession.RawOpenPhaseFrame.beforeFlock
 #check_axioms Alvoki.Storage.DiskSession.RawOpenPhaseFrame.runOpen
 #check_axioms Alvoki.Storage.DiskSession.RawOpenPhaseFrame.installs
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.keepsPhase
@@ -2068,6 +2069,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawHeldLateGuardError.stops
 #check_axioms Alvoki.Storage.DiskSession.RawHeldLateGuardError.returnsFinalized
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.returns
+#check_axioms Alvoki.Storage.DiskSession.RawBeforeFlockRejection.returns
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.preserves
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.reopensAligned
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensAfterRejectedOpensAt
