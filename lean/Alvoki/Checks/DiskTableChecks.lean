@@ -2465,6 +2465,30 @@ def main (args : List String) : IO Unit := do
         "rotation did not preserve its sync error"
       expectRejectedWrite db "publication failed; reopen the database"
     finally db.close
+  | ["--two-slot-seed", path] =>
+    let db ← TwoSlotDiskTable.open ⟨path⟩
+    try check ((← db.write 7 (some 99)) == 1) "wrong seeded sequence"
+    finally db.close
+  | ["--two-slot-submit-batch", path] =>
+    let db ← TwoSlotDiskTable.open ⟨path⟩
+    try check ((← db.writeBatch [(7, none), (8, some 123)]) == 3) "wrong batch sequence"
+    finally db.close
+  | ["--two-slot-check-resumed-batch", path, frontier] =>
+    let db ← TwoSlotDiskTable.open ⟨path⟩
+    try
+      let some prior ← db.acquireAt 1 | throw (IO.userError "missing acknowledged snapshot")
+      check ((← db.lookup prior.handle 7) == some (some 99)) "earlier acknowledgment disappeared"
+      let pin ← db.acquire
+      let expected := if frontier == "new" then 3 else 1
+      check (pin.sequence == expected) "recovered the wrong batch sequence"
+      if frontier == "new" then
+        check ((← db.lookup pin.handle 7) == some none &&
+          (← db.lookup pin.handle 8) == some (some 123)) "did not recover the whole submitted batch"
+      else
+        check ((← db.lookup pin.handle 7) == some (some 99) &&
+          (← db.lookup pin.handle 8) == some none) "recovered an unpublished batch"
+      check ((← db.write 9 (some 81)) == expected + 1) "wrong next sequence after two-slot recovery"
+    finally db.close
   | ["--two-slot-check-unknown", path] =>
     let db ← TwoSlotDiskTable.open ⟨path⟩
     try
