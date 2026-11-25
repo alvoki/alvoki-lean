@@ -19,8 +19,8 @@ private abbrev ReplacementSyncState := CensusOpenState × List (List LockReferen
 private abbrev ReplacementState := CensusDirectoryCache × ReplacementSyncState
 
 /-- The long keeper is read without a pending capture. Its observed close
-precedes the authorization barrier. The empty later-name route still
-performs its suffix directory barrier before the staged replacement. -/
+precedes the authorization barrier, the ordered unlinks and the suffix
+directory barrier before staged replacement. -/
 structure CapturedLongKeeperFinish (calls : CapturedAlignedCallbacks admission)
     (report : CapturedMarkedReadReports admission layout published)
     (vacant : TryLockObserves retry.owners directory (.ok true))
@@ -30,8 +30,13 @@ structure CapturedLongKeeperFinish (calls : CapturedAlignedCallbacks admission)
   authorization : ListedDirectoryAuthorization (calls.heldReport report vacant selected)
   readClosed : authorization.afterListing = reader.beforeOpen ++
     (reader.duringRead ++ [report.wal.keeper.calls.slot.closeEvent])
-  prune : ListedLongKeeperPrune authorization
-  stage : ListedLongKeeperStage prune
+  prune : LongKeeperPruning authorization
+  keeperAtPrune : match prune with
+    | .empty _ => True
+    | .listed reported _ _ =>
+      reported.bindings (directory.file (.walSegment layout.keeper.first)) =
+        (admission.view.child admission.root (renderWalSegmentName layout.keeper.first)).map admission.view.modelObject
+  stage : ListedLongKeeperStageAt prune
   rename : ListedLongKeeperRename stage
   settlement : ListedLongKeeperSettlement rename
   completed : settlement.outcome = .completed
@@ -50,6 +55,35 @@ theorem longer (finish : CapturedLongKeeperFinish calls report vacant selected) 
   have physical := finish.prune.longer
   rw [finish.sameKeeper] at physical
   exact physical
+
+/-- The checked held listing supplies the ordered names that the unlink
+loop clears. The selected keeper resolves to its original observed inode
+when replacement is about to begin. -/
+theorem listedKeeperAndSuffix (finish : CapturedLongKeeperFinish calls report vacant selected) :
+    match finish.prune with
+    | .empty _ => True
+    | .listed prune _ _ =>
+      layout.boundedPlan.newer.Pairwise (· < ·) ∧
+      prune.reached (directory.file (.walSegment layout.keeper.first)) =
+        some (admission.view.modelObject report.wal.keeper.object) ∧
+      ∀ first ∈ layout.boundedPlan.newer,
+        renderWalSegmentName first ∈ report.catalog.inventory.names ∧
+        ∃ object, admission.view.child admission.root (renderWalSegmentName first) = some object ∧
+          prune.bindings (directory.file (.walSegment first)) = some (admission.view.modelObject object) ∧
+          prune.reached (directory.file (.walSegment first)) = none := by
+  have original := finish.keeperAtPrune
+  cases pruning : finish.prune with
+  | empty _ => trivial
+  | listed prune _ later =>
+    rw [pruning] at original
+    obtain ⟨cleared, preserved, _⟩ := prune.selectedBindings later
+    have keeper := preserved layout.keeper (List.mem_append_right _ (List.mem_singleton_self _))
+    refine ⟨prune.catalog.1, keeper.trans ?_, ?_⟩
+    · rw [original, report.wal.keeper.bound]
+      rfl
+    · intro first listed
+      obtain ⟨name, _, object, found, identified⟩ := prune.catalog.2 first listed
+      exact ⟨name, object, found, identified, cleared first listed⟩
 
 /-- The old handle never enters the cache and its reported finalizer
 removes the newly allocated slot from the census used by the directory
@@ -84,6 +118,9 @@ noncomputable def census (finish : CapturedLongKeeperFinish calls report vacant 
 noncomputable def settled (finish : CapturedLongKeeperFinish calls report vacant selected) : LockedFileState FileImage :=
   finish.settlement.stopped true
 
+theorem suffixSettled (finish : CapturedLongKeeperFinish calls report vacant selected) :
+    finish.settled.image.later.DurablyEmpty := finish.prune.stageInputEffects.2
+
 theorem sameCensusObjects (finish : CapturedLongKeeperFinish calls report vacant selected) :
     finish.census.inode = admission.reached.inode := by
   unfold census ListedLongKeeperDirectoryIssue.inventory
@@ -111,7 +148,7 @@ theorem replacementInodes (finish : CapturedLongKeeperFinish calls report vacant
   simp [WalInodeImage.settleBinding, WalInodeImage.renameSynced, different]
 
 /-- Subsequent events belong to the successful syscall that was reached.
-The empty suffix still calls its directory sync, which has no extra drops. -/
+The suffix directory sync itself has no extra drops. -/
 private noncomputable def syncDrops (finish : CapturedLongKeeperFinish calls report vacant selected) :
     List (List LockReferenceDrop) :=
   [finish.prune.afterAuthorization, [], finish.rename.afterStageSync, finish.afterSettlement]
@@ -156,6 +193,53 @@ private noncomputable def repairAt (finish : CapturedLongKeeperFinish calls repo
     finish.stageAt (finish.syncAt resolved)
     (fun source target => fileAction (calls.renameFile source target) finish.settlement.afterRename)
 
+private noncomputable def repairStep (finish : CapturedLongKeeperFinish calls report vacant selected) :=
+  performPaths directory layout.boundedPlan (fun path => fileAction (calls.removeFile path))
+    throw finish.stageAt (finish.syncAt directory)
+    (fun source target => fileAction (calls.renameFile source target) finish.settlement.afterRename)
+
+private theorem afterNoDrops (census : DescriptorInventory) : census.afterDrops [] = census := by
+  cases census
+  simp only [DescriptorInventory.afterDrops, List.all_nil, List.filter_eq_self.mpr (fun _ _ => rfl)]
+
+private theorem unlinkFromCensus (finish : CapturedLongKeeperFinish calls report vacant selected)
+    {initial : FileImage} {bindings final : FilePath → Option Nat} {names : List Nat}
+    (reports : HeldLaterWalUnlinks (calls.heldReport report vacant selected) initial bindings names final)
+    (cache : CensusDirectoryCache) (census : DescriptorInventory) (files : LockedFileState FileImage)
+    (remaining : List (List LockReferenceDrop)) :
+    ((names.map Step.unlink).forM finish.repairStep) (cache, (census, { files with image := initial }), remaining) =
+      .ok () (cache, (census, { files with image := names.foldl FileImage.unlinkLater initial }), remaining) := by
+  induction reports with
+  | done => rfl
+  | @step first initial bindings reached rest final head _ ih =>
+    have raw : calls.removeFile (directory.file (.walSegment first)) initial =
+      .ok head.raw (initial.unlinkLater first) := head.returned
+    simpa only [repairStep, List.map_cons, List.foldl_cons, List.forM_eq_forM, List.forM_cons, Bind.bind,
+      EStateM.bind, Pure.pure, EStateM.pure, performPaths, RunCollection.performPaths, fileAction,
+      raw, head.accepted, afterNoDrops] using ih
+
+private theorem pruneUnlinks (finish : CapturedLongKeeperFinish calls report vacant selected)
+    (pruning : LongKeeperPruning finish.authorization)
+    (census : DescriptorInventory) (remaining : List (List LockReferenceDrop)) :
+    ((layout.boundedPlan.newer.map Step.unlink).forM finish.repairStep)
+      (admission.cache, (census, { admission.held with image := retry.image.syncDirectory }), remaining) =
+      .ok () (admission.cache, (census, { admission.held with image := pruning.afterUnlinks }), remaining) := by
+  cases pruning with
+  | empty reported =>
+    have empty : layout.boundedPlan.newer = [] := reported.noLater
+    rw [empty]
+    rfl
+  | listed reported _ _ =>
+    exact finish.unlinkFromCensus reported.unlinks admission.cache census admission.held remaining
+
+private theorem suffixEffect (finish : CapturedLongKeeperFinish calls report vacant selected)
+    (pruning : LongKeeperPruning finish.authorization) :
+    finish.authorization.fsync (admission.reached, admission.cached, 0)
+      { admission.held with image := pruning.afterUnlinks } = .ok () pruning.stageInput := by
+  cases pruning with
+  | empty reported => exact reported.synced
+  | listed reported _ _ => exact reported.effect
+
 private theorem syncDirectory (finish : CapturedLongKeeperFinish calls report vacant selected)
     {cache : CensusDirectoryCache} {before after : LockedFileState FileImage}
     {entered : DescriptorInventory} {drops : List LockReferenceDrop} {remaining : List (List LockReferenceDrop)}
@@ -176,7 +260,8 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
   let entered := finish.reader.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent]
   let beforeStage := entered.afterDrops finish.prune.afterAuthorization
   let authorized : LockedFileState FileImage := { admission.held with image := retry.image.syncDirectory }
-  let atStage := (LongKeeperPruning.empty finish.prune).stageInput
+  let atUnlinks : LockedFileState FileImage := { admission.held with image := finish.prune.afterUnlinks }
+  let atStage := finish.prune.stageInput
   let stagePath := directory.file .stagedWal
   let written : LockedFileState FileImage :=
     { atStage with image := atStage.image.withScratch (some (layout.keeper.bytes, false)) }
@@ -196,17 +281,23 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
   have first : finish.syncAt directory #[directory.path] (admission.cache, (entered, admission.held), finish.syncDrops) =
       .ok () (admission.cache, (beforeStage, authorized), [[], finish.rename.afterStageSync, finish.afterSettlement]) :=
     finish.syncDirectory rfl firstEffect
-  have second : finish.syncAt directory #[directory.path]
+  have removed : ((layout.boundedPlan.newer.map Step.unlink).forM finish.repairStep)
       (admission.cache, (beforeStage, authorized), [[], finish.rename.afterStageSync, finish.afterSettlement]) =
+        .ok () (admission.cache, (beforeStage, atUnlinks), [[], finish.rename.afterStageSync, finish.afterSettlement]) :=
+    finish.pruneUnlinks finish.prune beforeStage _
+  have second : finish.syncAt directory #[directory.path]
+      (admission.cache, (beforeStage, atUnlinks), [[], finish.rename.afterStageSync, finish.afterSettlement]) =
       .ok () (admission.cache, (beforeStage, atStage), [finish.rename.afterStageSync, finish.afterSettlement]) := by
     have returned := finish.syncDirectory (entered := beforeStage) (drops := []) (cache := admission.cache)
-      (remaining := [finish.rename.afterStageSync, finish.afterSettlement]) rfl finish.prune.synced
-    have unchanged : beforeStage.afterDrops [] = beforeStage := by
-      cases beforeStage
-      simp only [DescriptorInventory.afterDrops, List.all_nil,
-        List.filter_eq_self.mpr (fun _ _ => rfl)]
-    rw [unchanged] at returned
-    exact returned
+      (remaining := [finish.rename.afterStageSync, finish.afterSettlement]) rfl (finish.suffixEffect finish.prune)
+    simpa only [afterNoDrops] using returned
+  have pruned : (((layout.boundedPlan.newer.map Step.unlink) ++ [Step.syncPruned]).forM finish.repairStep)
+      (admission.cache, (beforeStage, authorized), [[], finish.rename.afterStageSync, finish.afterSettlement]) =
+        .ok () (admission.cache, (beforeStage, atStage), [finish.rename.afterStageSync, finish.afterSettlement]) := by
+    rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
+    simp only [Bind.bind, EStateM.bind, removed]
+    simp only [List.forM_eq_forM, List.forM_cons, List.forM_nil, repairStep, performPaths, second,
+      Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
   have stage : finish.stageAt stagePath layout.keeper.bytes
       (admission.cache, (beforeStage, atStage), [finish.rename.afterStageSync, finish.afterSettlement]) =
       .ok () (remembered, (beforeSync, written), [finish.rename.afterStageSync, finish.afterSettlement]) := by
@@ -247,9 +338,8 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
     simpa only [movedCensus, openedCensus, afterSync, DescriptorInventory.afterDrops_append, census,
       ListedLongKeeperDirectoryIssue.inventory, settled, List.append_assoc] using output
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have later : layout.boundedPlan.newer = [] := finish.prune.noLater
   have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, by simp [later]⟩
+    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, finish.prune.later⟩
   have bytes : layout.boundedPlan.keeperBytes.extract 0 layout.boundedPlan.keeperSize = layout.keeper.bytes := by
     rw [← size, ByteArray.extract_zero_size]
     rfl
@@ -263,9 +353,18 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
     (admission.cache, (entered, admission.held), finish.syncDrops) = _
   unfold repairAt
   rw [finishBoundedMarkedOpen_long _ _ _ _ _ _ _ valid size long]
-  simp only [later, List.map_nil, List.nil_append, List.forM_eq_forM, List.forM_cons, List.forM_nil,
-    performPaths, Publication.performReplacement, bytes, keeper, Array.push_empty, Bind.bind, EStateM.bind,
-    Pure.pure, EStateM.pure, first, second, stage, persisted, moved, settled, stagePath]
+  change (do
+    finish.syncAt directory #[directory.path]
+    ((layout.boundedPlan.newer.map Step.unlink) ++ [Step.syncPruned]).forM finish.repairStep
+    finish.repairStep (.replace .writeStaged)
+    finish.repairStep (.replace .syncStaged)
+    finish.repairStep (.replace .renameStaged)
+    finish.repairStep (.replace .syncDirectory)
+    pure () : EStateM IO.Error ReplacementState Unit)
+    (admission.cache, (entered, admission.held), finish.syncDrops) = _
+  simp only [Bind.bind, EStateM.bind, first, pruned]
+  simp only [repairStep, performPaths, Publication.performReplacement, bytes, keeper,
+    Array.push_empty, Pure.pure, EStateM.pure, stage, persisted, moved, settled, stagePath]
 
 private noncomputable def repairFromCensus (finish : CapturedLongKeeperFinish calls report vacant selected)
     (resolved : DiskDirectory) (plan : Plan) (size : Nat) :
@@ -383,10 +482,9 @@ theorem installsAfterVacancy (finish : CapturedLongKeeperFinish calls report vac
   have prepared : Prepared retry.image layout.target layout.plan :=
     ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
   have safe := effects.valid prepared.pair prepared.keeperPrefix prepared.newer
-  have pruned := (LongKeeperPruning.empty finish.prune).stageInputEffects.2
   have ready : finish.settled.image.Ready layout.target := by
     refine ⟨safe.selected, safe.settled, rfl, rfl, ?_⟩
-    exact pruned
+    exact finish.suffixSettled
   obtain ⟨session, returned, installed⟩ :=
     CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := report) vacant marker laterValid
       following accepted ordered selected finish.finishAt finish.finishAt_returns ready effects
