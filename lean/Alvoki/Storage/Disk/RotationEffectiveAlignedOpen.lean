@@ -68,6 +68,7 @@ theorem RotationDirectoryFsyncStop.reopensEffectiveAligned
       (next : RotationAlignedOpenReports report input postCrash layout selected)
       (session : SegmentedSession) (final : LockedFileState FileImage) (installed : Installed),
       next.finish.run = .ok session (next.finish.census, final) ∧
+      next.admission.owner ∈ next.finish.census.slots ∧ next.admission.cached ∈ next.finish.census.slots ∧
       session.directory = directory ∧ session.phase = .ready installed ∧ final.owners.Owns directory session.descriptor ∧
       next.admission.root = parent.root ∧
       next.admission.reached.inode next.admission.cached.description =
@@ -76,7 +77,9 @@ theorem RotationDirectoryFsyncStop.reopensEffectiveAligned
       final.image.directory.active = before.wal.directory.active ∧ final.image.Ready layout.target ∧
       installed.walBytes = before.installed.walBytes ∧ installed.activeFirst = before.installed.walBytes / WAL.frameSize ∧
       installed.generation = before.installed.generation ∧
+      layout.keeper.bytes = ByteArray.empty ∧
       next.reads.wal.keeper.observesFile.object = inventory.inode created.raw.description ∧
+      report.after.inodes.crashBytes next.reads.wal.keeper.observesFile.object = [ByteArray.empty] ∧
       (∃ marker, before.wal.directory.active.walBoundary = some marker ∧
         next.reads.catalog.inventory.reports.readOptional (directory.file .walBoundary) = .ok (some marker) ∧
         ∃ file : next.reads.reads.ObservesFile (directory.file .walBoundary) marker,
@@ -93,8 +96,10 @@ theorem RotationDirectoryFsyncStop.reopensEffectiveAligned
       report.after.crashNames (renderWalSegmentName (before.installed.walBytes / WAL.frameSize)) := by
     rw [report.settled.2.1 effective]
     exact List.mem_singleton_self _
+  have synced : report.after.inodes.crashBytes (inventory.inode created.raw.description) = [ByteArray.empty] := by
+    rw [report.bytes, created.syncedBytes]
   have payload : ByteArray.empty ∈ report.after.inodes.crashBytes (report.after.view.modelObject created.child.child) := by
-    rw [report.bytes, report.view, created.inode, created.syncedBytes]
+    rw [report.view, created.inode, synced]
     exact List.mem_singleton_self _
   obtain ⟨canSurvive, empty, _⟩ := report.selectedKeeperPayload survives payload
   have metadata : pair ∈ cut.image.metadata.crashImages := by
@@ -147,8 +152,17 @@ theorem RotationDirectoryFsyncStop.reopensEffectiveAligned
       ((congrArg (fun value : Option (PackedTable × UInt64) => (value.getD (.empty, 0)).2) previous).trans
         ready.resumed.generation.symm)⟩
   obtain ⟨path, owner, held, filesReady, sized, installedKeeper, generation⟩ := endpoint
+  have sameKeeper : next.reads.wal.keeper.observesFile.object = inventory.inode created.raw.description := by
+    let file := next.reads.wal.keeper
+    have bound : next.admission.view.child next.admission.root (renderWalSegmentName layout.keeper.first) =
+        some created.child.child := first.symm ▸ next.successor
+    have child := file.calls.statLookup.child_eq bound
+    change file.calls.statObject = inventory.inode created.raw.description
+    rw [← file.calls.identifiedStat, child, next.objects, report.view]
+    exact created.inode
   refine ⟨report.stopsSchedule, layout, selected, next, session, final, installed, returned,
-    path, phase, held, next.root, ?_, ?_, finalPair, filesReady, sized, installedKeeper, generation, ?_, ?_,
+    next.finish.lockRetained, next.finish.directoryRetained, path, phase, held, next.root, ?_, ?_,
+    finalPair, filesReady, sized, installedKeeper, generation, emptyKeeper, sameKeeper, sameKeeper.symm ▸ synced, ?_,
     sameCheckpoint ▸ recovered, answers⟩
   · obtain ⟨_, _, _, _, sameDirectory, _⟩ := next.admission.opened.captures
     calc
@@ -160,13 +174,6 @@ theorem RotationDirectoryFsyncStop.reopensEffectiveAligned
   · have sameLock := Option.some.inj (next.reads.lockEntry.symm.trans next.lock)
     rw [owner, ← next.reads.identifiesLock, sameLock, next.objects, report.view, created.objects]
     exact parent.lockObject
-  · let file := next.reads.wal.keeper
-    have bound : next.admission.view.child next.admission.root (renderWalSegmentName layout.keeper.first) =
-        some created.child.child := first.symm ▸ next.successor
-    have child := file.calls.statLookup.child_eq bound
-    change file.calls.statObject = inventory.inode created.raw.description
-    rw [← file.calls.identifiedStat, child, next.objects, report.view]
-    exact created.inode
   · obtain ⟨_, _, _, _, _, marker, stored, stable⟩ := report.keepsKeeperMarker
     have selectedMarker : report.effectiveCrash.image.directory.active.walBoundary = some marker := stored
     obtain ⟨file, _⟩ := next.reads.metadata.markerFile marker selectedMarker
