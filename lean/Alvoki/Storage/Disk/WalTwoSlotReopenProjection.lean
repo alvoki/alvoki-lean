@@ -610,24 +610,63 @@ theorem reopenWith_prepareError {image : Type} {directory : Storage.DiskDirector
   rw [runOpenWithInstallation_outcome, runOpenWithImage_acquired, report]
   cases unlock <;> rfl
 
+private theorem prepareSelected_walReadError {state : Type} (directory : Storage.DiskDirectory)
+    (marker : ByteArray) (frontier : UInt64) (decodes : Boundary.decode marker = .ok frontier)
+    (readCheckpoint : EStateM IO.Error state (Option (Storage.PackedTable × UInt64)))
+    (readWal : Nat → UInt64 → EStateM IO.Error state (Storage.WalSegmentMarkerReads × Nat))
+    {before checked reached : state} {checkpoint : Option (Storage.PackedTable × UInt64)}
+    (checkpointRead : readCheckpoint before = .ok checkpoint checked)
+    {cause : IO.Error}
+    (walRead : readWal (checkpoint.getD (.empty, 0)).1.committed.toNat frontier checked =
+      .error cause reached) :
+    prepareBoundedMarkedFromReaders directory readCheckpoint
+      (fun _ => pure (some marker)) readWal before =
+      .error cause reached := by
+  unfold prepareBoundedMarkedFromReaders
+  change EStateM.bind readCheckpoint _ before = _
+  rw [EStateM.bind, checkpointRead]
+  have optionalRead :
+      (pure (some marker) :
+        EStateM IO.Error state (Option ByteArray)) checked =
+        .ok (some marker) checked := rfl
+  have decoded : (liftExcept ((Boundary.decode marker).mapError IO.userError) :
+        EStateM IO.Error state UInt64) checked = .ok frontier checked := by
+    rw [decodes]
+    rfl
+  cases h : checkpoint.getD (.empty, 0) with
+  | mk base generation =>
+    rw [h] at walRead
+    change readWal base.committed.toNat frontier checked = _ at walRead
+    simp only [h, Bind.bind, EStateM.bind, optionalRead, decoded, walRead]
+
 /-- After the extent scan and the earlier seal reads, a keeper read
 error aborts the shared reopen before marker sync or WAL repair. -/
 theorem reopenWith_keeperReadError {state : Type} {directory : Storage.DiskDirectory}
-    (through : Nat)
+    (selection : Selection)
+    (readCheckpoint : EStateM IO.Error state (Option (Storage.PackedTable × UInt64)))
+    (readWal : Nat → UInt64 → EStateM IO.Error state (Storage.WalSegmentMarkerReads × Nat))
     {readSeal : System.FilePath → Nat → EStateM IO.Error state ByteArray}
     (readKeeper : System.FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
     (stabilize : EStateM IO.Error state Unit)
     (finish : Plan → Nat → EStateM IO.Error state Unit)
-    {before checked atKeeper reached : state}
+    {before checked atKeeper reached : state} {checkpoint : Option (Storage.PackedTable × UInt64)}
+    (checkpointRead : readCheckpoint before = .ok checkpoint checked)
     {required : List (Nat × IO.FS.Metadata)} {keeper : Nat} {metadata : IO.FS.Metadata}
     (seals : CachedWalKeeperReached directory readSeal keeper metadata required checked atKeeper)
-    {prepare : EStateM IO.Error state (Plan × Reopened × Nat)} {cause : IO.Error}
+    {cause : IO.Error}
     (failed : readKeeper (directory.file (.walSegment keeper))
-      ((through - keeper) * frameSize) metadata.byteSize.toNat atKeeper = .error cause reached)
-    (prepareError : readCachedWalPayloads directory through readSeal readKeeper required checked =
-      .error cause reached → prepare before = .error cause reached) :
-    reopenWith prepare stabilize finish before = .error cause reached := by
-  have read := prepareError (seals.read_error through readKeeper failed)
+      ((selection.frontier.toNat / frameSize - keeper) * frameSize) metadata.byteSize.toNat atKeeper = .error cause reached)
+    (walReadError : readCachedWalPayloads directory (selection.frontier.toNat / frameSize)
+      readSeal readKeeper required checked = .error cause reached →
+      readWal (checkpoint.getD (.empty, 0)).1.committed.toNat selection.frontier checked =
+        .error cause reached) :
+    reopenWith
+      (prepareBoundedMarkedFromReaders directory readCheckpoint
+        (fun _ => pure (some (Boundary.encode selection.frontier))) readWal)
+      stabilize finish before = .error cause reached := by
+  have payloadError := seals.read_error (selection.frontier.toNat / frameSize) readKeeper failed
+  have read := prepareSelected_walReadError directory (Boundary.encode selection.frontier)
+    selection.frontier (Boundary.decode_encode _) readCheckpoint readWal checkpointRead (walReadError payloadError)
   simp only [reopenWith_reports, read]
 
 /-- A failed file barrier returns exactly its reached file image through
