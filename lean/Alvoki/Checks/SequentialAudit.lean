@@ -111,6 +111,7 @@ import Alvoki.Storage.Disk.NativeCheckpointManifestRenameReboot
 import Alvoki.Storage.Disk.NativeCheckpointManifestRenameRetry
 import Alvoki.Storage.Disk.NativePendingCheckpoint
 import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryStop
+import Alvoki.Storage.Disk.NativeStoppedRunDirectoryTableOpen
 import Alvoki.Storage.Disk.NativePendingCheckpointOpenPhase
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeStoppedCheckpointTableOpen
@@ -969,6 +970,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryStop.priorRunStable
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryStop.freshRunSettled
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryStop.stopsOnOpenPhase
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryReboot.observed
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryReboot.plans
+#check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunDirectoryStop.cachedHandle
+#check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunDirectoryStop.stopsGroup
+#check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunDirectoryStop.reached
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedRunDirectory
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryStop.rejectsReads
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsDuringCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.Physical.fileProjection
