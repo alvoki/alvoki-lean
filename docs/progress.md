@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+After the first effective repair barrier, the client proof consumes
+the shared reported reopen prefix. It derives the canonical preparation
+at each reached image and refines the reports to the settled retry
+lineage. This covers the shared failed opens, interrupted repairs,
+reference drops and power losses. The two-slot-specific attempts before
+first authorization still require their own report composition.
+
 The client theorem now consumes branch-specific final repair reports.
 Lean dispatches to the aligned, prune or staged replacement proof
 and derives both the exact final callback result and file effects.

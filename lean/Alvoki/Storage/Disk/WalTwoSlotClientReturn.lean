@@ -1794,6 +1794,22 @@ private theorem selectedCheckpoint_represents
     exact historyPrefix.preserve sameClock (UInt64.le_of_eq sameFloor.symm)
       (baseRefines.rowsBounded bounds) (fun _ _ _ => by rw [sameTable])
 
+/-- Once the marker is authorized, reuse the shared reopen trace for
+failed opens, interrupted repairs, descriptor drops and power losses. -/
+theorem settledRetriesOfBoundedReopen
+    {directory : DiskDirectory} {target : Target} {initial after : LockedFileState FileImage}
+    (trace : BoundedReopenTrace directory (fun candidate => candidate = target) initial after) :
+    SettledRetries target initial.image after.image := by
+  have beforeBarrier {current : FileImage} (prior : BeforeReopenBarrier initial.image current) :
+      SettledRetries target initial.image current := by
+    cases prior with
+    | live => exact .start
+    | crash _ _ _ metadata bytes names => exact .crash .start metadata bytes names
+  cases trace.lineage (fun a b _ => a.trans b.symm) with
+  | before prior => exact beforeBarrier prior
+  | repairing prior canonical _ effects =>
+    exact .repair (beforeBarrier prior) (canonical ▸ effects)
+
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
 theorem installsAfterAcquiredRecovery_replays
@@ -1862,7 +1878,7 @@ theorem installsAfterAcquiredRecovery_replays
     {batch : List WAL.Write}
     (acceptedCheckpoint : published.AcceptsVersioned prior.history.length.toUInt64
       (Boundary.CheckpointRepresentsPrefix prior.history) retry.image.directory.active.manifest)
-    {interrupted firstPrepared firstRepair : FileImage}
+    {interrupted firstPrepared : FileImage} {firstRepair : LockedFileState FileImage}
     (beforeBarrier : UnsettledRetries interrupted firstPrepared)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
     {current next : Selection}
@@ -1875,9 +1891,9 @@ theorem installsAfterAcquiredRecovery_replays
         projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
     (observedFirst : firstPrepared.directory.active.walBoundary = some (Boundary.encode selection.frontier))
     (authorizedRepair : EffectTrace layout.target
-      { firstPrepared with directory := settleMarker firstPrepared.directory selection } firstRepair)
+      { firstPrepared with directory := settleMarker firstPrepared.directory selection } firstRepair.image)
     {firstPlan : Plan} (preparedPlan : WalSegmentRepair.Prepared firstPrepared layout.target firstPlan)
-    (retries : SettledRetries layout.target firstRepair retry.image)
+    (reportedRetries : ReportedReopenPrefix directory layout.target.first firstRepair retry)
     (oldSize : current.frontier.toNat = (WAL.encode prior.history).size)
     (sameHistory : history = (prior.history ++ batch).take layout.range.through) :
     let opened : Reopened := ⟨table, (loaded.getD (.empty, 0)).2, selection.frontier, layout.keeper.first⟩
@@ -1899,8 +1915,17 @@ theorem installsAfterAcquiredRecovery_replays
   intro opened prepare
   have finished := repair.returns
   have authorized := prepared_settleMarker preparedPlan selection observedFirst
-  have ⟨validRetry, keptRetry⟩ := retries.preserves
-    (authorizedRepair.valid authorized.pair authorized.keeperPrefix authorized.newer)
+  have validFirst := authorizedRepair.valid authorized.pair authorized.keeperPrefix authorized.newer
+  have boundedRetries : BoundedReopenTrace directory (fun candidate => candidate = layout.target)
+      firstRepair retry := by
+    apply reportedRetries.refines
+    intro current traced
+    have valid := ((settledRetriesOfBoundedReopen traced).preserves validFirst).1
+    obtain ⟨tail, read⟩ := valid.keeper.activeValid
+    exact ⟨layout.target, ⟨layout.target.range.through, layout.target.first, current.image.later.visible,
+      layout.target.trimmed ++ tail⟩, rfl, rfl,
+      ⟨valid.selected, valid.keeper, valid.later, rfl, rfl, rfl, read⟩⟩
+  have ⟨validRetry, keptRetry⟩ := (settledRetriesOfBoundedReopen boundedRetries).preserves validFirst
   have observed : retry.image.directory.active.walBoundary = some (Boundary.encode selection.frontier) := by
     rw [validRetry.selected, ← authorized.pair]
     simp [settleMarker, observedFirst]
