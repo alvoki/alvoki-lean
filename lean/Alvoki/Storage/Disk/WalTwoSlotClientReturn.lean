@@ -493,6 +493,47 @@ theorem interruptedDescriptors_selectBatch
   rw [syncedInode_survivor walSync walCurrent (by simp [walSettled]) walSurvived]
   exact interruptedBytes_selectBatch prior activeOffset advanced size unchanged target oldCount appended
 
+/-- A returned slot-write failure leaves the poisoned session and the
+exact crash candidates from the reached files. The previous successful
+WAL barrier suffices for either complete marker outcome. -/
+theorem slotError_selectBatch {α : Type}
+    (nextTable : α) (sequence : UInt64) (phase : DiskSession.Phase α)
+    (append syncWal writeSlot syncSlot install : EStateM IO.Error (WalInodeImage × WalInodeImage) Unit)
+    {initial appended durable reached : WalInodeImage × WalInodeImage} {cause : IO.Error}
+    (wrote : append initial = .ok () appended)
+    (walBarrier : syncWal appended = .ok () durable)
+    (failed : writeSlot durable = .error cause reached)
+    (walUnchanged : reached.1 = durable.1)
+    {walHandle markerHandle : KeeperDescriptorIdentity}
+    (walSync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      walHandle appended.1 (fun inode files => files.completeFileSync inode) (.ok () durable.1))
+    (walCurrent : walHandle.inode = appended.1.active)
+    (markerCurrent : markerHandle.inode = reached.2.active)
+    (walSettled : appended.1.crashBindings = [appended.1.active])
+    (markerSettled : reached.2.crashBindings = [reached.2.active])
+    {walBytes markerBytes before : ByteArray} {active : Slot} {current next : Selection}
+    (walSurvived : ∃ inode ∈ reached.1.crashBindings, walBytes ∈ reached.1.crashBytes inode)
+    (markerSurvived : ∃ inode ∈ reached.2.crashBindings, markerBytes ∈ reached.2.crashBytes inode)
+    {history batch : List WAL.Write}
+    (prior : decode before = .ok current)
+    (activeOffset : current.slot = slotIndex active)
+    (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
+    (slotOutcome : ∀ bytes ∈ reached.2.crashBytes markerHandle.inode,
+      InterruptedSlotBytes before bytes active next)
+    (oldCount : current.frontier.toNat = (WAL.encode history).size)
+    (appendedBytes : ∃ tail, appended.1.visible appended.1.active = WAL.encode (history ++ batch) ++ tail) :
+    DiskSession.publishPreparedWrite nextTable sequence setPhase
+      (commitReports (publish append syncWal writeSlot syncSlot install)) (phase, initial) =
+        .error (.commitUnknown cause) (.poisoned, reached) ∧
+    ∃ chosen events, decode markerBytes = .ok chosen ∧
+      (events = history ∨ events = history ++ batch) ∧
+      Boundary.select chosen.frontier walBytes = .ok (WAL.encode events) := by
+  refine ⟨prepared_write_slotError nextTable sequence phase append syncWal writeSlot syncSlot install
+    wrote walBarrier failed, ?_⟩
+  rw [walUnchanged] at walSurvived
+  exact interruptedDescriptors_selectBatch walSync walCurrent markerCurrent walSettled markerSettled
+    walSurvived markerSurvived prior activeOffset advanced slotOutcome oldCount appendedBytes
+
 /-- Before the schedule issues a marker write, append and WAL sync
 may leave different suffixes on disk, but the previous durable frontier
 selects exactly the previously acknowledged history. -/
