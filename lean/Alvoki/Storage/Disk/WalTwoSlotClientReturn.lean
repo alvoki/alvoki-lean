@@ -2890,7 +2890,13 @@ theorem recoveredRetries_installedReads
     {table : PackedTable} {log : List DatabaseSubmissions}
     {directory : DiskDirectory} {descriptor nextRef : Nat} {unlock : DiskSession.UnlockReport}
     {openedFrom : LockedFileState FileImage}
-    (openRetry : ReportedMarkerRetries initial openedFrom.image)
+    {survivingBindings : DirectoryPublication.Bindings}
+    {survivingKeeper : Option ByteArray} {survivingNames : List Nat}
+    (metadataSurvived : survivingBindings ∈ initial.directory.crashImages)
+    (keeperSurvived : survivingKeeper ∈ initial.keeper.crashImages)
+    (namesSurvived : survivingNames ∈ initial.later.crashImages)
+    (openRetry : ReportedMarkerRetries
+      (initial.crash survivingBindings survivingKeeper survivingNames) openedFrom.image)
     (preparationPreservesFiles : prepared = openedFrom.image)
     (readManifest : EStateM IO.Error FileImage (Option ByteArray))
     (readRunPrefix : System.FilePath → Nat → EStateM IO.Error FileImage ByteArray)
@@ -3138,8 +3144,11 @@ theorem recoveredRetries_installedReads
       obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes physical
       exact .inr ⟨bytes, interruptedBytes_ofCounts offset advanced transfersFit size
         (fun position changed => (attributed position changed).symm) decoded, projected⟩
+  have crash : ReportedMarkerRetries initial
+      (initial.crash survivingBindings survivingKeeper survivingNames) :=
+    .powerLoss .start metadataSurvived keeperSurvived namesSurvived
   have beforeBarrier : UnsettledRetries initial prepared :=
-    preparationPreservesFiles.symm ▸ openRetry.refines
+    preparationPreservesFiles.symm ▸ (crash.trans openRetry).refines
   have ledger := recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2.1
