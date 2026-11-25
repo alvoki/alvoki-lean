@@ -3096,6 +3096,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.sameKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.rawTail_returns
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.finishAt_returns
+#check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.recoversFromCensus
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.installsAfterVacancy
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.installsFromCensus
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.keeperReleased

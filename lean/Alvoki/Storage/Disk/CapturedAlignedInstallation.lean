@@ -559,6 +559,26 @@ def runFromCensus (finish : CapturedAlignedFinish calls report vacant selected)
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
   calls.runWithMarked (finish.recoverFromCensus metadataRelease runRelease sealRelease)
 
+/-- In the aligned branch, the reported chronological reads prepare
+the recovered value and hand the captured keeper to the two barriers.
+This reaches the settled files and census before the session is installed. -/
+theorem recoversFromCensus (finish : CapturedAlignedFinish calls report vacant selected)
+    (chronology : CapturedMarkedReadCensus report finish.readCustody)
+    (prepared : Prepared retry.image layout.target layout.plan)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ opened, finish.recoverFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
+      directory admission.cache (admission.reached, admission.held) =
+        .ok opened (finish.census, { admission.held with image := retry.image.syncDirectory.syncKeeper }) := by
+  obtain ⟨opened, reached, _⟩ := report.preparesFromCensus chronology.manifest chronology.runs selected chronology.marker
+    chronology.beforeListing finish.readCustody chronology.seals chronology.offsets chronology.retained following
+    prepared.newer accepted ordered finish.readCustody.readKeeperAt
+    (finish.readCustody.readsAligned finish.keeperAligned)
+  exact ⟨opened, by simp only [recoverFromCensus, finishPreparedWithCensus, reached, finish.actions_returns]⟩
+
 /-- The aligned repair starts at the reported vacant admission. Its
 captured directory and keeper barriers preserve the admitted pair. -/
 theorem installsAfterVacancy (finish : CapturedAlignedFinish calls report vacant selected)
