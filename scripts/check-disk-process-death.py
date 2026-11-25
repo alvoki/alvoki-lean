@@ -546,19 +546,29 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False,
                     "killed reopen changed the marker or trimmed the WAL")
         for failure in ("before", "after"):
             sync_log = Path(scratch) / f"retry-{failure}.log"
+            identity = marker.stat()
             status, stderr = run_probe(binary, "--two-slot-open-once", database, env={
                 **os.environ,
                 "LD_PRELOAD": str(shim),
                 "ALVOKI_CHECK_SYNC_LOG": str(sync_log),
                 "ALVOKI_CHECK_SYNC_FAIL": str(marker),
+                "ALVOKI_CHECK_MARKER_DESCRIPTOR": str(marker),
                 "ALVOKI_CHECK_SYNC_FAIL_MODE": failure,
             })
             require(status != 0, f"two-slot reopen ignored the {failure} marker sync error: {stderr}")
             expected_syncs = [str(marker)]
             if failure == "after":
                 expected_syncs.append(f"synced before error: {marker}")
-            require(sync_log.read_text().splitlines() == expected_syncs,
+            trace = sync_log.read_text().splitlines()
+            require(len(trace) >= 2 and trace[1].startswith("marker fsync: ")
+                    and trace[1].removeprefix("marker fsync: ").split(":")[1:]
+                    == [str(identity.st_dev), str(identity.st_ino)],
+                    f"failed reopen synced the wrong marker inode: {trace}")
+            require(trace[:1] + trace[2:] == expected_syncs,
                     f"two-slot reopen went past the {failure} marker sync error")
+            after = marker.stat()
+            require((after.st_dev, after.st_ino) == (identity.st_dev, identity.st_ino),
+                    "failed reopen replaced the marker inode")
             require(marker.read_bytes() == new_marker and wal.read_bytes() == new_wal,
                     "failed retry changed the marker or trimmed the WAL")
     published = resume or marker_sync_cut or new_marker == full_marker
