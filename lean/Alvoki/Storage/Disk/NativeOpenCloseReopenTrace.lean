@@ -128,6 +128,7 @@ theorem NativeCloseReopenStep.markedOpenReport
       reported.opening.finish.run reported.opening.chronology = next.opened ∧
       next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
       reported.inventory = observed.inventory ∧ reported.retry = current.state.releasedFiles ∧
+      (∃ finish, reported.opening.finish = .aligned finish) ∧
       reported.opening.admission.owner = next.state.owner ∧
       reported.opening.admission.cached = next.state.directorySlot ∧
       reported.opening.admission.cache = next.state.cache := by
@@ -140,6 +141,6 @@ theorem NativeCloseReopenStep.markedOpenReport
     simpa only [rows] using bounded
   let reported := seen.markedReport valid.retained retained inRange
   exact ⟨plan, selected, seen, reported, reads, rows, opened.symm, opened.trans returned,
-    rfl, rfl, owner.symm, cached.symm, cache.symm⟩
+    rfl, rfl, ⟨seen.opening.finish, rfl⟩, owner.symm, cached.symm, cache.symm⟩
 
 end Alvoki.Storage.DiskSession
