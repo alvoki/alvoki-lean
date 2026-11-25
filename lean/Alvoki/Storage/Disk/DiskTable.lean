@@ -1308,6 +1308,36 @@ theorem writeBatch_eq_adaptOutcome (db : TwoSlotDiskTable) (rows : List (UInt64 
     DiskSession.publishPrepared, adaptWriteBind, adaptWriteAdapt, adaptWritePure, adaptWriteThrow, adaptWriteIf]
   rfl
 
+/-- A singleton uses the same batch preparation, encoding and publication.
+The sequence guard still runs before the byte-count guard on this API. -/
+theorem writeWithOutcome_singletonSchedule (db : TwoSlotDiskTable) (key : UInt64) (value : Option UInt64) :
+    db.writeWithOutcome key value = (do
+      let state ← db.table.installed.adapt DiskWriteError.rejected
+      let (events, table) ← (fromOption (prepareBatch state.table [(key, value)])
+        "write sequence space exhausted").adapt DiskWriteError.rejected
+      let walBytes := state.walBytes + WAL.frameSize
+      unless walBytes < UInt64.size do
+        throw (.rejected (IO.userError "WAL byte count is too large"))
+      (checkActiveSegment db.table.dir state).adapt DiskWriteError.rejected
+      db.publish state table (WAL.encodeBatch events) walBytes .rejected .commitUnknown) := by
+  unfold writeWithOutcome writeWith DiskSession.withPreparedSingleWrite
+  congr 1
+  funext state
+  rw [prepareBatch_singleton]
+  cases prepared : prepareWrite state.table key value with
+  | none => rfl
+  | some result =>
+    obtain ⟨event, table⟩ := result
+    simp only [Option.map_some, fromOption]
+    let commit (payload : ByteArray) : EIO DiskWriteError UInt64 := do
+      let walBytes := state.walBytes + WAL.frameSize
+      unless walBytes < UInt64.size do
+        throw (.rejected (IO.userError "WAL byte count is too large"))
+      (checkActiveSegment db.table.dir state).adapt DiskWriteError.rejected
+      db.publish state table payload walBytes .rejected .commitUnknown
+    change commit (WAL.encodeFrame event) = commit (WAL.encodeBatch [event])
+    rw [WAL.encodeBatch_singleton]
+
 def acquire (db : TwoSlotDiskTable) : IO DiskSnapshotPin := db.table.acquire
 def acquireAt (db : TwoSlotDiskTable) := db.table.acquireAt
 def release (db : TwoSlotDiskTable) := db.table.release
