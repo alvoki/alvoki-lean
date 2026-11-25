@@ -125,3 +125,18 @@ the measured revision.
 Workspace raw samples and harnesses are under
 `work/alvoki-performance/two-slot-keyspace-4096` and
 `work/alvoki-performance/two-slot-marker-data-sync`.
+
+### Offered-load repeat
+
+A repeat with the same frozen binaries and RocksDB 9.10.0 used 256 keys,
+8,000 requests, seed 1847 and three paired trials. Both engines kept up
+at 2,500 and 3,000 operations/s. At 2,500, slots measured 2.389 ms read
+and 2.784 ms acknowledged-write response p99, versus 1.156 and 1.552 ms
+for RocksDB. At 3,000, the medians were 16.435 and 16.763 ms versus
+10.768 and 11.097 ms. One of the three 3,000-operation pairs exceeded
+2.30× for both operations. The lower rate did not reliably close the
+tail-latency gap.
+
+The raw request samples, paired ratios, binary hashes and reproduction
+harness are under `work/alvoki-performance/two-slot-offered-repeat`
+in the workspace.
