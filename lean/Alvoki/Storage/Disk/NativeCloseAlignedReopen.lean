@@ -226,7 +226,7 @@ theorem NativeReadyReadPrefix.reopensAfterClose
   have nextValid : next.Valid := ⟨newPhase, description.symm, ownerLive, directoryLive,
     ⟨opening.admission.reached, rfl⟩, path.symm ▸ description.symm ▸ retained⟩
   have continued : NativeReadyReadPrefix seen.run next history log reads next :=
-    .installed (sameFiles.symm ▸ returned) nextValid (nextHistory.trans originalHistory) pending
+    .installed (sameFiles.symm ▸ returned) nextValid (nextHistory.trans originalHistory) pending prior.readsBounded
   have nextTarget := selectedTarget.trans plan.target
   have chosen := retained.resumed.selected
   rw [nextTarget, durable] at chosen
