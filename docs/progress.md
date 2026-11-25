@@ -438,4 +438,6 @@ The same mixed client trace step now covers a returned write or flush error afte
 
 The native checkpoint reads the session phase, flushes pending rows in memory, checks generation and run-count bounds, then encodes the strict manifest. Each rejected check returns its exact error before changing the phase or dispatching a file operation. The proof retains the original phase, lock and file image. A successful preparation passes the exact next writer state and encoded manifest to the existing publication schedule. [Native checkpoint preflight](../lean/Alvoki/Storage/Disk/CheckpointPreflight.lean)
 
+The prior-manifest and live-manifest reopen proofs now share the passage from the bounded retry and held file reports to the exact returned session and WAL replay. Each route establishes its own manifest choices before installation. The prior-manifest route also proves that its opened checkpoint equals the original. [Held checkpoint installation](../lean/Alvoki/Storage/Disk/Checkpoint/Reopen/HeldInstallation.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

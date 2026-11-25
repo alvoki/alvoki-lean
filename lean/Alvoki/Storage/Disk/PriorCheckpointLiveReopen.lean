@@ -1,28 +1,9 @@
-import Alvoki.Storage.Disk.CheckpointHeldOpen
-import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
+import Alvoki.Storage.Disk.Checkpoint.Reopen.HeldInstallation
 
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication WalSegmentRepair
 open WAL.Boundary (CheckpointRepresentsPrefix)
-
-private theorem priorCheckpointAcceptance {directory : DiskDirectory} {before : SegmentedWriterState}
-    (publication : Image)
-    (agrees : SelectedRunsAgree before.wal.directory.active.manifest publication.durable before.published.durable)
-    {writer : Nat} (ready : before.RetainedReady directory writer) :
-    publication.AcceptsVersioned before.history.length.toUInt64
-      (CheckpointRepresentsPrefix before.history) before.wal.directory.active.manifest := by
-  have accepted := ready.resumed.accepted
-  have selected := ready.resumed.selected
-  rw [← ready.walPair] at accepted selected
-  generalize before.wal.directory.active.manifest = binding at accepted selected agrees ⊢
-  generalize before.checkpoint = checkpoint at selected
-  cases selected with
-  | absent => trivial
-  | @present bytes metadata files table decoded stored loaded =>
-    obtain ⟨payloads, exactRuns⟩ := (Image.acceptsVersioned_integrity_iff decoded).mp accepted
-    exact (Image.acceptsVersioned_integrity_iff decoded).mpr ⟨payloads, exactRuns.withKeptRuns (fun index inside =>
-      agrees bytes metadata rfl decoded index (exactRuns.count ▸ inside))⟩
 
 /-- Exact admitted reopening of a live checkpoint image that still
 selects the original manifest. The physical run map is retained. -/
@@ -86,48 +67,23 @@ theorem SegmentedWriterState.RetainedReady.reopensPriorCheckpointLiveWith
       ∃ range, pair.walRange = some range ∧ range.through = before.history.length := by
     intro pair found
     rw [selected pair found]
-    exact ⟨priorCheckpointAcceptance publication agrees ready, before.target.range, ready.walPair.symm ▸ before.target.decoded,
-      ready.resumed.through⟩
-  have lineage := failures.lineage (fun a b exact => CheckpointRetryTarget.unique a b exact)
-  change ReopenLineage (CheckpointPowerCut.physical before publication) _ retry.image at lineage
-  rw [CheckpointPowerCut.physical_eq publication ready] at lineage
-  obtain ⟨keeperLayout, chosen, keeper, tail, descriptions, offsets, prepared, _, accepted⟩ :=
-    publication.checkpointRetryLayout layout valid (.visible (wal := wal)) inputs lineage
-  obtain ⟨opened, observed⟩ := reads keeperLayout keeper tail descriptions
-  let chunks := opened.chunkReports
-  have following := chunks.selectedAfterWatermark offsets descriptions
-  have installed := runOpenWithInstallation_markedRetryFromChunks chunks prepared.keeperPrefix prepared.newer following
-    accepted ready.resumed.ordered
-  obtain ⟨_, appendReady⟩ := installed.readyForAppend accepted ready.resumed.ordered
-  have kept : retry.image.kept = (before.wal.checkpointReopenFiles before.wal.directory none).kept :=
-    lineage.keepsSealed
-  obtain ⟨session, final, after, returned, path, descriptor, phase, files, owners, reportedWal, target, history, durable, next⟩ :=
-    appendReady.writerCheckpointRetained layout valid ready.spans chosen rfl (congrArg WalSegment.first keeper) kept
-  have runtime : opened.wal.operations.runWithAdmission opened.admission = .ok session final :=
-    (chunks.runWithAdmission_eq opened.admission).trans returned
-  have pair : after.target.pair = before.wal.directory.active := (congrArg Target.pair target).trans
-    (prepared.pair.symm.trans (selected retry.image.directory.active chosen))
-  have afterCheckpoint := next.resumed.selected
-  rw [durable, pair] at afterCheckpoint
+    have accepted := ready.resumed.accepted
+    rw [← ready.walPair] at accepted
+    have decoded : before.wal.directory.active.walRange = some before.target.range :=
+      ready.walPair.symm ▸ before.target.decoded
+    exact ⟨agrees.acceptsVersioned decoded accepted, before.target.range, decoded, ready.resumed.through⟩
+  obtain ⟨keeperLayout, opened, session, final, after, installed, observed⟩ :=
+    CheckpointHeldOpen.installsAfterRetry ready publication layout valid inputs retry failures evidence reads
+  have selectedPair := selected retry.image.directory.active installed.admitted
+  have physical := installed.checkpoint
+  rw [congrArg DirectoryPublication.Bindings.manifest selectedPair] at physical
   have oldSelected := ready.resumed.selected
   rw [← ready.walPair] at oldSelected
-  have sameCheckpoint := (SelectedIntegrityCheckpoint.withRunMap afterCheckpoint agrees).uniqueResult oldSelected
-  obtain ⟨replayed, replayCheckpoint, _, replaySession, _, returnedAgain, _, _, phaseAgain, _, _, _, _, _, _, _,
-    _, _, _, chosenCheckpoint, replay, _⟩ := installed
-  obtain ⟨sameSession, _⟩ := EStateM.Result.ok.inj (returnedAgain.symm.trans returned)
-  have sameTable : replayed.table = after.installed.table :=
-    congrArg Installed.table (Phase.ready.inj (phaseAgain.symm.trans (sameSession ▸ phase)))
-  have exactReplay : replayCheckpoint = before.checkpoint := by
-    have observed : retry.image.directory.active.manifest = before.wal.directory.active.manifest :=
-      congrArg DirectoryPublication.Bindings.manifest (selected retry.image.directory.active chosen)
-    rw [observed] at chosenCheckpoint
-    exact (SelectedIntegrityCheckpoint.withRunMap chosenCheckpoint agrees).uniqueResult oldSelected
-  rw [exactReplay, sameTable] at replay
-  refine ⟨keeperLayout, opened, session, final, after, ⟨runtime, path,
-    descriptor.trans chunks.inventoryDescription, phase, files, owners, chunks.inventoryDescription ▸ next, history, ?_,
-    durable, pair, sameCheckpoint, replay⟩, observed⟩
-  rw [files]
-  exact reportedWal
+  have sameCheckpoint := (SelectedIntegrityCheckpoint.withRunMap physical agrees).uniqueResult oldSelected
+  refine ⟨keeperLayout, opened, session, final, after, ⟨installed.returned, installed.path, installed.slot,
+    installed.phase, installed.files, installed.owners, installed.ready, installed.history, installed.wal,
+    installed.durable, installed.pair.trans selectedPair, sameCheckpoint, ?_⟩, observed⟩
+  simpa only [sameCheckpoint] using installed.replay
 
 /-- The held reopen from the reached live image preserves the old
 checkpoint and the physical run map. -/

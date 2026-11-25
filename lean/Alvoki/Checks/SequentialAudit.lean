@@ -389,6 +389,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunSyncFailure.poisonsAndReleases
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunSyncFailure.priorRuns
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunSyncFailure.priorManifest
+#check_axioms Alvoki.Storage.DiskSession.CheckpointHeldOpen.installsAfterRetry
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.reopensPriorCheckpointLive
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.reopensPriorCheckpointLiveWith
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunSyncFailure.reopens
