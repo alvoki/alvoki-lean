@@ -553,6 +553,7 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False,
                 "ALVOKI_CHECK_SYNC_LOG": str(sync_log),
                 "ALVOKI_CHECK_SYNC_FAIL": str(marker),
                 "ALVOKI_CHECK_MARKER_DESCRIPTOR": str(marker),
+                "ALVOKI_CHECK_TWO_SLOT_READ": str(marker),
                 "ALVOKI_CHECK_SYNC_FAIL_MODE": failure,
             })
             require(status != 0, f"two-slot reopen ignored the {failure} marker sync error: {stderr}")
@@ -560,10 +561,14 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False,
             if failure == "after":
                 expected_syncs.append(f"synced before error: {marker}")
             trace = sync_log.read_text().splitlines()
+            reads = [line.removeprefix("marker fread: ") for line in trace if line.startswith("marker fread: ")]
+            trace = [line for line in trace if not line.startswith("marker fread: ")]
             require(len(trace) >= 2 and trace[1].startswith("marker fsync: ")
                     and trace[1].removeprefix("marker fsync: ").split(":")[1:]
                     == [str(identity.st_dev), str(identity.st_ino)],
                     f"failed reopen synced the wrong marker inode: {trace}")
+            require(reads and all(read == trace[1].removeprefix("marker fsync: ") for read in reads),
+                    "failed reopen did not sync the descriptor that supplied the marker bytes")
             require(trace[:1] + trace[2:] == expected_syncs,
                     f"two-slot reopen went past the {failure} marker sync error")
             after = marker.stat()

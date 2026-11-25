@@ -174,6 +174,8 @@ static void hold_owner(const char *ready, const char *release) {
     wait_for_release(ready, release, pid, (size_t)length);
 }
 
+static void log_marker_descriptor(const char *log, const char *operation, int fd);
+
 size_t fread(void *buffer, size_t size, size_t count, FILE *stream) {
     int incoming = errno;
     size_t (*real_read)(void *, size_t, size_t, FILE *) = dlsym(RTLD_NEXT, "fread");
@@ -197,6 +199,8 @@ size_t fread(void *buffer, size_t size, size_t count, FILE *stream) {
     struct stat wanted, opened;
     bool selected = target != NULL && stat(target, &wanted) == 0 && fstat(fileno(stream), &opened) == 0 &&
         opened.st_dev == wanted.st_dev && opened.st_ino == wanted.st_ino;
+    if (selected && same(target, getenv("ALVOKI_CHECK_MARKER_DESCRIPTOR")))
+        log_marker_descriptor(getenv("ALVOKI_CHECK_SYNC_LOG"), "marker fread: ", fileno(stream));
     errno = incoming;
     if (!selected) return real_read(buffer, size, count, stream);
 
