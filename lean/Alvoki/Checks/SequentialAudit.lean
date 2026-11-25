@@ -216,6 +216,7 @@ import Alvoki.Storage.Disk.SnapshotReadHistoryBounds
 import Alvoki.Storage.Disk.NativeReadyReadPrefix
 import Alvoki.Storage.Disk.NativeMarkedReadPrefix
 import Alvoki.Storage.Disk.NativeReadyClose
+import Alvoki.Storage.Disk.NativeCloseAlignedReopen
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeReadyWrite
@@ -1385,6 +1386,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reachesClose
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.closeAdmits
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.dropAdmitsAfterFailedClose
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseAlignedReads.readsManifest
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseAlignedReads.manifestMissing
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseAlignedReads.readsRun
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseAlignedReads.readsMarker
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseAlignedReads.readsWal
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensAfterClose
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyQuietCrash.vacant
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyQuietCrash.runSurvives
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyRestartReads.readsManifest
