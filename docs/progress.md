@@ -1974,3 +1974,19 @@ marker allocated after lock and directory acquisition. The two-slot
 preparation theorem now indexes its report by the actual marker-open
 inventory and derives both the acquisition return and the prepared
 state. The rename path still takes the existing admission census.
+
+The interrupted two-slot reopen uses the shared selected-WAL replay
+theorem to derive the table and the common session installation proof
+to carry it to client reads. The first retained sequence is unique
+because each encoded WAL frame has a fixed size. That argument now
+belongs to the shared WAL recovery contract, where either marker
+strategy can use it.
+
+The remaining bridge is to derive the recovery inputs from the reached
+crash and retry reports. The marker-specific part establishes which
+frontier the surviving slots select under the ordered sync model.
+The shared part needs the exact checkpoint and retained WAL bytes,
+together with their link to the acknowledged history. Those facts
+should be derived from the same reported execution that drives
+installation. The filesystem model supplies primitive observations
+such as which sync took effect and which bytes survived.

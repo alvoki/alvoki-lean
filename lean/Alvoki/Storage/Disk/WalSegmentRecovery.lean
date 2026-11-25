@@ -34,6 +34,26 @@ structure WalSegmentRecovery (after : WalSegmentImage) (pair : DirectoryPublicat
       WAL.Boundary.recoverMarked base length (WAL.encode history) = .ok (WAL.encode (history.take range.through), table)
   refines : ∃ model, table.Refines model ∧ RepresentsWalHistory (history.take range.through) model
 
+/-- A retained run of fixed-size frames fixes its start once both starts are
+within the represented history. -/
+theorem WalSegmentRecovery.first_eq
+    {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
+    {range : MarkedWalRange} {history : List Write} {base table : PackedTable}
+    {first expected : Nat}
+    (recovery : WalSegmentRecovery image pair range history base first table)
+    (watermarkWithin : range.watermark ≤ history.length)
+    (expectedCovered : expected ≤ range.watermark)
+    (retained : WalSegment.concatenate (image.afterWatermark range.watermark) =
+      WAL.encode (history.drop expected)) :
+    first = expected := by
+  have lengths := congrArg ByteArray.size (recovery.historyRetained.symm.trans retained)
+  simp only [WAL.encode_size, List.length_drop] at lengths
+  have framePositive : 0 < frameSize := by decide
+  have counts := Nat.eq_of_mul_eq_mul_left framePositive lengths
+  have left := Nat.le_trans recovery.startCovered watermarkWithin
+  have right := Nat.le_trans expectedCovered watermarkWithin
+  omega
+
 /-- For any pair still selectable after collection, feed the exact retained
 run of WAL segments to marked recovery. The loaded base represents the
 checkpoint's covered prefix. No success premise is needed for either worker. -/

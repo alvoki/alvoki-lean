@@ -3196,19 +3196,13 @@ theorem recoveredRetries_installedReads
   obtain ⟨first, table, shared⟩ := collection.recoversSelected walValid walSelected
     target.decoded sameWatermark checkpointRefines checkpointHistory ordinals
   have sameFirst : first = layout.first := by
-    have lengths := congrArg ByteArray.size (shared.historyRetained.symm.trans retainedBytes)
-    simp only [WAL.encode_size, List.length_drop] at lengths
-    have framePositive : 0 < frameSize := by decide
-    have counts := Nat.eq_of_mul_eq_mul_left framePositive lengths
     have throughWithin : target.range.through ≤ (history ++ batch).length := by
       rw [← layoutThrough, layout.through]
       simp [Nat.min_le_right]
-    have watermarkWithin := Nat.le_trans checkpointCovered throughWithin
-    have left := Nat.le_trans shared.startCovered watermarkWithin
     have layoutWatermark : layout.range.watermark = target.range.watermark :=
       congrArg (fun t : Target => t.range.watermark) layoutTarget
-    have right := Nat.le_trans (layoutWatermark ▸ layout.covers) watermarkWithin
-    omega
+    exact shared.first_eq (Nat.le_trans checkpointCovered throughWithin)
+      (layoutWatermark ▸ layout.covers) retainedBytes
   have recovery : WalSegmentRecovery image after.directory.active target.range (history ++ batch)
       base layout.first table := ready.selected.symm ▸ sameFirst ▸ shared
   have retries : SettledRetries target after after := .start
