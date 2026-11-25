@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeInactiveSessionCalls
-import Alvoki.Storage.Disk.LockCensusTrace
+import Alvoki.Storage.Disk.NativeReadyProcessExit
 
 namespace Alvoki.Storage.DiskSession
 
@@ -25,19 +25,21 @@ namespace NativePendingWriteProcessExit
 
 variable {current : NativeReadPosition history log} {pending : NativePendingWrite current}
 
+private def writerExit (seen : NativePendingWriteProcessExit pending) :
+    NativeWriterProcessExit current.state pending.poisoned.descriptors pending.files :=
+  ⟨seen.beforeExit, seen.filesBeforeExit, seen.observed, seen.writerLive, seen.later, seen.last⟩
+
 def afterExit (seen : NativePendingWriteProcessExit pending) : DescriptorInventory :=
-  seen.beforeExit.afterDrops [.exited current.state.owner.reference.process]
+  seen.writerExit.afterExit
 
 def filesAfterExit (seen : NativePendingWriteProcessExit pending) : LockedFileState FileImage :=
-  seen.beforeExit.dropLockState current.state.session.descriptor [.exited current.state.owner.reference.process]
-    current.state.session.directory seen.filesBeforeExit
+  seen.writerExit.filesAfterExit
 
 def census (seen : NativePendingWriteProcessExit pending) : DescriptorInventory :=
-  seen.afterExit.afterDrops seen.later
+  seen.writerExit.census
 
 def files (seen : NativePendingWriteProcessExit pending) : LockedFileState FileImage :=
-  seen.afterExit.dropLockState current.state.session.descriptor seen.later current.state.session.directory
-    seen.filesAfterExit
+  seen.writerExit.files
 
 structure Released (seen : NativePendingWriteProcessExit pending) : Prop where
   returned : pending.write.returnedAt pending.cache
@@ -58,33 +60,10 @@ structure Released (seen : NativePendingWriteProcessExit pending) : Prop where
 /-- The writer's actual exit drops all its slots. The lock becomes
 available exactly when the last observed alias disappears. -/
 theorem releases (seen : NativePendingWriteProcessExit pending) : seen.Released := by
-  have exited : LockCensusTrace current.state.session.directory current.state.session.descriptor
-      pending.poisoned.descriptors pending.files seen.afterExit seen.filesAfterExit :=
-    .drops seen.observed [.exited current.state.owner.reference.process]
-  have complete : LockCensusTrace current.state.session.directory current.state.session.descriptor
-      pending.poisoned.descriptors pending.files seen.census seen.files :=
-    .drops exited seen.later
-  have refs : seen.census.references current.state.session.descriptor = [] := by
-    rw [census, afterExit, DescriptorInventory.afterDrops_append]
-    exact seen.last
-  have live : seen.beforeExit.references current.state.session.descriptor ≠ [] :=
-    List.ne_nil_of_mem (seen.beforeExit.mem_references.mpr
-      ⟨current.state.owner, seen.writerLive, rfl, current.readPrefix.refines.1.owner⟩)
-  have sameBeforeExit : seen.filesBeforeExit = pending.files := by
-    simpa only [ite_eq_right live] using seen.observed.reached.2.2
-  have noWriterSlots : ∀ slot ∈ seen.census.slots, slot.reference.process ≠ current.state.owner.reference.process := by
-    intro slot present same
-    have afterExit := (List.mem_filter.mp present).1
-    have survived := List.all_eq_true.mp (List.mem_filter.mp afterExit).2
-      (.exited current.state.owner.reference.process) List.mem_cons_self
-    simp [LockReferenceDrop.removes, same] at survived
-  have released : seen.files = pending.write.failure.released := by
-    simpa only [refs, ite_true, NativePendingWrite.files, NativePendingWrite.poisoned,
-      ObservedBatchFailure.closeState, SegmentedBatchFailure.released] using complete.reached.2.2
-  exact ⟨pending.returned, pending.inactive.executes seen.requests, sameBeforeExit,
-    fun available => live (seen.observed.freshFlockAllowed.mp available), exited.freshFlockAllowed,
-    noWriterSlots, complete, released, complete.freshFlockAllowed.mpr refs, complete.reached.2.1,
-    complete.reopenTrace .start⟩
+  have dropped := seen.writerExit.releases current.readPrefix.refines.1.owner
+  exact ⟨pending.returned, pending.inactive.executes seen.requests, dropped.sameBeforeExit, dropped.heldBeforeExit,
+    dropped.afterExit, dropped.noWriterSlots, dropped.trace, dropped.exactFiles, dropped.vacant, dropped.inodeMap,
+    dropped.trace.reopenTrace .start⟩
 
 end NativePendingWriteProcessExit
 
