@@ -351,6 +351,7 @@ lake env leanchecker Alvoki.Storage.Disk.BootstrapMarkerRenameError
 lake env leanchecker Alvoki.Storage.Disk.BootstrapMarkerDirectoryError
 lake env leanchecker Alvoki.Storage.Disk.BootstrapMarkerFlushError
 lake env leanchecker Alvoki.Storage.Disk.BootstrapMarkerOpenError
+lake env leanchecker Alvoki.Storage.Disk.BootstrapMarkerDetachError
 lake env leanchecker Alvoki.Storage.Disk.ObservedBootstrapFailure
 lake env leanchecker Alvoki.Storage.Disk.ObservedBootstrapRetry
 lake env leanchecker Alvoki.Storage.Disk.MarkerlessBootstrapRetryInstallation

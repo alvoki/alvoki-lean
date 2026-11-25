@@ -37,6 +37,29 @@ private abbrev publish {directory : DiskDirectory} {before : LockedFileState Wal
   bootstrapEmptyWith directory before.image.observeSuccessor (calls.createEmpty cache)
     (calls.write cache) (calls.sync cache) calls.renameFile
 
+/-- An admitted markerless worker error preserves its exact reached
+image through the local lock cleanup. -/
+theorem BootstrapOpenCalls.runWorkerError
+    {input : FilePath} {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
+    {calls : BootstrapOpenCalls (Cache BootstrapHandle) directory before}
+    (captured : BootstrapCacheOpen calls.toBootstrapAdmissionCalls)
+    (admission : OpenAdmissionReports input directory calls.slot) (localUnlock : calls.unlock.LocalFlock)
+    {cause : IO.Error} {reached : WalSegmentRotation.State}
+    (worker : calls.bootstrapAt directory captured.cache before.image = .error cause reached) :
+    calls.run admission = (match calls.unlock with
+      | .success => .error cause ⟨reached, before.owners.set (directory.file .lock) none⟩
+      | .failure cleanup _ =>
+        .error cleanup ⟨reached, before.owners.set (directory.file .lock) (some calls.slot.description)⟩) := by
+  have exactRun := runOpenWithInstallation_acquiredRecoveryError directory calls.slot.description calls.nextRef
+    calls.unlock (calls.bootstrapAt directory captured.cache) before worker
+  rw [calls.runMarkerless admission captured.captures.1, exactRun]
+  cases outcome : calls.unlock with
+  | success => rfl
+  | failure cleanup released =>
+    have retained : released = false := by simpa [outcome, UnlockReport.LocalFlock] using localUnlock
+    subst released
+    rfl
+
 /-- If segment-zero creation or marker publication fails after admission,
 the same directory cache and acquired lock reach that publication attempt.
 Cleanup returns the exact reached image. A failed local unlock takes
@@ -66,8 +89,6 @@ theorem BootstrapCheckedListing.publicationError
   | error cause reached =>
     have worker : calls.bootstrapAt directory captured.cache before.image = .error cause reached :=
       (calls.reachesPublication captured.cache listed.entries.1 listed.entries.2).trans returned
-    have exactRun := runOpenWithInstallation_acquiredRecoveryError directory calls.slot.description calls.nextRef
-      calls.unlock (calls.bootstrapAt directory captured.cache) before worker
     have safe := bootstrapEmptyWith_safe directory before.image valid before.image.observeSuccessor rfl
       (calls.createEmpty captured.cache) (calls.write captured.cache) (calls.sync captured.cache) calls.renameFile
       effects.rotation effects.marker
@@ -75,14 +96,7 @@ theorem BootstrapCheckedListing.publicationError
       | .ok reopened after => reopened = ⟨.empty, 0, 0, 0⟩ ∧ BootstrapReady after
       | .error _ after => BootstrapValid after) at safe
     rw [returned] at safe
-    refine ⟨?_, safe, safe.nextSelection⟩
-    rw [calls.runMarkerless admission captured.captures.1, exactRun]
-    cases outcome : calls.unlock with
-    | success => rfl
-    | failure cleanup released =>
-      have retained : released = false := by simpa [outcome, UnlockReport.LocalFlock] using localUnlock
-      subst released
-      rfl
+    exact ⟨BootstrapOpenCalls.runWorkerError captured admission localUnlock worker, safe, safe.nextSelection⟩
 
 /-- The exact state returned by the failed admitted open supplies the
 bootstrap invariant for the next attempt, even if cleanup changed the error. -/
