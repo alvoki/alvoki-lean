@@ -201,6 +201,10 @@ private def readOptionalFile (path : FilePath) : IO (Option ByteArray) :=
   readOptionalDatabaseFile path.symlinkMetadata.toBaseIO (fun _ => IO.FS.readBinFile path)
     (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
 
+theorem readOptionalFile_fileEffects (path : FilePath) :
+    readOptionalFile path = readOptionalDatabaseFile (m := IO) path.symlinkMetadata.toBaseIO
+      (fun _ => IO.FS.readBinFile path) (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw := rfl
+
 /-- Only a no-follow lookup's ENOENT denotes an absent directory entry. -/
 @[macro_inline] def optionalMetadataWith [Monad m] [MonadExceptOf IO.Error m]
     (lookup : m (Except IO.Error IO.FS.Metadata)) : m (Option IO.FS.Metadata) := do

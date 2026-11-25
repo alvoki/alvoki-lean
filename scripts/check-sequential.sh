@@ -173,6 +173,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCheckpointRetained
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionPlan
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionMetadata
+lake env leanchecker Alvoki.Storage.Disk.WalCollectionPreflight
 lake env leanchecker Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
 lake env leanchecker Alvoki.Storage.Disk.WalSealedInodeLifetime
 lake env leanchecker Alvoki.Storage.Disk.WalHiddenSealRetry

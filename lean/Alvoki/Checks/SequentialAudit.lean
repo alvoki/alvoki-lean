@@ -284,6 +284,7 @@ import Alvoki.Storage.Disk.WalSegmentCollectionSpace
 import Alvoki.Storage.Disk.WalSegmentCollectionNames
 import Alvoki.Storage.Disk.ReachableWalSeals
 import Alvoki.Storage.Disk.WalCollectionRecoveryBudget
+import Alvoki.Storage.Disk.WalCollectionPreflight
 import Alvoki.Storage.Disk.SelectedRecoveryPayload
 import Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
@@ -1462,6 +1463,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.walCollectionEnd_covered
 #check_axioms Alvoki.Storage.DiskTable.planWalCollection_fileEffects
 #check_axioms Alvoki.Storage.DiskTable.collectCoveredWal_fileEffects
+#check_axioms Alvoki.Storage.readOptionalFile_fileEffects
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionReads.runPlan_ready
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.planObservedWalCollection
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.walCollectionRejected
 #check_axioms Alvoki.Storage.OpenPathReadReports.walSegmentExtents_offsets
 #check_axioms Alvoki.Storage.planWalCollectionWith_reported
 #check_axioms Alvoki.Storage.walCollectionOffsetsFromExtents_approved
