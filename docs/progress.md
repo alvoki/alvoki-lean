@@ -867,6 +867,11 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The client theorem derives the selected frame count from the observed
+marker and the layout's decoded range. The pre- and post-barrier proofs
+also use that layout's repair target and plan, binding the retry evidence
+to the same segment selection that drives preparation.
+
 Preparation and client replay now share the same selected WAL range.
 The client theorem carries an explicit equality between the history
 used to construct the prepared table and the selected submission

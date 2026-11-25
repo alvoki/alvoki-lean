@@ -1705,7 +1705,6 @@ theorem installsAfterAcquiredRecovery_replays
     (checkpointSelected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest loaded)
     (chronology : report.listing.beforeOpen = manifestDrops ++
       runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest))
-    (count : selection.frontier.toNat = layout.range.through * WAL.frameSize)
     (orderedLayout : WAL.OrdinalsFrom 1 history) {table : PackedTable}
     (replay : recoverSelected (loaded.getD (.empty, 0)).1 (WAL.encode history) = .ok table)
     {released : System.FilePath → List LockReferenceDrop}
@@ -1754,7 +1753,7 @@ theorem installsAfterAcquiredRecovery_replays
     {base : PackedTable} {first : Nat}
     (selected : WalSegmentRecovery image after.2.image.directory.active layout.range (prior.history ++ batch) base first
       table)
-    {interrupted firstRepair : FileImage} {target : Target}
+    {interrupted firstRepair : FileImage}
     (beforeBarrier : UnsettledRetries interrupted retry.image)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
     {current next : Selection}
@@ -1766,10 +1765,10 @@ theorem installsAfterAcquiredRecovery_replays
       ∃ bytes, InterruptedSlotBytes before bytes active next ∧
         projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
     (observed : retry.image.directory.active.walBoundary = some (Boundary.encode selection.frontier))
-    (authorizedRepair : EffectTrace target
+    (authorizedRepair : EffectTrace layout.target
       { retry.image with directory := settleMarker retry.image.directory selection } firstRepair)
-    {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared retry.image target plan)
-    (retries : SettledRetries target firstRepair after.2.image)
+    (preparedPlan : WalSegmentRepair.Prepared retry.image layout.target layout.plan)
+    (retries : SettledRetries layout.target firstRepair after.2.image)
     (oldSize : current.frontier.toNat = (WAL.encode prior.history).size)
     (sameHistory : history = (prior.history ++ batch).take layout.range.through) :
     let opened : Reopened := ⟨table, (loaded.getD (.empty, 0)).2, selection.frontier, layout.keeper.first⟩
@@ -1788,8 +1787,13 @@ theorem installsAfterAcquiredRecovery_replays
       InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take layout.range.through)
         opened.installed session := by
   intro opened prepare
+  obtain ⟨_, _, markerPayload, frontier, present, markerDecoded, count⟩ :=
+    DirectoryPublication.Bindings.walRange_accounting layout.decoded
+  have samePayload := Option.some.inj (observed.symm.trans present)
+  have sameFrontier : selection.frontier = frontier :=
+    Except.ok.inj ((Boundary.decode_encode selection.frontier).symm.trans (samePayload ▸ markerDecoded))
   obtain ⟨acquisition, prepared, markerLive, sameInode⟩ := preparesFromHeldMarker file privateFile available report
-    manifest runs checkpointSelected chronology selection decoded count orderedLayout replay keeper
+    manifest runs checkpointSelected chronology selection decoded (sameFrontier.symm ▸ count) orderedLayout replay keeper
     seals offsets retained following later keepsMarker listingDrops keeperDrops
   obtain ⟨_, _, previous, _, _, _⟩ := trace.keyValueRefinement start.bootstrap start.held
   have whole := (recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
