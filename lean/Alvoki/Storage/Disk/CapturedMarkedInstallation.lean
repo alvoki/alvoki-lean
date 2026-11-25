@@ -41,6 +41,34 @@ noncomputable def run (finish : CapturedKeeperFinish calls reads vacant selected
   | prunedAligned finish => exact finish.runFromCensus chronology
   | longer finish => exact finish.runFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
 
+/-- The marked worker consumed by the successful native installer. Its
+successful result returns the repaired census and file state before the
+phase and session references are allocated. -/
+noncomputable def markedWorker (finish : CapturedKeeperFinish calls reads vacant selected)
+    (chronology : CapturedMarkedReadCensus reads finish.reader) :
+    DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened := by
+  cases finish with
+  | aligned finish => exact finish.recoverFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
+  | prunedAligned finish => exact finish.recoverFromCensus chronology
+  | longer finish => exact finish.recoverFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
+
+theorem run_eq_markedWorker (finish : CapturedKeeperFinish calls reads vacant selected)
+    (chronology : CapturedMarkedReadCensus reads finish.reader) :
+    finish.run chronology = calls.runWithMarked (finish.markedWorker chronology) := by
+  cases finish <;> rfl
+
+theorem reachesInstaller (finish : CapturedKeeperFinish calls reads vacant selected)
+    (chronology : CapturedMarkedReadCensus reads finish.reader)
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    {session : SegmentedSession} {final : CensusOpenState}
+    (returned : finish.run chronology = .ok session final) :
+    ∃ opened, finish.markedWorker chronology directory admission.cache (admission.reached, admission.held) =
+      .ok opened final ∧
+      session = ⟨directory, admission.owner.description, .ready opened.installed, calls.nextRef, calls.nextRef + 1⟩ :=
+  calls.runWithMarked_reachedRepair _ marker ((finish.run_eq_markedWorker chronology).symm ▸ returned)
+
 noncomputable def census : CapturedKeeperFinish calls reads vacant selected → DescriptorInventory
   | .aligned finish => finish.census
   | .prunedAligned finish => finish.census

@@ -190,4 +190,27 @@ theorem returnsReady (report : NativeOpenSuccessReports input directory history 
 
 end NativeOpenSuccessReports
 
+/-- A successful marked open reaches the exact checkpoint replay and
+census before calling the installer. The returned model phase contains
+that same recovered value, with no file effect during construction. -/
+theorem MarkedOpenSuccessReports.recoversBeforeInstallation
+    (report : MarkedOpenSuccessReports input directory history log recorded) :
+    ∃ (state : NativeReadyState) (final : CensusOpenState) (opened : Reopened),
+      report.opening.finish.markedWorker report.opening.chronology directory report.opening.admission.cache
+        (report.opening.admission.reached, report.opening.admission.held) = .ok opened final ∧
+      opened.installed = state.writer.installed ∧
+      report.opening.finish.run report.opening.chronology = .ok state.session final ∧
+      final = (state.census, state.files) ∧ state.session.directory = directory ∧
+      state.cache = report.opening.admission.cache ∧ state.owner = report.opening.admission.owner ∧
+      state.directorySlot = report.opening.admission.cached ∧ state.census = report.opening.finish.census ∧
+      NativeReadyReadPrefix (.ok state.session (state.census, state.files)) state history log recorded state := by
+  let covered : NativeOpenSuccessReports input directory history log recorded := .marked report
+  obtain ⟨_, _, state, final, returned, path, custody, _, _, seed⟩ := covered.returnsReady
+  obtain ⟨sameFiles, cache, census, owner, slot, _, _⟩ := custody
+  obtain ⟨opened, recovered, session⟩ := report.opening.finish.reachesInstaller report.opening.chronology
+    report.opening.markerFound returned
+  have phase := congrArg SegmentedSession.phase session
+  exact ⟨state, final, opened, recovered, Phase.ready.inj (phase.symm.trans seed.refines.1.phase), returned,
+    sameFiles.symm, path, cache, owner, slot, census, seed⟩
+
 end Alvoki.Storage.DiskSession

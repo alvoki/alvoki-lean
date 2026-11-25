@@ -454,11 +454,15 @@ noncomputable def run (finish : CapturedLongKeeperFinish calls report vacant sel
 
 /-- Follow one admitted census through the selected reads, temporary
 keeper release, replacement, and ready session installation. -/
+noncomputable def recoverFromCensus (finish : CapturedLongKeeperFinish calls report vacant selected)
+    (metadataRelease runRelease sealRelease : FilePath → List LockReferenceDrop) :
+    DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened :=
+  finish.finishFromCensus (report.prepareFromCensus metadataRelease runRelease sealRelease finish.readKeeperAndRelease)
+
 noncomputable def runFromCensus (finish : CapturedLongKeeperFinish calls report vacant selected)
     (metadataRelease runRelease sealRelease : FilePath → List LockReferenceDrop) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
-  calls.runWithMarked (finish.finishFromCensus
-    (report.prepareFromCensus metadataRelease runRelease sealRelease finish.readKeeperAndRelease))
+  calls.runWithMarked (finish.recoverFromCensus metadataRelease runRelease sealRelease)
 
 /-- The long replacement starts after a reported vacant admission. Its
 directory barriers preserve the selected manifest and marker while the
@@ -526,7 +530,7 @@ theorem installsFromCensus (finish : CapturedLongKeeperFinish calls report vacan
     finish.reader seals offsets retained following laterValid accepted ordered finish.readKeeperAndRelease
     finish.readKeeperAndRelease_returns
   have same : finish.runFromCensus metadataRelease runs.released released = finish.run := by
-    unfold runFromCensus run
+    unfold runFromCensus recoverFromCensus run
     apply calls.runWithMarked_eq report _ finish.finishAt marker
     simp only [finish.finishFromCensus_returns reached, Bind.bind, EStateM.bind, projected, finish.finishAt_returns]
   rw [same]

@@ -265,13 +265,17 @@ private def repairActions (finish : CapturedPrunedAlignedFinish calls reads vaca
 
 /-- Use the actual reached keeper cache from the held read chronology
 through authorization, ordered removals and the two final barriers. -/
+def recoverFromCensus (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
+    (chronology : CapturedMarkedReadCensus reads finish.reader) :
+    DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened :=
+  fun resolved cache => finishPreparedWithCensus
+    (reads.prepareFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
+      finish.reader.readKeeperAt) (finish.repairActions resolved) cache
+
 def runFromCensus (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
     (chronology : CapturedMarkedReadCensus reads finish.reader) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
-  calls.runWithMarked fun resolved cache =>
-    finishPreparedWithCensus
-      (reads.prepareFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
-        finish.reader.readKeeperAt) (finish.repairActions resolved) cache
+  calls.runWithMarked (finish.recoverFromCensus chronology)
 
 /-- The successful aligned prune returns the same table selected from
 the physical checkpoint and WAL. The final image has no later WAL names,
@@ -318,7 +322,7 @@ theorem installsFromCensus (finish : CapturedPrunedAlignedFinish calls reads vac
       EStateM IO.Error CensusOpenState Reopened :=
     fun _ _ _ (_, opened, _) _ => .ok opened (finish.census, finish.settled)
   have same : finish.runFromCensus chronology = calls.runWithFinish reads projectedFinish := by
-    unfold runFromCensus
+    unfold runFromCensus recoverFromCensus
     apply calls.runWithMarked_eq reads _ projectedFinish marker
     simp only [finishPreparedWithCensus, reached, repairActions, finish.repairAt_returns later,
       Bind.bind, EStateM.bind, projected, projectedFinish]
