@@ -235,6 +235,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerStageWrite
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedPendingWrite
 lake env leanchecker Alvoki.Storage.Disk.NativeWritePreflight
+lake env leanchecker Alvoki.Storage.Disk.NativeWriteClassification
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations

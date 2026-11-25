@@ -401,6 +401,16 @@ private theorem ObservedBatchPublication.publisherProjects {handle : Type}
     cases value
     exact markerRun_projects _ _ _ appended (observed.markerProjects appended ran)
 
+/-- Project the reached cached publication result before deciding whether
+the original write acknowledges or returns an uncertain commit. -/
+theorem ObservedBatchPublication.projectsReturn {handle : Type}
+    {directory first bytes count initial append stage sync rename}
+    (observed : ObservedBatchPublication directory first bytes count initial append stage sync rename handle) :
+    withoutWriteGroupCache (commitBytesAt directory first bytes count
+      observed.append observed.stage observed.sync observed.rename (observed.cache, initial)) =
+      commitBytesAt directory first bytes count append stage sync rename initial :=
+  observed.publisherProjects
+
 /-- Execute the native-shaped batch from the checked active segment. The
 returned owner and installed table are exact, and the cache is the one
 reached by this same set of file operations. -/

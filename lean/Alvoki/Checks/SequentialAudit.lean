@@ -324,6 +324,7 @@ import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 import Alvoki.Storage.Disk.NativePendingMarkerStageWrite
 import Alvoki.Storage.Disk.NativeGroupedPendingWrite
 import Alvoki.Storage.Disk.NativeWritePreflight
+import Alvoki.Storage.Disk.NativeWriteClassification
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
 import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
@@ -2004,6 +2005,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeWritePreflightObservation.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeWritePreflightObservation.returnsWithCache
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preflightsWrite
+#check_axioms Alvoki.Storage.DiskSession.BatchActiveGuard.ofChecked
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.classifiesReadyReturn
+#check_axioms Alvoki.Storage.DiskSession.ObservedBatchPublication.projectsReturn
+#check_axioms Alvoki.Storage.DiskSession.WriteCallPublication.projects
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.Calls.classifiesReturnedReports
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyKeeperSelection.selects
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyKeeperSelection.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyKeeperSelection.cachedResult
