@@ -81,6 +81,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointManifestRenameError
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointManifestRenameReboot
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointManifestRenameRetry
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpoint
+lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRunDirectoryCut
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRunDirectoryStop
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRunDirectoryReboot
 lake env leanchecker Alvoki.Storage.Disk.NativeStoppedRunDirectoryTableOpen
@@ -320,6 +321,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
+lake env leanchecker Alvoki.Storage.Disk.NativeOpenedStoppedRunDirectoryReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedFirstAppendReport

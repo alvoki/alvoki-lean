@@ -110,6 +110,7 @@ import Alvoki.Storage.Disk.NativeCheckpointManifestRenameError
 import Alvoki.Storage.Disk.NativeCheckpointManifestRenameReboot
 import Alvoki.Storage.Disk.NativeCheckpointManifestRenameRetry
 import Alvoki.Storage.Disk.NativePendingCheckpoint
+import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryStop
 import Alvoki.Storage.Disk.NativeStoppedRunDirectoryTableOpen
 import Alvoki.Storage.Disk.NativePendingCheckpointOpenPhase
@@ -408,6 +409,7 @@ import Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
+import Alvoki.Storage.Disk.NativeOpenedStoppedRunDirectoryReport
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
 import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
@@ -975,6 +977,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryStop.priorRunStable
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryStop.freshRunSettled
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryStop.stopsOnOpenPhase
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtCheckpointRunDirectory
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversStoppedCheckpointRunDirectory
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryReboot.observed
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDirectoryReboot.plans
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunDirectoryStop.cachedHandle
@@ -2336,6 +2340,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedFailedCloseReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedManifestRenameReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedStoppedCheckpointReport.reaches
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedStoppedRunDirectoryReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedUncertainWriteReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationStop.stopsOnOpenedPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.settledWhenEffective

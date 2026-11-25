@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryStop
+import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
 
 namespace Alvoki.Storage.DiskSession
@@ -168,4 +168,29 @@ theorem plans (valid : state.Valid) : Nonempty (reboot.Plan valid) := by
   exact ⟨⟨layout, target, keeper, descriptors, offsets, prepared, valid.retained.resumed.selected⟩⟩
 
 end NativeCheckpointRunDirectoryReboot
+
+/-- One chosen survivor of a stopped first directory barrier supplies
+the same aligned reader, next position and earlier snapshot responses. -/
+structure NativeCheckpointRunDirectoryReopened (current : NativeReadPosition history log) {input : FilePath}
+    {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
+    {stop : NativeCheckpointRunDirectoryStop (image := image) current.state cut}
+    (reboot : NativeCheckpointRunDirectoryReboot stop) {valid : current.state.Valid} {plan : reboot.Plan valid}
+    (reader : NativeReadyRestartReads (reboot.observed valid) input plan.layout plan.selected)
+    (next : NativeReadPosition history log) : Prop where
+  pending : NativePendingCheckpointRunDirectory current stop
+  returned : next.opened = reader.run ∧ reader.ReachedSession next.state history log current.reads
+  reads : next.reads = current.reads
+
+theorem NativeReadPosition.recoversStoppedCheckpointRunDirectory (current : NativeReadPosition history log)
+    {input : FilePath} {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
+    {stop : NativeCheckpointRunDirectoryStop (image := image) current.state cut}
+    (reboot : NativeCheckpointRunDirectoryReboot stop) (valid : current.state.Valid) (plan : reboot.Plan valid)
+    (reader : NativeReadyRestartReads (reboot.observed valid) input plan.layout plan.selected) :
+    ∃ next, NativeCheckpointRunDirectoryReopened current reboot reader next := by
+  obtain ⟨_, history, replay⟩ := current.readPrefix.refines
+  obtain ⟨_, installed, reached⟩ := (reboot.observed valid).restartsAt valid history replay current.readPrefix.readsBounded
+    plan.layout plan.target plan.keeper plan.descriptors plan.offsets plan.prepared plan.selected reader
+  exact ⟨⟨reader.run, installed, installed, current.reads, reached.1⟩,
+    current.stopsAtCheckpointRunDirectory stop, ⟨rfl, reached⟩, rfl⟩
+
 end Alvoki.Storage.DiskSession

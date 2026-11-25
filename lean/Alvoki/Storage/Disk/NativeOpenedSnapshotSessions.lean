@@ -21,6 +21,7 @@ theorem NativeOpenedSessionTrace.executesSnapshotsAndRewrites
       | .quietRestart input => Nonempty (NativeQuietRestartReport reached input view names bytes)
       | .closeAndReopen input => Nonempty (NativeOpenedAlignedCloseReport reached.position input view)
       | .processExitAndReopen _ | .closeRetriesAndReopen _ _ | .checkpointRenameReboot _ | .stoppedCheckpointReboot _
+      | .stoppedCheckpointRunDirectoryReboot _
       | .uncertainWriteReboot _ _ | .uncertainWriteExitAndReopen _ _
       | .stoppedWalWriteReboot _ _ | .stoppedFirstAppendExit _ _
       | .stoppedFirstAppendExitRetries _ _ _ | .stoppedFirstAppendContendedRetries _ _ _ _ | .stoppedObsoleteRunUnlink _ _ => False) :
@@ -41,6 +42,7 @@ theorem NativeOpenedSessionTrace.executesSnapshotsAndRewrites
     obtain ⟨reported⟩ := seen
     exact ⟨.close input reported⟩
   | processExitAndReopen _ | closeRetriesAndReopen _ _ | checkpointRenameReboot _ | stoppedCheckpointReboot _
+  | stoppedCheckpointRunDirectoryReboot _
   | uncertainWriteReboot _ _ | uncertainWriteExitAndReopen _ _
   | stoppedWalWriteReboot _ _ | stoppedFirstAppendExit _ _
   | stoppedFirstAppendExitRetries _ _ _ | stoppedFirstAppendContendedRetries _ _ _ _ | stoppedObsoleteRunUnlink _ _ => exact False.elim seen
