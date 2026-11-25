@@ -432,6 +432,7 @@ lake env leanchecker Alvoki.Storage.Disk.ObservedBootstrapCache
 lake env leanchecker Alvoki.Storage.Disk.BootstrapZeroKeeperCustody
 lake env leanchecker Alvoki.Storage.Disk.BootstrapZeroCreateError
 lake env leanchecker Alvoki.Storage.Disk.BootstrapZeroCreateRetry
+lake env leanchecker Alvoki.Storage.Disk.BootstrapCreateErrorLineage
 lake env leanchecker Alvoki.Storage.Disk.BootstrapKeeperDirectoryError
 lake env leanchecker Alvoki.Storage.Disk.BootstrapKeeperFileError
 lake env leanchecker Alvoki.Storage.Disk.BootstrapMarkerCustody
