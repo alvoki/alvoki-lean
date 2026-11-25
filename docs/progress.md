@@ -867,6 +867,11 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+Interrupted publication reports require an unchanged physical marker
+when append or WAL fsync stops. Lean derives that a reported stop
+either leaves that marker untouched or follows a completed WAL fsync.
+Those local effects remain part of the filesystem contract.
+
 The interrupted writer report now uses the same arguments as the
 native publication schedule: the active segment pathname, encoded batch,
 selected marker offset and record, and one marker handle for the slot

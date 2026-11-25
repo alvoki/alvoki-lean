@@ -1870,9 +1870,10 @@ structure InterruptedBatchMarkerPublication (directory : DiskDirectory) (prior :
   cut :
     let active := directory.file (.walSegment prior.installed.activeFirst)
     let marker : KeeperDescriptorIdentity := ⟨markerDescription, initialMarker.active⟩
-    (append active (WAL.encode batch)).run (prior.files, initialMarker) = .error stopped reached ∨
+    ((append active (WAL.encode batch)).run (prior.files, initialMarker) = .error stopped reached ∧
+      reached.2 = initialMarker) ∨
     ∃ appended, (append active (WAL.encode batch)).run (prior.files, initialMarker) = .ok (.ok ()) appended ∧
-      ((syncWal active).run appended = .error stopped reached ∨
+      (((syncWal active).run appended = .error stopped reached ∧ reached.2 = initialMarker) ∨
         ∃ durable, (syncWal active).run appended = .ok (.ok ()) durable ∧
           ((writeSlot marker (next.slot * stride).toUInt64 next.encode).run durable = .error stopped reached ∨
             ∃ written, (writeSlot marker (next.slot * stride).toUInt64 next.encode).run durable = .ok (.ok ()) written ∧ (syncSlot marker).run written = .error stopped reached))
@@ -1902,13 +1903,29 @@ theorem InterruptedBatchMarkerPublication.stops
   let syncSlot := report.syncSlot report.markerHandle
   let install := report.install report.markerHandle next
   apply runBatchWriteWithInterruption_stopped report.nonempty report.prepared report.fits report.guard
-  rcases report.cut with appendCut | ⟨_, wrote, walCut | ⟨_, walBarrier, slotCut | ⟨_, slot, syncCut⟩⟩⟩
+  rcases report.cut with ⟨appendCut, _⟩ | ⟨_, wrote, ⟨walCut, _⟩ | ⟨_, walBarrier, slotCut | ⟨_, slot, syncCut⟩⟩⟩
   · exact publish_appendInterrupted append syncWal writeSlot syncSlot install appendCut
   · exact publish_walSyncInterrupted append syncWal writeSlot syncSlot install wrote walCut
   · exact publish_slotWriteInterrupted append syncWal writeSlot syncSlot install
       wrote walBarrier slotCut
   · exact publish_markerSyncInterrupted append syncWal writeSlot syncSlot install
       wrote walBarrier slot syncCut
+
+/-- If the writer stops before the slot write, the report preserves the
+previous physical marker. The later cases require the completed WAL sync. -/
+theorem InterruptedBatchMarkerPublication.markerUnchangedOrWalSynced
+    {directory : DiskDirectory} {prior : SegmentedWriterState} {batch : List WAL.Write}
+    {next : Selection} {reached : FileImage × WalInodeImage}
+    (report : InterruptedBatchMarkerPublication directory prior batch next reached) :
+    reached.2 = report.initialMarker ∨
+      ∃ appended durable,
+        let active := directory.file (.walSegment prior.installed.activeFirst)
+        (report.append active (WAL.encode batch)).run (prior.files, report.initialMarker) = .ok (.ok ()) appended ∧
+          (report.syncWal active).run appended = .ok (.ok ()) durable := by
+  rcases report.cut with ⟨_, unchanged⟩ | ⟨appended, wrote, ⟨_, unchanged⟩ | ⟨durable, synced, _⟩⟩
+  · exact .inl unchanged
+  · exact .inl unchanged
+  · exact .inr ⟨appended, durable, wrote, synced⟩
 
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
