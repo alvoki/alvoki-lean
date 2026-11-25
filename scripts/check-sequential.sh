@@ -150,6 +150,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeReadyWalCollection
 lake env leanchecker Alvoki.Storage.Disk.NativeWalPlanningQuery
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunCollection
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
+lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWalCollectionError
 lake env leanchecker Alvoki.Storage.Disk.NativeCollectionErrorReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyClose

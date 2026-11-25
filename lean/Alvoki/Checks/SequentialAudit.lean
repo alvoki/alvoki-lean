@@ -239,6 +239,7 @@ import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeObsoleteRunCollection
 import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
+import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeReadyClose
@@ -1537,7 +1538,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsCustody
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsLock
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectsCoveredWal
-#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPass.plans
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPlan.plans
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPass.barrierCensus
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPass.syncs
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunCollection.returns
@@ -1555,6 +1556,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunBarrierError.obsoleteVisible
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reachesObsoleteRunBarrierError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.retriesObsoleteRunBarrierError
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.selected
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.custody
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.namespaceAtCut
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.preservesReady
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkError.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reachesObsoleteRunUnlinkError
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkStop.stops
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsDuringObsoleteRunUnlink
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectionBarrierFailed
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.releasedVacant
 #check_axioms Alvoki.Storage.DiskSession.NativeCollectionCloseFiles.lock
