@@ -14,21 +14,21 @@ structure NativeExecutionPosition where
 
 inductive NativeExecutionEvent where
   | readOrRestart (event : NativeReadRecoveryEvent)
-  | acknowledged (batch : List WAL.Write)
+  | acknowledged (request : WriteRequest) (batch : List WAL.Write)
 
 namespace NativeExecutionEvent
 
 def writes : NativeExecutionEvent → List WAL.Write
   | .readOrRestart _ => []
-  | .acknowledged batch => batch
+  | .acknowledged _ batch => batch
 
 def submissions : NativeExecutionEvent → List DatabaseSubmissions
   | .readOrRestart _ => []
-  | .acknowledged batch => [.acknowledgedBatch batch]
+  | .acknowledged _ batch => [.acknowledgedBatch batch]
 
 def reads : NativeExecutionEvent → List RecordedSnapshotRead
   | .readOrRestart event => event.responses
-  | .acknowledged _ => []
+  | .acknowledged _ _ => []
 
 end NativeExecutionEvent
 
@@ -51,7 +51,7 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (initial : next.initial = observed.next target)
       (seed : next.opened = .ok next.state.session (next.state.census, next.state.files))
       (earlier : next.reads = current.ready.reads) :
-      NativeExecutionStep current (.acknowledged prepared.batch)
+      NativeExecutionStep current (.acknowledged request prepared.batch)
         ⟨current.history ++ prepared.batch, current.submissions ++ [.acknowledgedBatch prepared.batch], next⟩
 
 /-- Interpret the submitted single or batch write with the reported
@@ -59,7 +59,7 @@ primitive effects and start the next position from its actual result. -/
 theorem NativeExecutionPosition.acknowledges (current : NativeExecutionPosition)
     {prepared : NativeReadyWritePreparation current.ready.state} (observed : NativeReadyWriteReport prepared)
     (request : WriteRequest) (rows : request.rows = prepared.rows) :
-    ∃ next, NativeExecutionStep current (.acknowledged prepared.batch) next := by
+    ∃ next, NativeExecutionStep current (.acknowledged request prepared.batch) next := by
   obtain ⟨target, next, returned, reached, initial, reads, opened, _⟩ :=
     current.ready.acknowledgesWrite observed request rows
   exact ⟨_, .acknowledged current observed request rows target next returned reached initial
@@ -112,6 +112,26 @@ theorem NativeExecutionTrace.keyValueRefinement (observed : NativeExecutionTrace
   obtain ⟨writes, submissions, reads⟩ := observed.ledgers
   exact ⟨writes, submissions, reads, last.ready.readPrefix.guardedReplay⟩
 
+inductive NativeExecutionInstruction : Type 1 where
+  | snapshot (sequence : UInt64) (request : SnapshotReadRequest α)
+  | write (request : WriteRequest)
+  | restart (input : FilePath)
+
+/-- The recorded event belongs to the submitted instruction. Read
+observations determine the requested key or range and sequence. -/
+def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeExecutionEvent → Prop
+  | .snapshot sequence request, .readOrRestart (.read recorded) =>
+    ∃ response, recorded = request.record sequence response
+  | .write request, .acknowledged submitted _ => submitted = request
+  | .restart input, .readOrRestart (.restart resolvedInput) => resolvedInput = input
+  | _, _ => False
+
+inductive NativeExecutionInstructions : List NativeExecutionInstruction → List NativeExecutionEvent → Prop where
+  | empty : NativeExecutionInstructions [] []
+  | step (prior : NativeExecutionInstructions instructions events)
+      (matched : instruction.Matches event) :
+      NativeExecutionInstructions (instructions ++ [instruction]) (events ++ [event])
+
 /-- Reports for the next supported native operation. Each constructor
 supplies local observations at the reached state. The returned session,
 writer and client replay are derived by the corresponding step. -/
@@ -128,42 +148,58 @@ inductive NativeExecutionObservation (state : NativeReadyState) : Type 1 where
           crash.retry.image.directory.active.manifest state.writer.checkpoint,
         Nonempty (NativeReadyRestartReads crash input layout selected))
 
+def NativeExecutionObservation.instruction : NativeExecutionObservation state → NativeExecutionInstruction
+  | .snapshot sequence request _ _ => .snapshot sequence request
+  | .write _ _ request _ => .write request
+  | .restart _ input _ => .restart input
+
 theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     (observed : NativeExecutionObservation current.ready.state) :
-    ∃ event next, NativeExecutionStep current event next := by
+    ∃ event next, NativeExecutionStep current event next ∧ observed.instruction.Matches event := by
   cases observed with
   | snapshot sequence request floor committed =>
-    obtain ⟨_, _, step⟩ := current.ready.readAt sequence floor committed request
-    exact ⟨_, _, .readOrRestart current step⟩
+    obtain ⟨_, response, step⟩ := current.ready.readAt sequence floor committed request
+    exact ⟨_, _, .readOrRestart current step, ⟨response, rfl⟩⟩
   | write _ observed request rows =>
     obtain ⟨_, step⟩ := current.acknowledges observed request rows
-    exact ⟨_, _, step⟩
+    exact ⟨_, _, step, rfl⟩
   | restart crash _ observe =>
     obtain ⟨_, step⟩ := current.ready.restart crash observe
-    exact ⟨_, _, .readOrRestart current step⟩
+    exact ⟨_, _, .readOrRestart current step, rfl⟩
 
-/-- Given one observation packet at each reached prefix, derive the
-entire finite trace and the final replay without supplying any of its
-intermediate ready endpoints in advance. -/
-theorem NativeExecutionTrace.executes (start : NativeExecutionPosition) (count : Nat)
-    (observe : ∀ events current, NativeExecutionTrace start events current →
-      events.length < count → Nonempty (NativeExecutionObservation current.ready.state)) :
-    ∃ events last, events.length = count ∧ NativeExecutionTrace start events last ∧
+/-- Supply the primitive reports for the next prescribed instruction
+at its reached state. The whole trace and its endpoint are derived from
+those reports, in the order of the original instruction list. -/
+def NativeExecutionTrace.Reports (start : NativeExecutionPosition)
+    (instructions : List NativeExecutionInstruction) : Prop :=
+  ∀ issued events current instruction remaining,
+    instructions = issued ++ instruction :: remaining →
+    NativeExecutionTrace start events current → NativeExecutionInstructions issued events →
+    ∃ observed : NativeExecutionObservation current.ready.state, observed.instruction = instruction
+
+theorem NativeExecutionTrace.executes (start : NativeExecutionPosition)
+    (instructions : List NativeExecutionInstruction) (observe : NativeExecutionTrace.Reports start instructions) :
+    ∃ events last, NativeExecutionInstructions instructions events ∧ NativeExecutionTrace start events last ∧
       InstalledClientReplay last.submissions last.ready.reads last.history
         last.ready.state.writer.installed last.ready.state.session := by
-  have reaches (length : Nat) : length ≤ count → ∃ events current,
-      events.length = length ∧ NativeExecutionTrace start events current := by
-    induction length with
-    | zero => exact fun _ => ⟨[], start, rfl, .empty⟩
-    | succ priorLength ih =>
-      intro within
-      obtain ⟨events, current, counted, earlier⟩ := ih (by omega)
-      have room : events.length < count := by omega
-      obtain ⟨reported⟩ := observe events current earlier room
-      obtain ⟨event, after, reached⟩ := current.observesStep reported
-      exact ⟨events ++ [event], after, by simp [counted], .step earlier reached⟩
-  obtain ⟨events, last, counted, trace⟩ := reaches count (Nat.le_refl _)
-  exact ⟨events, last, counted, trace, trace.keyValueRefinement.2.2.2⟩
+  have finishes (remaining : List NativeExecutionInstruction) : ∀ issued events current,
+      instructions = issued ++ remaining →
+      NativeExecutionTrace start events current → NativeExecutionInstructions issued events →
+      ∃ events last, NativeExecutionInstructions instructions events ∧ NativeExecutionTrace start events last := by
+    induction remaining with
+    | nil =>
+      intro issued events current scheduled trace matched
+      exact ⟨events, current, by simpa [scheduled] using matched, trace⟩
+    | cons instruction remaining ih =>
+      intro issued events current scheduled trace matched
+      obtain ⟨reported, requested⟩ := observe issued events current instruction remaining scheduled trace matched
+      obtain ⟨event, after, step, same⟩ := current.observesStep reported
+      have scheduleNext : instructions = (issued ++ [instruction]) ++ remaining := by
+        simpa [List.append_assoc] using scheduled
+      exact ih (issued ++ [instruction]) (events ++ [event]) after scheduleNext (.step trace step)
+        (.step matched (requested ▸ same))
+  obtain ⟨events, last, matched, trace⟩ := finishes instructions [] [] start (by simp) .empty .empty
+  exact ⟨events, last, matched, trace, trace.keyValueRefinement.2.2.2⟩
 
 private abbrev BootstrapHandle := DescriptorInventory × DescriptorSlot × Nat
 
@@ -183,9 +219,8 @@ theorem BootstrapKeeperMarkerHandoff.executesFromEmpty
       calls.run admission = .ok start.ready.state.session boot.final ∧
       start.ready.state.session = boot.session ∧
       start.ready.state.writer = boot.writer ∧ start.ready.state.census = effects.reached ∧
-      ∀ count, (∀ events current, NativeExecutionTrace start events current →
-          events.length < count → Nonempty (NativeExecutionObservation current.ready.state)) →
-        ∃ events last, events.length = count ∧ NativeExecutionTrace start events last ∧
+      ∀ instructions, NativeExecutionTrace.Reports start instructions →
+        ∃ events last, NativeExecutionInstructions instructions events ∧ NativeExecutionTrace start events last ∧
           last.history = events.flatMap NativeExecutionEvent.writes ∧
           last.submissions = events.flatMap NativeExecutionEvent.submissions ∧
           last.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
@@ -198,10 +233,10 @@ theorem BootstrapKeeperMarkerHandoff.executesFromEmpty
   let start : NativeExecutionPosition :=
     ⟨[], [], ⟨.ok state.session (state.census, state.files), state, state, [], ready⟩⟩
   refine ⟨boot, start, returned, rfl, rfl, rfl, ?_⟩
-  intro count observe
-  obtain ⟨events, last, counted, trace, replay⟩ := NativeExecutionTrace.executes start count observe
+  intro instructions observe
+  obtain ⟨events, last, matched, trace, replay⟩ := NativeExecutionTrace.executes start instructions observe
   obtain ⟨writes, submissions, reads⟩ := trace.ledgers
-  exact ⟨events, last, counted, trace, by simpa [start] using writes, by simpa [start] using submissions,
+  exact ⟨events, last, matched, trace, by simpa [start] using writes, by simpa [start] using submissions,
     by simpa [start] using reads, replay⟩
 
 end Alvoki.Storage.DiskSession

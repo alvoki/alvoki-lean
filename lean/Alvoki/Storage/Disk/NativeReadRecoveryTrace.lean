@@ -7,8 +7,9 @@ open System WalSegmentRepair
 open Sequential (SnapshotPin)
 open scoped List
 
-/-- The exact open that started the current session and its reached read
-prefix. The acknowledged history stays fixed throughout this trace. -/
+/-- The normalized state from a successful open or acknowledged write,
+with the reads since that state. The committed history stays fixed
+through this local read prefix. -/
 structure NativeReadPosition (history : List WAL.Write) (log : List DatabaseSubmissions) where
   opened : EStateM.Result IO.Error CensusOpenState SegmentedSession
   initial : NativeReadyState
@@ -34,11 +35,11 @@ end NativeReadPosition
 
 inductive NativeReadRecoveryEvent where
   | read (response : RecordedSnapshotRead)
-  | restart
+  | restart (input : FilePath)
 
 def NativeReadRecoveryEvent.responses : NativeReadRecoveryEvent → List RecordedSnapshotRead
   | .read response => [response]
-  | .restart => []
+  | .restart _ => []
 
 /-- The directory, lock object and selected checkpoint stay fixed
 through local reads and each admitted quiet restart. -/
@@ -85,7 +86,7 @@ inductive NativeReadRecoveryStep : NativeReadPosition history log → NativeRead
       (sessionRef : next.session.sessionRef ≠ current.state.session.sessionRef)
       (phaseRef : next.session.phaseRef ≠ current.state.session.phaseRef)
       (frame : NativeReadRecoveryFrame current.state next) :
-      NativeReadRecoveryStep current .restart (current.afterRestart observed.run next readPrefix)
+      NativeReadRecoveryStep current (.restart input) (current.afterRestart observed.run next readPrefix)
 
 /-- The next supported acquisition and read derive an actual result and
 extend the reached ready prefix. -/
@@ -108,7 +109,7 @@ theorem NativeReadPosition.restart (current : NativeReadPosition history log) (c
       ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
         crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
       Nonempty (NativeReadyRestartReads crash input layout selected)) :
-    ∃ next, NativeReadRecoveryStep current .restart next := by
+    ∃ next, NativeReadRecoveryStep current (.restart input) next := by
   obtain ⟨lost, _, layout, selected, observed, next, readPrefix, directory, owner, directorySlot, cache, census,
     sessionRef, phaseRef, lockObject, directoryObject, _, target, checkpoint, durable, _⟩ :=
     current.readPrefix.restartsAfterPowerLoss crash observe
