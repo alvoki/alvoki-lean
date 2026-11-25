@@ -189,6 +189,7 @@ import Alvoki.Storage.Disk.ListedDirectoryAuthorization
 import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
 import Alvoki.Storage.Disk.ListedStagedKeeperRepair
+import Alvoki.Storage.Disk.ListedAlignedKeeperFailure
 import Alvoki.Storage.Disk.HeldMetadataReadObservations
 import Alvoki.Storage.Disk.HeldWalPayloadObservations
 import Alvoki.Storage.Disk.HeldWalInstallation
@@ -1388,6 +1389,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.keeperBarriers
 #check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.syncResult
 #check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.finishResult
+#check_axioms Alvoki.Storage.DiskSession.CachedOpenAttempt.run_repairError
+#check_axioms Alvoki.Storage.DiskSession.MarkedRetryChunkOperations.runWithAdmission_eq_cached
+#check_axioms Alvoki.Storage.DiskSession.HeldMarkedMetadata.cachedAttemptPrepared
+#check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.effects
+#check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.syncError
+#check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.continuesAfterError
 #check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.installs
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperPrune.pruneCustody
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperPrune.barriers

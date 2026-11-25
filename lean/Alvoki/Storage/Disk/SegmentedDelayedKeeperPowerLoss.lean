@@ -93,6 +93,9 @@ private theorem continuesAuthorized {initial final : LockedFileState FileImage} 
     exact continueFailure ih (attempt.errorFiles acquisition reports ran)
   | cachedRejected _ _ ih => exact ih
   | cachedAuthorizationFailed _ failure admitted ih => exact continueFailure ih (failure.errorFiles admitted)
+  | cachedRepairFailed _ attempt admitted prepared effects _ ih =>
+    exact continueFailure ih (.inr ⟨_, _, admitted, prepared, by
+      simpa only [CachedOpenAttempt.cleanupError_keepsFiles] using effects⟩)
   | referenceDrops _ _ _ ih => exact ih
   | powerLoss _ metadata keeper later ih => exact .crash ih metadata keeper later
 

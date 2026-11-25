@@ -12,7 +12,7 @@ variable {directory : DiskDirectory} {before : LockedFileState FileImage} {histo
   {published : CheckpointPublication.Image}
   {report : HeldDirectoryMarkedRetryReports operations published}
 
-private def MarkedRetryChunkOperations.cachedAttempt
+def MarkedRetryChunkOperations.cachedAttempt
     (operations : MarkedRetryChunkOperations files directory layout) (localUnlock : operations.unlock.LocalFlock) :
     CachedOpenAttempt directory before :=
   operations.reported.withReaders (m := EStateM IO.Error FileImage) operations.reads.readPrefix
@@ -34,7 +34,7 @@ private def MarkedRetryChunkOperations.cachedAttempt
         sync := operations.sync operations.cache
         renameFile := operations.renameFile }
 
-private theorem MarkedRetryChunkOperations.runWithAdmission_eq_cached
+theorem MarkedRetryChunkOperations.runWithAdmission_eq_cached
     (operations : MarkedRetryChunkOperations files directory layout) {input : FilePath}
     (admission : OpenAdmissionReports input directory operations.slot) (localUnlock : operations.unlock.LocalFlock)
     (markerPresent : operations.MarkerPresent) :
@@ -42,6 +42,31 @@ private theorem MarkedRetryChunkOperations.runWithAdmission_eq_cached
   rw [operations.runWithAdmission_eq admission, operations.run_selectsMarked markerPresent]
   simp only [MarkedRetryChunkOperations.markedAt, operations.keeperReads]
   rfl
+
+/-- Exact checkpoint and marker reads from the held directory supply the
+cached attempt's checked preparation without modifying the file image. -/
+theorem HeldMarkedMetadata.cachedAttemptPrepared (metadata : HeldMarkedMetadata report)
+    (localUnlock : operations.unlock.LocalFlock)
+    (laterValid : before.image.later.Beyond layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      before.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ opened, (operations.cachedAttempt localUnlock).prepare before.image =
+      .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) before.image := by
+  obtain ⟨watermark, _, _, count, _, _, absolute⟩ := DirectoryPublication.Bindings.walRange_accounting layout.decoded
+  have byteCount : (WAL.encode history).size = count.toNat := by
+    rw [absolute, layout.through, WAL.encode_size, Nat.mul_comm]
+  obtain ⟨checkpoint, _, _, selected, _, _, _, _, _, _⟩ :=
+    selectedCheckpoint_replays watermark accepted (byteCount ▸ count.toNat_lt_size) ordered
+  let sizes := SizedCheckpointRunReports.ofChunkReads (checkpoint := checkpoint) selected operations.reads
+    operations.metadata report.chunkReads
+  have reads := metadata.callbackMetadata
+  obtain ⟨opened, _, _, prepared, _⟩ :=
+    operations.reported.prepares before.image laterValid following accepted ordered sizes reads.manifestRead
+      reads.markerRead
+  exact ⟨opened, prepared⟩
 
 namespace ListedDirectoryAuthorization
 
@@ -75,26 +100,14 @@ theorem continuesAfterError {input : FilePath} {source : LockedFileState FileIma
       | .errorAfterEffect cause =>
         failure.cause = IO.userError s!"sync failed for '{directory.path}': {cause}" ∧
         failure.after.image = before.image.syncDirectory) := by
-  obtain ⟨watermark, _, _, count, _, _, absolute⟩ := DirectoryPublication.Bindings.walRange_accounting layout.decoded
-  have byteCount : (WAL.encode history).size = count.toNat := by
-    rw [absolute, layout.through, WAL.encode_size, Nat.mul_comm]
-  obtain ⟨checkpoint, _, _, selected, _, _, _, _, _, _⟩ :=
-    selectedCheckpoint_replays watermark accepted (byteCount ▸ count.toNat_lt_size) ordered
-  let sizes := SizedCheckpointRunReports.ofChunkReads (checkpoint := checkpoint) selected operations.reads
-    operations.metadata report.chunkReads
-  have reads := metadata.callbackMetadata
-  obtain ⟨opened, _, _, prepared, _⟩ :=
-    operations.reported.prepares before.image laterValid following accepted ordered sizes reads.manifestRead
-      reads.markerRead
   let attempt := operations.cachedAttempt localUnlock
-  have preparedRead : attempt.prepare before.image = .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size)
-      before.image := prepared
+  obtain ⟨opened, preparedRead⟩ := metadata.cachedAttemptPrepared localUnlock laterValid following accepted ordered
   rw [layout.boundedPlan_eq_extract] at preparedRead
   have valid : Prepared before.image layout.target layout.plan :=
     ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
   have cleanup {cause : IO.Error} {reached : FileImage}
       (edge : attempt.sync #[directory.path] before.image = .error cause reached)
-      (metadata : reached = before.image ∨ reached = before.image.syncDirectory) :
+      (timing : reached = before.image ∨ reached = before.image.syncDirectory) :
       ∃ failure : CachedOpenAuthorizationFailure directory before,
         operations.runWithAdmission admission = .error failure.error failure.after ∧
         failure.attempt.descriptor = operations.slot.description ∧ failure.attempt.unlock = operations.unlock ∧
@@ -103,10 +116,10 @@ theorem continuesAfterError {input : FilePath} {source : LockedFileState FileIma
     have reported : MetadataReport before.image (attempt.sync #[directory.path]) := by
       unfold MetadataReport
       rw [edge]
-      exact metadata
+      exact timing
     let failure : CachedOpenAuthorizationFailure directory before :=
       ⟨attempt, layout.target, layout.plan, opened, valid, preparedRead, cause, reached, edge, reported⟩
-    exact ⟨failure, (operations.runWithAdmission_eq_cached admission localUnlock reads.markerPresent).trans failure.run_error,
+    exact ⟨failure, (operations.runWithAdmission_eq_cached admission localUnlock metadata.callbackMetadata.markerPresent).trans failure.run_error,
       rfl, rfl, .cachedAuthorizationFailed prior failure admitted, rfl, attempt.cleanupError_keepsFiles cause reached⟩
   have sync := observed.syncResult
   change attempt.sync #[directory.path] before.image = _ at sync

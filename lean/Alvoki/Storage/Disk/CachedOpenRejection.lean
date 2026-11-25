@@ -70,6 +70,18 @@ theorem run_error (attempt : CachedOpenAttempt directory before) {cause : IO.Err
       simpa [UnlockReport.LocalFlock, observed] using attempt.localUnlock
     simp [cleanupError, observed, retained]
 
+/-- A reached error from the bounded finisher takes the ordinary cached
+cleanup path after this attempt's exact preparation. -/
+theorem run_repairError (attempt : CachedOpenAttempt directory before)
+    {plan : Plan} {opened : Reopened} {physicalSize : Nat} {cause : IO.Error} {reached : FileImage}
+    (prepared : attempt.prepare before.image = .ok (plan, opened, physicalSize) before.image)
+    (failed : finishBoundedMarkedOpen directory plan physicalSize
+      attempt.removeFile attempt.write attempt.sync attempt.renameFile before.image = .error cause reached) :
+    attempt.run = .error (attempt.cleanupError cause reached).1 (attempt.cleanupError cause reached).2 := by
+  apply attempt.run_error
+  change (attempt.prepare >>= _) before.image = _
+  simp only [Bind.bind, EStateM.bind, prepared, failed]
+
 /-- Acquire again immediately when local cleanup succeeds. An unlock
 error leaves the original open description responsible for the lock. -/
 theorem immediateReacquire (attempt : CachedOpenAttempt directory before) (cause : IO.Error) (reached : FileImage) :
@@ -156,11 +168,9 @@ def error (failure : CachedOpenAuthorizationFailure directory before) : IO.Error
 
 theorem run_error (failure : CachedOpenAuthorizationFailure directory before) :
     failure.attempt.run = .error failure.error failure.after := by
-  apply failure.attempt.run_error
-  have stopped := finishBoundedMarkedOpen_authorizationError directory failure.full failure.prepared.valid
-    failure.attempt.removeFile failure.attempt.write failure.attempt.sync failure.attempt.renameFile failure.failed
-  change (failure.attempt.prepare >>= _) before.image = _
-  simp only [Bind.bind, EStateM.bind, failure.preparedRead, stopped]
+  exact failure.attempt.run_repairError failure.preparedRead
+    (finishBoundedMarkedOpen_authorizationError directory failure.full failure.prepared.valid
+      failure.attempt.removeFile failure.attempt.write failure.attempt.sync failure.attempt.renameFile failure.failed)
 
 theorem imageOutcome (failure : CachedOpenAuthorizationFailure directory before) :
     failure.after.image = before.image ∨ failure.after.image = before.image.syncDirectory := by

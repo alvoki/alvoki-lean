@@ -217,20 +217,52 @@ theorem syncResult (repair : ListedAlignedKeeperRepair authorization) :
   generalize repair.effective = effective at outcome ⊢
   cases outcome <;> rfl
 
+/-- An error from the retained keeper description is the same error
+reported by the second grouped callback, with the reached file image. -/
+theorem syncError (repair : ListedAlignedKeeperRepair authorization) {cause : IO.Error}
+    {nativeReached : LockedFileState FileImage}
+    (failed : authorization.fsync (authorization.keeper.inventory, authorization.keeper.slot, 0)
+      (authorizeFiles (acquiredState before directory operations.slot)) = .error cause nativeReached) :
+    let path := directory.file (.walSegment layout.keeper.first)
+    operations.sync operations.cache #[path] before.image.syncDirectory =
+      .error (IO.userError s!"sync failed for '{path}': {cause}")
+        (if repair.effective then before.image.syncDirectory.syncKeeper else before.image.syncDirectory) := by
+  have result := repair.syncResult
+  dsimp only at result
+  rw [failed] at result
+  exact result
+
+private theorem tailEmpty (repair : ListedAlignedKeeperRepair authorization) : layout.tail = ByteArray.empty := by
+  have measured := repair.aligned.trans authorization.keeper.extent
+  rw [ByteArray.size_append] at measured
+  exact ByteArray.size_eq_zero_iff.mp (by omega)
+
 private theorem hasAlignedPlan (repair : ListedAlignedKeeperRepair authorization) :
     layout.plan.alignedWithoutPrune = true := by
   have size : layout.keeper.bytes.size = layout.plan.keeperSize := layout.target.trimmedSize
-  have tailEmpty : layout.tail = ByteArray.empty := by
-    have measured := repair.aligned.trans authorization.keeper.extent
-    rw [ByteArray.size_append] at measured
-    exact ByteArray.size_eq_zero_iff.mp (by omega)
   have planSize : layout.plan.keeperBytes.size = layout.plan.keeperSize := by
-    simpa [CanonicalKeeperLayout.plan, tailEmpty] using size
+    simpa [CanonicalKeeperLayout.plan, repair.tailEmpty] using size
   have covers : layout.plan.keeper ≤ layout.plan.through := layout.target.firstCovered
   have valid : layout.plan.valid = true :=
     (Plan.valid_iff layout.plan).mpr ⟨covers, Nat.le_of_eq planSize.symm, by simp [CanonicalKeeperLayout.plan, repair.noLater]⟩
   have newer : layout.plan.newer = [] := repair.noLater
   simp [Plan.alignedWithoutPrune, valid, newer, planSize]
+
+/-- Both keeper error timings come after successful directory settlement.
+Only an effective keeper sync settles the exact keeper bytes. -/
+theorem effects (repair : ListedAlignedKeeperRepair authorization) :
+    EffectTrace layout.target before.image
+      (if repair.effective then before.image.syncDirectory.syncKeeper else before.image.syncDirectory) := by
+  by_cases effective : repair.effective = true
+  · have empty : before.image.syncDirectory.later.DurablyEmpty := by
+      simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.DurablyEmpty, LaterNames.settled, repair.noLater]
+    have visible : before.image.syncDirectory.keeper.active = some layout.target.trimmed := by
+      change before.image.keeper.active = some layout.keeper.bytes
+      simpa only [repair.tailEmpty, ByteArray.append_empty] using layout.visible
+    rw [ite_eq_left effective]
+    exact EffectTrace.aligned .authorized empty visible
+  · rw [ite_eq_right effective]
+    exact EffectTrace.authorized
 
 /-- The exact aligned finisher returns the later grouped outcome after
 the authorized state, including errors that already settled the keeper. -/

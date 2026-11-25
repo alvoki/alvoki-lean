@@ -198,6 +198,11 @@ inductive BoundedReopenTrace (directory : DiskDirectory) (admits : Target → Pr
   | cachedAuthorizationFailed {before} (prior : BoundedReopenTrace directory admits initial before)
       (failure : CachedOpenAuthorizationFailure directory before) (admitted : admits failure.target) :
       BoundedReopenTrace directory admits initial failure.after
+  | cachedRepairFailed {before target plan cause reached} (prior : BoundedReopenTrace directory admits initial before)
+      (attempt : CachedOpenAttempt directory before) (admitted : admits target)
+      (prepared : Prepared before.image target plan) (effects : EffectTrace target before.image reached)
+      (ran : attempt.run = .error (attempt.cleanupError cause reached).1 (attempt.cleanupError cause reached).2) :
+      BoundedReopenTrace directory admits initial (attempt.cleanupError cause reached).2
   | referenceDrops {before description} (prior : BoundedReopenTrace directory admits initial before)
       (references : HeldLockReferences description) (drops : List LockReferenceDrop) :
       BoundedReopenTrace directory admits initial (references.afterFileDrops drops directory before)
@@ -267,6 +272,8 @@ theorem BoundedReopenTrace.trans {directory admits initial middle after}
   | failed _ attempt acquisition unlock reports ran ih => exact .failed ih attempt acquisition unlock reports ran
   | cachedRejected _ rejection ih => exact .cachedRejected ih rejection
   | cachedAuthorizationFailed _ failure admitted ih => exact .cachedAuthorizationFailed ih failure admitted
+  | cachedRepairFailed _ attempt admitted prepared effects ran ih =>
+    exact .cachedRepairFailed ih attempt admitted prepared effects ran
   | referenceDrops _ references drops ih => exact .referenceDrops ih references drops
   | powerLoss _ metadata keeper names ih => exact .powerLoss ih metadata keeper names
 
@@ -283,6 +290,9 @@ theorem BoundedReopenTrace.continuesLineage {directory : DiskDirectory} {admits 
     exact ih.afterFailure unique (attempt.errorFiles acquisition reports ran)
   | cachedRejected _ _ ih => exact ih
   | cachedAuthorizationFailed _ failure admitted ih => exact ih.afterFailure unique (failure.errorFiles admitted)
+  | cachedRepairFailed _ attempt admitted prepared effects _ ih =>
+    apply ih.afterFailure unique
+    exact Or.inr ⟨_, _, admitted, prepared, by simpa only [CachedOpenAttempt.cleanupError_keepsFiles] using effects⟩
   | referenceDrops _ _ _ ih => exact ih
   | powerLoss _ metadata keeper later ih => exact ih.afterPowerLoss metadata keeper later
 
