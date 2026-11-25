@@ -178,6 +178,7 @@ import Alvoki.Storage.Disk.SegmentedRunRetentionReopen
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
+import Alvoki.Storage.Disk.SelectedRecoveryPayload
 import Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
@@ -1226,6 +1227,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.powerLossCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.delayedKeeperPowerLossCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.collectedWalPayload
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.selectedRecoveryPayload
 #check_axioms Alvoki.Storage.WalSegmentRepair.ReopenLineage.reopensRetainedAppendWith
 #check_axioms Alvoki.Storage.WalSegmentRepair.ReopenLineage.reopensRetainedAppend
 #check_axioms Alvoki.Storage.DiskSession.SegmentedMarkerPowerLossReport.installsRetainedCached
