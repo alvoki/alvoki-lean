@@ -311,6 +311,45 @@ theorem walCollectionOffsetsFromExtents_approved {wal : WalSegmentImage} {histor
   subst pair
   exact ⟨range, decoded, eligible.2.2⟩
 
+/-- Given all the ordered starts, only guarded metadata and exact lengths
+of sealed files are needed to derive the complete unlink selector. -/
+theorem OpenPathReadReports.walCollectionOffsets_of_layout (reports : OpenPathReadReports)
+    (directory : DiskDirectory) {wal : WalSegmentImage} {history : List WAL.Write}
+    (layout : wal.ReadLayout history) {pair : DirectoryPublication.Bindings}
+    (visible : wal.directory.active = pair) (settled : wal.directory.crashImages = [pair])
+    {range : MarkedWalRange} (decoded : pair.walRange = some range)
+    (regular : ∀ first ∈ wal.segments.map WalSegment.first, ∃ metadata,
+      reports.lstat (directory.file (.walSegment first)) = .ok metadata ∧
+        metadata.type = .file ∧ metadata.numLinks = 1)
+    (physical : ∀ segment ∈ wal.sealed, ∀ metadata,
+      reports.lstat (directory.file (.walSegment segment.first)) = .ok metadata →
+        metadata.byteSize.toNat = segment.bytes.size)
+    (spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * frameSize) :
+    reports.walCollectionOffsets directory (wal.segments.map WalSegment.first) wal.active.first pair =
+      wal.collectionOffsets := by
+  have test (segment : WalSegment) (member : segment ∈ wal.sealed) :
+      (if segment.first = wal.active.first then false
+       else match reports.lstat (directory.file (.walSegment segment.first)) with
+         | .ok metadata => (walCollectionEnd segment.first wal.active.first range metadata).isSome
+         | .error _ => false) = wal.canRemove segment := by
+    have ordered := List.pairwise_append.mp layout.ordered
+    have before := ordered.2.2 segment member _ List.mem_cons_self
+    have present := List.mem_map_of_mem (f := WalSegment.first) (List.mem_append_left [wal.active] member)
+    obtain ⟨metadata, observed, kind, links⟩ := regular segment.first present
+    have forward := layout.forward segment (List.mem_append_left _ member)
+    have extent := (physical segment member metadata observed).trans (spans segment member)
+    have permitted := walCollectionEnd_isSome forward kind links extent (keeper := wal.active.first) (range := range)
+    simp [Nat.ne_of_lt before.1, observed, permitted, WalSegmentImage.canRemove, visible, settled, decoded,
+      Bool.and_assoc]
+  unfold OpenPathReadReports.walCollectionOffsets WalSegmentImage.collectionOffsets
+  rw [decoded]
+  simp only [WalSegmentImage.segments, List.map_append, List.map_cons, List.map_nil,
+    List.filter_append, List.filter_cons, Bool.false_eq_true, ↓reduceIte, List.filter_nil,
+    List.append_nil]
+  rw [List.filter_map]
+  congr 1
+  exact List.filter_congr test
+
 namespace WalSegmentRepair
 
 /-- A complete held inventory, with true physical sizes for the exact
@@ -329,29 +368,8 @@ theorem HealthyBoundedWalReports.collectionOffsets_exact {directory owners descr
         (fun offsets => raw.reports.walCollectionOffsets directory offsets wal.active.first pair) =
       .ok wal.collectionOffsets := by
   rw [raw.scan layout]
-  simp only [Except.map, Except.ok.injEq]
-  have test (segment : WalSegment) (member : segment ∈ wal.sealed) :
-      (if segment.first = wal.active.first then false
-       else match raw.reports.lstat (directory.file (.walSegment segment.first)) with
-         | .ok metadata => (walCollectionEnd segment.first wal.active.first range metadata).isSome
-         | .error _ => false) = wal.canRemove segment := by
-    have ordered := List.pairwise_append.mp layout.ordered
-    have before := ordered.2.2 segment member _ List.mem_cons_self
-    have present := List.mem_map_of_mem (f := WalSegment.first) (List.mem_append_left [wal.active] member)
-    obtain ⟨metadata, observed, kind, links⟩ := raw.regular segment.first present
-    have forward := layout.forward segment (List.mem_append_left _ member)
-    have extent := (physical segment member metadata observed).trans (spans segment member)
-    have permitted := walCollectionEnd_isSome forward kind links extent (keeper := wal.active.first) (range := range)
-    simp [Nat.ne_of_lt before.1, observed, permitted, WalSegmentImage.canRemove, visible, settled, decoded,
-      Bool.and_assoc]
-  unfold OpenPathReadReports.walCollectionOffsets WalSegmentImage.collectionOffsets
-  rw [decoded]
-  simp only [WalSegmentImage.segments, List.map_append, List.map_cons, List.map_nil,
-    List.filter_append, List.filter_cons, Bool.false_eq_true, ↓reduceIte, List.filter_nil,
-    List.append_nil]
-  rw [List.filter_map]
-  congr 1
-  exact List.filter_congr test
+  exact congrArg Except.ok (raw.reports.walCollectionOffsets_of_layout directory layout visible settled decoded
+    raw.regular physical spans)
 
 end WalSegmentRepair
 

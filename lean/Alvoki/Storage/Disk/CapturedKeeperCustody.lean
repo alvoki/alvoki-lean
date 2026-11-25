@@ -92,28 +92,27 @@ theorem readCensus (captured : CapturedKeeperOpenReports report) {earlier later 
     exact (List.mem_filter.mp atEnd).1
   exact ⟨keeps captured.keeperRetained, keeps captured.ownerRetained, keeps captured.directoryRetained⟩
 
-/-- A successful aligned prefix installs the same handle that supplied
-the bytes into the pending cache. The active append handle stays absent.
-The reached state includes the keeper slot and the preceding scan drops. -/
-theorem readsAligned (captured : CapturedKeeperOpenReports report)
-    (aligned : layout.keeper.bytes.size = report.wal.keeper.calls.metadata.byteSize.toNat) :
+/-- The observed keeper open and exact chunk loop return the selected
+prefix and its reached descriptor state. Cache admission depends on the
+same physical extent used by the bounded reader. -/
+theorem reads (captured : CapturedKeeperOpenReports report)
+    (within : layout.keeper.bytes.size ≤ report.wal.keeper.calls.metadata.byteSize.toNat) :
     let file := report.wal.keeper
     let path := directory.file (.walSegment layout.keeper.first)
     let handle := (file.calls.inventory, file.calls.slot, 0)
     captured.readKeeper (admission.cache, captured.atOpen, admission.held) =
-      .ok layout.keeper.bytes (admission.cache.remember path handle, captured.afterRead, admission.held) := by
+      .ok layout.keeper.bytes
+        (admission.cache.captureKeeper path handle layout.keeper.bytes.size file.calls.metadata.byteSize.toNat,
+          captured.afterRead, admission.held) := by
   intro file path handle
   let seen := file.observesFile
   have covered : layout.keeper.bytes.size ≤ (layout.keeper.bytes ++ layout.tail).size := by simp
   have selected := seen.readOpenedExactPrefix (IO.userError "short or oversized WAL keeper read")
     layout.keeper.bytes.size report.wal.keeperFits covered
   rw [ByteArray.extract_append_eq_left rfl] at selected
-  have remembered : admission.cache.captureKeeper path handle layout.keeper.bytes.size file.calls.metadata.byteSize.toNat =
-      admission.cache.remember path handle := ite_eq_left aligned
-  rw [← remembered]
   unfold readKeeper
   refine readKeeperWith_success admission.cache path layout.keeper.bytes.size file.calls.metadata.byteSize.toNat
-    _ _ (openedState := (file.calls.inventory, admission.held)) ⟨Nat.le_of_eq aligned, report.wal.keeperFits⟩ ?_ ?_
+    _ _ (openedState := (file.calls.inventory, admission.held)) ⟨within, report.wal.keeperFits⟩ ?_ ?_
   · rw [show report.reads.openRead path = .ok handle from file.calls.opened]
   · change (match report.reads.readOpenedPrefix (IO.userError "short or oversized WAL keeper read") handle
         layout.keeper.bytes.size with
@@ -121,6 +120,24 @@ theorem readsAligned (captured : CapturedKeeperOpenReports report)
       | .ok bytes => EStateM.Result.ok bytes (admission.cache, captured.afterRead, admission.held)) = _
     rw [show report.reads.readOpenedPrefix (IO.userError "short or oversized WAL keeper read") handle
       layout.keeper.bytes.size = .ok layout.keeper.bytes from selected]
+
+/-- A successful aligned prefix remembers the issuing description. -/
+theorem readsAligned (captured : CapturedKeeperOpenReports report)
+    (aligned : layout.keeper.bytes.size = report.wal.keeper.calls.metadata.byteSize.toNat) :
+    let file := report.wal.keeper
+    let path := directory.file (.walSegment layout.keeper.first)
+    let handle := (file.calls.inventory, file.calls.slot, 0)
+    captured.readKeeper (admission.cache, captured.atOpen, admission.held) =
+      .ok layout.keeper.bytes (admission.cache.remember path handle, captured.afterRead, admission.held) := by
+  simpa only [Cache.captureKeeper, aligned, ite_true] using captured.reads (Nat.le_of_eq aligned)
+
+/-- The old keeper is a temporary read when the physical file extends
+past the selected marker. Its handle stays outside the pending cache. -/
+theorem readsLong (captured : CapturedKeeperOpenReports report)
+    (longer : layout.keeper.bytes.size < report.wal.keeper.calls.metadata.byteSize.toNat) :
+    captured.readKeeper (admission.cache, captured.atOpen, admission.held) =
+      .ok layout.keeper.bytes (admission.cache, captured.afterRead, admission.held) := by
+  simpa only [Cache.captureKeeper, ite_eq_right (Nat.ne_of_lt longer)] using captured.reads (Nat.le_of_lt longer)
 
 /-- The aligned read and first directory barrier reach the authorized files
 and the same pending keeper handle. The reported intervening drops keep

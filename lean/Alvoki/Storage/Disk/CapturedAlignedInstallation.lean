@@ -361,25 +361,104 @@ theorem finishAt_returns (finish : CapturedAlignedFinish calls report vacant sel
       directory.file (.walSegment layout.keeper.first) := rfl
   simp only [finishAt, keeperPath, returned]
 
+end CapturedAlignedFinish
+
+namespace CapturedAlignedCallbacks
+
+variable {calls : CapturedAlignedCallbacks admission} {report : CapturedMarkedReadReports admission layout published}
+
 private def bootstrapAt (calls : CapturedAlignedCallbacks admission) (_resolved : DiskDirectory)
     (cache : CensusDirectoryCache) : EStateM IO.Error CensusOpenState Reopened := fun (openCensus, before) =>
   match calls.bootstrap cache before.image with
   | .ok value reached => .ok value (openCensus, { before with image := reached })
   | .error cause reached => .error cause (openCensus, { before with image := reached })
 
-private def recover (finish : CapturedAlignedFinish calls report vacant selected) (resolved : DiskDirectory)
-    (owner : DescriptorSlot) (cache : CensusDirectoryCache) :
+def recoverWithFinish (calls : CapturedAlignedCallbacks admission)
+    (report : CapturedMarkedReadReports admission layout published)
+    (finish : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Plan × Reopened × Nat →
+      EStateM IO.Error CensusOpenState Reopened)
+    (resolved : DiskDirectory) (owner : DescriptorSlot) (cache : CensusDirectoryCache) :
     EStateM IO.Error CensusOpenState SegmentedSession := do
-  let opened ← report.recoverThroughReads finish.finishAt (bootstrapAt calls) resolved owner cache
+  let opened ← report.recoverThroughReads finish calls.bootstrapAt resolved owner cache
   installReady opened.installed (fun phase => pure (phase, calls.nextRef)) (fun _ => pure (calls.nextRef + 1))
     fun (phase, phaseRef) sessionRef => pure ⟨resolved, owner.description, phase, phaseRef, sessionRef⟩
 
-/-- The open schedule allocates the phase and snapshot identity only after
-the recovery worker returns. Their distinct IDs come from the allocation
-observation, as in the existing projected installer. -/
+/-- Use the shared marked recovery and allocate the ready session after the
+reached repair callback returns. -/
+def runWithFinish (calls : CapturedAlignedCallbacks admission)
+    (report : CapturedMarkedReadReports admission layout published)
+    (finish : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Plan × Reopened × Nat →
+      EStateM IO.Error CensusOpenState Reopened) :
+    EStateM.Result IO.Error CensusOpenState SegmentedSession :=
+  admission.run (calls.recoverWithFinish report finish)
+
+/-- A successful reached repair completes the same admitted read and
+installation, independent of which bounded repair path was selected. -/
+theorem installsWithFinish
+    (vacant : TryLockObserves retry.owners directory (.ok true))
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    (laterValid : retry.image.later.Beyond layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (finish : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Plan × Reopened × Nat →
+      EStateM IO.Error CensusOpenState Reopened) {census : DescriptorInventory} {after : FileImage}
+    (finished : ∀ opened, finish directory admission.owner admission.cache
+      (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) =
+      .ok opened (census, { admission.held with image := after }))
+    (ready : after.Ready layout.target) (effects : EffectTrace layout.target retry.image after) :
+    ∃ session, calls.runWithFinish report finish = .ok session (census, { admission.held with image := after }) ∧
+      CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
+        published calls.liveRefs (.ok session { admission.held with image := after }) := by
+  let sizes := SizedCheckpointRunReports.ofChunkReads (checkpoint := checkpoint) selected report.reads
+    report.stat report.chunkReads
+  obtain ⟨opened, actualCheckpoint, model, preparedRead, exactCheckpoint, replay, generation, bytes,
+    keeper, committed, bounds, refined, represents, noPins⟩ :=
+    report.walReads.prepares (admission.reached, admission.held) laterValid following accepted ordered
+      sizes (report.metadata.manifestRead layout.decoded) (report.metadata.markerRead layout.decoded)
+  have reached : report.recoverThroughReads finish calls.bootstrapAt directory admission.owner admission.cache
+      (admission.reached, admission.held) = .ok opened (census, { admission.held with image := after }) := by
+    rw [report.recoverThroughReads_prepared calls.flat marker preparedRead]
+    exact finished opened
+  let final : LockedFileState FileImage := { admission.held with image := after }
+  let session : SegmentedSession := ⟨directory, admission.owner.description, .ready opened.installed,
+    calls.nextRef, calls.nextRef + 1⟩
+  have returned : calls.runWithFinish report finish = .ok session (census, final) := by
+    unfold runWithFinish
+    rw [admission.run_reachesRecovery]
+    simp only [recoverWithFinish, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, Bind.bind, EStateM.bind, reached]
+    rfl
+  have lock : final.owners.Owns directory session.descriptor := admission.opened.held
+  have different : calls.nextRef ≠ calls.nextRef + 1 := by omega
+  have freshSession : calls.nextRef + 1 ∉ calls.liveRefs := by
+    intro present
+    have fresh := calls.fresh _ present
+    omega
+  refine ⟨session, returned, ?_⟩
+  exact ⟨opened, actualCheckpoint, model, session, final, rfl, rfl, rfl, rfl, admission.opened.captures.2.1,
+    report.sameObjects.2.1, vacant rfl, rfl, lock, different,
+    fun present => Nat.lt_irrefl _ (calls.fresh _ present), freshSession, ready, effects,
+    exactCheckpoint, replay, generation, bytes, keeper, committed, bounds, refined, represents, noPins⟩
+
+end CapturedAlignedCallbacks
+
+namespace CapturedAlignedFinish
+
+variable {calls : CapturedAlignedCallbacks admission} {report : CapturedMarkedReadReports admission layout published}
+  {vacant : TryLockObserves retry.owners directory (.ok true)} {checkpoint : Option (PackedTable × UInt64)}
+  {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
+
+/-- This specialization executes the aligned repair using its captured
+keeper before allocating the ready session. -/
 def run (finish : CapturedAlignedFinish calls report vacant selected) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
-  admission.run finish.recover
+  calls.runWithFinish report finish.finishAt
 
 /-- The shared open and aligned repair install the table selected by the
 checked reads at this admission. The proof follows the reported directory
@@ -413,13 +492,6 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
       report.reads.ObservesSelected directory retry.image.directory.active.manifest published.durable ∧
       CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
         published calls.liveRefs (.ok session final) := by
-  let vacant := trace.freshFlockAllowed.mpr last
-  let sizes := SizedCheckpointRunReports.ofChunkReads (checkpoint := checkpoint) selected report.reads
-    report.stat report.chunkReads
-  obtain ⟨opened, actualCheckpoint, model, preparedRead, exactCheckpoint, replay, generation, bytes,
-    keeper, committed, bounds, refined, represents, noPins⟩ :=
-    report.walReads.prepares (admission.reached, admission.held) laterValid following accepted ordered
-      sizes (report.metadata.manifestRead layout.decoded) (report.metadata.markerRead layout.decoded)
   have prepared : Prepared retry.image layout.target layout.plan :=
     ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
   let after := retry.image.syncDirectory.syncKeeper
@@ -433,38 +505,18 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
   have ready : after.Ready layout.target := by
     have safe := effects.valid prepared.pair prepared.keeperPrefix prepared.newer
     exact ⟨safe.selected, safe.settled, visible, congrArg (fun bytes => [bytes]) visible, emptyNames⟩
-  have reached : report.recoverThroughReads finish.finishAt (bootstrapAt calls) directory admission.owner admission.cache
-      (admission.reached, admission.held) =
-      .ok opened (finish.census, { admission.held with image := after }) := by
-    rw [report.recoverThroughReads_prepared calls.flat marker preparedRead]
-    exact finish.finishAt_returns opened
-  let final : LockedFileState FileImage := { admission.held with image := after }
-  let session : SegmentedSession := ⟨directory, admission.owner.description, .ready opened.installed,
-    calls.nextRef, calls.nextRef + 1⟩
-  obtain ⟨prefixReached, _, _, _, _, oldObject, _, admitted⟩ :=
-    trace.capturesAfterAdmission earlier last admission distinct distinctCached lockObject finish.recover
-  have returned : finish.run = .ok session (finish.census, final) := by
-    unfold run
-    rw [admitted]
-    simp only [recover, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, Bind.bind, EStateM.bind, reached]
-    rfl
-  have lock : final.owners.Owns directory session.descriptor := admission.opened.held
-  have different : calls.nextRef ≠ calls.nextRef + 1 := by omega
-  have freshSession : calls.nextRef + 1 ∉ calls.liveRefs := by
-    intro present
-    have fresh := calls.fresh _ present
-    omega
+  obtain ⟨prefixReached, vacant, _, _, _, oldObject, _, _⟩ :=
+    trace.capturesAfterAdmission earlier last admission distinct distinctCached lockObject (calls.recoverWithFinish report finish.finishAt)
+  have sameLock := report.sameObjects.2.1.trans (congrArg some oldObject)
+  obtain ⟨session, returned, installed⟩ :=
+    CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := report) vacant marker laterValid
+      following accepted ordered selected finish.finishAt finish.finishAt_returns ready effects
   have sameObjects : finish.census.inode = admission.reached.inode := by
     unfold census
     rw [finish.repair.opened]
     rfl
-  refine ⟨prefixReached, report.sameObjects.2.1.trans (congrArg some oldObject),
-    session, final, returned, finish.lockRetained, finish.directoryRetained, sameObjects,
-    (calls.wal report vacant).keeperObserved finish.authorization, report.chunkReads, ?_⟩
-  exact ⟨opened, actualCheckpoint, model, session, final, rfl, rfl, rfl, rfl, admission.opened.captures.2.1,
-    report.sameObjects.2.1, vacant rfl, rfl, lock, different,
-    fun present => Nat.lt_irrefl _ (calls.fresh _ present), freshSession, ready, effects,
-    exactCheckpoint, replay, generation, bytes, keeper, committed, bounds, refined, represents, noPins⟩
+  exact ⟨prefixReached, sameLock, session, _, returned, finish.lockRetained, finish.directoryRetained,
+    sameObjects, finish.sameKeeper, report.chunkReads, installed⟩
 
 end CapturedAlignedFinish
 
