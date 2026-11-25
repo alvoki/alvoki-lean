@@ -71,7 +71,7 @@ structure NativeRejectedOpenWorkEvent where
 structure NativeCountedListingAttempt (input : FilePath) (directory : DiskDirectory) (before : CensusOpenState) where
   admission : CensusOpenAdmissionReports input directory before.1 before.2
   failure : NativeMarkedListingError admission
-  work : NativeMarkedListingWork failure
+  work : NativeListingWork failure
   rest : NativeMarkedListingError.Remainder
   bootstrap : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened
   install : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Reopened →
@@ -90,8 +90,7 @@ noncomputable def event (seen : NativeCountedListingAttempt input directory befo
 
 theorem chunks_le (seen : NativeCountedListingAttempt input directory before) :
     seen.event.chunks ≤ selectedManifestExtent before.2 + seen.event.runAndMarkerBudget := by
-  simpa only [event, selectedManifestExtent, seen.work.selected, Option.map_some, Option.getD_some, Nat.add_assoc]
-    using seen.work.chunkRequests_le
+  exact seen.work.chunkRequests_le
 
 end NativeCountedListingAttempt
 

@@ -66,6 +66,56 @@ private def runExtent (reads : CheckpointRunChunkReads) (path : FilePath) : Exce
     throw (IO.userError s!"expected a regular database file: '{path}'")
   return metadata.byteSize.toNat
 
+private theorem readsListingMarker {reads : CheckpointRunChunkReads} {release : FilePath → List LockReferenceDrop}
+    (file : HeldMetadataFile reads (directory.file .walBoundary) "WAL.commit" admission.view admission.root seen.marker)
+    (available : PrefixChunksAvailableUntilEof seen.marker (reads.readChunk file.observesFile.slot.description))
+    (custody : TemporaryPrefixCustody file.calls seen.atMarker (release (directory.file .walBoundary)))
+    (entered : seen.atListing = seen.atMarker.afterDrops (custody.beforeOpen ++ release (directory.file .walBoundary)))
+    (callback : seen.readOptional = fun path => discardCache (readTemporaryMetadata reads directory release path) admission.cache) :
+    seen.readOptional (directory.file .walBoundary) (seen.atMarker, admission.held) =
+      .ok (some seen.marker) (seen.atListing, admission.held) := by
+  have bounded := file.markerPrefix available
+  have size : seen.marker.size ≤ WAL.Boundary.acquisitionLimit := by
+    rw [← WAL.Boundary.decode_reencode seen.decoded, WAL.Boundary.encode_size]
+    decide
+  rw [Nat.min_eq_right size, ByteArray.extract_zero_size] at bounded
+  have read := custody.readMetadata bounded admission.cache admission.held
+  simp only [callback, discardCache, read, entered]
+
+private abbrev CountedOpenState := CensusOpenState × Nat
+private abbrev CountedMetadataRead := FilePath → EStateM IO.Error CountedOpenState (Option ByteArray)
+private abbrev CountedRunRead := FilePath → Nat → EStateM IO.Error CountedOpenState ByteArray
+
+private def countedListingWorker (metadata : CountedMetadataRead) (runPrefix : CountedRunRead)
+    (rest : NativeMarkedListingError.Remainder) : EStateM IO.Error CountedOpenState Reopened :=
+  reopenMarkedBoundedWithCachedExtents directory metadata (fun path => charged (seen.readRunSize path) 0)
+    runPrefix (fun path => charged (seen.list path) seen.listing.directoryCalls)
+    (fun path => charged (rest.lstat path) 0) (fun path count => charged (rest.readSeal path count) 0)
+    (fun path count size => charged (rest.readKeeper path count size) 0) (fun path => charged (rest.remove path) 0)
+    (fun path bytes => charged (rest.stage path bytes) 0) (fun paths => charged (rest.sync paths) 0)
+    (fun source target => charged (rest.rename source target) 0)
+
+private theorem countedListingWorker_error (metadata : CountedMetadataRead) (runPrefix : CountedRunRead)
+    (rest : NativeMarkedListingError.Remainder) {atMarker atListing : Nat}
+    (checkpoint : readIntegrityCheckpointSized directory (metadata (directory.file .manifest))
+      (fun path => charged (seen.readRunSize path) 0) runPrefix ((admission.reached, admission.held), 0) =
+        .ok seen.checkpoint ((seen.atMarker, admission.held), atMarker))
+    (marker : metadata (directory.file .walBoundary) ((seen.atMarker, admission.held), atMarker) =
+      .ok (some seen.marker) ((seen.atListing, admission.held), atListing)) :
+    countedListingWorker (seen := seen) metadata runPrefix rest ((admission.reached, admission.held), 0) =
+      .error seen.listing.cause ((seen.atListing, admission.held), atListing + seen.listing.directoryCalls) := by
+  have listed := seen.listed
+  rw [seen.listing.run_error] at listed
+  simp only [countedListingWorker, reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders,
+    readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checkpoint, marker, seen.decoded, seen.checked,
+    true_and, ↓reduceIte, liftExcept, Except.mapError, Pure.pure, EStateM.pure, charged, listed]
+
+private theorem markedListingError (rest : NativeMarkedListingError.Remainder) :
+    seen.marked rest directory (admission.reached, admission.held) = .error seen.listing.cause (seen.atListing, admission.held) := by
+  have actual := seen.stopsAtListing rest (pure ⟨.empty, 0, 0, 0⟩)
+  rw [admission.recoverWithMarked_selects seen.flat seen.route] at actual
+  simpa only [Option.isSome_some, ↓reduceIte] using actual
+
 /-- A returned readdir error after an accepted present manifest. Each
 raw read is tied to the failing worker's original callback. The run
 opens and closes follow increasing manifest index before the marker read. -/
@@ -142,14 +192,8 @@ private theorem readsManifest (report : NativeMarkedListingWork seen) :
 
 private theorem readsMarker (report : NativeMarkedListingWork seen) :
     seen.readOptional (directory.file .walBoundary) (seen.atMarker, admission.held) =
-      .ok (some seen.marker) (seen.atListing, admission.held) := by
-  have bounded := report.markerFile.markerPrefix report.markerAvailable
-  have size : seen.marker.size ≤ WAL.Boundary.acquisitionLimit := by
-    rw [← WAL.Boundary.decode_reencode seen.decoded, WAL.Boundary.encode_size]
-    decide
-  rw [Nat.min_eq_right size, ByteArray.extract_zero_size] at bounded
-  have read := report.markerCustody.readMetadata bounded admission.cache admission.held
-  simp only [report.metadataCallback, discardCache, read, report.enteredListing]
+      .ok (some seen.marker) (seen.atListing, admission.held) :=
+  readsListingMarker report.markerFile report.markerAvailable report.markerCustody report.enteredListing report.metadataCallback
 
 private def atRun (report : NativeMarkedListingWork seen) (index : Nat) : CensusOpenState :=
   (report.atRuns.afterDrops (runReadDrops report.events index), admission.held)
@@ -270,22 +314,12 @@ and repair continuation. On this path the directory error stops before
 any extent or WAL payload callback and before any repair. -/
 noncomputable def countedMarked (report : NativeMarkedListingWork seen) (rest : NativeMarkedListingError.Remainder) :
     EStateM IO.Error (CensusOpenState × Nat) Reopened :=
-  reopenMarkedBoundedWithCachedExtents directory report.countedMetadata (fun path => charged (seen.readRunSize path) 0)
-    report.countedRunPrefix (fun path => charged (seen.list path) report.directoryRequests)
-    (fun path => charged (rest.lstat path) 0) (fun path count => charged (rest.readSeal path count) 0)
-    (fun path count size => charged (rest.readKeeper path count size) 0) (fun path => charged (rest.remove path) 0)
-    (fun path bytes => charged (rest.stage path bytes) 0) (fun paths => charged (rest.sync paths) 0)
-    (fun source target => charged (rest.rename source target) 0)
+  countedListingWorker (seen := seen) report.countedMetadata report.countedRunPrefix rest
 
 theorem countedMarked_error (report : NativeMarkedListingWork seen) (rest : NativeMarkedListingError.Remainder) :
     report.countedMarked rest ((admission.reached, admission.held), 0) =
-      .error seen.listing.cause ((seen.atListing, admission.held), report.chunkRequests + report.directoryRequests) := by
-  have listed := seen.listed
-  rw [seen.listing.run_error] at listed
-  simp only [countedMarked, reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders,
-    readSelectedWithCachedExtents, Bind.bind, EStateM.bind, report.countedCheckpoint, report.countedMarker,
-    seen.decoded, seen.checked, true_and, ↓reduceIte, liftExcept, Except.mapError, Pure.pure, EStateM.pure,
-    charged, listed, chunkRequests]
+      .error seen.listing.cause ((seen.atListing, admission.held), report.chunkRequests + report.directoryRequests) :=
+  countedListingWorker_error _ _ rest report.countedCheckpoint (report.countedMarker _)
 
 /-- Erasure yields the original marked worker's exact route error and
 pre-unlock census. The existing native opener then applies local unlock
@@ -293,10 +327,7 @@ on this state and gives its error precedence over the listing error. -/
 theorem countedMarked_projects (report : NativeMarkedListingWork seen) (rest : NativeMarkedListingError.Remainder) :
     dropCount (report.countedMarked rest ((admission.reached, admission.held), 0)) =
       seen.marked rest directory (admission.reached, admission.held) := by
-  have actual := seen.stopsAtListing rest (pure ⟨.empty, 0, 0, 0⟩)
-  rw [admission.recoverWithMarked_selects seen.flat seen.route] at actual
-  simp only [Option.isSome_some, ↓reduceIte] at actual
-  rw [report.countedMarked_error, actual]
+  rw [report.countedMarked_error, markedListingError rest]
   rfl
 
 theorem listingInodes (report : NativeMarkedListingWork seen) : seen.atListing.inode = admission.reached.inode := by
@@ -348,5 +379,127 @@ theorem chunkRequests_le (report : NativeMarkedListingWork seen) :
   exact Nat.add_le_add (Nat.add_le_add manifestCount runBudget) markerCount
 
 end NativeMarkedListingWork
+
+/-- The marked reader finds no manifest at the captured root. The raw
+no-follow ENOENT supplies that same optional callback. The selected
+marker then uses a temporary descriptor and closes before listing. -/
+structure NativeAbsentManifestListingWork (seen : NativeMarkedListingError admission) where
+  reads : CheckpointRunChunkReads
+  absent : retry.image.directory.active.manifest = none
+  canonicalAbsent : admission.view.child admission.root "MANIFEST" = none
+  noFollowMissing : ∃ name message, reads.stat (directory.file .manifest) = .error (.noFileOrDirectory name 2 message)
+  release : FilePath → List LockReferenceDrop
+  selectedMarker : retry.image.directory.active.walBoundary = some seen.marker
+  markerFile : HeldMetadataFile reads (directory.file .walBoundary) "WAL.commit" admission.view admission.root seen.marker
+  markerAvailable : PrefixChunksAvailableUntilEof seen.marker (reads.readChunk markerFile.observesFile.slot.description)
+  markerCustody : TemporaryPrefixCustody markerFile.calls seen.atMarker (release (directory.file .walBoundary))
+  enteredListing : seen.atListing = seen.atMarker.afterDrops (markerCustody.beforeOpen ++ release (directory.file .walBoundary))
+  metadataCallback : seen.readOptional = fun path => discardCache (readTemporaryMetadata reads directory release path) admission.cache
+
+namespace NativeAbsentManifestListingWork
+
+def chunkRequests (report : NativeAbsentManifestListingWork seen) : Nat :=
+  recoveryCalls Prod.snd (report.reads.countMetadata directory (directory.file .walBoundary) (0, 0))
+
+private def countedMetadata (report : NativeAbsentManifestListingWork seen) (path : FilePath) :
+    EStateM IO.Error CountedOpenState (Option ByteArray) :=
+  charged (seen.readOptional path) (recoveryCalls Prod.snd (report.reads.countMetadata directory path (0, 0)))
+
+private def runPrefix (path : FilePath) (count : Nat) : EStateM IO.Error CountedOpenState ByteArray :=
+  charged (seen.readRunPrefix path count) 0
+
+theorem readsMissingManifest (report : NativeAbsentManifestListingWork seen) :
+    seen.readOptional (directory.file .manifest) (admission.reached, admission.held) =
+      .ok none (admission.reached, admission.held) := by
+  obtain ⟨name, message, missing⟩ := report.noFollowMissing
+  simp only [report.metadataCallback, discardCache, readTemporaryMetadata,
+    runCachedMetadataRead_missing _ _ _ name message missing]
+
+theorem checkpointAbsent (report : NativeAbsentManifestListingWork seen) :
+    seen.checkpoint = none ∧ seen.atMarker = admission.reached := by
+  have loaded := seen.loaded
+  simp only [readIntegrityCheckpointSized, report.readsMissingManifest, Bind.bind, EStateM.bind,
+    Pure.pure, EStateM.pure, EStateM.Result.ok.injEq, Prod.mk.injEq, and_true] at loaded
+  exact ⟨loaded.1.symm, loaded.2.symm⟩
+
+theorem manifestChunks_zero (report : NativeAbsentManifestListingWork seen) :
+    recoveryCalls Prod.snd (report.reads.countMetadata directory (directory.file .manifest) (0, 0)) = 0 := by
+  obtain ⟨_, _, missing⟩ := report.noFollowMissing
+  simp [CheckpointRunChunkReads.countMetadata, readOptionalCachedOpenFileWith, readOptionalDatabaseFileWithMetadata,
+    missing, Except.map, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, recoveryCalls]
+
+/-- The reached ENOENT returns the absent checkpoint at the original
+census. Every possible run callback is bypassed with zero chunk requests. -/
+theorem countedCheckpoint (report : NativeAbsentManifestListingWork seen) (readRun : CountedRunRead) :
+    readIntegrityCheckpointSized directory (report.countedMetadata (directory.file .manifest))
+      (fun path => charged (seen.readRunSize path) 0) readRun ((admission.reached, admission.held), 0) =
+      .ok seen.checkpoint ((seen.atMarker, admission.held), 0) := by
+  simp only [readIntegrityCheckpointSized, countedMetadata, charged, report.readsMissingManifest,
+    report.manifestChunks_zero, Nat.zero_add, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+    report.checkpointAbsent.1, report.checkpointAbsent.2]
+
+def countedMarked (report : NativeAbsentManifestListingWork seen) (rest : NativeMarkedListingError.Remainder) :
+    EStateM IO.Error CountedOpenState Reopened :=
+  countedListingWorker (seen := seen) report.countedMetadata (runPrefix (seen := seen)) rest
+
+theorem countedMarked_error (report : NativeAbsentManifestListingWork seen) (rest : NativeMarkedListingError.Remainder) :
+    report.countedMarked rest ((admission.reached, admission.held), 0) =
+      .error seen.listing.cause ((seen.atListing, admission.held), report.chunkRequests + seen.listing.directoryCalls) := by
+  have read := readsListingMarker report.markerFile report.markerAvailable report.markerCustody
+    report.enteredListing report.metadataCallback
+  apply countedListingWorker_error _ _ rest (report.countedCheckpoint _)
+  simp only [countedMetadata, charged, read, Nat.zero_add, chunkRequests]
+
+theorem countedMarked_projects (report : NativeAbsentManifestListingWork seen) (rest : NativeMarkedListingError.Remainder) :
+    dropCount (report.countedMarked rest ((admission.reached, admission.held), 0)) =
+      seen.marked rest directory (admission.reached, admission.held) := by
+  rw [report.countedMarked_error, markedListingError rest]
+  rfl
+
+theorem chunkRequests_le (report : NativeAbsentManifestListingWork seen) :
+    report.chunkRequests ≤ WAL.Boundary.acquisitionLimit := by
+  have bounded := report.reads.countMetadata_le directory (directory.file .walBoundary) (0, 0)
+  simpa only [chunkRequests, beq_self_eq_true, ↓reduceIte, Nat.zero_add] using bounded
+
+theorem listingInodes (report : NativeAbsentManifestListingWork seen) : seen.atListing.inode = admission.reached.inode := by
+  have reached := congrArg DescriptorInventory.inode report.enteredListing
+  change seen.atListing.inode = seen.atMarker.inode at reached
+  rw [reached, report.checkpointAbsent.2]
+
+end NativeAbsentManifestListingWork
+
+inductive NativeListingWork (seen : NativeMarkedListingError admission) where
+  | present (report : NativeMarkedListingWork seen)
+  | absent (report : NativeAbsentManifestListingWork seen)
+
+namespace NativeListingWork
+
+noncomputable def chunkRequests : NativeListingWork seen → Nat
+  | .present report => report.chunkRequests
+  | .absent report => report.chunkRequests
+
+def selectedRunBytes : NativeListingWork seen → Nat
+  | .present report => report.selectedRunBytes
+  | .absent _ => 0
+
+def directoryRequests (_report : NativeListingWork seen) : Nat := seen.listing.directoryCalls
+
+theorem listingInodes (report : NativeListingWork seen) : seen.atListing.inode = admission.reached.inode := by
+  cases report with
+  | present report => exact report.listingInodes
+  | absent report => exact report.listingInodes
+
+theorem chunkRequests_le (report : NativeListingWork seen) :
+    report.chunkRequests ≤ (retry.image.directory.active.manifest.map ByteArray.size).getD 0 +
+      (report.selectedRunBytes + WAL.Boundary.acquisitionLimit) := by
+  cases report with
+  | present report =>
+    simpa only [chunkRequests, selectedRunBytes, report.selected, Option.map_some, Option.getD_some, Nat.add_assoc]
+      using report.chunkRequests_le
+  | absent report =>
+    simpa only [chunkRequests, selectedRunBytes, report.absent, Option.map_none, Option.getD_none, Nat.zero_add]
+      using report.chunkRequests_le
+
+end NativeListingWork
 
 end Alvoki.Storage.DiskSession
