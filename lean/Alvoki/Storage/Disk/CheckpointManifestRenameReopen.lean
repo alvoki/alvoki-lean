@@ -154,6 +154,28 @@ theorem CheckpointPowerCut.reopensSelectedRunMap {directory : DiskDirectory}
     rw [descriptor]
     exact .checkpointPowerLossObserved prior cut projected pairSurvives failures retryPair installed
 
+/-- A physical run map can be reindexed using the exact manifest that
+selected it. The published new header fixes its generation and run count. -/
+theorem CheckpointPowerCut.selectedRunAgreement {directory : DiskDirectory}
+    {before : SegmentedWriterState} {writer : Nat}
+    (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
+    (published : Image) (binding : Option ByteArray)
+    (origin : binding = before.wal.directory.active.manifest ∨ binding = some cut.checkpoint.manifest)
+    (runs : RunFiles)
+    (newRuns : ∀ index < cut.checkpoint.table.runs.length, runs (SegmentedCheckpointReport.generation before) index =
+      published.durable (SegmentedCheckpointReport.generation before) index)
+    (oldRuns : SelectedRunsAgree before.wal.directory.active.manifest runs published.durable) :
+    SelectedRunsAgree binding runs published.durable := by
+  rcases origin with old | new
+  · exact old.symm ▸ oldRuns
+  · intro bytes metadata present decoded index inside
+    have sameBytes : bytes = cut.checkpoint.manifest := Option.some.inj (present.symm.trans new)
+    subst bytes
+    rw [cut.newManifestHeader ready decoded] at inside ⊢
+    have count : (checkpointHeader cut.checkpoint.table (SegmentedCheckpointReport.generation before)).runCount.toNat =
+        cut.checkpoint.table.runs.length := UInt64.toNat_ofNat_of_lt' cut.runCountFits
+    exact newRuns index (count ▸ inside)
+
 /-- The same held installer handles either manifest once the selected
 physical run map agrees with the corresponding checkpoint bytes. -/
 theorem CheckpointPowerCut.reopensPhysicalCheckpoint {directory : DiskDirectory}
@@ -176,16 +198,7 @@ theorem CheckpointPowerCut.reopensPhysicalCheckpoint {directory : DiskDirectory}
     CheckpointHeldOpen.Reports input directory before retry published physical →
     cut.HeldReopen input writer retry published binding runs := by
   intro pair physical failures observes
-  have agrees : SelectedRunsAgree binding runs published.durable := by
-    rcases origin with old | new
-    · exact old.symm ▸ oldRuns
-    · intro bytes metadata present decoded index inside
-      have sameBytes : bytes = cut.checkpoint.manifest := Option.some.inj (present.symm.trans new)
-      subst bytes
-      rw [cut.newManifestHeader ready decoded] at inside ⊢
-      have count : (checkpointHeader cut.checkpoint.table (SegmentedCheckpointReport.generation before)).runCount.toNat =
-          cut.checkpoint.table.runs.length := UInt64.toNat_ofNat_of_lt' cut.runCountFits
-      exact newRuns index (count ▸ inside)
+  have agrees := cut.selectedRunAgreement ready published binding origin runs newRuns oldRuns
   exact cut.reopensSelectedRunMap ready published projected binding survives
     runs agrees retry failures observes
 

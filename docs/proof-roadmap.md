@@ -177,6 +177,10 @@ The session adapter now proves the exact effects of snapshot release and floor a
 
 After the manifest rename returns, the final directory sync issues through the same captured directory description as the first. Before its effect, the reported rename survivors can select the old or new manifest. After its effect, the physical survivor list contains exactly the new manifest. If a prior manifest exists, it selects a different generation from the new one. The reported namespace and inode effects preserve the settled run map, whose selected bytes come from the actual completed run prefix. The exact admitted reopen replays the unchanged WAL and continues the original mixed trace. [Final manifest-directory sync](../lean/Alvoki/Storage/Disk/CheckpointManifestDirectoryCut.lean)
 
+If that final sync returns an error, the grouped callback reports the path and keeps the reached cache and files. The writer stays poisoned with its original lock. A reported successful close or last reference drop releases the same image. The new manifest remains visible in either effect case. When a later crash precedes the first effective recovery barrier, the bounded retry can select the old manifest only from the reported pre-effect crash choices. The admitted opener loads the strict selected manifest and exact physical run map, and the returned writer retains the ordered WAL. The returned-failure endpoint records the native error, release, bounded attempts and admitted reopen. [Returned final sync failure and reopen](../lean/Alvoki/Storage/Disk/CheckpointManifestDirectoryFailureReopen.lean)
+
+Carry this final-sync error endpoint through the mixed client trace with its unchanged submission and read ledgers.
+
 ### Garbage collection contract
 
 The engine must eventually reclaim obsolete run generations, covered WAL data, and versions that no supported snapshot can observe. The proof covers the executable collector, including interruption and retry.

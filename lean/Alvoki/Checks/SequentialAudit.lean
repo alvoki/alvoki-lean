@@ -83,6 +83,7 @@ import Alvoki.Storage.Disk.CheckpointManifestStageCut
 import Alvoki.Storage.Disk.CheckpointHeldOpen
 import Alvoki.Storage.Disk.CheckpointManifestStageFailureReopen
 import Alvoki.Storage.Disk.CheckpointManifestDirectoryCut
+import Alvoki.Storage.Disk.CheckpointManifestDirectoryFailureReopen
 import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.SessionRetentionFloor
 import Alvoki.Storage.Disk.MarkedOpenControl
@@ -379,8 +380,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.reopensAfterManifestRename
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.reopensPhysicalCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.manifestChanges
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.selectedRunAgreement
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.atManifestDirectory
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.reopens
+#check_axioms Alvoki.Storage.DiskSession.ObservedManifestDirectoryFailure.liveManifest
+#check_axioms Alvoki.Storage.DiskSession.ObservedManifestDirectoryFailure.returns
+#check_axioms Alvoki.Storage.DiskSession.ObservedManifestDirectoryFailure.poisonsAndReleases
+#check_axioms Alvoki.Storage.DiskSession.ObservedManifestDirectoryFailure.reopens
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunBarrierCut.reopens
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.reopensPriorCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.atManifestStage

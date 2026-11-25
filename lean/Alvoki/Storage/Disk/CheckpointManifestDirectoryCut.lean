@@ -91,6 +91,7 @@ structure CheckpointManifestDirectoryCut {directory : DiskDirectory} {before : S
     (manifests : List (Option ByteArray)) : Prop where
   current : cut.current = .manifest .syncDirectory
   executed : before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published
+  liveManifest : published.manifest.active = some cut.checkpoint.manifest
   manifestChoices : published.manifest.crashImages = if cut.tookEffect then [some cut.checkpoint.manifest]
     else [some cut.checkpoint.manifest, before.wal.directory.active.manifest]
   admitted : ∀ manifest ∈ manifests, manifest ∈ published.manifest.crashImages
@@ -107,6 +108,7 @@ private theorem CheckpointPowerCut.finalDirectoryPublication {directory : DiskDi
       [.syncRunsDirectory, .manifest .writeStaged, .manifest .syncStaged, .manifest .renameStaged]) :
     ∃ published,
       before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published ∧
+      published.manifest.active = some cut.checkpoint.manifest ∧
       published.manifest.crashImages = (if cut.tookEffect then [some cut.checkpoint.manifest]
         else [some cut.checkpoint.manifest, before.wal.directory.active.manifest]) ∧
       (∀ index, published.durable (SegmentedCheckpointReport.generation before) index = cut.checkpoint.plan.files[index]?) ∧
@@ -133,16 +135,16 @@ private theorem CheckpointPowerCut.finalDirectoryPublication {directory : DiskDi
   · obtain ⟨written, ran, same, durable, older⟩ := checkpoint_runs_complete before.published cut.checkpoint.plan.runSet
     let manifest : Publication.Image :=
       ⟨some cut.checkpoint.manifest, some cut.checkpoint.manifest :: before.published.manifest.crashImages, none⟩
-    refine ⟨{ written with manifest }, ?_, by simpa [manifest] using congrArg (List.cons (some cut.checkpoint.manifest)) prior,
-      durable, older⟩
+    refine ⟨{ written with manifest }, ?_, rfl,
+      by simpa [manifest] using congrArg (List.cons (some cut.checkpoint.manifest)) prior, durable, older⟩
     rw [cutLength, effective]
     exact before.published.executeVersioned_atManifestRename cut.checkpoint.plan written ran same planCount planBytes true
   · obtain ⟨published, ran, manifest, durable, older⟩ := checkpointVersioned_complete before.published cut.checkpoint.plan
     have exactLength : cut.checkpoint.cut = (steps cut.checkpoint.plan.files.length).length := by
       rw [cutLength, effective, planCount]
       simp [steps, Publication.steps]
-    refine ⟨published, exactLength.symm ▸ ran, ?_, durable, older⟩
-    simp [manifest, planBytes, Publication.Image.settled]
+    exact ⟨published, exactLength.symm ▸ ran, by simp [manifest, planBytes, Publication.Image.settled],
+      by simp [manifest, planBytes, Publication.Image.settled], durable, older⟩
 
 private theorem syncDirectorySelected (directory : DiskDirectory) (calls : CheckpointManifestDirectoryCalls)
     (state : ManifestState) (handle : ManifestHandle) (captured : state.1.directory = some handle) :
@@ -224,7 +226,7 @@ theorem CheckpointPowerCut.atManifestDirectory {directory : DiskDirectory} {befo
     rw [SyncPathGroup.run_single (sync directory.path calls.openRead calls.fsync), SyncPathGroup.run_single cached]
     have capturedFinal : atBarrier.1.directory = some reached.directoryHandle := reached.directoryCaptured
     rw [syncDirectorySelected directory calls atBarrier reached.directoryHandle capturedFinal]
-  obtain ⟨published, projected, choices, freshBytes, older⟩ := cut.finalDirectoryPublication ready completed
+  obtain ⟨published, projected, visible, choices, freshBytes, older⟩ := cut.finalDirectoryPublication ready completed
   have settled : runs interrupted = (runs runEnd).syncDirectory := by
     rw [show runs interrupted = _ from reached.directoryRunNames,
       reached.renameRunNames, reached.syncRunNames, reached.stageRunNames, reached.runNames]
@@ -274,7 +276,7 @@ theorem CheckpointPowerCut.atManifestDirectory {directory : DiskDirectory} {befo
       · rw [previous, oldManifestBytes] at payload
         exact List.mem_cons_of_mem _ payload
   refine ⟨prefixRan, reached.directoryLive, reached.directoryBinding, finalRoute, published,
-    ⟨current, projected, choices, physicalChoices, effective, runChoices, ?_, ?_⟩⟩
+    ⟨current, projected, visible, choices, physicalChoices, effective, runChoices, ?_, ?_⟩⟩
   · intro index within
     rw [runPayloads, runPrefix.freshVisible index within, freshBytes index]
   · intro bytes metadata binding decoded index within
