@@ -867,6 +867,15 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The positioned marker write now has a Lean bound for the entire
+short-write transfer sequence, starting at the slot selected by
+`advance`. All reported byte transfers stay within the inactive
+40-byte record, including a stopped prefix. The C wrapper checks the
+initial offset and length, advances by the returned count and retries
+EINTR without moving. This comparison assumes the native transfer
+reports match the syscall contract and does not establish crash
+isolation or checksum behavior for surviving bytes.
+
 The client theorem now obtains the live and crash marker alternatives
 by decoding the reported raw bytes into the exact ordered binding list.
 A missing binding remains explicit. Every present choice is attributed

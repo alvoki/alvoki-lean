@@ -745,6 +745,46 @@ theorem slotWrite_cursor (active : Slot) {cursor remaining transferred : Nat}
     constructor <;> omega
   · omega
 
+/-- Each reported transfer advances the positional-write cursor by its
+actual length. A zero-byte interruption has no addresses and no effect
+on the cursor. The empty trace can end at either a return or a stop. -/
+inductive SlotWriteTransfers (start : Nat) : Nat → List Nat → Nat → Prop where
+  | done (cursor : Nat) : SlotWriteTransfers start cursor [] cursor
+  | transfer {cursor count : Nat} {later : List Nat} {final : Nat}
+      (fits : cursor + count ≤ 40)
+      (rest : SlotWriteTransfers start (cursor + count) later final) :
+      SlotWriteTransfers start cursor ((List.range count).map (fun index => start + cursor + index) ++ later) final
+
+/-- The whole short-write loop stays within the inactive record, including
+any prefix left by a process stop. This bounds syscall transfers. The
+separate filesystem contract describes the bytes surviving a power loss. -/
+theorem SlotWriteTransfers.inactiveRecord {current next : Selection} {frontier : Nat} {active : Slot}
+    (offset : current.slot = slotIndex active) (advanced : advance current frontier = .ok next)
+    {addresses : List Nat} {final : Nat}
+    (transferred : SlotWriteTransfers (next.slot * stride) 0 addresses final) :
+    final ≤ 40 ∧ ∀ address ∈ addresses,
+      slotIndex active.other * stride ≤ address ∧ address < slotIndex active.other * stride + 40 := by
+  have nextSlot : next.slot = slotIndex active.other := by
+    rw [(advance_fields advanced).1, offset]
+    cases active <;> rfl
+  rw [nextSlot] at transferred
+  have bounded {cursor endCursor : Nat} {written : List Nat}
+      (trace : SlotWriteTransfers (slotIndex active.other * stride) cursor written endCursor)
+      (within : cursor ≤ 40) :
+      endCursor ≤ 40 ∧ ∀ address ∈ written,
+        slotIndex active.other * stride ≤ address ∧ address < slotIndex active.other * stride + 40 := by
+    induction trace with
+    | done cursor => exact ⟨within, by simp⟩
+    | @transfer cursor count later final fits rest ih =>
+      obtain ⟨finalBound, remaining⟩ := ih fits
+      refine ⟨finalBound, fun address member => ?_⟩
+      rcases List.mem_append.mp member with first | later
+      · obtain ⟨index, inRange, rfl⟩ := List.mem_map.mp first
+        exact (slotWrite_cursor active (cursor := cursor) (remaining := 40 - cursor)
+          (transferred := count) (by omega) (by omega)).1 index (List.mem_range.mp inRange)
+      · exact remaining address later
+  exact bounded transferred (by decide)
+
 /-- Filesystem contract for one surviving marker container after an
 interrupted positional write to its inactive record. -/
 def InterruptedSlotBytes (before bytes : ByteArray) (active : Slot) (next : Selection) : Prop :=

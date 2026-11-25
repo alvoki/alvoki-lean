@@ -3112,5 +3112,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.markerError_selectBatch
 #check_axioms Alvoki.WAL.TwoSlot.markerSyncErrorAfter_selectsSuccessor
 #check_axioms Alvoki.WAL.TwoSlot.slotWrite_cursor
+#check_axioms Alvoki.WAL.TwoSlot.SlotWriteTransfers.inactiveRecord
 #check_axioms Alvoki.WAL.TwoSlot.beforeSlotWrite_selectHistory
 #check_axioms Alvoki.WAL.TwoSlot.walError_selectHistory
