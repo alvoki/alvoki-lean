@@ -1927,6 +1927,36 @@ theorem InterruptedBatchMarkerPublication.markerUnchangedOrWalSynced
   · exact .inl unchanged
   · exact .inr ⟨appended, durable, wrote, synced⟩
 
+def projectMarkerBytes (checkpoint : Option ByteArray) :
+    Option ByteArray → Except String DirectoryPublication.Bindings
+  | none => .ok ⟨checkpoint, none⟩
+  | some bytes => projectBinding ⟨checkpoint, none⟩ bytes
+
+private theorem projectedMarker_member {checkpoint : Option ByteArray}
+    {source : List (Option ByteArray)} {bindings : List DirectoryPublication.Bindings}
+    (projected : source.mapM (projectMarkerBytes checkpoint) = .ok bindings)
+    {pair : DirectoryPublication.Bindings} (member : pair ∈ bindings) :
+    ∃ raw ∈ source, projectMarkerBytes checkpoint raw = .ok pair := by
+  induction source generalizing bindings with
+  | nil =>
+    have empty := Except.ok.inj projected
+    subst bindings
+    simp at member
+  | cons raw rest ih =>
+    cases head : projectMarkerBytes checkpoint raw with
+    | error => simp [List.mapM_cons, head, Bind.bind, Except.bind] at projected
+    | ok value =>
+      cases tail : rest.mapM (projectMarkerBytes checkpoint) with
+      | error => simp [List.mapM_cons, head, tail, Bind.bind, Except.bind] at projected
+      | ok values =>
+        have equal : value :: values = bindings := by
+          simpa [List.mapM_cons, head, tail, Bind.bind, Except.bind, Pure.pure, Except.pure] using projected
+        subst bindings
+        rcases List.mem_cons.mp member with same | later
+        · exact ⟨raw, List.mem_cons_self .., same.symm ▸ head⟩
+        · obtain ⟨bytes, present, projected⟩ := ih tail later
+          exact ⟨bytes, List.mem_cons_of_mem _ present, projected⟩
+
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
 theorem installsAfterAcquiredRecovery_replays
@@ -2004,15 +2034,14 @@ theorem installsAfterAcquiredRecovery_replays
     {interruptedMarker : WalInodeImage}
     (writeCut : InterruptedBatchMarkerPublication directory prior batch next (interrupted, interruptedMarker))
     (accepted : decode (writeCut.initialMarker.visible writeCut.initialMarker.active) = .ok current)
-    (retainedBinding : ∀ inode ∈ interruptedMarker.crashBindings, inode = interruptedMarker.active)
     (slotOutcome : ∀ bytes ∈ interruptedMarker.visible interruptedMarker.active ::
       interruptedMarker.crashBytes interruptedMarker.active,
       InterruptedSlotBytes (writeCut.initialMarker.visible writeCut.initialMarker.active) bytes active next)
-    (projectedBindings : ∀ pair ∈ interrupted.directory.active :: interrupted.directory.crashImages,
-      pair = ⟨checkpoint, none⟩ ∨
-        ∃ inode bytes, inode ∈ interruptedMarker.active :: interruptedMarker.crashBindings ∧
-          bytes ∈ interruptedMarker.visible inode :: interruptedMarker.crashBytes inode ∧
-          projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
+    {liveMarker : Option ByteArray} {crashMarkers : List (Option ByteArray)}
+    (liveBytes : ∀ bytes, liveMarker = some bytes → bytes = interruptedMarker.visible interruptedMarker.active)
+    (crashBytes : ∀ bytes, some bytes ∈ crashMarkers → bytes ∈ interruptedMarker.crashBytes interruptedMarker.active)
+    (projectedLive : projectMarkerBytes checkpoint liveMarker = .ok interrupted.directory.active)
+    (projectedCrash : crashMarkers.mapM (projectMarkerBytes checkpoint) = .ok interrupted.directory.crashImages)
     (observedFirst : firstPrepared.directory.active.walBoundary = some (Boundary.encode selection.frontier))
     (firstBarrier : DelayedDirectorySync directory)
     (firstEffective : firstBarrier.outcome.effective = true)
@@ -2088,11 +2117,18 @@ theorem installsAfterAcquiredRecovery_replays
         ∃ bytes, InterruptedSlotBytes (writeCut.initialMarker.visible writeCut.initialMarker.active) bytes active next ∧
           projectBinding ⟨checkpoint, none⟩ bytes = .ok pair := by
     intro pair member
-    rcases projectedBindings pair member with absent | ⟨inode, bytes, bound, survived, projected⟩
-    · exact .inl absent
-    · have same := (List.mem_cons.mp bound).elim id (retainedBinding inode)
-      subst inode
-      exact .inr ⟨bytes, slotOutcome bytes survived, projected⟩
+    have candidate : ∃ raw, projectMarkerBytes checkpoint raw = .ok pair ∧
+        ∀ bytes, raw = some bytes →
+          bytes ∈ interruptedMarker.visible interruptedMarker.active :: interruptedMarker.crashBytes interruptedMarker.active := by
+      rcases List.mem_cons.mp member with live | crash
+      · subst pair
+        exact ⟨liveMarker, projectedLive, fun bytes raw => (liveBytes bytes raw).symm ▸ List.mem_cons_self ..⟩
+      · obtain ⟨raw, present, projection⟩ := projectedMarker_member projectedCrash crash
+        exact ⟨raw, projection, fun bytes eq => List.mem_cons_of_mem _ (crashBytes bytes (eq ▸ present))⟩
+    obtain ⟨raw, projection, source⟩ := candidate
+    cases raw with
+    | none => exact .inl (Except.ok.inj projection).symm
+    | some bytes => exact .inr ⟨bytes, slotOutcome bytes (source bytes rfl), projection⟩
   have choicesBefore := interruptedMarker_retryChoices accepted offset newer observations
   have choice := (beforeBarrier.selectsOldOrNew checkpoint current.frontier next.frontier choicesBefore observedFirst).2
   have bytes := choice.imp (fun old => old ▸ oldSize) (fun all => all ▸ newSize)

@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The client theorem now obtains the live and crash marker alternatives
+by decoding the reported raw bytes into the exact ordered binding list.
+A missing binding remains explicit. Every present choice is attributed
+to the physical marker inode reached by the writer, while the filesystem
+report supplies the actual raw survivors and their slot-write contract.
+
 Interrupted publication reports require an unchanged physical marker
 when append or WAL fsync stops. Lean derives that a reported stop
 either leaves that marker untouched or follows a completed WAL fsync.
