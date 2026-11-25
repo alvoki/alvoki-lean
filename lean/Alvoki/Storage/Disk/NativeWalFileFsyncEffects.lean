@@ -127,8 +127,8 @@ theorem RawSyncCalls.groupedReturnedStorage {heap image : Type} (calls : RawSync
   exact keeperEffect.2.pairedStored markerEffect.2 keeperEffect.1 markerEffect.1 distinct consumeFrame unrelated
 
 /-- Move the synced staged inode to the canonical marker, then use the
-same directory handle selected by the publication. Every jointly
-selectable crash map sees that marker with the staged name absent. -/
+same directory handle selected by the publication. Every selectable
+crash map has the live keeper and marker bindings and no staged name. -/
 theorem RawSyncCalls.publishedStorage {heap image : Type} (calls : RawSyncCalls heap)
     {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles}
     (cache : OpenSyncCacheRefs files directory.path) (view : OpenCloseHeapView heap image)
@@ -169,10 +169,9 @@ theorem RawSyncCalls.publishedStorage {heap image : Type} (calls : RawSyncCalls 
     (storage reached).files.Stored (directory.file .walBoundary) markerBytes ∧
     (storage reached).crashNames ≠ [] ∧
     ∀ names ∈ (storage reached).crashNames,
-      (⟨names, (storage reached).files.bytes⟩ : CheckpointSurvivingFiles).Stored
-        (directory.file (.walSegment first)) keeperBytes ∧
-      (⟨names, (storage reached).files.bytes⟩ : CheckpointSurvivingFiles).Stored
-        (directory.file .walBoundary) markerBytes ∧ names (directory.file .stagedWalBoundary) = none := by
+      names (directory.file (.walSegment first)) = (storage reached).files.names (directory.file (.walSegment first)) ∧
+      names (directory.file .walBoundary) = (storage reached).files.names (directory.file .walBoundary) ∧
+      names (directory.file .stagedWalBoundary) = none := by
   obtain ⟨markerInode, staged, durable⟩ := stagedStored
   obtain ⟨markerNamed, detached, markerBytesAfterRename⟩ :=
     renameEffect moved markerInode staged (stagedPrivate markerInode staged)
@@ -191,11 +190,8 @@ theorem RawSyncCalls.publishedStorage {heap image : Type} (calls : RawSyncCalls 
     (show (storage renamed).files.Stored (directory.file .walBoundary) markerBytes from
       ⟨markerInode, markerNamed, markerBytesAfterRename.trans durable⟩)
   have scratchGone := (frame _ (.inr ⟨DiskFile.stagedWalBoundary, rfl⟩)).1.trans detached
-  refine ⟨keeperFinal, markerFinal, nonempty, fun names allowed => ?_⟩
-  obtain ⟨keeperInode, keeperNamed, keeperDurable⟩ := keeperFinal
-  obtain ⟨selected, markerBound, markerDurable⟩ := markerFinal
-  exact ⟨⟨keeperInode, (settled names allowed (.walSegment first)).trans keeperNamed, keeperDurable⟩,
-    ⟨selected, (settled names allowed .walBoundary).trans markerBound, markerDurable⟩,
-    (settled names allowed .stagedWalBoundary).trans scratchGone⟩
+  exact ⟨keeperFinal, markerFinal, nonempty, fun names allowed =>
+    ⟨settled names allowed (.walSegment first), settled names allowed .walBoundary,
+      (settled names allowed .stagedWalBoundary).trans scratchGone⟩⟩
 
 end Alvoki.Storage.DiskSession
