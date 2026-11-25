@@ -233,6 +233,7 @@ import Alvoki.Storage.Disk.NativeSnapshotExecution
 import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
 import Alvoki.Storage.Disk.NativeExecutionTrace
 import Alvoki.Storage.Disk.NativeExecutionClose
+import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 import Alvoki.Storage.Disk.NativeReadyWrite
 import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
@@ -1425,6 +1426,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.custody
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.selectsReportedSurvivor
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.selectsAtReturn
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyClose.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyClose.rejectsReads
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.closes
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.binding
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.returns
