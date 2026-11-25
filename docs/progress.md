@@ -1066,7 +1066,9 @@ inode, including when the cache routes sync through a pending handle.
 
 The two-slot installer now has a shared reference-allocation proof.
 It follows the successful marker probe to the acquired marker
-and the recovery result on that same handle and selected frontier.
+and selected frontier through WAL preparation, marker sync on that
+handle, and the final repair. The installer starts at the exact heap
+returned by that repair.
 The marked worker's returned table and marker determine the arguments
 of the three allocations. The marker reference is allocated after the
 existing phase and token, and the phase still contains the recovered
