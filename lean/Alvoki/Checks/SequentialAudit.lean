@@ -259,7 +259,7 @@ import Alvoki.Storage.Disk.NativeSnapshotExecution
 import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
 import Alvoki.Storage.Disk.NativeExecutionTrace
 import Alvoki.Storage.Disk.NativeRunMaintenance
-import Alvoki.Storage.Disk.NativeRunRetentionReopen
+import Alvoki.Storage.Disk.NativeRunMaintenanceReopen
 import Alvoki.Storage.Disk.NativeExecutionPrefix
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
@@ -648,7 +648,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.completes
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.completesWithPublication
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.RunBinding.completes
-#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.retainsRunCheckpointAndReopens
+#check_axioms Alvoki.Storage.DiskSession.RunMaintenance.outputAt
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rewritesRunCheckpointAndReopens
 #check_axioms Alvoki.Storage.CheckpointPublication.ReturnedCheckpointPrefix.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.issues

@@ -115,12 +115,55 @@ private theorem preservesRunAtFlush {before checkpoint : PackedTable} {index : N
     rw [runs]
     exact (List.getElem?_append_left (List.getElem?_eq_some_iff.mp selected).1).trans selected
 
+namespace RunMaintenance
+
+def index : RunMaintenance → Nat
+  | .compact index | .retainRunVersions index => index
+
+/-- Retention uses the indicated run's history. Compaction uses the
+union of the two actual adjacent runs, in their original order. -/
+inductive SourceAt (before : PackedTable) : RunMaintenance → Sequential.History UInt64 → Prop where
+  | retention {index : Nat} {run : Compaction.CheckedRun}
+      (source : before.runs[index]? = some run) : SourceAt before (.retainRunVersions index) run.history
+  | compaction {index : Nat} {left right : Compaction.CheckedRun}
+      (first : before.runs[index]? = some left) (second : before.runs[index + 1]? = some right) :
+      SourceAt before (.compact index) (left.history.union right.history)
+
+private theorem firstAtSuffix {older newer : List Compaction.CheckedRun} {index : Nat}
+    (length : older.length = index) (run : Compaction.CheckedRun) :
+    (older ++ run :: newer)[index]? = some run := by
+  rw [List.getElem?_append_right (Nat.le_of_eq length), ← length, Nat.sub_self]
+  rfl
+
+/-- Both admitted rewrites publish one output at the reported index.
+The chosen source history and the caller's original floor determine it. -/
+theorem outputAt (request : RunMaintenance) {before after : PackedTable}
+    (updated : request.update before = some after) :
+    ∃ source output, SourceAt before request source ∧ after.runs[request.index]? = some output ∧
+      output.history = source.retain before.pins.floor := by
+  cases request with
+  | retainRunVersions index =>
+    obtain ⟨_, _, _, older, input, output, newer, length, beforeRuns, afterRuns, _, kept⟩ :=
+      PackedTable.retainRunVersions_spec updated
+    exact ⟨input.history, output, .retention (beforeRuns.symm ▸ firstAtSuffix length input),
+      afterRuns.symm ▸ firstAtSuffix length output, kept⟩
+  | compact index =>
+    obtain ⟨_, _, _, older, left, right, output, newer, length, beforeRuns, afterRuns, kept⟩ :=
+      PackedTable.compact_spec updated
+    have rightAt : before.runs[index + 1]? = some right := by
+      rw [beforeRuns, List.getElem?_append_right (by omega), ← length]
+      simp
+    exact ⟨left.history.union right.history, output,
+      .compaction (beforeRuns.symm ▸ firstAtSuffix length left) rightAt, afterRuns.symm ▸ firstAtSuffix length output, kept⟩
+
+end RunMaintenance
+
 variable {history : List WAL.Write} {log : List DatabaseSubmissions}
 
 /-- The rewrite, checkpoint return and reopen are reports from consecutive
 reached states. The selected run in the returned table comes from the
 same inode that was synced for the new generation. -/
-structure NativeRetainedRunReopen (current : NativeReadPosition history log) (index : Nat)
+structure NativeRunMaintenanceReopen (current : NativeReadPosition history log) (request : RunMaintenance)
     {rewritten : PackedTable} {image : Type}
     {attempt : SegmentedCheckpointReport current.state.session.directory (current.state.withTable rewritten).writer}
     {reports : CheckpointCompletionReports (CensusDirectoryCache × image) attempt}
@@ -128,7 +171,7 @@ structure NativeRetainedRunReopen (current : NativeReadPosition history log) (in
     (input : FilePath) (next : NativeReadPosition history log) : Prop where
   replay : InstalledClientReplay log current.reads history next.state.writer.installed next.state.session
   reads : next.reads = current.reads
-  rewrite : ∃ rewrittenPosition, NativeRunMaintenanceStep current (.retainRunVersions index) true rewrittenPosition ∧
+  rewrite : ∃ rewrittenPosition, NativeRunMaintenanceStep current request true rewrittenPosition ∧
     rewrittenPosition.state = current.state.withTable rewritten
   generation : next.state.writer.installed.generation = SegmentedCheckpointReport.generation current.state.writer
   table : next.state.writer.installed.table.SameData attempt.table
@@ -138,11 +181,13 @@ structure NativeRetainedRunReopen (current : NativeReadPosition history log) (in
       newPin.sequence = oldPin.sequence ∧
       (∀ key, pinned.lookup newPin.handle key = current.state.writer.installed.table.lookup oldPin.handle key) ∧
       ∀ start stop, pinned.range newPin.handle start stop = current.state.writer.installed.table.range oldPin.handle start stop
-  exactRun : ∃ (source output : Compaction.CheckedRun) (checkpointed : NativeReadPosition history log)
-    (close : NativeCloseReopenObservation checkpointed.state input),
-    current.state.writer.installed.table.runs[index]? = some source ∧
-    output.history = source.history.retain current.state.writer.installed.table.pins.floor ∧
-    output.run.bytes.size ≤ 16 + 32 * retentionRowBound source.history.rows current.state.writer.installed.table.pins.floor ∧
+  exactRun :
+    let index := request.index
+    ∃ (source : Sequential.History UInt64) (output : Compaction.CheckedRun) (checkpointed : NativeReadPosition history log)
+      (close : NativeCloseReopenObservation checkpointed.state input),
+    RunMaintenance.SourceAt current.state.writer.installed.table request source ∧
+    output.history = source.retain current.state.writer.installed.table.pins.floor ∧
+    output.run.bytes.size ≤ 16 + 32 * retentionRowBound source.rows current.state.writer.installed.table.pins.floor ∧
     next.state.writer.installed.table.runs[index]? = some output ∧
     next.state.writer.published.durable (SegmentedCheckpointReport.generation current.state.writer) index =
       some output.run.bytes ∧
@@ -165,30 +210,28 @@ structure NativeRetainedRunReopen (current : NativeReadPosition history log) (in
         (read : opened.opening.reads.reads.ObservesFile path output.run.bytes),
         opened.run = next.opened ∧ read.object = inode
 
-/-- A successful native retention rewrite publishes its exact output at
-the same index, even when checkpoint preparation appends a flushed run.
-The healthy close and aligned reopen read that inode and install the
-retained table. Supported pins reacquire their prior point and range reads. -/
-theorem NativeReadPosition.retainsRunCheckpointAndReopens
-    (current : NativeReadPosition history log) {index : Nat} {rewritten : PackedTable}
-    (retained : current.state.writer.installed.table.retainRunVersions index = some rewritten)
+/-- Retention and adjacent-run compaction publish the exact output of
+the native rewrite at the requested index, even if checkpoint preparation
+appends a flushed run. The later aligned open reads that inode and
+installs a table that answers prior supported snapshot reads. -/
+theorem NativeReadPosition.rewritesRunCheckpointAndReopens
+    (current : NativeReadPosition history log) (request : RunMaintenance) {rewritten : PackedTable}
+    (updated : request.update current.state.writer.installed.table = some rewritten)
     {image : Type}
     {attempt : SegmentedCheckpointReport current.state.session.directory (current.state.withTable rewritten).writer}
     {reports : CheckpointCompletionReports (CensusDirectoryCache × image) attempt}
     (checkpoint : NativeReadyCheckpoint (current.state.withTable rewritten) reports)
-    (binding : checkpoint.RunBinding index) (input : FilePath)
+    (binding : checkpoint.RunBinding request.index) (input : FilePath)
     (observe : ∀ writer, checkpoint.Completed writer →
       ∃ close : NativeCloseReopenObservation (checkpoint.next writer) input,
         close.close.report.result = .ok () ∧
-        let path := current.state.session.directory.file (.run attempt.prepared.generation index)
+        let path := current.state.session.directory.file (.run attempt.prepared.generation request.index)
         close.files.names path = checkpoint.bindings reports.observed.completed.2 path) :
-    ∃ next, NativeRetainedRunReopen current index checkpoint input next := by
-  obtain ⟨_, rewrittenPosition, rewrite⟩ := current.rewritesRun (.retainRunVersions index)
+    ∃ next, NativeRunMaintenanceReopen current request checkpoint input next := by
+  let index := request.index
+  obtain ⟨_, rewrittenPosition, rewrite⟩ := current.rewritesRun request
   have reached := rewrite.reached
-  change (match current.state.writer.installed.table.retainRunVersions index with
-    | none => _ ∧ _
-    | some table => _ ∧ rewrittenPosition.state = current.state.withTable table) at reached
-  rw [retained] at reached
+  rw [updated] at reached
   obtain ⟨rfl, rewrittenState⟩ := reached
   obtain ⟨priorValid, historyEq, pending⟩ := current.readPrefix.refines
   have rewriteValid := rewrittenState ▸ rewrittenPosition.readPrefix.refines.1
@@ -199,12 +242,8 @@ theorem NativeReadPosition.retainsRunCheckpointAndReopens
       .installed rfl completed.valid (completed.sameHistory.trans historyEq) pending current.readPrefix.readsBounded⟩
   obtain ⟨close, closeOK, sameName⟩ := observe writer completed
   obtain ⟨next, reopened⟩ := checkpointed.closesAndReopens close
-  obtain ⟨_, _, rewritePins, older, source, output, newer, length, original, updated, wroteRetained, ownHistory⟩ :=
-    PackedTable.retainRunVersions_spec retained
-  have atIndex (run : Compaction.CheckedRun) : (older ++ run :: newer)[index]? = some run := by
-    rw [List.getElem?_append_right (Nat.le_of_eq length), ← length, Nat.sub_self]
-    rfl
-  have outputAt : rewritten.runs[index]? = some output := updated.symm ▸ atIndex output
+  obtain ⟨source, output, sourceAt, outputAt, ownHistory⟩ := request.outputAt updated
+  have rewritePins := (request.update_spec updated).2.2
   have publishedAt : attempt.table.runs[index]? = some output :=
     preservesRunAtFlush reports.preflight.preparedFacts.1 outputAt
   obtain ⟨file, physical, released⟩ := binding.completes publishedAt
@@ -277,8 +316,8 @@ theorem NativeReadPosition.retainsRunCheckpointAndReopens
   · intro oldPin active
     exact priorValid.retained.reacquireReadsStable (path ▸ reopenedValid.retained) (suffix := [])
       (by simpa using sameHistory) active (floor.symm ▸ current.state.writer.installed.table.pins.safe oldPin active)
-  · exact ⟨source, output, checkpointed, close, original.symm ▸ atIndex source, ownHistory,
-      Compaction.CheckedRun.retainVersions_byteSize_le wroteRetained, loadedOutput,
+  · exact ⟨source, output, checkpointed, close, sourceAt, ownHistory,
+      Compaction.CheckedRun.byteSize_le_of_retainedHistory ownHistory, loadedOutput,
       foundDurable, closeOK, reopened, completed, file, rfl, physical, completedBytes, released,
       sameName.trans physical, readBytes, plan, selected, opened, raw, returned.symm, object⟩
 
