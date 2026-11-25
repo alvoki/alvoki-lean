@@ -188,9 +188,8 @@ structure NativeReadyWriteFileSyncs {before : NativeReadyState} (prepared : Nati
   release : LockReferenceDrop
   closeStage : release = markerSlot.closeEvent
 
-/-- A returned publication continues the guarded append and staged marker
-through both file syncs, the rename and the directory barrier. -/
-structure NativeReadyWriteReport {before : NativeReadyState} (prepared : NativeReadyWritePreparation before)
+/-- A returned marker rename after the same successful file barriers. -/
+structure NativeReadyWriteRenamed {before : NativeReadyState} (prepared : NativeReadyWritePreparation before)
     extends NativeReadyWriteFileSyncs prepared where
   publishedView : DirectoryReadNamespace
   renameObjects : publishedView.modelObject = stageView.modelObject
@@ -198,11 +197,15 @@ structure NativeReadyWriteReport {before : NativeReadyState} (prepared : NativeR
     publishedView.child root name = stageView.child root name
   publishedMarker : RunChildLookup root "WAL.commit" publishedView
   renameChild : publishedMarker.child = openedMarker.child
+  rename : FilePath → FilePath → EStateM IO.Error WriteFiles Unit
+  renamed : rename prepared.stagedPath prepared.markerPath prepared.bothSynced = .ok () prepared.renamed
+
+/-- The returned write also completes the cached directory barrier. -/
+structure NativeReadyWriteReport {before : NativeReadyState} (prepared : NativeReadyWritePreparation before)
+    extends NativeReadyWriteRenamed prepared where
   settledView : DirectoryReadNamespace
   directoryObjects : settledView.modelObject = publishedView.modelObject
   directoryNames : ∀ name, settledView.child root name = publishedView.child root name
-  rename : FilePath → FilePath → EStateM IO.Error WriteFiles Unit
-  renamed : rename prepared.stagedPath prepared.markerPath prepared.bothSynced = .ok () prepared.renamed
   syncedDirectory : fsync (directoryCapture, before.directorySlot, 0) prepared.renamed = .ok () prepared.settled
 
 namespace NativeReadyWriteStaging
@@ -338,6 +341,40 @@ theorem groupReturns (seen : NativeReadyWriteFileSyncs prepared) :
 
 end NativeReadyWriteFileSyncs
 
+namespace NativeReadyWriteRenamed
+
+variable {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
+
+def replace (seen : NativeReadyWriteRenamed prepared) (source target : FilePath) :
+    EStateM IO.Error (CensusDirectoryCache × WriteFiles) Unit :=
+  fun (cache, files) => withCache cache (seen.rename source target files)
+
+theorem renameReturns (seen : NativeReadyWriteRenamed prepared) :
+    seen.replace prepared.stagedPath prepared.markerPath (seen.appendCache, prepared.bothSynced) =
+      .ok () (seen.appendCache, prepared.renamed) := by
+  simp only [replace, seen.renamed, withCache]
+
+/-- Renaming the staged marker changes neither the append name nor the
+lock, and the active marker is the file written and synced earlier. -/
+theorem renameBindings (seen : NativeReadyWriteRenamed prepared) :
+    seen.publishedView.child seen.root prepared.keeperName = some seen.checkedKeeper.child ∧
+    seen.publishedView.child seen.root "LOCK" = some seen.lockLookup.child ∧
+    seen.publishedView.child seen.root "WAL.commit" = some seen.openedMarker.child := by
+  have differentStage : prepared.keeperName ≠ "WAL.commit.next" := by
+    intro same
+    have samePrefix := congrArg (fun name : String => name.toList.take 4) same
+    simp [NativeReadyWritePreparation.keeperName, renderWalSegmentName, String.toList_append] at samePrefix
+  have differentMarker : prepared.keeperName ≠ "WAL.commit" := by
+    intro same
+    have samePrefix := congrArg (fun name : String => name.toList.take 4) same
+    simp [NativeReadyWritePreparation.keeperName, renderWalSegmentName, String.toList_append] at samePrefix
+  obtain ⟨keeper, lock, _⟩ := seen.stageBindings
+  exact ⟨(seen.renameNames _ differentStage differentMarker).trans keeper,
+    (seen.renameNames "LOCK" (by decide) (by decide)).trans lock,
+    (rootedChild seen.publishedMarker).trans (congrArg some seen.renameChild)⟩
+
+end NativeReadyWriteRenamed
+
 namespace NativeReadyWriteReport
 
 open NativeReadyWriteStaging NativeReadyWriteFileSyncs
@@ -394,20 +431,11 @@ structure BindingFrames (seen : NativeReadyWriteReport prepared) : Prop where
   markerAtReturn : seen.settledView.child seen.root "WAL.commit" = some seen.openedMarker.child
 
 theorem bindingFrames (seen : NativeReadyWriteReport prepared) : seen.BindingFrames := by
-  have differentStage : prepared.keeperName ≠ "WAL.commit.next" := by
-    intro same
-    have samePrefix := congrArg (fun name : String => name.toList.take 4) same
-    simp [NativeReadyWritePreparation.keeperName, renderWalSegmentName, String.toList_append] at samePrefix
-  have differentMarker : prepared.keeperName ≠ "WAL.commit" := by
-    intro same
-    have samePrefix := congrArg (fun name : String => name.toList.take 4) same
-    simp [NativeReadyWritePreparation.keeperName, renderWalSegmentName, String.toList_append] at samePrefix
   obtain ⟨keeperStaged, lockStaged, _⟩ := seen.stageBindings
-  have keeperRenamed := (seen.renameNames _ differentStage differentMarker).trans keeperStaged
-  have lockRenamed := (seen.renameNames "LOCK" (by decide) (by decide)).trans lockStaged
+  obtain ⟨keeperRenamed, lockRenamed, markerRenamed⟩ := seen.renameBindings
   exact ⟨keeperStaged, lockStaged, keeperRenamed, lockRenamed,
     (seen.directoryNames _).trans keeperRenamed, (seen.directoryNames _).trans lockRenamed,
-    (seen.directoryNames _).trans ((rootedChild seen.publishedMarker).trans (congrArg some seen.renameChild))⟩
+    (seen.directoryNames _).trans markerRenamed⟩
 
 noncomputable def calls (seen : NativeReadyWriteReport prepared) : WriteRequest.Calls WriteHandle where
   cache := before.cache
@@ -415,7 +443,7 @@ noncomputable def calls (seen : NativeReadyWriteReport prepared) : WriteRequest.
   append := seen.toNativeReadyWriteStaging.append
   stage := seen.toNativeReadyWriteStaging.stage
   sync := seen.toNativeReadyWriteFileSyncs.sync
-  rename := fun source target (cache, files) => withCache cache (seen.rename source target files)
+  rename := seen.toNativeReadyWriteRenamed.replace
 
 private theorem appendReturns (seen : NativeReadyWriteReport prepared) :
     seen.calls.append prepared.keeperPath (WAL.encodeBatch prepared.batch) (before.cache, prepared.initial) =
@@ -437,7 +465,7 @@ theorem groupReturns (seen : NativeReadyWriteReport prepared) :
 private theorem renameReturns (seen : NativeReadyWriteReport prepared) :
     seen.calls.rename prepared.stagedPath prepared.markerPath (seen.appendCache, prepared.bothSynced) =
       .ok () (seen.appendCache, prepared.renamed) := by
-  simp [calls, seen.renamed, withCache]
+  exact seen.toNativeReadyWriteRenamed.renameReturns
 
 private theorem directoryReturns (seen : NativeReadyWriteReport prepared) :
     seen.calls.sync #[before.session.directory.path] (seen.appendCache, prepared.renamed) =
