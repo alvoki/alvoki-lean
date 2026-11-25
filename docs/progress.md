@@ -1008,3 +1008,9 @@ census with the caller's file image, including a marker already settled
 by the two-slot barrier. It proves that the directory sync hands its
 exact reached state to the cached keeper sync. The rename-backed read
 and finish proof reuses this result.
+
+For an aligned keeper with no later names, the captured two-slot reopen
+now derives the bounded finish from the reported directory and keeper
+syncs. The marker barrier supplies the directory sync input, and that
+call's reached census supplies the input to the cached keeper sync.
+The longer-keeper and prune callbacks still need this same handoff.

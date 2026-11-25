@@ -1508,6 +1508,53 @@ theorem reopensAfterCapturedPreparation
     rfl
   simp only [reopenWith_reports, prepared, barrier, finished]
 
+/-- The aligned case runs marker fsync, directory fsync and the cached
+keeper fsync in order, using the exact state returned by each call. -/
+theorem reopensAlignedAfterCapturedPreparation
+    (report : CapturedMarkedReadReports admission layout published false)
+    (captured : CapturedKeeperOpenReports report)
+    {marker settled : WalInodeImage} {slot : DescriptorSlot}
+    (live : slot ∈ captured.afterRead.slots)
+    (current : admission.reached.inode slot.description = marker.active)
+    (effect : Storage.SyncHandleRouting.FsyncResult marker
+      (marker.completeFileSync marker.active) true (.ok () settled))
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selection : Selection} (decoded : decode (marker.visible marker.active) = .ok selection)
+    (bound : retry.image.directory.active.walBoundary.isSome = true)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = retry.image.directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode)
+    (aligned : layout.keeper.bytes.size = report.wal.keeper.calls.metadata.byteSize.toNat)
+    (noLater : retry.image.later.visible = [])
+    {before : CensusDirectoryCache × CensusOpenState} {opened : Reopened}
+    (prepare : EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Plan × Reopened × Nat))
+    (prepared : prepare before =
+      .ok (layout.boundedPlan, opened, report.wal.keeper.calls.metadata.byteSize.toNat)
+        (admission.cache.remember (directory.file (.walSegment layout.keeper.first))
+          (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0), captured.afterRead, admission.held))
+    (openRead : System.FilePath → EStateM IO.Error CensusOpenState (DescriptorInventory × DescriptorSlot × Nat))
+    (fsync : (DescriptorInventory × DescriptorSlot × Nat) → EStateM IO.Error CensusOpenState Unit)
+    (removeFile : System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Except IO.Error Unit))
+    (write : System.FilePath → ByteArray → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (renameFile : System.FilePath → System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    {authorized after : CensusOpenState}
+    (directorySync : fsync (admission.reached, admission.cached, 0)
+      (captured.afterRead,
+        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) =
+      .ok () authorized)
+    (keeperSync : fsync (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0) authorized = .ok () after) :
+    reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices)
+        (fun plan extent => finishBoundedMarkedOpen directory plan extent removeFile write
+          (Storage.SyncPathGroup.run (Storage.SyncHandleRouting.sync directory.path openRead fsync)) renameFile) before =
+      .ok opened (admission.cache, after) := by
+  apply reopensAfterCapturedPreparation report captured live current effect sameBinding decoded
+    bound choices enumerated presence physical prepare prepared
+  have returned := captured.finishAlignedFromCache aligned noLater openRead fsync
+    removeFile write renameFile directorySync
+  simpa only [keeperSync] using returned
+
 end CapturedPreparation
 
 /-- The same retry-selected recovery explains the retained submissions and
