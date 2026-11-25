@@ -282,6 +282,7 @@ import Alvoki.Storage.Disk.NativeBootstrapMarkerPhysical
 import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenEarlyError
+import Alvoki.Storage.Disk.NativeRawMarkerRouteError
 import Alvoki.Storage.Disk.NativeCacheOpenRejection
 import Alvoki.Storage.Disk.NativeContendedOpen
 import Alvoki.Storage.Disk.NativeManifestDecodeError
@@ -1818,6 +1819,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorUnlock.admitsAfterFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.stopsBeforeRecovery
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.returns
+#check_axioms Alvoki.Storage.DiskSession.RawMarkerRouteFailure.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.disposes
 #check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.censusInodes
