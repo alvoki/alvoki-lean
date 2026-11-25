@@ -879,6 +879,38 @@ theorem recoveredBatch_retains {image : WalSegmentImage} {pair : DirectoryPublic
   · rw [new, List.take_length]
     exact DatabaseBatchRetention.append (entry := .uncertainBatch batch) prior (Or.inr rfl)
 
+/-- Connect the observed commit-unknown return to the recovered client
+ledger. The filesystem reports for the reached stage bound the selected
+frontier, and the common segmented proof accounts for that exact batch. -/
+theorem commitUnknown_retainsBatch {α σ : Type}
+    (next : α) (sequence : UInt64) (phase : DiskSession.Phase α)
+    (append syncWal writeSlot syncSlot install : EStateM IO.Error σ Unit)
+    {files reached : σ} {cause : IO.Error}
+    (installOk : ∀ state, ∃ installed, install state = .ok () installed)
+    (returned : DiskSession.publishPreparedWrite next sequence setPhase
+      (commitReports (publish append syncWal writeSlot syncSlot install)) (phase, files) =
+        .error (.commitUnknown cause) (.poisoned, reached))
+    {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
+    {range : MarkedWalRange} {history batch : List Write} {base table : PackedTable} {first : Nat}
+    {log : List DatabaseSubmissions} (prior : DatabaseBatchRetention log history)
+    (recovery : WalSegmentRecovery image pair range (history ++ batch) base first table)
+    {frontier : UInt64} (bound : pair.walBoundary = some (Boundary.encode frontier))
+    (early : (append files = .error cause reached ∨
+      ∃ appended, append files = .ok () appended ∧ syncWal appended = .error cause reached) →
+        frontier.toNat = (WAL.encode history).size)
+    (late : ∀ appended durable, append files = .ok () appended →
+      syncWal appended = .ok () durable →
+      (writeSlot durable = .error cause reached ∨
+        ∃ written, writeSlot durable = .ok () written ∧ syncSlot written = .error cause reached) →
+      frontier.toNat = (WAL.encode history).size ∨ frontier.toNat = (WAL.encode (history ++ batch)).size) :
+    DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
+    ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
+  apply recoveredBatch_retains prior recovery bound
+  rcases prepared_write_errorStage next sequence phase append syncWal writeSlot syncSlot install
+      installOk returned with failed | ⟨appended, durable, wrote, synced, failed⟩
+  · exact .inl (early failed)
+  · exact late appended durable wrote synced failed
+
 /-- Acknowledged publication has a single retained history, containing the
 whole submitted batch after all earlier retained writes. -/
 theorem recoveredAcknowledgedBatch_retains {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
