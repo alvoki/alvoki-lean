@@ -154,9 +154,9 @@ leaves a poisoned session with a commit-unknown result. If the marker
 sync reports an error after persisting the entire slot, the surviving
 marker and prior WAL barrier select the complete batch. If it reports
 an error before the effect, the admitted slot bytes can select the old
-frontier or the whole batch. Native tests inject a 17-byte positional
-write followed by an I/O error, a successful marker sync followed by
-an I/O error, and process death on both sides of the reopen marker
+frontier or the whole batch. Native tests inject a positional-write I/O error after each strict
+prefix from 0 through 39 bytes, an I/O error after a successful marker
+sync, and process death on both sides of the reopen marker
 barrier. They exercise recovery and the next append both on the first
 WAL segment and after rotation.
 

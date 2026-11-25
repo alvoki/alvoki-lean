@@ -332,9 +332,14 @@ ssize_t pwrite(int fd, const void *bytes, size_t size, off_t offset) {
         struct stat opened, expected;
         if (fstat(fd, &opened) == 0 && stat(partial_error, &expected) == 0 &&
             opened.st_dev == expected.st_dev && opened.st_ino == expected.st_ino) {
-            const size_t prefix = 17;
-            if ((offset == 0 || offset == 4096) && size == 40)
-                return real_pwrite(fd, bytes, prefix, offset);
+            if ((offset == 0 || offset == 4096) && size == 40) {
+                const char *length = getenv("ALVOKI_CHECK_SLOT_WRITE_PREFIX");
+                char *end = NULL;
+                long prefix = length == NULL ? 17 : strtol(length, &end, 10);
+                if ((length != NULL && (end == length || *end != '\0')) ||
+                    prefix < 0 || (size_t)prefix >= size) _exit(125);
+                if (prefix > 0) return real_pwrite(fd, bytes, (size_t)prefix, offset);
+            }
             errno = EIO;
             return -1;
         }

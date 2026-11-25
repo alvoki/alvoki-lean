@@ -969,6 +969,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The native batch API now has matching coverage for returned I/O
+errors after all 40 strict marker-write prefixes, with and without a
+rotated keeper. Each cut returns commit-unknown, poisons the writer,
+and skips the publication marker sync. Reopen checks the exact
+selected batch and the next append. The extended native suite passed.
+
 Native process-death coverage now checks all 40 strict marker write
 prefixes for both the original and rotated keeper. Each test compares
 the exact mixed record with the same fixture's complete slot write,

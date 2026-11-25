@@ -356,7 +356,7 @@ def check_batch_append_cut(binary, shim, root):
             "the fresh batch changed the checkpoint or sealed prefix")
 
 
-def check_two_slot_partial_write_error(binary, shim, database, rotated):
+def check_two_slot_partial_write_error(binary, shim, database, rotated, count, full_marker):
     database.mkdir()
     status, stderr = run_probe(binary, "--two-slot-seed", database, "rotated" if rotated else "zero")
     require(status == 0, f"could not seed the two-slot database: {stderr}")
@@ -364,28 +364,30 @@ def check_two_slot_partial_write_error(binary, shim, database, rotated):
     wal = database / f"WAL-segment-{int(rotated)}"
     before, prefix = marker.read_bytes(), wal.read_bytes()
     log = database.with_suffix(".sync.log")
-    status, stderr = run_probe(binary, "--two-slot-check-unknown", database, env={
+    status, stderr = run_probe(binary, "--two-slot-check-unknown-batch", database, env={
         **os.environ,
         "LD_PRELOAD": str(shim),
         "ALVOKI_CHECK_SLOT_PARTIAL_ERROR": str(marker),
+        "ALVOKI_CHECK_SLOT_WRITE_PREFIX": str(count),
         "ALVOKI_CHECK_SYNC_LOG": str(log),
     })
     require(status == 0, f"partial slot write did not return commit-unknown: {stderr}")
     reached = marker.read_bytes()
-    require(reached[:17] != before[:17] and reached[17:] == before[17:],
-            "failed positional write did not preserve the untouched bytes")
+    require(reached == full_marker[:count] + before[count:],
+            "failed positional write did not leave the exact marker prefix")
     require(log.read_text().splitlines().count(str(marker)) == 1,
             "publication attempted marker sync after a positional-write error")
     frame_size = (database / "WAL-segment-0").stat().st_size if rotated else len(prefix)
     appended = wal.read_bytes()
-    require(appended.startswith(prefix) and len(appended) == len(prefix) + frame_size,
-            "failed positional write did not leave exactly one appended frame")
-    status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "old")
+    require(appended.startswith(prefix) and len(appended) == len(prefix) + 2 * frame_size,
+            "failed positional write did not leave the exact batch extent")
+    frontier = "new" if reached == full_marker else "old"
+    status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, frontier)
     require(status == 0, f"could not recover after a partial slot error: {stderr}")
+    retained = appended if frontier == "new" else prefix
     resumed = wal.read_bytes()
-    require(resumed.startswith(prefix) and len(resumed) == len(appended) and resumed != appended,
-            "recovery did not replace the unacknowledged frame with the new write")
-
+    require(resumed.startswith(retained) and len(resumed) == len(retained) + frame_size,
+            "recovery did not extend the selected history by exactly one frame")
 
 def check_two_slot_effective_sync_error(binary, shim, database, rotated, fail_wal):
     database.mkdir()
@@ -701,7 +703,6 @@ if __name__ == "__main__":
                 check_two_slot_effective_sync_error(
                     binary, shim, root / f"two-slot-{int(rotated)}-sync-error-{int(fail_wal)}", rotated, fail_wal
                 )
-            check_two_slot_partial_write_error(binary, shim, root / f"two-slot-{int(rotated)}-partial-error", rotated)
             full_marker = check_two_slot_batch_cut(
                 binary, shim, root / f"two-slot-{int(rotated)}-marker-sync", "marker-sync", rotated
             )
@@ -709,6 +710,8 @@ if __name__ == "__main__":
             check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-short-write",
                                      "slot-write", rotated, resume=True, full_marker=full_marker)
             for prefix in range(40):
+                check_two_slot_partial_write_error(binary, shim, root / f"two-slot-{int(rotated)}-partial-error-{prefix}",
+                                                   rotated, prefix, full_marker)
                 check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-slot-write-{prefix}",
                                          "slot-write", rotated, prefix=prefix, full_marker=full_marker)
         for batch in (False, True):
@@ -724,5 +727,5 @@ if __name__ == "__main__":
     print("Interrupted ready and poisoned close before or after LOCK_UN; an inherited alias blocked only the no-effect cut.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
     print("Recovered zero and rotated two-slot keepers after short writes, publication and reopen cuts, and failed retries.")
-    print("Checked every strict marker-write prefix from 0 through 39 bytes in both keeper layouts.")
+    print("Checked every strict marker-write prefix from 0 through 39 bytes on process exit and returned EIO in both keeper layouts.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")
