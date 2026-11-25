@@ -3055,6 +3055,10 @@ theorem recoveredRetries_installedReads
             WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
           openedFrom.image = .ok (opened, markerHandle, selected) after ∧
       session.phase = .ready opened.installed ∧ opened.table = table ∧
+      WalSegmentRecovery image after.directory.active target.range (history ++ batch)
+        (checkpointResult.getD (.empty, 0)).1 layout.first opened.table ∧
+      ((history ++ batch).take target.range.through = history ∨
+        (history ++ batch).take target.range.through = history ++ batch) ∧
       final.image = after ∧ final.image.Ready target ∧
       EffectTrace target { prepared with directory := settleMarker prepared.directory selected } final.image ∧
       final.owners.Owns directory descriptor ∧
@@ -3327,7 +3331,7 @@ theorem recoveredRetries_installedReads
       show (IO.FS.FileType.file == .file) = true from rfl,
       Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept,
       sameRead, decodedMarker, held]
-  have recovery : reopenWith
+  have reopenResult : reopenWith
       (WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
         (fun _ => pure (some (Boundary.encode selected.frontier))) readWal)
       (stabilize markerHandle)
@@ -3341,7 +3345,7 @@ theorem recoveredRetries_installedReads
       (prepare := fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
         (fun _ => pure (some (Boundary.encode selection.frontier))) readWal)
       (stabilize := stabilize)
-      liveRefs fresh acquisition markerAcquired recovery
+      liveRefs fresh acquisition markerAcquired reopenResult
   have physical bytes survives := retries.replayUnchanged authorizedRepair authorized base sealed
     sealedRead logicalMarker (Boundary.decode_encode selected.frontier) checked (bytes := bytes) survives
   have layoutPlan : layout.plan = plan := by
@@ -3364,7 +3368,7 @@ theorem recoveredRetries_installedReads
     simpa only [layoutTarget] using retryPrepared
   refine ⟨⟨markerBytes, markerRead, decodedMarker⟩, ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
     retrySeals, retryKeeper, retryPlan, session, final, reference,
-    opened, pin, pinned, returned, fullReopen, installed, rfl, reached, reached.symm ▸ ready,
+    opened, pin, pinned, returned, fullReopen, installed, rfl, recovery, ledger.2.2, reached, reached.symm ▸ ready,
     reached.symm ▸ authorizedRepair, owner, freshSession, replayed, acquired, points, ranges⟩
   intro bytes survives
   obtain ⟨equalReplay, sealedBytes⟩ := physical bytes survives
