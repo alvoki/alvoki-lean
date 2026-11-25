@@ -28,6 +28,13 @@ phase, cache and census. The later `FileImage` projection is supplied separately
 rotation view. A ready write trace still uses exact interpreted returns in the normalized `OpenWriteFiles`
 view and local publication and custody evidence. [Per-call report premises](../../lean/Alvoki/Storage/Disk/NativeOpenReadyTrace.lean) · [Fresh allocation and views](../../lean/Alvoki/Storage/Disk/NativeFreshTableOpen.lean)
 
+The raw append now projects one reached call on the installed active cache cell, preserving the
+literal handle and diagnostic. `RawWalAppendCalls.projects` uses per-primitive observations and a
+store law at the reached success or failure. Clearing or replacing the cell can release a stream,
+so its projected result can change the files as well as the cache. The runtime law still has to
+account for local and cached reference releases and their filesystem effects. The proof composes
+the append result before marker publication. [Production cache schedules](../../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Raw append projection](../../lean/Alvoki/Storage/Disk/NativeWalAppend.lean)
+
 `NativeReachedExecutionPrefix.keyValueRefinement` adds whole-or-none uncertain events, ready replay when
 the ending returns ready, and the existence of an allowed terminal history that agrees with prior reads.
 `Returned.stopsAfterWrites` uses that terminal argument on a finite observed write trace from fresh

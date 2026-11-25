@@ -717,6 +717,7 @@ lake env leanchecker Alvoki.Storage.Disk.CapturedMarkedInstallation
 lake env leanchecker Alvoki.Storage.Disk.CapturedLongKeeperInstallation
 lake env leanchecker Alvoki.Storage.Disk.DelayedKeeperInventory
 lake env leanchecker Alvoki.Storage.Disk.AppendHandleCustody
+lake env leanchecker Alvoki.Storage.Disk.NativeWalAppend
 lake env leanchecker Alvoki.Storage.Disk.KeeperReadCustody
 lake env leanchecker Alvoki.Storage.Disk.CapturedKeeperCustody
 lake env leanchecker Alvoki.Storage.Disk.CapturedSealReadCensus

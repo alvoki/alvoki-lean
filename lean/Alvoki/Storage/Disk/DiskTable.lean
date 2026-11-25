@@ -1397,6 +1397,17 @@ theorem DiskTable.OpenSyncFiles.stageCacheSchedule {files : DiskTable.OpenSyncFi
   rw [← uses.2.1]
   exact syncFilesStage_schedule files path bytes
 
+/-- The public write schedules append through the active cell allocated
+by the opener. Its error cleanup clears that same cell. -/
+theorem DiskTable.OpenSyncFiles.appendCacheSchedule {files : DiskTable.OpenSyncFiles}
+    {active pending directory} (uses : files.UsesCacheReferences active pending directory)
+    (path : FilePath) (bytes : ByteArray) :
+    files.append path bytes = SyncHandleRouting.appendWithActive (m := IO)
+      active.get active.set (fun name => IO.FS.Handle.mk name .append)
+      IO.FS.Handle.write IO.FS.Handle.flush path bytes := by
+  rw [← uses.1]
+  rfl
+
 /-- The two markerless publication writes keep their produced handles
 in the same pending cell that is consumed by the file barriers. -/
 def DiskTable.OpenSyncFiles.UsesBootstrapCacheSchedules (files : DiskTable.OpenSyncFiles)

@@ -54,6 +54,7 @@ import Alvoki.Storage.Disk.CapturedMarkedInstallation
 import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
 import Alvoki.Storage.Disk.DelayedKeeperInventory
 import Alvoki.Storage.Disk.AppendHandleCustody
+import Alvoki.Storage.Disk.NativeWalAppend
 import Alvoki.Storage.Disk.KeeperReadCustody
 import Alvoki.Storage.Disk.CapturedKeeperCustody
 import Alvoki.Storage.Disk.CapturedSealReadCensus
@@ -3766,6 +3767,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.delayedDirectoryAppendFromInventory
 #check_axioms Alvoki.Storage.SyncHandleRouting.FsyncObservation.ofInventory
 #check_axioms Alvoki.Storage.SyncHandleRouting.runAppendWithCache_effect
+#check_axioms Alvoki.Storage.SyncHandleRouting.appendWithActive_effect
+#check_axioms Alvoki.Storage.SyncHandleRouting.runAppendWithCacheEffects_effect
+#check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.appendCacheSchedule
+#check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.returned
+#check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.retainsKeeper
+#check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.projects
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.selectAppend_owned
 #check_axioms Alvoki.Storage.SyncHandleRouting.runAppendWithCache_owned
 #check_axioms Alvoki.Storage.SyncHandleRouting.appendThenStage_syncKeeper

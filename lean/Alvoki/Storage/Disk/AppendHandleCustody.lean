@@ -4,18 +4,67 @@ namespace Alvoki.Storage.SyncHandleRouting
 
 open System
 
-/-- Interpret the native append helper's reference reads and writes as
-cache actions. The remaining callbacks report filesystem effects. -/
-def runAppendWithCache {handle state : Type} (path : FilePath) (bytes : ByteArray)
+/-- The raw append retains the heap reached by its actual cache store.
+Clearing the active cell can release a stream with pending effects. -/
+theorem appendWithActive_effect {handle state : Type}
+    (getActive : EStateM IO.Error state (Option (FilePath × handle)))
+    (setActive : Option (FilePath × handle) → EStateM IO.Error state Unit)
     (openAppend : FilePath → EStateM IO.Error state handle)
-    (write : handle → ByteArray → EStateM IO.Error state Unit) (flush : handle → EStateM IO.Error state Unit) :
+    (write : handle → ByteArray → EStateM IO.Error state Unit)
+    (flush : handle → EStateM IO.Error state Unit)
+    (path : FilePath) (bytes : ByteArray) (entry : state) :
+    appendWithActive getActive setActive openAppend write flush path bytes entry =
+      match getActive entry with
+      | .error cause reached => .error cause reached
+      | .ok active loaded =>
+        match selectAppendHandle active openAppend path loaded with
+        | .error cause reached => .error cause reached
+        | .ok file opened =>
+          match ((write file bytes) >>= fun _ => flush file) opened with
+          | .error cause failed =>
+            (setActive none >>= fun _ => EStateM.throw cause) failed
+          | .ok () flushed => setActive (some (path, file)) flushed := by
+  simp only [appendWithActive, Bind.bind]
+  cases loaded : getActive entry with
+  | error => simp [EStateM.bind, loaded]
+  | ok active ready =>
+    cases selected : selectAppendHandle active openAppend path ready with
+    | error => simp [EStateM.bind, loaded, selected]
+    | ok file opened =>
+      cases attempted : (EStateM.bind (write file bytes) (fun _ => flush file)) opened with
+      | error cause failed =>
+        simp [EStateM.bind, loaded, selected, MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe,
+          EStateM.tryCatch, EStateM.Backtrackable.restore, EStateM.dummyRestore] at attempted ⊢
+        rw [attempted]
+        cases cleared : setActive none failed <;>
+          simp [cleared, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+      | ok value reached =>
+        cases value
+        simp [EStateM.bind, loaded, selected, MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe,
+          EStateM.tryCatch] at attempted ⊢
+        rw [attempted]
+
+/-- Interpret both the cache update and the observed effects of
+releasing the references at that update. The returned diagnostic is
+determined by the data action, even if release changes the file state. -/
+def runAppendWithCacheEffects {handle state : Type} (path : FilePath) (bytes : ByteArray)
+    (openAppend : FilePath → EStateM IO.Error state handle)
+    (write : handle → ByteArray → EStateM IO.Error state Unit) (flush : handle → EStateM IO.Error state Unit)
+    (afterStore : Cache handle → Option (FilePath × handle) → state → state) :
     EStateM IO.Error (Cache handle × state) Unit :=
   appendWithActive (fun before => .ok before.1.active before)
-    (fun active (cache, files) => .ok () ({ cache with active }, files))
+    (fun active (cache, files) => .ok () ({ cache with active }, afterStore cache active files))
     (fun name (cache, files) => withCache cache (openAppend name files))
     (fun file value (cache, files) => withCache cache (write file value files))
     (fun file (cache, files) => withCache cache (flush file files))
     path bytes
+
+/-- A file model whose cache updates have no extra file effects. -/
+def runAppendWithCache {handle state : Type} (path : FilePath) (bytes : ByteArray)
+    (openAppend : FilePath → EStateM IO.Error state handle)
+    (write : handle → ByteArray → EStateM IO.Error state Unit) (flush : handle → EStateM IO.Error state Unit) :
+    EStateM IO.Error (Cache handle × state) Unit :=
+  runAppendWithCacheEffects path bytes openAppend write flush (fun _ _ files => files)
 
 private theorem selectAppendHandle_withCache {handle state : Type} (cache : Cache handle)
     (path : FilePath) (openAppend : FilePath → EStateM IO.Error state handle) (before : state) :
@@ -29,10 +78,42 @@ private theorem selectAppendHandle_withCache {handle state : Type} (cache : Cach
     by_cases same : path = name <;>
       simp [selectAppendHandle, same, Pure.pure, EStateM.pure, withCache]
 
-/-- An open failure reaches no write or cache update. After a write or
-flush error the active entry is cleared, and the returned state includes
-the filesystem effects reached before that error. Only complete success
-installs the captured handle for the next durability barrier. -/
+/-- An open failure reaches no write or cache update. A data failure
+clears the active entry and retains the file effects of that clear. -/
+theorem runAppendWithCacheEffects_effect {handle state : Type} (cache : Cache handle) (before : state)
+    (path : FilePath) (bytes : ByteArray) (openAppend : FilePath → EStateM IO.Error state handle)
+    (write : handle → ByteArray → EStateM IO.Error state Unit) (flush : handle → EStateM IO.Error state Unit)
+    (afterStore : Cache handle → Option (FilePath × handle) → state → state) :
+    runAppendWithCacheEffects path bytes openAppend write flush afterStore (cache, before) =
+      match selectAppendHandle cache.active openAppend path before with
+      | .error cause reached => .error cause (cache, reached)
+      | .ok file opened => match write file bytes opened with
+        | .error cause reached => .error cause ({ cache with active := none }, afterStore cache none reached)
+        | .ok () written => match flush file written with
+          | .error cause reached => .error cause ({ cache with active := none }, afterStore cache none reached)
+          | .ok () reached =>
+            let active := some (path, file)
+            .ok () ({ cache with active }, afterStore cache active reached) := by
+  refine (appendWithActive_effect (state := Cache handle × state)
+    (fun before => .ok before.1.active before)
+    (fun active (cache, files) => .ok () ({ cache with active }, afterStore cache active files))
+    (fun name (cache, files) => withCache cache (openAppend name files))
+    (fun file value (cache, files) => withCache cache (write file value files))
+    (fun file (cache, files) => withCache cache (flush file files)) path bytes (cache, before)).trans ?_
+  dsimp only
+  rw [selectAppendHandle_withCache]
+  cases selected : selectAppendHandle cache.active openAppend path before with
+  | error => rfl
+  | ok file opened =>
+    cases writing : write file bytes opened with
+    | error => simp [withCache, writing, Bind.bind, EStateM.bind, EStateM.throw]
+    | ok result written =>
+      cases result
+      cases flushing : flush file written <;>
+        simp [withCache, writing, flushing, Bind.bind, EStateM.bind, EStateM.throw]
+
+/-- The effect for the file model in which active references can be
+replaced without extra file effects. -/
 theorem runAppendWithCache_effect {handle state : Type} (cache : Cache handle) (before : state)
     (path : FilePath) (bytes : ByteArray) (openAppend : FilePath → EStateM IO.Error state handle)
     (write : handle → ByteArray → EStateM IO.Error state Unit) (flush : handle → EStateM IO.Error state Unit) :
@@ -43,21 +124,8 @@ theorem runAppendWithCache_effect {handle state : Type} (cache : Cache handle) (
         | .error cause reached => .error cause ({ cache with active := none }, reached)
         | .ok () written => match flush file written with
           | .error cause reached => .error cause ({ cache with active := none }, reached)
-          | .ok () reached => .ok () ({ cache with active := some (path, file) }, reached) := by
-  simp only [runAppendWithCache, appendWithActive, Bind.bind, EStateM.bind]
-  rw [selectAppendHandle_withCache]
-  cases selected : selectAppendHandle cache.active openAppend path before with
-  | error => rfl
-  | ok file opened =>
-    cases writing : write file bytes opened with
-    | error =>
-      simp [withCache, writing, MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe, EStateM.tryCatch,
-        EStateM.bind, EStateM.Backtrackable.restore, EStateM.dummyRestore, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
-    | ok result written =>
-      cases result
-      cases flushing : flush file written <;>
-        simp [withCache, writing, flushing, MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe, EStateM.tryCatch,
-          EStateM.bind, EStateM.Backtrackable.restore, EStateM.dummyRestore, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+          | .ok () reached => .ok () ({ cache with active := some (path, file) }, reached) :=
+  runAppendWithCacheEffects_effect cache before path bytes openAppend write flush (fun _ _ files => files)
 
 /-- A selected append using the retained handle matches the active binding.
 On a cache miss, the observed open supplies the corresponding identity. -/
