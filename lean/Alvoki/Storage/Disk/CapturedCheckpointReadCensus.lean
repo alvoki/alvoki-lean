@@ -484,6 +484,58 @@ theorem CapturedMarkedReadReports.beforeKeeper (report : CapturedMarkedReadRepor
   rw [reached]
   rfl
 
+/-- The complete bounded WAL read returns the exact selected payloads
+and the reached keeper census. The held marker remains live there. -/
+theorem CapturedMarkedReadReports.walFromScan
+    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {length : UInt64} (count : length.toNat = layout.range.through * WAL.frameSize)
+    (captured : CapturedKeeperOpenReports report) {released : FilePath → List LockReferenceDrop}
+    {required : List (Nat × IO.FS.Metadata)}
+    {retains : DescriptorSlot → Prop}
+    (seals : CapturedSealReadChainWith report released retains required report.listing.afterClose captured.beforeOpen)
+    (offsets : required.map Prod.fst = (layout.sealed ++ [layout.keeper]).map WalSegment.first)
+    (retained : ∀ event ∈ captured.beforeOpen,
+      event.removes admission.owner.reference = false ∧ event.removes admission.cached.reference = false)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (later : ∀ start ∈ retry.image.later.visible, layout.range.through < start)
+    {slot : DescriptorSlot} (keepsMarker : retains slot)
+    (markerLive : slot ∈ admission.reached.slots)
+    (listingDrops : ∀ event ∈ report.listing.beforeOpen ++ report.listing.duringScan,
+      event.removes slot.reference = false)
+    (keeperDrops : ∀ event ∈ captured.duringRead, event.removes slot.reference = false) :
+    let handle := (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+    let cache := admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
+      handle layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat
+    readSelectedWithCachedExtents directory layout.range.watermark length report.scanWal
+        report.inspectWal (readTemporarySeal report.reads released) captured.readKeeperAt
+        (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) =
+      .ok (⟨(layout.sealed ++ [layout.keeper]).map (fun segment => (segment.first, segment.bytes)),
+        retry.image.later.visible⟩, report.wal.keeper.calls.metadata.byteSize.toNat)
+        (cache, captured.afterRead, admission.held) ∧
+    slot ∈ captured.afterRead.slots := by
+  intro handle cache
+  obtain ⟨_, _, entered⟩ := report.walFromScanToKeeper count captured seals offsets retained following later
+    captured.readKeeperAt
+  have through : length.toNat / WAL.frameSize = layout.range.through := by
+    rw [count, Nat.mul_div_cancel _ (by decide : 0 < WAL.frameSize)]
+  have size : layout.keeper.bytes.size = (length.toNat / WAL.frameSize - layout.keeper.first) * WAL.frameSize :=
+    through.symm ▸ layout.target.trimmedSize
+  have covers : layout.keeper.bytes.size ≤ report.wal.keeper.calls.metadata.byteSize.toNat := by
+    have extent : report.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
+      report.wal.keeper.observesFile.extent
+    rw [extent]
+    change layout.keeper.bytes.size ≤ (layout.keeper.bytes ++ layout.tail).size
+    rw [ByteArray.size_append]
+    exact Nat.le_add_right ..
+  have returned := readCachedWalPayloads_keeperSuccess directory (length.toNat / WAL.frameSize)
+    (readTemporarySeal report.reads released) captured.readKeeperAt size covers (captured.reads covers)
+  refine ⟨?_, captured.preservesSlotAfterRead
+    (seals.preservesSlot keepsMarker (report.listing.preservesSlot markerLive listingDrops)) keeperDrops⟩
+  rw [entered]
+  simp only [Bind.bind, EStateM.bind, returned, Pure.pure, EStateM.pure, List.map_append, List.map_cons, List.map_nil]
+  rfl
+
 /-- The chronological preparation and the read-only projection return
 the same bounded plan, replayed table, generation, and physical keeper
 extent. Only the return from the chronological reader carries the reached

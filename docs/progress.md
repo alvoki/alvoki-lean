@@ -962,3 +962,9 @@ exact sealed payloads, later names and reached keeper census from the
 same reports. The rename-backed opener now uses this lemma. The
 two-slot opener can use a seal chain that also tracks its retained
 marker descriptor.
+
+The bounded WAL read now returns the exact sealed payloads, keeper
+prefix, physical extent and reached keeper cache and census in one
+theorem. The same read reports establish that the held marker slot
+remains live in that census. The client composition can use this
+census for the marker barrier.
