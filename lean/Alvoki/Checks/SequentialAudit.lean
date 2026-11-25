@@ -266,6 +266,8 @@ import Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
 import Alvoki.Storage.Disk.NativeMarkedWalExtentsHeap
 import Alvoki.Storage.Disk.NativeMarkedSealHeap
 import Alvoki.Storage.Disk.NativeAlignedMarkedWorker
+import Alvoki.Storage.Disk.NativeMarkedTableOpen
+import Alvoki.Storage.Disk.NativePrunedAlignedMarkedWorker
 import Alvoki.Storage.Disk.NativeLongKeeperReadHeap
 import Alvoki.Storage.Disk.NativeAlignedOpenHeap
 import Alvoki.Storage.Disk.NativePrunedAlignedOpenHeap
@@ -1719,6 +1721,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheAllocations.installs
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.admitsWithCache
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.admitsWithCacheAfterFlatGuard
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.startsHeldWorker
+#check_axioms Alvoki.Storage.DiskSession.MarkedHeapInstallation.opensFromAdmission
+#check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.opensAlignedFromAdmission
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.keeperCacheSchedules
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.stageCacheSchedule
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.returns
@@ -1743,7 +1748,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedSealReadChain.reaches
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.reachesKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.recoversWithSelectedPreparation
+#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.recoversFromOpenedCacheWith
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.recoversFromOpenedCache
+#check_axioms Alvoki.Storage.DiskSession.PrunedAlignedKeeperCacheReport.recoversFromOpenedCache
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromAlignedCache
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromRepairedHeap
 #check_axioms Alvoki.Storage.DiskSession.MarkedHeapInstallation.startsAtReportedPosition
@@ -3243,6 +3250,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.repairAt_returns
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.repairActions_returns_from
 
+#check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.recoversWithSelectedPreparation
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.recoversFromCensus
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.installsFromCensus
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.delayedKeeperSync
