@@ -1709,8 +1709,23 @@ theorem installsAfterAcquiredRecovery_replays
     {base : PackedTable} {first : Nat}
     (selected : WalSegmentRecovery image after.2.image.directory.active range (prior.history ++ batch) base first
       opened.installed.table)
-    (whole : (prior.history ++ batch).take range.through = prior.history ∨
-      (prior.history ++ batch).take range.through = prior.history ++ batch)
+    {interrupted firstRepair : FileImage} {target : Target}
+    (beforeBarrier : UnsettledRetries interrupted retry.image)
+    {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
+    {current next : Selection}
+    (accepted : decode before = .ok current)
+    (offset : current.slot = slotIndex active)
+    (advanced : advance current (WAL.encode (prior.history ++ batch)).size = .ok next)
+    (observations : ∀ pair ∈ interrupted.directory.active :: interrupted.directory.crashImages,
+      pair = ⟨checkpoint, none⟩ ∨
+      ∃ bytes, InterruptedSlotBytes before bytes active next ∧
+        projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
+    (observed : retry.image.directory.active.walBoundary = some (Boundary.encode selection.frontier))
+    (authorizedRepair : EffectTrace target
+      { retry.image with directory := settleMarker retry.image.directory selection } firstRepair)
+    {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared retry.image target plan)
+    (retries : SettledRetries target firstRepair after.2.image)
+    (oldSize : current.frontier.toNat = (WAL.encode prior.history).size)
     (ordered : WAL.OrdinalsFrom 1 ((prior.history ++ batch).take range.through)) :
     ∃ session,
       calls.runWithMarked (fun resolved cache before =>
@@ -1720,6 +1735,9 @@ theorem installsAfterAcquiredRecovery_replays
         .ok session after ∧
       InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take range.through)
         opened.installed session := by
+  obtain ⟨_, _, previous, _, _, _⟩ := trace.keyValueRefinement start.bootstrap start.held
+  have whole := (recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
+    observations selection observed authorizedRepair preparedPlan retries previous oldSize selected).2.2
   obtain ⟨reference, replayed, retained, acknowledged, bounded, priorReads⟩ :=
     trace.replaysUncertainSubmission start whole ordered
   have returned := installsAfterAcquiredRecovery calls marker acquire prepare stabilize finish acquisition recovery

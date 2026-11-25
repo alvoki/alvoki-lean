@@ -867,6 +867,14 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The returned-session replay theorem now derives its old-or-whole
+selection from the reported pre-barrier and settled retry traces.
+The pre-barrier trace ends at the admitted files and the settled trace
+ends at the files returned by the marked opener. The same decoded
+selection enters recovery and the client proof. The remaining work is
+to derive chronological retry evidence and successful reopen from the
+native outcome reports rather than supplying both as premises.
+
 The acquired-marker installer derives the replay of earlier client
 responses from the prior client trace and the old-or-whole-batch
 selection. The recovered table and returned guarded reads use that
