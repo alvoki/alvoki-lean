@@ -256,6 +256,7 @@ import Alvoki.Storage.Disk.NativeOpenCloseAdmissionTrace
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 import Alvoki.Storage.Disk.NativeInactiveOpenedSnapshots
 import Alvoki.Storage.Disk.NativeInactiveOpenedPublication
+import Alvoki.Storage.Disk.NativeInactiveOpenedMaintenance
 import Alvoki.Storage.Disk.NativeOpenCheckpoint
 import Alvoki.Storage.Disk.NativeOpenedPosition
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
@@ -1969,6 +1970,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runCheckpointOnOpenPhase_rejectsPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveWalPlan
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveWalCollection
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveRotation
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveObsoleteRunCollection
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveRunMaintenance
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotRead
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotRelease
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotAcquire

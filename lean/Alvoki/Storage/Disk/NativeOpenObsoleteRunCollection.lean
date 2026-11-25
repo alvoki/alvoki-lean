@@ -61,7 +61,7 @@ private theorem nativeBindAssoc (run : IO α) (next : α → IO β) (last : β �
   unfold EST.bind
   cases run world <;> rfl
 
-private theorem obsoleteRunCollectionSchedule {db : DiskTable}
+theorem obsoleteRunCollectionSchedule {db : DiskTable}
     {directory lock files phase token active pending cachedDirectory}
     (uses : db.UsesOpenReferences directory lock files phase token)
     (references : files.UsesCacheReferences active pending cachedDirectory)
@@ -111,6 +111,16 @@ def OpenObsoleteRunCallbacks.run (calls : OpenObsoleteRunCallbacks heap)
     EStateM IO.Error heap Unit :=
   performObsoleteRunsWith opened.directory (calls.plan opened held) calls.remove
     (calls.sync opened.directory cacheDirectory active pending)
+
+theorem OpenObsoleteRunCallbacks.rejectsInactiveCollection (calls : OpenObsoleteRunCallbacks heap)
+    (opened : NativeOpenedHandle heap) (before : heap) (cause : IO.Error) (held : List UInt64)
+    (rejected : ((do (← opened.get opened.phase).installed : EStateM IO.Error heap Installed) before) =
+      .error cause before)
+    (cachedDirectory : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) :
+    calls.run opened held cachedDirectory active pending before = .error cause before := by
+  simp only [Bind.bind, EStateM.bind] at rejected
+  simp only [run, plan, performObsoleteRunsWith, selectObsoleteRunsWith, Bind.bind, EStateM.bind, rejected]
 
 /-- The table's projected phase, raw cache entries and resolved handles,
 cached directory and lock identities, census and held writer remain

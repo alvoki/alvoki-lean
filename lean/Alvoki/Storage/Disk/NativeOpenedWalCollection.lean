@@ -35,6 +35,17 @@ def NativeReadyWalCollection.runOnOpenPhase {heap : Type} {state : NativeReadySt
     EStateM IO.Error (heap × CollectionFiles) Unit :=
   reported.calls.collectOnOpenPhase opened reported.publicationFiles
 
+theorem WalCollectionReads.rejectsInactiveCollection {heap : Type}
+    (calls : WalCollectionReads) (opened : NativeOpenedHandle heap) (before : heap)
+    (phase : Phase Installed) (cause : IO.Error)
+    (stored : opened.contents before opened.phase = some phase)
+    (rejected : (phase.installed : Except IO.Error Installed) = .error cause) (files : CollectionFiles)
+    (publication : List Nat → EStateM IO.Error CollectionFiles Unit) :
+    calls.collectOnOpenPhase opened publication (before, files) = .error cause (before, files) := by
+  have loaded := opened.phaseEffects.reads before opened.phase _ stored
+  simp only [collectOnOpenPhase, onPhase, Bind.bind, EStateM.bind, loaded]
+  cases phase <;> cases rejected <;> rfl
+
 variable {heap : Type} {opened : NativeOpenedHandle heap}
 
 /-- A successful public collection continues on its original handle.

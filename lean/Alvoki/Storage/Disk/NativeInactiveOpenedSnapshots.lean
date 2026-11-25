@@ -15,7 +15,7 @@ variable {heap : Type} (opened : NativeOpenedHandle heap)
 def loadInstalled : EStateM IO.Error heap Installed := do
   (← opened.get opened.phase).installed
 
-private theorem rejectsInstalled (stored : opened.contents before opened.phase = some mode.phase) :
+theorem rejectsInstalled (stored : opened.contents before opened.phase = some mode.phase) :
     opened.loadInstalled before = .error mode.error before := by
   have loaded := opened.phaseEffects.reads before opened.phase _ stored
   simp only [loadInstalled, Bind.bind, EStateM.bind, loaded]

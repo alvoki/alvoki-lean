@@ -537,6 +537,11 @@ private def checkCheckpointRunAliases (root : FilePath) : IO Unit := do
     expectManifest dir 2 2 0 2
   finally recovered.close
 
+private def rejectsClosed (action : IO α) (operation : String) : IO Unit := do
+  let .error (.userError cause) ← action.toBaseIO
+    | throw (IO.userError s!"closed database accepted {operation}")
+  check (cause == "database is closed") s!"closed database changed the {operation} diagnostic"
+
 private def checkSnapshotSessions (root : FilePath) : IO Unit := do
   let firstDir := root / "first"
   let secondDir := root / "second"
@@ -575,9 +580,13 @@ private def checkSnapshotSessions (root : FilePath) : IO Unit := do
       let .error (.rejected (.userError batchCause)) ← (original.writeBatchWithOutcome []).toBaseIO
         | throw (IO.userError "closed database accepted an empty batch")
       check (batchCause == "database is closed") "closed database changed the empty-batch diagnostic"
-      let .error (.userError checkpointCause) ← original.checkpoint.toBaseIO
-        | throw (IO.userError "closed database accepted a checkpoint")
-      check (checkpointCause == "database is closed") "closed database changed the checkpoint diagnostic"
+      rejectsClosed original.checkpoint "checkpoint"
+      rejectsClosed original.planWalCollection "WAL planning"
+      rejectsClosed original.collectCoveredWal "covered WAL collection"
+      rejectsClosed original.rotateWal "WAL rotation"
+      rejectsClosed (original.collectObsoleteRuns [1]) "obsolete-run collection"
+      rejectsClosed (original.compact 0) "compaction"
+      rejectsClosed (original.retainRunVersions 0) "run-version retention"
       check ((← first.lookup firstPin.handle 7) == some (some 70))
         "a call on the closed table changed the reopened table's snapshot"
     finally second.close
