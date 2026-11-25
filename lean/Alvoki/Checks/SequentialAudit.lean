@@ -387,6 +387,7 @@ import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
 import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
+import Alvoki.Storage.Disk.NativeStoppedFirstAppendExitTableOpen
 import Alvoki.Storage.Disk.NativeOpenedRestartSessions
 import Alvoki.Storage.Disk.NativeOpenedSnapshotSessions
 import Alvoki.Storage.Disk.NativeFreshOpenedSessions
@@ -2095,10 +2096,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendStop.selectsPrior
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtFirstAppend
 #check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendExit.reaches
+#check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendExit.plans
 #check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendExit.noIssuerSlots
 #check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendExitReads.rootAndLock
 #check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendExitReads.sameKeeper
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversFirstAppendAfterExit
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversFirstAppendAfterExitFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversFirstAppendPowerLoss
 #check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendCrash.plans
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversFirstAppendPowerLossFrom
@@ -2223,6 +2226,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedStoppedMarkerReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendStop.stopsBeforeSuffix
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedFirstAppendReport.reaches
+#check_axioms Alvoki.Storage.DiskSession.RawStoppedFirstAppendExitEffects.stopsAppend
+#check_axioms Alvoki.Storage.DiskSession.RawStoppedFirstAppendExitEffects.releases
+#check_axioms Alvoki.Storage.DiskSession.NativeStoppedFirstAppendExitTableOpen.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.common
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.executes
