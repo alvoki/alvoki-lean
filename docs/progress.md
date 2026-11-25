@@ -2111,3 +2111,11 @@ The stopped WAL sync now uses the reported keeper image before or
 after the sync effect. Before the effect it reuses the append survivor
 proof. After the effect it reuses the same flushed-prefix proof as a
 completed sync. The layout proof derives the prefix in both cases.
+
+The canonical layout now takes the keeper survivor from the first
+crash and the reported retry trace. Before destructive repair,
+successive marker syncs and crashes preserve those exact keeper bytes.
+The layout proof therefore derives the keeper at the reached reopen
+from the original physical choice, without an independent retry-byte
+premise. The native installation proof still needs to consume this
+layout and its matching checkpoint and callback reports.

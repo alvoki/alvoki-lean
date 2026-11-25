@@ -2631,7 +2631,11 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
     (newSize : next.frontier.toNat = (WAL.encode (prior.history ++ batch)).size)
     (counted : selected.frontier.toNat = through * frameSize)
     (decoded : retry.directory.active.walRange = some ⟨watermark, through⟩)
-    (survives : retry.keeper.active ∈ reached.1.keeper.crashImages)
+    {survivingPair : DirectoryPublication.Bindings} {survivingBytes : Option ByteArray}
+    {survivingNames : List Nat}
+    (survived : survivingBytes ∈ reached.1.keeper.crashImages)
+    (retries : ReportedMarkerRetries
+      (reached.1.crash survivingPair survivingBytes survivingNames) retry)
     (appendCutImage : let active := directory.file (.walSegment prior.installed.activeFirst)
       (report.append active (WAL.encode batch)).run (prior.files, report.initialMarker) =
         .error report.stopped reached →
@@ -2654,6 +2658,11 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
     (previousSelection : decode (previousMarker.visible previousMarker.active) = .ok current) :
     ∃ plan : DiskSession.CanonicalKeeperLayout retry ((prior.history ++ batch).take through),
       plan.range.watermark = watermark ∧ plan.keeper.first = prior.wal.active.first := by
+  have initialKeeper : (reached.1.crash survivingPair survivingBytes survivingNames).keeper.Valid
+      (fun candidate => candidate = survivingBytes) :=
+    Storage.Publication.Image.settled_valid rfl
+  have survives : retry.keeper.active ∈ reached.1.keeper.crashImages :=
+    (retries.refines.keepsWal initialKeeper).activeValid.symm ▸ survived
   have flushedPrefix {appended : FileImage × WalInodeImage}
       (wrote : (report.append (directory.file (.walSegment prior.installed.activeFirst)) (WAL.encode batch)).run
         (prior.files, report.initialMarker) = .ok (.ok ()) appended)
