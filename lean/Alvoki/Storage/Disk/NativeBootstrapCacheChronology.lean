@@ -10,18 +10,18 @@ structure FreshBootstrapCacheCalls (heap : Type) extends BootstrapPendingCalls h
   metadata : FilePath → EStateM IO.Error heap (Option IO.FS.Metadata)
   rename : FilePath → FilePath → EStateM IO.Error heap Unit
 
-private def FreshBootstrapCacheCalls.sync (calls : FreshBootstrapCacheCalls heap) (directory : DiskDirectory)
+def FreshBootstrapCacheCalls.sync (calls : FreshBootstrapCacheCalls heap) (directory : DiskDirectory)
     (directoryRef : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (paths : Array FilePath) : EStateM IO.Error heap Unit :=
   SyncPathGroup.run (fun name => syncWithHandles directory.path name (calls.readDirectory directoryRef)
     (calls.readPending pending) (calls.setPending pending) (calls.readActive active) calls.openRead calls.fsync) paths
 
-private def FreshBootstrapCacheCalls.createPending (calls : FreshBootstrapCacheCalls heap)
+def FreshBootstrapCacheCalls.createPending (calls : FreshBootstrapCacheCalls heap)
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (path : FilePath) : EStateM IO.Error heap Unit := do
   let handle ← calls.create path
   calls.remember pending (pushPending path handle)
 
-private def FreshBootstrapCacheCalls.stagePending (calls : FreshBootstrapCacheCalls heap)
+def FreshBootstrapCacheCalls.stagePending (calls : FreshBootstrapCacheCalls heap)
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (path : FilePath) (bytes : ByteArray) : EStateM IO.Error heap Unit := do
   let handle ← calls.stage path bytes
   calls.remember pending (pushPending path handle)
@@ -82,7 +82,7 @@ structure FreshBootstrapDirectoryBarrier
   frame : FreshBootstrapCacheFrame view seed.directoryRef seed.activeRef before reached
   pending : view.pending reached seed.pendingRef = view.pending before seed.pendingRef
 
-private theorem FreshBootstrapDirectoryBarrier.returns
+theorem FreshBootstrapDirectoryBarrier.returns
     {seed : OpenSyncCacheAllocations opened view init entry} {calls : FreshBootstrapCacheCalls heap}
     (report : FreshBootstrapDirectoryBarrier seed calls before) :
     calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[directory.path] before = .ok () report.reached := by

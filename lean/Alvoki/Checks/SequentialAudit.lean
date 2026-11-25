@@ -295,6 +295,7 @@ import Alvoki.Storage.Disk.NativePrunedAlignedOpenHeap
 import Alvoki.Storage.Disk.NativeBootstrapCacheMutations
 import Alvoki.Storage.Disk.NativeBootstrapCacheChronology
 import Alvoki.Storage.Disk.NativeBootstrapKeeperPhysical
+import Alvoki.Storage.Disk.NativeReusedBootstrapKeeperHeap
 import Alvoki.Storage.Disk.NativeBootstrapMarkerPhysical
 import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.NativeFreshTableOpen
@@ -1840,6 +1841,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapDirectoryBarrier.selectsRoot
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapCacheChronology.returns
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapKeeperPhysical.settles
+#check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperGuards.prepare
+#check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.syncsKeeper
+#check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.settles
+#check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.reachesMarker
+#check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.reachesFromHeld
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapMarkerPhysical.settles
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.installs
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.opensFromAdmission
