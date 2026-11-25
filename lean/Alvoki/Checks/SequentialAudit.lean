@@ -177,6 +177,7 @@ import Alvoki.Storage.Disk.RotationRetrySession
 import Alvoki.Storage.Disk.SegmentedRotationRecovery
 import Alvoki.Storage.Disk.SegmentedRotationStep
 import Alvoki.Storage.Disk.ObservedRotationSchedule
+import Alvoki.Storage.Disk.RotationExistingSuccessor
 import Alvoki.Storage.Disk.RotationCreateInterruption
 import Alvoki.Storage.Disk.RotationCreatePhysical
 import Alvoki.Storage.Disk.RotationSuccessorFsyncStop
@@ -1461,6 +1462,16 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runObservedRotation_empty
 #check_axioms Alvoki.Storage.DiskSession.runObservedRotation_publishError
 #check_axioms Alvoki.Storage.DiskSession.runObservedRotation_present
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorOpen.readsEmpty
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorOpen.resolves
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorOpen.custody
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorOpen.lockCustody
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorFileSync.effects
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorFileSync.fileGroup
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorFileSync.returnsFileError
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorDirectorySync.directoryGroup
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorDirectorySync.returnsRotation
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorDirectorySync.durableSuccessor
 #check_axioms Alvoki.Storage.DiskSession.ObservedRotation.rotates
 #check_axioms Alvoki.Storage.DiskSession.ObservedRotation.reopensAfterClose
 #check_axioms Alvoki.Storage.DiskSession.RotationInFlightCut.reopensAdmitted
