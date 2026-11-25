@@ -231,6 +231,7 @@ import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeExecutionTrace
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeReadyWrite
+import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
 import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
@@ -1470,6 +1471,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.executesFromEmpty
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.closesAndReopens
 #check_axioms Alvoki.Storage.DiskSession.runBatchWrite_acknowledges
+#check_axioms Alvoki.Storage.DiskSession.NativeWritePreflightObservation.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeWritePreflightObservation.returnsWithCache
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preflightsWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyKeeperSelection.selects
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyKeeperSelection.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyKeeperSelection.cachedResult
