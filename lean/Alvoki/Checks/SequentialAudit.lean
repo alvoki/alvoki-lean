@@ -312,6 +312,7 @@ import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
 import Alvoki.Storage.Disk.NativeFinalizedRetryAlignedOpen
 import Alvoki.Storage.Disk.NativeFinalizedListingRetry
 import Alvoki.Storage.Disk.NativeRawPresentManifestListing
+import Alvoki.Storage.Disk.NativeRawCheckpointDigestError
 import Alvoki.Storage.Disk.NativeRawFinalizedManifestError
 import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
 import Alvoki.Storage.Disk.NativeRawFlatWalOpenError
@@ -1942,6 +1943,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.stopsAfterPresentManifest
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.returnsAfterPresentManifest
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.finalizedPresentAttempt
+#check_axioms Alvoki.Storage.DiskSession.RawCheckpointDigestRead.readsRun
+#check_axioms Alvoki.Storage.DiskSession.RawCheckpointDigestRead.rejects
+#check_axioms Alvoki.Storage.DiskSession.RawCheckpointDigestRead.stopsMarkedWorker
+#check_axioms Alvoki.Storage.DiskSession.RawCheckpointDigestRead.finalizedAttempt
 #check_axioms Alvoki.Storage.DiskSession.RawAbsentManifestMarkerPrefix.readsSelected
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.stops
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.sameStream
