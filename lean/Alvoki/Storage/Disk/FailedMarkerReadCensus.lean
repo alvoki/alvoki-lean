@@ -201,8 +201,6 @@ structure RejectedMarkerTail where
   sync : Array FilePath → EStateM IO.Error FileImage Unit
   renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit
 
-namespace HeldMarkerChunkFailure
-
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
 
@@ -212,15 +210,13 @@ private def liftFile {result : Type} (action : EStateM IO.Error FileImage result
   | .ok value after => .ok value (census, { before with image := after })
   | .error cause after => .error cause (census, { before with image := after })
 
-private def readFiles (fault : HeldMarkerChunkFailure admission) (path : FilePath) :
-    EStateM IO.Error FileImage (Option ByteArray) := fun files =>
-  match metadataRead fault.reads directory path (none, 0) with
-  | .ok bytes _ => .ok bytes files
-  | .error cause _ => .error cause files
-
-/-- The actual held marked schedule, with the original recovery and
-installation continuations. The metadata read carries its local census. -/
-def recover (fault : HeldMarkerChunkFailure admission) (tail : RejectedMarkerTail)
+/-- The shared held marked branches pass the reached metadata and run
+callbacks into the original bounded reader and its original continuations. -/
+def CensusOpenAdmissionReports.recoverMarkedWithReads
+    (admission : CensusOpenAdmissionReports input directory inventory retry)
+    (readOptional : DiskDirectory → FilePath → EStateM IO.Error CensusOpenState (Option ByteArray))
+    (readSize : FilePath → EStateM IO.Error CensusOpenState Nat)
+    (readPrefix : FilePath → Nat → EStateM IO.Error CensusOpenState ByteArray) (tail : RejectedMarkerTail)
     (bootstrap : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened)
     (install : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Reopened →
       EStateM IO.Error CensusOpenState SegmentedSession)
@@ -229,8 +225,7 @@ def recover (fault : HeldMarkerChunkFailure admission) (tail : RejectedMarkerTai
   let opened ← recoverSegmentedWalWith
     (rejectFlatWalWith resolved (optionalMetadataWith (admission.lookup (resolved.file .wal))))
     (optionalMetadataWith (admission.lookup (resolved.file .walBoundary)))
-    (reopenMarkedBoundedWithCachedExtents resolved (readMetadataWithCensus fault.reads resolved fault.release)
-      (fun path => liftFile (tail.readRunSize path)) (fun path count => liftFile (tail.readRunPrefix path count))
+    (reopenMarkedBoundedWithCachedExtents resolved (readOptional resolved) readSize readPrefix
       (fun path => liftFile (tail.list path)) (fun path => liftFile (tail.lstat path))
       (fun path count => liftFile (tail.readSeal path count))
       (fun path count size => liftFile (tail.readKeeper path count size))
@@ -238,6 +233,41 @@ def recover (fault : HeldMarkerChunkFailure admission) (tail : RejectedMarkerTai
       (fun paths => liftFile (tail.sync paths)) (fun source target => liftFile (tail.renameFile source target)))
     (bootstrap resolved cache)
   install resolved owner cache opened
+
+theorem CensusOpenAdmissionReports.run_reachesReadCleanup
+    (admission : CensusOpenAdmissionReports input directory inventory retry)
+    (recover : DiskDirectory → DescriptorSlot → CensusDirectoryCache →
+      EStateM IO.Error CensusOpenState SegmentedSession)
+    {cause : IO.Error} {reached : DescriptorInventory}
+    (failed : recover directory admission.owner admission.cache (admission.reached, admission.held) =
+      .error cause (reached, admission.held)) :
+    admission.run recover =
+      match admission.unlock admission.owner () (reached, admission.held) with
+      | .ok () after => .error cause after
+      | .error cleanup after => .error cleanup after := by
+  rw [admission.run_reachesRecovery]
+  simp only [tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, failed, Bind.bind, EStateM.bind,
+    throw, throwThe, MonadExceptOf.throw, EStateM.throw, EStateM.Backtrackable.restore, EStateM.dummyRestore]
+  cases admission.unlock admission.owner () (reached, admission.held) with
+  | ok answer reached => cases answer; rfl
+  | error error reached => rfl
+
+namespace HeldMarkerChunkFailure
+
+private def readFiles (fault : HeldMarkerChunkFailure admission) (path : FilePath) :
+    EStateM IO.Error FileImage (Option ByteArray) := fun files =>
+  match metadataRead fault.reads directory path (none, 0) with
+  | .ok bytes _ => .ok bytes files
+  | .error cause _ => .error cause files
+
+/-- The actual held marked schedule, with the metadata read census. -/
+def recover (fault : HeldMarkerChunkFailure admission) (tail : RejectedMarkerTail)
+    (bootstrap : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened)
+    (install : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Reopened →
+      EStateM IO.Error CensusOpenState SegmentedSession) :=
+  admission.recoverMarkedWithReads (readMetadataWithCensus fault.reads · fault.release)
+    (fun path => liftFile (tail.readRunSize path)) (fun path count => liftFile (tail.readRunPrefix path count))
+    tail bootstrap install
 
 /-- The raw marker read fails after the empty checkpoint is reached.
 The bounded worker returns the exact diagnostic and census directly to
@@ -248,21 +278,14 @@ theorem reachesCleanup (fault : HeldMarkerChunkFailure admission) (tail : Reject
       match admission.unlock admission.owner () (fault.afterRead, admission.held) with
       | .ok () after => .error fault.cause after
       | .error cleanup after => .error cleanup after := by
-  rw [admission.run_reachesRecovery]
+  apply admission.run_reachesReadCleanup
   have selected : optionalMetadataWith (admission.lookup (directory.file .walBoundary))
       (admission.reached, admission.held) = .ok (some fault.metadata) (admission.reached, admission.held) := by
     simp only [optionalMetadataWith, Bind.bind, EStateM.bind, fault.route, Pure.pure, EStateM.pure]
-  have recovery : fault.recover tail bootstrap install directory admission.owner admission.cache
-      (admission.reached, admission.held) = .error fault.cause (fault.afterRead, admission.held) := by
-    simp only [recover, recoverSegmentedWalWith, rejectFlatWalWith, reopenMarkedBoundedWithCachedExtents,
-      prepareBoundedMarkedFromReaders, readIntegrityCheckpointSized, Bind.bind, EStateM.bind, fault.flat, selected,
-      Option.isSome_none, Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure,
-      fault.missingManifest, fault.returnsError]
-  simp only [tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, recovery, Bind.bind, EStateM.bind,
-    throw, throwThe, MonadExceptOf.throw, EStateM.throw, EStateM.Backtrackable.restore, EStateM.dummyRestore]
-  cases admission.unlock admission.owner () (fault.afterRead, admission.held) with
-  | ok answer reached => cases answer; rfl
-  | error error reached => rfl
+  simp only [recover, CensusOpenAdmissionReports.recoverMarkedWithReads, recoverSegmentedWalWith, rejectFlatWalWith,
+    reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, readIntegrityCheckpointSized,
+    Bind.bind, EStateM.bind, fault.flat, selected, Option.isSome_none, Option.isSome_some, Bool.false_eq_true,
+    ↓reduceIte, Pure.pure, EStateM.pure, fault.missingManifest, fault.returnsError]
 
 private def attempt (fault : HeldMarkerChunkFailure admission) (tail : RejectedMarkerTail)
     (acquisition : TryLockObserves retry.owners directory (.ok true)) (unlock : UnlockReport)
@@ -299,19 +322,40 @@ def certifies (fault : HeldMarkerChunkFailure admission) (tail : RejectedMarkerT
   · change fault.readFiles (directory.file .walBoundary) retry.image = _
     simp only [readFiles, fault.rawError]
 
-private def cleanupResult (fault : HeldMarkerChunkFailure admission) (outcome : UnlockReport) :
+end HeldMarkerChunkFailure
+
+private def readCleanupResult (admission : CensusOpenAdmissionReports input directory inventory retry)
+    (reached : DescriptorInventory) (outcome : UnlockReport) :
     EStateM.Result IO.Error CensusOpenState PUnit :=
   match outcome with
-  | .success => .ok () (fault.afterRead, ⟨retry.image, retry.owners.set (directory.file .lock) none⟩)
-  | .failure cause _ => .error cause (fault.afterRead, admission.held)
+  | .success => .ok () (reached, ⟨retry.image, retry.owners.set (directory.file .lock) none⟩)
+  | .failure cause _ => .error cause (reached, admission.held)
 
 /-- The same live lock slot receives the native cleanup callback once
-the failed marker handle has finalized. Local Linux flock errors keep
-the lock description live and take precedence over the read diagnostic. -/
-structure Cleanup (fault : HeldMarkerChunkFailure admission) where
+the read handles have finalized. Local Linux flock errors keep the lock
+description live and take precedence over the read diagnostic. -/
+structure ReportedReadCleanup (admission : CensusOpenAdmissionReports input directory inventory retry)
+    (reached : DescriptorInventory) where
   outcome : UnlockReport
   localFlock : outcome.LocalFlock
-  returned : admission.unlock admission.owner () (fault.afterRead, admission.held) = fault.cleanupResult outcome
+  returned : admission.unlock admission.owner () (reached, admission.held) = readCleanupResult admission reached outcome
+
+theorem ReportedReadCleanup.matchesRejection {reached : DescriptorInventory}
+    (cleanup : ReportedReadCleanup admission reached) (rejected : CachedOpenRejection directory retry)
+    (owner : rejected.attempt.descriptor = admission.owner.description)
+    (reported : rejected.attempt.unlock = cleanup.outcome) :
+    (match admission.unlock admission.owner () (reached, admission.held) with
+    | .ok () after => .error rejected.cause after
+    | .error error after => .error error after : EStateM.Result IO.Error CensusOpenState SegmentedSession) =
+    .error rejected.error (reached, rejected.after) := by
+  rw [cleanup.returned]
+  simp only [CachedOpenRejection.after, CachedOpenRejection.error, CachedOpenAttempt.cleanupError,
+    owner, reported]
+  cases cleanup.outcome <;> rfl
+
+namespace HeldMarkerChunkFailure
+
+abbrev Cleanup (fault : HeldMarkerChunkFailure admission) := ReportedReadCleanup admission fault.afterRead
 
 /-- The exact visible file state of the native failed open is the common
 retry prefix's rejection endpoint. Its descriptor census comes from the
@@ -331,11 +375,8 @@ theorem continues (fault : HeldMarkerChunkFailure admission) (tail : RejectedMar
   have custody := fault.custody
   refine ⟨?_, rejected.attempt.cleanupError_keepsFiles rejected.cause retry.image, earlier.rejected rejected,
     custody.2.2.2.2.2.1, fault.ownerRetained, fault.directoryRetained⟩
-  rw [fault.reachesCleanup tail bootstrap install, cleanup.returned]
-  cases observed : cleanup.outcome <;>
-    simp [rejected, certifies, CachedOpenRejection.ofMarkerReadError, CachedOpenRejection.after,
-      CachedOpenRejection.error, attempt, CachedOpenAttempt.cleanupError, observed, cleanupResult]
-  rfl
+  rw [fault.reachesCleanup tail bootstrap install]
+  exact cleanup.matchesRejection rejected rfl rfl
 
 end HeldMarkerChunkFailure
 

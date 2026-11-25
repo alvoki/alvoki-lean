@@ -397,4 +397,28 @@ theorem CapturedMarkedReadReports.preparesFromCensus (report : CapturedMarkedRea
   rw [through]
   rfl
 
+/-- Chronological reports from admitted checkpoint metadata to the
+exact keeper entry, shared by the aligned and longer-keeper branches. -/
+structure CapturedMarkedReadCensus
+    {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
+    {retry : LockedFileState FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout retry.image history} {published : CheckpointPublication.Image}
+    {admission : CensusOpenAdmissionReports input directory inventory retry}
+    (reads : CapturedMarkedReadReports admission layout published) (keeper : CapturedKeeperOpenReports reads) where
+  metadataRelease : FilePath → List LockReferenceDrop
+  manifestDrops : List LockReferenceDrop
+  manifest : CapturedManifestCensus reads metadataRelease manifestDrops
+  runs : CapturedRunReadCensus reads (admission.reached.afterDrops manifestDrops)
+  marker : CapturedMarkerCensus reads ((admission.reached.afterDrops manifestDrops).afterDrops
+    (runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest))) metadataRelease
+  beforeListing : reads.listing.beforeOpen = manifestDrops ++
+    runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest) ++
+    (marker.custody.beforeOpen ++ metadataRelease (directory.file .walBoundary))
+  sealRelease : FilePath → List LockReferenceDrop
+  required : List (Nat × IO.FS.Metadata)
+  seals : CapturedSealReadChain reads sealRelease required reads.listing.afterClose keeper.beforeOpen
+  offsets : required.map Prod.fst = (layout.sealed ++ [layout.keeper]).map WalSegment.first
+  retained : ∀ event ∈ keeper.beforeOpen,
+    event.removes admission.owner.reference = false ∧ event.removes admission.cached.reference = false
+
 end Alvoki.Storage.DiskSession

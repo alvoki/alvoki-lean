@@ -130,6 +130,12 @@ theorem longer (pruning : LongKeeperPruning authorization) :
   | .empty reported => reported.longer
   | .listed _ longer _ => longer
 
+theorem later (pruning : LongKeeperPruning authorization) :
+    ∀ first ∈ before.image.later.visible, layout.range.through < first := by
+  cases pruning with
+  | empty reported => simp [reported.noLater]
+  | listed _ _ later => exact later
+
 theorem suffixSync (pruning : LongKeeperPruning authorization) :
     operations.sync operations.cache #[directory.path] pruning.afterUnlinks = .ok () pruning.stageInput.image :=
   match pruning with

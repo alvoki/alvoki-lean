@@ -124,6 +124,7 @@ lake env leanchecker Alvoki.Storage.Disk.ReturnedWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.PendingAlignedReopen
 lake env leanchecker Alvoki.Storage.Disk.PendingFirstAppendReopen
+lake env leanchecker Alvoki.Storage.Disk.NativeReadyReadPrefix
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
@@ -216,6 +217,7 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationRecovery
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRotationStep
 lake env leanchecker Alvoki.Storage.Disk.ObservedRotationSchedule
+lake env leanchecker Alvoki.Storage.Disk.RotationExistingSuccessor
 lake env leanchecker Alvoki.Storage.Disk.RotationCreateInterruption
 lake env leanchecker Alvoki.Storage.Disk.RotationCreatePhysical
 lake env leanchecker Alvoki.Storage.Disk.RotationSuccessorFsyncStop
@@ -353,6 +355,7 @@ lake env leanchecker Alvoki.Storage.Disk.CachedWalOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.FailedMarkerReadCensus
+lake env leanchecker Alvoki.Storage.Disk.FailedCheckpointDigestCensus
 lake env leanchecker Alvoki.Storage.Disk.CachedOpenRejection
 lake env leanchecker Alvoki.Storage.Disk.CachedWalExtentRetry
 lake env leanchecker Alvoki.Storage.Disk.CachedCheckpointExtentRetry

@@ -26,16 +26,23 @@ namespace CapturedKeeperFinish
 
 variable {calls : CapturedAlignedCallbacks admission} {reads : CapturedMarkedReadReports admission layout published}
 
-noncomputable def run : CapturedKeeperFinish calls reads vacant selected →
-    EStateM.Result IO.Error CensusOpenState SegmentedSession
-  | .aligned finish => finish.run
-  | .longer finish => finish.run
+def reader : CapturedKeeperFinish calls reads vacant selected → CapturedKeeperOpenReports reads
+  | .aligned finish => finish.readCustody
+  | .longer finish => finish.reader
+
+noncomputable def run (finish : CapturedKeeperFinish calls reads vacant selected)
+    (chronology : CapturedMarkedReadCensus reads finish.reader) :
+    EStateM.Result IO.Error CensusOpenState SegmentedSession := by
+  cases finish with
+  | aligned finish => exact finish.runFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
+  | longer finish => exact finish.runFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
 
 noncomputable def census : CapturedKeeperFinish calls reads vacant selected → DescriptorInventory
   | .aligned finish => finish.census
   | .longer finish => finish.census
 
-theorem installsAfterVacancy (finish : CapturedKeeperFinish calls reads vacant selected)
+theorem installsFromCensus (finish : CapturedKeeperFinish calls reads vacant selected)
+    (chronology : CapturedMarkedReadCensus reads finish.reader)
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
@@ -45,20 +52,22 @@ theorem installsAfterVacancy (finish : CapturedKeeperFinish calls reads vacant s
     (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
       retry.image.directory.active.manifest)
     (ordered : WAL.OrdinalsFrom 1 history) :
-    ∃ session final, finish.run = .ok session (finish.census, final) ∧
+    ∃ session final, finish.run chronology = .ok session (finish.census, final) ∧
       final.image.directory.active = retry.image.directory.active ∧
       admission.owner ∈ finish.census.slots ∧ admission.cached ∈ finish.census.slots ∧
       CachedRetryInstalled (before := retry) reads.walReads admission.reached admission.owner reads.bindings
         published calls.liveRefs (.ok session final) := by
   cases finish with
   | aligned finish =>
-    obtain ⟨session, final, returned, pair, installed⟩ :=
-      finish.installsAfterVacancy marker prepared.keeperPrefix prepared.newer following accepted ordered
-    exact ⟨session, final, returned, pair, finish.lockRetained, finish.directoryRetained, installed⟩
+    exact finish.installsFromCensus chronology.manifest chronology.runs chronology.marker chronology.beforeListing
+      chronology.seals chronology.offsets chronology.retained marker prepared.keeperPrefix prepared.newer
+      following accepted ordered
   | longer finish =>
-    obtain ⟨session, returned, pair, installed⟩ :=
-      finish.installsAfterVacancy marker prepared.keeperPrefix prepared.newer following accepted ordered
-    exact ⟨session, finish.settled, returned, pair, finish.lockRetained, finish.directoryRetained, installed⟩
+    obtain ⟨session, returned, pair, owner, directory, installed⟩ :=
+      finish.installsFromCensus chronology.manifest chronology.runs chronology.marker chronology.beforeListing
+        chronology.seals chronology.offsets chronology.retained marker prepared.keeperPrefix prepared.newer
+        following accepted ordered
+    exact ⟨session, finish.settled, returned, pair, owner, directory, installed⟩
 
 end CapturedKeeperFinish
 
@@ -74,6 +83,7 @@ structure FirstAppendReopenObservations (input : FilePath) (directory : DiskDire
   callbacks : CapturedAlignedCallbacks admission
   reads : CapturedMarkedReadReports admission layout published
   finish : CapturedKeeperFinish callbacks reads vacant selected
+  chronology : CapturedMarkedReadCensus reads finish.reader
   marker : IO.FS.Metadata
   markerFound : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
     .ok (.ok marker) (admission.reached, admission.held)
@@ -107,19 +117,24 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
       (selected : SelectedIntegrityCheckpoint before.published.durable
         retry.image.directory.active.manifest before.checkpoint)
       (observations : FirstAppendReopenObservations input directory inventory retry layout before.published vacant selected)
-      (session : SegmentedSession) (final : LockedFileState FileImage) (ready : Installed),
+      (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState),
       layout.target = before.target ∧
-      observations.finish.run = .ok session (observations.finish.census, final) ∧
+      observations.finish.run observations.chronology = .ok session (observations.finish.census, final) ∧
       final.image.directory.active = before.target.pair ∧
-      session.phase = .ready ready ∧
+      session.directory = directory ∧ session.descriptor = observations.admission.owner.description ∧
+      session.phase = .ready after.installed ∧
+      after.files = final.image ∧ after.owners = final.owners ∧ after.RetainedReady directory session.descriptor ∧
+      after.target = before.target ∧ after.history = before.history ∧ after.checkpoint = before.checkpoint ∧
+      after.installed.generation = before.installed.generation ∧ after.published.durable = before.published.durable ∧
+      after.wal.sealed = before.wal.sealed ∧
       observations.admission.owner ∈ observations.finish.census.slots ∧
       observations.admission.cached ∈ observations.finish.census.slots ∧
       observations.reads.reads.ObservesSelected directory retry.image.directory.active.manifest before.published.durable ∧
       CachedRetryInstalled (before := retry) observations.reads.walReads observations.admission.reached
         observations.admission.owner observations.reads.bindings before.published observations.callbacks.liveRefs
         (.ok session final) ∧
-      recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok ready.table ∧
-      InstalledClientReplay (log ++ [.uncertainBatch report.batch]) recorded before.history ready session := by
+      recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table ∧
+      InstalledClientReplay (log ++ [.uncertainBatch report.batch]) recorded before.history after.installed session := by
   dsimp only
   have beforeReady := (client.writes.preservesRetained (start.bootstrap.writerReady start.held).toRetained).1
   obtain ⟨_, _, attempts, pair, pending, layout, prepared⟩ :=
@@ -132,14 +147,32 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
     manifest.symm ▸ beforeReady.resumed.accepted
   obtain ⟨observations⟩ := observe layout prepared selected
   obtain ⟨session, final, returned, samePair, owner, cached, installed⟩ :=
-    observations.finish.installsAfterVacancy observations.markerFound prepared.prepared
+    observations.finish.installsFromCensus observations.chronology observations.markerFound prepared.prepared
       (observations.reads.walReads.selectedAfterWatermark prepared.offsets prepared.descriptors)
       accepted beforeReady.resumed.ordered
   obtain ⟨actual, reached, ready, checkpoint, indexed, phase, loaded, recovered, refined⟩ :=
     CachedRetryInstalled.refinesPendingClient installed pending
   obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj indexed
+  obtain ⟨_, appendReady⟩ := CachedRetryInstalled.readyForAppend installed accepted beforeReady.resumed.ordered
+  have visible : before.wal.directory.active = layout.target.pair :=
+    beforeReady.walPair.trans (congrArg Target.pair prepared.target).symm
+  obtain ⟨nextSession, nextFinal, after, exactReturn, path, lock, nextPhase, files, owners,
+    wal, target, history, _, durable, nextReady⟩ :=
+    appendReady.writerRetained beforeReady.layout beforeReady.valid beforeReady.spans visible prepared.first
+      (prepared.kept.trans beforeReady.sealedFiles)
+  obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj exactReturn
+  have sameInstalled := Phase.ready.inj (phase.symm.trans nextPhase)
+  subst ready
+  have sameTarget := target.trans prepared.target
+  have restored := nextReady.resumed.selected
+  rw [sameTarget, durable] at restored
+  have sameCheckpoint := restored.uniqueResult beforeReady.resumed.selected
+  have generation : after.installed.generation = before.installed.generation := by
+    rw [nextReady.resumed.generation, sameCheckpoint, ← beforeReady.resumed.generation]
+  have sealed : after.wal.sealed = before.wal.sealed := by rw [wal]
   exact ⟨observed.stopsWriteRequest request rows stage sync rename, attempts, layout, selected, observations, session,
-    final, ready, prepared.target, returned, samePair.trans pair, phase, owner, cached, observations.reads.chunkReads, installed,
-    loaded.uniqueResult selected ▸ recovered, refined⟩
+    final, after, prepared.target, returned, samePair.trans pair, path, lock, nextPhase, files, owners,
+    lock.symm ▸ nextReady, sameTarget, history, sameCheckpoint, generation, durable, sealed,
+    owner, cached, observations.reads.chunkReads, installed, loaded.uniqueResult selected ▸ recovered, refined⟩
 
 end Alvoki.Storage.DiskSession
