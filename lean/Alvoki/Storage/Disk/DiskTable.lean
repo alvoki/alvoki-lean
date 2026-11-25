@@ -790,6 +790,20 @@ def DiskTable.range (db : DiskTable) (handle : DiskSnapshotHandle) (lo hi : UInt
   DiskSession.withLocalHandle db.installed (handle.session.ptrEq db.session) none fun state =>
     pure (state.table.range handle.localHandle lo hi)
 
+/-- Read the reached ready table when the requested pin belongs to the session. -/
+@[macro_inline] def DiskSession.readSnapshotWith [Monad m]
+    (installed : m DiskSession.Installed) (sameSession : m Bool)
+    (read : PackedTable → Option α) : m (Option α) :=
+  DiskSession.withLocalHandle installed sameSession none (fun state => pure (read state.table))
+
+theorem DiskTable.lookup_schedule (db : DiskTable) (handle : DiskSnapshotHandle) (key : UInt64) :
+    db.lookup handle key = DiskSession.readSnapshotWith (m := IO) db.installed
+      (handle.session.ptrEq db.session) (fun table => table.lookup handle.localHandle key) := rfl
+
+theorem DiskTable.range_schedule (db : DiskTable) (handle : DiskSnapshotHandle) (lo hi : UInt64) :
+    db.range handle lo hi = DiskSession.readSnapshotWith (m := IO) db.installed
+      (handle.session.ptrEq db.session) (fun table => table.range handle.localHandle lo hi) := rfl
+
 def DiskTable.advanceFloor (db : DiskTable) (floor : UInt64) : IO Bool := do
   let state ← db.installed
   let some table := state.table.advanceFloor floor | return false
