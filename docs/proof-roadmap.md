@@ -144,11 +144,24 @@ two slots remains a storage assumption.
 Before the slot write starts, a crash can expose any append suffix that
 preserves the durable WAL prefix, while the unchanged marker selects
 exactly the previous history.
-The native refinement still has to connect the reached append and positional
-write to those same inodes and account for interrupted and failed effects.
-Derive the projected retry steps from reached native events and connect the
-returned session to the common client ledger. Use the physical reports for
-checkpoint selection and segmented extents from that same attempt.
+A returned slot-write or marker-sync error preserves the reached files and
+leaves a poisoned session with a commit-unknown result. If the marker
+sync reports an error after persisting the entire slot, the surviving
+marker and prior WAL barrier select the complete batch. If it reports
+an error before the effect, the admitted slot bytes can select the old
+frontier or the whole batch. Native tests inject a 17-byte positional
+write followed by an I/O error, a successful marker sync followed by
+an I/O error, and process death on both sides of the reopen marker
+barrier. They exercise recovery and the next append both on the first
+WAL segment and after rotation.
+
+For end-to-end refinement, derive the reached native reports and retry
+transitions on one descriptor inventory. In particular, the append and
+positional write must refer to the same inodes as their barriers, and
+reopen must carry the selected physical checkpoint and WAL extents
+through repair and into the returned client session. The native process
+tests observe live file bytes and process death. Machine power loss
+uses the stated persistence, slot isolation, and decode assumptions.
 [Slot model](../lean/Alvoki/Storage/Disk/WalOrderedTwoSlot.lean) ·
 [Decoder and schedules](../lean/Alvoki/Storage/Disk/WalTwoSlot.lean) ·
 [Write outcomes](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean) ·
