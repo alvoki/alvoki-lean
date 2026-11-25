@@ -70,6 +70,78 @@ theorem repair_preserves_settledMarker (initial : FileImage) (selected : Selecti
   rw [same, ← pair]
   simp [settleMarker, bound]
 
+/-- Before destructive repair, a retry can settle the observed marker
+contents or crash. A returned error without effects leaves the same image.
+The visible marker supplied to the file barrier is the one read during
+validation under the writer lock. -/
+inductive UnsettledRetries (initial : FileImage) : FileImage → Prop where
+  | start : UnsettledRetries initial initial
+  | settle (prior : UnsettledRetries initial before) (selected : Selection)
+      (observed : before.directory.active.walBoundary = some (Boundary.encode selected.frontier)) :
+      UnsettledRetries initial { before with directory := settleMarker before.directory selected }
+  | crash (prior : UnsettledRetries initial before)
+      (metadata : pair ∈ before.directory.crashImages)
+      (keeper : bytes ∈ before.keeper.crashImages) (later : names ∈ before.later.crashImages) :
+      UnsettledRetries initial (before.crash pair bytes names)
+
+/-- No retry before repair introduces a new manifest or marker choice. Every
+present marker still names one of the initial allowed frontiers. The file
+barrier cannot introduce a missing binding or resurrect an absent marker. -/
+theorem UnsettledRetries.preserves {initial after : FileImage}
+    (retries : UnsettledRetries initial after)
+    (allowedManifest : Option ByteArray → Prop) (allowedMarker : Option ByteArray → Prop)
+    (initialChoices : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
+      allowedManifest pair.manifest ∧ allowedMarker pair.walBoundary) :
+    ∀ pair ∈ after.directory.active :: after.directory.crashImages,
+      allowedManifest pair.manifest ∧ allowedMarker pair.walBoundary := by
+  induction retries with
+  | start => exact initialChoices
+  | @settle before _ selected observed ih =>
+    intro pair present
+    have current := ih before.directory.active (List.mem_cons_self ..)
+    rcases List.mem_cons.mp present with visible | surviving
+    · subst pair
+      simpa [settleMarker, observed] using current
+    · obtain ⟨previous, member, manifest, marker⟩ :=
+        (settleMarker_survivor_iff before.directory selected pair).mp surviving
+      have previousAllowed := ih previous (List.mem_cons_of_mem _ member)
+      refine ⟨manifest ▸ previousAllowed.1, ?_⟩
+      cases status : previous.walBoundary with
+      | none => simpa [marker, status] using previousAllowed.2
+      | some _ => simpa [marker, status, ← observed] using current.2
+  | @crash before pair bytes names _ metadata _ _ ih =>
+    intro survivor present
+    have same : survivor = pair := by
+      simpa [FileImage.crash, Image.settled] using present
+    exact same ▸ ih pair (List.mem_cons_of_mem _ metadata)
+
+/-- At a retry that reads a present marker, the chosen frontier is one
+of the two complete publications. This applies even when every preceding
+open returned an error. -/
+theorem UnsettledRetries.selectsOldOrNew {initial after : FileImage}
+    (retries : UnsettledRetries initial after) (checkpoint : Option ByteArray)
+    (old new : UInt64)
+    (initialChoices : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
+      pair.manifest = checkpoint ∧ (pair.walBoundary = none ∨
+        pair.walBoundary = some (Boundary.encode old) ∨
+        pair.walBoundary = some (Boundary.encode new)))
+    {selected : Selection}
+    (observed : after.directory.active.walBoundary = some (Boundary.encode selected.frontier)) :
+    after.directory.active.manifest = checkpoint ∧ (selected.frontier = old ∨ selected.frontier = new) := by
+  have ⟨manifest, marker⟩ := retries.preserves (· = checkpoint)
+    (fun marker => marker = none ∨ marker = some (Boundary.encode old) ∨
+      marker = some (Boundary.encode new)) initialChoices _ (List.mem_cons_self ..)
+  rw [observed] at marker
+  refine ⟨manifest, ?_⟩
+  rcases marker with impossible | oldMarker | newMarker
+  · contradiction
+  · left
+    have equal := congrArg Boundary.decode (Option.some.inj oldMarker)
+    simpa only [Boundary.decode_encode, Except.ok.injEq] using equal
+  · right
+    have equal := congrArg Boundary.decode (Option.some.inj newMarker)
+    simpa only [Boundary.decode_encode, Except.ok.injEq] using equal
+
 /-- Physical image changes admitted after the first successful directory
 barrier. A failed validation, lock handoff or other step without file effects
 leaves the projected image unchanged. -/
@@ -123,5 +195,35 @@ theorem SettledRetries.preservesSelectedMarker
   refine ⟨?_, sameSeals.trans firstRepair.keepsSealed⟩
   rw [same, ← pair]
   simp [settleMarker, bound]
+
+/-- Join retries on both sides of the authorization barrier. Before it,
+the open may select either complete publication. After it, all repair
+and crash survivors keep that exact choice. -/
+theorem retries_preservePublishedFrontier
+    {initial prepared first after : FileImage} {target : Target}
+    (beforeBarrier : UnsettledRetries initial prepared)
+    (checkpoint : Option ByteArray) (old new : UInt64)
+    (choices : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
+      pair.manifest = checkpoint ∧ (pair.walBoundary = none ∨
+        pair.walBoundary = some (Boundary.encode old) ∨
+        pair.walBoundary = some (Boundary.encode new)))
+    (selected : Selection)
+    (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
+    (firstRepair : EffectTrace target
+      { prepared with directory := settleMarker prepared.directory selected } first)
+    (pair : (settleMarker prepared.directory selected).active = target.pair)
+    (keeper : prepared.keeper.Valid target.Accepts)
+    (later : prepared.later.Beyond target.range.through)
+    (retries : SettledRetries target first after)
+    {survivor : Bindings} (chosen : survivor ∈ after.directory.active :: after.directory.crashImages) :
+    survivor.manifest = checkpoint ∧
+      survivor.walBoundary = some (Boundary.encode selected.frontier) ∧
+      (selected.frontier = old ∨ selected.frontier = new) := by
+  have ⟨manifest, allowed⟩ := beforeBarrier.selectsOldOrNew checkpoint old new choices observed
+  have ⟨valid, _⟩ := retries.preserves (firstRepair.valid pair keeper later)
+  have same : survivor = target.pair := by
+    simpa [valid.selected, valid.settled] using chosen
+  rw [same, ← pair]
+  exact ⟨manifest, by simp [settleMarker, observed], allowed⟩
 
 end Alvoki.WAL.TwoSlot

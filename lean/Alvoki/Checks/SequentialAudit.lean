@@ -2146,3 +2146,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.advance_valid
 #check_axioms Alvoki.WAL.TwoSlot.SettledRetries.preserves
 #check_axioms Alvoki.WAL.TwoSlot.SettledRetries.preservesSelectedMarker
+#check_axioms Alvoki.WAL.TwoSlot.UnsettledRetries.preserves
+#check_axioms Alvoki.WAL.TwoSlot.UnsettledRetries.selectsOldOrNew
+#check_axioms Alvoki.WAL.TwoSlot.retries_preservePublishedFrontier
