@@ -250,6 +250,7 @@ import Alvoki.Storage.Disk.NativeCloseAlignedReopen
 import Alvoki.Storage.Disk.NativeReadyRotation
 import Alvoki.Storage.Disk.NativePendingRotation
 import Alvoki.Storage.Disk.NativeRotationErrorReopen
+import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeSnapshotExecution
@@ -1635,6 +1636,19 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryFailure.liveRetained
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorFiles.successor
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversRotationError
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.vacant
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.keeperPayload
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.retained
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.physicalKeeper
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.retryExact
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.choosesKeeper
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.alternatives
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.keeperBinding
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.prepares
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationCrashReads.readsWal
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationCrashReads.readsKeeper
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationCrashReads.readsMetadata
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversRotationPowerLoss
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationFailureState.selectsReportedSurvivor
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyClose.followsFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reachesClose
