@@ -12,9 +12,10 @@ theorem SegmentedClientReadTrace.afterRunError
     SegmentedClientReadTrace directory initialDescriptor initial allowCollection log reads descriptor after := by
   simpa only [List.append_nil] using trace.advance (.checkpointRunError .start endpoint)
 
-/-- A guard, write-open or own file-sync error preserves the installed
-prior checkpoint and both client ledgers. One replay accounts for the
-recorded responses and supported reads in the returned ready session. -/
+/-- An error at a run's guard, write-open, write, flush or own file sync
+preserves the installed prior checkpoint and both client ledgers. One
+replay accounts for recorded responses and supported reads in the
+returned ready session. -/
 theorem SegmentedClientReadTrace.reopenAfterRunError {input : FilePath}
     {first : LockedFileState WalSegmentRotation.State}
     (bootstrap : BootstrapReady first.image) (held : first.owners.Owns directory initialDescriptor)

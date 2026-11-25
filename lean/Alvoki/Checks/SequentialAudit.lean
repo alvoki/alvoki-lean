@@ -474,6 +474,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ManifestStageFailureBindings.reopens
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.checkpointManifestStageError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.checkpointManifestError
+#check_axioms Alvoki.Storage.DiskSession.CheckpointRunError.writeData
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunError.returns
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunError.priorRuns
 #check_axioms Alvoki.Storage.DiskSession.CheckpointRunError.reopens

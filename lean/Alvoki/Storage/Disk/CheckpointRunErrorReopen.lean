@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointRunGuardFailure
 import Alvoki.Storage.Disk.CheckpointRunOpenFailure
+import Alvoki.Storage.Disk.CheckpointRunDataFailure
 import Alvoki.Storage.Disk.CheckpointRunDirectoryFailure
 
 namespace Alvoki.Storage.DiskSession
@@ -20,6 +21,8 @@ inductive CheckpointRunError : ObservedCheckpointRunPrefix attempt → IO.Error 
       CheckpointRunError runs report.cause (runs.atRun runs.index)
   | writeOpen {runs : ObservedCheckpointRunPrefix attempt} (report : ObservedCheckpointRunOpenFailure runs) :
       CheckpointRunError runs report.cause report.reachedFiles
+  | writeData {runs : ObservedCheckpointRunPrefix attempt} (report : ObservedCheckpointRunDataFailure runs) :
+      CheckpointRunError runs report.cause report.reached
   | fileSync (report : ObservedCheckpointRunSyncFailure attempt) :
       CheckpointRunError report.toObservedCheckpointRunPrefix report.error report.reached
 
@@ -32,6 +35,7 @@ theorem returns (reported : CheckpointRunError runs cause reached) :
   cases reported with
   | guard report => exact report.returns
   | writeOpen report => exact report.returns
+  | writeData report => exact report.returns
   | fileSync report => exact report.returns
 
 theorem priorRuns (reported : CheckpointRunError runs cause reached) {writer : Nat}
@@ -43,6 +47,7 @@ theorem priorRuns (reported : CheckpointRunError runs cause reached) {writer : N
     obtain ⟨_, _, stored, stable, _⟩ := runs.priorStable ready entry binding decoded inside
     exact stable.guaranteed.trans stored.symm
   | writeOpen report => exact report.priorRuns ready entry
+  | writeData report => exact report.priorRuns ready entry
   | fileSync report => exact report.priorRuns ready entry
 
 def publication (_reported : CheckpointRunError runs cause reached) (manifest : RunState → Publication.Image) : Image :=
