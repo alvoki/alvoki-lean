@@ -77,6 +77,7 @@ import Alvoki.Storage.Disk.MarkedWriteReopenProgress
 import Alvoki.Storage.Disk.OptionalFileRead
 import Alvoki.Storage.Disk.CheckpointFileDispatch
 import Alvoki.Storage.Disk.CheckpointPreflight
+import Alvoki.Storage.Disk.CheckpointCacheContinuity
 import Alvoki.Storage.Disk.CheckpointRunWriteCustody
 import Alvoki.Storage.Disk.CheckpointRunPrefixCustody
 import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
@@ -741,6 +742,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.preparedFacts
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.effect
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.reachesIssue
+#check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.stepCache
+#check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.prefixKeepsRoutes
+#check_axioms Alvoki.Storage.DiskSession.CheckpointIssue.keepsCacheRoutes
+#check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.checkpointKeepsRoutes
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.rejected
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.publicationError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.preflight
