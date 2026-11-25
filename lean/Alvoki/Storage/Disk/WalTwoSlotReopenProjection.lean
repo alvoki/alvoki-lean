@@ -589,6 +589,39 @@ theorem reopenWith_installsPrepared {image : Type} {directory : Storage.DiskDire
     runOpenWithInstallation_ready (unlock := unlock) liveRefs fresh acquisition report
   exact ⟨session, final, success, phase, files, owner, freshSession⟩
 
+/-- Keep the acquired marker alongside the result of the same recovery
+that the common guarded installer uses for its ready session. -/
+theorem reopenAcquiredWith_installsReady {image handle : Type}
+    {directory : Storage.DiskDirectory} {descriptor nextRef : Nat} {unlock : UnlockReport}
+    {before : LockedFileState image} {acquired after : image}
+    {acquire : EStateM IO.Error image (handle × Selection)}
+    {prepare : Selection → EStateM IO.Error image (Plan × Reopened × Nat)}
+    {stabilize : handle → EStateM IO.Error image Unit} {finish : Plan → Nat → EStateM IO.Error image Unit}
+    {marker : handle} {selection : Selection} {opened : Reopened}
+    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (lock : TryLockObserves before.owners directory (.ok true))
+    (readMarker : acquire before.image = .ok (marker, selection) acquired)
+    (repaired : reopenWith (prepare selection) (stabilize marker) finish acquired = .ok opened after) :
+    reopenAcquiredWith acquire prepare stabilize finish before.image = .ok (opened, marker, selection) after ∧
+    ∃ session final,
+      runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+        (do
+          let (opened, _, _) ← reopenAcquiredWith acquire prepare stabilize finish
+          pure opened) before = .ok session final ∧
+      session.phase = .ready opened.installed ∧ final.image = after ∧
+      final.owners.Owns directory descriptor ∧ session.sessionRef ∉ liveRefs := by
+  have result : reopenAcquiredWith acquire prepare stabilize finish before.image =
+      .ok (opened, marker, selection) after := by
+    simp only [reopenAcquiredWith_reports, readMarker, repaired]
+  refine ⟨result, ?_⟩
+  have recover : ((do
+      let (opened, _, _) ← reopenAcquiredWith acquire prepare stabilize finish
+      pure opened) : EStateM IO.Error image Reopened) before.image = .ok opened after := by
+    simp only [Bind.bind, EStateM.bind, result, Pure.pure, EStateM.pure]
+  obtain ⟨session, final, success, _, _, phase, files, _, owner, _, _, freshSession⟩ :=
+    runOpenWithInstallation_ready (unlock := unlock) liveRefs fresh lock recover
+  exact ⟨session, final, success, phase, files, owner, freshSession⟩
+
 /-- Syncing the marker selected by preparation preserves its repair plan.
 Only the crash choices of the marker bytes can change. -/
 theorem prepared_settleMarker {image : FileImage} {target : Target} {plan : Plan}

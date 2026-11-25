@@ -995,3 +995,10 @@ callbacks, the exact marker-settled image and the same keeper census and
 cache enter repair, and its reached state accompanies the reopened
 table. The native repair reports and the session installation still
 need to be connected to this composition.
+
+The client return theorem now installs the ready session from the
+same complete acquisition-and-recovery schedule that returns its marker.
+The shared guarded installer supplies the lock owner and fresh session
+identity from that exact recovered state. The remaining native proof
+must instantiate the modeled repair with the reached filesystem and
+descriptor reports for the two-slot path.

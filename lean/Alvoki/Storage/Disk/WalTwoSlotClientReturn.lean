@@ -1643,14 +1643,18 @@ theorem recoveredRetries_installedReads
       WalSegmentRepair.Prepared after target retry.plan ∧
     ∃ session final reference state pin pinned,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
-        (reopenWith (WalSegmentRepair.prepareBoundedMarkedFromReaders directory
-          (readIntegrityCheckpointSized directory readManifest
-            (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
-          (fun _ => pure (some (Boundary.encode selected.frontier))) (fun start length => WalSegmentRepair.readSelectedWithCachedExtents directory start length
-            list lstat readSeal readKeeper)) (stabilize markerHandle)
-          (fun bounded size =>
-            WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile))
-        openedFrom = .ok session final ∧
+        (do
+          let (opened, _, _) ← reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary))
+            (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory
+              (readIntegrityCheckpointSized directory readManifest
+                (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
+              (fun _ => pure (some (Boundary.encode selection.frontier)))
+              (fun start length => WalSegmentRepair.readSelectedWithCachedExtents directory start length
+                list lstat readSeal readKeeper))
+            stabilize
+            (fun bounded size =>
+              WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
+          pure opened) openedFrom = .ok session final ∧
       (∃ opened,
         reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary))
           (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory
@@ -1854,11 +1858,6 @@ theorem recoveredRetries_installedReads
     rw [boundedPlan, keeperExtent, WalSegmentRepair.finishBoundedMarkedOpen_eq_full
       directory plan preparedPlan.valid removeFile write sync renameFile]
     exact repaired
-  obtain ⟨session, final, returned, installed, reached, owner, freshSession⟩ :=
-    reopenWith_installsPrepared (unlock := unlock)
-      (finish := fun bounded size =>
-        WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
-      liveRefs fresh acquisition read barrier boundedRepair
   have available : PrefixChunksAvailableUntilEof (marker.visible marker.active)
       (markerReads.readChunk markerFile.calls.slot.description) := by
     simpa only [markerCurrent] using markerAvailable
@@ -1878,13 +1877,21 @@ theorem recoveredRetries_installedReads
       show (IO.FS.FileType.file == .file) = true from rfl,
       Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept,
       decodedMarker, held]
-  have fullReopen := (reopenAcquiredWith_success (acquireMarkerFromReports markerReads (directory.file .walBoundary))
-    (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
-      (fun _ => pure (some (Boundary.encode selection.frontier))) readWal)
-    stabilize
-    (fun bounded size =>
-      WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)).mpr
-      ⟨_, _, _, _, _, markerAcquired, read, barrier, boundedRepair⟩
+  have recovery : reopenWith
+      (WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
+        (fun _ => pure (some (Boundary.encode selected.frontier))) readWal)
+      (stabilize markerHandle)
+      (fun bounded size =>
+        WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
+      openedFrom.image = .ok opened after := by
+    simp only [reopenWith_reports, read, barrier, boundedRepair]
+    rfl
+  obtain ⟨fullReopen, session, final, returned, installed, reached, owner, freshSession⟩ :=
+    reopenAcquiredWith_installsReady (unlock := unlock)
+      (prepare := fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
+        (fun _ => pure (some (Boundary.encode selection.frontier))) readWal)
+      (stabilize := stabilize)
+      liveRefs fresh acquisition markerAcquired recovery
   have physical bytes survives := retries.replayUnchanged authorizedRepair authorized base sealed
     sealedRead logicalMarker (Boundary.decode_encode selected.frontier) checked (bytes := bytes) survives
   have layoutPlan : layout.plan = plan := by
