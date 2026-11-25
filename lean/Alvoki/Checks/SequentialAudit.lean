@@ -3801,6 +3801,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedFileReturns
 #check_axioms Alvoki.Storage.DiskSession.RegularFileSyncEffect.pairedStored
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedReturnedStorage
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedStorageFromStaging
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publicationReturned
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage
 #check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.Frames.settledFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_iff_write

@@ -45,15 +45,17 @@ schedule reaches its file barrier on the staging return. The barrier reads the a
 and attempts the remembered marker on the heap left by that keeper fsync, including an error.
 Bootstrap and stopped checkpoint sync reuse the same selector and reference interpretation.
 The regular-file effect changes durable byte choices only at the inode bound to the issued
-descriptor. The grouped success proof composes those two local laws and a frame for the intervening
-pending-reference store. Rename keeps the synced staged inode and the final directory fsync settles
-the keeper and canonical marker in each joint crash map. This uses reported effect, binding and
-descriptor facts at each primitive. In each allowed joint crash map the keeper and canonical
+descriptor. The grouped success proof derives the two routed fsyncs from the reached append and staged cache.
+The visible append and marker payloads fix the two durable byte images through the ordinary syncs
+and the pending-reference store. Success of the raw commit identifies the exact grouped return,
+rename, cached directory load and final fsync. Rename keeps the synced staged inode and the final
+directory fsync settles the keeper and canonical marker in each joint crash map. This uses
+reported effect, binding and descriptor facts at each primitive. In each allowed joint crash map the keeper and canonical
 marker name the exact visible inodes. On an acknowledged transition the physical WAL files combine
 with one frame for the directory, lock, selected checkpoint and seals to establish the next ready
 storage. The directory barrier settles its child names. The frame still covers the directory's
-own binding. The remaining refinement must derive the classified acknowledgement and filesystem
-effects from the same raw execution and transport them through the final phase-cell update.
+own binding. The remaining refinement must derive the normalized publication evidence and cache
+custody from those same raw effects.
 Both ordinary group errors already feed the same uncertain-write endpoint.
 [Shared cache routing](../../lean/Alvoki/Storage/Disk/NativeRawSync.lean) · [Durable WAL publication](../../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean) · [Ready storage after an acknowledged write](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) · [Pending write](../../lean/Alvoki/Storage/Disk/NativeGroupedPendingWrite.lean)
 

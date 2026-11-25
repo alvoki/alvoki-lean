@@ -1,5 +1,20 @@
 # Current handoff
 
+A successful raw WAL commit now fixes the actual grouped file-sync return, marker rename and
+cached directory fsync in one chronology. The original append and stage payloads fix the durable
+keeper and marker at the group return. The logical acknowledgement uses the one checked request
+and its exact projected commit. A frame across the ready setter carries the published files into
+the returned writer. The model still needs to derive the normalized append tails and reached
+cache custody from those effects. [WAL barriers](../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean)
+· [Acknowledged ready storage](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean)
+
+Quiet reboot now records the exact prior descriptor inventory and selected names and bytes. The
+selected restart projection ignores the temporary manifest metadata, and the marked WAL reader
+skips `MANIFEST.next` anywhere in a successful listing. Native process exits before and after
+staging fsync left that scratch file present after reopening. The next write succeeded and a
+later checkpoint replaced the scratch inode. The raw selected reader and admission effects
+remain explicit. [Checkpoint reboot](../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
+
 Bootstrap, returned WAL sync and stopped checkpoint sync now use one raw cache selector. Bootstrap uses the shared pending-handle proof, and the checkpoint uses the same opened-reference type as WAL. The literal WAL publication reaches marker staging at the append heap and the file barrier at the staging return. The staged file comes from the exclusive open and is remembered in the original pending cell. The grouped barrier consumes that literal staged handle on the heap returned by the active keeper's fsync, even when the keeper reports an error. The group preserves its first diagnostic and the final heap. Actual inode-byte settlement and marker rename still need to be composed with this chronology. [Shared cache routing](../lean/Alvoki/Storage/Disk/NativeRawSync.lean) · [Raw staging and grouped WAL barrier](../lean/Alvoki/Storage/Disk/NativeWalStage.lean)
 
 The production WAL append now exposes its original active-cache cell, native opener, write and flush. One source result law gives the reached heap for path selection, data failure, or the successful store. On success the same literal handle remains bound to the keeper under the local name laws. The raw projection retains both the original diagnostic and file changes from releasing references on the reached clear or replacement. The older cache interpreter is the special case with no additional store effects. The full WAL publication still needs the next stage and sync projections on these heaps. [Native append](../lean/Alvoki/Storage/Disk/NativeWalAppend.lean) · [Shared cache interpretation](../lean/Alvoki/Storage/Disk/AppendHandleCustody.lean)
