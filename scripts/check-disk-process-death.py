@@ -325,7 +325,7 @@ def check_batch_append_cut(binary, shim, root):
             "the fresh batch changed the checkpoint or sealed prefix")
 
 
-def check_two_slot_batch_cut(binary, shim, database, at_marker):
+def check_two_slot_batch_cut(binary, shim, database, cut):
     database.mkdir()
     status, stderr = run_probe(binary, "--two-slot-seed", database)
     require(status == 0, f"could not seed the two-slot database: {stderr}")
@@ -336,10 +336,12 @@ def check_two_slot_batch_cut(binary, shim, database, at_marker):
     with tempfile.TemporaryDirectory() as scratch:
         ready = Path(scratch) / "sync.pid"
         release = Path(scratch) / "release"
+        hold = ({"ALVOKI_CHECK_SLOT_WRITE_HOLD": str(marker)} if cut == "slot-write" else
+                {"ALVOKI_CHECK_SYNC_HOLD": str(marker if cut == "marker-sync" else wal)})
         with native_process(binary, "--two-slot-submit-batch", database, sync_pid_file=ready, env={
             **os.environ,
+            **hold,
             "LD_PRELOAD": str(shim),
-            "ALVOKI_CHECK_SYNC_HOLD": str(marker if at_marker else wal),
             "ALVOKI_CHECK_SYNC_PID": str(ready),
             "ALVOKI_CHECK_SYNC_RELEASE": str(release),
         }) as owner:
@@ -347,9 +349,12 @@ def check_two_slot_batch_cut(binary, shim, database, at_marker):
                     "two-slot batch sync paused in the wrong process")
             new_marker = marker.read_bytes()
             new_wal = wal.read_bytes()
-            if at_marker:
+            if cut == "marker-sync":
                 require(new_marker[:40] != old_marker[:40] and new_marker[40:] == old_marker[40:],
                         "the positional write did not update only the inactive slot")
+            elif cut == "slot-write":
+                require(new_marker[:17] != old_marker[:17] and new_marker[17:] == old_marker[17:],
+                        "the interrupted positional write did not leave just its strict prefix")
             else:
                 require(new_marker == old_marker, "marker changed before the WAL sync")
             require(new_wal.startswith(old_wal) and len(new_wal) == 3 * len(old_wal),
@@ -359,9 +364,9 @@ def check_two_slot_batch_cut(binary, shim, database, at_marker):
                     f"two-slot reopen did not respect the live writer lock: {stderr}")
             owner.kill()
             require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "two-slot writer was not killed")
-    status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "new" if at_marker else "old")
+    status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "new" if cut == "marker-sync" else "old")
     require(status == 0, f"could not recover and extend the two-slot batch: {stderr}")
-    retained = new_wal if at_marker else old_wal
+    retained = new_wal if cut == "marker-sync" else old_wal
     recovered_wal = wal.read_bytes()
     require(recovered_wal.startswith(retained) and len(recovered_wal) == len(retained) + len(old_wal),
             "recovery did not preserve the exact prefix and append one frame")
@@ -528,8 +533,8 @@ if __name__ == "__main__":
         check_manifest_acquisition(binary, shim, root / "manifest-acquisition")
         check_fork_exec_lock(binary, shim, root / "fork-exec")
         check_batch_append_cut(binary, shim, root / "batch-append-cut")
-        check_two_slot_batch_cut(binary, shim, root / "two-slot-wal-cut", False)
-        check_two_slot_batch_cut(binary, shim, root / "two-slot-marker-cut", True)
+        for cut in ("wal-sync", "slot-write", "marker-sync"):
+            check_two_slot_batch_cut(binary, shim, root / f"two-slot-{cut}", cut)
         for batch in (False, True):
             for rotated in (False, True):
                 for after_rename in (False, True):
@@ -542,5 +547,5 @@ if __name__ == "__main__":
     print("Read the manifest in two bounded phases and preserved its exact reopen and rejection outcomes.")
     print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
-    print("Recovered and extended the appropriate two-slot prefix after native WAL and marker sync cuts.")
+    print("Recovered and extended the appropriate two-slot prefix after native WAL sync, partial slot write and marker sync cuts.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")

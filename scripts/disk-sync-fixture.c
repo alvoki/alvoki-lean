@@ -320,6 +320,21 @@ ssize_t pwrite(int fd, const void *bytes, size_t size, off_t offset) {
             opened.st_dev == expected.st_dev && opened.st_ino == expected.st_ino)
             log_marker_descriptor(getenv("ALVOKI_CHECK_SYNC_LOG"), "marker pwrite: ", fd);
     }
+    const char *cut = getenv("ALVOKI_CHECK_SLOT_WRITE_HOLD");
+    if (cut != NULL) {
+        struct stat opened, expected;
+        if (fstat(fd, &opened) == 0 && stat(cut, &expected) == 0 &&
+            opened.st_dev == expected.st_dev && opened.st_ino == expected.st_ino) {
+            const char *ready = getenv("ALVOKI_CHECK_SYNC_PID");
+            const char *release = getenv("ALVOKI_CHECK_SYNC_RELEASE");
+            // Include the first epoch byte, but leave the old frontier and checksum.
+            const size_t prefix = 17;
+            if (ready == NULL || release == NULL || size <= prefix) _exit(125);
+            if (real_pwrite(fd, bytes, prefix, offset) != (ssize_t)prefix) _exit(125);
+            hold_owner(ready, release);
+            return (ssize_t)prefix;
+        }
+    }
     return real_pwrite(fd, bytes, size, offset);
 }
 
