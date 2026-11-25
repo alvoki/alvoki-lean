@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The initial retry binding alternatives now follow from raw marker
+bytes on the interrupted marker inode. Lean checks that the reported
+live and crash bindings use the same inode before applying the
+slot-write contract to its bytes. The native interrupted write still
+needs to supply the physical marker image and its exact projection.
+
 The client theorem derives the pre-authorization retry file lineage from
 held marker fsync reports and exact power-loss survivors. It derives
 the first authorization effect from the effective directory sync report,

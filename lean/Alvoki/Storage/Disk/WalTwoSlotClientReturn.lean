@@ -1921,10 +1921,15 @@ theorem installsAfterAcquiredRecovery_replays
     (accepted : decode before = .ok current)
     (offset : current.slot = slotIndex active)
     (advanced : advance current (WAL.encode (prior.history ++ batch)).size = .ok next)
-    (observations : ∀ pair ∈ interrupted.directory.active :: interrupted.directory.crashImages,
+    (interruptedMarker : WalInodeImage)
+    (retainedBinding : ∀ inode ∈ interruptedMarker.crashBindings, inode = interruptedMarker.active)
+    (slotOutcome : ∀ bytes ∈ interruptedMarker.visible interruptedMarker.active ::
+      interruptedMarker.crashBytes interruptedMarker.active, InterruptedSlotBytes before bytes active next)
+    (projectedBindings : ∀ pair ∈ interrupted.directory.active :: interrupted.directory.crashImages,
       pair = ⟨checkpoint, none⟩ ∨
-      ∃ bytes, InterruptedSlotBytes before bytes active next ∧
-        projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
+        ∃ inode bytes, inode ∈ interruptedMarker.active :: interruptedMarker.crashBindings ∧
+          bytes ∈ interruptedMarker.visible inode :: interruptedMarker.crashBytes inode ∧
+          projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
     (observedFirst : firstPrepared.directory.active.walBoundary = some (Boundary.encode selection.frontier))
     (firstBarrier : DelayedDirectorySync directory)
     (firstEffective : firstBarrier.outcome.effective = true)
@@ -1987,6 +1992,16 @@ theorem installsAfterAcquiredRecovery_replays
   have newer : current.toRecord.epoch < next.toRecord.epoch := by
     change current.epoch.toNat < next.epoch.toNat
     omega
+  have observations : ∀ pair ∈ interrupted.directory.active :: interrupted.directory.crashImages,
+      pair = ⟨checkpoint, none⟩ ∨
+        ∃ bytes, InterruptedSlotBytes before bytes active next ∧
+          projectBinding ⟨checkpoint, none⟩ bytes = .ok pair := by
+    intro pair member
+    rcases projectedBindings pair member with absent | ⟨inode, bytes, bound, survived, projected⟩
+    · exact .inl absent
+    · have same := (List.mem_cons.mp bound).elim id (retainedBinding inode)
+      subst inode
+      exact .inr ⟨bytes, slotOutcome bytes survived, projected⟩
   have choicesBefore := interruptedMarker_retryChoices accepted offset newer observations
   have choice := (beforeBarrier.selectsOldOrNew checkpoint current.frontier next.frontier choicesBefore observedFirst).2
   have bytes := choice.imp (fun old => old ▸ oldSize) (fun all => all ▸ newSize)
