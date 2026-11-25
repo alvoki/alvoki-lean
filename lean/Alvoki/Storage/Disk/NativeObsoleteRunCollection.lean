@@ -40,20 +40,30 @@ structure NativeObsoleteRunCollection (state : NativeReadyState) where
       reports.inventory.kindAt (state.session.directory.file (.run generation index)) = .ok .file
   atBarrier : RunUnlinkImage
   unlinked : ((reports.selected.map RunCollection.Step.unlink).forM reports.perform) initial = .ok () atBarrier
+  beforeBarrierDrops : List LockReferenceDrop
+  afterBarrierDrops : List LockReferenceDrop
+  keepsSlots : ∀ slot ∈ state.census.slots, ∀ drop ∈ beforeBarrierDrops ++ afterBarrierDrops,
+    drop.removes slot.reference = false
   capture : DescriptorInventory
   cached : state.cache.directory = some (capture, state.directorySlot, 0)
   capturedInode : capture.inode state.directorySlot.description = state.census.inode state.directorySlot.description
-  pathObject : FilePath → Option DeviceInode
-  atPath : pathObject state.session.directory.path = some lifetime.root
-  atLock : pathObject (state.session.directory.file .lock) = some lifetime.lock
-  openRead : FilePath → EStateM IO.Error RunUnlinkImage CheckpointOpenHandle
-  fsync : CheckpointOpenHandle → EStateM IO.Error RunUnlinkImage Unit
-  synced : fsync (capture, state.directorySlot, 0) atBarrier = .ok () atBarrier.syncDirectory
+  pathObject : DescriptorInventory × RunUnlinkImage → FilePath → Option DeviceInode
+  atPath : pathObject (listing.afterClose.afterDrops beforeBarrierDrops, atBarrier) state.session.directory.path =
+    some lifetime.root
+  atLock : pathObject (listing.afterClose.afterDrops beforeBarrierDrops, atBarrier)
+    (state.session.directory.file .lock) = some lifetime.lock
+  keepsBindings : ∀ path ∈ [state.session.directory.path, state.session.directory.file .lock],
+    pathObject ((listing.afterClose.afterDrops beforeBarrierDrops).afterDrops afterBarrierDrops, atBarrier.syncDirectory) path =
+      pathObject (listing.afterClose.afterDrops beforeBarrierDrops, atBarrier) path
+  openRead : FilePath → EStateM IO.Error (DescriptorInventory × RunUnlinkImage) CheckpointOpenHandle
+  fsync : CheckpointOpenHandle → EStateM IO.Error (DescriptorInventory × RunUnlinkImage) Unit
+  synced : fsync (capture, state.directorySlot, 0) (listing.afterClose.afterDrops beforeBarrierDrops, atBarrier) =
+    .ok () ((listing.afterClose.afterDrops beforeBarrierDrops).afterDrops afterBarrierDrops, atBarrier.syncDirectory)
   syncProjection : reports.syncDirectory state.session.directory.path atBarrier =
     match SyncPathGroup.run (sync state.session.directory.path openRead fsync)
-      #[state.session.directory.path] (state.cache, atBarrier) with
-    | .ok value (_, reached) => .ok value reached
-    | .error cause (_, reached) => .error cause reached
+      #[state.session.directory.path] (state.cache, (listing.afterClose.afterDrops beforeBarrierDrops, atBarrier)) with
+    | .ok value (_, (_, reached)) => .ok value reached
+    | .error cause (_, (_, reached)) => .error cause reached
 
 namespace NativeObsoleteRunCollection
 
@@ -85,6 +95,33 @@ theorem preservesCensus (seen : NativeObsoleteRunCollection state) : seen.listin
         simp [DescriptorSlot.closeEvent, LockReferenceDrop.removes, process, different]
       · simp [DescriptorSlot.closeEvent, LockReferenceDrop.removes, process]
   exact stays state.census seen.listing.stream free
+
+def issueCensus (seen : NativeObsoleteRunCollection state) : DescriptorInventory :=
+  seen.listing.afterClose.afterDrops seen.beforeBarrierDrops
+
+def returnCensus (seen : NativeObsoleteRunCollection state) : DescriptorInventory :=
+  seen.issueCensus.afterDrops seen.afterBarrierDrops
+
+private theorem inventoryKeepsSlots (inventory : DescriptorInventory) (drops : List LockReferenceDrop)
+    (kept : ∀ slot ∈ inventory.slots, ∀ drop ∈ drops, drop.removes slot.reference = false) :
+    inventory.afterDrops drops = inventory := by
+  cases inventory with
+  | mk slots distinct inode =>
+    simp only [DescriptorInventory.afterDrops, DescriptorInventory.mk.injEq, and_true]
+    apply List.filter_eq_self.mpr
+    intro slot present
+    exact List.all_eq_true.mpr fun drop occurred => by simp [kept slot present drop occurred]
+
+theorem barrierCensus (seen : NativeObsoleteRunCollection state) :
+    seen.issueCensus = state.census ∧ seen.returnCensus = state.census := by
+  have issue : seen.issueCensus = state.census := by
+    rw [issueCensus, seen.preservesCensus]
+    exact inventoryKeepsSlots state.census seen.beforeBarrierDrops fun slot live drop occurred =>
+      seen.keepsSlots slot live drop (List.mem_append_left _ occurred)
+  refine ⟨issue, ?_⟩
+  rw [returnCensus, issue]
+  exact inventoryKeepsSlots state.census seen.afterBarrierDrops fun slot live drop occurred =>
+    seen.keepsSlots slot live drop (List.mem_append_right _ occurred)
 
 private theorem selectsFromLstat (seen : NativeObsoleteRunCollection state) :
     selectRunFilesWith (m := Except IO.Error) state.session.directory
@@ -142,10 +179,10 @@ theorem plans (seen : NativeObsoleteRunCollection state) (valid : state.Valid) :
 handle and settles the same namespace reached by the preceding unlinks. -/
 theorem syncs (seen : NativeObsoleteRunCollection state) :
     SyncPathGroup.run (sync state.session.directory.path seen.openRead seen.fsync)
-      #[state.session.directory.path] (state.cache, seen.atBarrier) =
-        .ok () (state.cache, seen.atBarrier.syncDirectory) := by
+      #[state.session.directory.path] (state.cache, (seen.issueCensus, seen.atBarrier)) =
+        .ok () (state.cache, (seen.returnCensus, seen.atBarrier.syncDirectory)) := by
   rw [SyncPathGroup.run_single]
-  simp [SyncHandleRouting.sync, Cache.resolve, seen.cached, seen.synced, withCache]
+  simp [SyncHandleRouting.sync, Cache.resolve, seen.cached, withCache, issueCensus, returnCensus, seen.synced]
 
 def run (seen : NativeObsoleteRunCollection state) :
     EStateM.Result IO.Error (Phase Installed × LockedFileState (CensusDirectoryCache × RunUnlinkImage)) Unit :=
@@ -160,7 +197,9 @@ def run (seen : NativeObsoleteRunCollection state) :
     | .error cause after => .error cause (reached after)
 
 def next (seen : NativeObsoleteRunCollection state) : NativeReadyState :=
-  { state with writer := state.writer.afterRunCollection seen.atBarrier.syncDirectory.guaranteed }
+  { state with
+    writer := state.writer.afterRunCollection seen.atBarrier.syncDirectory.guaranteed
+    census := seen.returnCensus }
 
 theorem returns (seen : NativeObsoleteRunCollection state) (valid : state.Valid) :
     seen.reports.run = .ok () seen.atBarrier.syncDirectory ∧
@@ -170,25 +209,37 @@ theorem returns (seen : NativeObsoleteRunCollection state) (valid : state.Valid)
   obtain ⟨atBarrier, exactImage⟩ := runUnlinkSchedule_reachesBarrier seen.reports.selected
     seen.reports.perform seen.reports.effects seen.unlinked
   have synced : seen.reports.perform .syncDirectory seen.atBarrier = .ok () seen.atBarrier.syncDirectory := by
-    rw [SegmentedRunCollectionReports.perform, RunCollection.performPaths, seen.syncProjection, seen.syncs]
+    rw [SegmentedRunCollectionReports.perform, RunCollection.performPaths, seen.syncProjection]
+    exact congrArg (fun result => match result with
+      | .ok value (_, (_, reached)) => EStateM.Result.ok value reached
+      | .error cause (_, (_, reached)) => EStateM.Result.error cause reached) seen.syncs
   have completed := atBarrier.trans synced
   refine ⟨(seen.reports.run_eq_schedule valid.retained).trans completed, ?_, exactImage⟩
   simp only [run, seen.plans valid, completed]
   rfl
 
-/-- The reached stream is closed before the final callback. Its cached
-directory object and held lock survive, and the exact original slots
-are available when the barrier is issued. -/
+/-- The reached slot intervals feed the actual barrier call and its
+return. The original cached directory and lock objects agree with the
+path reports at both points. -/
 theorem custody (seen : NativeObsoleteRunCollection state) (valid : state.Valid) :
-    seen.listing.Custody ∧ seen.listing.afterClose = state.census ∧
-    state.directorySlot ∈ seen.listing.afterClose.slots ∧ state.owner ∈ seen.listing.afterClose.slots ∧
-    seen.pathObject state.session.directory.path = some seen.lifetime.root ∧
+    seen.listing.Custody ∧ seen.issueCensus = state.census ∧ seen.returnCensus = state.census ∧
+    state.directorySlot ∈ seen.issueCensus.slots ∧ state.owner ∈ seen.issueCensus.slots ∧
+    state.directorySlot ∈ seen.returnCensus.slots ∧ state.owner ∈ seen.returnCensus.slots ∧
     seen.lifetime.namespaceView.modelObject seen.lifetime.root = seen.capture.inode state.directorySlot.description ∧
-    seen.pathObject (state.session.directory.file .lock) = some seen.lifetime.lock ∧
-    seen.lifetime.namespaceView.modelObject seen.lifetime.lock = seen.listing.afterClose.inode state.owner.description := by
-  have census := seen.preservesCensus
-  refine ⟨seen.listing.custody, census, census.symm ▸ valid.directoryLive, census.symm ▸ valid.ownerLive,
-    seen.atPath, ?_, seen.atLock, census.symm ▸ seen.lifetime.identifiesLock⟩
+    seen.capture.inode state.directorySlot.description = seen.issueCensus.inode state.directorySlot.description ∧
+    seen.lifetime.namespaceView.modelObject seen.lifetime.lock = seen.issueCensus.inode state.owner.description ∧
+    seen.pathObject (seen.issueCensus, seen.atBarrier) state.session.directory.path = some seen.lifetime.root ∧
+    seen.pathObject (seen.issueCensus, seen.atBarrier) (state.session.directory.file .lock) = some seen.lifetime.lock ∧
+    seen.pathObject (seen.returnCensus, seen.atBarrier.syncDirectory) state.session.directory.path = some seen.lifetime.root ∧
+    seen.pathObject (seen.returnCensus, seen.atBarrier.syncDirectory) (state.session.directory.file .lock) =
+      some seen.lifetime.lock := by
+  obtain ⟨issue, returned⟩ := seen.barrierCensus
+  have directory := seen.keepsBindings state.session.directory.path (by simp)
+  have lock := seen.keepsBindings (state.session.directory.file .lock) (by simp)
+  refine ⟨seen.listing.custody, issue, returned, issue.symm ▸ valid.directoryLive, issue.symm ▸ valid.ownerLive,
+    returned.symm ▸ valid.directoryLive, returned.symm ▸ valid.ownerLive, ?_, issue.symm ▸ seen.capturedInode,
+    issue.symm ▸ seen.lifetime.identifiesLock, seen.atPath, seen.atLock,
+    directory.trans seen.atPath, lock.trans seen.atLock⟩
   rw [seen.capturedInode, ← seen.cachedSlot]
   exact seen.lifetime.identifiesDirectory
 
@@ -215,7 +266,9 @@ theorem reclaims (seen : NativeObsoleteRunCollection state) (valid : state.Valid
   rw [reached] at preserved retry
   have checked := (validateObservedRunGeneration_ok_iff.mp (seen.reports.preflight valid.retained)).2
   refine ⟨fun generation index => ?_, ?_, ?_, preserved.2 _ List.mem_cons_self,
-    { valid with retained := preserved.1 }⟩
+    { valid with ownerLive := by simpa only [next, seen.barrierCensus.2] using valid.ownerLive,
+                 directoryLive := by simpa only [next, seen.barrierCensus.2] using valid.directoryLive,
+                 retained := preserved.1 }⟩
   · rw [seen.reports.selected_eligible valid.retained, sameNames]
   · rw [exactImage]
     exact seen.reports.inventory.finishOlderPass_absent seen.initial seen.reports.held checked
@@ -266,7 +319,7 @@ theorem NativeReadPosition.collectsObsoleteRuns (current : NativeReadPosition hi
   let state := seen.next
   let next : NativeReadPosition history log := ⟨.ok state.session (state.census, state.files), state, state, current.reads,
     .installed rfl ready sameHistory pending current.readPrefix.readsBounded⟩
-  exact ⟨next, rfl, rfl, (seen.returns valid).2.1, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+  exact ⟨next, rfl, rfl, (seen.returns valid).2.1, rfl, rfl, rfl, rfl, rfl, rfl, seen.barrierCensus.2, rfl,
     rfl, selected, obsolete, retainedNames, next.readPrefix.guardedReplay⟩
 
 end Alvoki.Storage.DiskSession

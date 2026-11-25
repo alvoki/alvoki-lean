@@ -1482,6 +1482,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsLock
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunCollection.plans
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunCollection.barrierCensus
+#check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunCollection.syncs
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunCollection.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunCollection.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunCollection.reclaims
