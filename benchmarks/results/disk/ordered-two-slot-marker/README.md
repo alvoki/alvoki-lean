@@ -140,3 +140,7 @@ tail-latency gap.
 The raw request samples, paired ratios, binary hashes and reproduction
 harness are under `work/alvoki-performance/two-slot-offered-repeat`
 in the workspace.
+
+[Per-trial results](offered-repeat.csv) retain the elapsed time and both
+response p99 values in nanoseconds for all 18 runs, including rename.
+Each p99 is the nearest-rank percentile of the 4,000 responses of its kind.
