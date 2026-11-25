@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.SegmentedBatchAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedBatchPowerLoss
-import Alvoki.Storage.Disk.SegmentedBatchAppend
+import Alvoki.Storage.Disk.ClientWriteTrace
 
 namespace Alvoki.Storage.DiskSession
 
@@ -49,6 +49,16 @@ def runSingleWriteWithInterruption {stop image : Type} (directory : DiskDirector
       publishPreparedWrite { installed with table, walBytes := bytes } event.sequence
         (fun phase => ExceptT.lift (modify fun state => (phase, state.2)))
         (observeBatchFileCall .commitUnknown (publish installed [event] bytes)))).run
+
+/-- The caller's original write interface determines which preflight runs
+before using the reported publication actions. -/
+def WriteRequest.runWithInterruption {stop image : Type} (request : WriteRequest) (directory : DiskDirectory)
+    (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+    (publish : Installed → List WAL.Write → Nat → ExceptT IO.Error (EStateM stop image) Unit) :
+    EStateM stop (Phase Installed × LockedFileState image) (Except DiskWriteError UInt64) :=
+  match request with
+  | .single key value => runSingleWriteWithInterruption directory key value lookup publish
+  | .batch rows => runBatchWriteWithInterruption directory rows lookup publish
 
 /-- A reached singleton preparation produces the same event and sequence
 under both production schedules. The same low-level publication can
@@ -289,6 +299,22 @@ theorem Reached.stopsSingleWriteSchedule {report : SegmentedBatchMarkerPowerLoss
   dsimp only
   rw [runSingleWriteWithInterruption_eq_singleton (writtenFromSingleton (singleton ▸ observed.prepared))]
   simpa only [singleton] using observed.stopsBatchSchedule
+
+/-- Both native write interfaces reach the same reported marker issue
+for the request's prepared rows. -/
+theorem Reached.stopsWriteRequest {report : SegmentedBatchMarkerPowerLossReport directory before writer}
+    (observed : report.Reached) (request : WriteRequest) (rows : request.rows = report.rows) :
+    let scratch := before.wal.directory.staged .walBoundary
+    request.runWithInterruption directory report.activeMetadata report.publishUntilIssue
+      (.ready before.installed, ⟨WriteFiles.initial before.history scratch, before.owners⟩) =
+      .error report.cut.action
+        (.poisoned, ⟨report.cut.interrupt (WAL.Boundary.encode report.nextBytes.toUInt64) report.reached,
+          before.owners⟩) := by
+  cases request with
+  | single key value => exact observed.stopsSingleWriteSchedule rows.symm
+  | batch submitted =>
+    have exactRows : submitted = report.rows := rows
+    simpa only [WriteRequest.runWithInterruption, exactRows] using observed.stopsBatchSchedule
 
 end SegmentedBatchMarkerPowerLossReport
 end Alvoki.Storage.DiskSession

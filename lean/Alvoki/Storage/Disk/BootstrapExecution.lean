@@ -40,8 +40,8 @@ theorem startFromEmpty {input : FilePath} (observed : BootstrapKeeperMarkerHando
 end BootstrapKeeperMarkerHandoff
 
 /-- Start from the returned bootstrap session, acknowledge a batch, and
-continue from an interruption of the next batch at the writer installed
-by that acknowledgement. The first batch is in the ledger before the
+continue from an interruption of the next single or batch write at the
+writer installed by that acknowledgement. The first batch is in the ledger before the
 interruption and the second enters as a single uncertain group. The
 returned session acquires a pin at its actual latest sequence and uses it
 for a point or range read in the same client trace. -/
@@ -52,7 +52,8 @@ theorem BootstrapClientStart.acknowledgesThenRecovers {handle : Type} {directory
     (written : ObservedBatchWrite acknowledged handle) {target : Target}
     (selection : acknowledged.Selects target)
     {cut : SegmentedBatchMarkerPowerLossReport directory (acknowledged.next target) descriptor}
-    (observed : cut.Reached) {retry : LockedFileState FileImage}
+    (observed : cut.Reached) (request : WriteRequest) (rows : request.rows = cut.rows)
+    {retry : LockedFileState FileImage}
     (retries : ReportedReopenPrefix directory (acknowledged.next target).wal.active.first cut.inFlight retry)
     {input : FilePath}
     (readAndFinish : ∀ history, ∀ layout : CanonicalKeeperLayout retry.image history,
@@ -69,7 +70,7 @@ theorem BootstrapClientStart.acknowledgesThenRecovers {handle : Type} {directory
       (let before := acknowledged.next target
        let scratch := before.wal.directory.staged .walBoundary
        let reached := cut.cut.interrupt (WAL.Boundary.encode cut.nextBytes.toUInt64) cut.reached
-       runBatchWriteWithInterruption directory cut.rows cut.activeMetadata cut.publishUntilIssue
+       request.runWithInterruption directory cut.activeMetadata cut.publishUntilIssue
          (.ready before.installed, ⟨WriteFiles.initial before.history scratch, before.owners⟩) =
            .error cut.cut.action (.poisoned, ⟨reached, before.owners⟩) ∧
        cut.inFlight = ⟨before.wal.appendReopenFiles
@@ -130,7 +131,7 @@ theorem BootstrapClientStart.acknowledgesThenRecovers {handle : Type} {directory
     simpa only [List.cons_append, List.nil_append, path, lock] using continued
   obtain ⟨reference, issued, acquired, reader, replayed, _, pinned, localToken, sequence, exactPhase, readNext⟩ :=
     replay.acquireAndRead atSession phase _ floor (UInt64.le_refl _)
-  refine ⟨cacheAfter, returned, ⟨observed.stopsBatchSchedule, fileStop⟩, description, after, history, layout, reported, admission, session, final,
+  refine ⟨cacheAfter, returned, ⟨observed.stopsWriteRequest request rows, fileStop⟩, description, after, history, layout, reported, admission, session, final,
     opened, path, lock, phase, files, owners, sameHistory, by simpa only [batchHistory] using retained, continued, replay,
     reference, issued, acquired, reader, sameHistory ▸ replayed, pinned, localToken, sequence, exactPhase, ?_⟩
   intro sameSession compared α request

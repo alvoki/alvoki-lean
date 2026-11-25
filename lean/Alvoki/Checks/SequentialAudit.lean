@@ -980,6 +980,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runSingleWriteWithInterruption_eq_singleton
 #check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Valid.stopsSingleWriteSchedule
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.stopsSingleWriteSchedule
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.stopsWriteRequest
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedBatchMarker
 #check_axioms Alvoki.Storage.DiskSession.ReportedReopenPrefix.refines
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedBatchAppend
