@@ -158,22 +158,19 @@ theorem NativeOpenedPosition.opensAfterManifestRenameError
   let marked := reader.markedReport valid pending bounded
   obtain ⟨next, reopened, sameReturn, nextReturned, owner, slot, cache⟩ :=
     current.current.ready.reopensCheckpointManifestRenameWith crash reader
-  obtain ⟨installed, cacheOpen, makeCache, cacheAction, cacheSource, ran⟩ := marked.opensAlignedFromAdmission seen.raw seen.seed
-    reader.opening.finish rfl seen.checkpoint seen.listing seen.extents seen.seals seen.keeper seen.sameLookup
-    seen.flat seen.marked remove write rename bootstrap assemble constructs seen.allocations
   have phaseEffects : OpenPhaseCellEffects view.phase opened.get opened.set := samePhase.symm ▸ opened.phaseEffects
-  obtain ⟨handle, start, currentEq, rawTable, lock, files, contents, getEq, setEq, compareEq, token,
-    reachedHeap, pins, sameFiles, sameCensus, sameCache⟩ :=
-    installed.startsAtCheckpointReopen rows next sameReturn nextReturned cache owner slot phaseEffects opened.ptrEq
+  obtain ⟨installed⟩ := seen.toRawAlignedCheckpointReopenEffects.installsAtReportedPosition (report := marked)
+    next remove write rename bootstrap assemble opened.ptrEq rows sameReturn nextReturned cache owner slot constructs phaseEffects
   have stored : view.phase reached opened.phase = some .poisoned := by
     rw [samePhase]
     exact poison
   refine ⟨source, diagnostic, image, stored, ?_,
     Prod.ext seen.raw.entryCensus seen.raw.entryFiles, ?_, ?_, ?_, reader.readsSelected valid,
-    fun _ _ => seen.reboot.readsSurvivingFile, next, cacheOpen, makeCache, handle, start, cacheAction, cacheSource,
-    reopened, sameReturn, nextReturned, ?_, reopened.checkpointWatermark.1, ?_, currentEq, lock,
-    files.symm ▸ installed.cacheReferences, files.symm ▸ installed.cacheDirectory, contents, getEq, setEq,
-    compareEq, token, pins, sameFiles, sameCensus, sameCache⟩
+    fun _ _ => seen.reboot.readsSurvivingFile, next, installed.cacheOpen, installed.makeCache, installed.handle,
+    installed.start, installed.cacheAction, installed.cacheSource, reopened, sameReturn, nextReturned, ?_,
+    reopened.checkpointWatermark.1, installed.rawOpen, installed.position, installed.lock, installed.references,
+    installed.directory, installed.contents, installed.readsPhase, installed.writesPhase, installed.comparesTokens,
+    installed.tokenRef, installed.pins, installed.files, installed.census, installed.cache⟩
   · rw [image]
     exact Prod.ext seen.reboot.returnedCensus seen.reboot.returnedFiles
   · rw [seen.raw.entryCensus]
@@ -184,10 +181,8 @@ theorem NativeOpenedPosition.opensAfterManifestRenameError
   · rw [seen.seed.sameHandle, seen.seed.openedHandle]
     exact (seen.reboot.survivorNames _ (.inl rfl)).trans
       ((reader.opening.reads.sameObjects.1.symm).trans reader.directoryObject).symm
-  · rw [currentEq, diagnostic]
+  · rw [installed.position, diagnostic]
     exact .recoverCheckpointManifestRenameError current.current crash next reopened
-  · rw [rawTable, reachedHeap]
-    exact ran
 
 end
 
