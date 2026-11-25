@@ -49,6 +49,7 @@ import Alvoki.Storage.Disk.LockCensusTrace
 import Alvoki.Storage.Disk.LockCensusOpenAdmission
 import Alvoki.Storage.Disk.CapturedMarkedReads
 import Alvoki.Storage.Disk.CapturedAlignedInstallation
+import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
 import Alvoki.Storage.Disk.DelayedKeeperInventory
 import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.KeeperReadCustody
@@ -2185,6 +2186,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.reachesMarkedPreparation
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.recoverThroughReads_prepared
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.installs
+#check_axioms Alvoki.Storage.DiskSession.CapturedAlignedCallbacks.installsWithFinish
+#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.readAndClose
+#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.sameCensusObjects
+#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.replacementInodes
+#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.repairAt_returns
+#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.installs
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.sameKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.rawTail_returns
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.finishAt_returns
@@ -2210,6 +2217,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.openedKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.readCensus
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.readsAligned
+#check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.readsLong
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.syncFromRead
 #check_axioms Alvoki.Storage.SyncHandleRouting.replacementKeeperBeforeRename
 #check_axioms Alvoki.WAL.Boundary.WriteEffects.markerStep_syncStaged_success
