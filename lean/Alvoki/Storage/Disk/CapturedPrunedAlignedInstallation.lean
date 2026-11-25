@@ -24,12 +24,11 @@ structure CapturedPrunedAlignedFinish (calls : CapturedAlignedCallbacks admissio
   repair : ListedPrunedAlignedKeeper prune
   succeeded : ∃ reached, repair.keeperFsyncReturn = .ok () reached
   afterKeeper : List LockReferenceDrop
+  released : ∃ earlier, afterKeeper = earlier ++ [authorization.keeper.slot.closeEvent]
   lockRetained : admission.owner ∈ (authorization.keeper.inventory.afterDrops
-    (repair.beforeAuthorization ++ prune.afterAuthorization ++ repair.afterSuffix ++ afterKeeper ++
-      [authorization.keeper.slot.closeEvent])).slots
+    (repair.beforeAuthorization ++ prune.afterAuthorization ++ repair.afterSuffix ++ afterKeeper)).slots
   directoryRetained : admission.cached ∈ (authorization.keeper.inventory.afterDrops
-    (repair.beforeAuthorization ++ prune.afterAuthorization ++ repair.afterSuffix ++ afterKeeper ++
-      [authorization.keeper.slot.closeEvent])).slots
+    (repair.beforeAuthorization ++ prune.afterAuthorization ++ repair.afterSuffix ++ afterKeeper)).slots
 
 namespace CapturedPrunedAlignedFinish
 
@@ -78,8 +77,7 @@ private theorem aligned (finish : CapturedPrunedAlignedFinish calls reads vacant
 
 def census (finish : CapturedPrunedAlignedFinish calls reads vacant selected) : DescriptorInventory :=
   finish.authorization.keeper.inventory.afterDrops
-    (finish.repair.beforeAuthorization ++ finish.prune.afterAuthorization ++ finish.repair.afterSuffix ++
-      finish.afterKeeper ++ [finish.authorization.keeper.slot.closeEvent])
+    (finish.repair.beforeAuthorization ++ finish.prune.afterAuthorization ++ finish.repair.afterSuffix ++ finish.afterKeeper)
 
 def settled (_finish : CapturedPrunedAlignedFinish calls reads vacant selected) : LockedFileState FileImage :=
   { admission.held with image := retry.image.unlinkVisibleSuffix.syncDirectory.syncKeeper }
@@ -88,12 +86,13 @@ def settled (_finish : CapturedPrunedAlignedFinish calls reads vacant selected) 
 barrier. Its stable description no longer has a slot in the final census. -/
 theorem keeperReleased (finish : CapturedPrunedAlignedFinish calls reads vacant selected) :
     finish.census.references reads.wal.keeper.calls.slot.description = [] := by
+  obtain ⟨earlier, release⟩ := finish.released
   let events := finish.repair.beforeAuthorization ++ finish.prune.afterAuthorization ++ finish.repair.afterSuffix ++
-    finish.afterKeeper
+    earlier
   have result : finish.census = finish.reader.atOpen.afterDrops (events ++ [reads.wal.keeper.calls.slot.closeEvent]) := by
     unfold census
-    rw [finish.sameKeeper]
-    change (reads.wal.keeper.calls.inventory).afterDrops (events ++ [reads.wal.keeper.calls.slot.closeEvent]) = _
+    rw [release, finish.sameKeeper, ← List.append_assoc]
+    change reads.wal.keeper.calls.inventory.afterDrops (events ++ [reads.wal.keeper.calls.slot.closeEvent]) = _
     rw [finish.reader.opened]
     exact DescriptorInventory.insert_thenClose _ _ _ _
   have fresh : finish.reader.atOpen.references reads.wal.keeper.calls.slot.description = [] := finish.reader.fresh
@@ -162,7 +161,7 @@ private def repairAt (finish : CapturedPrunedAlignedFinish calls reads vacant se
     (fun source target => fileAction (calls.renameFile source target))
 
 private def syncDrops (finish : CapturedPrunedAlignedFinish calls reads vacant selected) : List (List LockReferenceDrop) :=
-  [finish.prune.afterAuthorization, finish.repair.afterSuffix, finish.afterKeeper ++ [finish.authorization.keeper.slot.closeEvent]]
+  [finish.prune.afterAuthorization, finish.repair.afterSuffix, finish.afterKeeper]
 
 private theorem unlinksFromCensus (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
     {initial : FileImage} {bindings final : FilePath → Option Nat} {names : List Nat}
@@ -199,7 +198,7 @@ theorem repairAt_returns (finish : CapturedPrunedAlignedFinish calls reads vacan
       (remembered, (finish.reader.afterRead, admission.held), finish.syncDrops) =
       .ok () (admission.cache, (finish.census, finish.settled), []) := by
   intro keeper remembered
-  let next := finish.afterKeeper ++ [finish.authorization.keeper.slot.closeEvent]
+  let next := finish.afterKeeper
   let afterAuthorization := finish.reader.afterRead.afterDrops finish.prune.afterAuthorization
   let afterSuffix := afterAuthorization.afterDrops finish.repair.afterSuffix
   let authorized : LockedFileState FileImage := { admission.held with image := retry.image.syncDirectory }
