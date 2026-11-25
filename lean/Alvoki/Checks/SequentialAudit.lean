@@ -71,6 +71,7 @@ import Alvoki.Storage.Disk.CheckpointRunWriteCustody
 import Alvoki.Storage.Disk.CheckpointObservedCompletion
 import Alvoki.Storage.Disk.CheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.CheckpointManifestRenameCut
+import Alvoki.Storage.Disk.CheckpointManifestRenameReopen
 import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.MarkedOpenControl
 import Alvoki.Storage.Disk.DiskLockLifecycle
@@ -299,6 +300,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.atRunDirectory
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.executeVersioned_atManifestRename
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.atManifestRename
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.reopensAfterManifestRename
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.returns
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.durableRuns
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.manifestSettled

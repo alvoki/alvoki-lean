@@ -63,6 +63,7 @@ lake env leanchecker Alvoki.Storage.Disk.CheckpointRunWriteCustody
 lake env leanchecker Alvoki.Storage.Disk.CheckpointObservedCompletion
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunDirectoryCut
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestRenameCut
+lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestRenameReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointObservedDispatch
 lake env leanchecker Alvoki.Storage.Disk.CheckpointLockHandoff
 lake env leanchecker Alvoki.Storage.Disk.CheckpointCutSession
