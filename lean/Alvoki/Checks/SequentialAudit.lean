@@ -239,6 +239,7 @@ import Alvoki.Storage.Disk.NativeFirstAppendPowerLoss
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativePendingCloseRetries
 import Alvoki.Storage.Disk.NativePendingCloseReferenceDrop
+import Alvoki.Storage.Disk.NativePendingCloseRecovery
 import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 import Alvoki.Storage.Disk.NativeInterruptedCloseReopen
 import Alvoki.Storage.Disk.NativePoisonedCloseReopen
@@ -1865,6 +1866,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.recoversAfterCloseRetries
 #check_axioms Alvoki.Storage.DiskSession.NativePendingCloseReferenceDrop.releases
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.recoversAfterFailedClosesAndDrop
+#check_axioms Alvoki.Storage.DiskSession.NativePendingCloseRecovery.frames
+#check_axioms Alvoki.Storage.DiskSession.NativePendingCloseRecovery.reopens
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.acknowledgesWrite
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.replaysClient
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysClientAtManifestDirectory

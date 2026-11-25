@@ -150,6 +150,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeFirstAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionPendingClose
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCloseRetries
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCloseReferenceDrop
+lake env leanchecker Alvoki.Storage.Disk.NativePendingCloseRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 lake env leanchecker Alvoki.Storage.Disk.NativeInterruptedCloseReopen
 lake env leanchecker Alvoki.Storage.Disk.NativePoisonedCloseReopen

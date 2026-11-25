@@ -15,6 +15,8 @@ import Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkStop
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
+import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryError
+import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 
 namespace Alvoki.Storage.DiskSession
@@ -81,10 +83,14 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
       (owner : cut.slot = current.ready.state.owner)
   | checkpointError {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointDirectoryError (image := image) current.ready.state cut) (physical : reported.Physical)
+  | checkpointRunDirectoryError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointRunDirectoryError (image := image) current.ready.state cut)
   | interruptedCheckpoint {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (stop : NativeCheckpointDirectoryStop (image := image) current.ready.state cut)
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause)
+  | coveredWalUnlinkError (reported : NativeCoveredWalUnlinkError current.ready.state)
   | interruptedCoveredWalUnlink (stop : NativeCoveredWalUnlinkStop current.ready.state)
   | interruptedObsoleteRunUnlink (cut : NativeObsoleteRunUnlinkCut current.ready.state)
       (stop : NativeObsoleteRunUnlinkStop cut)
@@ -109,10 +115,10 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .rejectedOpensAfterClose sequence => .closeThenOpenAttempts sequence.inputs
   | .interruptedClose _ _ => .close
   | .interruptedCloseAfterUncertainWrite pending _ _ => .writeThenClose pending.write.request
-  | .checkpointError _ _ => .checkpoint
+  | .checkpointError _ _ | .checkpointRunDirectoryError _ => .checkpoint
   | .interruptedCheckpoint _ => .checkpoint
   | .collectionError _ _ _ => .collectCoveredWal
-  | .interruptedCoveredWalUnlink _ => .collectCoveredWal
+  | .interruptedCoveredWalUnlink _ | .coveredWalUnlinkError _ => .collectCoveredWal
   | .interruptedObsoleteRunUnlink cut _ => .collectObsoleteRuns cut.plan.reports.held
   | .interruptedRotation _ => .rotateWal
   | .rotationError _ _ => .rotateWal
@@ -188,12 +194,14 @@ def Reached : NativeExecutionEnd current → Prop
       ∀ pair ∈ (physical.files reported.after).directory.crashImages,
         pair.walBoundary = current.ready.state.writer.wal.directory.active.walBoundary ∧
         cut.PendingReplay (physical.runs reported.after) pair.manifest current.submissions current.ready.reads
+  | .checkpointRunDirectoryError reported => NativeReturnedCheckpointRunDirectoryError current.ready reported
   | .interruptedCheckpoint stop => NativePendingCheckpoint current.ready stop
   | .collectionError reported cause _ =>
       reported.run = .error (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}")
         (.poisoned, ⟨(current.ready.state.cache, reported.pending.image), reported.pending.owners⟩) ∧
       ∀ sealed ∈ reported.pending.image.crashSealed,
         Nonempty (CoveredWalRetrySelection current.ready.state.writer { reported.pending.image.visible with sealed })
+  | .coveredWalUnlinkError reported => NativeReturnedCoveredWalUnlinkError current.ready reported
   | .interruptedCoveredWalUnlink stop =>
       (∀ barrier, stop.run barrier = .error stop.path
         (.poisoned, ⟨(current.ready.state.cache, stop.census, stop.after), current.ready.state.files.owners⟩)) ∧
@@ -255,11 +263,13 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
     obtain ⟨stopped, phase, files, inventory, _, _, bound, _⟩ := pending.stopsDuringClose cut owner clear
     exact ⟨stopped, phase, files, inventory, bound⟩
   | checkpointError reported physical => exact current.ready.readPrefix.checkpointDirectoryError reported physical
+  | checkpointRunDirectoryError reported => exact current.ready.checkpointRunDirectoryError reported
   | interruptedCheckpoint stop => exact current.ready.stopsDuringCheckpoint stop
   | collectionError reported _ failed =>
     obtain ⟨returned, _, _, _, _, _, _, _, _, _, _, _, _, survivors, _⟩ :=
       current.ready.readPrefix.collectionBarrierFailed reported failed
     exact ⟨returned, survivors⟩
+  | coveredWalUnlinkError reported => exact current.ready.returnsCoveredWalUnlinkError reported
   | interruptedCoveredWalUnlink stop =>
     have valid := current.ready.readPrefix.refines.1
     have custody := stop.retainsCustody valid
@@ -332,7 +342,8 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
   | ready | close | rejectedOpensAfterClose | interruptedClose | checkpointError | interruptedCheckpoint
-  | collectionError | interruptedCoveredWalUnlink | interruptedObsoleteRunUnlink | interruptedRotation | rotationError =>
+  | checkpointRunDirectoryError | collectionError | coveredWalUnlinkError | interruptedCoveredWalUnlink
+  | interruptedObsoleteRunUnlink | interruptedRotation | rotationError =>
     refine ⟨current.history, .inl rfl, ?_, current.ready.readPrefix.readsBounded⟩
     all_goals simpa [submissions, uncertainBatch] using current.ready.readPrefix.refines.2.2
 
@@ -383,12 +394,16 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
   | checkpointError {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointDirectoryError (image := image) current.ready.state cut) (physical : reported.Physical) :
       NativeExecutionEndObservation current .checkpoint
+  | checkpointRunDirectoryError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointRunDirectoryError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
   | interruptedCheckpoint {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (stop : NativeCheckpointDirectoryStop (image := image) current.ready.state cut) :
       NativeExecutionEndObservation current .checkpoint
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause) :
       NativeExecutionEndObservation current .collectCoveredWal
+  | coveredWalUnlinkError (reported : NativeCoveredWalUnlinkError current.ready.state) : NativeExecutionEndObservation current .collectCoveredWal
   | interruptedCoveredWalUnlink (stop : NativeCoveredWalUnlinkStop current.ready.state) :
       NativeExecutionEndObservation current .collectCoveredWal
   | interruptedObsoleteRunUnlink (cut : NativeObsoleteRunUnlinkCut current.ready.state)
@@ -431,8 +446,10 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
     change NativeExecutionEndInstruction.writeThenClose pending.write.request = .writeThenClose write.request
     rw [same]
   | checkpointError reported physical => exact ⟨.checkpointError reported physical, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointRunDirectoryError reported => exact ⟨.checkpointRunDirectoryError reported, rfl, NativeExecutionEnd.reached _⟩
   | interruptedCheckpoint stop => exact ⟨.interruptedCheckpoint stop, rfl, NativeExecutionEnd.reached _⟩
   | collectionError reported cause failed => exact ⟨.collectionError reported cause failed, rfl, NativeExecutionEnd.reached _⟩
+  | coveredWalUnlinkError reported => exact ⟨.coveredWalUnlinkError reported, rfl, NativeExecutionEnd.reached _⟩
   | interruptedCoveredWalUnlink stop => exact ⟨.interruptedCoveredWalUnlink stop, rfl, NativeExecutionEnd.reached _⟩
   | interruptedObsoleteRunUnlink cut stop => exact ⟨.interruptedObsoleteRunUnlink cut stop, rfl, NativeExecutionEnd.reached _⟩
   | interruptedRotation stop => exact ⟨.interruptedRotation stop, rfl, NativeExecutionEnd.reached _⟩
