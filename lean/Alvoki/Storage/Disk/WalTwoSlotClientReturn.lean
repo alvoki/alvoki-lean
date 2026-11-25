@@ -2966,7 +2966,11 @@ theorem recoveredRetries_installedReads
     (markerBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
     (markerAvailable : PrefixChunksAvailableUntilEof (marker.visible markerHandle.inode)
       (markerReads.readChunk markerFile.calls.slot.description))
-    (markerAccepted : decode (marker.visible markerHandle.inode) = .ok selected)
+    {markerBytes : ByteArray}
+    (markerRead : readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+      (markerReads.readChunk markerFile.calls.slot.description) acquisitionLimit ByteArray.empty 0 =
+        .ok markerBytes (min acquisitionLimit (marker.visible markerHandle.inode).size))
+    (decodedMarker : decode markerBytes = .ok selected)
     (markerSource :
       (openedFrom.image.directory.active = survivingBindings ∧
         survivingMarker = some (marker.visible markerHandle.inode)) ∨
@@ -3050,6 +3054,16 @@ theorem recoveredRetries_installedReads
   let base := (checkpointResult.getD (.empty, 0)).1
   let readWal := fun start length =>
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
+  have available : PrefixChunksAvailableUntilEof (marker.visible marker.active)
+      (markerReads.readChunk markerFile.calls.slot.description) := by
+    simpa only [markerCurrent] using markerAvailable
+  obtain ⟨heldBytes, heldRead, heldDecode⟩ := decode_markerFromHeldDirectory markerFile available
+  have sameRead : heldBytes = markerBytes := by
+    rw [markerCurrent, heldRead] at markerRead
+    exact (EStateM.Result.ok.inj markerRead).1
+  have markerAccepted : decode (marker.visible markerHandle.inode) = .ok selected := by
+    rw [markerCurrent, ← heldDecode, sameRead]
+    exact decodedMarker
   have observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier) := by
     rw [preparationPreservesFiles]
     rcases markerSource with ⟨binding, bytes⟩ | projected
@@ -3284,12 +3298,6 @@ theorem recoveredRetries_installedReads
     rw [boundedPlan, keeperExtent, WalSegmentRepair.finishBoundedMarkedOpen_eq_full
       directory plan preparedPlan.valid removeFile write sync renameFile]
     exact repaired
-  have available : PrefixChunksAvailableUntilEof (marker.visible marker.active)
-      (markerReads.readChunk markerFile.calls.slot.description) := by
-    simpa only [markerCurrent] using markerAvailable
-  obtain ⟨markerBytes, markerRead, markerDecode⟩ := decode_markerFromHeldDirectory markerFile available
-  have decodedMarker : decode markerBytes = .ok selected :=
-    markerDecode.trans (by simpa only [markerCurrent] using markerAccepted)
   have markerAcquired : acquireMarkerFromReports markerReads (directory.file .walBoundary) openedFrom.image =
       .ok (markerHandle, selected) openedFrom.image := by
     have held : (⟨markerFile.calls.slot.description,
@@ -3300,10 +3308,10 @@ theorem recoveredRetries_installedReads
       exact ⟨markerDescription, markerDescription ▸ reachedInode⟩
     rw [acquireMarkerFromReports, acquireMarkerWithInventory_sharedReader]
     simp [acquireMarkerWithInventory, acquireMarkerWithInventoryUsing, checkPrivateRegularWith, markerFile.calls.stat,
-      markerFile.calls.regular, markerPrivate, markerFile.calls.opened, markerRead,
+      markerFile.calls.regular, markerPrivate, markerFile.calls.opened, heldRead,
       show (IO.FS.FileType.file == .file) = true from rfl,
       Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept,
-      decodedMarker, held]
+      sameRead, decodedMarker, held]
   have recovery : reopenWith
       (WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
         (fun _ => pure (some (Boundary.encode selected.frontier))) readWal)
@@ -3339,7 +3347,7 @@ theorem recoveredRetries_installedReads
       (layoutTarget.symm ▸ authorizedRepair) (layoutTarget.symm ▸ retries)
   have retryPlan : WalSegmentRepair.Prepared after target retry.plan := by
     simpa only [layoutTarget] using retryPrepared
-  refine ⟨⟨markerBytes, (by simpa only [markerCurrent] using markerRead), decodedMarker⟩, ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
+  refine ⟨⟨markerBytes, markerRead, decodedMarker⟩, ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
     retrySeals, retryKeeper, retryPlan, session, final, reference,
     opened, pin, pinned, returned, fullReopen, installed, rfl, reached, reached.symm ▸ ready,
     reached.symm ▸ authorizedRepair, owner, freshSession, replayed, acquired, points, ranges⟩
