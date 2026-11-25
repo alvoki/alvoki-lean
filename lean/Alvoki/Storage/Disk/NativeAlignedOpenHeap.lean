@@ -167,6 +167,32 @@ theorem MarkedHeapInstallation.startsAtReportedPosition
   · rw [token, ← sameSession]
     exact installed.tokenRef
 
+/-- The exact raw recovery result supplies the payload and heap for
+the two installer allocations. The projected worker identifies that
+payload with the one already proved for the installation. -/
+theorem MarkedHeapInstallation.installsAfterRawRecovery
+    {report : MarkedOpenSuccessReports input directory history log recorded}
+    {view : OpenCloseHeapView heap FileImage} {init : OpenSyncCacheCallbacks heap} {entry : heap}
+    {seed : OpenSyncCacheAllocations report.opening.admission.opened view init entry}
+    {lock : IO.FS.Handle} {lockIdentity : IO.FS.Handle → Nat}
+    {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+    {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+    {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)} {reached : heap}
+    (installed : MarkedHeapInstallation report view init entry seed lock lockIdentity phaseIdentity tokenIdentity
+      allocatePhase allocateToken reached)
+    (rawRecovery : EStateM IO.Error heap Reopened) {opened : Reopened}
+    (rawReturned : rawRecovery seed.afterPending = .ok opened reached)
+    (workerReturned : report.opening.finish.markedWorker report.opening.chronology directory report.opening.admission.cache
+      (report.opening.admission.reached, report.opening.admission.held) =
+        .ok opened (view.descriptors reached, view.files reached)) :
+    (do
+      let opened ← rawRecovery
+      installReady opened.installed allocatePhase allocateToken
+        (fun phase token => pure (installed.assemble phase token)) : EStateM IO.Error heap DiskTable)
+      seed.afterPending = .ok installed.table installed.allocation.afterToken := by
+  have samePayload := (EStateM.Result.ok.inj (workerReturned.symm.trans installed.recovered)).1
+  simp only [Bind.bind, EStateM.bind, rawReturned, samePayload, installed.allocated]
+
 /-- Allocate the real phase and token after a marked repair whose returned
 checkpoint, WAL, file image, descriptor census and cache have been matched
 to the reached raw heap. Each allocation frames the existing cache. -/

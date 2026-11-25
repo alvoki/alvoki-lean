@@ -1741,6 +1741,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromAlignedCache
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromRepairedHeap
 #check_axioms Alvoki.Storage.DiskSession.MarkedHeapInstallation.startsAtReportedPosition
+#check_axioms Alvoki.Storage.DiskSession.MarkedHeapInstallation.installsAfterRawRecovery
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsFromPrunedAlignedCache
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.bootstrapCacheSchedules
 #check_axioms Alvoki.Storage.DiskSession.BootstrapPendingObservation.returns
