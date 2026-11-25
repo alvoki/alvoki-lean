@@ -631,18 +631,43 @@ theorem selectedBytes_retainBatch
     (selected : Boundary.select decoded.frontier wal = .ok (WAL.encode events))
     (whole : events = history ∨ events = history ++ batch)
     (acknowledged : Bool) (confirmed : acknowledged = true → events = history ++ batch) :
-    if acknowledged then
+    Boundary.recoverMarked base decoded.frontier wal = .ok (WAL.encode events, table) ∧
+    (if acknowledged then
       DatabaseBatchRetention (log ++ [.acknowledgedBatch batch]) (history ++ batch) ∧
       ∃ model, table.Refines model ∧ RepresentsWalHistory (history ++ batch) model
     else
       DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
-      ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
+      ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model) := by
   have projection := projectBinding_of_heldRead (visible := directory)
     mismatch observes available fits returned accepted
   have samePair := Except.ok.inj (projected.symm.trans projection)
   have binding : pair.walBoundary = some (Boundary.encode decoded.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary samePair
   have count := (Boundary.select_size selected).symm
+  have fits : (WAL.encode events).size < UInt64.size := by
+    rw [← count]
+    exact decoded.frontier.toNat_lt
+  have frontier : decoded.frontier = (WAL.encode events).size.toUInt64 := by
+    rw [← count]
+    simp
+  have canonical : Boundary.select decoded.frontier (WAL.encode (history ++ batch)) =
+      .ok (WAL.encode events) := by
+    rw [frontier]
+    rcases whole with old | new
+    · rw [old, WAL.encode_append]
+      exact Boundary.select_encoded history (WAL.encode batch) (old ▸ fits)
+    · rw [new]
+      simpa using Boundary.select_encoded (history ++ batch) ByteArray.empty (new ▸ fits)
+  obtain ⟨markerRecord, length, _, readMarker, parsed, _, _, _, recovered⟩ := recovery.marked
+  have sameRecord := Option.some.inj (binding.symm.trans readMarker)
+  have sameLength : decoded.frontier = length :=
+    Except.ok.inj ((Boundary.decode_encode decoded.frontier).symm.trans (sameRecord ▸ parsed))
+  have exactReplay : Boundary.recoverMarked base decoded.frontier wal =
+      .ok (WAL.encode events, table) := by
+    rw [← sameLength] at recovered
+    simp only [Boundary.recoverMarked, Bind.bind, Except.bind, selected, canonical] at recovered ⊢
+    cases replay : recoverSelected base (WAL.encode events) <;> simp_all [Pure.pure, Except.pure]
+  refine ⟨exactReplay, ?_⟩
   cases acknowledged with
   | false =>
     apply recoveredBatch_retains prior recovery binding
