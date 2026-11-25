@@ -339,7 +339,7 @@ theorem walAtReturn (report : NativeCheckpointManifestRenameError (image := imag
     CheckpointWalView.ofFiles (report.synced.settled.runs.files report.after) = CheckpointWalView.ofFiles state.files.image :=
   report.wal.trans (report.synced.wal.trans (report.synced.settled.selectedPair valid).2.2)
 
-private theorem modeled (report : NativeCheckpointManifestRenameError (image := image) state cut) (valid : state.Valid) :
+theorem modeledPublication (report : NativeCheckpointManifestRenameError (image := image) state cut) (valid : state.Valid) :
     ∃ published, state.writer.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published ∧
       published.manifest.crashImages = (if cut.tookEffect then
         [some cut.checkpoint.manifest, state.writer.wal.directory.active.manifest]
@@ -379,7 +379,7 @@ theorem replaysChoice (report : NativeCheckpointManifestRenameError (image := im
     (pending : PendingClientReplay log reads state.writer.history) {binding : Option ByteArray}
     (choice : binding = state.writer.wal.directory.active.manifest ∨
       (cut.tookEffect = true ∧ binding = some cut.checkpoint.manifest)) : report.Replays binding log reads := by
-  obtain ⟨published, executed, choices, newRuns, oldRuns⟩ := report.modeled valid
+  obtain ⟨published, executed, choices, newRuns, oldRuns⟩ := report.modeledPublication valid
   obtain ⟨modeled, exactExecution, _, _, _, recovers⟩ := cut.selectsAcknowledgedHistory valid.retained
   have same := Option.some.inj (exactExecution.symm.trans executed)
   subst modeled

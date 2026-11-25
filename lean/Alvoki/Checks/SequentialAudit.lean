@@ -106,6 +106,7 @@ import Alvoki.Storage.Disk.NativeCheckpointManifestSyncReopen
 import Alvoki.Storage.Disk.NativeCheckpointManifestDataError
 import Alvoki.Storage.Disk.NativeCheckpointManifestOpenError
 import Alvoki.Storage.Disk.NativeCheckpointManifestRenameError
+import Alvoki.Storage.Disk.NativeCheckpointManifestRenameReboot
 import Alvoki.Storage.Disk.NativePendingCheckpoint
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeCheckpointErrorReopen
@@ -795,6 +796,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.freshRunAtReturn
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.replaysFiles
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointManifestRenameError
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.modeledPublication
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameCrash.losesPower
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameCrash.classification
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameCrash.manifestStored
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameCrash.runStored
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameCrash.plans
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameReads.readsSelected
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCheckpointManifestRenamePowerLoss
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.issues
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.routes
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.custody
