@@ -505,6 +505,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeRejectedOpenWork
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedListingWork
 lake env leanchecker Alvoki.Storage.Disk.MaintainedRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.NativeRotatedMaintenanceBound
+lake env leanchecker Alvoki.Storage.Disk.RotatedMaintenanceRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.MaintainedDirectoryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionSpace
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionNames
