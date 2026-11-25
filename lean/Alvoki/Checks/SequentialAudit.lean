@@ -1,4 +1,5 @@
 import Alvoki.Checks.AxiomPolicy
+import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.WalBatchRecovery
 import Alvoki.Storage.Disk.WalBatchMarkerPowerLoss
 import Alvoki.Storage.Disk.SegmentedBatchPowerLoss
@@ -2122,3 +2123,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.write_cut_replays_old_or_new
 #check_axioms Alvoki.WAL.Boundary.acknowledged_write_replays_new
 #check_axioms Alvoki.WAL.Boundary.markerFor_append_frame
+
+#check_axioms Alvoki.WAL.OrderedTwoSlot.Survivor.keepsActive
+#check_axioms Alvoki.WAL.OrderedTwoSlot.Survivor.recovery
+#check_axioms Alvoki.WAL.OrderedTwoSlot.recover_targetNew_invalid
+#check_axioms Alvoki.WAL.OrderedTwoSlot.acknowledged_exact
+#check_axioms Alvoki.WAL.TwoSlot.decode_agrees_with_protocol
+#check_axioms Alvoki.WAL.TwoSlot.publish_reports
+#check_axioms Alvoki.WAL.TwoSlot.advance_fields
+#check_axioms Alvoki.WAL.TwoSlot.decode_newer

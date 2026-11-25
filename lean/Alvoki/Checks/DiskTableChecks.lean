@@ -2257,6 +2257,77 @@ private def checkRecoveredBatchProbe (path : FilePath) (sequence outcome : Strin
       expectSnapshot db next expected
   finally db.close
 
+private def checkTwoSlotMarker (root : FilePath) : IO Unit := do
+  let bin ← syncFixtureBin root
+  let dir := root / "slots"
+  let legacy := root / "legacy"
+  let wal := dir / firstWalSegment
+  let marker := dir / "WAL.commit"
+  IO.FS.createDir dir
+  IO.FS.createDir legacy
+  let old ← DiskTable.open legacy
+  old.close
+  rejects (TwoSlotDiskTable.open legacy) "two-slot opener accepted a legacy WAL marker"
+  let db ← TwoSlotDiskTable.open dir
+  try
+    check ((← db.write 10 (some 10)) == 1) "wrong first two-slot ordinal"
+    check ((← db.writeBatch []) == 1) "empty two-slot batch advanced the WAL"
+    db.checkpoint
+    db.rotateWal
+    db.collectCoveredWal
+    check ((← db.writeBatch [(10, none), (11, some 11)]) == 3) "wrong two-slot batch ordinal"
+  finally db.close
+  rejects (DiskTable.open dir) "legacy opener accepted a two-slot WAL marker"
+  let reopened ← TwoSlotDiskTable.open dir
+  try
+    let some old ← reopened.acquireAt 1 | throw (IO.userError "missing earlier two-slot snapshot")
+    check ((← reopened.lookup old.handle 10) == some (some 10)) "two-slot snapshot lost its earlier value"
+    let latest ← reopened.acquire
+    check (latest.sequence == 3 && (← reopened.lookup latest.handle 10) == some none &&
+      (← reopened.lookup latest.handle 11) == some (some 11)) "two-slot reopen lost batch state"
+  finally reopened.close
+  let active := dir / "WAL-segment-1"
+  let before ← IO.FS.readBinFile marker
+  let selected ← IO.ofExcept (WAL.TwoSlot.decode before)
+  check (selected.epoch == 2 && selected.slot == 0 && selected.frontier.toNat == 3 * WAL.frameSize &&
+    !(← wal.pathExists)) "wrong two-slot selection or collection"
+  let (classified, barriers) ← probeDisk bin dir (some marker) "--two-slot-check-unknown"
+    (skipFailures := 1)
+  check (classified && barriers == [marker.toString, dir.toString, active.toString,
+    active.toString, marker.toString]) "two-slot commit did not order WAL sync before slot sync"
+  let visible ← IO.FS.readBinFile marker
+  let uncertain ← IO.ofExcept (WAL.TwoSlot.decode visible)
+  check (uncertain.epoch == 3 && uncertain.slot == 1 && uncertain.frontier.toNat == 4 * WAL.frameSize)
+    "two-slot write did not publish one successor slot"
+  check (visible.extract 0 WAL.TwoSlot.stride == before.extract 0 WAL.TwoSlot.stride)
+    "two-slot update modified the previously selected slot"
+  let payload ← IO.FS.readBinFile active
+  let short := payload.extract 0 (payload.size - WAL.frameSize)
+  IO.FS.writeBinFile active short
+  rejects (TwoSlotDiskTable.open dir) "two-slot reopen fell back from a valid selected slot with short WAL"
+  check ((← IO.FS.readBinFile marker) == visible && (← IO.FS.readBinFile active) == short)
+    "two-slot reopen changed files before validating the selected WAL"
+  IO.FS.writeBinFile active payload
+  -- Model a storage survivor in which the uncertain inactive slot tore.
+  let damageAt := WAL.TwoSlot.stride + 32
+  let damaged := (visible.extract 0 damageAt).push (visible.get! damageAt ^^^ 1) ++
+    visible.extract (damageAt + 1) visible.size
+  IO.FS.writeBinFile marker damaged
+  let repaired ← TwoSlotDiskTable.open dir
+  try
+    let latest ← repaired.acquire
+    check (latest.sequence == 3 && (← repaired.lookup latest.handle 12) == some none)
+      "torn two-slot marker recovered an uncertain write"
+    check ((← IO.FS.readBinFile active).size == 2 * WAL.frameSize) "two-slot reopen kept a rejected suffix"
+    check ((← repaired.write 12 (some 120)) == 4) "two-slot repair reused the wrong ordinal"
+  finally repaired.close
+  let final ← TwoSlotDiskTable.open dir
+  try
+    let latest ← final.acquire
+    check (latest.sequence == 4 && (← final.lookup latest.handle 12) == some (some 120))
+      "two-slot append after repair did not survive reopen"
+  finally final.close
+
 def main (args : List String) : IO Unit := do
   match args with
   | ["--open-once", dir] => (← DiskTable.open ⟨dir⟩).close
@@ -2370,6 +2441,14 @@ def main (args : List String) : IO Unit := do
         "rotation did not preserve its sync error"
       expectRejectedWrite db "publication failed; reopen the database"
     finally db.close
+  | ["--two-slot-check-unknown", path] =>
+    let db ← TwoSlotDiskTable.open ⟨path⟩
+    try
+      let .error (.commitUnknown (.hardwareFault 5 _)) ← (db.writeWithOutcome 12 (some 120)).toBaseIO
+        | throw (IO.userError "two-slot write did not preserve injected slot sync error")
+      let .error (.rejected _) ← (db.writeWithOutcome 12 (some 120)).toBaseIO
+        | throw (IO.userError "two-slot writer remained writable after failed publication")
+    finally db.close
   | ["--check-write-outcome", dir] =>
     let some target ← IO.getEnv "ALVOKI_CHECK_SYNC_FAIL"
       | throw (IO.userError "missing sync fault target")
@@ -2416,6 +2495,7 @@ def main (args : List String) : IO Unit := do
   | [] => withSyncFixture do
     checkCodecs
     checkPublicationCuts
+    IO.FS.withTempDir checkTwoSlotMarker
     IO.FS.withTempDir checkSegmentedCheckpointOpen
     IO.FS.withTempDir checkReopen
     IO.FS.withTempDir checkInterruptedPublication

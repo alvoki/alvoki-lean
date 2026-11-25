@@ -90,6 +90,26 @@ The top-level target is **refinement of the executable storage engine to the abs
 
 The Linux adapter uses a shared exact-prefix loop for checkpoint runs, WAL seals and the keeper. Given truthful chunk and cursor reports on a stable opened file, the loop yields the exact requested bytes or preserves the reported error at the reached cursor. Healthy bounded chunks imply completion. Proving that each native file open and read supplies those reports still requires identity from stat to open and from the open description to the active namespace. [Prefix read proof](../lean/Alvoki/Storage/Disk/ReadRecoveryPrefix.lean)
 
+### Ordered two-slot WAL marker
+
+The opt-in adapter uses the shared segmented replay, repair and session
+installation after decoding a durable frontier. Lean checks that an accepted
+slot container selects the same newest record as the protocol model. The
+writer's shared schedule reaches the inactive-slot write only after the WAL
+sync succeeds, and reaches installation only after the marker sync succeeds.
+Under the slot survivor contract, recovery chooses the old or new frontier
+for an uncertain write, chooses the new frontier after acknowledgment, and
+rejects an unavailable WAL at the selected frontier.
+
+The remaining native refinement must derive the slot survivor report from
+reached positional writes and sync events. It needs the unaffected slot to
+survive an interrupted update, the target to decode only as old, new, or
+invalid, and prior synced WAL bytes to remain durable. It must also thread
+successful marker stabilization through interrupted reopen and subsequent
+checkpoint, reclamation and marker reuse.
+[Slot model](../lean/Alvoki/Storage/Disk/WalOrderedTwoSlot.lean) ·
+[Decoder and write schedule](../lean/Alvoki/Storage/Disk/WalTwoSlot.lean)
+
 ### Completion checklist for native key-value refinement
 
 Begin with an engine-owned empty directory. An execution consists of the actual `DiskTable` calls, their

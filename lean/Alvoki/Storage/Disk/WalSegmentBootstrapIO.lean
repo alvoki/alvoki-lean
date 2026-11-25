@@ -8,6 +8,7 @@ open System
 
 def conflictsWithBootstrap (name : String) : Bool :=
   name == "MANIFEST" || name == "MANIFEST.next" || name == "WAL.next" ||
+    name == "WAL.commit.slots.next" ||
     (name.startsWith "WAL-segment-" && name != renderWalSegmentName 0) ||
     (parseRunFileName name).isSome
 

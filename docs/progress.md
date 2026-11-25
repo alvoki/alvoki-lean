@@ -8,6 +8,17 @@ The production batch schedule can now be interpreted through a report that stops
 
 After an observed interruption during batch marker publication, the retry-prefix proof derives which target each reached authorization or repair failure selected from the same visible marker and keeper bytes. Failed opens, reference drops and repeated power losses preserve the selected manifest binding, sealed bytes and an old-or-whole batch history without a later successful open. Once an admitted open reports the selected reads and its successful primitive finish, the returned session continues the client log and its supported snapshot reads agree with replay. The proof uses the reported batch publication prefix and canonical keeper offset of each attempted repair. It remains to derive those reports from the full native execution and compose the initialization and other operation families. [Batch recovery prefix](../lean/Alvoki/Storage/Disk/BatchRecoveryPrefix.lean)
 
+The optional ordered two-slot WAL marker prototype doubles closed-loop
+durable mixed throughput on the tested Linux overlay mount. At 4,000
+offered operations/s it still accumulates a queue and misses the RocksDB
+p99 target. The rename marker remains the default. Lean checks the shared
+write order and slot selection under explicit survivor assumptions. Native
+tests exercise failed marker sync, compiled reopen and the missing-WAL
+guard. The roadmap records both the remaining native refinement and a
+separate striped reusable WAL experiment. [Measurements](../benchmarks/results/disk/ordered-two-slot-marker)
+· [Proof boundaries](proof-roadmap.md#ordered-two-slot-wal-marker)
+· [Striped WAL](roadmap.md#striped-reusable-wal-experiment)
+
 Durable batch writes use the single-write publication schedule once for a list of consecutive frames. The mixed database trace connects reported batch publication and bounded reopen to the exact installed writer. The retained history preserves every acknowledgement and keeps all or none of a batch with an uncertain outcome. Snapshot reads agree with replay of that history. Native fixtures also exercise continuation through checkpoint, rotation, collection, batch failure and reopen. [Verification scope](verification-status.md#durable-batches) · [Batch pilot](performance-baseline.md#durable-batch-experiment)
 
 The first three-scenario baseline against RocksDB 9.10.0 is reproducible. The primary gap is individually durable writes. A separate syscall trace attributes three Alvoki barriers per put to WAL and marker publication. The first candidate is durable batch publication with a matched RocksDB batch and explicit crash semantics. [Native baseline](performance-baseline.md)

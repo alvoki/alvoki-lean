@@ -1,0 +1,13 @@
+trial,binary,tail,elapsed_ns,rss_kib
+1,alvoki-disk-crash,aligned,923703,15292
+1,alvoki-disk-crash,torn,1705582,15172
+1,alvoki-two-slot-crash,aligned,963671,15252
+1,alvoki-two-slot-crash,torn,1855044,15132
+2,alvoki-two-slot-crash,aligned,1245196,15244
+2,alvoki-two-slot-crash,torn,1933109,15200
+2,alvoki-disk-crash,aligned,7399737,15232
+2,alvoki-disk-crash,torn,1488314,15236
+3,alvoki-disk-crash,aligned,842762,15104
+3,alvoki-disk-crash,torn,1441264,15100
+3,alvoki-two-slot-crash,aligned,1285495,15308
+3,alvoki-two-slot-crash,torn,2124612,15236

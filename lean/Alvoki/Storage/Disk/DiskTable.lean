@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.DiskPaths
 import Alvoki.Storage.Disk.WalBoundary
+import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.CheckpointRead
 import Alvoki.Storage.Disk.IntegrityCheckpointRead
 import Alvoki.Storage.Disk.DiskSession
@@ -1111,5 +1112,173 @@ theorem readKeeperPrefix_fileEffects (files : SyncFiles) (path : FilePath) (coun
 fresh write and flush. -/
 theorem syncFilesStage_schedule (files : SyncFiles) (path : FilePath) (bytes : ByteArray) :
     files.stage path bytes = (writeFreshStagedHandle path bytes >>= files.remember path) := rfl
+
+/-- The experimental marker is selected only by its own entry point.
+The underlying session retains the existing framed WAL, checkpoint and lock. -/
+structure TwoSlotDiskTable where
+  private mk ::
+  private table : DiskTable
+  private marker : IO.Ref (Option (IO.FS.Handle × WAL.TwoSlot.Selection))
+
+namespace TwoSlotDiskTable
+
+@[extern "alvoki_write_wal_marker_slot"]
+private opaque writeSlot : @& IO.FS.Handle → UInt64 → @& ByteArray → IO Unit
+
+private def stagedName : String := "WAL.commit.slots.next"
+
+private def readSelection (file : IO.FS.Handle) : IO WAL.TwoSlot.Selection := do
+  file.rewind
+  let bytes ← file.read (WAL.TwoSlot.containerSize + 1).toUSize
+  IO.ofExcept (WAL.TwoSlot.decode bytes)
+
+private def openMarker (dir : DiskDirectory) : IO (IO.FS.Handle × WAL.TwoSlot.Selection) := do
+  let path := dir.file .walBoundary
+  checkPrivateRegular path (← path.symlinkMetadata)
+  let file ← IO.FS.Handle.mk path .readWrite
+  return (file, ← readSelection file)
+
+private def bootstrap (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentRepair.Reopened := do
+  let staged := dir.path / stagedName
+  if (← optionalMetadata (dir.file .stagedWalBoundary)).isSome then
+    throw (IO.userError "legacy WAL marker stage in two-slot database")
+  let empty ← WalSegmentRepair.prepareBootstrapWith dir
+    (fun path => do return (← readDirectoryChecked path).filter (·.fileName != stagedName))
+    (readEmptyWalSegment · WAL.Boundary.missingOpenMarker) optionalMetadata
+  if let some metadata ← optionalMetadata staged then
+    unless metadata.type == .file && empty.isSome do
+      throw (IO.userError "invalid staged two-slot WAL marker")
+  WalSegmentRotation.runAt dir 0 (fun _ => pure empty) files.create (fun path => files.syncPaths #[path])
+  Publication.run (Publication.performReplacement (files.stage · WAL.TwoSlot.initial)
+    files.syncPaths IO.FS.rename staged dir.path (fun _ => dir.file .walBoundary) #[])
+  return ⟨.empty, 0, 0, 0⟩
+
+private def reopen (dir : DiskDirectory) (files : SyncFiles) (marker : IO.FS.Handle)
+    (selection : WAL.TwoSlot.Selection) : IO WalSegmentRepair.Reopened := do
+  let (plan, opened, size) ← WalSegmentRepair.prepareBoundedMarkedFromReaders dir
+    (readIntegrityCheckpointSized dir (readOptionalCachedOpenFile dir (dir.file .manifest))
+      readCheckpointRunSize readCheckpointRunPrefix)
+    (fun _ => pure (some (WAL.Boundary.encode selection.frontier)))
+    (fun watermark frontier => WalSegmentRepair.readSelectedWithCachedExtents dir watermark frontier
+      readDirectoryChecked inspectWalSegment readSealedWalPrefix (readKeeperPrefix files))
+  -- A visible complete but uncertain slot must become durable before the
+  -- next writer can overwrite the previous witness or reclaim covered WAL.
+  fsyncHandle marker
+  WalSegmentRepair.finishBoundedMarkedOpen dir plan size
+    (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
+  return opened
+
+/-- Open an existing experimental database or initialize a fresh one.
+A legacy marker is rejected under the same exclusive database lock. -/
+def «open» (path : FilePath) : IO TwoSlotDiskTable := do
+  let dir ← DiskDirectory.open path
+  rejectFlatWal dir
+  let lockPath := dir.file .lock
+  if let some metadata ← optionalMetadata lockPath then checkPrivateRegular lockPath metadata
+  let lock ← IO.FS.Handle.mk lockPath .append
+  DiskSession.openWithLock lock.tryLock (fun _ => IO.userError s!"database already open: {dir.path}")
+    (fun _ => lock.unlock) fun _ => do
+      rejectFlatWal dir
+      let files ← SyncFiles.open dir.path
+      let (opened, marker, selection) ← if (← optionalMetadata (dir.file .walBoundary)).isSome then do
+        let (marker, selection) ← openMarker dir
+        pure (← reopen dir files marker selection, marker, selection)
+      else do
+        let opened ← bootstrap dir files
+        let (marker, selection) ← openMarker dir
+        pure (opened, marker, selection)
+      return ⟨← installReopened dir lock files opened, ← IO.mkRef (some (marker, selection))⟩
+
+def close (db : TwoSlotDiskTable) : IO Unit := do
+  db.table.close
+  db.marker.set none
+
+private def currentMarker (db : TwoSlotDiskTable) : IO (IO.FS.Handle × WAL.TwoSlot.Selection) := do
+  let some marker ← db.marker.get | throw (IO.userError "closed two-slot WAL marker")
+  return marker
+
+@[inline] private def publish (db : TwoSlotDiskTable) (state : Installed) (nextTable : PackedTable)
+    (bytes : ByteArray) (walBytes : Nat) (rejected unknown : IO.Error → ε) : EIO ε UInt64 := do
+  let (marker, current) ← db.currentMarker.adapt rejected
+  unless current.frontier.toNat == state.walBytes do
+    throw (rejected (IO.userError "installed WAL frontier disagrees with its selected slot"))
+  let next ← (IO.ofExcept (WAL.TwoSlot.advance current walBytes)).adapt rejected
+  DiskSession.publishPreparedWrite { state with table := nextTable, walBytes := walBytes }
+    nextTable.committed db.table.phase.set ((do
+      let active := db.table.dir.file (.walSegment state.activeFirst)
+      WAL.TwoSlot.publish (db.table.files.append active bytes) (db.table.files.sync active)
+        (writeSlot marker (next.slot * WAL.TwoSlot.stride).toUInt64 next.encode)
+        (fsyncHandle marker) (db.marker.set (some (marker, next))) : IO Unit).adapt unknown)
+
+@[inline] private def writeWith (db : TwoSlotDiskTable) (key : UInt64) (value : Option UInt64)
+    (rejected unknown : IO.Error → ε) : EIO ε UInt64 :=
+  DiskSession.withPreparedSingleWrite key value (db.table.installed.adapt rejected) rejected
+    (fun result => (fromOption result "write sequence space exhausted").adapt rejected)
+    (fun state => (checkActiveSegment db.table.dir state).adapt rejected)
+    (fun state event table walBytes => db.publish state table (WAL.encodeFrame event) walBytes rejected unknown)
+
+def writeWithOutcome (db : TwoSlotDiskTable) (key : UInt64) (value : Option UInt64) :
+    EIO DiskWriteError UInt64 :=
+  db.writeWith key value .rejected .commitUnknown
+
+def write (db : TwoSlotDiskTable) (key : UInt64) (value : Option UInt64) : IO UInt64 :=
+  db.writeWith key value id id
+
+@[inline] private def writeBatchWith (db : TwoSlotDiskTable) (rows : List (UInt64 × Option UInt64))
+    (rejected unknown : IO.Error → ε) : EIO ε UInt64 := do
+  let state ← db.table.installed.adapt rejected
+  if rows.isEmpty then return state.table.committed
+  let walBytes := state.walBytes + WAL.frameSize * rows.length
+  unless walBytes < UInt64.size do throw (rejected (IO.userError "WAL byte count is too large"))
+  let (events, table) ← (fromOption (prepareBatch state.table rows)
+    "write sequence space exhausted").adapt rejected
+  (checkActiveSegment db.table.dir state).adapt rejected
+  db.publish state table (WAL.encodeBatch events) walBytes rejected unknown
+
+def writeBatchWithOutcome (db : TwoSlotDiskTable) (rows : List (UInt64 × Option UInt64)) :
+    EIO DiskWriteError UInt64 :=
+  db.writeBatchWith rows .rejected .commitUnknown
+
+def writeBatch (db : TwoSlotDiskTable) (rows : List (UInt64 × Option UInt64)) : IO UInt64 :=
+  db.writeBatchWith rows id id
+
+def acquire (db : TwoSlotDiskTable) : IO DiskSnapshotPin := db.table.acquire
+def acquireAt (db : TwoSlotDiskTable) := db.table.acquireAt
+def release (db : TwoSlotDiskTable) := db.table.release
+def lookup (db : TwoSlotDiskTable) := db.table.lookup
+def range (db : TwoSlotDiskTable) := db.table.range
+def advanceFloor (db : TwoSlotDiskTable) := db.table.advanceFloor
+def compact (db : TwoSlotDiskTable) := db.table.compact
+def retainRunVersions (db : TwoSlotDiskTable) := db.table.retainRunVersions
+def checkpoint (db : TwoSlotDiskTable) := db.table.checkpoint
+def rotateWal (db : TwoSlotDiskTable) := db.table.rotateWal
+
+def collectObsoleteRuns (db : TwoSlotDiskTable) (heldGenerations : List UInt64 := []) : IO Unit :=
+  db.table.collectObsoleteRuns heldGenerations
+
+private def planCollection (db : TwoSlotDiskTable) (state : Installed) : IO (List Nat) := do
+  let (_, cached) ← db.currentMarker
+  let (_, observed) ← openMarker db.table.dir
+  unless observed == cached do
+    throw (IO.userError "selected two-slot WAL marker changed before collection")
+  let dir := db.table.dir
+  planWalCollectionWith dir state.generation state.walBytes state.activeFirst
+    (fun path => if path == dir.file .walBoundary then
+      pure (some (WAL.Boundary.encode observed.frontier)) else readOptionalFile path)
+    readDirectoryChecked inspectWalSegment
+
+def planWalCollection (db : TwoSlotDiskTable) : IO (List Nat) := do
+  db.planCollection (← db.table.installed)
+
+def collectCoveredWal (db : TwoSlotDiskTable) : IO Unit := do
+  let state ← db.table.installed
+  let selected ← db.planCollection state
+  let dir := db.table.dir
+  DiskSession.publishPrepared db.table.phase.set
+    (RunCollection.run selected (RunCollection.performPaths (fun path => (IO.FS.removeFile path).toBaseIO)
+      (fun path => db.table.files.syncPaths #[path]) throw (fun first => dir.file (.walSegment first)) dir.path))
+    (db.table.phase.set (.ready state))
+
+end TwoSlotDiskTable
 
 end Alvoki.Storage
