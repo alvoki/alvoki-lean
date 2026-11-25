@@ -111,6 +111,34 @@ theorem Image.executeVersioned_atRunDirectory (initial : Image) (next : Versione
       rfl
     exact ⟨written, computed, unchanged, by simp, fun _ => exactRuns, older⟩
 
+/-- Once the run names are settled and the manifest inode is synced, the
+rename adds the replacement binding to the original crash choices. -/
+theorem Image.executeVersioned_atManifestRename (initial : Image) (next : VersionedRunSet)
+    (written : Image)
+    (runs : initial.execute next.runSet (runSteps next.files.length ++ [.syncRunsDirectory]) = some written)
+    (sameManifest : written.manifest = initial.manifest)
+    {count : Nat} (counted : next.files.length = count)
+    {bytes : ByteArray} (encoded : next.manifest.encode = bytes) (effective : Bool) :
+    initial.executeVersioned next ((runSteps count).length + 1 + (2 + (if effective then 1 else 0))) =
+      some { written with manifest := if effective then
+        ⟨some bytes, some bytes :: initial.manifest.crashImages, none⟩
+        else { initial.manifest with staged := some (bytes, true) } } := by
+  subst count
+  have length : (runBarrier next.files.length).length = (runSteps next.files.length).length + 1 := by
+    simp [runBarrier]
+  have takeRuns (extra : Nat) :
+      (runBarrier next.files.length).take ((runBarrier next.files.length).length + extra) =
+        runBarrier next.files.length := List.take_of_length_le (Nat.le_add_right _ _)
+  rw [← length, Image.executeVersioned, takeRuns, Nat.add_sub_cancel_left]
+  change (do
+    let step ← initial.execute next.runSet (runSteps next.files.length ++ [Step.syncRunsDirectory])
+    let manifest ← step.manifest.execute next.manifest.encode (Publication.steps.take (2 + (if effective then 1 else 0)))
+    return { step with manifest }) = _
+  rw [runs]
+  simp only [Bind.bind, Option.bind]
+  rw [sameManifest, encoded]
+  cases effective <;> rfl
+
 /-- A complete integrity checkpoint publishes the exact ordered runs and the
 v2 manifest built from their fingerprints. WAL coverage and the caller's
 semantic checkpoint witness are explicit. -/
