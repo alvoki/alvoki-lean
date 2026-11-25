@@ -3,19 +3,21 @@ import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 
 namespace Alvoki.Storage
 
-private def countChunk (read : USize → EStateM IO.Error Nat ByteArray) (size : USize) :
+/-- Count one reached chunk read while preserving its cursor and report. -/
+def countRecoveryChunk (read : USize → EStateM IO.Error Nat ByteArray) (size : USize) :
     EStateM IO.Error (Nat × Nat) ByteArray := fun (offset, calls) =>
   match read size offset with
   | .ok bytes next => .ok bytes (next, calls + 1)
   | .error cause next => .error cause (next, calls + 1)
 
-private def forgetCount {α : Type} : EStateM.Result IO.Error (Nat × Nat) α → EStateM.Result IO.Error Nat α
+/-- Forget the proof-only counter while preserving the file cursor. -/
+def forgetRecoveryChunkCount {α : Type} : EStateM.Result IO.Error (Nat × Nat) α → EStateM.Result IO.Error Nat α
   | .ok result (offset, _) => .ok result offset
   | .error error (offset, _) => .error error offset
 
-private theorem countExactLoop_projects (mismatch : IO.Error) (read : USize → EStateM IO.Error Nat ByteArray)
+theorem countExactPrefix_projects (mismatch : IO.Error) (read : USize → EStateM IO.Error Nat ByteArray)
     (remaining : Nat) (bytes : ByteArray) (offset calls : Nat) :
-    forgetCount (readExactPrefixWith mismatch (countChunk read) remaining bytes (offset, calls)) =
+    forgetRecoveryChunkCount (readExactPrefixWith mismatch (countRecoveryChunk read) remaining bytes (offset, calls)) =
       readExactPrefixWith mismatch read remaining bytes offset := by
   by_cases done : remaining = 0
   · subst remaining
@@ -24,12 +26,12 @@ private theorem countExactLoop_projects (mismatch : IO.Error) (read : USize → 
   · rw [readExactPrefixWith, readExactPrefixWith]
     simp only [ite_eq_right done, Bind.bind, EStateM.bind]
     cases result : read remaining.toUSize offset with
-    | error error next => simp [countChunk, result, forgetCount]
+    | error error next => simp [countRecoveryChunk, result, forgetRecoveryChunkCount]
     | ok chunk next =>
-      simp only [countChunk, result]
+      simp only [countRecoveryChunk, result]
       by_cases valid : 0 < chunk.size ∧ chunk.size ≤ remaining
       · rw [dite_eq_left valid, dite_eq_left valid]
-        exact countExactLoop_projects mismatch read (remaining - chunk.size) _ next (calls + 1)
+        exact countExactPrefix_projects mismatch read (remaining - chunk.size) _ next (calls + 1)
       · rw [dite_eq_right valid, dite_eq_right valid]
         rfl
 termination_by remaining
@@ -49,7 +51,7 @@ noncomputable def CheckpointRunChunkReads.countPrefix (reads : CheckpointRunChun
   match reads.openRead path with
   | .error cause => .error cause calls
   | .ok (_, slot, offset) =>
-    match readExactPrefixWith mismatch (countChunk (reads.readChunk slot.description)) count ByteArray.empty (offset, calls) with
+    match readExactPrefixWith mismatch (countRecoveryChunk (reads.readChunk slot.description)) count ByteArray.empty (offset, calls) with
     | .ok result (_, reached) => .ok result reached
     | .error cause (_, reached) => .error cause reached
 
@@ -64,7 +66,7 @@ theorem CheckpointRunChunkReads.countPrefix_projects (reads : CheckpointRunChunk
   | error cause => simp [CheckpointRunChunkReads.countPrefix, CheckpointRunChunkReads.readFilePrefix, opened, Bind.bind, Except.bind]
   | ok openedFile =>
     obtain ⟨inventory, slot, offset⟩ := openedFile
-    have projects := countExactLoop_projects mismatch (reads.readChunk slot.description) count ByteArray.empty offset calls
+    have projects := countExactPrefix_projects mismatch (reads.readChunk slot.description) count ByteArray.empty offset calls
     rw [CheckpointRunChunkReads.countPrefix, CheckpointRunChunkReads.readFilePrefix, opened]
     change _ = reads.readOpenedPrefix mismatch (inventory, slot, offset) count
     change _ = (match readExactPrefixWith (m := EStateM IO.Error Nat) mismatch (reads.readChunk slot.description)
@@ -72,10 +74,10 @@ theorem CheckpointRunChunkReads.countPrefix_projects (reads : CheckpointRunChunk
       | .ok bytes _ => Except.ok bytes
       | .error cause _ => Except.error cause)
     rw [← projects]
-    cases outcome : readExactPrefixWith mismatch (countChunk (reads.readChunk slot.description)) count ByteArray.empty
+    cases outcome : readExactPrefixWith mismatch (countRecoveryChunk (reads.readChunk slot.description)) count ByteArray.empty
       (offset, calls) with
-    | ok result state => cases state; simp [outcome, forgetCount]
-    | error cause state => cases state; simp [outcome, forgetCount]
+    | ok result state => cases state; simp [outcome, forgetRecoveryChunkCount]
+    | error cause state => cases state; simp [outcome, forgetRecoveryChunkCount]
 
 theorem CheckpointRunChunkReads.countPrefix_le (reads : CheckpointRunChunkReads)
     (mismatch : IO.Error) (path : FilePath) (count calls : Nat) :
@@ -85,12 +87,12 @@ theorem CheckpointRunChunkReads.countPrefix_le (reads : CheckpointRunChunkReads)
   | error cause => simp [reached]
   | ok openedFile =>
     obtain ⟨_, slot, offset⟩ := openedFile
-    let read := countChunk (reads.readChunk slot.description)
+    let read := countRecoveryChunk (reads.readChunk slot.description)
     have charged (size : USize) (state : Nat × Nat) : recoveryCalls Prod.snd (read size state) = state.2 + 1 := by
       cases state with
       | mk offset calls =>
         cases reported : reads.readChunk slot.description size offset <;>
-          simp [read, countChunk, reported, recoveryCalls]
+          simp [read, countRecoveryChunk, reported, recoveryCalls]
     have bound := readExactPrefixWith_requestBoundBy mismatch read Prod.snd charged count ByteArray.empty (offset, calls)
     change reached (match readExactPrefixWith mismatch read count ByteArray.empty (offset, calls) with
       | .ok result (_, reached) => .ok result reached

@@ -203,12 +203,14 @@ private theorem reachedBeforeFailedGroup {state error : Type} {perform : Publica
       simp only [EStateM.bind, wrote, failed] at arrived
       contradiction
 
-/-- Derive the existing returned-publication packet from the reached
-append, staging and two-file sync. The failing sync is the last reached
-publication action. -/
-theorem returnedReports (seen : BatchGroupedWriteError directory before handle)
-    (request : WriteRequest) (rows : request.rows = seen.rows) :
-    WriteRequest.ReturnedReports request directory before handle seen.calls := by
+/-- Derive the failure witness at the last reached publication action.
+Record the exact projected sync error with the cache after consumption. -/
+theorem observedFailure (seen : BatchGroupedWriteError directory before handle) :
+    ∃ (failure : SegmentedBatchFailure directory before) (observed : ObservedBatchFailure failure handle),
+      seen.calls = WriteRequest.Calls.ofFailure observed ∧ failure.rows = seen.rows ∧ failure.batch = seen.batch ∧
+      seen.calls.sync #[directory.file (.walSegment before.installed.activeFirst), directory.file .stagedWalBoundary]
+        (seen.group.cache, seen.staged) =
+          .error failure.cause (seen.group.cache.consume (directory.file .stagedWalBoundary), failure.failed) := by
   obtain ⟨cause, reached, synced⟩ := seen.syncReturned
   let keeperPath := directory.file (.walSegment before.installed.activeFirst)
   let staging := directory.file .stagedWalBoundary
@@ -260,7 +262,38 @@ theorem returnedReports (seen : BatchGroupedWriteError directory before handle)
     · change withoutWriteGroupCache (seen.calls.sync #[keeperPath, staging] (seen.group.cache, seen.staged)) = _
       rw [synced, withoutWriteGroupCache]
       exact physicalSync.symm
-  exact .unknown failure observed rows
+  exact ⟨failure, observed, rfl, rfl, rfl, synced⟩
+
+/-- Derive the native returned-publication packet from the reached
+append, staged write and failed group. -/
+theorem returnedReports (seen : BatchGroupedWriteError directory before handle)
+    (request : WriteRequest) (rows : request.rows = seen.rows) :
+    WriteRequest.ReturnedReports request directory before handle seen.calls := by
+  obtain ⟨failure, observed, calls, submitted, _, _⟩ := seen.observedFailure
+  rw [calls]
+  exact .unknown failure observed (rows.trans submitted.symm)
+
+/-- The exact diagnostic, cache and files reached by the group are also
+the return of the shared single or batch dispatcher. -/
+theorem returnsError (seen : BatchGroupedWriteError directory before handle)
+    (request : WriteRequest) (rows : request.rows = seen.rows)
+    (ready : before.RetainedReady directory descriptor) {cause : IO.Error} {reached : WriteFiles}
+    (grouped : seen.calls.sync #[directory.file (.walSegment before.installed.activeFirst), directory.file .stagedWalBoundary]
+      (seen.group.cache, seen.staged) =
+        .error cause (seen.group.cache.consume (directory.file .stagedWalBoundary), reached)) :
+    seen.calls.run request directory before = .error (.commitUnknown cause)
+      (.poisoned, ⟨(seen.group.cache.consume (directory.file .stagedWalBoundary), reached), before.owners⟩) := by
+  have commit : commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch seen.batch) seen.count
+      seen.calls.append seen.calls.stage seen.calls.sync seen.calls.rename (seen.cache, initial before) =
+      .error cause (seen.group.cache.consume (directory.file .stagedWalBoundary), reached) := by
+    rw [commitBytesAt_fileEffects]
+    simp only [WAL.Boundary.commit, Bind.bind, EStateM.bind, seen.appendReturned, seen.stageReturned, grouped]
+  rw [WriteRequest.Calls.run, request.runReported_eq_batch ready, rows]
+  change runBatchWrite directory seen.rows seen.calls.lookup seen.calls.append seen.calls.stage seen.calls.sync
+    seen.calls.rename (.ready before.installed, ⟨(seen.cache, WriteFiles.initial before.history
+      (before.files.directory.staged .walBoundary)), before.owners⟩) = _
+  rw [ready.directoryFiles]
+  exact runBatchWrite_commitUnknown seen.guard seen.nonempty seen.prepared seen.fits commit
 
 /-- The grouped error reaches the actual poisoned write outcome and the
 client certificate without an eventual release or reopen premise. -/
@@ -277,20 +310,10 @@ theorem refinesClient (seen : BatchGroupedWriteError directory before handle)
         before handle seen.calls (seen.calls.run request directory before) := by
   obtain ⟨cause, reached, grouped⟩ := seen.syncReturned
   have ready := (trace.writes.preservesRetained initialReady).1
-  have commit : commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch seen.batch) seen.count
-      seen.calls.append seen.calls.stage seen.calls.sync seen.calls.rename (seen.cache, initial before) =
-      .error cause (seen.group.cache.consume (directory.file .stagedWalBoundary), reached) := by
-    rw [commitBytesAt_fileEffects]
-    simp only [WAL.Boundary.commit, Bind.bind, EStateM.bind, seen.appendReturned, seen.stageReturned, grouped]
   obtain ⟨marker, crashes⟩ := seen.groupFailureKeepsMarker grouped
   have unchanged : reached.marker.crashImages = [reached.marker.active] := by rw [crashes, marker]; rfl
-  refine ⟨cause, reached, ?_, marker, unchanged, (seen.returnedReports request rows).refinesClient trace initialReady⟩
-  rw [WriteRequest.Calls.run, request.runReported_eq_batch ready, rows]
-  change runBatchWrite directory seen.rows seen.calls.lookup seen.calls.append seen.calls.stage seen.calls.sync
-    seen.calls.rename (.ready before.installed, ⟨(seen.cache, WriteFiles.initial before.history
-      (before.files.directory.staged .walBoundary)), before.owners⟩) = _
-  rw [ready.directoryFiles]
-  exact runBatchWrite_commitUnknown seen.guard seen.nonempty seen.prepared seen.fits commit
+  exact ⟨cause, reached, seen.returnsError request rows ready grouped, marker, unchanged,
+    (seen.returnedReports request rows).refinesClient trace initialReady⟩
 
 end BatchGroupedWriteError
 end Alvoki.Storage.DiskSession

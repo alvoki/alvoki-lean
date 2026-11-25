@@ -206,6 +206,34 @@ theorem runUnlinkSchedule_reachesBarrier {error : Type} (names : List RunAddress
       from prefixEffect, ← foldl_collectionSteps before names]
     simp only [RunCollection.steps, List.foldl_append, List.foldl_cons, List.foldl_nil, RunUnlinkImage.applyCollectionStep]
 
+/-- The next selected unlink is reached after the reported returned
+prefix, before the remaining unlinks and the directory barrier. -/
+theorem runUnlinkSchedule_reachesUnlink {error : Type} (done : List RunAddress) (target : RunAddress)
+    (remaining : List RunAddress) {before issue : RunUnlinkImage}
+    (perform : RunCollection.Step RunAddress → EStateM error RunUnlinkImage Unit)
+    (returned : ((done.map RunCollection.Step.unlink).forM perform) before = .ok () issue) :
+    RunCollection.run (done ++ target :: remaining) perform before =
+      (do
+        perform (.unlink target)
+        RunCollection.run remaining perform : EStateM error RunUnlinkImage Unit) issue := by
+  rw [List.forM_eq_forM] at returned
+  simp only [RunCollection.run, RunCollection.steps, List.map_append, List.map_cons, List.append_assoc, List.cons_append,
+    List.forM_eq_forM, List.forM_append, List.forM_cons, Bind.bind, EStateM.bind, returned]
+
+/-- Before a barrier, the unlink prefix preserves every prior namespace choice. -/
+theorem RunUnlinkImage.crashChoices_afterUnlinks (initial : RunUnlinkImage) (names : List RunAddress)
+    {candidate : RunFiles} (present : candidate ∈ initial.crashImages) :
+    candidate ∈ ((names.map RunCollection.Step.unlink).foldl RunUnlinkImage.applyCollectionStep initial).crashImages := by
+  induction names generalizing initial with
+  | nil => exact present
+  | cons address rest ih =>
+    simp only [List.map_cons, List.foldl_cons]
+    apply ih
+    change candidate ∈ (if initial.visible address.1 address.2 = none then initial else initial.unlink address).crashImages
+    by_cases empty : initial.visible address.1 address.2 = none
+    · simpa only [empty, ↓reduceIte] using present
+    · simpa only [empty, ↓reduceIte] using RunUnlinkImage.unlink_crashImages.mpr (.inl present)
+
 private theorem RunUnlinkRetry.collectionSteps {approved : List RunAddress} {initial before : RunUnlinkImage}
     (prior : RunUnlinkRetry approved initial before) (actions : List (RunCollection.Step RunAddress))
     (eligible : ∀ action ∈ actions, match action with | .unlink name => name ∈ approved | .syncDirectory => True) :

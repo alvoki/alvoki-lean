@@ -31,11 +31,10 @@ private def groupedResult (directory : DiskDirectory) (outcome : DelayedDirector
   | .errorBeforeEffect cause | .errorAfterEffect cause =>
     .error (IO.userError s!"sync failed for '{directory.path}': {cause}") reached
 
-/-- One pass that reaches the final barrier from the ready writer. The checked
-listing and no-follow probes enumerate the older unheld run names.
-The final barrier uses the cached directory handle, after the ordered
-canonical unlinks have returned. -/
-structure NativeObsoleteRunPass (state : NativeReadyState) where
+/-- The checked manifest, directory listing and ordered no-follow
+probes of an obsolete-run pass determine the exact unlinks the
+collector may issue under the caller's holds. -/
+structure NativeObsoleteRunPlan (state : NativeReadyState) where
   initial : RunUnlinkImage
   reports : SegmentedRunCollectionReports state.session.directory state.writer initial
   lifetime : HeldDirectoryReadLifetime state.census state.owner
@@ -50,6 +49,9 @@ structure NativeObsoleteRunPass (state : NativeReadyState) where
     generation < state.writer.installed.generation → generation ∉ reports.held →
     runKindAt stat (state.session.directory.file (.run generation index)) =
       .ok (reports.inventory.kindAt (state.session.directory.file (.run generation index)))
+/-- The pass has returned from all of its unlinks and reached the final
+directory barrier on the original cached handle. -/
+structure NativeObsoleteRunPass (state : NativeReadyState) extends NativeObsoleteRunPlan state where
   complete : ∀ generation index bytes, initial.visible generation index = some bytes →
     generation < state.writer.installed.generation → generation ∉ reports.held →
     renderRunFileName generation index ∈ lifetime.namespaceView.names lifetime.root ∧
@@ -84,11 +86,11 @@ structure NativeObsoleteRunPass (state : NativeReadyState) where
     | .ok value (_, (_, reached)) => .ok value reached
     | .error cause (_, (_, reached)) => .error cause reached
 
-namespace NativeObsoleteRunPass
+namespace NativeObsoleteRunPlan
 
 variable {state : NativeReadyState}
 
-theorem checkedNames (seen : NativeObsoleteRunPass state) :
+theorem checkedNames (seen : NativeObsoleteRunPlan state) :
     seen.reports.inventory.names.Perm (seen.lifetime.namespaceView.names seen.lifetime.root) := by
   obtain ⟨returned, names⟩ := CheckedDirectoryReadReport.scan_complete state.session.directory.path
     seen.listing.eof seen.listing.closed seen.listing.complete
@@ -96,7 +98,7 @@ theorem checkedNames (seen : NativeObsoleteRunPass state) :
   rw [← seen.reports.names, listed]
   simpa only [seen.listing.sameRoot] using names
 
-theorem preservesCensus (seen : NativeObsoleteRunPass state) : seen.listing.afterClose = state.census := by
+theorem preservesCensus (seen : NativeObsoleteRunPlan state) : seen.listing.afterClose = state.census := by
   rw [seen.listing.afterClose_eq, seen.listing.drops, seen.beforeOpen, seen.duringScan]
   have free : ∀ slot ∈ state.census.slots, slot.address ≠ seen.listing.stream.address := by
     simpa [seen.beforeOpen, DescriptorInventory.afterDrops] using seen.listing.free
@@ -115,34 +117,17 @@ theorem preservesCensus (seen : NativeObsoleteRunPass state) : seen.listing.afte
       · simp [DescriptorSlot.closeEvent, LockReferenceDrop.removes, process]
   exact stays state.census seen.listing.stream free
 
-def issueCensus (seen : NativeObsoleteRunPass state) : DescriptorInventory :=
-  seen.listing.afterClose.afterDrops seen.beforeBarrierDrops
+/-- The exact metadata at the selected no-follow probe is regular. -/
+theorem reportedRegular (seen : NativeObsoleteRunPlan state) {generation : UInt64} {index : Nat}
+    (listed : renderRunFileName generation index ∈ seen.reports.inventory.names)
+    (older : generation < state.writer.installed.generation) (unheld : generation ∉ seen.reports.held)
+    {metadata : IO.FS.Metadata} (reported : seen.stat (state.session.directory.file (.run generation index)) = .ok metadata)
+    (regular : seen.reports.inventory.kindAt (state.session.directory.file (.run generation index)) = .ok .file) :
+    metadata.type = .file := by
+  simpa [runKindAt, reported, regular, Bind.bind, Except.bind, Pure.pure, Except.pure]
+    using seen.kind generation index listed older unheld
 
-def returnCensus (seen : NativeObsoleteRunPass state) : DescriptorInventory :=
-  seen.issueCensus.afterDrops seen.afterBarrierDrops
-
-private theorem inventoryKeepsSlots (inventory : DescriptorInventory) (drops : List LockReferenceDrop)
-    (kept : ∀ slot ∈ inventory.slots, ∀ drop ∈ drops, drop.removes slot.reference = false) :
-    inventory.afterDrops drops = inventory := by
-  cases inventory with
-  | mk slots distinct inode =>
-    simp only [DescriptorInventory.afterDrops, DescriptorInventory.mk.injEq, and_true]
-    apply List.filter_eq_self.mpr
-    intro slot present
-    exact List.all_eq_true.mpr fun drop occurred => by simp [kept slot present drop occurred]
-
-theorem barrierCensus (seen : NativeObsoleteRunPass state) :
-    seen.issueCensus = state.census ∧ seen.returnCensus = state.census := by
-  have issue : seen.issueCensus = state.census := by
-    rw [issueCensus, seen.preservesCensus]
-    exact inventoryKeepsSlots state.census seen.beforeBarrierDrops fun slot live drop occurred =>
-      seen.keepsSlots slot live drop (List.mem_append_left _ occurred)
-  refine ⟨issue, ?_⟩
-  rw [returnCensus, issue]
-  exact inventoryKeepsSlots state.census seen.afterBarrierDrops fun slot live drop occurred =>
-    seen.keepsSlots slot live drop (List.mem_append_right _ occurred)
-
-private theorem selectsFromLstat (seen : NativeObsoleteRunPass state) :
+private theorem selectsFromLstat (seen : NativeObsoleteRunPlan state) :
     selectRunFilesWith (m := Except IO.Error) state.session.directory
       (seen.reports.observed.map fun _ => state.writer.installed.generation)
       (retainRunGeneration state.writer.installed.generation seen.reports.held)
@@ -179,7 +164,7 @@ private theorem selectsFromLstat (seen : NativeObsoleteRunPass state) :
 
 /-- The checked read-only preflight of the actual native collector.
 The phase is read before the manifest, directory list and lstat probes. -/
-def plan (seen : NativeObsoleteRunPass state) : Except IO.Error (List RunAddress) := do
+def plan (seen : NativeObsoleteRunPlan state) : Except IO.Error (List RunAddress) := do
   let installed ← state.session.phase.installed
   let manifest ← seen.reports.manifest.result (state.session.directory.file .manifest)
   let current ← (validateIntegrityRunCollectionGeneration installed.generation manifest).mapError IO.userError
@@ -187,12 +172,65 @@ def plan (seen : NativeObsoleteRunPass state) : Except IO.Error (List RunAddress
   selectRunFilesWith state.session.directory current (retainRunGeneration installed.generation seen.reports.held)
     (runKindAt seen.stat) (entries.toList.map (·.fileName))
 
-theorem plans (seen : NativeObsoleteRunPass state) (valid : state.Valid) :
+theorem plans (seen : NativeObsoleteRunPlan state) (valid : state.Valid) :
     seen.plan = .ok seen.reports.selected := by
   simp only [plan, valid.phase, Phase.installed, Pure.pure, Except.pure, Bind.bind, Except.bind,
     seen.reports.manifestRead, seen.reports.preflight valid.retained, Except.mapError, seen.reports.listed,
     seen.reports.names]
   exact seen.selectsFromLstat
+
+def run (seen : NativeObsoleteRunPlan state) :
+    EStateM.Result IO.Error (Phase Installed × LockedFileState (CensusDirectoryCache × RunUnlinkImage)) Unit :=
+  let reached (image : RunUnlinkImage) :=
+    (state.session.phase, (⟨(state.cache, image), state.files.owners⟩ :
+      LockedFileState (CensusDirectoryCache × RunUnlinkImage)))
+  match seen.plan with
+  | .error cause => .error cause (reached seen.initial)
+  | .ok selected =>
+    match RunCollection.run selected seen.reports.perform seen.initial with
+    | .ok () after => .ok () (reached after)
+    | .error cause after => .error cause (reached after)
+
+private theorem inventoryKeepsSlots (inventory : DescriptorInventory) (drops : List LockReferenceDrop)
+    (kept : ∀ slot ∈ inventory.slots, ∀ drop ∈ drops, drop.removes slot.reference = false) :
+    inventory.afterDrops drops = inventory := by
+  cases inventory with
+  | mk slots distinct inode =>
+    simp only [DescriptorInventory.afterDrops, DescriptorInventory.mk.injEq, and_true]
+    apply List.filter_eq_self.mpr
+    intro slot present
+    exact List.all_eq_true.mpr fun drop occurred => by simp [kept slot present drop occurred]
+
+/-- The reached inventory includes the checked listing's stream close
+and then the reported slot events before the next native callback. -/
+theorem keepsCensus (seen : NativeObsoleteRunPlan state) (drops : List LockReferenceDrop)
+    (kept : ∀ slot ∈ state.census.slots, ∀ drop ∈ drops, drop.removes slot.reference = false) :
+    seen.listing.afterClose.afterDrops drops = state.census := by
+  rw [seen.preservesCensus]
+  exact inventoryKeepsSlots state.census drops kept
+
+end NativeObsoleteRunPlan
+
+namespace NativeObsoleteRunPass
+
+variable {state : NativeReadyState}
+
+abbrev plan (seen : NativeObsoleteRunPass state) := seen.toNativeObsoleteRunPlan.plan
+
+def issueCensus (seen : NativeObsoleteRunPass state) : DescriptorInventory :=
+  seen.listing.afterClose.afterDrops seen.beforeBarrierDrops
+
+def returnCensus (seen : NativeObsoleteRunPass state) : DescriptorInventory :=
+  seen.issueCensus.afterDrops seen.afterBarrierDrops
+
+theorem barrierCensus (seen : NativeObsoleteRunPass state) :
+    seen.issueCensus = state.census ∧ seen.returnCensus = state.census := by
+  have issue : seen.issueCensus = state.census :=
+    seen.toNativeObsoleteRunPlan.keepsCensus seen.beforeBarrierDrops fun slot live drop occurred =>
+      seen.keepsSlots slot live drop (List.mem_append_left _ occurred)
+  have returned := seen.toNativeObsoleteRunPlan.keepsCensus seen.afterBarrierDrops fun slot live drop occurred =>
+    seen.keepsSlots slot live drop (List.mem_append_right _ occurred)
+  exact ⟨issue, by simpa only [returnCensus, issue, seen.toNativeObsoleteRunPlan.preservesCensus] using returned⟩
 
 /-- The last scheduled callback resolves the original cached directory
 handle and settles the same namespace reached by the preceding unlinks. -/
@@ -206,17 +244,7 @@ theorem syncs (seen : NativeObsoleteRunPass state) :
     withCache, issueCensus, returnCensus, seen.synced]
   cases seen.outcome <;> rfl
 
-def run (seen : NativeObsoleteRunPass state) :
-    EStateM.Result IO.Error (Phase Installed × LockedFileState (CensusDirectoryCache × RunUnlinkImage)) Unit :=
-  let reached (image : RunUnlinkImage) :=
-    (state.session.phase, (⟨(state.cache, image), state.files.owners⟩ :
-      LockedFileState (CensusDirectoryCache × RunUnlinkImage)))
-  match seen.plan with
-  | .error cause => .error cause (reached seen.initial)
-  | .ok selected =>
-    match RunCollection.run selected seen.reports.perform seen.initial with
-    | .ok () after => .ok () (reached after)
-    | .error cause after => .error cause (reached after)
+abbrev run (seen : NativeObsoleteRunPass state) := seen.toNativeObsoleteRunPlan.run
 
 def after (seen : NativeObsoleteRunPass state) : RunUnlinkImage :=
   directoryImage seen.atBarrier seen.outcome
@@ -245,7 +273,7 @@ theorem returns (seen : NativeObsoleteRunPass state) (valid : state.Valid) :
     cases status : seen.outcome <;> simpa only [status, groupedResult, after, issueCensus] using projected
   have completed := atBarrier.trans synced
   refine ⟨(seen.reports.run_eq_schedule valid.retained).trans completed, ?_, exactImage⟩
-  simp only [run, seen.plans valid, completed]
+  simp only [run, NativeObsoleteRunPlan.run, seen.toNativeObsoleteRunPlan.plans valid, completed]
   cases seen.outcome <;> rfl
 
 private theorem reached (seen : NativeObsoleteRunPass state) (valid : state.Valid) :
@@ -273,7 +301,7 @@ theorem settlesOldRuns (seen : NativeObsoleteRunPass state) (valid : state.Valid
   exact seen.reports.inventory.finishOlderPass_absent seen.initial seen.reports.held checked
     (fun generation index bytes present older unheld =>
       let known := seen.complete generation index bytes present older unheld
-      ⟨seen.checkedNames.mem_iff.mpr known.1, known.2⟩)
+      ⟨seen.toNativeObsoleteRunPlan.checkedNames.mem_iff.mpr known.1, known.2⟩)
 
 theorem retainsNamedBytes (seen : NativeObsoleteRunPass state) (valid : state.Valid) :
     ∀ generation index bytes, state.writer.installed.generation ≤ generation ∨ generation ∈ seen.reports.held →
@@ -352,7 +380,7 @@ theorem reclaims (seen : NativeObsoleteRunCollection state) (valid : state.Valid
     seen.next.Valid := by
   have sameNames (name : String) :
       name ∈ seen.reports.inventory.names ↔ name ∈ seen.lifetime.namespaceView.names seen.lifetime.root :=
-    seen.toNativeObsoleteRunPass.checkedNames.mem_iff
+    seen.toNativeObsoleteRunPass.toNativeObsoleteRunPlan.checkedNames.mem_iff
   have preserved := seen.toNativeObsoleteRunPass.preservesReady valid
   refine ⟨fun generation index => ?_, seen.toNativeObsoleteRunPass.settlesOldRuns valid, ?_,
     ?_, preserved.1⟩

@@ -4,11 +4,10 @@ namespace Alvoki.Storage.DiskSession
 
 open System
 
-/-- One invocation's no-follow lookup in the fixed parent, its local
-detach effect, and the before/after physical projection. An already
-missing name may report ENOENT and leave earlier crash choices intact. -/
-structure WalUnlinkEffect (root : DeviceInode) (first : Nat) (view : DirectoryReadNamespace)
-    (before : WalSealedUnlinkImage) (result : Except IO.Error Unit)
+/-- One invocation's lookup, detach effect, and allowed surviving seal
+lists. The physical effect can occur before a syscall returns. -/
+structure WalUnlinkPhysicalEffect (root : DeviceInode) (first : Nat) (view : DirectoryReadNamespace)
+    (before : WalSealedUnlinkImage)
     (afterView : DirectoryReadNamespace) (after : WalSealedUnlinkImage) where
   target : Option DeviceInode
   lookup : view.child root (renderWalSegmentName first) = target
@@ -22,15 +21,22 @@ structure WalUnlinkEffect (root : DeviceInode) (first : Nat) (view : DirectoryRe
   metadata : after.visible.directory = before.visible.directory
   survivors : ∀ sealed ∈ after.crashSealed, ∃ earlier ∈ before.crashSealed,
     sealed = earlier ∨ removed = true ∧ sealed = earlier.filter (fun segment => segment.first != first)
+
+/-- A returned invocation also reports whether Linux accepted the unlink
+or found that the name was already absent. -/
+structure WalUnlinkEffect (root : DeviceInode) (first : Nat) (view : DirectoryReadNamespace)
+    (before : WalSealedUnlinkImage) (result : Except IO.Error Unit)
+    (afterView : DirectoryReadNamespace) (after : WalSealedUnlinkImage)
+    extends WalUnlinkPhysicalEffect root first view before afterView after where
   completed : result = .ok () → removed = true
   missing : ∀ path message, result = .error (.noFileOrDirectory path 2 message) → target = none
 
-namespace WalUnlinkEffect
+namespace WalUnlinkPhysicalEffect
 
 variable {root : DeviceInode} {first : Nat} {view afterView : DirectoryReadNamespace}
-  {before after : WalSealedUnlinkImage} {result : Except IO.Error Unit}
+  {before after : WalSealedUnlinkImage}
 
-theorem lookupAfter (report : WalUnlinkEffect root first view before result afterView after) (offset : Nat) :
+theorem lookupAfter (report : WalUnlinkPhysicalEffect root first view before afterView after) (offset : Nat) :
     afterView.child root (renderWalSegmentName offset) =
       if report.removed && offset == first then none else view.child root (renderWalSegmentName offset) := by
   by_cases equal : offset = first
@@ -39,6 +45,33 @@ theorem lookupAfter (report : WalUnlinkEffect root first view before result afte
       intro same
       exact equal (by simpa only [parseWalSegmentName_render, Option.some.injEq] using congrArg parseWalSegmentName same)
     simp [equal, report.frame _ different]
+
+/-- Lift the physical name frame to the ordered list of immutable seals. -/
+theorem sealedAfter (report : WalUnlinkPhysicalEffect root first view before afterView after)
+    (bound : ∀ segment ∈ before.visible.sealed,
+      (view.child root (renderWalSegmentName segment.first)).isSome = true) :
+    after.visible.sealed = before.visible.sealed.filter (fun segment => !report.removed || segment.first != first) := by
+  rw [report.visible]
+  apply List.filter_congr
+  intro segment member
+  rw [report.lookupAfter]
+  have present := bound segment member
+  by_cases same : segment.first = first
+  · rw [same] at present ⊢
+    cases report.removed <;> simp [present]
+  · simp [same, present]
+
+end WalUnlinkPhysicalEffect
+
+namespace WalUnlinkEffect
+
+variable {root : DeviceInode} {first : Nat} {view afterView : DirectoryReadNamespace}
+  {before after : WalSealedUnlinkImage} {result : Except IO.Error Unit}
+
+theorem lookupAfter (report : WalUnlinkEffect root first view before result afterView after) (offset : Nat) :
+    afterView.child root (renderWalSegmentName offset) =
+      if report.removed && offset == first then none else view.child root (renderWalSegmentName offset) :=
+  report.toWalUnlinkPhysicalEffect.lookupAfter offset
 
 /-- At the first invocation this primitive target is the object whose
 extent the planner measured. Later invocations use the evolving view. -/
@@ -59,20 +92,11 @@ theorem accepted (report : WalUnlinkEffect root first view before result afterVi
   · exact .inl (report.completed completed)
   · exact .inr (report.lookup.trans (report.missing path message missing))
 
-/-- Lift the physical name frame to the ordered list of immutable seals. -/
 theorem sealedAfter (report : WalUnlinkEffect root first view before result afterView after)
     (bound : ∀ segment ∈ before.visible.sealed,
       (view.child root (renderWalSegmentName segment.first)).isSome = true) :
-    after.visible.sealed = before.visible.sealed.filter (fun segment => !report.removed || segment.first != first) := by
-  rw [report.visible]
-  apply List.filter_congr
-  intro segment member
-  rw [report.lookupAfter]
-  have present := bound segment member
-  by_cases same : segment.first = first
-  · rw [same] at present ⊢
-    cases report.removed <;> simp [present]
-  · simp [same, present]
+    after.visible.sealed = before.visible.sealed.filter (fun segment => !report.removed || segment.first != first) :=
+  report.toWalUnlinkPhysicalEffect.sealedAfter bound
 
 theorem eligibleAfter (report : WalUnlinkEffect root first view before result afterView after)
     (bound : ∀ segment ∈ before.visible.sealed,
@@ -166,8 +190,8 @@ private theorem image_eq {left right : WalSegmentImage}
 
 theorem unlink {history : List WAL.Write} (prior : WalUnlinkInvariant initial root view physical projected)
     (layout : initial.ReadLayout history) {first : Nat} (approved : first ∈ initial.collectionOffsets)
-    {afterView : DirectoryReadNamespace} {result : Except IO.Error Unit} {after : WalSealedUnlinkImage}
-    (report : WalUnlinkEffect root first view physical result afterView after) :
+    {afterView : DirectoryReadNamespace} {after : WalSealedUnlinkImage}
+    (report : WalUnlinkPhysicalEffect root first view physical afterView after) :
     WalUnlinkInvariant initial root afterView after (if report.removed then projected.unlink first else projected) := by
   have filtered := report.sealedAfter (prior.bound layout)
   have named segment (original : segment ∈ initial.sealed) :
@@ -306,14 +330,14 @@ theorem projects
   induction reported generalizing projected with
   | pause => exact ⟨⟨projected, prior⟩, List.Sublist.refl _, by simp⟩
   | next call effect accepted tail ih =>
-    have advanced := prior.unlink layout (approved _ List.mem_cons_self) effect
+    have advanced := prior.unlink layout (approved _ List.mem_cons_self) effect.toWalUnlinkPhysicalEffect
     obtain ⟨final, included, eligible⟩ := ih advanced (fun offset member => approved offset (List.mem_cons_of_mem _ member))
     refine ⟨final, included.cons _, ?_⟩
     intro offset
     rw [eligible, effect.eligibleAfter (prior.bound layout)]
     by_cases effective : effect.removed = true <;> simp [effective, and_assoc, and_left_comm]
   | failed call effect returned =>
-    refine ⟨⟨_, prior.unlink layout (approved _ List.mem_cons_self) effect⟩, (List.Sublist.refl _).cons _, ?_⟩
+    refine ⟨⟨_, prior.unlink layout (approved _ List.mem_cons_self) effect.toWalUnlinkPhysicalEffect⟩, (List.Sublist.refl _).cons _, ?_⟩
     intro offset
     rw [effect.eligibleAfter (prior.bound layout)]
     by_cases effective : effect.removed = true <;> simp [effective]

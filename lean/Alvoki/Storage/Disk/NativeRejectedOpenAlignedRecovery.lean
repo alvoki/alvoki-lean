@@ -33,7 +33,7 @@ private theorem NativeRejectedOpenLineage.framesOwners
     ∀ path, path ≠ directory.file .lock → after.2.owners path = first.2.owners path := by
   induction lineage with
   | start vacant => exact ⟨vacant, fun _ _ => rfl⟩
-  | rejected _ _ _ _ disposed prior =>
+  | attempted _ _ _ _ disposed prior =>
     exact ⟨prior.1, fun _ other => (disposed.keepsOtherLock other).trans (prior.2 _ other)⟩
 
 /-- When the final reported disposition allows another attempt, both

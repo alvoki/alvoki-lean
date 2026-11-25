@@ -131,6 +131,32 @@ private theorem writtenFromSingleton {state : PackedTable} {key : UInt64} {value
     simp only [written, Option.map_some, Option.some.injEq, Prod.mk.injEq] at prepared
     rw [prepared.2]
 
+/-- The active guard and nonempty preflight of either write dispatcher
+reach the same interrupted publication with the exact reached files. -/
+theorem WriteRequest.stopsPublication {stop image : Type} {directory : DiskDirectory} {installed : Installed}
+    {rows : List (UInt64 × Option UInt64)} {events : List WAL.Write} {table : PackedTable}
+    (request : WriteRequest) (submitted : request.rows = rows) (nonempty : rows ≠ [])
+    (prepared : prepareBatch installed.table rows = some (events, table))
+    (fits : installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    (guard : BatchActiveGuard directory installed)
+    (publish : Installed → List WAL.Write → Nat → ExceptT IO.Error (EStateM stop image) Unit)
+    {before : LockedFileState image} {stopped : stop} {reached : image}
+    (issued : (publish installed events (installed.walBytes + WAL.frameSize * rows.length)).run before.image =
+      .error stopped reached) :
+    request.runWithInterruption directory guard.lookup publish (.ready installed, before) =
+      .error stopped (.poisoned, { before with image := reached }) := by
+  have checked := checkObservedActiveSegment (directory := directory) (installed := installed)
+    ⟨guard.metadata, guard.reached, guard.regular, guard.privateFile, guard.extent⟩
+  have batch := runBatchWriteWithInterruption_stopped nonempty prepared fits checked publish issued
+  cases request with
+  | batch group =>
+    change group = rows at submitted
+    simpa only [runWithInterruption, submitted] using batch
+  | single key value =>
+    have singleton : [(key, value)] = rows := submitted
+    have wrote := writtenFromSingleton (singleton.symm ▸ prepared)
+    simpa only [runWithInterruption, runSingleWriteWithInterruption_eq_singleton wrote, singleton] using batch
+
 namespace BatchAppendInterruption
 
 variable {directory : DiskDirectory} {before : SegmentedWriterState}

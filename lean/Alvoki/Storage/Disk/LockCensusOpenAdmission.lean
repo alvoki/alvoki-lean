@@ -5,24 +5,25 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
 
-abbrev CensusOpenState := DescriptorInventory × LockedFileState FileImage
+abbrev OpenCensus (image : Type) := DescriptorInventory × LockedFileState image
+abbrev CensusOpenState := OpenCensus FileImage
 abbrev CensusDirectoryCache := Cache (DescriptorInventory × DescriptorSlot × Nat)
 
 /-- Primitive reports for the guarded append-open, flock and directory
 open. The filesystem image is the stable projection under the lock. -/
-structure CensusOpenAdmissionReports (input : FilePath) (directory : DiskDirectory)
-    (inventory : DescriptorInventory) (retry : LockedFileState FileImage) where
+structure CensusOpenAdmissionReports {image : Type} (input : FilePath) (directory : DiskDirectory)
+    (inventory : DescriptorInventory) (retry : LockedFileState image) where
   owner : DescriptorSlot
   cached : DescriptorSlot
   view : DirectoryReadNamespace
   root : DeviceInode
   free : ∀ slot ∈ inventory.slots, slot.address ≠ owner.address
   fresh : inventory.references owner.description = []
-  realPath : FilePath → EStateM IO.Error CensusOpenState FilePath
-  lookup : FilePath → EStateM IO.Error CensusOpenState (Except IO.Error IO.FS.Metadata)
-  openAppend : FilePath → EStateM IO.Error CensusOpenState DescriptorSlot
-  flock : DescriptorSlot → EStateM IO.Error CensusOpenState Bool
-  unlock : DescriptorSlot → Unit → EStateM IO.Error CensusOpenState Unit
+  realPath : FilePath → EStateM IO.Error (OpenCensus image) FilePath
+  lookup : FilePath → EStateM IO.Error (OpenCensus image) (Except IO.Error IO.FS.Metadata)
+  openAppend : FilePath → EStateM IO.Error (OpenCensus image) DescriptorSlot
+  flock : DescriptorSlot → EStateM IO.Error (OpenCensus image) Bool
+  unlock : DescriptorSlot → Unit → EStateM IO.Error (OpenCensus image) Unit
   resolved : realPath input (inventory, retry) = .ok directory.path (inventory, retry)
   flat : optionalMetadataWith (lookup (directory.file .wal)) (inventory, retry) = .ok none (inventory, retry)
   lockMetadata : Option IO.FS.Metadata
@@ -37,20 +38,20 @@ structure CensusOpenAdmissionReports (input : FilePath) (directory : DiskDirecto
 namespace CensusOpenAdmissionReports
 
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
-  {retry : LockedFileState FileImage}
+  {image : Type} {retry : LockedFileState image}
 
 def reached (report : CensusOpenAdmissionReports input directory inventory retry) : DescriptorInventory :=
   (inventory.insert report.owner report.free).insert report.cached report.opened.free
 
-def held (report : CensusOpenAdmissionReports input directory inventory retry) : LockedFileState FileImage :=
+def held (report : CensusOpenAdmissionReports input directory inventory retry) : LockedFileState image :=
   ⟨retry.image, retry.owners.set (directory.file .lock) (some report.owner.description)⟩
 
 def cache (report : CensusOpenAdmissionReports input directory inventory retry) : CensusDirectoryCache :=
   ⟨some (report.reached, report.cached, 0), none, []⟩
 
 def run {result : Type} (report : CensusOpenAdmissionReports input directory inventory retry)
-    (recover : DiskDirectory → DescriptorSlot → CensusDirectoryCache → EStateM IO.Error CensusOpenState result) :
-    EStateM.Result IO.Error CensusOpenState result :=
+    (recover : DiskDirectory → DescriptorSlot → CensusDirectoryCache → EStateM IO.Error (OpenCensus image) result) :
+    EStateM.Result IO.Error (OpenCensus image) result :=
   DiskTable.withOpenAdmission input report.realPath report.lookup report.openAppend (fun path slot =>
     openWithLock (report.flock slot) (fun _ => IO.userError s!"database already open: {path.path}")
       (report.unlock slot) fun _ => do
@@ -58,7 +59,7 @@ def run {result : Type} (report : CensusOpenAdmissionReports input directory inv
         recover path slot files) (inventory, retry)
 
 theorem run_reachesRecovery {result : Type} (report : CensusOpenAdmissionReports input directory inventory retry)
-    (recover : DiskDirectory → DescriptorSlot → CensusDirectoryCache → EStateM IO.Error CensusOpenState result) :
+    (recover : DiskDirectory → DescriptorSlot → CensusDirectoryCache → EStateM IO.Error (OpenCensus image) result) :
     report.run recover =
       (tryCatchThe IO.Error (recover directory report.owner report.cache) fun cause => do
         report.unlock report.owner ()

@@ -14,20 +14,6 @@ abbrev run (seen : NativeObsoleteRunBarrierError state) := seen.toNativeObsolete
 
 abbrev next (seen : NativeObsoleteRunBarrierError state) := seen.toNativeObsoleteRunPass.next
 
-private theorem keepsCrashChoices (names : List RunAddress) (initial : RunUnlinkImage) :
-    ∀ candidate ∈ initial.crashImages,
-      candidate ∈ ((names.map RunCollection.Step.unlink).foldl RunUnlinkImage.applyCollectionStep initial).crashImages := by
-  induction names generalizing initial with
-  | nil => intro candidate member; exact member
-  | cons name rest ih =>
-    intro candidate member
-    simp only [List.map_cons, List.foldl_cons]
-    apply ih
-    change candidate ∈ (if initial.visible name.1 name.2 = none then initial else initial.unlink name).crashImages
-    by_cases absent : initial.visible name.1 name.2 = none
-    · simpa only [absent, ↓reduceIte] using member
-    · simpa only [absent, ↓reduceIte] using RunUnlinkImage.unlink_crashImages.mpr (.inl member)
-
 /-- An error before the sync effect retains every old crash choice from
 the actual unlink prefix. An initially possible old binding can still
 survive even though the visible name has already been removed. -/
@@ -44,7 +30,7 @@ theorem beforeEffect (seen : NativeObsoleteRunBarrierError state)
   rw [seen.unlinked] at unlinked
   exact ⟨image, fun candidate member => by
     rw [image, unlinked]
-    exact keepsCrashChoices _ _ candidate member⟩
+    exact RunUnlinkImage.crashChoices_afterUnlinks _ _ member⟩
 
 theorem retainsPossibleBinding (seen : NativeObsoleteRunBarrierError state)
     (before : seen.outcome = .errorBeforeEffect seen.cause) {candidate : RunFiles}

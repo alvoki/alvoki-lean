@@ -54,15 +54,13 @@ def SegmentedWriterState.afterWalCollection (before : SegmentedWriterState) (rem
     files := { before.files with
       kept := (remaining.visible.checkpointReopenFiles remaining.visible.directory none).kept } }
 
-theorem SegmentedWriterState.RetainedReady.afterWalCollection {directory descriptor}
+/-- Update the retained writer with a visible or surviving seal list
+whose covered removals are proven and whose metadata is unchanged. -/
+theorem SegmentedWriterState.RetainedReady.afterWalProjection {directory descriptor}
     {before : SegmentedWriterState} {remaining : WalSealedUnlinkImage}
-    (ready : before.RetainedReady directory descriptor) (trace : WalSealedUnlinkTrace before.wal remaining)
-    (sameDirectory : remaining.visible.directory = before.wal.directory)
-    (settled : remaining.crashSealed = [remaining.visible.sealed]) :
+    (ready : before.RetainedReady directory descriptor) (retry : WalSegmentCollectionRetry before.wal remaining.visible)
+    (sameDirectory : remaining.visible.directory = before.wal.directory) :
     (before.afterWalCollection remaining).RetainedReady directory descriptor := by
-  have survives : remaining.visible.sealed ∈ remaining.crashSealed := by rw [settled]; exact List.mem_cons_self ..
-  have retry : WalSegmentCollectionRetry before.wal remaining.visible :=
-    (trace.projects ready.layout).2 remaining.visible.sealed survives
   exact ⟨{ ready.resumed with ready := {
       selected := ready.resumed.ready.selected
       settled := ready.resumed.ready.settled
@@ -73,6 +71,15 @@ theorem SegmentedWriterState.RetainedReady.afterWalCollection {directory descrip
     fun segment member => ready.spans segment (retry.sealedSublist.subset member),
     ready.directoryFiles.trans sameDirectory.symm, rfl,
     ready.active.trans (congrArg WalSegment.first retry.keepsActive).symm, ready.manifestFiles, ready.held⟩
+
+theorem SegmentedWriterState.RetainedReady.afterWalCollection {directory descriptor}
+    {before : SegmentedWriterState} {remaining : WalSealedUnlinkImage}
+    (ready : before.RetainedReady directory descriptor) (trace : WalSealedUnlinkTrace before.wal remaining)
+    (sameDirectory : remaining.visible.directory = before.wal.directory)
+    (settled : remaining.crashSealed = [remaining.visible.sealed]) :
+    (before.afterWalCollection remaining).RetainedReady directory descriptor := by
+  have survives : remaining.visible.sealed ∈ remaining.crashSealed := by rw [settled]; exact List.mem_cons_self ..
+  exact ready.afterWalProjection ((trace.projects ready.layout).2 remaining.visible.sealed survives) sameDirectory
 
 namespace SegmentedCollectionReport
 
