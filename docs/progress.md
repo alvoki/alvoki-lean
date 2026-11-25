@@ -983,6 +983,13 @@ inactive record must decode to the old record,
 the intended new record, or no record. The checksum check alone does
 not establish that last condition for arbitrary corruption.
 
+The full sequential suite exited successfully after merging main at
+`afa74eb` into the experiment branch. It covered the Lean build and
+axiom audit, differential checks, native disk checks, the process-death
+matrix, and aligned and repaired replay smoke cases. The later
+in-flight-write proof change also passed a targeted build and
+`leanchecker`. Runtime code and the performance comparison were unchanged.
+
 Lean now identifies the addresses of the reported short positional
 writes with the contiguous prefix ending at the reached cursor. The
 client theorem accepts that cursor interval for attributing surviving
