@@ -20,7 +20,7 @@ def cachedMetadataReadResult (result : EStateM.Result IO.Error Nat (Option ByteA
   | .ok bytes _ => .ok bytes
   | .error cause _ => .error cause
 
-private theorem manifestPath_ne_boundary (directory : DiskDirectory) :
+theorem manifestPath_ne_boundary (directory : DiskDirectory) :
     directory.file .manifest ≠ directory.file .walBoundary := by
   intro same
   have names := congrArg FilePath.toString same

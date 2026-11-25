@@ -296,6 +296,7 @@ import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenEarlyError
 import Alvoki.Storage.Disk.NativeRawMarkerRouteError
+import Alvoki.Storage.Disk.NativeRawManifestDecodeError
 import Alvoki.Storage.Disk.NativeRawFlatWalOpenError
 import Alvoki.Storage.Disk.NativeCacheOpenRejection
 import Alvoki.Storage.Disk.NativeRawDirectoryCacheRejection
@@ -1871,6 +1872,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerRouteFailure.returns
 #check_axioms Alvoki.Storage.DiskSession.rawOptionalMetadataError
 #check_axioms Alvoki.Storage.DiskSession.RawHeldOpenCleanup.returnsError
+#check_axioms Alvoki.Storage.DiskSession.RawHeldOpenCleanup.returnsErrorAt
+#check_axioms Alvoki.Storage.DiskSession.RawManifestDecodeFailure.readsSelected
+#check_axioms Alvoki.Storage.DiskSession.RawManifestDecodeFailure.stopsBeforeWal
+#check_axioms Alvoki.Storage.DiskSession.RawManifestDecodeFailure.returns
 #check_axioms Alvoki.Storage.DiskSession.RawHeldFlatWalError.stops
 #check_axioms Alvoki.Storage.DiskSession.RawHeldFlatWalError.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.returns
