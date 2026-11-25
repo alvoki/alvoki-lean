@@ -509,6 +509,57 @@ theorem NativeReadPosition.classifiesWriteOnOpenPhase {history log}
     simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, heapEffect, writeResult, setPoisoned, fileEffect, writeResult,
       failed, projectOpenWriteResult, poison, Option.map_some]
 
+/-- Both accepted and rejected result classification uses the same
+metadata that the no-follow callback returned on the actual issue.
+The reached heap is retained even when that callback fails. -/
+theorem checkActiveSegmentWith_rawResult {heap : Type} (directory : DiskDirectory) (state : Installed)
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata) (entry : heap) :
+    let info := lookup (directory.file (.walSegment state.activeFirst)) entry
+    checkActiveSegmentWith directory state lookup entry =
+      match info with
+      | .error cause reached => .error cause reached
+      | .ok metadata reached =>
+        match (checkActiveSegmentWith directory state (fun _ => .ok metadata) : Except IO.Error Unit) with
+        | .ok () => .ok () reached
+        | .error cause => .error cause reached := by
+  intro info
+  cases resolved : lookup (directory.file (.walSegment state.activeFirst)) entry with
+  | error cause reached =>
+    simp [info, resolved, checkActiveSegmentWith, Bind.bind, EStateM.bind]
+  | ok metadata reached =>
+    cases allowed : metadata.type == .file && metadata.numLinks == 1 <;>
+      cases fits : metadata.byteSize.toNat == state.walBytes - state.activeFirst * WAL.frameSize <;>
+      simp only [info, resolved, checkActiveSegmentWith, checkPrivateRegularWith, allowed, fits,
+        Bind.bind, EStateM.bind, Except.bind, Pure.pure, EStateM.pure, Except.pure,
+        Bool.false_eq_true, ↓reduceIte, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+
+theorem BatchActiveGuard.ofRawChecked {heap : Type} {directory : DiskDirectory} {state : Installed}
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata) {entry reached : heap}
+    (checked : checkActiveSegmentWith directory state lookup entry = .ok () reached) :
+    ∃ guard : BatchActiveGuard directory state,
+      lookup (directory.file (.walSegment state.activeFirst)) entry = .ok guard.metadata reached := by
+  rw [checkActiveSegmentWith_rawResult] at checked
+  cases observed : lookup (directory.file (.walSegment state.activeFirst)) entry with
+  | error cause rejected => simp only [observed] at checked; cases checked
+  | ok metadata lookedUp =>
+    simp only [observed] at checked
+    let pureLookup : FilePath → Except IO.Error IO.FS.Metadata := fun _ => .ok metadata
+    change (match checkActiveSegmentWith directory state pureLookup with
+      | .ok () => EStateM.Result.ok () lookedUp
+      | .error cause => EStateM.Result.error cause lookedUp) = (EStateM.Result.ok (ε := IO.Error) () reached) at checked
+    cases accepted : checkActiveSegmentWith directory state pureLookup with
+    | error cause => simp only [accepted] at checked; cases checked
+    | ok value =>
+      cases value
+      simp only [accepted, EStateM.Result.ok.injEq] at checked
+      have sameHeap := checked.2
+      subst reached
+      obtain ⟨guard, sameCall⟩ := BatchActiveGuard.ofChecked pureLookup accepted
+      have payload := guard.reached
+      rw [sameCall] at payload
+      exact ⟨guard, congrArg (fun metadata => EStateM.Result.ok (ε := IO.Error) metadata lookedUp) (Except.ok.inj payload)⟩
+
+
 section RawWrite
 
 variable (request : WriteRequest) (directory : DiskDirectory)
@@ -611,7 +662,9 @@ theorem WriteRequest.runOnRawOpenPhase_acknowledges
     let publish := commitBytesAt directory installed.activeFirst (WAL.encodeBatch batch) count append stage sync rename
     ∃ guarded poisoned settled, checkActiveSegmentWith directory installed lookup entry = .ok () guarded ∧
       set phase .poisoned guarded = .ok () poisoned ∧ publish poisoned = .ok () settled ∧
-      set phase (.ready next) settled = .ok () reached ∧ sequence = table.committed := by
+      set phase (.ready next) settled = .ok () reached ∧ sequence = table.committed ∧
+      ∃ checked : BatchActiveGuard directory installed,
+        lookup (directory.file (.walSegment installed.activeFirst)) entry = .ok checked.metadata guarded := by
   intro count next publish
   rw [request.runOnRawOpenPhase_afterPreparation directory lookup append stage sync rename phase get set
     loaded nonempty prepared fits] at returned
@@ -642,7 +695,8 @@ theorem WriteRequest.runOnRawOpenPhase_acknowledges
           cases value
           simp only [guard, exclude, committed, installed, EStateM.Result.ok.injEq] at returned
           obtain ⟨rfl, rfl⟩ := returned
-          exact ⟨guarded, poisoned, settled, rfl, exclude, committed, installed, rfl⟩
+          exact ⟨guarded, poisoned, settled, rfl, exclude, committed, installed, rfl,
+            BatchActiveGuard.ofRawChecked lookup guard⟩
 
 end RawWrite
 

@@ -3788,6 +3788,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.frame
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.frame
 #check_axioms Alvoki.Storage.DiskSession.ClassifiedWriteAcknowledgement.readyStorage
+#check_axioms Alvoki.Storage.DiskSession.checkActiveSegmentWith_rawResult
+#check_axioms Alvoki.Storage.DiskSession.BatchActiveGuard.ofRawChecked
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_afterPreparation
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_rejectsPhase
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_acknowledges
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedFromStaging
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.selectAppend_owned
 #check_axioms Alvoki.Storage.SyncHandleRouting.runAppendWithCache_owned

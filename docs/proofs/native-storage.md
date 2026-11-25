@@ -53,6 +53,13 @@ effects from the same raw execution and transport them through the final phase-c
 Both ordinary group errors already feed the same uncertain-write endpoint.
 [Shared cache routing](../../lean/Alvoki/Storage/Disk/NativeRawSync.lean) · [Durable WAL publication](../../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean) · [Ready storage after an acknowledged write](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) · [Pending write](../../lean/Alvoki/Storage/Disk/NativeGroupedPendingWrite.lean)
 
+The shared single and batch dispatch can now run on one raw heap with the original phase cell,
+metadata lookup and WAL callbacks. A prepared write that acknowledges must have passed the no-follow
+guard on the observed metadata, set the poisoned phase, completed publication, and set ready at the
+heap reached by the last barrier. Rejected metadata and uncertain publication preserve their exact
+errors and heaps. The remaining bridge projects filesystem and cache effects from those precise
+calls into the classified acknowledgement. [Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean)
+
 `NativeReachedExecutionPrefix.keyValueRefinement` adds whole-or-none uncertain events, ready replay when
 the ending returns ready, and the existence of an allowed terminal history that agrees with prior reads.
 `Returned.stopsAfterWrites` uses that terminal argument on a finite observed write trace from fresh
