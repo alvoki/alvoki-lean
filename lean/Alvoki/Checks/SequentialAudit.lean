@@ -2306,7 +2306,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.closes
 #check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.preservesSlot
 #check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.readSeal
-#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.reaches
+#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChainWith.reaches
+#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChainWith.preservesSlot
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanWal_closed
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanWal_fromEntry
 #check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.readPrefix
@@ -2315,9 +2316,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedRunReadCensus.reads
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkerCensus.reads
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.beforeWalScan
-#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.stat
-#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.sealPayload
-#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.matchesExtents
+#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChainWith.stat
+#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChainWith.sealPayload
+#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChainWith.matchesExtents
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.guardedWalScan
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.selectedWalReachesKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.beforeKeeper

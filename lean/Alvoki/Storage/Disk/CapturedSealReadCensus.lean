@@ -136,28 +136,36 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
 /-- Read the selected seal extents in their worker order. Each report
 starts from the previous temporary reader's reached census. The last
 selected extent is the actual keeper from the held stat/open reports. -/
-inductive CapturedSealReadChain (report : CapturedMarkedReadReports admission layout published)
-    (released : FilePath → List LockReferenceDrop) :
+inductive CapturedSealReadChainWith (report : CapturedMarkedReadReports admission layout published)
+    (released : FilePath → List LockReferenceDrop) (retains : DescriptorSlot → Prop) :
     List (Nat × IO.FS.Metadata) → DescriptorInventory → List LockReferenceDrop → Prop where
-  | keeper {initial} : CapturedSealReadChain report released
+  | keeper {initial} : CapturedSealReadChainWith report released retains
       [(layout.keeper.first, report.wal.keeper.calls.metadata)] initial []
   | sealed {initial segment next nextMetadata rest drops} (member : segment ∈ layout.sealed)
       (forward : segment.first < next) (size : segment.bytes.size = (next - segment.first) * WAL.frameSize)
       (custody : TemporaryPrefixCustody (report.wal.sealedFile segment member).calls initial
         (released (directory.file (.walSegment segment.first))))
-      (remaining : CapturedSealReadChain report released ((next, nextMetadata) :: rest)
+      (ambient : ∀ slot, retains slot → ∀ event ∈ custody.beforeOpen ++ custody.beforeClose,
+        event.removes slot.reference = false)
+      (remaining : CapturedSealReadChainWith report released retains ((next, nextMetadata) :: rest)
         (initial.afterDrops (custody.beforeOpen ++ released (directory.file (.walSegment segment.first)))) drops) :
-      CapturedSealReadChain report released ((segment.first, (report.wal.sealedFile segment member).calls.metadata) ::
+      CapturedSealReadChainWith report released retains ((segment.first, (report.wal.sealedFile segment member).calls.metadata) ::
         (next, nextMetadata) :: rest) initial (custody.beforeOpen ++ released (directory.file (.walSegment segment.first)) ++ drops)
 
-namespace CapturedSealReadChain
+/-- A chain without any additional retained descriptor. -/
+abbrev CapturedSealReadChain (report : CapturedMarkedReadReports admission layout published)
+    (released : FilePath → List LockReferenceDrop) :=
+  CapturedSealReadChainWith report released (fun _ => False)
+
+namespace CapturedSealReadChainWith
 
 variable {report : CapturedMarkedReadReports admission layout published} {released : FilePath → List LockReferenceDrop}
+  {retains : DescriptorSlot → Prop}
   {required : List (Nat × IO.FS.Metadata)} {initial : DescriptorInventory} {drops : List LockReferenceDrop}
 
 /-- A captured seal or keeper uses exactly the extent probe from the
 catalog used by the selected reader. -/
-theorem stat (chain : CapturedSealReadChain report released required initial drops) :
+theorem stat (chain : CapturedSealReadChainWith report released retains required initial drops) :
     ∀ entry ∈ required,
       report.catalog.inventory.reports.lstat (directory.file (.walSegment entry.1)) = .ok entry.2 := by
   induction chain with
@@ -166,7 +174,7 @@ theorem stat (chain : CapturedSealReadChain report released required initial dro
     obtain rfl := List.mem_singleton.mp chosen
     rw [report.stat, report.wal.keeper.calls.stat]
     rfl
-  | @sealed initial segment next nextMetadata rest drops member forward size custody remaining ih =>
+  | @sealed initial segment next nextMetadata rest drops member forward size custody _ambient remaining ih =>
     intro entry chosen
     rcases List.mem_cons.mp chosen with rfl | later
     · rw [report.stat, (report.wal.sealedFile segment member).calls.stat]
@@ -175,13 +183,13 @@ theorem stat (chain : CapturedSealReadChain report released required initial dro
 
 /-- A successful seal callback for its checked extent returns the bytes
 of that exact retained inode. The final keeper has its own callback. -/
-theorem sealPayload (chain : CapturedSealReadChain report released required initial drops) :
+theorem sealPayload (chain : CapturedSealReadChainWith report released retains required initial drops) :
     ∀ entry ∈ required.dropLast, ∀ {before after bytes},
       readTemporarySeal report.reads released (directory.file (.walSegment entry.1)) entry.2.byteSize.toNat before =
         .ok bytes after → retry.image.kept entry.1 = some bytes := by
   induction chain with
   | keeper => simp
-  | @sealed initial segment next nextMetadata rest drops member forward size custody remaining ih =>
+  | @sealed initial segment next nextMetadata rest drops member forward size custody _ambient remaining ih =>
     intro entry chosen before after bytes returned
     rw [List.dropLast_cons_cons] at chosen
     rcases List.mem_cons.mp chosen with rfl | tail
@@ -204,7 +212,7 @@ theorem sealPayload (chain : CapturedSealReadChain report released required init
 /-- The chronological read reports and the executable extent scan select
 the same entries when their ordered offsets agree. Each lookup's own
 result fixes the accompanying metadata. -/
-theorem matchesExtents (chain : CapturedSealReadChain report released required initial drops)
+theorem matchesExtents (chain : CapturedSealReadChainWith report released retains required initial drops)
     {scanned : List (Nat × IO.FS.Metadata)} (offsets : required.map Prod.fst = scanned.map Prod.fst)
     (scannedStat : ∀ entry ∈ scanned,
       report.catalog.inventory.reports.lstat (directory.file (.walSegment entry.1)) = .ok entry.2) :
@@ -228,7 +236,7 @@ theorem matchesExtents (chain : CapturedSealReadChain report released required i
 
 /-- The actual extent-checked seal loop reaches the keeper in the census
 left by the ordered temporary reads. -/
-theorem reaches (chain : CapturedSealReadChain report released required initial drops)
+theorem reaches (chain : CapturedSealReadChainWith report released retains required initial drops)
     (cache : CensusDirectoryCache) (files : LockedFileState FileImage) :
     CachedWalKeeperReached directory (readTemporarySeal report.reads released) layout.keeper.first
       report.wal.keeper.calls.metadata required (cache, initial, files) (cache, initial.afterDrops drops, files) := by
@@ -240,7 +248,7 @@ theorem reaches (chain : CapturedSealReadChain report released required initial 
         simp only [DescriptorInventory.afterDrops, List.all_nil, List.filter_eq_self.mpr (fun _ _ => rfl)]
     rw [same]
     exact .noSeals
-  | @sealed initial segment next nextMetadata rest drops member forward size custody remaining ih =>
+  | @sealed initial segment next nextMetadata rest drops member forward size custody _ambient remaining ih =>
     let file := report.wal.sealedFile segment member
     have extent := file.observesFile.extent.trans size
     have fits := size ▸ report.wal.sealFits segment member
@@ -249,7 +257,24 @@ theorem reaches (chain : CapturedSealReadChain report released required initial 
     rw [← DescriptorInventory.afterDrops_append]
     exact .sealed forward extent fits read size ih
 
-end CapturedSealReadChain
+/-- Replay the lifetime reports of all temporary seal reads. The
+finalizers cannot remove the retained slot, and the reports account
+for its survival across the other drops. -/
+theorem preservesSlot
+    (chain : CapturedSealReadChainWith report released retains required initial drops)
+    {slot : DescriptorSlot} (keep : retains slot) (present : slot ∈ initial.slots) :
+    slot ∈ (initial.afterDrops drops).slots := by
+  induction chain with
+  | keeper => simpa [DescriptorInventory.afterDrops] using present
+  | @sealed initial segment next nextMetadata rest drops member forward size custody ambient remaining ih =>
+    have retained := custody.preservesSlot present
+      (fun event found => ambient slot keep event (List.mem_append_left _ found))
+      (fun event found => ambient slot keep event (List.mem_append_right _ found))
+    rw [custody.closes.1] at retained
+    rw [← DescriptorInventory.afterDrops_append]
+    exact ih retained
+
+end CapturedSealReadChainWith
 
 namespace CapturedMarkedReadReports
 

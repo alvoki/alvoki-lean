@@ -898,3 +898,9 @@ guard, including the one-link requirement, before reading any bytes.
 The client proof identifies the marker handle with the description and
 inode in the held-open report. One identity equation now supplies both
 the description used by bounded reads and the inode targeted by fsync.
+
+The selected-seal read chain can now track retained descriptors through
+every reported open and close. A temporary seal finalizer preserves a
+retained slot by its observed free-address allocation. Other drops
+carry explicit lifetime reports at the corresponding read. The chain
+derives slot membership at the keeper entry from those per-read reports.
