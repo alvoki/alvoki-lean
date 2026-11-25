@@ -869,10 +869,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.common
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.executes
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedInstruction.observesSnapshot
-#check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.executesSnapshots
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.rewriteRun
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rewritesRunViaOpenReferences
-#check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.executesSnapshotsAndRewrites
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.reportsSnapshotsAndRewrites
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.RunBinding.completes
 #check_axioms Alvoki.Storage.DiskSession.RunMaintenance.outputAt
@@ -2445,7 +2443,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.executes
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acquiresAndReadsLatest
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest
-#check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.executesSnapshotsAndRewrites
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.writeInstructions
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesTrace
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.stopsAfterWrites
