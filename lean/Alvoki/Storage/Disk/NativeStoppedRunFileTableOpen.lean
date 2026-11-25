@@ -169,32 +169,18 @@ theorem NativeOpenedPosition.opensAfterStoppedRunFile
       view.cacheAt start.reached raw.admission.seed.directoryRef raw.admission.seed.activeRef
         raw.admission.seed.pendingRef = next.state.cache := by
   intro state
-  obtain ⟨_, history, pending⟩ := current.current.ready.readPrefix.refines
-  let crash := reboot.observed valid
-  obtain ⟨_, installed, reached⟩ := crash.restartsAt valid history pending current.current.ready.readPrefix.readsBounded
-    plan.layout plan.target plan.keeper plan.descriptors plan.offsets plan.prepared plan.selected reader
-  let next : NativeReadPosition current.current.history current.current.submissions :=
-    ⟨reader.run, installed, installed, current.current.ready.reads, reached.1⟩
-  obtain ⟨cacheOpen, makeCache, handle, start, cacheAction, cacheSource, ran, nextPosition, lock, cacheRefs,
-    cacheDir, contents, get, set, compare, pins, files, census, cache⟩ :=
-    raw.installsAligned valid history plan.target plan.keeper plan.descriptors plan.offsets plan.prepared next rfl reached
-      remove write rename bootstrap assemble constructs effects ptrEq
+  obtain ⟨reopened⟩ := RawQuietRestartEffects.reopensSelected current.current.ready raw remove write rename bootstrap assemble ptrEq
+    plan.target plan.keeper plan.descriptors plan.offsets plan.prepared constructs effects
   obtain ⟨source, phase, issued, stoppedLock, stoppedFiles⟩ := stopped.reached
   have live := (stop.custody valid).2.1
   rw [← stopped.census] at live
-  refine ⟨source, phase, issued, stopped.cleared, stopped.stillHeld, stopped.stopsGroup, stoppedLock, live, stoppedFiles,
-    Prod.ext raw.admission.raw.entryCensus raw.admission.raw.entryFiles, ?_, ?_,
-    next, cacheOpen, makeCache, handle, start, cacheAction, cacheSource, reached, ran, nextPosition, lock, cacheRefs,
-    cacheDir, contents, get, set, compare, pins, files, census, cache⟩
-  · rw [raw.admission.raw.entryCensus]
-    rfl
-  · intro path payload isSelected observed
-    obtain ⟨read, bound, contents⟩ := raw.admission.reboot.readsSurvivingFile isSelected observed
-    have protectedPath : state.crashPath path := .inr (.inr isSelected)
-    have atStop := raw.admission.reboot.liveNames path protectedPath
-    have survived := crash.settled crash.names crash.chosen path protectedPath
-    have atRestart := raw.admission.reboot.survivorNames path protectedPath
-    exact ⟨read, (atStop.trans (survived.symm.trans atRestart.symm)).trans bound, bound, contents⟩
+  let installed := reopened.installed
+  exact ⟨source, phase, issued, stopped.cleared, stopped.stillHeld, stopped.stopsGroup, stoppedLock, live, stoppedFiles,
+    reopened.rebooted, reopened.emptyCensus, reopened.selectedBytes,
+    reopened.next, installed.cacheOpen, installed.makeCache, installed.handle, installed.start,
+    installed.cacheAction, installed.cacheSource, reopened.session, installed.rawOpen, installed.position,
+    installed.lock, installed.references, installed.directory, installed.contents, installed.readsPhase,
+    installed.writesPhase, installed.comparesTokens, installed.pins, installed.files, installed.census, installed.cache⟩
 
 end
 end Alvoki.Storage.DiskSession

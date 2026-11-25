@@ -913,6 +913,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunFileReboot.plans
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunFileStop.selectedHandle
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunFileStop.stopsGroup
+#check_axioms Alvoki.Storage.DiskSession.RawQuietRestartEffects.installsAlignedAt
+#check_axioms Alvoki.Storage.DiskSession.RawQuietRestartEffects.reopensSelected
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedRunFile
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtCheckpointRunFile
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsAtCheckpointRunFile
