@@ -471,6 +471,8 @@ An explicit close of a reached ready client preserves the replay of its submissi
 The reached lookup and range results now determine the client read record. A successful read derives its local active pin
 from the reached token comparison and registry. Ready acquisition, release and floor updates extend the same mixed client
 trace with the returned phase and unchanged WAL submissions. Unavailable sessions return the phase error unchanged.
+From the exact recovered session, a supported acquisition followed by a native-schedule lookup or range now appends
+its response to that same client trace. The read uses the issued pin and agrees with the replay of the earlier responses.
 [Read observations](../lean/Alvoki/Storage/Disk/ClientReadTrace.lean) · [Snapshot transitions](../lean/Alvoki/Storage/Disk/ClientSnapshotTransitions.lean)
 
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

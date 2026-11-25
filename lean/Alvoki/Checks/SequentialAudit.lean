@@ -1231,6 +1231,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.closed
 #check_axioms Alvoki.Storage.DiskSession.SnapshotUpdate.poisoned
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.observeSnapshotUpdate
+#check_axioms Alvoki.Storage.DiskSession.GuardedClientReplay.acquireAndRead
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.writes
 #check_axioms Alvoki.Storage.prepareBatch_singleton
 #check_axioms Alvoki.WAL.encodeBatch_singleton

@@ -3,7 +3,7 @@ import Alvoki.Storage.Disk.SessionRetentionFloor
 
 namespace Alvoki.Storage.DiskSession
 
-open Sequential (SnapshotHandle SnapshotPin)
+open Sequential (SnapshotHandle SnapshotPin SnapshotTable)
 
 variable {session next : SegmentedSession} {installed : Installed} {before : SegmentedWriterState}
 
@@ -135,5 +135,86 @@ theorem SegmentedClientReadTrace.observeSnapshotUpdate
       SegmentedClientReadTrace session.directory initialDescriptor initial allowCollection log reads session.descriptor after := by
   obtain ⟨after, exactNext, step⟩ := update.readyTransition (allowCollection := allowCollection) phase returned
   exact ⟨after, exactNext, by simpa only [List.append_nil] using trace.advance step⟩
+
+inductive SnapshotReadRequest : Type → Type where
+  | lookup (key : UInt64) : SnapshotReadRequest (Option UInt64)
+  | range (lo hi : UInt64) : SnapshotReadRequest (List (Compaction.Model.Entry (Option UInt64)))
+
+def SnapshotReadRequest.read (handle : SnapshotHandle) : SnapshotReadRequest α → PackedTable → Option α
+  | .lookup key => fun table => table.lookup handle key
+  | .range lo hi => fun table => table.range handle lo hi
+
+def SnapshotReadRequest.replay (reference : SnapshotTable UInt64) (sequence : UInt64) : SnapshotReadRequest α → α
+  | .lookup key => reference.table.lookup key sequence
+  | .range lo hi => reference.table.range lo hi sequence
+
+def SnapshotReadRequest.record (sequence : UInt64) : SnapshotReadRequest α → α → RecordedSnapshotRead
+  | .lookup key => .lookup sequence key
+  | .range lo hi => .range sequence lo hi
+
+private theorem runSnapshotRead_of_guarded (phase : session.phase = .ready installed)
+    (read : PackedTable → Option α)
+    (guarded : withLocalHandle (m := Except IO.Error) session.phase.installed (.ok sameSession) none
+      (fun state => pure (read state.table)) = .ok value) :
+    session.runSnapshotRead sameSession read = .ok value session := by
+  rw [SegmentedSession.runSnapshotRead, phase]
+  rw [phase] at guarded
+  cases sameSession
+  · change Except.ok none = .ok value at guarded
+    exact congrArg (fun result => EStateM.Result.ok result session) (Except.ok.inj guarded)
+  · change Except.ok (read installed.table) = .ok value at guarded
+    exact congrArg (fun result => EStateM.Result.ok result session) (Except.ok.inj guarded)
+
+/-- A supported acquisition uses the exact recovered session and issues the
+pin that serves the next read. The native read and the appended response both
+use the same abstract replay that explains the preceding client responses. -/
+theorem GuardedClientReplay.acquireAndRead
+    (replay : GuardedClientReplay log reads before session)
+    (trace : SegmentedClientReadTrace session.directory initialDescriptor initial allowCollection log reads
+      session.descriptor before)
+    (phase : session.phase = .ready before.installed) (snapshot : UInt64)
+    (floor : before.installed.table.pins.floor ≤ snapshot) (committed : snapshot ≤ before.installed.table.committed) :
+    ∃ (reference : SnapshotTable UInt64) (issued : Nat × SnapshotPin) (acquired : SegmentedSession)
+      (after : SegmentedWriterState),
+      SnapshotWalReplay .empty before.history reference ∧
+      (∀ earlier ∈ reads, earlier.agrees reference) ∧
+      session.runAcquireAt snapshot = .ok (some issued) acquired ∧
+      issued.1 = acquired.sessionRef ∧ issued.2.sequence = snapshot ∧
+      acquired = { session with phase := .ready after.installed } ∧
+      ∀ (sameSession : Bool), sameSession = decide (issued.1 = acquired.sessionRef) →
+        ∀ {α : Type} (request : SnapshotReadRequest α),
+          acquired.runSnapshotRead sameSession (request.read issued.2.handle) =
+            .ok (some (request.replay reference snapshot)) acquired ∧
+          SegmentedClientReadTrace session.directory initialDescriptor initial allowCollection log
+            (reads ++ [request.record snapshot (request.replay reference snapshot)]) session.descriptor after := by
+  obtain ⟨reference, replayed, _, _, _, preceding, supported⟩ := replay
+  obtain ⟨issued, pinned, acquired, returned, pinnedPhase, localToken, sequence, active, guarded⟩ :=
+    supported snapshot floor committed
+  obtain ⟨after, exactSession, continued⟩ :=
+    trace.observeSnapshotUpdate (.acquireAt snapshot) phase returned
+  have readyAfter : acquired.phase = .ready after.installed := congrArg SegmentedSession.phase exactSession
+  have sameTable : after.installed.table = pinned :=
+    congrArg Installed.table (Phase.ready.inj (readyAfter.symm.trans pinnedPhase))
+  have sameDirectory : acquired.directory = session.directory := by rw [exactSession]
+  have sameDescriptor : acquired.descriptor = session.descriptor := by rw [exactSession]
+  refine ⟨reference, issued, acquired, after, replayed, preceding, returned, localToken, sequence, exactSession, ?_⟩
+  intro sameSession compared α request
+  let pin : ObservedLocalPin session.directory session.descriptor after :=
+    ⟨⟨acquired, sameDirectory, sameDescriptor, readyAfter, issued.1, sameSession, compared⟩,
+      issued.2, sameTable.symm ▸ active, localToken⟩
+  obtain ⟨lookup, range⟩ := guarded sameSession compared
+  cases request with
+  | lookup key =>
+    have actual := runSnapshotRead_of_guarded pinnedPhase (fun table => table.lookup issued.2.handle key) (lookup key)
+    have observed : RecordedSnapshotRead.Observed session.directory session.descriptor after
+        (.lookup issued.2.sequence key (reference.table.lookup key snapshot)) := .lookup pin actual
+    refine ⟨actual, ?_⟩
+    simpa only [SnapshotReadRequest.record, SnapshotReadRequest.replay, sequence] using continued.read observed
+  | range lo hi =>
+    have actual := runSnapshotRead_of_guarded pinnedPhase (fun table => table.range issued.2.handle lo hi) (range lo hi)
+    have observed : RecordedSnapshotRead.Observed session.directory session.descriptor after
+        (.range issued.2.sequence lo hi (reference.table.range lo hi snapshot)) := .range pin actual
+    refine ⟨actual, ?_⟩
+    simpa only [SnapshotReadRequest.record, SnapshotReadRequest.replay, sequence] using continued.read observed
 
 end Alvoki.Storage.DiskSession
