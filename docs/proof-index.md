@@ -2,6 +2,77 @@
 
 For guarantees and assumptions, see [verification status](verification-status.md). This index starts from techniques that occur in more than one part of the implementation.
 
+## How to structure a proof
+
+Start with a claim about an executable entry point and the behavior its caller can observe. For crash
+recovery, the claim must explain reads on the actual table returned by `DiskTable.open` after the
+production schedule runs against each observed filesystem outcome admitted by the contract. Include acknowledged writes in order
+and account for each uncertain write or batch as absent or applied in full. Write down that target and trace
+its premises back to the filesystem contract before extending the list of cases.
+
+Prove one refinement at each boundary. Join the results by identifying the state or value that one
+boundary produces and the next one consumes.
+
+| Boundary | Obligation to prove once |
+|---|---|
+| Native primitive to production schedule | Interpret the actual callback at the reached heap. Account for the returned value and effects, or for the issued operation and effects at an interruption. A returned error may follow an effect. An interruption has no ordinary API return. |
+| Reached storage state to recovery selection | Derive which manifest, runs and marker-bounded WAL recovery reads from one allowed filesystem outcome. Record the selected paths, inodes, bytes and replay watermark together. |
+| Selected reads to the returned table | Use the proof of the actual reads, replay, repair and allocation to identify the returned table and next usable session. The same opened references and reached heap carry into the next call. |
+| Session steps to the client contract | Compose the operation refinements in one induction from the supported initial state. Use the common replay and snapshot proofs for the resulting history. |
+
+The end-to-end theorem crosses all four boundaries by composition. Each local proof sees the
+implementation detail needed at its own boundary. For example, proving that the replay algorithm
+returns the right rows for an input byte array still leaves an essential equality to prove. Those must
+be the bytes read from the selected inode by the opener that returned the table. Reuse the existing
+trace induction and bounded-read contracts as consumers of that evidence. [Reached execution and replay](../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean) · [Exact prefix reads](../lean/Alvoki/Storage/Disk/ReadRecoveryPrefix.lean)
+
+### Choose an invariant that can be carried forward
+
+Define what has to remain true at a stable boundary and prove how each operation establishes,
+preserves, or deliberately changes it. Give the next proof enough information to fix the identity of
+its input. Keep an operation's immediate details local once they have discharged that obligation.
+Use the smallest scope justified by recovery. For checkpoint recovery, that scope is the selected
+manifest and the run and WAL paths it will read, with the root and lock tracked separately.
+
+The two early checkpoint stops illustrate the distinction. A stopped run fsync can retain the
+issuing descriptor at the stop. The first directory fsync issues after the temporary run descriptors
+have closed. Both preserve the prior checkpoint selection. A rename error requires a different
+selection proof because the chosen crash image can retain the old manifest even if the replacement
+was visible. The consolidation target is one proof from selected reads to the exact returned table,
+shared by all three paths. That proof must accept each allowed selection with its
+own watermark and bytes. [Run fsync stop](../lean/Alvoki/Storage/Disk/NativeCheckpointRunFileStop.lean) · [First directory fsync stop](../lean/Alvoki/Storage/Disk/NativeStoppedRunDirectoryTableOpen.lean) · [Manifest rename error](../lean/Alvoki/Storage/Disk/NativeCheckpointManifestRenameTableOpen.lean)
+
+Prove outcomes over the same production schedule and prefer induction over its actual sequence of
+operations or retries. Put the distinction between completed return, pending call and interruption
+where the schedule makes it. Compose a failed open and a later successful open through the state
+between them. This lets a later proof reuse the same retry argument even when another interruption
+or rejection appears. [Shared production schedule](../lean/Alvoki/Storage/Publication/DiskPublication.lean) · [Opened-session induction](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
+
+### Review the proof boundary
+
+- Name the public outcome the change covers and the theorem that uses it. For a new case-specific
+  report, identify both the primitive evidence that derives it and the theorem that uses it. Track
+  missing connections as remaining proof work.
+- Read the public theorem's premises. A local primitive receipt may say which bytes a read returned
+  or what an fsync changed at the reached heap. An intermediate success result is a valid input to
+  the next lemma once the preceding lemma proves it. When open returns successfully, the public refinement
+  must derive the installed session and its replay from the execution.
+- When extracting a shared lemma, try it on two different concrete callers. Look for a duplicated
+  argument that disappears or an existing invariant that a new case can reuse directly. Keep
+  differences that affect callers or recovery. For example, an identical EIO before or after a
+  directory sync can admit different crash images. [Obsolete-run barrier errors](../lean/Alvoki/Storage/Disk/NativeObsoleteRunBarrierError.lean)
+- Track safety and progress independently. The safety theorem ranges over all admitted executions
+  and crash outcomes, including returned errors and interruptions. Recovery completion can assume
+  that required I/O succeeds and resources are available. Eventual reclamation can assume eligible
+  data stays eligible and a later maintenance pass reaches an effective directory barrier.
+  Name removal and release of allocated blocks need distinct evidence. [Recovery progress](../lean/Alvoki/Storage/Disk/CachedRecoveryProgress.lean) · [Reclamation contract](proof-roadmap.md#garbage-collection-contract)
+- Check dependencies on the integrated theorem, including the kernel and axiom audit. Use native
+  fixtures to test the adapter at the reported boundaries. Track the proof's scope by which
+  executable outcomes it covers and which premises it discharges. Keep ghost histories and other
+  proof data away from native execution. [Sequential checks](../scripts/check-sequential.sh) · [Performance requirements](proof-roadmap.md#performance-requirements-for-verified-paths)
+
+## Existing proof techniques
+
 | Technique | Start here | What it buys |
 |---|---|---|
 | Binary-search partitions | [Partition and search invariant](../lean/Proofs.lean#L6) · [Machine index refinement](../lean/OptProofs.lean#L37) | Lower and upper cuts identify a contiguous key interval. The packed v1 and v3 readers use this to connect index scans to filtering decoded rows. |

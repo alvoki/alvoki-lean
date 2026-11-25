@@ -5,6 +5,7 @@
 - Keep the binary format and behavioral specification consistent across implementations. Add differential coverage when changing observable behavior.
 - Preserve benchmark workload equivalence, release compilation, deterministic data, and the original raw timings. Record platform, commands, and benchmark changes.
 - Keep formal contracts explicit. Do not weaken a specification to make a proof pass, and do not use `sorry`, `admit`, custom axioms, or proof steps that depend on native execution. Audit the actual theorem dependencies.
+- Follow the [proof-engineering guidance](docs/proof-index.md#how-to-structure-a-proof). Start from an executable guarantee, prove local refinements at shared boundaries, and identify the theorem that composes them or the remaining composition obligation.
 - Keep verification-only history and evidence out of the runtime path. Benchmark the affected native release workloads when proof-driven changes add or alter runtime work. See [performance requirements](docs/proof-roadmap.md#performance-requirements-for-verified-paths).
 - Review executable behavior, proof assumptions, fault coverage, and performance at milestone boundaries and during longer milestones. Add confirmed findings and new proof obligations to the roadmap with their priority and completion criteria.
 - Document which implementation a theorem applies to and identify remaining refinement, runtime, compiler, and environment assumptions.
