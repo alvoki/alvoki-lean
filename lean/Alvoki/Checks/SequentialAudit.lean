@@ -1634,6 +1634,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsCustody
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsLock
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.stops
+#check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.framesWal
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.member
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.intact
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.frameChild
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.inspectedSeal
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.projects
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.selections

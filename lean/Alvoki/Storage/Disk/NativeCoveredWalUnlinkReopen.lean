@@ -21,7 +21,7 @@ theorem survivorValid (stop : NativeCoveredWalUnlinkStop state) (valid : state.V
   refine { valid with ownerLive := ?_, directoryLive := ?_, retained := ?_ }
   · simpa only [survivor, stop.sameCensus.2] using valid.ownerLive
   · simpa only [survivor, stop.sameCensus.2] using valid.directoryLive
-  · exact valid.retained.afterWalProjection ((stop.selections valid).2 sealed survived) stop.effect.metadata
+  · exact valid.retained.afterWalProjection ((stop.selections valid).2 sealed survived) stop.intact.1
 
 /-- All allowed seal lists supply the same ordered files to marked open. -/
 theorem survivingReads (stop : NativeCoveredWalUnlinkStop state) (valid : state.Valid)
@@ -29,7 +29,7 @@ theorem survivingReads (stop : NativeCoveredWalUnlinkStop state) (valid : state.
     (stop.survivor sealed).writer.wal.readDescriptors state.writer.target.range.watermark =
       state.writer.wal.readDescriptors state.writer.target.range.watermark := by
   have retry := (stop.selections valid).2 sealed survived
-  have directory : (stop.survivor sealed).writer.wal.directory = state.writer.wal.directory := stop.effect.metadata
+  have directory : (stop.survivor sealed).writer.wal.directory = state.writer.wal.directory := stop.intact.1
   have pair := (congrArg DirectoryPublication.Image.active directory).trans valid.retained.walPair
   have decoded : (stop.survivor sealed).writer.wal.directory.active.walRange = some state.writer.target.range :=
     pair.symm ▸ state.writer.target.decoded
@@ -38,9 +38,9 @@ theorem survivingReads (stop : NativeCoveredWalUnlinkStop state) (valid : state.
 end NativeCoveredWalUnlinkStop
 
 /-- One reboot reports an allowed seal list and a single namespace and
-payload image. The retained file observations use the pre-effect view
-of the issued unlink: an unbarriered detached seal can reappear with its
-original binding. Other selected names still resolve at the stop. -/
+payload image. The retained observations use the checked view before
+the entire unlink schedule. Any unbarriered detached seal can reappear
+with its original binding. Protected names still resolve at the stop. -/
 structure NativeCoveredWalUnlinkCrash {state : NativeReadyState} (stop : NativeCoveredWalUnlinkStop state) where
   sealed : List WalSegment
   survived : sealed ∈ stop.after.crashSealed
@@ -62,10 +62,10 @@ variable {state : NativeReadyState} {stop : NativeCoveredWalUnlinkStop state}
 
 theorem keepsReachedBinding (crash : NativeCoveredWalUnlinkCrash stop) {name : String}
     (selected : (stop.survivor crash.sealed).crashPath ⟨state.session.directory.path.toString ++ "/" ++ name⟩)
-    (other : name ≠ renderWalSegmentName stop.first) :
+    (other : ∀ offset ∈ state.writer.wal.collectionOffsets, name ≠ renderWalSegmentName offset) :
     crash.observed.names ⟨state.session.directory.path.toString ++ "/" ++ name⟩ =
       (stop.afterView.child stop.inventory.lifetime.root name).map stop.afterView.modelObject := by
-  rw [crash.observed.settled _ crash.observed.chosen _ selected, crash.beforeBindings name selected, stop.effect.frame name other,
+  rw [crash.observed.settled _ crash.observed.chosen _ selected, crash.beforeBindings name selected, stop.frameChild other,
     stop.objects]
 
 theorem survivingSeal (crash : NativeCoveredWalUnlinkCrash stop) (valid : state.Valid)
@@ -94,8 +94,10 @@ theorem survivingKeeper (crash : NativeCoveredWalUnlinkCrash stop) (valid : stat
   let child := (stop.inventory.extent keeper retained).child.child
   have original : stop.inventory.lifetime.namespaceView.child stop.inventory.lifetime.root
       (renderWalSegmentName keeper.first) = some child := stop.inventory.bound keeper retained
-  obtain ⟨segment, _, atFirst, eligible, _⟩ := stop.inspectedSeal valid
-  have distinct : renderWalSegmentName keeper.first ≠ renderWalSegmentName stop.first := by
+  have distinct (offset : Nat) (included : offset ∈ state.writer.wal.collectionOffsets) :
+      renderWalSegmentName keeper.first ≠ renderWalSegmentName offset := by
+    obtain ⟨segment, member, atFirst⟩ := (valid.retained.layout.collectionOffsets_approved included).1
+    have eligible := (valid.retained.layout.collectionOffsets_approved included).2 segment member atFirst
     intro same
     have measures := congrArg parseWalSegmentName same
     simp only [parseWalSegmentName_render, Option.some.injEq] at measures
@@ -106,13 +108,13 @@ theorem survivingKeeper (crash : NativeCoveredWalUnlinkCrash stop) (valid : stat
   obtain ⟨inode, named, contents⟩ := crash.observed.keeperSurvives
   change crash.observed.names (state.session.directory.file (.walSegment stop.after.visible.active.first)) = some inode at named
   change crash.observed.contents inode = stop.after.visible.active.bytes at contents
-  rw [stop.effect.keeper] at named contents
-  exact ⟨child, (stop.effect.frame _ distinct).trans original, chosen,
+  rw [stop.intact.2] at named contents
+  exact ⟨child, (stop.frameChild distinct).trans original, chosen,
     Option.some.inj (named.symm.trans chosen) ▸ contents⟩
 
 end NativeCoveredWalUnlinkCrash
 
-/-- The first in-flight covered unlink and actual next healthy aligned
+/-- The in-flight covered unlink and actual next healthy aligned
 open use the same ledger, selected checkpoint and marked WAL suffix. -/
 structure NativeCoveredWalUnlinkReopen (current : NativeReadPosition history log)
     {stop : NativeCoveredWalUnlinkStop current.state} (crash : NativeCoveredWalUnlinkCrash stop) (input : FilePath) : Prop where
@@ -141,7 +143,7 @@ theorem NativeReadPosition.recoversInterruptedCoveredWalUnlink (current : Native
     NativeCoveredWalUnlinkReopen current crash input := by
   obtain ⟨valid, sameHistory, pending⟩ := current.readPrefix.refines
   have retry := stop.survivorValid valid crash.survived
-  exact ⟨stop.stops valid, valid.retained.held, retry.retained.resumed.selected, stop.effect.keeper, crash.survivingKeeper valid,
+  exact ⟨stop.stops valid, valid.retained.held, retry.retained.resumed.selected, stop.intact.2, crash.survivingKeeper valid,
     stop.survivingReads valid crash.survived,
     crash.observed.restarts retry sameHistory pending current.readPrefix.readsBounded observe⟩
 
