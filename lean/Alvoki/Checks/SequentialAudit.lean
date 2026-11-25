@@ -191,6 +191,7 @@ import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
 import Alvoki.Storage.Disk.ListedStagedKeeperRepair
 import Alvoki.Storage.Disk.ListedStagedKeeperFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperFailure
+import Alvoki.Storage.Disk.HeldLaterWalPrune
 import Alvoki.Storage.Disk.HeldMetadataReadObservations
 import Alvoki.Storage.Disk.HeldWalPayloadObservations
 import Alvoki.Storage.Disk.HeldWalInstallation
@@ -1418,6 +1419,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.finishResult
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.healthyFinish
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.installs
+#check_axioms Alvoki.Storage.DiskSession.HeldLaterWalUnlinks.returned
+#check_axioms Alvoki.Storage.DiskSession.HeldLaterWalUnlinks.keepsBinding
+#check_axioms Alvoki.Storage.DiskSession.HeldLaterWalUnlinks.removesBinding
+#check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.catalog
+#check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.selectedBindings
+#check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.settledImage
+#check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.suffixBarrier
+#check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.finishAfterPrune
+#check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.finishAfterUnlinkError
 #check_axioms Alvoki.Storage.readOptionalCachedOpenFile_fileEffects
 #check_axioms Alvoki.Storage.DiskSession.runCachedMetadataRead_missing
 #check_axioms Alvoki.Storage.DiskSession.HeldMetadataFile.manifestPrefix
