@@ -19,7 +19,7 @@ def CheckpointSurvivingFiles.Frames (selectedPath : FilePath → Prop)
 private theorem CheckpointSurvivingFiles.Frames.rfl {selectedPath} {files : CheckpointSurvivingFiles} : files.Frames selectedPath files :=
   fun _ _ => ⟨Eq.refl _, fun _ _ => Eq.refl _⟩
 
-private theorem CheckpointSurvivingFiles.Frames.trans {selectedPath} {first middle last : CheckpointSurvivingFiles}
+theorem CheckpointSurvivingFiles.Frames.trans {selectedPath} {first middle last : CheckpointSurvivingFiles}
     (earlier : first.Frames selectedPath middle) (later : middle.Frames selectedPath last) : first.Frames selectedPath last := by
   intro path selected
   obtain ⟨same, bytes⟩ := earlier path selected
