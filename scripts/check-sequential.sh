@@ -143,6 +143,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeReadRecoveryTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeSnapshotExecution
 lake env leanchecker Alvoki.Storage.Disk.NativeExplicitSnapshotRead
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionTrace
+lake env leanchecker Alvoki.Storage.Disk.NativeExecutionPrefix
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionClose
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWrite

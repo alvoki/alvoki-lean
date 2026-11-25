@@ -5,10 +5,14 @@ import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
+import Alvoki.Storage.Disk.NativeWritePreflight
+import Alvoki.Storage.Disk.NativeSnapshotExecution
+import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
 
 namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
+open Sequential (SnapshotHandle)
 
 /-- The reached session, its committed WAL and the client requests that
 account for it. A local read prefix preserves the corresponding ledger. -/
@@ -17,7 +21,7 @@ structure NativeExecutionPosition where
   submissions : List DatabaseSubmissions
   ready : NativeReadPosition history submissions
 
-inductive NativeExecutionEvent where
+inductive NativeExecutionEvent : Type 1 where
   | readOrRestart (event : NativeReadRecoveryEvent)
   | acknowledged (request : WriteRequest) (batch : List WAL.Write)
   | checkpoint
@@ -26,6 +30,10 @@ inductive NativeExecutionEvent where
   | uncertainWriteRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (attempted retained : List WAL.Write)
   | collectionErrorRecovered (input : FilePath) (error : IO.Error)
+  | writePreflight (request : WriteRequest) (result : Except IO.Error UInt64)
+  | snapshotControl (request : SnapshotUpdate α) (result : Except IO.Error α)
+  | snapshotHandleRead (issuer : Nat) (handle : SnapshotHandle) (request : SnapshotReadRequest α)
+      (result : Option α) (recorded : RecordedSnapshotRead)
 
 namespace NativeExecutionEvent
 
@@ -41,6 +49,7 @@ def submissions : NativeExecutionEvent → List DatabaseSubmissions
 
 def reads : NativeExecutionEvent → List RecordedSnapshotRead
   | .readOrRestart event => event.responses
+  | .snapshotHandleRead _ _ _ _ recorded => [recorded]
   | _ => []
 
 def uncertainBatchWhole : NativeExecutionEvent → Prop
@@ -48,6 +57,10 @@ def uncertainBatchWhole : NativeExecutionEvent → Prop
   | _ => True
 
 end NativeExecutionEvent
+
+private def snapshotControlResult : SnapshotUpdate.Outcome α → Except IO.Error α
+  | .unchanged value | .updated value _ => .ok value
+  | .failed cause => .error cause
 
 /-- A successful maintenance operation continues the same committed
 history and read ledger from its exact reached ready state. -/
@@ -112,6 +125,22 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (reopened : NativeCollectionReopenContinuation current.ready observed next) :
       NativeExecutionStep current (.collectionErrorRecovered input observed.diagnostic)
         ⟨current.history, current.submissions, next⟩
+  | writePreflight (current : NativeExecutionPosition) {request : WriteRequest}
+      (observed : NativeWritePreflightObservation current.ready.state request)
+      (returned : NativeWritePreflightStep current.ready observed current.ready) :
+      NativeExecutionStep current (.writePreflight request observed.response) current
+  | snapshotControl (current : NativeExecutionPosition) (observed : NativeSnapshotUpdateObservation current.ready.state α)
+      (next : NativeReadPosition current.history current.submissions)
+      (returned : NativeSnapshotUpdateContinuation current.ready observed next) :
+      NativeExecutionStep current
+        (.snapshotControl observed.update (snapshotControlResult (observed.update.outcome current.ready.state.session)))
+        ⟨current.history, current.submissions, next⟩
+  | snapshotHandleRead (current : NativeExecutionPosition)
+      (observed : NativeSnapshotHandleObservation current.ready.state.session) (request : SnapshotReadRequest α)
+      (result : Option α) (recorded : RecordedSnapshotRead) (next : NativeReadPosition current.history current.submissions)
+      (returned : NativeSnapshotHandleRead current.ready observed request result recorded next) :
+      NativeExecutionStep current (.snapshotHandleRead observed.issuer observed.handle request result recorded)
+        ⟨current.history, current.submissions, next⟩
 
 /-- Interpret the submitted single or batch write with the reported
 primitive effects and start the next position from its actual result. -/
@@ -141,21 +170,27 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
     after.history = before.history ++ event.writes ∧
     after.submissions = before.submissions ++ event.submissions ∧
     after.ready.reads = before.ready.reads ++ event.reads := by
-  cases step with
-  | readOrRestart observed => exact ⟨by simp [NativeExecutionEvent.writes],
+  cases step
+  case readOrRestart observed => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], observed.frames.1⟩
-  | acknowledged _ _ _ _ _ _ _ _ _ reads =>
+  case acknowledged reads =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reads⟩
-  | checkpoint => simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads,
+  case checkpoint => simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads,
       NativeReadPosition.afterMaintenance]
-  | collectCoveredWal => simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions,
+  case collectCoveredWal => simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions,
       NativeExecutionEvent.reads, NativeReadPosition.afterMaintenance]
-  | closeAndReopen _ _ reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+  case closeAndReopen reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
-  | recoverUncertainWrite _ _ _ recovered =>
+  case recoverUncertainWrite recovered =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using recovered.earlierReads⟩
-  | recoverCollectionError _ _ reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+  case recoverCollectionError reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case writePreflight =>
+    simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads]
+  case snapshotControl returned => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.reads⟩
+  case snapshotHandleRead returned => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], returned.reads⟩
 
 theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep before event after) :
     event.uncertainBatchWhole := by
@@ -219,6 +254,8 @@ inductive NativeExecutionInstruction : Type 1 where
   | closeAndReopen (input : FilePath)
   | writeThenCloseAndReopen (request : WriteRequest) (input : FilePath)
   | collectThenCloseAndReopen (input : FilePath)
+  | snapshotControl (request : SnapshotUpdate α)
+  | snapshotHandleRead (issuer : Nat) (handle : SnapshotHandle) (request : SnapshotReadRequest α)
 
 /-- The recorded event belongs to the submitted instruction. Read
 observations determine the requested key or range and sequence. -/
@@ -226,6 +263,7 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .snapshot sequence request, .readOrRestart (.read recorded) =>
     ∃ response, recorded = request.record sequence response
   | .write request, .acknowledged submitted _ => submitted = request
+  | .write request, .writePreflight submitted _ => submitted = request
   | .restart input, .readOrRestart (.restart resolvedInput) => resolvedInput = input
   | .checkpoint, .checkpoint => True
   | .collectCoveredWal, .collectCoveredWal => True
@@ -233,6 +271,9 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .writeThenCloseAndReopen request input, .uncertainWriteRecovered submitted opened _ _ _ =>
     submitted = request ∧ opened = input
   | .collectThenCloseAndReopen input, .collectionErrorRecovered opened _ => opened = input
+  | .snapshotControl request, .snapshotControl issued _ => HEq issued request
+  | .snapshotHandleRead issuer handle request, .snapshotHandleRead supplied observed issued _ _ =>
+    supplied = issuer ∧ observed = handle ∧ HEq issued request
   | _, _ => False
 
 inductive NativeExecutionInstructions : List NativeExecutionInstruction → List NativeExecutionEvent → Prop where
@@ -264,6 +305,9 @@ inductive NativeExecutionObservation (state : NativeReadyState) : Type 1 where
   | closeAndReopen (input : FilePath) (observed : NativeCloseReopenObservation state input)
   | writeThenCloseAndReopen (observed : NativeUncertainWriteObservation state)
   | collectThenCloseAndReopen (input : FilePath) (observed : NativeCollectionReopenObservation state input)
+  | writePreflight (request : WriteRequest) (observed : NativeWritePreflightObservation state request)
+  | snapshotControl (observed : NativeSnapshotUpdateObservation state α)
+  | snapshotHandleRead (observed : NativeSnapshotHandleObservation state.session) (request : SnapshotReadRequest α)
 
 def NativeExecutionObservation.instruction : NativeExecutionObservation state → NativeExecutionInstruction
   | .snapshot sequence request _ _ => .snapshot sequence request
@@ -274,6 +318,9 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation state �
   | .closeAndReopen input _ => .closeAndReopen input
   | .writeThenCloseAndReopen observed => .writeThenCloseAndReopen observed.write.request observed.input
   | .collectThenCloseAndReopen input _ => .collectThenCloseAndReopen input
+  | .writePreflight request _ => .write request
+  | .snapshotControl observed => .snapshotControl observed.update
+  | .snapshotHandleRead observed request => .snapshotHandleRead observed.issuer observed.handle request
 
 theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     (observed : NativeExecutionObservation current.ready.state) :
@@ -303,6 +350,14 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | collectThenCloseAndReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.recoversCollectionBarrier observed
     exact ⟨_, _, .recoverCollectionError current observed next reopened, rfl⟩
+  | writePreflight _ observed =>
+    exact ⟨_, current, .writePreflight current observed (current.ready.preflightsWrite observed), rfl⟩
+  | snapshotControl observed =>
+    obtain ⟨next, returned⟩ := current.ready.updatesSnapshot observed
+    exact ⟨_, _, .snapshotControl current observed next returned, HEq.rfl⟩
+  | snapshotHandleRead observed request =>
+    obtain ⟨result, recorded, next, returned⟩ := current.ready.readsHandle observed request
+    exact ⟨_, _, .snapshotHandleRead current observed request result recorded next returned, rfl, rfl, HEq.rfl⟩
 
 /-- Supply the primitive reports for the next prescribed instruction
 at its reached state. The whole trace and its endpoint are derived from
