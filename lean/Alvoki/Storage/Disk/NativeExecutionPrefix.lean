@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeExecutionTrace
-import Alvoki.Storage.Disk.NativeOpenChoice
+import Alvoki.Storage.Disk.NativeOpenReferences
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 import Alvoki.Storage.Disk.NativeInactiveSessionCalls
@@ -603,6 +603,54 @@ theorem NativeOpenSuccessReports.reachesExecutionPrefix
     ⟨history, log, ⟨.ok state.session (state.census, state.files), state, state, recorded, ready⟩⟩
   exact ⟨marker, selected, start, files, returned, path, reached, rfl, rfl, rfl,
     NativeExecutionTrace.reachesPrefix start⟩
+
+/-- The ready position of the common execution uses the same installed
+state, lock and reference identities as the reported native installation
+suffix. The heap and primitive allocation effects at that suffix remain
+part of the report. -/
+theorem NativeOpenSuccessReports.reachesExecutionPrefixWithReferences
+    {heap : Type} {input : FilePath} {directory : DiskDirectory} {history : List WAL.Write}
+    {log : List DatabaseSubmissions} {recorded : List RecordedSnapshotRead}
+    (opened : NativeOpenSuccessReports input directory history log recorded)
+    {lock : IO.FS.Handle} {syncFiles : DiskTable.OpenSyncFiles}
+    {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+    (constructor : DiskTable.OpenReferenceAssembly directory lock syncFiles assemble)
+    (lockIdentity : IO.FS.Handle → Nat) (phaseIdentity : IO.Ref (Phase Installed) → Nat)
+    (tokenIdentity : IO.Ref Unit → Nat)
+    (allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed)))
+    (allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit))
+    (phaseContents : heap → IO.Ref (Phase Installed) → Option (Phase Installed))
+    (heapAtInstall : heap)
+    (observe : ∀ (session : SegmentedSession) (files : opened.Image) (installed : Installed),
+      opened.run = .ok session files → session.phase = .ready installed →
+      ∃ allocation : OpenReferenceAllocations allocatePhase allocateToken phaseContents installed heapAtInstall,
+        lockIdentity lock = session.descriptor ∧ phaseIdentity allocation.phase = session.phaseRef ∧
+        tokenIdentity allocation.token = session.sessionRef) :
+    opened.markerRead = .ok opened.marker ∧ opened.Selects ∧
+    ∃ (start : NativeExecutionPosition) (files : opened.Image)
+      (allocation : OpenReferenceAllocations allocatePhase allocateToken phaseContents
+        start.ready.state.writer.installed heapAtInstall) (db : DiskTable),
+      opened.run = .ok start.ready.state.session files ∧ start.ready.state.session.directory = directory ∧
+      opened.UsesReachedState start.ready.state files ∧
+      installReady start.ready.state.writer.installed allocatePhase allocateToken (fun phase token => pure (assemble phase token))
+        heapAtInstall = .ok db allocation.afterToken ∧
+      db.UsesOpenReferences directory lock syncFiles allocation.phase allocation.token ∧
+      phaseContents allocation.afterToken allocation.phase = some start.ready.state.session.phase ∧
+      lockIdentity lock = start.ready.state.session.descriptor ∧ phaseIdentity allocation.phase = start.ready.state.session.phaseRef ∧
+      tokenIdentity allocation.token = start.ready.state.session.sessionRef ∧
+      start.history = history ∧ start.submissions = log ∧ start.ready.reads = recorded ∧
+      ∀ instructions requested, NativeExecutionTrace.Reports start instructions →
+        (∀ events last, NativeExecutionInstructions instructions events → NativeExecutionTrace start events last →
+          Nonempty (NativeExecutionEndObservation last requested)) →
+        Nonempty (NativeReachedExecutionPrefix start instructions requested) := by
+  obtain ⟨marker, selected, state, files, allocation, db, returned, path, reached, ready, installed,
+    references, contents, sameLock, samePhase, sameToken⟩ :=
+    opened.returnsReadyWithReferences constructor lockIdentity phaseIdentity tokenIdentity allocatePhase allocateToken
+      phaseContents heapAtInstall observe
+  let start : NativeExecutionPosition :=
+    ⟨history, log, ⟨.ok state.session (state.census, state.files), state, state, recorded, ready⟩⟩
+  exact ⟨marker, selected, start, files, allocation, db, returned, path, reached, installed, references, contents,
+    sameLock, samePhase, sameToken, rfl, rfl, rfl, NativeExecutionTrace.reachesPrefix start⟩
 
 /-- The exact empty bootstrap starts one native execution. Completed
 instructions retain their ordered replay. The final report retains

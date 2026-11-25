@@ -1854,6 +1854,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReachedExecutionPrefix.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.reachesPrefix
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.reachesExecutionPrefix
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.reachesExecutionPrefixWithReferences
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.executesPrefixFromEmpty
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.closesAndReopens
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCloseError.trace
