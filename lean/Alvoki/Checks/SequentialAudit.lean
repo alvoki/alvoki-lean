@@ -2067,6 +2067,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsExactFile
 #check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsIntegrityRunBytes
 #check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsIntegrityCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsCachedWalPayloads
+#check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsWalExtents
+#check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsSelectedWal
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotRead
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotRelease
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotAcquire
