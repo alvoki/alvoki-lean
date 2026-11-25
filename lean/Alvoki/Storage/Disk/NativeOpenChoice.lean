@@ -132,14 +132,29 @@ theorem selects (report : NativeOpenSuccessReports input directory history log r
     simpa only [Option.isSome_some, ↓reduceIte] using admission.recoverWithMarked_selects
       (marked := marked) (bootstrap := bootstrap) observed.opening.callbacks.flat marker
 
-/-- Bootstrap projects its published directory and releases into a
-segmented writer. Marked recovery already returns the complete state. -/
-def UsesReturnedFiles (report : NativeOpenSuccessReports input directory history log recorded)
+/-- Each branch supplies the exact live handles and allocation facts
+for the ready writer. Bootstrap projects its published directory and
+marker release. Marked recovery returns the complete file state. -/
+def UsesReachedState (report : NativeOpenSuccessReports input directory history log recorded)
     (state : NativeReadyState) (after : report.Image) : Prop :=
   match report with
-  | .empty observed => BootstrapReady after.image ∧ state.census = observed.effects.reached ∧
-      state.files.image.directory = after.image.metadata ∧ state.files.owners = after.owners
-  | .marked .. => (state.census, state.files) = after
+  | .empty observed =>
+    let settled := (observed.marker.inodeState.completeFileSync observed.marker.inodeState.active).settleBinding
+    BootstrapReady after.image ∧ state.census = observed.effects.reached ∧
+      state.files.image.directory = after.image.metadata ∧ state.files.owners = after.owners ∧
+      state.cache = observed.captured.cache ∧ state.owner = observed.calls.slot ∧
+      state.directorySlot = observed.captured.cached ∧
+      state.session.phaseRef = observed.calls.nextRef ∧ state.session.sessionRef = observed.calls.nextRef + 1 ∧
+      state.census.references observed.marker.slot.description = [] ∧
+      observed.handoff.afterMarkerNames (renderWalSegmentName 0) = [some observed.keeper.keeperChild] ∧
+      observed.handoff.afterMarkerNames "WAL.commit" = [some observed.marker.stageChild.child] ∧
+      settled.crashBytes observed.keeper.settledImage.active = [ByteArray.empty] ∧
+      settled.crashBytes observed.marker.inodeState.active = [WAL.Boundary.encode 0]
+  | .marked observed =>
+    let opening := observed.opening
+    (state.census, state.files) = after ∧ state.cache = opening.admission.cache ∧ state.census = opening.finish.census ∧
+      state.owner = opening.admission.owner ∧ state.directorySlot = opening.admission.cached ∧
+      state.session.phaseRef ∉ opening.callbacks.liveRefs ∧ state.session.sessionRef ∉ opening.callbacks.liveRefs
 
 /-- Either original open returns the session that seeds the common
 ready state. The bootstrap projection preserves its returned metadata
@@ -147,22 +162,31 @@ and owner. The marked projection retains its entire returned file image. -/
 theorem returnsReady (report : NativeOpenSuccessReports input directory history log recorded) :
     report.markerRead = .ok report.marker ∧ report.Selects ∧ ∃ (state : NativeReadyState) (after : report.Image),
       report.run = .ok state.session after ∧ state.session.directory = directory ∧
-      report.UsesReturnedFiles state after ∧
+      report.UsesReachedState state after ∧ state.owner ∈ state.census.slots ∧ state.directorySlot ∈ state.census.slots ∧
       NativeReadyReadPrefix (.ok state.session (state.census, state.files)) state history log recorded state := by
   refine ⟨report.readsMarker, report.selects, ?_⟩
   cases report with
   | empty observed =>
-    obtain ⟨start, returned, owners, metadata, _, _, _, _, _, _, seed⟩ :=
+    obtain ⟨start, returned, owners, metadata, _, stageClosed, keeperName, markerName, keeperBytes, markerBytes, seed⟩ :=
       observed.handoff.startsNativeReadPrefixFromEmpty observed.admission observed.empty observed.effects
-    exact ⟨_, start.final, returned, start.canonicalDirectory, ⟨start.bootstrap, rfl, metadata, owners⟩, seed⟩
+    have bootstrapValid : BootstrapValid observed.before.image := observed.empty.symm ▸ bootstrap_fresh
+    obtain ⟨_, _, _, _, _, _, installed, _, _, _⟩ := observed.handoff.installs observed.admission bootstrapValid false
+    have sameSession := (EStateM.Result.ok.inj (returned.symm.trans installed)).1
+    have atPhase := congrArg SegmentedSession.phaseRef sameSession
+    have atSession := congrArg SegmentedSession.sessionRef sameSession
+    exact ⟨_, start.final, returned, start.canonicalDirectory,
+      ⟨start.bootstrap, rfl, metadata, owners, rfl, rfl, rfl, atPhase, atSession, stageClosed,
+        keeperName, markerName, keeperBytes, markerBytes⟩, seed.refines.1.ownerLive, seed.refines.1.directoryLive, seed⟩
   | marked observed =>
     let opening := observed.opening
-    obtain ⟨state, seed, _, _, _, _, _, _, _, path, _⟩ :=
+    obtain ⟨state, seed, cache, census, owner, directorySlot, _, _, _, path, _, _, phaseFresh, sessionFresh⟩ :=
       opening.finish.startsNativeReadPrefix opening.chronology opening.markerFound observed.prepared
         observed.following observed.accepted observed.ordered observed.walLayout observed.walValid observed.spans
         observed.active observed.keeper observed.kept observed.pending observed.bounded
     have returned := seed.frames.1
-    exact ⟨state, (state.census, state.files), returned, path, rfl, returned ▸ seed⟩
+    exact ⟨state, (state.census, state.files), returned, path,
+      ⟨rfl, cache, census, owner, directorySlot, phaseFresh, sessionFresh⟩, seed.refines.1.ownerLive,
+      seed.refines.1.directoryLive, returned ▸ seed⟩
 
 end NativeOpenSuccessReports
 
