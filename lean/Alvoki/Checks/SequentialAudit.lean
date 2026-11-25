@@ -393,10 +393,11 @@ import Alvoki.Storage.Disk.NativeReadyWrite
 import Alvoki.Storage.Disk.NativePendingMarkerSync
 import Alvoki.Storage.Disk.NativePendingMarkerRename
 import Alvoki.Storage.Disk.NativePendingMarkerRenameOpenPhase
+import Alvoki.Storage.Disk.NativePendingMarkerDirectoryOpenPhase
 import Alvoki.Storage.Disk.NativeGroupedKeeperSyncError
 import Alvoki.Storage.Disk.NativePendingMarkerDirectory
 import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
-import Alvoki.Storage.Disk.NativeStoppedMarkerRenameTableOpen
+import Alvoki.Storage.Disk.NativeStoppedMarkerTableOpen
 import Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 import Alvoki.Storage.Disk.NativePendingMarkerStageWrite
@@ -2344,6 +2345,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversInterruptedMarkerFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrashReads.usesRepairForMarker
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedMarkerRename
+#check_axioms Alvoki.Storage.DiskSession.RawStoppedMarkerReopenEffects.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteRenamed.reachesMarkerDirectory
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsWriteAtMarkerDirectory
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.newMarkerAfterDirectoryEffect
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterStoppedMarkerDirectory
 #check_axioms Alvoki.Storage.DiskSession.NativeGroupedWriteSyncError.groupReturns
 #check_axioms Alvoki.Storage.DiskSession.NativeGroupedWriteSyncError.projectedGroup
 #check_axioms Alvoki.Storage.DiskSession.NativeGroupedWriteSyncError.returnsUnknown

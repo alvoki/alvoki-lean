@@ -301,12 +301,13 @@ lake env leanchecker Alvoki.Storage.Disk.NativeReadyWrite
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerSync
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerRename
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerRenameOpenPhase
+lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerDirectoryOpenPhase
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedWriteSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedKeeperSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerDirectory
 lake env leanchecker Alvoki.Storage.Disk.NativeWriteCrashReads
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
-lake env leanchecker Alvoki.Storage.Disk.NativeStoppedMarkerRenameTableOpen
+lake env leanchecker Alvoki.Storage.Disk.NativeStoppedMarkerTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerStageWrite
