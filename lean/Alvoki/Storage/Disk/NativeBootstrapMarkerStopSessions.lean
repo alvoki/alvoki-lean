@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeBootstrapMarkerRebootTableOpen
+import Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectMarkedReboot
 import Alvoki.Storage.Disk.NativeOpenedRestartSessions
 
 namespace Alvoki.Storage.DiskSession
@@ -81,8 +81,6 @@ theorem stopsPublicSchedule (physical : stop.Physical handoff)
     stopsPublicOpen admitted stop physical owner lockHandle metadata keeperLookup flat absent marked install
   exact ⟨cacheOpen, makeCache, cache, action, source, initialized, stopped⟩
 
-namespace EffectiveReboot
-
 variable
   {nextView : OpenCloseHeapView heap FileImage} {nextCalls : RawOpenAdmissionCallbacks heap}
   {nextInit : OpenSyncCacheCallbacks heap} {stream : Type}
@@ -91,6 +89,33 @@ variable
   {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
   {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)} {stage : LongKeeperStageCallbacks heap}
   {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+
+namespace MarkedRebootSelection.Returned
+
+variable {rebooted : heap} {selection : MarkedRebootSelection physical rebooted}
+  {opening : MarkedRebootSelection.OpenObservation (input := nextInput) selection}
+  {raw : RawHealthyMarkedOpenEffects opening nextView nextCalls nextInit rebooted
+    phaseIdentity tokenIdentity allocatePhase allocateToken stream remove stage rename}
+  {fallback : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened}
+  {assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles →
+    IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+  {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+  {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+  {ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool}
+
+def sessionPoint (returned : selection.Returned opening raw fallback assemble get set ptrEq) :
+    NativeOpenedSessionPoint heap := ⟨returned.handle, returned.start⟩
+
+/-- The ledger begins at the exact handle returned by the marked reopen.
+The selected reboot does not contribute any client writes or reads. -/
+theorem replaysFromEmpty (returned : selection.Returned opening raw fallback assemble get set ptrEq)
+    (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) :
+    NativeOpenedSessionTrace.ReplaysFromEmpty nextView names bytes returned.sessionPoint :=
+  NativeOpenedSessionTrace.replaysFromEmpty returned.sessionPoint returned.history returned.submissions returned.reads
+
+end MarkedRebootSelection.Returned
+
+namespace EffectiveReboot
 
 /-- The first open stops on the original cached fsync without an
 ordinary result. Its reported effective reboot supplies the very
@@ -105,10 +130,11 @@ theorem executesOpenedSessions (reboot : EffectiveReboot physical) (valid : Boot
     (absent : calls.metadata (directory.file .walBoundary) seed.afterPending = .ok none seed.afterPending)
     (firstMarked : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
     (firstInstall : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap DiskTable)
-    (opening : MarkedReadyOpenObservations nextInput directory (view.descriptors reboot.rebooted)
-      (reboot.markedInput valid) (reboot.layout valid) (reboot.checkpointImage valid)
-      (reboot.selects valid).vacant (reboot.noCheckpoint valid))
-    (same : reboot.SameReboot valid opening)
+    (opening : let selection := (reboot.selects valid).toMarkedRebootSelection
+      MarkedReadyOpenObservations nextInput directory (view.descriptors reboot.rebooted)
+      (selection.markedInput) (selection.layout) (selection.checkpointImage)
+      selection.vacant (selection.noCheckpoint))
+    (same : (reboot.selects valid).toMarkedRebootSelection.SameReboot opening)
     (next : RawHealthyMarkedOpenEffects opening nextView nextCalls nextInit reboot.rebooted
       phaseIdentity tokenIdentity allocatePhase allocateToken stream remove stage rename)
     (fallback : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
@@ -121,7 +147,7 @@ theorem executesOpenedSessions (reboot : EffectiveReboot physical) (valid : Boot
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) :
     PublicStop admitted stop firstMarked firstInstall ∧
-    reboot.Selected ∧ reboot.SelectedReads valid opening ∧
+    reboot.Selected ∧ (reboot.selects valid).toMarkedRebootSelection.SelectedReads opening ∧
     ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
       (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
         IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles) (start : NativeOpenedSessionPoint heap),
@@ -136,14 +162,51 @@ theorem executesOpenedSessions (reboot : EffectiveReboot physical) (valid : Boot
       NativeOpenedSessionTrace.ReplaysFromEmpty nextView names bytes start := by
   have interrupted := stopsPublicSchedule (admitted := admitted) physical owner lockHandle metadata keeperLookup
     flat absent firstMarked firstInstall
-  obtain ⟨selectedReads, _, _, _, cacheOpen, makeCache, handle, position, cacheAction, cacheSource, returned, phase,
-    _, _, _, _, _, _, _, _, _, _, history, submissions, reads, pins⟩ :=
-    reboot.opensEmptyTable valid opening same next fallback assemble constructs get set phaseEffects ptrEq
-  let start : NativeOpenedSessionPoint heap := ⟨handle, position⟩
-  exact ⟨interrupted, reboot.selects valid, selectedReads, cacheOpen, makeCache, start, cacheAction, cacheSource,
-    returned, phase, history, submissions, reads, pins,
-    NativeOpenedSessionTrace.replaysFromEmpty start history submissions reads⟩
+  obtain ⟨returned⟩ :=
+    (reboot.selects valid).toMarkedRebootSelection.opensEmptyTable opening same next fallback assemble constructs get set phaseEffects ptrEq
+  exact ⟨interrupted, reboot.selects valid, returned.selectedReads, returned.cacheOpen, returned.makeCache,
+    returned.sessionPoint, returned.cacheAction, returned.cacheSource, returned.sourceOpen, returned.phase,
+    returned.history, returned.submissions, returned.reads, returned.pins, returned.replaysFromEmpty names bytes⟩
 
 end EffectiveReboot
+
+namespace BeforeEffectMarkedReboot
+
+/-- A stop without a final directory effect can select the renamed zero
+marker. The next marked open is the start of the same finite client
+trace used after an effective barrier. Both routes reuse the empty
+keeper that was already present at the first open. -/
+theorem executesOpenedSessions (reboot : BeforeEffectMarkedReboot physical) (valid : BootstrapValid before.image)
+    (owner : firstAdmission.owner = fileCalls.slot)
+    (lockHandle : (view.handle stop.afterRename admitted.lock).2.1 = firstAdmission.owner)
+    (metadata : ∀ path, calls.metadata path = optionalMetadataWith (firstCalls.lookup path))
+    (keeperLookup : guards.metadataLookup (directory.file (.walSegment 0)) =
+      firstCalls.lookup (directory.file (.walSegment 0)))
+    (flat : calls.metadata (directory.file .wal) seed.afterPending = .ok none seed.afterPending)
+    (absent : calls.metadata (directory.file .walBoundary) seed.afterPending = .ok none seed.afterPending)
+    (firstMarked : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (firstInstall : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap DiskTable)
+    (opening : MarkedRebootSelection.OpenObservation (input := nextInput) (reboot.selects valid).marked)
+    (same : (reboot.selects valid).marked.SameReboot opening)
+    (next : RawHealthyMarkedOpenEffects opening nextView nextCalls nextInit reboot.rebooted
+      phaseIdentity tokenIdentity allocatePhase allocateToken stream remove stage rename)
+    (fallback : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles →
+      IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    (constructs : ∀ resolved lock cache, DiskTable.OpenReferenceAssembly resolved lock cache (assemble resolved lock cache))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    (phaseEffects : OpenPhaseCellEffects nextView.phase get set)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+    (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) :
+    PublicStop admitted stop firstMarked firstInstall ∧ reboot.Selected ∧
+    ∃ returned : (reboot.selects valid).marked.Returned opening next fallback assemble get set ptrEq,
+      NativeOpenedSessionTrace.ReplaysFromEmpty nextView names bytes returned.sessionPoint := by
+  have interrupted := stopsPublicSchedule (admitted := admitted) physical owner lockHandle metadata keeperLookup
+    flat absent firstMarked firstInstall
+  obtain ⟨selected, ⟨returned⟩⟩ := reboot.opensEmptyTable valid opening same next fallback assemble constructs get set phaseEffects ptrEq
+  exact ⟨interrupted, selected, returned, returned.replaysFromEmpty names bytes⟩
+
+end BeforeEffectMarkedReboot
 end RawBootstrapMarkerDirectoryStop
 end Alvoki.Storage.DiskSession

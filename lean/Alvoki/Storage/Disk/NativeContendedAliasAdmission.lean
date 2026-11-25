@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeRawFlockOutcome
+import Alvoki.Storage.Disk.NativeRawOpenReturn
 import Alvoki.Storage.Disk.NativeOpenErrorLockFinalization
 import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
 
@@ -8,10 +8,10 @@ open System WalSegmentRepair
 
 variable {heap : Type}
 
-/-- The contender resolves the canonical lock while a different
-description still has a live alias. Nonblocking contention returns
-before recovery or cache initialization. -/
-structure RawContendedAliasOpen (view : OpenCloseHeapView heap FileImage) (calls : RawOpenAdmissionCallbacks heap)
+/-- The primitive reports about the contender's checked child and
+temporary descriptor. The guard report applies at the reached checked
+prefix, and frames only the tracked census and locked file projection. -/
+structure RawContendedAliasEffects (view : OpenCloseHeapView heap FileImage) (calls : RawOpenAdmissionCallbacks heap)
     (release : IO.FS.Handle → heap → heap) (directory : DiskDirectory) (description : Nat)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (input : FilePath) (entry : heap) where
   alias : DescriptorSlot
@@ -21,28 +21,37 @@ structure RawContendedAliasOpen (view : OpenCloseHeapView heap FileImage) (calls
   sameLookup : ∀ path, calls.lookup path = (do
     let result ← stat path
     pure (result.map Prod.fst))
-  resolved : calls.realPath input entry = .ok directory.path entry
-  flatAbsent : optionalMetadataWith (calls.lookup (directory.file .wal)) entry = .ok none entry
   checkedChild : RunChildLookup root "LOCK" namespaceView
-  metadata : IO.FS.Metadata
-  checked : stat (directory.file .lock) entry = .ok (.ok (metadata, checkedChild.child)) entry
-  privateLock : (metadata.type == .file && metadata.numLinks == 1) = true
+  appendedChild : RunChildLookup root "LOCK" namespaceView
   lock : IO.FS.Handle
   slot : DescriptorSlot
   free : ∀ prior ∈ (view.descriptors entry).slots, prior.address ≠ slot.address
   fresh : (view.descriptors entry).references slot.description = []
-  appendedChild : RunChildLookup root "LOCK" namespaceView
   inode : (view.descriptors entry).inode slot.description = namespaceView.modelObject appendedChild.child
   afterAppend : heap
-  appended : calls.openAppend (directory.file .lock) entry = .ok lock afterAppend
   openedHandle : view.handle afterAppend lock = ((view.descriptors entry).insert slot free, slot, 0)
   openedCensus : view.descriptors afterAppend = (view.handle afterAppend lock).1
-  openedFiles : view.files afterAppend = view.files entry
+  guarded : ∀ afterResolve afterFlat afterGuard,
+    DiskDirectory.openWith calls.realPath input entry = .ok directory afterResolve →
+    rejectFlatWalWith directory (optionalMetadataWith (calls.lookup (directory.file .wal))) afterResolve =
+      .ok () afterFlat →
+    calls.checkLock directory afterFlat = .ok () afterGuard →
+    calls.openAppend (directory.file .lock) afterGuard = .ok lock afterAppend →
+    ∃ metadata, stat (directory.file .lock) afterFlat = .ok (.ok (metadata, checkedChild.child)) afterGuard ∧
+      view.files afterGuard = view.files entry ∧ view.files afterAppend = view.files afterGuard
   blocked : heap
-  busy : calls.flock lock afterAppend = .ok false blocked
   busyCensus : view.descriptors blocked = view.descriptors afterAppend
   busyFiles : view.files blocked = view.files afterAppend
   finalized : RawOpenErrorLockFinalization view directory release lock slot blocked
+
+/-- An actual append handle and a returned false flock identify the
+ordinary contention branch. The effects and caller cleanup are local. -/
+structure RawContendedAliasOpen (view : OpenCloseHeapView heap FileImage) (calls : RawOpenAdmissionCallbacks heap)
+    (release : IO.FS.Handle → heap → heap) (directory : DiskDirectory) (description : Nat)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (input : FilePath) (entry : heap)
+    extends RawContendedAliasEffects view calls release directory description namespaceView root input entry where
+  opened : calls.beforeFlock input entry = .ok (directory, lock) afterAppend
+  busy : calls.flock lock afterAppend = .ok false blocked
 
 namespace RawContendedAliasOpen
 
@@ -53,6 +62,46 @@ variable {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCall
 
 def diagnostic (_seen : RawContendedAliasOpen view calls release directory description namespaceView root input entry) :
     IO.Error := IO.userError s!"database already open: {directory.path}"
+
+/-- The fixed open classifier takes its contention branch on this
+very handle, independently of the held cache and recovery callbacks. -/
+theorem classifies (init : OpenSyncCacheCallbacks heap)
+    (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
+    (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap DiskTable) :
+    RawOpenReturn calls input entry
+      (fun resolved => openSyncFilesWith (init.openDirectory resolved.path) init.newRef init.newRef init.newRef makeCache)
+      recover (calls.runOpen input init makeCache recover entry) ∧
+    calls.runOpen input init makeCache recover entry = .error seen.diagnostic seen.blocked := by
+  have ran : calls.runOpen input init makeCache recover entry = .error seen.diagnostic seen.blocked := by
+    rw [calls.runsAfterFlock input seen.opened init makeCache recover, seen.busy]
+    rfl
+  exact ⟨ran.symm ▸ .contended seen.opened seen.busy, ran⟩
+
+/-- The identity-bearing no-follow report belongs to the actual guard,
+and the append uses that guard's reached heap. -/
+theorem checkedPrefix :
+    ∃ afterResolve afterFlat afterGuard metadata,
+      DiskDirectory.openWith calls.realPath input entry = .ok directory afterResolve ∧
+      rejectFlatWalWith directory (optionalMetadataWith (calls.lookup (directory.file .wal))) afterResolve =
+        .ok () afterFlat ∧
+      calls.checkLock directory afterFlat = .ok () afterGuard ∧
+      seen.stat (directory.file .lock) afterFlat = .ok (.ok (metadata, seen.checkedChild.child)) afterGuard ∧
+      (metadata.type == .file && metadata.numLinks == 1) = true ∧
+      calls.openAppend (directory.file .lock) afterGuard = .ok seen.lock seen.afterAppend ∧
+      view.files afterGuard = view.files entry ∧ view.files seen.afterAppend = view.files afterGuard := by
+  obtain ⟨afterResolve, afterFlat, afterGuard, resolved, flat, guarded, appended⟩ :=
+    calls.beforeFlock_steps seen.opened
+  obtain ⟨metadata, stat, guardFiles, appendFiles⟩ := seen.guarded afterResolve afterFlat afterGuard resolved flat guarded appended
+  have lookup : optionalMetadataWith (calls.lookup (directory.file .lock)) afterFlat = .ok (some metadata) afterGuard := by
+    simp [seen.sameLookup, optionalMetadataWith, Bind.bind, EStateM.bind, stat, Pure.pure, EStateM.pure, Except.map]
+  have safe : (metadata.type == .file && metadata.numLinks == 1) = true := by
+    cases checked : (metadata.type == .file && metadata.numLinks == 1)
+    · have rejected := guarded
+      simp [RawOpenAdmissionCallbacks.checkLock, Bind.bind, EStateM.bind, lookup, checkPrivateRegularWith,
+        checked, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at rejected
+    · rfl
+  exact ⟨afterResolve, afterFlat, afterGuard, metadata, resolved, flat, guarded, stat, safe, appended, guardFiles, appendFiles⟩
 
 structure Returned : Prop where
   ran : ∀ (init : OpenSyncCacheCallbacks heap)
@@ -73,16 +122,10 @@ structure Returned : Prop where
 /-- The source reaches the exact failed contender. Its finalizer
 retires only its slot and keeps the old lock alias and files. -/
 theorem returns (held : (view.files entry).owners.Owns directory description) : seen.Returned := by
-  have guard : optionalMetadataWith (calls.lookup (directory.file .lock)) entry = .ok (some seen.metadata) entry := by
-    simp [seen.sameLookup, optionalMetadataWith, Bind.bind, EStateM.bind, seen.checked, Pure.pure, EStateM.pure, Except.map]
-  have opened : calls.beforeFlock input entry = .ok (directory, seen.lock) seen.afterAppend := by
-    unfold RawOpenAdmissionCallbacks.beforeFlock
-    rw [DiskTable.withOpenAdmission_lockOpen _ _ _ _ seen.resolved seen.flatAbsent guard
-      (fun _ same => Option.some.inj same ▸ seen.privateLock), seen.appended]
-    rfl
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, guardFiles, appendFiles⟩ := seen.checkedPrefix
   have busyCensus : view.descriptors seen.blocked = (view.descriptors entry).insert seen.slot seen.free :=
     seen.busyCensus.trans (seen.openedCensus.trans (congrArg Prod.fst seen.openedHandle))
-  have busyFiles := seen.busyFiles.trans seen.openedFiles
+  have busyFiles := seen.busyFiles.trans (appendFiles.trans guardFiles)
   have distinct : seen.slot.description ≠ description := by
     intro same
     have present := (view.descriptors entry).mem_references.mpr
@@ -122,8 +165,7 @@ theorem returns (held : (view.files entry).owners.Owns directory description) : 
   refine ⟨?_, ?_, distinct, exactSlot.symm ▸ seen.fresh, exactSlot, untouched,
     untouched.symm ▸ held, exactSlot.symm ▸ seen.aliasLive⟩
   · intro init makeCache recover
-    simp only [finishFailedOpen, calls.runsAfterFlock input opened init makeCache recover, seen.busy, seen.finalized.finalized,
-      diagnostic]
+    simp only [finishFailedOpen, (seen.classifies init makeCache recover).2, seen.finalized.finalized]
   · rw [busyCensus]
     exact seen.inode.trans (congrArg namespaceView.modelObject sameChild)
 

@@ -40,6 +40,7 @@ import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeUncertainStageRetry
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
+import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryReboot
 import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
 import Alvoki.Storage.Disk.NativeFirstAppendPowerLoss
 import Alvoki.Storage.Disk.NativeInterruptedCloseReopen
@@ -77,6 +78,7 @@ inductive NativeExecutionEvent : Type 1 where
   | checkpointCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | checkpointManifestRenameCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | interruptedCheckpointRecovered (input : FilePath) (manifest : Option ByteArray)
+  | interruptedCheckpointRunDirectoryRecovered (input : FilePath) (effective : Bool) (manifest : Option ByteArray)
   | collectCoveredWal
   | coveredWalCollectionRejected (error : IO.Error)
   | interruptedCoveredWalUnlinkRecovered (input : FilePath)
@@ -481,6 +483,16 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (reopened : NativePendingCheckpointReopened current.ready observed next) :
       NativeExecutionStep current (.interruptedCheckpointRecovered input observed.crash.pair.manifest)
         ⟨current.history, current.submissions, next⟩
+  | recoverInterruptedCheckpointRunDirectory (current : NativeExecutionPosition) {input : FilePath} {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      {stop : NativeCheckpointRunDirectoryStop (image := image) current.ready.state cut}
+      (reboot : NativeCheckpointRunDirectoryReboot stop) {valid : current.ready.state.Valid} {plan : reboot.Plan valid}
+      (reader : NativeReadyRestartReads (reboot.observed valid) input plan.layout plan.selected)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeCheckpointRunDirectoryReopened current.ready reboot reader next) :
+      NativeExecutionStep current
+        (.interruptedCheckpointRunDirectoryRecovered input cut.tookEffect current.ready.state.writer.target.pair.manifest)
+        ⟨current.history, current.submissions, next⟩
   | recoverUncertainWriteCrash (current : NativeExecutionPosition) {input : FilePath}
       (observed : NativeUncertainWriteCrashObservation current.ready.state input) (retained : List WAL.Write)
       (next : NativeReadPosition (current.history ++ retained)
@@ -744,6 +756,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverInterruptedCheckpoint reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverInterruptedCheckpointRunDirectory reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWriteCrash reopened =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWriteStageRetry reopened =>
@@ -883,6 +897,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | readyExitThenReopen (input : FilePath)
   | interruptedCloseThenReopen (input : FilePath)
   | interruptedCheckpointThenReopen (input : FilePath)
+  | interruptedCheckpointRunDirectoryThenReopen (input : FilePath)
   | writeThenCloseAndReopen (request : WriteRequest) (input : FilePath)
   | writeThenPowerLossAndReopen (request : WriteRequest) (input : FilePath)
   | writeThenPowerLossStageRetryAndReopen (request : WriteRequest) (failedInput input : FilePath)
@@ -947,6 +962,7 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .readyExitThenReopen input, .readyExitRecovered opened _ => opened = input
   | .interruptedCloseThenReopen input, .interruptedCloseRecovered opened _ => opened = input
   | .interruptedCheckpointThenReopen input, .interruptedCheckpointRecovered opened _ => opened = input
+  | .interruptedCheckpointRunDirectoryThenReopen input, .interruptedCheckpointRunDirectoryRecovered opened _ _ => opened = input
   | .writeThenCloseAndReopen request input, .uncertainWriteRecovered submitted opened _ _ _ =>
     submitted = request ∧ opened = input
   | .writeThenPowerLossAndReopen request input, .uncertainWriteCrashRecovered submitted opened _ _ _ =>
@@ -1020,6 +1036,11 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
   | readyExitThenReopen (input : FilePath) (seen : NativeReadyProcessExitObservation current.state input)
   | interruptedCloseThenReopen (input : FilePath) (observed : NativeInterruptedCloseReopenObservation current.state input)
   | interruptedCheckpointThenReopen (input : FilePath) (observed : NativePendingCheckpointCrashObservation current.state input)
+  | interruptedCheckpointRunDirectoryThenReopen (input : FilePath) {image : Type}
+      {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
+      {stop : NativeCheckpointRunDirectoryStop (image := image) current.state cut}
+      (reboot : NativeCheckpointRunDirectoryReboot stop) (valid : current.state.Valid) (plan : reboot.Plan valid)
+      (reader : NativeReadyRestartReads (reboot.observed valid) input plan.layout plan.selected)
   | writeThenCloseAndReopen (observed : NativeUncertainWriteObservation current.state)
   | writeThenPowerLossAndReopen (input : FilePath) (observed : NativeUncertainWriteCrashObservation current.state input)
   | writeThenPowerLossStageRetryAndReopen (failedInput input : FilePath) (write : NativeReadyWriteFailure current.state)
@@ -1149,6 +1170,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .readyExitThenReopen input _ => .readyExitThenReopen input
   | .interruptedCloseThenReopen input _ => .interruptedCloseThenReopen input
   | .interruptedCheckpointThenReopen input _ => .interruptedCheckpointThenReopen input
+  | .interruptedCheckpointRunDirectoryThenReopen input _ _ _ _ => .interruptedCheckpointRunDirectoryThenReopen input
   | .writeThenCloseAndReopen observed => .writeThenCloseAndReopen observed.write.request observed.input
   | .writeThenPowerLossAndReopen input observed => .writeThenPowerLossAndReopen observed.write.request input
   | .writeThenPowerLossStageRetryAndReopen failedInput input failedWrite _ _ =>
@@ -1243,6 +1265,9 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | interruptedCheckpointThenReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.recoversStoppedCheckpoint observed
     exact ⟨_, _, .recoverInterruptedCheckpoint current observed next reopened, rfl⟩
+  | interruptedCheckpointRunDirectoryThenReopen _ reboot valid plan reader =>
+    obtain ⟨next, reopened⟩ := current.ready.recoversStoppedCheckpointRunDirectory reboot valid plan reader
+    exact ⟨_, _, .recoverInterruptedCheckpointRunDirectory current reboot reader next reopened, rfl⟩
   | writeThenCloseAndReopen observed =>
     obtain ⟨retained, next, recovered⟩ := current.ready.recoversUncertainWrite observed
     exact ⟨_, _, .recoverUncertainWrite current observed retained next recovered, rfl, rfl⟩
