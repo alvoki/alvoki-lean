@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeWalAppend
+import Alvoki.Storage.Disk.NativeRawSync
 
 namespace Alvoki.Storage.DiskSession
 
@@ -289,4 +290,106 @@ theorem rejected {footprint : Type} (calls : RawWalStageCalls heap)
         simp [openResult, writeResult, flushResult] at freshFailed
 
 end RawWalStageCalls
+
+namespace RawSyncCalls
+
+variable {heap image : Type} {files : DiskTable.OpenSyncFiles} {directory : DiskDirectory}
+
+/-- The shared WAL publication code starts the file barrier at the
+exact heap returned by staging, after the literal append. -/
+theorem commitAfterStaging (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
+    (append : RawWalAppendCalls heap) (stage : RawWalStageCalls heap)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {first count : Nat} {bytes : ByteArray}
+    {entry appended staged : heap}
+    (wrote : append.run cache.active (directory.file (.walSegment first)) bytes entry = .ok () appended)
+    (remembered : stage.run cache.pending (directory.file .stagedWalBoundary) (WAL.Boundary.encode count.toUInt64)
+      appended = .ok () staged) :
+    let sync := calls.group directory.path cache.directory cache.active cache.pending
+    WalSegmentCommit.commitBytesAt directory first bytes count
+      (append.run cache.active) (stage.run cache.pending) sync rename entry =
+      (do
+        sync #[directory.file (.walSegment first), directory.file .stagedWalBoundary]
+        rename (directory.file .stagedWalBoundary) (directory.file .walBoundary)
+        sync #[directory.path]
+        pure ()) staged := by
+  intro sync
+  rw [WalSegmentCommit.commitBytesAt_fileEffects]
+  simp only [WAL.Boundary.commit, Bind.bind, EStateM.bind, wrote, remembered]
+
+/-- Use the append's active entry and staging's returned pending entry
+instead of supplying a second handle selection. Even a failed keeper
+fsync feeds its reached heap to the marker path. -/
+theorem groupedFromStaging (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
+    (view : OpenCloseHeapView heap image) {first : Nat} {appendHeap stagedHeap consumed : heap}
+    {keeperHandle markerHandle : IO.FS.Handle}
+    (activeKeeper : view.active appendHeap cache.active = some (directory.file (.walSegment first), keeperHandle))
+    (keeperMiss : (view.pending appendHeap cache.pending).find?
+      (fun entry => entry.1 == directory.file (.walSegment first)) = none)
+    (remembered : view.literalCacheAt stagedHeap cache.directory cache.active cache.pending =
+      (view.literalCacheAt appendHeap cache.directory cache.active cache.pending).remember
+        (directory.file .stagedWalBoundary) markerHandle)
+    (loadedKeeper : calls.readPending cache.pending stagedHeap = .ok (view.pending stagedHeap cache.pending) stagedHeap)
+    (loadedActive : calls.readActive cache.active stagedHeap = .ok (view.active stagedHeap cache.active) stagedHeap)
+    (loadedMarker : let atKeeper := reachedState (calls.fsync keeperHandle stagedHeap)
+      calls.readPending cache.pending atKeeper = .ok (view.pending stagedHeap cache.pending) atKeeper)
+    (removed : calls.setPending cache.pending
+      ((view.pending stagedHeap cache.pending).filter (fun entry => entry.1 != directory.file .stagedWalBoundary))
+      (reachedState (calls.fsync keeperHandle stagedHeap)) = .ok () consumed) :
+    let keeper := directory.file (.walSegment first)
+    let staged := directory.file .stagedWalBoundary
+    let perform := fun path => calls.syncPath directory.path path cache.directory cache.active cache.pending
+    perform keeper stagedHeap = calls.fsync keeperHandle stagedHeap ∧
+    perform staged (reachedState (calls.fsync keeperHandle stagedHeap)) = calls.fsync markerHandle consumed ∧
+    calls.group directory.path cache.directory cache.active cache.pending #[keeper, staged] stagedHeap =
+      match calls.fsync keeperHandle stagedHeap with
+      | .ok () _ => match calls.fsync markerHandle consumed with
+        | .ok () reached => .ok () reached
+        | .error cause reached => .error (IO.userError s!"sync failed for '{staged}': {cause}") reached
+      | .error cause _ => .error (IO.userError s!"sync failed for '{keeper}': {cause}")
+          (reachedState (calls.fsync markerHandle consumed)) := by
+  have active := congrArg Cache.active remembered
+  change view.active stagedHeap cache.active = view.active appendHeap cache.active at active
+  have pending := congrArg Cache.pending remembered
+  change view.pending stagedHeap cache.pending =
+    (directory.file .stagedWalBoundary, markerHandle) :: view.pending appendHeap cache.pending at pending
+  have different : directory.file .stagedWalBoundary ≠ directory.file (.walSegment first) := by
+    intro equal
+    obtain ⟨start, contradiction⟩ := DiskDirectory.walSegment_exclusive equal
+    cases contradiction
+  have noKeeper : (view.pending stagedHeap cache.pending).find?
+      (fun entry => entry.1 == directory.file (.walSegment first)) = none := by
+    simp [pending, different, keeperMiss]
+  have marker : (view.pending stagedHeap cache.pending).find? (fun entry => entry.1 == directory.file .stagedWalBoundary) =
+      some (directory.file .stagedWalBoundary, markerHandle) := by simp [pending]
+  intro keeper staged perform
+  have keeperFile : keeper ≠ directory.path := file_ne_directory _ _
+  have stagedFile : staged ≠ directory.path := file_ne_directory _ _
+  have loadedKeeperHandle : calls.readActive cache.active stagedHeap = .ok (some (keeper, keeperHandle)) stagedHeap := by
+    rw [active, activeKeeper] at loadedActive
+    exact loadedActive
+  have first : perform keeper stagedHeap = calls.fsync keeperHandle stagedHeap := by
+    simp [perform, syncWithHandles, keeperFile, loadedKeeper, noKeeper, loadedKeeperHandle, keeper,
+      Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  have second : perform staged (reachedState (calls.fsync keeperHandle stagedHeap)) = calls.fsync markerHandle consumed :=
+    calls.syncPending cache stagedFile loadedMarker marker removed
+  refine ⟨first, second, ?_⟩
+  change SyncPathGroup.run perform #[keeper, staged] stagedHeap = _
+  rw [SyncPathGroup.run_pair, first]
+  cases outcome : calls.fsync keeperHandle stagedHeap with
+  | ok result reached =>
+    cases result
+    simp only [outcome, reachedState] at second
+    exact congrArg (fun result : EStateM.Result IO.Error heap Unit =>
+      show EStateM.Result IO.Error heap Unit from match result with
+      | .ok () after => .ok () after
+      | .error cause after => .error (IO.userError s!"sync failed for '{staged}': {cause}") after) second
+  | error cause reached =>
+    simp only [outcome, reachedState] at second
+    have retained := congrArg (fun result : EStateM.Result IO.Error heap Unit =>
+      show EStateM.Result IO.Error heap Unit from match result with
+      | .ok () after | .error _ after => .error (IO.userError s!"sync failed for '{keeper}': {cause}") after) second
+    refine retained.trans ?_
+    cases calls.fsync markerHandle consumed <;> rfl
+
+end RawSyncCalls
 end Alvoki.Storage.DiskSession

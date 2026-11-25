@@ -55,6 +55,8 @@ import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
 import Alvoki.Storage.Disk.DelayedKeeperInventory
 import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.NativeWalAppend
+import Alvoki.Storage.Disk.NativeRawSync
+import Alvoki.Storage.Disk.NativeWalStage
 import Alvoki.Storage.Disk.KeeperReadCustody
 import Alvoki.Storage.Disk.CapturedKeeperCustody
 import Alvoki.Storage.Disk.CapturedSealReadCensus
@@ -3773,6 +3775,16 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.returned
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.retainsKeeper
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.projects
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.syncPending
+#check_axioms Alvoki.Storage.DiskSession.freshStageCacheSchedule
+#check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.acquireKeeps
+#check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.acquireBinds
+#check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.fresh_effect
+#check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.returned
+#check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.retainsStaged
+#check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.rejected
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.commitAfterStaging
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedFromStaging
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.selectAppend_owned
 #check_axioms Alvoki.Storage.SyncHandleRouting.runAppendWithCache_owned
 #check_axioms Alvoki.Storage.SyncHandleRouting.appendThenStage_syncKeeper

@@ -35,6 +35,14 @@ so its projected result can change the files as well as the cache. The runtime l
 account for local and cached reference releases and their filesystem effects. The proof composes
 the append result before marker publication. [Production cache schedules](../../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Raw append projection](../../lean/Alvoki/Storage/Disk/NativeWalAppend.lean)
 
+The raw staging callback follows the exclusive open, write, flush and pending-reference update.
+A data failure carries the observed stream-release effects and the original error. The WAL
+schedule reaches its file barrier on the staging return. The barrier reads the active keeper
+and attempts the remembered marker on the heap left by that keeper fsync, including an error.
+Bootstrap and stopped checkpoint sync reuse the same selector and reference interpretation.
+Per-primitive filesystem effects, rename and directory settlement still need to supply the
+durable payloads at the next ready position. [Shared cache routing](../../lean/Alvoki/Storage/Disk/NativeRawSync.lean) · [Staging and grouped barrier](../../lean/Alvoki/Storage/Disk/NativeWalStage.lean)
+
 `NativeReachedExecutionPrefix.keyValueRefinement` adds whole-or-none uncertain events, ready replay when
 the ending returns ready, and the existence of an allowed terminal history that agrees with prior reads.
 `Returned.stopsAfterWrites` uses that terminal argument on a finite observed write trace from fresh
