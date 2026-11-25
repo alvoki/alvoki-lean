@@ -45,6 +45,34 @@ theorem afterRead_inode (captured : CapturedKeeperOpenReports report) :
   rw [report.listing.afterClose_eq]
   exact report.objectMap
 
+/-- The first repair barrier uses the cached directory slot in the
+inventory returned by the keeper read, including any other retained slots. -/
+def directoryBarrier (captured : CapturedKeeperOpenReports report)
+    (outcome : DelayedDirectorySyncOutcome) : DelayedDirectorySync directory :=
+  captured.afterRead.delayedDirectorySync [] directory admission.cached.description admission.cached.reference
+    (by
+      rw [DescriptorInventory.references_afterDrops]
+      exact List.mem_filter.mpr
+        ⟨captured.afterRead.mem_references.mpr ⟨admission.cached, captured.directoryRetained, rfl, rfl⟩, rfl⟩)
+    report.bindings (by
+      have object : admission.view.modelObject admission.root = readStart.inode admission.cached.description :=
+        report.lifetime.identifiesDirectory
+      rw [captured.afterRead_inode, ← report.objectMap, ← object]
+      exact report.canonicalDirectory) outcome
+
+/-- A successful first directory barrier settles the repair namespace
+and carries forward the actual keeper-read census. -/
+theorem directoryBarrier_completed (captured : CapturedKeeperOpenReports report)
+    (before : LockedFileState FileImage)
+    (fsync : (DescriptorInventory × DescriptorSlot × Nat) → EStateM IO.Error CensusOpenState Unit)
+    (observed : fsync (admission.reached, admission.cached, 0) (captured.afterRead, before) =
+      match (captured.directoryBarrier .completed).run before with
+      | .ok value after => .ok value (captured.afterRead, after)
+      | .error cause after => .error cause (captured.afterRead, after)) :
+    fsync (admission.reached, admission.cached, 0) (captured.afterRead, before) =
+      .ok () (captured.afterRead, { before with image := before.image.syncDirectory }) := by
+  simpa only [directoryBarrier, DescriptorInventory.delayedDirectorySync, DelayedDirectorySync.run] using observed
+
 /-- Interpret `readKeeperPrefix_fileEffects` with the same open and exact
 prefix loop as the held read. In the successful projection the open adds
 its reported slot, and the prefix applies the reported slot drops. -/

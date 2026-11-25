@@ -867,6 +867,14 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The first repair directory barrier can now use the census returned by
+the keeper read. The cached handle still comes from admission. Lean
+derives the live issuing reference and the directory inode from the
+reached census, and a reported successful barrier settles the selected
+namespace while retaining that census. The replacement and prune
+schedules still need to consume this chronological barrier.
+[Keeper descriptor custody](../lean/Alvoki/Storage/Disk/CapturedKeeperCustody.lean)
+
 The aligned repair lemmas accept the actual marker-open descriptor census
 while retaining the directory handle recorded at admission. Each repair
 variant identifies the synced marker inode in the census reached by its
