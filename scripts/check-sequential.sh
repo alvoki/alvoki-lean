@@ -387,6 +387,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedWriteAck
 lake env leanchecker Alvoki.Storage.Disk.NativeRawWriteProjection
 lake env leanchecker Alvoki.Storage.Disk.NativeRawWriteCustody
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWriteStorage
+lake env leanchecker Alvoki.Storage.Disk.NativeRawUncertainWrite
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedUncertainWrite
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier

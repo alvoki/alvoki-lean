@@ -466,6 +466,7 @@ import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
 import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeRawWriteProjection
 import Alvoki.Storage.Disk.NativeReadyWriteStorage
+import Alvoki.Storage.Disk.NativeRawUncertainWrite
 import Alvoki.Storage.Disk.NativeRawWriteCustody
 import Alvoki.Storage.Disk.NativeClassifiedUncertainWrite
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
@@ -3826,6 +3827,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_afterPreparation
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_rejectsPhase
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_acknowledges
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_commitUnknown
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.framesRawWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.returnsCommitUnknown
 #check_axioms Alvoki.Storage.DiskSession.withoutWriteGroupCache_eq_projectResult
 #check_axioms Alvoki.Storage.DiskSession.commitBytesAt_projects
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_projectsAcknowledged

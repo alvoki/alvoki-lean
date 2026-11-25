@@ -95,8 +95,11 @@ and reference operations into the next opened position. The fresh-open theorem s
 same visible property for the empty keeper after the actual phase and token allocations.
 The owner must still account for the pending reference contents, the clean cached hit and the
 reported primitive effects. The common execution induction has to compose these write steps
-with independent failures and recovery.
-[Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean) · [Raw return projection](../../lean/Alvoki/Storage/Disk/NativeRawWriteProjection.lean)
+with independent failures and recovery. A returned `commitUnknown` now identifies the failed
+commit at that exact heap, with the original phase poisoned. The shared frame traversal carries
+the exact descriptor authority and protected files through the failure. The uncertain WAL
+outcome and later recovery still need to join that returned state.
+[Raw uncertain return](../../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean) · [Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean) · [Raw return projection](../../lean/Alvoki/Storage/Disk/NativeRawWriteProjection.lean)
 
 At a stopped staged-manifest fsync the returned prefix and pending-cache update identify the same
 live descriptor. Its private inode effect leaves the previously selected checkpoint and WAL intact

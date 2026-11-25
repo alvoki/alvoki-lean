@@ -9,6 +9,12 @@ Fresh open supplies the empty visible keeper at the exact allocation endpoint. T
 execution still needs to join these steps with the independent error, stop and recovery paths.
 [Grouped WAL effects](../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean) · [Ready writer](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) · [Fresh open](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 
+A returned `commitUnknown` identifies the exact failed commit on the original phase and cache.
+The same callback traversal carries descriptor authority and the protected files to the
+error heap and proves that the original phase is poisoned there. The WAL selection and
+release, crash and recovery transitions remain separate.
+[Raw uncertain return](../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean)
+
 The fresh marked bootstrap establishes ready storage on the exact returned heap. The observed
 keeper and marker barriers give the empty keeper and zero marker. Exact child observations
 preserve the lock binding and manifest absence. The phase and token allocations carry the
