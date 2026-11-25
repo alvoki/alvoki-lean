@@ -301,6 +301,16 @@ theorem reopenSync_projectsCrashBindings
     simp [List.mapM_cons, head, tail, Bind.bind, Except.bind, Pure.pure, Except.pure,
       Function.comp_def]
 
+def projectRepairDirectory (directory : DirectoryPublication.Image) (visible : ByteArray)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray)) :
+    Except String DirectoryPublication.Image := do
+  let active ← projectBinding directory.active visible
+  let crashImages ← choices.mapM fun (choice : DirectoryPublication.Bindings × Option ByteArray) =>
+    match choice.2 with
+    | none => Except.ok ⟨choice.1.manifest, none⟩
+    | some payload => projectBinding choice.1 payload
+  pure { directory with active, crashImages }
+
 /-- A successful descriptor barrier yields the exact directory image
 that precedes shared keeper repair. Staging is untouched by file sync. -/
 theorem reopenSync_projectsRepairDirectory
@@ -317,20 +327,14 @@ theorem reopenSync_projectsRepairDirectory
     (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
     (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
       ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode) :
-    (do
-      let active ← projectBinding directory.active (marker.visible handle.inode)
-      let crashImages ← choices.mapM fun (choice : DirectoryPublication.Bindings × Option ByteArray) =>
-        match choice.2 with
-        | none => Except.ok (⟨choice.1.manifest, none⟩ : DirectoryPublication.Bindings)
-        | some payload => projectBinding choice.1 payload
-      pure { directory with active, crashImages }) = .ok (settleMarker directory selected) := by
+    projectRepairDirectory directory (marker.visible handle.inode) choices = .ok (settleMarker directory selected) := by
   have crashes := reopenSync_projectsCrashBindings sync current sameBinding observed choices presence physical
   have active := projectBinding_decodes (visible := directory.active) observed
   have activeMap : directory.active.walBoundary.map (fun _ => Boundary.encode selected.frontier) =
       some (Boundary.encode selected.frontier) := by
     cases boundary : directory.active.walBoundary <;> simp_all
   rw [enumerated] at crashes
-  simp only [Bind.bind, Except.bind, active, crashes, Pure.pure, Except.pure]
+  simp only [projectRepairDirectory, Bind.bind, Except.bind, active, crashes, Pure.pure, Except.pure]
   simp [settleMarker, activeMap]
 
 /-- A successful barrier on each held descriptor fixes the bytes used by
@@ -649,6 +653,36 @@ theorem selectedBytes_retainBatch
     exact recoveredAcknowledgedBatch_retains prior recovery binding (confirmed rfl ▸ count)
 
 open WalSegmentRepair (FileImage Target EffectTrace)
+
+/-- Every admitted repair cut preserves the frontier derived from the
+same descriptor barrier and physical directory choices. -/
+theorem reopenSync_repairPreservesFrontier
+    {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
+    (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      handle marker (fun inode files => files.completeFileSync inode) (.ok () settled))
+    (current : handle.inode = marker.active)
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selected : Selection} (observed : decode (marker.visible handle.inode) = .ok selected)
+    {initial after : FileImage} {directory : DirectoryPublication.Image} {target : Target}
+    {bytes : ByteArray} (bound : initial.directory.active.walBoundary = some bytes)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = initial.directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ payload, choice.2 = some payload →
+      ∃ inode ∈ settled.crashBindings, payload ∈ settled.crashBytes inode)
+    (projected : projectRepairDirectory initial.directory (marker.visible handle.inode) choices = .ok directory)
+    (trace : EffectTrace target { initial with directory := directory } after)
+    (pair : directory.active = target.pair)
+    (keeper : initial.keeper.Valid target.Accepts)
+    (later : initial.later.Beyond target.range.through)
+    {survivor : DirectoryPublication.Bindings}
+    (chosen : survivor ∈ after.directory.active :: after.directory.crashImages) :
+    survivor.walBoundary = some (Boundary.encode selected.frontier) := by
+  have projectedSync := reopenSync_projectsRepairDirectory sync current sameBinding observed
+    initial.directory (by simp [bound]) choices enumerated presence physical
+  have same := Except.ok.inj (projected.symm.trans projectedSync)
+  subst directory
+  exact repair_preserves_settledMarker initial selected bound trace pair keeper later chosen
 
 /-- The descriptor's error report determines which retry image is
 reachable. A reported error after persistence settles only the marker. -/

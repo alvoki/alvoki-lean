@@ -2227,6 +2227,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.reopenSync_projectsCrashBinding
 #check_axioms Alvoki.WAL.TwoSlot.reopenSync_projectsCrashBindings
 #check_axioms Alvoki.WAL.TwoSlot.reopenSync_projectsRepairDirectory
+#check_axioms Alvoki.WAL.TwoSlot.reopenSync_repairPreservesFrontier
 #check_axioms Alvoki.WAL.TwoSlot.decode_interruptedWrite
 #check_axioms Alvoki.WAL.TwoSlot.decode_syncedWrite
 #check_axioms Alvoki.Storage.TwoSlotDiskTable.publish_fileEffects
