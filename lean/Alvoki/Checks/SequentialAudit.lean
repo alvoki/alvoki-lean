@@ -271,6 +271,7 @@ import Alvoki.Storage.Disk.NativeRunRetentionPass
 import Alvoki.Storage.Disk.NativeExecutionPrefix
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
+import Alvoki.Storage.Disk.NativeReadyCloseRetries
 import Alvoki.Storage.Disk.NativeReadyWrite
 import Alvoki.Storage.Disk.NativePendingMarkerSync
 import Alvoki.Storage.Disk.NativePendingMarkerRename
@@ -1780,6 +1781,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionEndObservation.reaches
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.executesPrefixFromEmpty
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.closesAndReopens
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyCloseError.trace
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyCloseError.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.closesAndReopensAfterRetries
 #check_axioms Alvoki.Storage.DiskSession.runBatchWrite_acknowledges
 #check_axioms Alvoki.Storage.DiskSession.NativeWritePreflightObservation.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeWritePreflightObservation.returnsWithCache

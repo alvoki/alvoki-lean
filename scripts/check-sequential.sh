@@ -183,6 +183,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeRunRetentionPass
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionPrefix
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionClose
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
+lake env leanchecker Alvoki.Storage.Disk.NativeReadyCloseRetries
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWrite
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerSync
 lake env leanchecker Alvoki.Storage.Disk.NativePendingMarkerRename
