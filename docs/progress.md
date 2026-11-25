@@ -2094,3 +2094,10 @@ old prefix now follows from the same successful append and sync
 reports as the new-frontier case. The fully synced batch can survive
 as an unselected tail. The remaining old-prefix premise concerns the
 execution branch in which the marker image was unchanged.
+
+Old-frontier layout recovery now distinguishes an interrupted append
+from an interrupted WAL sync by the actual callback return. Each early
+cut supplies the prior-prefix guarantee at its own filesystem boundary.
+A completed WAL sync still derives the old prefix from the durable
+append. The native composition must connect these early-cut premises
+to the append and sync observations and pass the layout to installation.

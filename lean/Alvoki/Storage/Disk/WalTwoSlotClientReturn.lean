@@ -2631,7 +2631,15 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
     (counted : selected.frontier.toNat = through * frameSize)
     (decoded : retry.directory.active.walRange = some ⟨watermark, through⟩)
     (survives : retry.keeper.active ∈ reached.1.keeper.crashImages)
-    (unchangedPrefix : reached.2 = report.initialMarker →
+    (appendCutPrefix : let active := directory.file (.walSegment prior.installed.activeFirst)
+      (report.append active (WAL.encode batch)).run (prior.files, report.initialMarker) =
+        .error report.stopped reached →
+      ∃ tail, retry.keeper.active = some (prior.wal.active.bytes ++ tail))
+    (syncCutPrefix : ∀ appended,
+      let active := directory.file (.walSegment prior.installed.activeFirst)
+      (report.append active (WAL.encode batch)).run (prior.files, report.initialMarker) =
+        .ok (.ok ()) appended →
+      (report.syncWal active).run appended = .error report.stopped reached →
       ∃ tail, retry.keeper.active = some (prior.wal.active.bytes ++ tail))
     {markerBytes : ByteArray}
     (markerSurvives : ∃ inode ∈ reached.2.crashBindings, markerBytes ∈ reached.2.crashBytes inode)
@@ -2652,10 +2660,16 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
       unfold frameSize at count
       have throughOld : through = prior.history.length := by omega
       rw [throughOld, List.take_append_of_le_length (Nat.le_refl _), List.take_length, ← layout.activeBytes]
-      rcases report.keeperUnchangedOrWalSynced writeKeepsKeeper syncKeepsKeeper with unchanged |
-        ⟨appended, durable, wrote, synced, keeper⟩
-      · exact unchangedPrefix unchanged
-      · have persisted : retry.keeper.active ∈ durable.1.keeper.crashImages :=
+      rcases report.cut with ⟨appendCut, _⟩ |
+        ⟨appended, wrote, ⟨syncCut, _⟩ | ⟨durable, synced, cut⟩⟩
+      · exact appendCutPrefix appendCut
+      · exact syncCutPrefix appended wrote syncCut
+      · have keeper : reached.1.keeper = durable.1.keeper := by
+          rcases cut with writeCut | ⟨written, writeReturned, syncCut | ⟨_, _, _, keepsKeeper⟩⟩
+          · exact writeKeepsKeeper durable _ writeCut
+          · exact (syncKeepsKeeper written syncCut).trans (writeKeepsKeeper durable _ writeReturned)
+          · exact keepsKeeper.trans (writeKeepsKeeper durable _ writeReturned)
+        have persisted : retry.keeper.active ∈ durable.1.keeper.crashImages :=
           keeper ▸ survives
         rw [walPersists synced] at persisted
         have exactBytes : retry.keeper.active = appended.1.keeper.active := by
