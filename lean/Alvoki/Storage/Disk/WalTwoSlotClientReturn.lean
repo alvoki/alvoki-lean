@@ -1495,7 +1495,10 @@ theorem reopenSyncInterrupted_preservesRetry {stop : Type}
     (source : project physical = prepared) (reachedImage : project after = reached)
     (persisted : project (physical.completeFileSync handle.inode) =
       { prepared with directory := settleMarker prepared.directory selected })
-    (effect : after = physical ∨ after = physical.completeFileSync handle.inode)
+    (inventory : DiskSession.DescriptorInventory)
+    (captured : inventory.inode handle.description = handle.inode)
+    (effect : after = physical ∨
+      after = physical.completeFileSync (inventory.inode handle.description))
     {pair : DirectoryPublication.Bindings} {bytes : Option ByteArray} {names : List Nat}
     (metadata : pair ∈ reached.directory.crashImages)
     (keeper : bytes ∈ reached.keeper.crashImages) (later : names ∈ reached.later.crashImages) :
@@ -1511,6 +1514,7 @@ theorem reopenSyncInterrupted_preservesRetry {stop : Type}
   · have projectedEffect : reached = prepared ∨
         reached = { prepared with directory := settleMarker prepared.directory selected } := by
       rw [← reachedImage]
+      rw [captured] at effect
       rcases effect with rfl | rfl
       · exact Or.inl source
       · exact Or.inr persisted
