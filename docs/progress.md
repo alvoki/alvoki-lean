@@ -1067,7 +1067,9 @@ inode, including when the cache routes sync through a pending handle.
 The held recovery proof now derives the acquired selection and
 descriptor inventory in one step from the reported rewind and bounded
 reads. That rewind also enters the composed client recovery theorem
-through the same acquisition action used before WAL preparation. The projection that already accounts for rewind is a special
+through the same acquisition action used before WAL preparation.
+The reported rewind is indexed by the exact description opened and
+used for the chunk reads. The projection that already accounts for rewind is a special
 case of that same proof.
 
 The acquisition model now takes its bounded reader as an argument.

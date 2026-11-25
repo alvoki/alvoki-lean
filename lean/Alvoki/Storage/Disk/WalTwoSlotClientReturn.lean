@@ -1630,7 +1630,7 @@ private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × By
 /-- The open records its reached inventory before the bounded read. The
 read advances the reported cursor on that same description. -/
 def acquireMarkerWithInventoryUsing {state : Type}
-    (readMarker : (USize → EStateM IO.Error Nat ByteArray) → EStateM IO.Error Nat ByteArray)
+    (readMarker : Nat → (USize → EStateM IO.Error Nat ByteArray) → EStateM IO.Error Nat ByteArray)
     (reached : DiskSession.DescriptorInventory → state → state)
     (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
     EStateM IO.Error state (KeeperDescriptorIdentity × Selection) := do
@@ -1642,7 +1642,7 @@ def acquireMarkerWithInventoryUsing {state : Type}
     | .ok (inventory, slot, cursor) =>
       let files := reached inventory files
       let handle : KeeperDescriptorIdentity := ⟨slot.description, inventory.inode slot.description⟩
-      match readMarker (reads.readChunk handle.description) cursor with
+      match readMarker handle.description (reads.readChunk handle.description) cursor with
       | .error cause _ => .error cause files
       | .ok bytes _ =>
         match decode bytes with
@@ -1654,7 +1654,7 @@ def acquireMarkerWithInventory {state : Type}
     (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
     EStateM IO.Error state (KeeperDescriptorIdentity × Selection) :=
   acquireMarkerWithInventoryUsing
-    (fun read => readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+    (fun _ read => readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
       read acquisitionLimit ByteArray.empty)
     reached reads path
 
@@ -1664,27 +1664,27 @@ same acquisition action, including its bounded reads and error returns. -/
 theorem acquireMarkerWithInventory_sharedReader {state : Type}
     (reached : DiskSession.DescriptorInventory → state → state)
     (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
-    acquireMarkerWithInventoryUsing (readMarkerBytesWith (EStateM.pure ())) reached reads path =
+    acquireMarkerWithInventoryUsing (fun _ => readMarkerBytesWith (EStateM.pure ())) reached reads path =
       acquireMarkerWithInventory reached reads path := by
-  have same : readMarkerBytesWith (EStateM.pure ()) =
-      (fun (read : USize → EStateM IO.Error Nat ByteArray) =>
+  have same : (fun (_ : Nat) => readMarkerBytesWith (EStateM.pure ())) =
+      (fun (_ : Nat) (read : USize → EStateM IO.Error Nat ByteArray) =>
         readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
           read acquisitionLimit ByteArray.empty) := by
-    funext read cursor
+    funext description read cursor
     rfl
   exact congrArg (fun readMarker => acquireMarkerWithInventoryUsing readMarker reached reads path) same
 
 def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
     EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) :=
-  acquireMarkerWithInventoryUsing (readMarkerBytesWith (EStateM.pure ())) (fun _ files => files) reads path
+  acquireMarkerWithInventoryUsing (fun _ => readMarkerBytesWith (EStateM.pure ())) (fun _ files => files) reads path
 
 /-- The native acquisition projection retains the opened marker slot
 in the state passed to checkpoint preparation. -/
 def acquireMarkerInCensus (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath)
-    (rewind : EStateM IO.Error Nat Unit) :
+    (rewind : Nat → EStateM IO.Error Nat Unit) :
     EStateM IO.Error (DiskSession.CensusDirectoryCache × DiskSession.CensusOpenState)
       (KeeperDescriptorIdentity × Selection) :=
-  acquireMarkerWithInventoryUsing (readMarkerBytesWith rewind)
+  acquireMarkerWithInventoryUsing (fun description => readMarkerBytesWith (rewind description))
     (fun inventory (cache, _, files) => (cache, inventory, files)) reads path
 
 /-- A successful rewind on the reached marker description and its
@@ -1695,14 +1695,14 @@ theorem acquireMarkerInCensus_afterRewind
     (file : DiskSession.HeldMetadataFile reads (directory.file .walBoundary) "WAL.commit" view root payload)
     (privateFile : file.calls.metadata.numLinks = 1)
     (available : PrefixChunksAvailableUntilEof payload (reads.readChunk file.calls.slot.description))
-    (rewind : EStateM IO.Error Nat Unit) (rewound : rewind 0 = .ok () 0)
+    (rewind : Nat → EStateM IO.Error Nat Unit) (rewound : rewind file.calls.slot.description 0 = .ok () 0)
     {selected : Selection} (decoded : decode payload = .ok selected)
     (before : DiskSession.CensusDirectoryCache × DiskSession.CensusOpenState) :
-    acquireMarkerWithInventoryUsing (readMarkerBytesWith rewind)
+    acquireMarkerWithInventoryUsing (fun description => readMarkerBytesWith (rewind description))
       (fun inventory (cache, _, files) => (cache, inventory, files)) reads (directory.file .walBoundary) before =
       .ok (⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩, selected)
         (before.1, file.calls.inventory, before.2.2) := by
-  obtain ⟨bytes, returned, agrees⟩ := readMarkerBytesWith_decodesHeldMarker file available rewind 0 rewound
+  obtain ⟨bytes, returned, agrees⟩ := readMarkerBytesWith_decodesHeldMarker file available (rewind file.calls.slot.description) 0 rewound
   cases before
   simp [acquireMarkerWithInventoryUsing, checkPrivateRegularWith, file.calls.stat,
     file.calls.regular, privateFile, file.calls.opened, returned,
@@ -1718,10 +1718,10 @@ theorem acquireMarkerInCensus_returns
     (available : PrefixChunksAvailableUntilEof payload (reads.readChunk file.calls.slot.description))
     {selected : Selection} (decoded : decode payload = .ok selected)
     (before : DiskSession.CensusDirectoryCache × DiskSession.CensusOpenState) :
-    acquireMarkerInCensus reads (directory.file .walBoundary) (EStateM.pure ()) before =
+    acquireMarkerInCensus reads (directory.file .walBoundary) (fun _ => EStateM.pure ()) before =
       .ok (⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩, selected)
         (before.1, file.calls.inventory, before.2.2) := by
-  exact acquireMarkerInCensus_afterRewind file privateFile available (EStateM.pure ()) rfl decoded before
+  exact acquireMarkerInCensus_afterRewind file privateFile available (fun _ => EStateM.pure ()) rfl decoded before
 
 
 section CapturedPreparation
@@ -1749,7 +1749,7 @@ theorem acquiresAndReadsCheckpoint
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) :
     ((do
-      let marker ← acquireMarkerInCensus report.reads (directory.file .walBoundary) (EStateM.pure ())
+      let marker ← acquireMarkerInCensus report.reads (directory.file .walBoundary) (fun _ => EStateM.pure ())
       let checkpoint ← report.readCheckpointFromCensus release runs.released
       pure (marker, checkpoint)) :
       EStateM IO.Error (CensusDirectoryCache × CensusOpenState)
@@ -1770,7 +1770,7 @@ theorem preparesFromHeldMarker
     (file : HeldMetadataFile markerReads (directory.file .walBoundary) "WAL.commit" admission.view admission.root payload)
     (privateFile : file.calls.metadata.numLinks = 1)
     (available : PrefixChunksAvailableUntilEof payload (markerReads.readChunk file.calls.slot.description))
-    (rewind : EStateM IO.Error Nat Unit) (rewound : rewind 0 = .ok () 0)
+    (rewind : Nat → EStateM IO.Error Nat Unit) (rewound : rewind file.calls.slot.description 0 = .ok () 0)
     (report : CapturedMarkedReadReports admission layout published false file.calls.inventory)
     {metadataRelease : System.FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
     (manifest : CapturedManifestCensus report metadataRelease file.calls.inventory manifestDrops)
@@ -2321,7 +2321,7 @@ theorem installsAfterAcquiredRecovery_replays
       admission.view admission.root payload)
     (privateFile : file.calls.metadata.numLinks = 1)
     (available : PrefixChunksAvailableUntilEof payload (markerReads.readChunk file.calls.slot.description))
-    (rewind : EStateM IO.Error Nat Unit) (rewound : rewind 0 = .ok () 0)
+    (rewind : Nat → EStateM IO.Error Nat Unit) (rewound : rewind file.calls.slot.description 0 = .ok () 0)
     {selection : Selection} (decoded : decode payload = .ok selection)
     (stabilize : KeeperDescriptorIdentity → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
     (finish : DiskDirectory → Plan → Nat → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
