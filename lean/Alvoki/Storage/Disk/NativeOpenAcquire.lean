@@ -70,4 +70,44 @@ theorem NativeReadPosition.acquiresViaOpenReferences {history log}
     · rw [reached]
       exact kept
 
+/-- Run acquisition on the object and heap returned by the same
+reported installer. The first public call uses that initialized cell,
+and any subsequent call can start from the reported reached contents. -/
+theorem OpenReferenceAllocations.acquiresAfterInstall
+    (current : NativeReadPosition history log)
+    {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+    {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+    {contents : heap → IO.Ref (Phase Installed) → Option (Phase Installed)}
+    {beforeInstall : heap}
+    (allocation : OpenReferenceAllocations allocatePhase allocateToken contents
+      current.state.writer.installed beforeInstall)
+    {lock : IO.FS.Handle} {files : DiskTable.OpenSyncFiles}
+    {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+    (constructor : DiskTable.OpenReferenceAssembly current.state.session.directory lock files assemble)
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (effects : OpenPhaseCellEffects contents get set) (snapshot : UInt64) :
+    ∃ (db : DiskTable) (issue : SnapshotPin → DiskSnapshotPin) (next : NativeReadPosition history log)
+      (normalized : Option (Nat × SnapshotPin)) (after : heap),
+      installReady current.state.writer.installed allocatePhase allocateToken (fun phase token => pure (assemble phase token))
+        beforeInstall = .ok db allocation.afterToken ∧
+      db.UsesOpenReferences current.state.session.directory lock files allocation.phase allocation.token ∧
+      (∀ pin, (issue pin).UsesOpenToken allocation.token pin) ∧
+      db.acquireAt snapshot =
+        acquireSnapshotWith (m := IO) (do (← allocation.phase.get).installed) allocation.phase.set issue snapshot ∧
+      NativeSnapshotUpdateContinuation current (.acquireAt snapshot) next ∧
+      current.state.session.runAcquireAt snapshot = .ok normalized next.state.session ∧
+      acquireSnapshotWith (m := EStateM IO.Error heap) (do (← get allocation.phase).installed) (set allocation.phase)
+        issue snapshot allocation.afterToken = .ok (normalized.map (fun (_, pin) => issue pin)) after ∧
+      contents after allocation.phase = some next.state.session.phase ∧
+      (normalized = none → after = allocation.afterToken) := by
+  let db := assemble allocation.phase allocation.token
+  obtain ⟨installed, uses, initial⟩ := allocation.installs constructor
+  have stored : contents allocation.afterToken allocation.phase = some current.state.session.phase :=
+    current.readPrefix.refines.1.phase.symm ▸ initial
+  obtain ⟨issue, next, normalized, after, usingToken, source, transition, returned, executed, reached, unchanged⟩ :=
+    current.acquiresViaOpenReferences db uses effects stored snapshot
+  exact ⟨db, issue, next, normalized, after, installed, uses, usingToken, source, transition, returned,
+    executed, reached, unchanged⟩
+
 end Alvoki.Storage.DiskSession

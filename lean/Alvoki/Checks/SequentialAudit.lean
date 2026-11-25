@@ -1578,6 +1578,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.returnsReadyWithReferences
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.acquireAt
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.acquiresViaOpenReferences
+#check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.acquiresAfterInstall
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.lookupPin
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.rangePin
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.readsOpenPin
