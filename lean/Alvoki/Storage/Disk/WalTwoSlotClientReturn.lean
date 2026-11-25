@@ -379,6 +379,41 @@ theorem recoveredSlot_retains {image : WalSegmentImage} {pair : DirectoryPublica
     subst phase
     exact recoveredAcknowledgedBatch_retains prior recovery selected (frontier ▸ nextSize)
 
+/-- Compose the selected physical WAL prefix with the segmentation proof
+for the same marker projection. An observed acknowledgement requires the
+full-batch selection, while an uncertain return admits either prefix. -/
+theorem selectedBytes_retainBatch
+    {image : WalSegmentImage} {directory pair : DirectoryPublication.Bindings}
+    {range : MarkedWalRange} {history batch events : List Write}
+    {base table : PackedTable} {first : Nat} {log : List DatabaseSubmissions}
+    (prior : DatabaseBatchRetention log history)
+    (recovery : WalSegmentRecovery image pair range (history ++ batch) base first table)
+    {marker wal : ByteArray} {decoded : Selection}
+    (accepted : decode marker = .ok decoded)
+    (projected : projectBinding directory marker = .ok pair)
+    (selected : Boundary.select decoded.frontier wal = .ok (WAL.encode events))
+    (whole : events = history ∨ events = history ++ batch)
+    (acknowledged : Bool) (confirmed : acknowledged = true → events = history ++ batch) :
+    if acknowledged then
+      DatabaseBatchRetention (log ++ [.acknowledgedBatch batch]) (history ++ batch) ∧
+      ∃ model, table.Refines model ∧ RepresentsWalHistory (history ++ batch) model
+    else
+      DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
+      ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
+  have projection := projectBinding_decodes (visible := directory) accepted
+  have samePair := Except.ok.inj (projected.symm.trans projection)
+  have binding : pair.walBoundary = some (Boundary.encode decoded.frontier) :=
+    congrArg DirectoryPublication.Bindings.walBoundary samePair
+  have count := (Boundary.select_size selected).symm
+  cases acknowledged with
+  | false =>
+    apply recoveredBatch_retains prior recovery binding
+    rcases whole with old | new
+    · exact .inl (old ▸ count)
+    · exact .inr (new ▸ count)
+  | true =>
+    exact recoveredAcknowledgedBatch_retains prior recovery binding (confirmed rfl ▸ count)
+
 open WalSegmentRepair (FileImage Target EffectTrace)
 
 /-- The retry trace supplies the actual frontier used by the recovered
