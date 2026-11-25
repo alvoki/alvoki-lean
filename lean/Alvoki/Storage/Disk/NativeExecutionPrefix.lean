@@ -22,6 +22,9 @@ import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryError
 import Alvoki.Storage.Disk.NativeCheckpointRunFileError
 import Alvoki.Storage.Disk.NativeCheckpointRunDataError
 import Alvoki.Storage.Disk.NativeCheckpointManifestSyncError
+import Alvoki.Storage.Disk.NativeCheckpointManifestOpenError
+import Alvoki.Storage.Disk.NativeCheckpointManifestDataError
+import Alvoki.Storage.Disk.NativeCheckpointManifestRenameError
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 
@@ -103,6 +106,15 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
   | checkpointManifestSyncError {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointManifestSyncError (image := image) current.ready.state cut)
+  | checkpointManifestOpenError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestOpenError (image := image) current.ready.state cut)
+  | checkpointManifestDataError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestDataError (image := image) current.ready.state cut)
+  | checkpointManifestRenameError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestRenameError (image := image) current.ready.state cut)
   | checkpointRunDataError {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointRunDataError (image := image) current.ready.state cut)
@@ -143,7 +155,8 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .interruptedClose _ _ => .close
   | .interruptedCloseAfterUncertainWrite pending _ _ => .writeThenClose pending.write.request
   | .checkpointError _ _ | .checkpointRunDirectoryError _ | .checkpointRunFileError _
-  | .checkpointRunDataError _ | .checkpointManifestSyncError _ => .checkpoint
+  | .checkpointRunDataError _ | .checkpointManifestSyncError _
+  | .checkpointManifestOpenError _ | .checkpointManifestDataError _ | .checkpointManifestRenameError _ => .checkpoint
   | .interruptedCheckpoint _ => .checkpoint
   | .collectionError _ _ _ => .collectCoveredWal
   | .interruptedCoveredWalUnlink _ | .interruptedCoveredWalDirectory _ | .coveredWalUnlinkError _ => .collectCoveredWal
@@ -236,6 +249,9 @@ def Reached : NativeExecutionEnd current → Prop
   | .checkpointRunFileError reported => NativeReturnedCheckpointRunFileError current.ready reported
   | .checkpointRunDataError reported => NativeReturnedCheckpointRunDataError current.ready reported
   | .checkpointManifestSyncError reported => NativeReturnedCheckpointManifestSyncError current.ready reported
+  | .checkpointManifestOpenError reported => NativeReturnedCheckpointManifestOpenError current.ready reported
+  | .checkpointManifestDataError reported => NativeReturnedCheckpointManifestDataError current.ready reported
+  | .checkpointManifestRenameError reported => NativeReturnedCheckpointManifestRenameError current.ready reported
   | .interruptedCheckpoint stop => NativePendingCheckpoint current.ready stop
   | .collectionError reported cause _ =>
       reported.run = .error (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}")
@@ -316,6 +332,9 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   | checkpointRunFileError reported => exact current.ready.checkpointRunFileError reported
   | checkpointRunDataError reported => exact current.ready.checkpointRunDataError reported
   | checkpointManifestSyncError reported => exact current.ready.checkpointManifestSyncError reported
+  | checkpointManifestOpenError reported => exact current.ready.checkpointManifestOpenError reported
+  | checkpointManifestDataError reported => exact current.ready.checkpointManifestDataError reported
+  | checkpointManifestRenameError reported => exact current.ready.checkpointManifestRenameError reported
   | interruptedCheckpoint stop => exact current.ready.stopsDuringCheckpoint stop
   | collectionError reported _ failed =>
     obtain ⟨returned, _, _, _, _, _, _, _, _, _, _, _, _, survivors, _⟩ :=
@@ -401,7 +420,9 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
   | ready | close | callsAfterReadyClose | rejectedOpensAfterClose | interruptedClose | checkpointError | interruptedCheckpoint
-  | checkpointRunDirectoryError | checkpointRunFileError | checkpointRunDataError | checkpointManifestSyncError | collectionError | coveredWalUnlinkError | interruptedCoveredWalUnlink
+  | checkpointRunDirectoryError | checkpointRunFileError | checkpointRunDataError
+  | checkpointManifestSyncError | checkpointManifestOpenError | checkpointManifestDataError | checkpointManifestRenameError
+  | collectionError | coveredWalUnlinkError | interruptedCoveredWalUnlink
   | interruptedCoveredWalDirectory | interruptedObsoleteRunUnlink | interruptedRotation | rotationError =>
     refine ⟨current.history, .inl rfl, ?_, current.ready.readPrefix.readsBounded⟩
     all_goals simpa [submissions, uncertainBatch] using current.ready.readPrefix.refines.2.2
@@ -471,6 +492,15 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
   | checkpointManifestSyncError {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointManifestSyncError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
+  | checkpointManifestOpenError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestOpenError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
+  | checkpointManifestDataError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestDataError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
+  | checkpointManifestRenameError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestRenameError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
   | checkpointRunDataError {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointRunDataError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
@@ -545,6 +575,9 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
   | checkpointRunFileError reported => exact ⟨.checkpointRunFileError reported, rfl, NativeExecutionEnd.reached _⟩
   | checkpointRunDataError reported => exact ⟨.checkpointRunDataError reported, rfl, NativeExecutionEnd.reached _⟩
   | checkpointManifestSyncError reported => exact ⟨.checkpointManifestSyncError reported, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointManifestOpenError reported => exact ⟨.checkpointManifestOpenError reported, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointManifestDataError reported => exact ⟨.checkpointManifestDataError reported, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointManifestRenameError reported => exact ⟨.checkpointManifestRenameError reported, rfl, NativeExecutionEnd.reached _⟩
   | interruptedCheckpoint stop => exact ⟨.interruptedCheckpoint stop, rfl, NativeExecutionEnd.reached _⟩
   | collectionError reported cause failed => exact ⟨.collectionError reported cause failed, rfl, NativeExecutionEnd.reached _⟩
   | coveredWalUnlinkError reported => exact ⟨.coveredWalUnlinkError reported, rfl, NativeExecutionEnd.reached _⟩
