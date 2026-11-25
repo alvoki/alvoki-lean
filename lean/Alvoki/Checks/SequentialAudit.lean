@@ -1,4 +1,5 @@
 import Alvoki.Checks.AxiomPolicy
+import Alvoki.Storage.Disk.WalTwoSlotClientReturn
 import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.WalBatchRecovery
 import Alvoki.Storage.Disk.WalBatchMarkerPowerLoss
@@ -2132,3 +2133,4 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.publish_reports
 #check_axioms Alvoki.WAL.TwoSlot.advance_fields
 #check_axioms Alvoki.WAL.TwoSlot.decode_newer
+#check_axioms Alvoki.WAL.TwoSlot.prepared_write_reports
