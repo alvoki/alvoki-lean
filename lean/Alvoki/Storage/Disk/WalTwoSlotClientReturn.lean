@@ -223,6 +223,16 @@ open Boundary (WalInodeImage)
 open Storage.SyncHandleRouting (FsyncObservation)
 open WalSegmentRepair (KeeperDescriptorIdentity)
 
+private theorem completeFileSync_survivor {image reached : WalInodeImage}
+    (state : reached = image.completeFileSync image.active)
+    (binding : ∀ inode ∈ image.crashBindings, inode = image.active)
+    {bytes : ByteArray} (survived : ∃ inode ∈ reached.crashBindings, bytes ∈ reached.crashBytes inode) :
+    bytes = image.visible image.active := by
+  obtain ⟨inode, bound, stored⟩ := survived
+  have live := binding inode (by
+    simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync] using bound)
+  simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, live] using stored
+
 private theorem syncedInode_survivor {image reached : WalInodeImage}
     {descriptor : KeeperDescriptorIdentity}
     (report : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
@@ -235,10 +245,7 @@ private theorem syncedInode_survivor {image reached : WalInodeImage}
   have target := report.sameInode.trans current
   rw [target] at completed
   have state : reached = image.completeFileSync image.active := by injection completed
-  obtain ⟨inode, bound, stored⟩ := survived
-  have live : inode = image.active := by
-    exact binding inode (by simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync] using bound)
-  simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, live] using stored
+  exact completeFileSync_survivor state binding survived
 
 /-- An error after the marker file has reached durable storage does not
 undo that effect. Every surviving binding to the marker inode reads the
@@ -265,11 +272,7 @@ theorem markerSyncErrorAfter_selectsSuccessor
   have state : reached = marker.completeFileSync marker.active := by
     cases effect
     rfl
-  obtain ⟨inode, bound, stored⟩ := survived
-  have live : inode = marker.active := binding inode (by simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync] using bound)
-  have exactBytes : bytes = marker.visible marker.active := by
-    simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, live] using stored
-  rw [exactBytes]
+  rw [completeFileSync_survivor state binding survived]
   exact decode_afterAdvance prior advanced size unchanged written
 
 /-- The successful reopen barrier persists the same marker that the
