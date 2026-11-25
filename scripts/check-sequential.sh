@@ -210,6 +210,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeOpenEarlyError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawMarkerRouteError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawManifestDecodeError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
+lake env leanchecker Alvoki.Storage.Disk.NativeRawFinalizedOpenError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawAbsentManifestListing
 lake env leanchecker Alvoki.Storage.Disk.NativeRawFlatWalOpenError
 lake env leanchecker Alvoki.Storage.Disk.NativeCacheOpenRejection

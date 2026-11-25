@@ -303,6 +303,7 @@ import Alvoki.Storage.Disk.NativeOpenEarlyError
 import Alvoki.Storage.Disk.NativeRawMarkerRouteError
 import Alvoki.Storage.Disk.NativeRawManifestDecodeError
 import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
+import Alvoki.Storage.Disk.NativeRawFinalizedOpenError
 import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
 import Alvoki.Storage.Disk.NativeRawFlatWalOpenError
 import Alvoki.Storage.Disk.NativeCacheOpenRejection
@@ -1897,6 +1898,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawManifestDecodeFailure.stopsBeforeWal
 #check_axioms Alvoki.Storage.DiskSession.RawManifestDecodeFailure.returns
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returns
+#check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsAfterLockFinalization
 #check_axioms Alvoki.Storage.DiskSession.RawAbsentManifestMarkerPrefix.readsSelected
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.stops
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.sameStream
