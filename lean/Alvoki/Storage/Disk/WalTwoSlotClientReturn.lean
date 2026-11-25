@@ -10,6 +10,7 @@ import Alvoki.Storage.Disk.BatchInterruptionDispatch
 import Alvoki.Storage.Disk.SyncHandleEffects
 import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.DescriptorInventory
+import Alvoki.Storage.Disk.HeldMetadataReadObservations
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -479,6 +480,24 @@ theorem markerSyncErrorAfter_selectsSuccessor
   rw [completeFileSync_survivor state binding survived,
     syncedInode_survivor walSync walCurrent walBinding walSurvived]
   exact syncedBytes_selectBatch history batch prior advanced size unchanged written appended
+
+/-- The no-follow stat and raw open on the held directory identify the
+object whose bounded read selects the two-slot frontier. -/
+theorem decode_markerFromHeldDirectory
+    {reads : WalSegmentRepair.CheckpointRunChunkReads} {directory : DiskDirectory}
+    {view : DiskSession.DirectoryReadNamespace} {root : DiskSession.DeviceInode}
+    {payload : ByteArray}
+    (file : DiskSession.HeldMetadataFile reads (directory.file .walBoundary) "WAL.commit" view root payload)
+    (available : PrefixChunksAvailableUntilEof payload (reads.readChunk file.calls.slot.description)) :
+    ∃ bytes, readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+      (reads.readChunk file.calls.slot.description) acquisitionLimit ByteArray.empty 0 =
+        .ok bytes (min acquisitionLimit payload.size) ∧ decode bytes = decode payload := by
+  have object := congrArg view.modelObject (file.calls.openLookup.child_eq file.bound)
+  have opened := object.symm.trans file.calls.identifiedOpen
+  have contents : reads.objectBytes (file.calls.inventory.inode file.calls.slot.description) = some payload := by
+    rw [← opened, file.contents]
+  exact decode_heldRead _ (file.calls.observes payload contents) available
+    (Nat.lt_of_lt_of_le (by decide) USize.le_size)
 
 /-- The successful reopen barrier persists the same marker that the
 bounded read observed. WAL repair may rely on this frontier for every

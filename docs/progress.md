@@ -814,3 +814,10 @@ The successful retry proof now inserts the observed marker slot into the
 pre-acquisition descriptor census. It derives the issuing reference
 from that allocation and the intervening drop reports. The caller
 still supplies those reports and the reached WAL and repair effects.
+
+The branch includes `main` through `3672ceb`. The two-slot read proof
+now derives its bounded decode from a held-directory marker report
+with separate no-follow stat and raw-open lookups. The opened inode
+supplies the bytes read at the rewound cursor. The remaining composition
+must carry the slot and filesystem state from that report through
+checkpoint and WAL preparation, marker sync and repair.
