@@ -871,8 +871,12 @@ The first repair directory barrier can now use the census returned by
 the keeper read. The cached handle still comes from admission. Lean
 derives the live issuing reference and the directory inode from the
 reached census, and a reported successful barrier settles the selected
-namespace while retaining that census. The replacement and prune
-schedules still need to consume this chronological barrier.
+namespace while retaining that census. The aligned, suffix-pruning and
+keeper-replacement recovery theorems now consume this barrier. Replacement
+uses the census after the temporary keeper closes. The replacement and
+prune theorems still require repair reports indexed by the admission
+census, so they do not yet compose with marker-open preparation.
+The final native client-history theorem still needs that composition.
 [Keeper descriptor custody](../lean/Alvoki/Storage/Disk/CapturedKeeperCustody.lean)
 
 The aligned repair lemmas accept the actual marker-open descriptor census

@@ -1616,12 +1616,19 @@ theorem reopensAlignedAfterCapturedPreparation
     (removeFile : System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Except IO.Error Unit))
     (write : System.FilePath → ByteArray → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
     (renameFile : System.FilePath → System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
-    {authorized after : CensusOpenState}
-    (directorySync : fsync (admission.reached, admission.cached, 0)
-      (captured.afterRead,
-        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) =
-      .ok () authorized)
-    (keeperSync : fsync (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0) authorized = .ok () after) :
+    {after : CensusOpenState}
+    (directorySync :
+      let before := { admission.held with image :=
+        { retry.image with directory := settleMarker retry.image.directory selection } }
+      fsync (admission.reached, admission.cached, 0) (captured.afterRead, before) =
+        match (captured.directoryBarrier .completed).run before with
+        | .ok value reached => .ok value (captured.afterRead, reached)
+        | .error cause reached => .error cause (captured.afterRead, reached))
+    (keeperSync :
+      let before := { admission.held with image :=
+        { retry.image with directory := settleMarker retry.image.directory selection } }
+      fsync (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+        (captured.afterRead, { before with image := before.image.syncDirectory }) = .ok () after) :
     reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices)
         (fun plan extent => finishBoundedMarkedOpen directory plan extent removeFile write
           (Storage.SyncPathGroup.run (Storage.SyncHandleRouting.sync directory.path openRead fsync)) renameFile) before =
@@ -1629,7 +1636,7 @@ theorem reopensAlignedAfterCapturedPreparation
   apply reopensAfterCapturedPreparation report captured live current effect sameBinding decoded
     bound choices enumerated presence physical prepare prepared
   have returned := captured.finishAlignedFromCache aligned noLater openRead fsync
-    removeFile write renameFile directorySync
+    removeFile write renameFile (captured.directoryBarrier_completed _ fsync directorySync)
   simpa only [keeperSync] using returned
 
 /-- Install the marked worker's recovered table in the admitted session.
@@ -1688,9 +1695,13 @@ theorem reopensLongAfterCapturedPreparation
     (prepared : prepare before =
       .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size)
         (admission.cache, finish.reader.afterRead, admission.held))
-    (directorySync : finish.authorization.fsync (admission.reached, admission.cached, 0)
-      { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
-      .ok () { admission.held with image := retry.image.syncDirectory }) :
+    (frontier : retry.image.directory.active.walBoundary = some (Boundary.encode selection.frontier))
+    (directorySync :
+      let before := { admission.held with image :=
+        { retry.image with directory := settleMarker retry.image.directory selection } }
+      finish.authorization.fsync (admission.reached, admission.cached, 0) before =
+        (finish.reader.directoryBarrierAfterDrops [report.wal.keeper.calls.slot.closeEvent]
+          (finish.readAndClose.2.symm ▸ finish.authorization.directoryRetained) .completed).run before) :
     reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices)
       (finish.repairAfterRead directory) before =
         .ok opened (admission.cache, finish.census, finish.settled) := by
@@ -1705,7 +1716,12 @@ theorem reopensLongAfterCapturedPreparation
       | .ok settled => _) = _
     rw [projected]
     rfl
-  simp only [reopenWith_reports, prepared, barrier, finish.repairAfterRead_returns_from _ directorySync]
+  have authorized : finish.authorization.fsync (admission.reached, admission.cached, 0)
+      { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
+      .ok () { admission.held with image := retry.image.syncDirectory } := by
+    simpa only [CapturedKeeperOpenReports.directoryBarrierAfterDrops, DescriptorInventory.delayedDirectorySync,
+      DelayedDirectorySync.run, syncDirectory_afterSelectedMarker _ _ frontier] using directorySync
+  simp only [reopenWith_reports, prepared, barrier, finish.repairAfterRead_returns_from _ authorized]
 
 /-- An aligned keeper with later segments uses the same ordered suffix
 repair after the marker barrier reaches the common authorized image. -/
@@ -1736,9 +1752,12 @@ theorem reopensPrunedAfterCapturedPreparation
       .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size)
         (admission.cache.remember (directory.file (.walSegment layout.keeper.first))
           (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0), finish.reader.afterRead, admission.held))
-    (directorySync : finish.authorization.fsync (admission.reached, admission.cached, 0)
-      { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
-      .ok () { admission.held with image := retry.image.syncDirectory }) :
+    (frontier : retry.image.directory.active.walBoundary = some (Boundary.encode selection.frontier))
+    (directorySync :
+      let before := { admission.held with image :=
+        { retry.image with directory := settleMarker retry.image.directory selection } }
+      finish.authorization.fsync (admission.reached, admission.cached, 0) before =
+        (finish.reader.directoryBarrier .completed).run before) :
     reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices)
       (finish.repairActions directory) before =
         .ok opened (admission.cache, finish.census, finish.settled) := by
@@ -1755,7 +1774,13 @@ theorem reopensPrunedAfterCapturedPreparation
       | .ok settled => _) = _
     rw [projected]
     rfl
-  have repaired := finish.repairActions_returns_from _ directorySync later
+  have authorized : finish.authorization.fsync (admission.reached, admission.cached, 0)
+      { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
+      .ok () { admission.held with image := retry.image.syncDirectory } := by
+    simpa only [CapturedKeeperOpenReports.directoryBarrier, CapturedKeeperOpenReports.directoryBarrierAfterDrops,
+      DescriptorInventory.delayedDirectorySync,
+      DelayedDirectorySync.run, syncDirectory_afterSelectedMarker _ _ frontier] using directorySync
+  have repaired := finish.repairActions_returns_from _ authorized later
   change finish.repairActions directory layout.boundedPlan layout.plan.keeperBytes.size
     (remembered, finish.reader.afterRead, _) = _ at repaired
   change prepare before = .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size)
