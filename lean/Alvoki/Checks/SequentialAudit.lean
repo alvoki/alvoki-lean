@@ -82,6 +82,7 @@ import Alvoki.Storage.Disk.CheckpointRunDirectoryFailure
 import Alvoki.Storage.Disk.CheckpointRunFileSyncFailureReopen
 import Alvoki.Storage.Disk.CheckpointRunGuardFailure
 import Alvoki.Storage.Disk.CheckpointRunOpenFailure
+import Alvoki.Storage.Disk.CheckpointRunDataFailure
 import Alvoki.Storage.Disk.CheckpointManifestRenameCut
 import Alvoki.Storage.Disk.CheckpointManifestRenameReopen
 import Alvoki.Storage.Disk.CheckpointRunBarrierReopen
@@ -401,6 +402,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunOpenFailure.returns
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunOpenFailure.priorRuns
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunOpenFailure.reopens
+#check_axioms Alvoki.Storage.CheckpointPublication.RunDataWriteFailure.returns
+#check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDataFailure.reachedBinding
+#check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDataFailure.returnsWrite
+#check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDataFailure.returns
+#check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDataFailure.priorRuns
+#check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDataFailure.reopens
 #check_axioms Alvoki.Storage.CheckpointPublication.RunOpenLinkReports.privateBinding
 #check_axioms Alvoki.Storage.CheckpointPublication.RunDirectoryInodeView.Stable.guaranteed
 #check_axioms Alvoki.Storage.CheckpointPublication.RunWriteInodeFrame.keepsVisible
