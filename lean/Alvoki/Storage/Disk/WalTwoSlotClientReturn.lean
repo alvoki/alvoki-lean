@@ -250,6 +250,56 @@ theorem syncedDescriptors_selectBatch
     syncedInode_survivor markerSync markerCurrent markerSettled markerSurvived]
   exact syncedBytes_selectBatch history batch prior advanced size unchanged written appended
 
+/-- Apply the filesystem contracts at the actual successful callback
+states of a client acknowledgement. The crash-byte choices are taken
+from the two inodes at the final installed state. -/
+theorem acknowledgedWrite_selectBatch {α : Type}
+    (nextTable : α) (sequence : UInt64) (phase : DiskSession.Phase α)
+    (append syncWal writeSlot syncSlot install :
+      EStateM IO.Error (WalInodeImage × WalInodeImage) Unit)
+    {initial final : WalInodeImage × WalInodeImage}
+    (returned : DiskSession.publishPreparedWrite nextTable sequence setPhase
+      (commitReports (publish append syncWal writeSlot syncSlot install)) (phase, initial) =
+        .ok sequence (.ready nextTable, final))
+    {walHandle markerHandle : KeeperDescriptorIdentity}
+    (walReport : ∀ {before after}, syncWal before = .ok () after →
+      FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+        walHandle before.1 (fun inode files => files.completeFileSync inode) (.ok () after.1))
+    (markerReport : ∀ {before after}, syncSlot before = .ok () after →
+      FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+        markerHandle before.2 (fun inode files => files.completeFileSync inode) (.ok () after.2))
+    (slotKeepsWal : ∀ {before after}, writeSlot before = .ok () after → after.1 = before.1)
+    (markerSyncKeepsWal : ∀ {before after}, syncSlot before = .ok () after → after.1 = before.1)
+    (installKeepsFiles : ∀ {before after}, install before = .ok () after → after = before)
+    (history batch : List WAL.Write) {before markerBytes walBytes : ByteArray} {current next : Selection}
+    (prior : decode before = .ok current)
+    (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
+    (appendReport : ∀ {after}, append initial = .ok () after →
+      walHandle.inode = after.1.active ∧ after.1.crashBindings = [after.1.active] ∧
+      ∃ tail, after.1.visible after.1.active = WAL.encode (history ++ batch) ++ tail)
+    (slotReport : ∀ {beforeState after}, writeSlot beforeState = .ok () after →
+      markerHandle.inode = after.2.active ∧ after.2.crashBindings = [after.2.active] ∧
+      (after.2.visible after.2.active).size = containerSize ∧
+      (∀ position,
+        (position < next.slot * stride ∨ next.slot * stride + 40 ≤ position) →
+          (after.2.visible after.2.active).get! position = before.get! position) ∧
+      (after.2.visible after.2.active).extract (next.slot * stride) (next.slot * stride + 40) =
+        next.encode)
+    (walSurvived : ∃ inode ∈ final.1.crashBindings, walBytes ∈ final.1.crashBytes inode)
+    (markerSurvived : ∃ inode ∈ final.2.crashBindings, markerBytes ∈ final.2.crashBytes inode) :
+    decode markerBytes = .ok next ∧
+      Boundary.select next.frontier walBytes = .ok (WAL.encode (history ++ batch)) := by
+  obtain ⟨appended, walSynced, written, synced, wrote, walBarrier, slotWrite, slotBarrier, installed⟩ :=
+    prepared_write_acknowledged nextTable sequence phase append syncWal writeSlot syncSlot install returned
+  have finish := installKeepsFiles installed
+  rw [finish, markerSyncKeepsWal slotBarrier, slotKeepsWal slotWrite] at walSurvived
+  rw [finish] at markerSurvived
+  obtain ⟨walCurrent, walSettled, appendedBytes⟩ := appendReport wrote
+  obtain ⟨markerCurrent, markerSettled, size, unchanged, writtenBytes⟩ := slotReport slotWrite
+  exact syncedDescriptors_selectBatch (walReport walBarrier) (markerReport slotBarrier)
+    walCurrent markerCurrent walSettled markerSettled walSurvived markerSurvived history batch
+    prior advanced size unchanged writtenBytes appendedBytes
+
 /-- After the successful WAL barrier, any marker bytes surviving an
 interrupted positional write on the live marker can expose only the
 previous history or the whole newly durable batch. The slot isolation
