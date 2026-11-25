@@ -828,3 +828,9 @@ reported slot inserted. Its bounded read yields the selected frontier,
 and the same slot supplies the later fsync effect after the reported
 drops. The proof still takes the drop chronology across checkpoint and
 WAL preparation and the reached repair effects as inputs.
+
+The temporary-read custody proof now preserves a separately retained
+slot across allocation, bounded reads and finalization. Its finalizer
+cannot target the marker slot because the temporary open used a free
+descriptor address. The remaining lifetime premises concern the other
+reported drops between callbacks.

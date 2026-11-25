@@ -2265,6 +2265,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.afterClose_eq
 #check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.liveAtRead
 #check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.closes
+#check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.preservesSlot
 #check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.readSeal
 #check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.reaches
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanWal_closed

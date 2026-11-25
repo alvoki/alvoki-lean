@@ -74,6 +74,33 @@ theorem closes (custody : TemporaryPrefixCustody opened initial (released path))
   rw [reduced, ← DescriptorInventory.afterDrops_append, DescriptorInventory.references_afterDrops, custody.fresh]
   rfl
 
+/-- A separate retained slot survives a successful temporary read when
+it survives the intervening drops. The temporary finalizer cannot close
+it because allocation used a free descriptor address. -/
+theorem preservesSlot (custody : TemporaryPrefixCustody opened initial (released path))
+    {slot : DescriptorSlot} (present : slot ∈ initial.slots)
+    (retainedBeforeOpen : ∀ event ∈ custody.beforeOpen, event.removes slot.reference = false)
+    (retainedBeforeClose : ∀ event ∈ custody.beforeClose, event.removes slot.reference = false) :
+    slot ∈ (opened.inventory.afterDrops (released path)).slots := by
+  have beforeOpen : slot ∈ (initial.afterDrops custody.beforeOpen).slots :=
+    List.mem_filter.mpr ⟨present, List.all_eq_true.mpr (by simpa using retainedBeforeOpen)⟩
+  have finalizer : opened.slot.closeEvent.removes slot.reference = false := by
+    cases removed : opened.slot.closeEvent.removes slot.reference with
+    | false => rfl
+    | true =>
+      exfalso
+      apply custody.free slot beforeOpen
+      simpa [DescriptorSlot.address, DescriptorSlot.closeEvent, LockReferenceDrop.removes,
+        Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq] using removed
+  rw [custody.closes.1, ← DescriptorInventory.afterDrops_append,
+    congrArg (initial.afterDrops custody.beforeOpen).afterDrops custody.closing]
+  refine List.mem_filter.mpr ⟨beforeOpen, List.all_eq_true.mpr ?_⟩
+  intro event member
+  rcases List.mem_append.mp member with earlier | last
+  · simp [retainedBeforeClose event earlier]
+  · have same := List.mem_singleton.mp last
+    simp [same, finalizer]
+
 /-- The held stat and actual chunk callback produce the complete file
 bytes. The reached file image and cache are unchanged and the descriptor
 census records the exact temporary lifetime. -/
