@@ -363,7 +363,8 @@ theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission l
     (selected : selectWalExtentsThrough extents layout.range.watermark (count.toNat / WAL.frameSize) =
       some (required, newer))
     {released : FilePath → List LockReferenceDrop}
-    (seals : CapturedSealReadChain report released required report.listing.afterClose captured.beforeOpen)
+    {retains : DescriptorSlot → Prop}
+    (seals : CapturedSealReadChainWith report released retains required report.listing.afterClose captured.beforeOpen)
     (retained : ∀ event ∈ captured.beforeOpen,
       event.removes admission.owner.reference = false ∧ event.removes admission.cached.reference = false)
     (readKeeper : FilePath → Nat → Nat → EStateM IO.Error ReadState ByteArray) :

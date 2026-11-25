@@ -360,6 +360,73 @@ def CapturedMarkedReadReports.prepareFromCensus (report : CapturedMarkedReadRepo
     (fun watermark length => readSelectedWithCachedExtents directory watermark length report.scanWal
       report.inspectWal (readTemporarySeal report.reads sealRelease) readKeeper)
 
+/-- Use the same checked WAL catalog and ordered seal reads for either
+marker format. The observed keeper callback starts at the reached census. -/
+theorem CapturedMarkedReadReports.walFromScanToKeeper
+    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {length : UInt64} (count : length.toNat = layout.range.through * WAL.frameSize)
+    (captured : CapturedKeeperOpenReports report) {released : FilePath → List LockReferenceDrop}
+    {required : List (Nat × IO.FS.Metadata)}
+    {retains : DescriptorSlot → Prop}
+    (seals : CapturedSealReadChainWith report released retains required report.listing.afterClose captured.beforeOpen)
+    (offsets : required.map Prod.fst = (layout.sealed ++ [layout.keeper]).map WalSegment.first)
+    (retained : ∀ event ∈ captured.beforeOpen,
+      event.removes admission.owner.reference = false ∧ event.removes admission.cached.reference = false)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (later : ∀ start ∈ retry.image.later.visible, layout.range.through < start)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error ReadState ByteArray) :
+    admission.owner ∈ captured.atOpen.slots ∧ admission.cached ∈ captured.atOpen.slots ∧
+    readSelectedWithCachedExtents directory layout.range.watermark length report.scanWal
+        report.inspectWal (readTemporarySeal report.reads released) readKeeper
+        (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) =
+      (do
+        let (last, extent) ← readCachedWalPayloads directory (length.toNat / WAL.frameSize)
+          (readTemporarySeal report.reads released) readKeeper [(layout.keeper.first, report.wal.keeper.calls.metadata)]
+        pure (⟨layout.sealed.map (fun segment => (segment.first, segment.bytes)) ++ last, retry.image.later.visible⟩, extent) : EStateM IO.Error ReadState (WalSegmentMarkerReads × Nat))
+        (admission.cache, captured.atOpen, admission.held) := by
+  obtain ⟨extents, chosen, scanned, selection, ordered, _⟩ := report.catalog.scanSelected following later count
+  have listed := (CheckedDirectoryReadReport.scan_complete directory.path report.listing.eof report.listing.closed
+    report.listing.complete).1
+  have entries := Except.ok.inj (report.catalog.listed.symm.trans (report.listed.trans listed))
+  rw [entries] at scanned
+  have reportedStat (entry) (member : entry ∈ chosen) :=
+    OpenPathReadReports.walSegmentExtents_metadata scanned (selectWalExtentsThrough_required_subset selection member)
+  have same := seals.matchesExtents (offsets.trans ordered.symm) reportedStat
+  rw [← same] at selection
+  have aligned : length.toNat % WAL.frameSize = 0 := by rw [count, Nat.mul_mod_left]
+  have through : length.toNat / WAL.frameSize = layout.range.through := by
+    rw [count, Nat.mul_div_cancel _ (by decide : 0 < WAL.frameSize)]
+  have covers : layout.range.watermark ≤ length.toNat / WAL.frameSize :=
+    through.symm ▸ (DirectoryPublication.Bindings.walRange_accounting layout.decoded).2.1
+  obtain ⟨owner, directoryLive, earlier, prior, contents, reached⟩ :=
+    report.selectedWalReachesKeeper captured aligned covers scanned selection seals retained readKeeper
+  have earlierOffsets : earlier.map Prod.fst = layout.sealed.map WalSegment.first := by
+    simpa only [List.map_dropLast, offsets, List.map_append, List.map_cons, List.map_nil, List.dropLast_append_cons,
+      List.dropLast_singleton, List.append_nil] using prior
+  let exactSeals := layout.sealed.map (fun segment => (segment.first, segment.bytes))
+  have exactOffsets : exactSeals.map Prod.fst = layout.sealed.map WalSegment.first := by
+    simp [exactSeals, List.map_map, Function.comp_def]
+  let payload (first : Nat) := (first, (retry.image.kept first).getD ByteArray.empty)
+  have readsStored (files : List (Nat × ByteArray))
+      (all : ∀ file ∈ files, retry.image.kept file.1 = some file.2) :
+      files = (files.map Prod.fst).map payload := by
+    rw [List.map_map]
+    calc
+      files = files.map id := (List.map_id _).symm
+      _ = _ := List.map_congr_left fun file member => by cases file; simp [payload, all _ member]
+  have stored : ∀ file ∈ exactSeals, retry.image.kept file.1 = some file.2 := by
+    intro file member
+    obtain ⟨segment, held, rfl⟩ := List.mem_map.mp member
+    exact report.wal.kept segment held
+  have exactEarlier : earlier = exactSeals := by
+    calc
+      earlier = (earlier.map Prod.fst).map payload := readsStored _ contents
+      _ = (exactSeals.map Prod.fst).map payload := congrArg (List.map payload) (earlierOffsets.trans exactOffsets.symm)
+      _ = exactSeals := (readsStored _ stored).symm
+  refine ⟨owner, directoryLive, ?_⟩
+  simpa only [exactEarlier] using reached
+
 /-- The admitted marked preparation carries one census through the
 manifest, exact selected runs and marker, checked directory stream and
 temporary seal reads. It reaches the keeper with its actual path, extent
@@ -403,45 +470,8 @@ theorem CapturedMarkedReadReports.beforeKeeper (report : CapturedMarkedReadRepor
     report.inspectWal (readTemporarySeal report.reads released) readKeeper
   obtain ⟨_, _, _, watermark, ⟨length, decoded, count⟩, entered⟩ :=
     report.beforeWalScan manifest runs selected marker chronology walRead
-  obtain ⟨extents, chosen, scanned, selection, ordered, _⟩ := report.catalog.scanSelected following later count
-  have listed := (CheckedDirectoryReadReport.scan_complete directory.path report.listing.eof report.listing.closed
-    report.listing.complete).1
-  have entries := Except.ok.inj (report.catalog.listed.symm.trans (report.listed.trans listed))
-  rw [entries] at scanned
-  have reportedStat (entry) (member : entry ∈ chosen) :=
-    OpenPathReadReports.walSegmentExtents_metadata scanned (selectWalExtentsThrough_required_subset selection member)
-  have same := seals.matchesExtents (offsets.trans ordered.symm) reportedStat
-  rw [← same] at selection
-  have aligned : length.toNat % WAL.frameSize = 0 := by rw [count, Nat.mul_mod_left]
-  have through : length.toNat / WAL.frameSize = layout.range.through := by
-    rw [count, Nat.mul_div_cancel _ (by decide : 0 < WAL.frameSize)]
-  have covers : layout.range.watermark ≤ length.toNat / WAL.frameSize :=
-    through.symm ▸ (DirectoryPublication.Bindings.walRange_accounting layout.decoded).2.1
-  obtain ⟨owner, directoryLive, earlier, prior, contents, reached⟩ :=
-    report.selectedWalReachesKeeper captured aligned covers scanned selection seals retained readKeeper
-  have earlierOffsets : earlier.map Prod.fst = layout.sealed.map WalSegment.first := by
-    simpa only [List.map_dropLast, offsets, List.map_append, List.map_cons, List.map_nil, List.dropLast_append_cons,
-      List.dropLast_singleton, List.append_nil] using prior
-  let exactSeals := layout.sealed.map (fun segment => (segment.first, segment.bytes))
-  have exactOffsets : exactSeals.map Prod.fst = layout.sealed.map WalSegment.first := by
-    simp [exactSeals, List.map_map, Function.comp_def]
-  let payload (first : Nat) := (first, (retry.image.kept first).getD ByteArray.empty)
-  have readsStored (files : List (Nat × ByteArray))
-      (all : ∀ file ∈ files, retry.image.kept file.1 = some file.2) :
-      files = (files.map Prod.fst).map payload := by
-    rw [List.map_map]
-    calc
-      files = files.map id := (List.map_id _).symm
-      _ = _ := List.map_congr_left fun file member => by cases file; simp [payload, all _ member]
-  have stored : ∀ file ∈ exactSeals, retry.image.kept file.1 = some file.2 := by
-    intro file member
-    obtain ⟨segment, held, rfl⟩ := List.mem_map.mp member
-    exact report.wal.kept segment held
-  have exactEarlier : earlier = exactSeals := by
-    calc
-      earlier = (earlier.map Prod.fst).map payload := readsStored _ contents
-      _ = (exactSeals.map Prod.fst).map payload := congrArg (List.map payload) (earlierOffsets.trans exactOffsets.symm)
-      _ = exactSeals := (readsStored _ stored).symm
+  obtain ⟨owner, directoryLive, reached⟩ :=
+    report.walFromScanToKeeper count captured seals offsets retained following later readKeeper
   refine ⟨owner, directoryLive, report.listing.sameDirectoryObject, length, decoded, count, ?_⟩
   have markerDecoded : (liftExcept ((WAL.Boundary.decode marker.bytes).mapError IO.userError) : EStateM IO.Error ReadState UInt64) =
       pure length := by rw [decoded]; rfl
@@ -451,7 +481,7 @@ theorem CapturedMarkedReadReports.beforeKeeper (report : CapturedMarkedReadRepor
   rw [entered]
   simp only [prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, markerDecoded, watermark]
   dsimp only [walRead]
-  rw [reached, exactEarlier]
+  rw [reached]
   rfl
 
 /-- The chronological preparation and the read-only projection return

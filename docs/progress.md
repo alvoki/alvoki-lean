@@ -955,3 +955,10 @@ The actual bounded preparation worker now consumes the checkpoint
 result at the exact WAL scan entry state when the frontier is already
 held. The proof rewrites only the outer checkpoint bind on each side
 and leaves the read and replay continuation intact.
+
+The proof from the checked WAL scan through the ordered sealed reads
+to the keeper entry is shared by both marker formats. It derives the
+exact sealed payloads, later names and reached keeper census from the
+same reports. The rename-backed opener now uses this lemma. The
+two-slot opener can use a seal chain that also tracks its retained
+marker descriptor.
