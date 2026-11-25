@@ -23,7 +23,7 @@ def Selection.encode (selected : Selection) : ByteArray :=
 def initialSelection : Selection := ⟨0, 0, 0⟩
 
 def initial : ByteArray :=
-  ⟨initialSelection.encode.data ++ Array.replicate (containerSize - 40) 0⟩
+  initialSelection.encode ++ ⟨Array.replicate (containerSize - 40) 0⟩
 
 private def decodeSlot (bytes : ByteArray) (slot : Nat) : Option Selection := do
   let offset := slot * stride
@@ -109,6 +109,38 @@ def decode (bytes : ByteArray) : Except String Selection :=
     select (decodeSlot bytes 0) (decodeSlot bytes 1)
   else
     .error "invalid two-slot WAL marker length"
+
+/-- The bytes published at bootstrap select an empty WAL. -/
+theorem decode_initial : decode initial = .ok initialSelection := by
+  let padding : ByteArray := ⟨Array.replicate (containerSize - 40) 0⟩
+  have encodedSize : initialSelection.encode.size = 40 := by
+    simp [Selection.encode]
+  have paddingSize : padding.size = containerSize - 40 := by
+    change (Array.replicate (containerSize - 40) (0 : UInt8)).size = _
+    simp
+  have joined : initial = initialSelection.encode ++ padding := rfl
+  have size : initial.size = containerSize := by
+    rw [joined, ByteArray.size_append, encodedSize, paddingSize]
+    decide
+  have encodedPrefix : initial.extract 0 40 = initialSelection.encode := by
+    rw [joined, ByteArray.extract_append_eq_left encodedSize.symm]
+  have first : decodeSlot initial 0 = some initialSelection :=
+    decodeSlot_exact initialSelection (by rw [size]; decide) encodedPrefix (by decide) (by decide) (by decide)
+  have zeroByte (offset : Nat) (within : offset < padding.size) : padding.get! offset = 0 := by
+    rw [getBang_eq_index, getElem!_pos padding offset within]
+    exact Array.getElem_replicate _
+  have zeroWord : word padding (stride - 40) = 0 := by
+    simp only [word, joinBytes]
+    repeat rw [zeroByte _ (by rw [paddingSize]; decide)]
+    decide
+  have otherWord : word initial stride = 0 := by
+    rw [joined, ← zeroWord]
+    have offset : stride = initialSelection.encode.size + (stride - 40) := by rw [encodedSize]; decide
+    refine (congrArg (word (initialSelection.encode ++ padding)) offset).trans ?_
+    exact word_right _ _ _ (by rw [paddingSize]; decide)
+  have second : decodeSlot initial 1 = none := by
+    simp [decodeSlot, otherWord, magic]
+  simp [decode, size, first, second, select]
 
 /-- Read one byte beyond the fixed container to witness oversized files. -/
 abbrev acquisitionLimit : Nat := containerSize + 1

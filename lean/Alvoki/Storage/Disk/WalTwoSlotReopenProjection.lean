@@ -31,6 +31,15 @@ theorem projectBinding_decodes {visible : Bindings} {bytes : ByteArray} {selecte
       ⟨visible.manifest, some (Boundary.encode selected.frontier)⟩ := by
   simp [projectBinding, accepted, Except.map, Bindings.replace]
 
+/-- Bootstrap exposes the same zero frontier and checkpoint binding as
+the ordinary empty-WAL installer under the marker projection. -/
+theorem projectBinding_initial (visible : Bindings) :
+    projectBinding visible initial = .ok ⟨visible.manifest, some (Boundary.encode 0)⟩ :=
+  by
+    have projected := projectBinding_decodes (visible := visible)
+      (bytes := initial) (selected := initialSelection) decode_initial
+    simpa only [initialSelection] using projected
+
 /-- A physically observed marker that decodes after an interrupted write
 projects to one of the original batch frontiers. After successful sync its
 projection is the new frontier. WAL validation is checked separately. -/

@@ -2164,3 +2164,5 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.TwoSlotDiskTable.publish_fileEffects
 #check_axioms Alvoki.WAL.TwoSlot.decode_acquisitionPrefix
 #check_axioms Alvoki.WAL.TwoSlot.decode_heldRead
+#check_axioms Alvoki.WAL.TwoSlot.decode_initial
+#check_axioms Alvoki.WAL.TwoSlot.projectBinding_initial
