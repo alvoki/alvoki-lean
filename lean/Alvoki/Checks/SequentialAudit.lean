@@ -337,6 +337,7 @@ import Alvoki.Storage.Disk.NativePendingCloseRetries
 import Alvoki.Storage.Disk.NativePendingCloseReferenceDrop
 import Alvoki.Storage.Disk.NativePendingWriteProcessExit
 import Alvoki.Storage.Disk.NativeReadyProcessExit
+import Alvoki.Storage.Disk.NativeOpenedProcessExitReport
 import Alvoki.Storage.Disk.NativePendingCloseRecovery
 import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 import Alvoki.Storage.Disk.NativeInterruptedCloseReopen
@@ -2375,6 +2376,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.recoversAfterProcessExit
 #check_axioms Alvoki.Storage.DiskSession.NativeWriterProcessExit.releases
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensAfterProcessExit
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensAfterProcessExitAt
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedProcessExitReport.releases
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedProcessExitReport.readsReleasedFile
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedProcessExitReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.recoversAfterFailedClosesAndDrop
 #check_axioms Alvoki.Storage.DiskSession.NativePendingCloseRecovery.frames
 #check_axioms Alvoki.Storage.DiskSession.NativePendingCloseRecovery.reopens

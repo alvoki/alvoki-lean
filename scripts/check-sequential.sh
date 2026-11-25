@@ -244,6 +244,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativePendingCloseRetries
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCloseReferenceDrop
 lake env leanchecker Alvoki.Storage.Disk.NativePendingWriteProcessExit
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyProcessExit
+lake env leanchecker Alvoki.Storage.Disk.NativeOpenedProcessExitReport
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCloseRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 lake env leanchecker Alvoki.Storage.Disk.NativeInterruptedCloseReopen

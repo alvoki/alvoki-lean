@@ -20,7 +20,7 @@ theorem NativeOpenedSessionTrace.executesSnapshotsAndRewrites
       | .calls instructions => NativeOpenedTrace.SnapshotAndRewriteOperands reached.position instructions
       | .quietRestart input => Nonempty (NativeQuietRestartReport reached input view names bytes)
       | .closeAndReopen input => Nonempty (NativeOpenedAlignedCloseReport reached.position input view)
-      | .checkpointRenameReboot _ | .stoppedCheckpointReboot _ | .uncertainWriteReboot _ _ => False) :
+      | .processExitAndReopen _ | .checkpointRenameReboot _ | .stoppedCheckpointReboot _ | .uncertainWriteReboot _ _ => False) :
     ∃ events next, NativeOpenedSessionTrace view names bytes start actions events next ∧
       NativeExecutionTrace start.position.current events next.position.current ∧
       InstalledClientReplay next.position.current.submissions next.position.current.ready.reads next.position.current.history
@@ -37,6 +37,6 @@ theorem NativeOpenedSessionTrace.executesSnapshotsAndRewrites
   | closeAndReopen input =>
     obtain ⟨reported⟩ := seen
     exact ⟨.close input reported⟩
-  | checkpointRenameReboot _ | stoppedCheckpointReboot _ | uncertainWriteReboot _ _ => exact False.elim seen
+  | processExitAndReopen _ | checkpointRenameReboot _ | stoppedCheckpointReboot _ | uncertainWriteReboot _ _ => exact False.elim seen
 
 end Alvoki.Storage.DiskSession

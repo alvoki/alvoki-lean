@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
+import Alvoki.Storage.Disk.NativeOpenedProcessExitReport
 
 namespace Alvoki.Storage.DiskSession
 
@@ -135,6 +136,7 @@ theorem NativeQuietRestartReport.reaches (seen : NativeQuietRestartReport before
 inductive NativeOpenedSessionAction : Type 1 where
   | calls (instructions : List NativeOpenedInstruction)
   | quietRestart (input : FilePath)
+  | processExitAndReopen (input : FilePath)
   | closeAndReopen (input : FilePath)
   | checkpointRenameReboot (input : FilePath)
   | stoppedCheckpointReboot (input : FilePath)
@@ -151,6 +153,10 @@ inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
   | quiet {input : FilePath} (seen : NativeQuietRestartReport before input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next) :
       NativeOpenedSessionStep view names bytes before (.quietRestart input) [.readOrRestart (.restart input)] next
+  | processExit {input : FilePath} (seen : NativeOpenedProcessExitReport before.position input view names bytes)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.processExitAndReopen input)
+        [.readyExitRecovered input before.position.current.ready.state.owner.reference.process] next
   | close {input : FilePath} (seen : NativeOpenedAlignedCloseReport before.position input view)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.closeAndReopen input) [.closedAndReopened input (.ok ())] next
@@ -187,6 +193,7 @@ theorem NativeOpenedSessionTrace.common (trace : NativeOpenedSessionTrace view n
     cases next with
     | calls ran => exact prior.append ran.common
     | quiet _ returned => exact .step prior returned.common
+    | processExit _ returned => exact .step prior returned.common
     | close _ returned => exact .step prior returned.common
     | closeAfterFailedUnlock _ returned => exact .step prior returned.common
     | checkpointRename _ returned => exact .step prior returned.common
@@ -201,6 +208,8 @@ inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
       NativeOpenedSessionReport view names bytes before (.calls instructions)
   | quiet (input : FilePath) (report : NativeQuietRestartReport before input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.quietRestart input)
+  | processExit (input : FilePath) (report : NativeOpenedProcessExitReport before.position input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.processExitAndReopen input)
   | close (input : FilePath) (report : NativeOpenedAlignedCloseReport before.position input view) :
       NativeOpenedSessionReport view names bytes before (.closeAndReopen input)
   | closeAfterFailedUnlock (input : FilePath) (report : NativeOpenedFailedCloseReport before.position input view) :
@@ -222,6 +231,9 @@ theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport vi
   | quiet input seen =>
     obtain ⟨next, returned⟩ := seen.reaches
     exact ⟨_, next, .quiet seen returned⟩
+  | processExit input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .processExit seen returned⟩
   | close input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .close seen returned⟩
@@ -240,7 +252,7 @@ theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport vi
 
 /-- Obtain the next local report only at the reached position of this
 prescribed prefix. Each reopen can reach a new handle. Quiet restarts
-share the same filesystem view. -/
+and process exits use the same filesystem view. -/
 def NativeOpenedSessionTrace.Reports (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray)
     (start : NativeOpenedSessionPoint heap) (actions : List NativeOpenedSessionAction) : Prop :=
