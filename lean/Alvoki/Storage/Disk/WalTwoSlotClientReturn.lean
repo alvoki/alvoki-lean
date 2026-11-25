@@ -2865,12 +2865,19 @@ theorem recoveredRetries_installedReads
     (offset : current.slot = slotIndex active)
     {history batch : List Write}
     (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
+    (interruptedMarker : WalInodeImage)
     {visibleMarker : Option ByteArray} {crashMarkers : List (Option ByteArray)}
+    (visibleBytes : ∀ bytes, visibleMarker = some bytes →
+      bytes = interruptedMarker.visible interruptedMarker.active)
+    (crashBytes : ∀ bytes, some bytes ∈ crashMarkers →
+      ∃ inode ∈ interruptedMarker.crashBindings, bytes ∈ interruptedMarker.crashBytes inode)
     (projectedVisible : projectMarkerBytes checkpoint visibleMarker = .ok initial.directory.active)
     (projectedCrash : crashMarkers.mapM (projectMarkerBytes checkpoint) = .ok initial.directory.crashImages)
     (completedCounts : List Nat) (inFlightCount : Nat)
     (transfersFit : completedCounts.sum + inFlightCount ≤ 40)
-    (slotOutcome : ∀ bytes, some bytes ∈ visibleMarker :: crashMarkers →
+    (slotOutcome : ∀ bytes,
+      (bytes = interruptedMarker.visible interruptedMarker.active ∨
+        ∃ inode ∈ interruptedMarker.crashBindings, bytes ∈ interruptedMarker.crashBytes inode) →
       bytes.size = containerSize ∧
       (∀ position, bytes.get! position ≠ before.get! position → position < next.slot * stride + (completedCounts.sum + inFlightCount) ∧
         next.slot * stride ≤ position) ∧
@@ -3124,7 +3131,10 @@ theorem recoveredRetries_installedReads
     cases raw with
     | none => exact .inl (Except.ok.inj projected).symm
     | some bytes =>
-      obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes present
+      have physical : bytes = interruptedMarker.visible interruptedMarker.active ∨
+          ∃ inode ∈ interruptedMarker.crashBindings, bytes ∈ interruptedMarker.crashBytes inode :=
+        (List.mem_cons.mp present).imp (visibleBytes bytes ∘ Eq.symm) (crashBytes bytes)
+      obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes physical
       exact .inr ⟨bytes, interruptedBytes_ofCounts offset advanced transfersFit size
         (fun position changed => (attributed position changed).symm) decoded, projected⟩
   have ledger := recoveredRetries_retainUncertainBatch beforeBarrier.refines accepted offset advanced
