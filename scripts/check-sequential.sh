@@ -156,6 +156,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeOpenWriteReadTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenClose
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenSnapshotControls
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenCheckpoint
+lake env leanchecker Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenCacheReferences
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedKeeperCache
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedOpenHeap

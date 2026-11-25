@@ -53,6 +53,26 @@ theorem CheckpointPreflight.rejectsFromOpenCell {files : Type} {phase : Phase In
   apply preflight.preparesFrom
   simp only [phaseEffect, Bind.bind, EStateM.bind, read]
 
+/-- The exact return of the production checkpoint schedule with its
+opened phase cell and the reached cached file step reports. -/
+def NativeReadyCheckpoint.ReturnsOnOpenPhase {image : Type} {before : NativeReadyState}
+    {attempt : SegmentedCheckpointReport before.session.directory before.writer}
+    {reports : CheckpointCompletionReports (CensusDirectoryCache × image) attempt}
+    (observed : NativeReadyCheckpoint before reports) (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    (entry reached : heap) : Prop :=
+  let directory := before.session.directory
+  let load : EStateM IO.Error (heap × (CensusDirectoryCache × image)) Installed := do
+    (← phaseEffect (get phase)).installed
+  let setPhase := fun value => phaseEffect (set phase value)
+  let checkpoint := withPreparedCheckpoint load liftCheckpointExcept (fun next manifest =>
+    publishPrepared setPhase
+      (CheckpointPublication.run next.table.runs.length
+        (fun step => fileEffect (observed.primitives.cached.perform directory next manifest step)))
+      (setPhase (.ready next)))
+  checkpoint (entry, before.cache, (reports.observed.atRun 0).2) = .ok () (reached, reports.observed.completed)
+
 /-- Checkpoint returns through the same phase cell stored by the native
 opener. Its reported cached file steps select the exact checkpoint
 before the final setter stores the reached ready writer in that cell. -/
@@ -68,34 +88,25 @@ theorem NativeReadPosition.checkpointsViaOpenReferences {history log image}
     {attempt : SegmentedCheckpointReport current.state.session.directory current.state.writer}
     {reports : CheckpointCompletionReports (CensusDirectoryCache × image) attempt}
     (observed : NativeReadyCheckpoint current.state reports) :
-    let before := current.state
-    let directory := before.session.directory
-    let load : EStateM IO.Error (heap × (CensusDirectoryCache × image)) Installed := do
-      (← phaseEffect (get phase)).installed
-    let setPhase := fun value => phaseEffect (set phase value)
-    let checkpoint := withPreparedCheckpoint load liftCheckpointExcept (fun next manifest =>
-      publishPrepared setPhase
-        (CheckpointPublication.run next.table.runs.length
-          (fun step => fileEffect (observed.primitives.cached.perform directory next manifest step)))
-        (setPhase (.ready next)))
-    db.UsesOpenCheckpointSchedule directory files phase ∧
+    db.UsesOpenCheckpointSchedule current.state.session.directory files phase ∧
     ∃ writer, ∃ poisoned reached : heap,
-      get phase entry = .ok before.session.phase entry ∧
+      get phase entry = .ok current.state.session.phase entry ∧
       set phase .poisoned entry = .ok () poisoned ∧ contents poisoned phase = some .poisoned ∧
       set phase (.ready writer.installed) poisoned = .ok () reached ∧
       contents reached phase = some (observed.next writer).session.phase ∧
-      checkpoint (entry, before.cache, (reports.observed.atRun 0).2) =
-        .ok () (reached, reports.observed.completed) ∧
+      observed.ReturnsOnOpenPhase phase get set entry reached ∧
       observed.Completed writer ∧ writer.history = history ∧
       db.UsesOpenReferences (observed.next writer).session.directory lock files phase token ∧
       InstalledClientReplay log current.reads history writer.installed (observed.next writer).session := by
-  intro before directory load setPhase checkpoint
+  let before := current.state
   obtain ⟨writer, completed, history, replay⟩ := current.readPrefix.checkpoints observed
   have loaded := effects.reads entry phase before.session.phase stored
   obtain ⟨poisoned, excluded, poisonedPhase⟩ := effects.writes entry phase before.session.phase .poisoned stored
   obtain ⟨reached, installed, readyPhase⟩ := effects.writes poisoned phase .poisoned (.ready writer.installed) poisonedPhase
   refine ⟨uses.checkpoint, writer, poisoned, reached, loaded, excluded, poisonedPhase, installed, readyPhase, ?_,
     completed, history, uses, replay⟩
+  unfold NativeReadyCheckpoint.ReturnsOnOpenPhase
+  intro directory load setPhase checkpoint
   have preflight : CheckpointPreflight before.session.phase (.ok (attempt.prepared, attempt.manifest)) := by
     rw [current.readPrefix.refines.1.phase]
     exact reports.preflight

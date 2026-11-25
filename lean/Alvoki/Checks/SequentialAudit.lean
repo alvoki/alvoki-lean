@@ -248,6 +248,7 @@ import Alvoki.Storage.Disk.NativeOpenWriteReadTrace
 import Alvoki.Storage.Disk.NativeOpenClose
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 import Alvoki.Storage.Disk.NativeOpenCheckpoint
+import Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
 import Alvoki.Storage.Disk.NativeOpenCacheReferences
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
 import Alvoki.Storage.Disk.NativeAlignedOpenHeap
@@ -710,6 +711,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.completesWithPublication
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.checkpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointsViaOpenReferences
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.checkpointsThenReadsOpenPin
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCheckpoint.RunBinding.completes
 #check_axioms Alvoki.Storage.DiskSession.RunMaintenance.outputAt
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rewritesRunCheckpointAndReopens
@@ -1686,6 +1688,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.returnsViaOpenReferences
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsReachedPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.acquiresAndReadsOpenPin
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.prepend
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.writesThenReadsOpenPin
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preflightsViaOpenReferences
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.releasePin

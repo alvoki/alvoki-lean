@@ -6,14 +6,6 @@ namespace Alvoki.Storage.DiskSession
 open System WalSegmentRepair
 open Sequential (SnapshotPin)
 
-private theorem NativeExecutionTrace.prepend
-    (first : NativeExecutionStep start event reached)
-    (rest : NativeExecutionTrace reached events last) :
-    NativeExecutionTrace start (event :: events) last := by
-  induction rest with
-  | empty => exact .step .empty first
-  | step _ next earlier => exact .step earlier next
-
 /-- The same acknowledged write witness supplies the raw return and the
 common trace edge. The following acquisition starts on its returned
 heap and reads through the exact snapshot token it issues. -/
