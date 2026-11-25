@@ -187,6 +187,8 @@ If that final sync returns an error, the grouped callback reports the path and k
 
 The exact returned final-sync error, lock release and admitted reopen now extend the mixed client trace at the returned ready session. The submission and read ledgers are unchanged. One replay accounts for the acknowledged writes, successful recorded reads and guarded reads from snapshots acquired in the reopened session. Recorded token and registry checks account for denied reads. [Client trace after final sync error](../lean/Alvoki/Storage/Disk/CheckpointManifestDirectoryClientTrace.lean)
 
+The returned manifest rename error uses the same completed run prefix, directory handle and staged-file sync as successful rename. The native report records whether the atomic replacement occurred. Before the effect, the synced scratch and old live binding remain. After the effect, the new manifest becomes visible and the stage name is gone. Each reported crash binding can select only the old or new manifest, with the original run map derived from the settled prefix. The schedule returns the original rename error before final sync. The poisoned session releases exactly that image, and bounded retry reaches the same held installer with the selected runs and unchanged WAL. Add this returned-error endpoint to the mixed client trace. [Returned manifest rename failure](../lean/Alvoki/Storage/Disk/CheckpointManifestRenameFailure.lean)
+
 ### Garbage collection contract
 
 The engine must eventually reclaim obsolete run generations, covered WAL data, and versions that no supported snapshot can observe. The proof covers the executable collector, including interruption and retry.

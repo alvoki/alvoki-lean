@@ -20,6 +20,16 @@ def manifestCrashBytes (files : WalInodeImage) : Option Nat → List (Option Byt
   | none => [none]
   | some inode => (files.crashBytes inode).map some
 
+/-- The reached manifest bytes are the encoding of this exact run plan. -/
+theorem CheckpointPowerCut.plannedManifestBytes {directory : DiskDirectory} {before : SegmentedWriterState}
+    (cut : CheckpointPowerCut directory before) : cut.checkpoint.plan.manifest.encode = cut.checkpoint.manifest := by
+  let generation := SegmentedCheckpointReport.generation before
+  have encoded := cut.encoded
+  by_cases fits : (cut.checkpoint.table.runs.map (·.run.bytes)).all (fun bytes => decide (bytes.size < UInt64.size)) = true
+  · exact Except.ok.inj ((encodeCheckpointIntegrityManifest_exact generation
+      (fun bytes member => of_decide_eq_true (List.all_eq_true.mp fits bytes member))).symm.trans encoded)
+  · simp [encodeCheckpointIntegrityManifest, fits, Bind.bind, Except.bind] at encoded
+
 private theorem CheckpointPowerCut.newManifestHeader {directory : DiskDirectory} {before : SegmentedWriterState}
     {writer : Nat} (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
     {metadata : Manifest.IntegrityCheckpoint}
@@ -192,13 +202,6 @@ theorem CheckpointPowerCut.atManifestRename {directory : DiskDirectory} {before 
       (RunUnlinkImage.project_settled (runs (atRun count).2).visible (.settled none))
   have planCount : cut.checkpoint.plan.files.length = count := by
     simp [SegmentedCheckpointReport.plan, VersionedRunSet.integrity, count]
-  have planBytes : cut.checkpoint.plan.manifest.encode = cut.checkpoint.manifest := by
-    have encoded := cut.encoded
-    by_cases fits : (cut.checkpoint.table.runs.map (·.run.bytes)).all
-        (fun bytes => decide (bytes.size < UInt64.size)) = true
-    · exact Except.ok.inj ((encodeCheckpointIntegrityManifest_exact generation
-        (fun bytes member => of_decide_eq_true (List.all_eq_true.mp fits bytes member))).symm.trans encoded)
-    · simp [encodeCheckpointIntegrityManifest, fits, Bind.bind, Except.bind] at encoded
   have stableOld : before.published.manifest.crashImages = [before.wal.directory.active.manifest] := by
     rw [ready.manifestFiles, ready.directoryFiles]
     have settled := ready.walDirectorySettled
@@ -227,7 +230,7 @@ theorem CheckpointPowerCut.atManifestRename {directory : DiskDirectory} {before 
           ⟨some cut.checkpoint.manifest, some cut.checkpoint.manifest :: before.published.manifest.crashImages, none⟩
           else { before.published.manifest with staged := some (cut.checkpoint.manifest, true) } } := by
     exact before.published.executeVersioned_atManifestRename cut.checkpoint.plan writtenRuns runModel
-      sameManifest planCount planBytes took
+      sameManifest planCount cut.plannedManifestBytes took
   have crashContents : ∀ bytes ∈ crashBindings.flatMap (manifestCrashBytes interrupted),
       bytes ∈ (if cut.tookEffect then some cut.checkpoint.manifest :: before.published.manifest.crashImages
         else before.published.manifest.crashImages) := by
