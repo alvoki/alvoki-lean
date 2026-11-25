@@ -49,9 +49,10 @@ theorem installs
 the two-slot opener's three reference allocations in order. -/
 theorem installsWithRecoveredMarker
     {marker : Type} {entry afterMarker : heap}
-    {recover : EStateM IO.Error heap (Installed × marker)}
-    {selected : marker} (recovered : recover entry = .ok (installed, selected) before)
-    (observed : OpenReferenceAllocations allocatePhase allocateToken phaseContents installed before)
+    {recover : EStateM IO.Error heap (WalSegmentRepair.Reopened × marker)}
+    {opened : WalSegmentRepair.Reopened}
+    {selected : marker} (recovered : recover entry = .ok (opened, selected) before)
+    (observed : OpenReferenceAllocations allocatePhase allocateToken phaseContents opened.installed before)
     {directory : DiskDirectory} {lock : IO.FS.Handle} {syncFiles : DiskTable.OpenSyncFiles}
     {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
     (constructor : DiskTable.OpenReferenceAssembly directory lock syncFiles assemble)
@@ -61,11 +62,11 @@ theorem installsWithRecoveredMarker
     (keepsPhase : phaseContents afterMarker observed.phase = phaseContents observed.afterToken observed.phase) :
     (do
       let (reopened, selected) ← recover
-      let table ← installReady reopened allocatePhase allocateToken (fun phase token => pure (assemble phase token))
+      let table ← installReady reopened.installed allocatePhase allocateToken (fun phase token => pure (assemble phase token))
       let cell ← allocateMarker (some selected)
       pure (table, cell)) entry = .ok (assemble observed.phase observed.token, cell) afterMarker ∧
     (assemble observed.phase observed.token).UsesOpenReferences directory lock syncFiles observed.phase observed.token ∧
-    phaseContents afterMarker observed.phase = some (.ready installed) := by
+    phaseContents afterMarker observed.phase = some (.ready opened.installed) := by
   obtain ⟨_, references, ready⟩ := observed.installs constructor
   exact ⟨by simp only [Bind.bind, EStateM.bind, recovered, installReady, observed.phaseAllocated, observed.tokenAllocated, markerAllocated, Pure.pure, EStateM.pure],
     references, keepsPhase.trans ready⟩
