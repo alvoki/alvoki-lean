@@ -33,6 +33,15 @@ def FreshBootstrapCacheCalls.run (calls : FreshBootstrapCacheCalls heap) (direct
     (calls.createPending pending) (calls.stagePending pending)
     (calls.sync directory directoryRef active pending) calls.rename
 
+/-- Both successful keeper routes continue with the same zero-marker publication. -/
+def FreshBootstrapCacheCalls.publishZeroMarker (calls : FreshBootstrapCacheCalls heap) (directory : DiskDirectory)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : EStateM IO.Error heap Reopened := do
+  Publication.run (Publication.performReplacement
+    (calls.stagePending pending · (WAL.Boundary.encode 0)) (calls.sync directory cached active pending) calls.rename
+    (directory.file .stagedWalBoundary) directory.path (fun _ => directory.file .walBoundary) #[])
+  pure ⟨.empty, 0, 0, 0⟩
+
 /-- The two cache cells unrelated to the pending write keep their contents
 across a reported local callback. This frame speaks only about those cells. -/
 structure FreshBootstrapCacheFrame (view : OpenCloseHeapView heap image)
@@ -101,6 +110,42 @@ theorem FreshBootstrapDirectoryBarrier.selectsRoot
   exact ⟨congrArg (fun handle : CheckpointOpenHandle => handle.2.1) report.rawHandle, report.live,
     object.trans report.sameInode.symm⟩
 
+/-- The raw marker suffix starts on the heap returned by the keeper's
+directory sync. It uses only the original initialized cache cells. -/
+structure BootstrapMarkerPublicationHeap
+    (seed : OpenSyncCacheAllocations opened view init entry) (calls : FreshBootstrapCacheCalls heap)
+    (before : heap) where
+  markerHandle : CheckpointOpenHandle
+  marker : BootstrapPendingObservation view calls.toBootstrapPendingCalls directory .marker seed.pendingRef markerHandle before
+  markerOK : marker.result = .ok ()
+  markerFrames : marker.CacheFrames seed.directoryRef seed.activeRef
+  afterRename : heap
+  renamed : calls.rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) marker.reached = .ok () afterRename
+  renameFrame : FreshBootstrapCacheFrame view seed.directoryRef seed.activeRef marker.reached afterRename
+  renamePending : view.pending afterRename seed.pendingRef = view.pending marker.reached seed.pendingRef
+  markerDirectory : FreshBootstrapDirectoryBarrier seed calls afterRename
+
+theorem BootstrapMarkerPublicationHeap.returns
+    {seed : OpenSyncCacheAllocations opened view init entry} {calls : FreshBootstrapCacheCalls heap}
+    {before : heap} (seen : BootstrapMarkerPublicationHeap seed calls before) :
+    calls.publishZeroMarker directory seed.directoryRef seed.activeRef seed.pendingRef before =
+      .ok ⟨.empty, 0, 0, 0⟩ seen.markerDirectory.reached ∧
+    FreshBootstrapCacheFrame view seed.directoryRef seed.activeRef before seen.markerDirectory.reached ∧
+    view.pending seen.markerDirectory.reached seed.pendingRef = [] := by
+  obtain ⟨_, _, cache, _, _, _, references, path, _, _, _, _, _, _, _, _, _⟩ := seed.installs
+  obtain ⟨_, staged, synced, _, _, consumed, _⟩ := seen.marker.returns cache references path
+  rw [seen.markerOK] at synced
+  have stageReturn : calls.stagePending seed.pendingRef (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0)
+      before = .ok () seen.marker.recorded := staged
+  have fileReturn : calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
+      #[directory.file .stagedWalBoundary] seen.marker.recorded = .ok () seen.marker.reached := synced
+  have frame := (seen.markerFrames.preserves.trans seen.renameFrame).trans seen.markerDirectory.frame
+  refine ⟨?_, frame, seen.markerDirectory.pending.trans (seen.renamePending.trans consumed)⟩
+  unfold FreshBootstrapCacheCalls.publishZeroMarker
+  rw [Publication.run_performReplacement]
+  simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, stageReturn, fileReturn, seen.renamed,
+    seen.markerDirectory.returns]
+
 /-- The fresh markerless path starts at the actual directory cache
 allocation and uses its references through the two file barriers,
 both directory barriers and marker rename. Every link starts at the
@@ -138,6 +183,11 @@ namespace FreshBootstrapCacheChronology
 
 variable {seed : OpenSyncCacheAllocations opened view init entry} {calls : FreshBootstrapCacheCalls heap}
 
+def markerPublication (seen : FreshBootstrapCacheChronology seed calls) :
+    BootstrapMarkerPublicationHeap seed calls seen.keeperDirectory.reached :=
+  ⟨seen.markerHandle, seen.marker, seen.markerOK, seen.markerFrames, seen.afterRename, seen.renamed,
+    seen.renameFrame, seen.renamePending, seen.markerDirectory⟩
+
 /-- The raw fresh worker returns on the exact success heap of the last
 barrier, with the same raw directory cell and empty active and pending
 cells. The initialized synchronization record exposes the same native
@@ -161,44 +211,32 @@ theorem returns (seen : FreshBootstrapCacheChronology seed calls) :
   obtain ⟨action, assemble, cache, native, source, allocated, references, path, loaded, activeEmpty,
     _, _, _, _, _, _, _, _⟩ := seed.installs
   obtain ⟨schedules, keeperCreated, keeperSynced, _, _, _, _⟩ := seen.keeper.returns cache references path
-  obtain ⟨_, markerStaged, markerSynced, _, _, markerConsumed, _⟩ := seen.marker.returns cache references path
   rw [seen.keeperOK] at keeperSynced
-  rw [seen.markerOK] at markerSynced
   have created : calls.createPending seed.pendingRef (directory.file (.walSegment 0)) seen.prepared =
       .ok () seen.keeper.recorded := keeperCreated
-  have staged : calls.stagePending seed.pendingRef (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0)
-      seen.keeperDirectory.reached = .ok () seen.marker.recorded := markerStaged
   have keeperSync : calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
       #[directory.file (.walSegment 0)] seen.keeper.recorded = .ok () seen.keeper.reached := keeperSynced
-  have markerSync : calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
-      #[directory.file .stagedWalBoundary] seen.marker.recorded = .ok () seen.marker.reached := markerSynced
   have rotation : WalSegmentRotation.runAt directory 0 (fun _ => EStateM.pure none) (calls.createPending seed.pendingRef)
       (fun path => calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[path]) seen.prepared =
       .ok () seen.keeperDirectory.reached := by
     rw [WalSegmentRotation.runAt_fileEffects]
     simp [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
       created, keeperSync, seen.keeperDirectory.returns]
-  have published : Publication.run (Publication.performReplacement
-      (calls.stagePending seed.pendingRef · (WAL.Boundary.encode 0))
-      (calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef) calls.rename
-      (directory.file .stagedWalBoundary) directory.path (fun _ => directory.file .walBoundary) #[])
-      seen.keeperDirectory.reached = .ok () seen.markerDirectory.reached := by
-    rw [Publication.run_performReplacement]
-    simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, staged, markerSync, seen.renamed,
-      seen.markerDirectory.returns]
+  obtain ⟨published, markerFrame, pending⟩ := seen.markerPublication.returns
   have guards : prepareBootstrapWith directory calls.list calls.readEmpty calls.metadata seed.afterPending =
       .ok none seen.prepared := by
     simp [prepareBootstrapWith, Bind.bind, EStateM.bind, seen.checked, seen.clear, seen.empty, seen.absentStage,
       Pure.pure, EStateM.pure]
   have guardsFrame := (seen.listingFrame.trans seen.emptyFrame).trans seen.stageProbeFrame
   have keeperFrame := (guardsFrame.trans seen.keeperFrames.preserves).trans seen.keeperDirectory.frame
-  have markerFrame := (keeperFrame.trans seen.markerFrames.preserves).trans seen.renameFrame
-  have final := markerFrame.trans seen.markerDirectory.frame
+  have final := keeperFrame.trans markerFrame
   refine ⟨action, assemble, cache, native, source, allocated, schedules, ?_, final.directory.trans loaded,
-    final.activeUnchanged.trans activeEmpty,
-    seen.markerDirectory.pending.trans (seen.renamePending.trans markerConsumed)⟩
-  simp [FreshBootstrapCacheCalls.run, bootstrapSegmentedWith, bootstrapEmptyWith, Bind.bind, EStateM.bind,
-    Pure.pure, EStateM.pure, guards, rotation, published]
+    final.activeUnchanged.trans activeEmpty, pending⟩
+  have rawPublication : calls.publishZeroMarker directory seed.directoryRef seed.activeRef seed.pendingRef
+      seen.keeperDirectory.reached = .ok ⟨.empty, 0, 0, 0⟩ seen.markerDirectory.reached := published
+  simp only [FreshBootstrapCacheCalls.run, bootstrapSegmentedWith, bootstrapEmptyWith,
+    Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, guards, rotation]
+  exact rawPublication
 
 end FreshBootstrapCacheChronology
 

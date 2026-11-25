@@ -1851,6 +1851,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.settles
 #check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.reachesMarker
 #check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.reachesFromHeld
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerPublicationHeap.returns
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerPublicationHeap.Physical.settles
+#check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperHeap.MarkerPublication.returns
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapMarkerPhysical.settles
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.installs
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.opensFromAdmission

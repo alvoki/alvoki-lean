@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeBootstrapKeeperPhysical
+import Alvoki.Storage.Disk.NativeBootstrapMarkerPhysical
 
 namespace Alvoki.Storage.DiskSession
 
@@ -155,23 +155,13 @@ theorem settles (seen : ReusedBootstrapKeeperHeap guards) : seen.Settled := by
     census.symm ▸ route.settledCustody.1, census.symm ▸ route.settledCustody.2.1⟩
   exact observed.statObject.trans (inode.trans (congrArg (fun slots => slots.inode observed.slot.description) seen.liveCensus).symm)
 
-/-- Once the zero keeper is durable, both markerless routes continue
-with the same staged zero marker and return the empty replay payload. -/
-def publishZeroMarker (calls : FreshBootstrapCacheCalls heap) (directory : DiskDirectory)
-    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
-    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : EStateM IO.Error heap Reopened := do
-  Publication.run (Publication.performReplacement
-    (calls.stagePending pending · (WAL.Boundary.encode 0)) (calls.sync directory cached active pending) calls.rename
-    (directory.file .stagedWalBoundary) directory.path (fun _ => directory.file .walBoundary) #[])
-  pure ⟨.empty, 0, 0, 0⟩
-
 /-- The actual guarded markerless worker reaches marker publication
 from exactly the returned directory fsync heap. The keeper branch has
 only the file and directory barriers after the successful empty probe. -/
 theorem reachesMarker (seen : ReusedBootstrapKeeperHeap guards) :
     let next := seen.directoryBarrier.reached
     calls.run directory seed.directoryRef seed.activeRef seed.pendingRef seed.afterPending =
-      publishZeroMarker calls directory seed.directoryRef seed.activeRef seed.pendingRef next ∧
+      calls.publishZeroMarker directory seed.directoryRef seed.activeRef seed.pendingRef next ∧
     view.cacheAt next seed.directoryRef seed.activeRef seed.pendingRef = captured.cache := by
   intro next
   let sync := calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
@@ -182,7 +172,7 @@ theorem reachesMarker (seen : ReusedBootstrapKeeperHeap guards) :
       sync, next, seen.syncsKeeper, seen.directoryBarrier.returns]
   refine ⟨?_, ?_⟩
   · simp [FreshBootstrapCacheCalls.run, bootstrapSegmentedWith, bootstrapEmptyWith, Bind.bind, EStateM.bind,
-      Pure.pure, EStateM.pure, guards.prepare, rotates, sync, publishZeroMarker]
+      Pure.pure, EStateM.pure, guards.prepare, rotates, sync, FreshBootstrapCacheCalls.publishZeroMarker]
   · have cached := seen.directoryBarrier.frame.directory.trans seen.keptDirectory
     have active := seen.directoryBarrier.frame.activeUnchanged.trans seen.keptActive
     have pending := seen.directoryBarrier.pending.trans seen.keptPending
@@ -199,9 +189,51 @@ theorem reachesFromHeld (seen : ReusedBootstrapKeeperHeap guards)
     recoverSegmentedWalWith (rejectFlatWalWith directory (calls.metadata (directory.file .wal)))
       (calls.metadata (directory.file .walBoundary)) marked
       (calls.run directory seed.directoryRef seed.activeRef seed.pendingRef) seed.afterPending =
-    publishZeroMarker calls directory seed.directoryRef seed.activeRef seed.pendingRef seen.directoryBarrier.reached := by
+    calls.publishZeroMarker directory seed.directoryRef seed.activeRef seed.pendingRef seen.directoryBarrier.reached := by
   simpa [recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind, flat, marker,
     Pure.pure, EStateM.pure] using seen.reachesMarker.1
+
+/-- The reused keeper's reached heap supplies the common publication
+of the zero marker, with the same inode projection and live cache. -/
+structure MarkerPublication (keeper : ReusedBootstrapKeeperHeap guards)
+    {marker : BootstrapMarkerCustody listed} (handoff : BootstrapKeeperMarkerHandoff (.reused observed) marker)
+    (effects : BootstrapKeeperMarkerHandoff.ReturnedCensus marker) where
+  raw : BootstrapMarkerPublicationHeap seed calls keeper.directoryBarrier.reached
+  physical : raw.Physical keeper.inodes handoff effects
+  keptDirectory : view.handle raw.markerDirectory.reached seed.handle = view.handle keeper.directoryBarrier.reached seed.handle
+  owners : (view.files raw.markerDirectory.reached).owners = (view.files keeper.directoryBarrier.reached).owners
+
+variable {keeper : ReusedBootstrapKeeperHeap guards} {marker : BootstrapMarkerCustody listed}
+  {handoff : BootstrapKeeperMarkerHandoff (.reused observed) marker} {effects : BootstrapKeeperMarkerHandoff.ReturnedCensus marker}
+
+theorem MarkerPublication.returns (publication : keeper.MarkerPublication handoff effects)
+    (flat : calls.metadata (directory.file .wal) seed.afterPending = .ok none seed.afterPending)
+    (absent : calls.metadata (directory.file .walBoundary) seed.afterPending = .ok none seed.afterPending)
+    (marked : EStateM IO.Error heap Reopened) :
+    let final := publication.raw.markerDirectory.reached
+    recoverSegmentedWalWith (rejectFlatWalWith directory (calls.metadata (directory.file .wal)))
+      (calls.metadata (directory.file .walBoundary)) marked
+      (calls.run directory seed.directoryRef seed.activeRef seed.pendingRef) seed.afterPending =
+      .ok ⟨.empty, 0, 0, 0⟩ final ∧
+    view.cacheAt final seed.directoryRef seed.activeRef seed.pendingRef = captured.cache ∧
+    (view.files final).image = marker.publishedState ∧
+    (view.files final).owners = before.owners.set (directory.file .lock) (some fileCalls.slot.description) ∧
+    view.descriptors final = effects.reached ∧ (view.descriptors final).references marker.slot.description = [] ∧
+    (keeper.inodes final).crashBytes (BootstrapZeroKeeperRoute.settledImage (.reused observed)).active = [ByteArray.empty] ∧
+    (keeper.inodes final).crashBytes marker.inodeState.active = [WAL.Boundary.encode 0] := by
+  intro final
+  obtain ⟨published, frame, pending⟩ := publication.raw.returns
+  have settled := keeper.settles
+  obtain ⟨_, _, _, _, image, _, _, _, keeperBytes, markerBytes, census, released, _, _⟩ :=
+    publication.physical.settles settled.image settled.inodes
+  have directoryCell := frame.directory.trans (keeper.directoryBarrier.frame.directory.trans keeper.keptDirectory)
+  have activeCell := frame.activeUnchanged.trans (keeper.directoryBarrier.frame.activeUnchanged.trans keeper.keptActive)
+  have directoryHandle := publication.keptDirectory.trans (keeper.keptHandle.trans (seed.sameHandle.trans seed.openedHandle))
+  have cache : view.cacheAt final seed.directoryRef seed.activeRef seed.pendingRef = captured.cache := by
+    simp only [final, OpenCloseHeapView.cacheAt, directoryCell, activeCell, pending, directoryHandle,
+      Option.map_some, Option.map_none, List.map_nil, BootstrapCacheOpen.cache, BootstrapCacheOpen.reached]
+  exact ⟨(keeper.reachesFromHeld flat absent marked).trans published, cache, image,
+    publication.owners.trans settled.owners, census, released, keeperBytes, markerBytes⟩
 
 end ReusedBootstrapKeeperHeap
 
