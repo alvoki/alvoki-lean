@@ -2633,7 +2633,11 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
     (survives : retry.keeper.active ∈ reached.1.keeper.crashImages)
     (oldPrefix : selected.frontier = current.frontier →
       ∃ tail, retry.keeper.active = some (prior.wal.active.bytes ++ tail))
-    (advanced : selected.frontier ≠ current.frontier → reached.2 ≠ report.initialMarker) :
+    {markerBytes : ByteArray}
+    (markerSurvives : ∃ inode ∈ reached.2.crashBindings, markerBytes ∈ reached.2.crashBytes inode)
+    (selectedBytes : decode markerBytes = .ok selected)
+    (initialFrontier : ∀ inode ∈ report.initialMarker.crashBindings, ∀ bytes ∈ report.initialMarker.crashBytes inode,
+      ∀ selection, decode bytes = .ok selection → selection.frontier = current.frontier) :
     ∃ plan : DiskSession.CanonicalKeeperLayout retry ((prior.history ++ batch).take through),
       plan.range.watermark = watermark ∧ plan.keeper.first = prior.wal.active.first := by
   have visible : ∃ tail, retry.keeper.active = some
@@ -2645,7 +2649,12 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
       have throughOld : through = prior.history.length := by omega
       rw [throughOld, List.take_append_of_le_length (Nat.le_refl _), List.take_length, ← layout.activeBytes]
       exact oldPrefix old
-    · have newest := choice.resolve_left old
+    · have changed : reached.2 ≠ report.initialMarker := by
+        intro unchanged
+        obtain ⟨inode, binding, bytes⟩ := markerSurvives
+        rw [unchanged] at binding bytes
+        exact old (initialFrontier inode binding markerBytes bytes selected selectedBytes)
+      have newest := choice.resolve_left old
       have count := newest ▸ newSize
       rw [counted, WAL.encode_size] at count
       unfold frameSize at count
@@ -2653,7 +2662,7 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
       rw [throughNew, List.take_length]
       exact ⟨ByteArray.empty, by
         simpa using report.survivingEncodedKeeper layout appendBytes writeKeepsKeeper syncKeepsKeeper
-          walPersists (advanced old) survives⟩
+          walPersists changed survives⟩
   exact canonicalLayout_of_twoSlotFrontier layout valid oldRange choice oldSize newSize counted decoded visible
 
 /-- The guarded marked opener returns a session whose reads use the

@@ -2076,3 +2076,10 @@ leave an unselected tail. The new frontier uses the exact synced
 encoded batch. The native handoff still needs to derive the old-prefix
 preservation and to link an advanced selection to a changed marker
 image, then pass the resulting layout into the installed-read theorem.
+
+The keeper layout proof now derives the changed marker image from the
+actual surviving slot bytes. If the old marker's admitted crash bytes
+only decode to the old frontier, a survivor decoding to a new frontier
+rules out the unchanged image. This supplies the premise of the WAL
+sync proof. The prior marker stability and old keeper prefix still
+need to be carried into the native reopen composition.
