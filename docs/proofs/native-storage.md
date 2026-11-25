@@ -40,8 +40,14 @@ A data failure carries the observed stream-release effects and the original erro
 schedule reaches its file barrier on the staging return. The barrier reads the active keeper
 and attempts the remembered marker on the heap left by that keeper fsync, including an error.
 Bootstrap and stopped checkpoint sync reuse the same selector and reference interpretation.
-Per-primitive filesystem effects, rename and directory settlement still need to supply the
-durable payloads at the next ready position. [Shared cache routing](../../lean/Alvoki/Storage/Disk/NativeRawSync.lean) · [Staging and grouped barrier](../../lean/Alvoki/Storage/Disk/NativeWalStage.lean)
+The regular-file effect changes durable byte choices only at the inode bound to the issued
+descriptor. The grouped success proof composes those two local laws and a frame for the intervening
+pending-reference store. Rename keeps the synced staged inode and the final directory fsync settles
+the keeper and canonical marker in each joint crash map. This uses reported effect, binding and
+descriptor facts at each primitive. The remaining refinement must carry these results, the
+protected checkpoint files and the failure outcomes into the next ready or interrupted position.
+Both ordinary group errors already feed the same uncertain-write endpoint.
+[Shared cache routing](../../lean/Alvoki/Storage/Disk/NativeRawSync.lean) · [Durable WAL publication](../../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean) · [Pending write](../../lean/Alvoki/Storage/Disk/NativeGroupedPendingWrite.lean)
 
 `NativeReachedExecutionPrefix.keyValueRefinement` adds whole-or-none uncertain events, ready replay when
 the ending returns ready, and the existence of an allowed terminal history that agrees with prior reads.

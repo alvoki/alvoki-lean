@@ -39,15 +39,6 @@ private theorem checkpointRawGroupStops (call : FilePath → RawSyncM heap Unit)
     MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe, ExceptT.tryCatch, Bind.bind,
     ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind, StateT.pure, Pure.pure, ExceptT.pure, issued]
 
-/-- The literal selected handle still carries the same open slot and
-inode at the syscall. Other live descriptions may have changed. -/
-structure CheckpointFsyncTarget (view : OpenCloseHeapView heap image) (selected issued : heap)
-    (handle : IO.FS.Handle) : Prop where
-  slot : (view.handle issued handle).2.1 = (view.handle selected handle).2.1
-  live : (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots
-  inode : (view.descriptors issued).inode (view.handle issued handle).2.1.description =
-    (view.handle selected handle).1.inode (view.handle selected handle).2.1.description
-
 variable {current : NativeOpenedPosition opened}
   {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
   {reason : FilePath} {reached : CheckpointWorld heap}
@@ -97,13 +88,13 @@ theorem NativeCheckpointSourceStop.runFileIssuesRawSync {index : Nat}
         current.current.ready.state.session.directory.file (.run stop.next.generation index)) =
         some (current.current.ready.state.session.directory.file (.run stop.next.generation index), literal) →
       fsync (view.handle stop.atIssue.2 literal) stop.atIssue.2 = calls.fsync literal atFsync ∧
-        CheckpointFsyncTarget view stop.atIssue.2 atFsync literal) :
+        RawFsyncTarget view stop.atIssue.2 atFsync literal) :
     let root := current.current.ready.state.session.directory
     let path := root.file (.run stop.next.generation index)
     ∃ literal,
       (view.pending stop.atIssue.2 cache.pending).find? (fun entry => entry.1 == path) = some (path, literal) ∧
       (view.pending atFsync cache.pending).find? (fun entry => entry.1 == path) = none ∧
-      CheckpointFsyncTarget view stop.atIssue.2 atFsync literal ∧
+      RawFsyncTarget view stop.atIssue.2 atFsync literal ∧
       fsync (view.handle stop.atIssue.2 literal) stop.atIssue.2 = .error reason reached.2 ∧
       calls.fsync literal atFsync = .error reason reached.2 ∧
       calls.group root.path path cache.directory cache.active cache.pending stop.atIssue.2 = .error reason reached.2 := by
@@ -143,11 +134,11 @@ theorem NativeCheckpointSourceStop.runsDirectoryIssuesRawSync
     (load : calls.readDirectory cache.directory stop.atIssue.2 = .ok (view.directory stop.atIssue.2 cache.directory) stop.atIssue.2)
     (primitive : ∀ literal, view.directory stop.atIssue.2 cache.directory = some literal →
       fsync (view.handle stop.atIssue.2 literal) stop.atIssue.2 = calls.fsync literal stop.atIssue.2 ∧
-        CheckpointFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal) :
+        RawFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal) :
     let dir := current.current.ready.state.session.directory.path
     ∃ literal, view.directory stop.atIssue.2 cache.directory = some literal ∧
       current.current.ready.state.cache.directory = some (view.handle stop.atIssue.2 literal) ∧
-      CheckpointFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal ∧
+      RawFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal ∧
       calls.fsync literal stop.atIssue.2 = .error reason reached.2 ∧
       calls.group dir dir cache.directory cache.active cache.pending stop.atIssue.2 = .error reason reached.2 := by
   intro dir

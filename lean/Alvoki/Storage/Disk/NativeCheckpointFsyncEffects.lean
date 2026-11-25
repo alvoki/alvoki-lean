@@ -40,6 +40,49 @@ theorem CheckpointStorageObservation.Frames.trans {footprint : FilePath → Prop
     obtain ⟨prior, earlier, preserved⟩ := first.survivors intermediate possible
     exact ⟨prior, earlier, fun path keep => (kept path keep).trans (preserved path keep)⟩
 
+theorem CheckpointStorageObservation.Frames.weaken {entry reached : CheckpointStorageObservation}
+    {footprint scope : FilePath → Prop} (frame : entry.Frames footprint reached)
+    (included : ∀ path, scope path → footprint path) : entry.Frames scope reached := by
+  constructor
+  · exact fun path keep => frame.visible path (included path keep)
+  · intro names allowed
+    obtain ⟨prior, earlier, same⟩ := frame.survivors names allowed
+    exact ⟨prior, earlier, fun path keep => same path (included path keep)⟩
+
+/-- Transport the selected file together with its durable payload. -/
+theorem CheckpointSurvivingFiles.Frames.stored {footprint : FilePath → Prop}
+    {first last : CheckpointSurvivingFiles} (frame : first.Frames footprint last)
+    {path : FilePath} {payload : ByteArray} (selected : footprint path)
+    (initial : first.Stored path payload) : last.Stored path payload := by
+  obtain ⟨inode, bound, durable⟩ := initial
+  obtain ⟨name, bytes⟩ := frame path selected
+  exact ⟨inode, name.trans bound, (bytes inode bound).trans durable⟩
+
+/-- A regular-file fsync changes crash bytes at one inode. The
+observation keeps both the visible names and the joint crash maps. -/
+structure RegularFileSyncEffect (inode : Nat) (choices : List ByteArray)
+    (entry reached : CheckpointStorageObservation) : Prop where
+  names : reached.files.names = entry.files.names
+  crashNames : reached.crashNames = entry.crashNames
+  bytes : ∀ other, reached.files.bytes other = if other = inode then choices else entry.files.bytes other
+
+theorem RegularFileSyncEffect.frames {inode : Nat} {choices : List ByteArray}
+    {entry reached : CheckpointStorageObservation} (effect : RegularFileSyncEffect inode choices entry reached)
+    {footprint : FilePath → Prop}
+    (apart : ∀ path, footprint path → ∀ other, entry.files.names path = some other → other ≠ inode) :
+    entry.Frames footprint reached := by
+  constructor
+  · intro path keep
+    refine ⟨congrFun effect.names path, fun other bound => ?_⟩
+    simpa [apart path keep other bound] using effect.bytes other
+  · intro names allowed
+    exact ⟨names, effect.crashNames ▸ allowed, fun _ _ => rfl⟩
+
+theorem RegularFileSyncEffect.stored {inode : Nat} {payload : ByteArray}
+    {entry reached : CheckpointStorageObservation} (effect : RegularFileSyncEffect inode [payload] entry reached)
+    {path : FilePath} (bound : entry.files.names path = some inode) : reached.files.Stored path payload :=
+  ⟨inode, (congrFun effect.names path).trans bound, by simpa using effect.bytes inode⟩
+
 end Alvoki.Storage.DiskSession
 
 namespace Alvoki.Storage.CheckpointPublication
@@ -79,6 +122,21 @@ theorem RunWriteInodeFrame.preservesCheckpointFootprint {directory : DiskDirecto
     obtain ⟨prior, earlier, same⟩ := effect.crashNames names allowed
     exact ⟨prior, earlier, fun other selected => same other (separate other selected)⟩
 
+/-- Project the primitive file sync effect into the storage observation.
+The choices can describe a completed sync, a partial effect, or the
+original crash bytes when the syscall had no effect. -/
+theorem RunDirectoryInodeView.fileSyncEffect {directory : DiskDirectory}
+    {before after : WalInodeImage} {oldRuns newRuns : RunUnlinkImage}
+    (entry : RunDirectoryInodeView directory before oldRuns) (reached : RunDirectoryInodeView directory after newRuns)
+    {inode : Nat} {choices : List ByteArray}
+    (bytes : after = before.reportFileSync inode choices)
+    (names : reached.visible = entry.visible) (crashNames : reached.crashBindings = entry.crashBindings) :
+    RegularFileSyncEffect inode choices entry.storageObservation reached.storageObservation := by
+  refine ⟨names, crashNames, fun other => ?_⟩
+  change after.crashBytes other = _
+  rw [bytes]
+  rfl
+
 end Alvoki.Storage.CheckpointPublication
 
 namespace Alvoki.Storage.DiskSession
@@ -92,8 +150,8 @@ variable {heap image : Type} {view : OpenCloseHeapView heap image}
 /-- A literal stopped file sync acts on the inode still held at the
 issue heap. Before any effect it leaves durable bytes unchanged. After
 the reported effect it changes only that inode's durable choices. -/
-theorem CheckpointFsyncTarget.stoppedRunFrames
-    (target : CheckpointFsyncTarget view selected issued handle)
+theorem RawFsyncTarget.stoppedRunFrames
+    (target : RawFsyncTarget view selected issued handle)
     (calls : CheckpointRawSyncCalls heap) (stopped : calls.fsync handle issued = .error reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap))
@@ -113,21 +171,50 @@ theorem CheckpointFsyncTarget.stoppedRunFrames
   obtain ⟨bound, privateBinding, bytes, visible, surviving⟩ := effect stopped
   rw [target.inode] at bound privateBinding bytes
   refine ⟨bound, ?_⟩
-  let frame : RunWriteInodeFrame path inode (inodes issued) (observe issued) (observe reached) :=
-    ⟨fun other _ => congrFun visible other,
-      fun names allowed => ⟨names, surviving ▸ allowed, fun _ _ => rfl⟩,
-      fun _ _ => rfl, fun _ _ => rfl⟩
-  apply frame.preservesCheckpointFootprint _ privateBinding separate
-  intro other distinct
-  change inodes reached = (if effective then (inodes issued).completeFileSync inode else inodes issued) at bytes
-  rw [bytes]
-  cases effective <;> simp [WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, distinct]
+  let choices := if effective then [(inodes issued).visible inode] else (inodes issued).crashBytes inode
+  have reported : inodes reached = (inodes issued).reportFileSync inode choices := by
+    rw [bytes]
+    cases effective with
+    | true => rfl
+    | false =>
+      have unchanged : (inodes issued).crashBytes =
+          ((inodes issued).reportFileSync inode ((inodes issued).crashBytes inode)).crashBytes := by
+        funext other
+        by_cases same : other = inode <;> simp [WalInodeImage.reportFileSync, same]
+      exact congrArg (fun durable => { inodes issued with crashBytes := durable }) unchanged
+  apply ((observe issued).fileSyncEffect (observe reached) reported visible surviving).frames
+  intro other keep oldInode named same
+  have boundToTarget : (observe issued).visible other = some inode := named.trans (congrArg some same)
+  exact separate other keep (privateBinding other boundToTarget)
+
+/-- Apply the successful regular-file law at the actual issued syscall.
+The descriptor's inode and the visible path must agree at issue. -/
+theorem RawFsyncTarget.returnedFileEffect
+    (target : RawFsyncTarget view selected issued handle)
+    (calls : RawSyncCalls heap) (returned : calls.fsync handle issued = .ok () reached)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap))
+    (path : FilePath)
+    (effect : calls.fsync handle issued = .ok () reached →
+      let inode := (view.descriptors issued).inode (view.handle issued handle).2.1.description
+      (observe issued).visible path = some inode ∧
+      inodes reached = (inodes issued).completeFileSync inode ∧
+      (observe reached).visible = (observe issued).visible ∧
+      (observe reached).crashBindings = (observe issued).crashBindings) :
+    let inode := (view.handle selected handle).1.inode (view.handle selected handle).2.1.description
+    (observe issued).visible path = some inode ∧
+    RegularFileSyncEffect inode [(inodes issued).visible inode]
+      (observe issued).storageObservation (observe reached).storageObservation := by
+  intro inode
+  obtain ⟨bound, bytes, names, survivors⟩ := effect returned
+  rw [target.inode] at bound bytes
+  exact ⟨bound, (observe issued).fileSyncEffect (observe reached) bytes names survivors⟩
 
 /-- The first directory fsync leaves inode bytes unchanged. An effective
 barrier may settle all visible names, but a protected name that was
 already settled agrees with one earlier joint choice. -/
-theorem CheckpointFsyncTarget.stoppedDirectoryFrames
-    (target : CheckpointFsyncTarget view selected issued handle)
+theorem RawFsyncTarget.stoppedDirectoryFrames
+    (target : RawFsyncTarget view selected issued handle)
     (calls : CheckpointRawSyncCalls heap) (stopped : calls.fsync handle issued = .error reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap))

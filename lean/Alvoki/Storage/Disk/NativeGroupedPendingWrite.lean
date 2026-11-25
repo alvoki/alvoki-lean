@@ -62,6 +62,63 @@ theorem recoveryBindings (seen : NativeGroupedWriteSyncError prepared) (valid : 
     rw [crashMarkers]
     exact congrArg (fun binding => [binding]) pair
 
+private theorem FsyncResult.reachedFiles {state : Type} {entry synced : state}
+    {effective : Bool} {result : EStateM.Result IO.Error state Unit}
+    (observed : FsyncResult entry synced effective result) :
+    reachedState result = if effective then synced else entry := by
+  cases observed <;> rfl
+
+/-- The successful keeper result fixes both projected file states.
+The second callback's reported effect still distinguishes the staged bytes. -/
+theorem filesAfterKeeperSuccess (seen : NativeGroupedWriteSyncError prepared) {afterKeeper : WriteFiles}
+    (syncedKeeper : seen.fsync seen.staging.keeperHandle prepared.staged = .ok () afterKeeper) :
+    seen.keeperFiles = prepared.keeperSynced ∧
+    seen.markerFiles = if seen.markerEffective then prepared.bothSynced else prepared.keeperSynced := by
+  have complete := seen.complete _ syncedKeeper
+  have first := seen.keeperReturned.completed_of_return ⟨_, syncedKeeper⟩
+  have atKeeper : seen.keeperFiles = prepared.keeperSynced := by
+    unfold NativeGroupedWriteSyncError.keeperFiles
+    rw [first, complete]
+    rfl
+  have atMarker : seen.markerFiles = if seen.markerEffective then prepared.bothSynced else prepared.keeperSynced := by
+    have second := FsyncResult.reachedFiles seen.markerReturned
+    change seen.markerFiles = if seen.markerEffective then
+      (seen.keeperFiles.stepMarker prepared.marker .syncStaged).getD seen.keeperFiles else seen.keeperFiles at second
+    rw [atKeeper] at second
+    exact second
+  exact ⟨atKeeper, atMarker⟩
+
+/-- The successful-keeper specialization of the common physical report
+retains the old marker and checkpoint while the keeper has the full
+new durable bytes. The stage bit belongs to the same second callback. -/
+theorem fileSelectionAfterKeeperSuccess
+    (seen : NativeGroupedWriteSyncError prepared) (valid : before.Valid) {afterKeeper : WriteFiles}
+    (syncedKeeper : seen.fsync seen.staging.keeperHandle prepared.staged = .ok () afterKeeper) :
+    let files := resumedAppendFiles before.files.image before.writer.history before.writer.wal.active.first seen.markerFiles
+    files.directory.active = before.writer.target.pair ∧
+    files.directory.crashImages = [before.writer.target.pair] ∧
+    files.directory.staged .walBoundary = some (prepared.marker, seen.markerEffective) ∧
+    files.keeper.active = some (before.writer.wal.active.bytes ++ WAL.encode prepared.batch) ∧
+    files.keeper.crashImages = [files.keeper.active] ∧
+    SelectedIntegrityCheckpoint before.writer.published.durable files.directory.active.manifest
+      before.writer.checkpoint ∧
+    selectRetained before.writer.installed.activeFirst (WAL.encode before.writer.history).size.toUInt64
+      (before.writer.wal.active.bytes ++ WAL.encode prepared.batch) = .ok before.writer.wal.active.bytes := by
+  have atMarker := (seen.filesAfterKeeperSuccess syncedKeeper).2
+  dsimp only
+  let ready := valid.retained
+  have old : before.files.image.directory.active = before.writer.target.pair := ready.resumed.ready.selected
+  obtain ⟨marker, selected⟩ := ready.selectPriorKeeper (WAL.encode prepared.batch)
+  have pair : (⟨before.files.image.directory.active.manifest,
+      some (WAL.Boundary.encode (WAL.encode before.writer.history).size.toUInt64)⟩ :
+      DirectoryPublication.Bindings) = before.writer.target.pair := by
+    rw [old, ← marker]
+  have bytes := congrArg (fun bytes => some (bytes ++ WAL.encode prepared.batch)) ready.layout.activeBytes.symm
+  rw [← ready.layout.activeBytes] at selected
+  have checkpoint := pair.symm ▸ ready.resumed.selected
+  rw [atMarker]
+  cases seen.markerEffective <;> exact ⟨pair, congrArg (fun pair => [pair]) pair, rfl, bytes, rfl, checkpoint, selected⟩
+
 end NativeGroupedWriteSyncError
 
 /-- A returned error from either actual group member reaches the common

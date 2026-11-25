@@ -295,8 +295,9 @@ namespace RawSyncCalls
 
 variable {heap image : Type} {files : DiskTable.OpenSyncFiles} {directory : DiskDirectory}
 
-/-- The shared WAL publication code starts the file barrier at the
-exact heap returned by staging, after the literal append. -/
+/-- Expand the continuation of the reached append and stage through
+the actual two-file barrier. Rename gets its successful heap. Either
+earlier error returns before the final root barrier. -/
 theorem commitAfterStaging (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
     (append : RawWalAppendCalls heap) (stage : RawWalStageCalls heap)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {first count : Nat} {bytes : ByteArray}
@@ -307,14 +308,49 @@ theorem commitAfterStaging (calls : RawSyncCalls heap) (cache : OpenSyncCacheRef
     let sync := calls.group directory.path cache.directory cache.active cache.pending
     WalSegmentCommit.commitBytesAt directory first bytes count
       (append.run cache.active) (stage.run cache.pending) sync rename entry =
-      (do
-        sync #[directory.file (.walSegment first), directory.file .stagedWalBoundary]
-        rename (directory.file .stagedWalBoundary) (directory.file .walBoundary)
-        sync #[directory.path]
-        pure ()) staged := by
+      match sync #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged with
+      | .error cause reached => .error cause reached
+      | .ok () synced => match rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) synced with
+        | .error cause reached => .error cause reached
+        | .ok () renamed => sync #[directory.path] renamed := by
   intro sync
   rw [WalSegmentCommit.commitBytesAt_fileEffects]
   simp only [WAL.Boundary.commit, Bind.bind, EStateM.bind, wrote, remembered]
+  cases grouped : sync #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged with
+  | error => rfl
+  | ok value synced =>
+    cases value
+    cases renamed : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) synced with
+    | error => simp [renamed]
+    | ok value renamedAt =>
+      cases value
+      cases final : sync #[directory.path] renamedAt with
+      | error => simp [renamed, final]
+      | ok value reached =>
+        cases value
+        simp [renamed, final, Pure.pure, EStateM.pure]
+
+/-- Once the group and rename both return, the rest of the same
+publication is exactly the reached singleton directory fsync. -/
+theorem commitAfterRename (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
+    (append : RawWalAppendCalls heap) (stage : RawWalStageCalls heap)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {first count : Nat} {bytes : ByteArray}
+    {entry appended staged synced renamed issued : heap} {handle : IO.FS.Handle}
+    (wrote : append.run cache.active (directory.file (.walSegment first)) bytes entry = .ok () appended)
+    (remembered : stage.run cache.pending (directory.file .stagedWalBoundary) (WAL.Boundary.encode count.toUInt64)
+      appended = .ok () staged)
+    (grouped : calls.group directory.path cache.directory cache.active cache.pending
+      #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .ok () synced)
+    (moved : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) synced = .ok () renamed)
+    (loaded : calls.readDirectory cache.directory renamed = .ok (some handle) issued) :
+    WalSegmentCommit.commitBytesAt directory first bytes count (append.run cache.active) (stage.run cache.pending)
+      (calls.group directory.path cache.directory cache.active cache.pending) rename entry =
+      match calls.fsync handle issued with
+      | .ok () reached => .ok () reached
+      | .error cause reached => .error (IO.userError s!"sync failed for '{directory.path}': {cause}") reached := by
+  rw [calls.commitAfterStaging cache append stage rename wrote remembered]
+  simp only [grouped, moved]
+  exact (calls.rootBarrier cache loaded).2
 
 /-- Use the append's active entry and staging's returned pending entry
 instead of supplying a second handle selection. Even a failed keeper

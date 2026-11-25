@@ -5,19 +5,6 @@ namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication SyncHandleRouting
 
-namespace CheckpointStorageObservation.Frames
-
-variable {footprint : FilePath → Prop} {first middle last : CheckpointStorageObservation}
-
-private theorem stored (frame : first.Frames footprint last) {path : FilePath} {payload : ByteArray}
-    (selected : footprint path) (initial : first.files.Stored path payload) :
-    last.files.Stored path payload := by
-  obtain ⟨inode, initialName, initialBytes⟩ := initial
-  obtain ⟨same, bytes⟩ := frame.visible path selected
-  exact ⟨inode, same.trans initialName, (bytes inode initialName).trans initialBytes⟩
-
-end CheckpointStorageObservation.Frames
-
 /-- The selected files of a ready table before any survivor is chosen. -/
 structure NativeReadyStorage (state : NativeReadyState) (storage : CheckpointStorageObservation) : Prop where
   directoryBound : storage.files.names state.session.directory.path = some (state.census.inode state.directorySlot.description)
@@ -46,8 +33,8 @@ theorem frame (initial : NativeReadyStorage state first) (frame : first.Frames s
     NativeReadyStorage state last := by
   refine ⟨(frame.visible _ (.inl rfl)).1.trans initial.directoryBound,
     (frame.visible _ (.inr (.inl rfl))).1.trans initial.lockBound, ?_,
-    frame.stored (.inr (.inr (.inr (.inl (.inl rfl))))) initial.marker,
-    frame.stored (.inr (.inr (.inr (.inl (.inr (.inl rfl)))))) initial.keeper, ?_, ?_, ?_⟩
+    frame.visible.stored (.inr (.inr (.inr (.inl (.inl rfl))))) initial.marker,
+    frame.visible.stored (.inr (.inr (.inr (.inl (.inr (.inl rfl)))))) initial.keeper, ?_, ?_, ?_⟩
   · have manifest := initial.manifest
     cases selected : state.writer.target.pair.manifest with
     | none =>
@@ -55,12 +42,12 @@ theorem frame (initial : NativeReadyStorage state first) (frame : first.Frames s
       exact (frame.visible _ (.inr (.inr (.inl rfl)))).1.trans manifest
     | some bytes =>
       rw [selected] at manifest
-      exact frame.stored (.inr (.inr (.inl rfl))) manifest
+      exact frame.visible.stored (.inr (.inr (.inl rfl))) manifest
   · intro segment member
-    exact frame.stored (.inr (.inr (.inr (.inl (.inr (.inr ⟨segment, member, rfl⟩))))))
+    exact frame.visible.stored (.inr (.inr (.inr (.inl (.inr (.inr ⟨segment, member, rfl⟩))))))
       (initial.sealedFiles segment member)
   · intro bytes metadata manifest decoded index within payload bound
-    exact frame.stored (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, manifest, decoded, within, rfl⟩))))
+    exact frame.visible.stored (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, manifest, decoded, within, rfl⟩))))
       (initial.runs bytes metadata manifest decoded index within payload bound)
   · intro names allowed path selected
     obtain ⟨prior, priorAllowed, frameNames⟩ := frame.survivors names allowed
