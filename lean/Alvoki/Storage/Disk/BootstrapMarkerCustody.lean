@@ -112,9 +112,9 @@ structure BootstrapMarkerSynced (listed : BootstrapCheckedListing captured) exte
   fileSynced : fsync ((listed.scan.afterClose.afterDrops beforeStage).insert slot free, slot, 0)
     (written before.image, inodeState) = .ok () (synced before.image, inodeState.completeFileSync inodeState.active)
 
-/-- Successful publication observes the rename and directory barrier for
-the same synced marker inode. -/
-structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) extends BootstrapMarkerSynced listed where
+/-- The observed rename publishes the synced staged inode under the
+canonical marker name. -/
+structure BootstrapMarkerRenamed (listed : BootstrapCheckedListing captured) extends BootstrapMarkerSynced listed where
   rename : FilePath → FilePath → EStateM IO.Error Files Unit
   renamedView : DirectoryReadNamespace
   liveChild : RunChildLookup captured.root "WAL.commit" renamedView
@@ -128,9 +128,6 @@ structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) ext
     (beforeFile ++ afterFile)).slots
   directoryLive : captured.cached ∈ (((listed.scan.afterClose.afterDrops beforeStage).insert slot free).afterDrops
     (beforeFile ++ afterFile)).slots
-  directorySynced : fsync (captured.reached, captured.cached, 0)
-    (renamed before.image, inodeState.completeFileSync inodeState.active) =
-    .ok () (settled before.image, (inodeState.completeFileSync inodeState.active).settleBinding)
   projectRename :
     calls.renameFile (directory.file .stagedWalBoundary) (directory.file .walBoundary) (synced before.image) =
       bootstrapMarkerProjection (withCache (captured.cache.consume (directory.file .stagedWalBoundary))
@@ -141,6 +138,13 @@ structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) ext
       bootstrapMarkerProjection (SyncPathGroup.run (sync directory.path read fsync) #[directory.path]
         (captured.cache.consume (directory.file .stagedWalBoundary), renamed before.image,
           inodeState.completeFileSync inodeState.active))
+
+/-- Successful publication includes the final barrier on the captured
+directory and settles the renamed marker. -/
+structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) extends BootstrapMarkerRenamed listed where
+  directorySynced : fsync (captured.reached, captured.cached, 0)
+    (renamed before.image, inodeState.completeFileSync inodeState.active) =
+    .ok () (settled before.image, (inodeState.completeFileSync inodeState.active).settleBinding)
 
 variable {listed : BootstrapCheckedListing captured}
 
@@ -214,12 +218,45 @@ theorem fileCallback (observed : BootstrapMarkerSynced listed) :
       .ok () (captured.cache.consume path, observed.toBootstrapMarkerStaging.syncedState, observed.inodeSynced) := by
   simpa only [observed.fileSynced] using observed.toBootstrapMarkerStaging.syncPending
 
+theorem fileProjected (observed : BootstrapMarkerSynced listed) :
+    calls.sync captured.cache #[directory.file .stagedWalBoundary] observed.toBootstrapMarkerStaging.writtenState =
+      .ok () observed.toBootstrapMarkerStaging.syncedState :=
+  observed.projectFile.trans (congrArg bootstrapMarkerProjection observed.fileCallback)
+
 end BootstrapMarkerSynced
+
+namespace BootstrapMarkerRenamed
+
+abbrev publishedState (_ : BootstrapMarkerRenamed listed) : WalSegmentRotation.State := settled before.image
+
+theorem renameProjected (observed : BootstrapMarkerRenamed listed) :
+    calls.renameFile (directory.file .stagedWalBoundary) (directory.file .walBoundary)
+      observed.toBootstrapMarkerStaging.syncedState = .ok () observed.toBootstrapMarkerSynced.renamedState := by
+  rw [observed.projectRename, observed.renameReturned]
+  rfl
+
+/-- The singleton final barrier uses the original cached descriptor. The
+native grouping adds the directory path to a returned error. -/
+theorem directoryCallback (observed : BootstrapMarkerRenamed listed) :
+    let consumed := captured.cache.consume (directory.file .stagedWalBoundary)
+    let input := (observed.toBootstrapMarkerSynced.renamedState, observed.toBootstrapMarkerSynced.inodeSynced)
+    observed.grouped #[directory.path] (consumed, input) =
+      match observed.fsync (captured.reached, captured.cached, 0) input with
+      | .ok () after => .ok () (consumed, after)
+      | .error cause after => .error (IO.userError s!"sync failed for '{directory.path}': {cause}") (consumed, after) := by
+  intro consumed input
+  change SyncPathGroup.run (sync directory.path observed.read observed.fsync) #[directory.path] (consumed, input) = _
+  rw [SyncPathGroup.run_single]
+  have cache : consumed.directory = some (captured.reached, captured.cached, 0) := rfl
+  cases result : observed.fsync (captured.reached, captured.cached, 0) input <;>
+    simp [sync, Cache.resolve, cache, withCache, result] <;> rfl
+
+end BootstrapMarkerRenamed
 
 namespace BootstrapMarkerCustody
 
-abbrev publishedState (_ : BootstrapMarkerCustody listed) : WalSegmentRotation.State :=
-  settled before.image
+abbrev publishedState (observed : BootstrapMarkerCustody listed) : WalSegmentRotation.State :=
+  observed.toBootstrapMarkerRenamed.publishedState
 
 /-- The stage remembers its actual returned slot. The file sync consumes
 that entry and the final sync uses the captured directory description. -/
@@ -242,11 +279,7 @@ theorem callbacks (observed : BootstrapMarkerCustody listed) :
   refine ⟨?_, ?_, ?_⟩
   · exact observed.toBootstrapMarkerStaging.staged
   · exact observed.toBootstrapMarkerSynced.fileCallback
-  · change SyncPathGroup.run (sync directory.path observed.read observed.fsync) #[directory.path]
-      (consumed, renamed before.image, durable) = _
-    rw [SyncPathGroup.run_single]
-    have cache : consumed.directory = some (captured.reached, captured.cached, 0) := rfl
-    simp [sync, Cache.resolve, cache, observed.directorySynced, durable, withCache]
+  · simpa only [observed.directorySynced] using observed.toBootstrapMarkerRenamed.directoryCallback
 
 /-- The staged and published children resolve to the same native inode.
 Only its synced zero marker bytes survive the reported final effect. -/

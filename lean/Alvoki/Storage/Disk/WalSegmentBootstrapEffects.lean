@@ -308,6 +308,43 @@ theorem bootstrapEmptyWith_renameError (directory : DiskDirectory) (before : Sta
   simp only [Publication.run_performReplacement, Bind.bind, EStateM.bind, Pure.pure,
     runRotation, writeOk, single, syncOk, failed]
 
+/-- The issued final directory sync returns its exact reached image.
+The preceding rename is already visible in either reported outcome. -/
+theorem bootstrapEmptyWith_directoryError (directory : DiskDirectory) (before : State)
+    (valid : BootstrapValid before) (empty : Option ByteArray) (seen : before.observeSuccessor = empty)
+    (createEmpty : FilePath → BootstrapM Unit) (write : FilePath → ByteArray → BootstrapM Unit)
+    (sync : Array FilePath → BootstrapM Unit) (renameFile : FilePath → FilePath → BootstrapM Unit)
+    {written fileSynced renamed reached : State} {cause : IO.Error} :
+    let rotate := WalSegmentRotation.performPaths directory 0 createEmpty (fun path => sync #[path])
+    let settled : State := ⟨before.metadata.syncDirectory, .durable⟩
+    (∀ done step todo prior next, WalSegmentRotation.steps empty.isSome = done ++ step :: todo →
+      before.execute done = some prior → prior.step step = some next → rotate step prior = .ok () next) →
+    bootstrapMarkerStep settled .writeStaged = some written →
+    write (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0) settled = .ok () written →
+    bootstrapMarkerStep written .syncStaged = some fileSynced →
+    sync #[directory.file .stagedWalBoundary] written = .ok () fileSynced →
+    bootstrapMarkerStep fileSynced .renameStaged = some renamed →
+    renameFile (directory.file .stagedWalBoundary) (directory.file .walBoundary) fileSynced = .ok () renamed →
+    sync #[directory.path] renamed = .error cause reached →
+    (reached = renamed ∨ bootstrapMarkerStep renamed .syncDirectory = some reached) →
+    bootstrapEmptyWith directory empty createEmpty write sync renameFile before = .error cause reached ∧
+      BootstrapValid reached := by
+  intro _ settled rotation writeEffect writeOk syncEffect syncOk renameEffect renameOk failed reachedEffect
+  obtain ⟨rotates, runRotation⟩ := bootstrapRotation_completes directory before empty seen createEmpty sync rotation
+  obtain ⟨validWritten, durable⟩ := markerStep_valid (valid.rotatePrefix rotates) rfl writeEffect
+  obtain ⟨validSynced, durable⟩ := markerStep_valid validWritten durable syncEffect
+  obtain ⟨validRenamed, durable⟩ := markerStep_valid validSynced durable renameEffect
+  have preserves : BootstrapValid reached := by
+    rcases reachedEffect with rfl | applied
+    · exact validRenamed
+    · exact (markerStep_valid validRenamed durable applied).1
+  refine ⟨?_, preserves⟩
+  rw [bootstrapEmptyWith]
+  have single : (#[].push (directory.file .stagedWalBoundary)) = #[directory.file .stagedWalBoundary] := rfl
+  dsimp only [settled] at writeOk
+  simp only [Publication.run_performReplacement, Bind.bind, EStateM.bind, Pure.pure,
+    runRotation, writeOk, single, syncOk, renameOk, failed]
+
 /-- The native markerless schedule runs the segment creation and sync
 before starting marker publication. Its reported failures preserve the
 bootstrap invariant, including when a failing syscall did take effect. -/

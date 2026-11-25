@@ -203,6 +203,7 @@ import Alvoki.Storage.Disk.BootstrapMarkerCustody
 import Alvoki.Storage.Disk.BootstrapKeeperMarkerHandoff
 import Alvoki.Storage.Disk.BootstrapMarkerSyncError
 import Alvoki.Storage.Disk.BootstrapMarkerRenameError
+import Alvoki.Storage.Disk.BootstrapMarkerDirectoryError
 import Alvoki.Storage.Disk.ObservedBootstrapFailure
 import Alvoki.Storage.Disk.ObservedBootstrapRetry
 import Alvoki.Storage.Disk.MarkerlessBootstrapRetryInstallation
@@ -964,6 +965,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_completesAt
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_syncStagedError
 #check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_renameError
+#check_axioms Alvoki.Storage.WalSegmentRepair.bootstrapEmptyWith_directoryError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.fromHealthyBootstrap
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_markerlessBranch
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_recoveryBranch
@@ -1517,6 +1519,19 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerRenameError.returns
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerRenameError.crashSelection
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerRenameError.retrySelects
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerSynced.fileProjected
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerRenamed.renameProjected
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerRenamed.directoryCallback
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerRename.renamedKeeper
+#check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerRename.renameAfterKeeper
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerDirectoryError.barrier
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerDirectoryError.physicalPrefix
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerDirectoryError.physicalChoices
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerDirectoryError.crashProjection
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerDirectoryError.worker
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerDirectoryError.returns
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerDirectoryError.crashSelection
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerDirectoryError.retryMarked
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.entries
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.canonicalLock
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.retained

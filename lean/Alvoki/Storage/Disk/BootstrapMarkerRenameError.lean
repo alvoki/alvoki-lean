@@ -75,11 +75,6 @@ theorem physicalPrefix (observed : BootstrapMarkerRenameError handoff) :
   simp only [SeqRight.seqRight, EStateM.seqRight, input, staged, write, wrote, marker.fileCallback, rename, withCache,
     observed.returned, reached]
 
-private theorem fileProjected :
-    calls.sync captured.cache #[directory.file .stagedWalBoundary] marker.toBootstrapMarkerStaging.writtenState =
-      .ok () marker.toBootstrapMarkerStaging.syncedState :=
-  marker.projectFile.trans (congrArg bootstrapMarkerProjection marker.fileCallback)
-
 private theorem renameProjected (observed : BootstrapMarkerRenameError handoff) :
     calls.renameFile (directory.file .stagedWalBoundary) (directory.file .walBoundary)
       marker.toBootstrapMarkerStaging.syncedState = .error observed.cause observed.reached := by
@@ -155,7 +150,7 @@ theorem worker (observed : BootstrapMarkerRenameError handoff) (valid : Bootstra
     · exact .inr (by simp only [reached, returned, ite_true]; rfl)
   have outcome := bootstrapEmptyWith_renameError directory before.image valid before.image.observeSuccessor rfl
     (calls.createEmpty captured.cache) (calls.write captured.cache) (calls.sync captured.cache) calls.renameFile
-    keeper.rotationHealthy rfl marker.toBootstrapMarkerStaging.writeProjected rfl (fileProjected (marker := marker))
+    keeper.rotationHealthy rfl marker.toBootstrapMarkerStaging.writeProjected rfl marker.fileProjected
     observed.renameProjected effect
   exact ⟨(calls.reachesPublication captured.cache listed.entries.1 listed.entries.2).trans outcome.1, outcome.2⟩
 

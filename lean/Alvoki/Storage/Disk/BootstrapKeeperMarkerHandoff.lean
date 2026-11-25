@@ -86,17 +86,22 @@ structure BootstrapKeeperMarkerStaging (keeper : BootstrapZeroKeeperRoute listed
   keeperSettlement : ∀ name, afterKeeperNames name = [keeper.keeperView.child captured.root name]
   stageChoices : ∀ name, name ≠ stageName → afterStageNames name = afterKeeperNames name
 
-/-- After staging and file sync, a successful continuation also reports
-the namespace effects of the marker rename and the final directory barrier. -/
-structure BootstrapKeeperMarkerHandoff (keeper : BootstrapZeroKeeperRoute listed)
-    (marker : BootstrapMarkerCustody listed)
+/-- The successful rename preserves names outside its two targets
+and carries the same object identities into the final barrier. -/
+structure BootstrapKeeperMarkerRename (keeper : BootstrapZeroKeeperRoute listed)
+    (marker : BootstrapMarkerRenamed listed)
     extends BootstrapKeeperMarkerStaging keeper marker.toBootstrapMarkerStaging where
   renameObjects : marker.renamedView.modelObject = captured.view.modelObject
   renameNames : ∀ name, name ≠ stageName → name ≠ markerName →
     marker.renamedView.child captured.root name = marker.stageView.child captured.root name
   afterRenameNames : String → List (Option DeviceInode)
-  afterMarkerNames : String → List (Option DeviceInode)
   renameChoices : ∀ name, name ≠ stageName → name ≠ markerName → afterRenameNames name = afterStageNames name
+
+/-- Successful settlement binds exactly the observed renamed entries. -/
+structure BootstrapKeeperMarkerHandoff (keeper : BootstrapZeroKeeperRoute listed)
+    (marker : BootstrapMarkerCustody listed)
+    extends BootstrapKeeperMarkerRename keeper marker.toBootstrapMarkerRenamed where
+  afterMarkerNames : String → List (Option DeviceInode)
   markerSettlement : ∀ name, afterMarkerNames name = [marker.renamedView.child captured.root name]
 
 namespace BootstrapKeeperMarkerStaging
@@ -157,6 +162,53 @@ theorem stagedKeeper (observed : BootstrapKeeperMarkerStaging keeper marker) :
 
 end BootstrapKeeperMarkerStaging
 
+namespace BootstrapKeeperMarkerRename
+
+variable {keeper : BootstrapZeroKeeperRoute listed} {marker : BootstrapMarkerRenamed listed}
+
+private theorem keeper_ne_stage : keeperName ≠ stageName := by decide
+private theorem keeper_ne_marker : keeperName ≠ markerName := by decide
+
+/-- The file sync and rename leave the already settled keeper unchanged. -/
+theorem renamedKeeper (observed : BootstrapKeeperMarkerRename keeper marker) :
+    let inode := keeper.settledImage.active
+    let expected := some keeper.keeperChild
+    marker.stageChild.child ≠ keeper.keeperChild ∧
+    marker.renamedView.child captured.root keeperName = expected ∧
+    marker.renamedView.modelObject keeper.keeperChild = inode ∧
+    observed.afterRenameNames keeperName = [expected] ∧
+    marker.toBootstrapMarkerSynced.inodeSynced.visible inode = ByteArray.empty ∧
+    marker.toBootstrapMarkerSynced.inodeSynced.crashBytes inode = [ByteArray.empty] := by
+  intro inode expected
+  obtain ⟨separate, distinct, staged, _, stagedNames, visibleEmpty, durableEmpty⟩ :=
+    observed.toBootstrapKeeperMarkerStaging.stagedKeeper
+  have renamed := (observed.renameNames keeperName keeper_ne_stage keeper_ne_marker).trans staged
+  have renamedNames := (observed.renameChoices keeperName keeper_ne_stage keeper_ne_marker).trans stagedNames
+  refine ⟨distinct, renamed, (congrArg (· keeper.keeperChild) observed.renameObjects).trans keeper.settledCustody.2.2.2,
+    renamedNames, visibleEmpty, ?_⟩
+  simp [BootstrapMarkerSynced.inodeSynced, inode, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync,
+    separate, durableEmpty]
+
+/-- The same reached physical cache and file image enter the final
+directory barrier after the ordered stage, file barrier and rename. -/
+theorem renameAfterKeeper (observed : BootstrapKeeperMarkerRename keeper marker) :
+    let input := keeper.keeperImage.completeFileSync keeper.keeperImage.active
+    let path := directory.file .stagedWalBoundary
+    let write := stageFreshWithCache path (WAL.Boundary.encode 0) marker.toBootstrapMarkerStaging.stage
+    let rename := fun (state : Cache Handle × Files) =>
+      withCache state.1 (marker.rename path (directory.file .walBoundary) state.2)
+    (((keeper.groupedSync #[directory.path] *> write) *> marker.grouped #[path]) *> rename)
+      (captured.cache, keeper.fileSyncedState, input) =
+      .ok () (captured.cache.consume path, marker.toBootstrapMarkerSynced.renamedState,
+        marker.toBootstrapMarkerSynced.inodeSynced) := by
+  intro input path write rename
+  have staged := observed.toBootstrapKeeperMarkerStaging.stageAfterKeeper
+  simp only [SeqRight.seqRight, EStateM.seqRight] at staged
+  simp only [SeqRight.seqRight, EStateM.seqRight, input, path, write, staged,
+    marker.toBootstrapMarkerSynced.fileCallback, rename, withCache, marker.renameReturned]
+
+end BootstrapKeeperMarkerRename
+
 namespace BootstrapKeeperMarkerHandoff
 
 variable {keeper : BootstrapZeroKeeperRoute listed} {marker : BootstrapMarkerCustody listed}
@@ -166,9 +218,6 @@ theorem heldAtStage (observed : BootstrapKeeperMarkerHandoff keeper marker) :
     calls.slot ∈ reached.slots ∧ captured.cached ∈ reached.slots ∧
     marker.initial = keeper.settledImage :=
   observed.toBootstrapKeeperMarkerStaging.heldAtStage
-
-private theorem keeper_ne_stage : keeperName ≠ stageName := by decide
-private theorem keeper_ne_marker : keeperName ≠ markerName := by decide
 
 /-- Through staging, the marker file sync, rename, and final directory
 barrier, the off-target keeper retains the same name and empty bytes.
@@ -193,18 +242,14 @@ theorem preservesKeeper (observed : BootstrapKeeperMarkerHandoff keeper marker) 
     markerSettled.visible inode = ByteArray.empty ∧
     markerSettled.crashBytes inode = [ByteArray.empty] := by
   intro inode fileSynced markerSettled expected
-  obtain ⟨separate, distinct, staged, oldNames, stagedNames, visibleEmpty, durableEmpty⟩ :=
+  obtain ⟨_, distinct, staged, oldNames, stagedNames, visibleEmpty, durableEmpty⟩ :=
     observed.toBootstrapKeeperMarkerStaging.stagedKeeper
-  have renamed := (observed.renameNames keeperName keeper_ne_stage keeper_ne_marker).trans staged
-  have renamedNames := (observed.renameChoices keeperName keeper_ne_stage keeper_ne_marker).trans stagedNames
+  obtain ⟨_, renamed, renamedIdentity, renamedNames, _, syncEmpty⟩ :=
+    observed.toBootstrapKeeperMarkerRename.renamedKeeper
   have finalNames : observed.afterMarkerNames keeperName = [expected] := by
     simp [observed.markerSettlement, renamed, expected]
-  have syncEmpty : fileSynced.crashBytes inode = [ByteArray.empty] := by
-    simp [fileSynced, inode, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, separate, durableEmpty]
-  exact ⟨distinct, staged, renamed,
-    (congrArg (· keeper.keeperChild) observed.renameObjects).trans keeper.settledCustody.2.2.2,
-    oldNames, stagedNames, renamedNames, finalNames, visibleEmpty, durableEmpty,
-    syncEmpty, visibleEmpty, syncEmpty⟩
+  exact ⟨distinct, staged, renamed, renamedIdentity, oldNames, stagedNames, renamedNames, finalNames,
+    visibleEmpty, durableEmpty, syncEmpty, visibleEmpty, syncEmpty⟩
 
 /-- Both reports have one stateful suffix from the keeper directory
 barrier through the actual ordered marker replacement. The output cache
