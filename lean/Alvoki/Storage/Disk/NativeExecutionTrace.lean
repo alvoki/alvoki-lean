@@ -22,6 +22,7 @@ import Alvoki.Storage.Disk.NativeCheckpointErrorReopen
 import Alvoki.Storage.Disk.NativeEarlyCheckpointReopen
 import Alvoki.Storage.Disk.NativeCheckpointRunFileReopen
 import Alvoki.Storage.Disk.NativeCheckpointManifestSyncReopen
+import Alvoki.Storage.Disk.NativeCheckpointManifestRenameReboot
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkErrorReopen
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkErrorPowerLoss
 import Alvoki.Storage.Disk.NativeCheckpointPreflight
@@ -70,6 +71,7 @@ inductive NativeExecutionEvent : Type 1 where
   | checkpointManifestSyncErrorRecovered (input : FilePath) (error : IO.Error)
   | firstCheckpointBarrierErrorRecovered (input : FilePath) (error : IO.Error)
   | checkpointCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
+  | checkpointManifestRenameCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | interruptedCheckpointRecovered (input : FilePath) (manifest : Option ByteArray)
   | collectCoveredWal
   | interruptedCoveredWalUnlinkRecovered (input : FilePath)
@@ -399,6 +401,13 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (reopened : NativeCheckpointManifestSyncReopened current.ready seen next) :
       NativeExecutionStep current (.checkpointManifestSyncErrorRecovered input seen.error.error)
         ⟨current.history, current.submissions, next⟩
+  | recoverCheckpointManifestRenameError (current : NativeExecutionPosition) {input : FilePath} {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      {report : NativeCheckpointManifestRenameError (image := image) current.ready.state cut}
+      (crash : NativeCheckpointManifestRenameCrash report) (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeCheckpointManifestRenameReopened current.ready crash input next) :
+      NativeExecutionStep current (.checkpointManifestRenameCrashRecovered input report.cause crash.pair.manifest)
+        ⟨current.history, current.submissions, next⟩
   | recoverInterruptedCheckpoint (current : NativeExecutionPosition) {input : FilePath}
       (observed : NativePendingCheckpointCrashObservation current.ready.state input)
       (next : NativeReadPosition current.history current.submissions)
@@ -638,6 +647,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverCheckpointManifestSyncError reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverCheckpointManifestRenameError reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverInterruptedCheckpoint reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWriteCrash reopened =>
@@ -754,6 +765,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | checkpointFirstBarrierErrorThenReopen (input : FilePath)
   | coveredWalUnlinkErrorThenReopen (input : FilePath)
   | checkpointThenPowerLossAndReopen (input : FilePath)
+  | checkpointManifestRenameErrorThenPowerLossAndReopen (input : FilePath)
   | collectCoveredWal
   | interruptedCoveredWalUnlinkThenReopen (input : FilePath)
   | coveredWalUnlinkErrorThenPowerLossAndReopen (input : FilePath)
@@ -809,6 +821,8 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .checkpointFirstBarrierErrorThenReopen input, .firstCheckpointBarrierErrorRecovered opened _ => opened = input
   | .coveredWalUnlinkErrorThenReopen input, .coveredWalUnlinkErrorRecovered opened _ => opened = input
   | .checkpointThenPowerLossAndReopen input, .checkpointCrashRecovered opened _ _ => opened = input
+  | .checkpointManifestRenameErrorThenPowerLossAndReopen input, .checkpointManifestRenameCrashRecovered opened _ _ =>
+    opened = input
   | .collectCoveredWal, .collectCoveredWal => True
   | .interruptedCoveredWalUnlinkThenReopen input, .interruptedCoveredWalUnlinkRecovered opened => opened = input
   | .coveredWalUnlinkErrorThenPowerLossAndReopen input, .coveredWalUnlinkErrorCrashRecovered opened _ => opened = input
@@ -973,6 +987,11 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
       (seen : NativeCheckpointManifestSyncReopenObservation current.state input)
   | checkpointFirstBarrierErrorThenReopen (input : FilePath) (seen : NativeEarlyCheckpointReopenObservation current.state input)
   | coveredWalUnlinkErrorThenReopen (input : FilePath) (seen : NativeCoveredWalUnlinkErrorReopen current.state input)
+  | checkpointManifestRenameErrorThenPowerLossAndReopen (input : FilePath) {image : Type}
+      {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
+      {report : NativeCheckpointManifestRenameError (image := image) current.state cut}
+      (crash : NativeCheckpointManifestRenameCrash report)
+      (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointManifestRenameReads crash input plan))
   | planWalCollection (observed : NativeWalPlanningObservation current.state)
   | rotateCreated (reported : NativeReadyCreatedRotation current.state)
   | rotateExisting (reported : NativeReadyExistingRotation current.state)
@@ -1064,6 +1083,8 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .rotateThenPowerLossAndReopen input _ _ => .rotateThenPowerLossAndReopen input
   | .interruptedRotationThenReopen input _ _ => .interruptedRotationThenReopen input
   | .checkpointThenPowerLossAndReopen input _ => .checkpointThenPowerLossAndReopen input
+  | .checkpointManifestRenameErrorThenPowerLossAndReopen input _ _ =>
+    .checkpointManifestRenameErrorThenPowerLossAndReopen input
   | .collectObsoleteRuns observed => .collectObsoleteRuns observed.reports.held
   | .interruptedRunUnlinkThenReopen (cut := cut) input _ _ _ => .interruptedRunUnlinkThenReopen cut.plan.reports.held input
   | .retryObsoleteRunCollection (held := held) (errors := errors) _ _ _ _ => .retryObsoleteRunCollection held errors.length
@@ -1191,6 +1212,9 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | coveredWalUnlinkErrorThenReopen _ seen =>
     obtain ⟨next, reopened⟩ := current.ready.recoversCoveredWalUnlinkError seen
     exact ⟨_, _, .recoverCoveredWalUnlinkError current seen next reopened, rfl⟩
+  | checkpointManifestRenameErrorThenPowerLossAndReopen _ crash observe =>
+    obtain ⟨next, reopened⟩ := current.ready.recoversCheckpointManifestRenamePowerLoss crash observe
+    exact ⟨_, _, .recoverCheckpointManifestRenameError current crash next reopened, rfl⟩
   | checkpointThenCloseAndReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.recoversCheckpointDirectoryError observed
     exact ⟨_, _, .recoverCheckpointError current observed next reopened, rfl⟩
