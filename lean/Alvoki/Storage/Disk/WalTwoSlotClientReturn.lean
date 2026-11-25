@@ -567,6 +567,22 @@ theorem markerSyncErrorAfter_selectsSuccessor
     syncedInode_survivor walSync walCurrent walBinding walSurvived]
   exact syncedBytes_selectBatch history batch prior advanced size unchanged written appended
 
+/-- A process stop after a completed marker barrier preserves the exact
+selected frontier when the cache-installation suffix leaves its inode alone. -/
+theorem markerSyncBeforeInstall_preservesSelection
+    {marker synced stopped : WalInodeImage} {handle : KeeperDescriptorIdentity}
+    (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      handle marker (fun inode files => files.completeFileSync inode) (.ok () synced))
+    (current : handle.inode = marker.active)
+    (binding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    (keepsMarker : stopped = synced)
+    {selection : Selection} (decoded : decode (marker.visible marker.active) = .ok selection)
+    {bytes : ByteArray} (survived : ∃ inode ∈ stopped.crashBindings, bytes ∈ stopped.crashBytes inode) :
+    decode bytes = .ok selection := by
+  rw [keepsMarker] at survived
+  rw [syncedInode_survivor sync current binding survived]
+  exact decoded
+
 /-- The no-follow stat and raw open on the held directory identify the
 object whose bounded read selects the two-slot frontier. -/
 theorem decode_markerFromHeldDirectory

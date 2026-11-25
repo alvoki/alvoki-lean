@@ -3651,6 +3651,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.interruptedDescriptors_selectBatch
 #check_axioms Alvoki.WAL.TwoSlot.markerError_selectBatch
 #check_axioms Alvoki.WAL.TwoSlot.markerSyncErrorAfter_selectsSuccessor
+#check_axioms Alvoki.WAL.TwoSlot.markerSyncBeforeInstall_preservesSelection
 #check_axioms Alvoki.WAL.TwoSlot.slotWrite_cursor
 #check_axioms Alvoki.WAL.TwoSlot.SlotWriteTransfers.inactiveRecord
 #check_axioms Alvoki.WAL.TwoSlot.SlotWriteTransfers.coversPrefix
