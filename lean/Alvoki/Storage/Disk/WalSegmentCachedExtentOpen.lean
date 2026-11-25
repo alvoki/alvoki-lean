@@ -326,6 +326,32 @@ theorem readCachedWalPayloads_keeperSuccess {state : Type} (dir : DiskDirectory)
   simp [readCachedWalPayloads, readCachedWalPayloadsFrom, Bind.bind, EStateM.bind, observed, size, enough,
     Pure.pure, EStateM.pure]
 
+/-- A successful keeper callback completes the same payload loop that
+read the earlier seals, retaining their order and the final callback state. -/
+theorem CachedWalKeeperReached.read_success {state : Type} {dir : DiskDirectory} (through : Nat)
+    {readSeal : FilePath → Nat → EStateM IO.Error state ByteArray}
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
+    {keeper : Nat} {metadata : IO.FS.Metadata} {required : List (Nat × IO.FS.Metadata)}
+    {initial reached after : state}
+    (seals : CachedWalKeeperReached dir readSeal keeper metadata required initial reached)
+    {selected : Nat → ByteArray → Prop}
+    (reportedPayload : ∀ entry ∈ required.dropLast, ∀ {before after bytes},
+      readSeal (dir.file (.walSegment entry.1)) entry.2.byteSize.toNat before = .ok bytes after →
+      selected entry.1 bytes)
+    {bytes : ByteArray} (size : bytes.size = (through - keeper) * frameSize)
+    (covers : bytes.size ≤ metadata.byteSize.toNat)
+    (called : readKeeper (dir.file (.walSegment keeper)) bytes.size metadata.byteSize.toNat reached =
+      .ok bytes after) :
+    ∃ earlier : List (Nat × ByteArray), earlier.map Prod.fst = required.dropLast.map Prod.fst ∧
+      (∀ entry ∈ earlier, selected entry.1 entry.2) ∧
+      readCachedWalPayloads dir through readSeal readKeeper required initial =
+        .ok (earlier ++ [(keeper, bytes)], metadata.byteSize.toNat) after := by
+  obtain ⟨earlier, offsets, contents, read⟩ := seals.reachesRead through readKeeper reportedPayload
+  have last := readCachedWalPayloads_keeperSuccess dir through readSeal readKeeper size covers called
+  refine ⟨earlier, offsets, contents, ?_⟩
+  rw [read]
+  simp only [Bind.bind, EStateM.bind, last, Pure.pure, EStateM.pure]
+
 /-- Read-only seal observations preserve the state until the keeper read. -/
 theorem CachedWalKeeperReached.reached_eq_of_readonly {state : Type} {dir : DiskDirectory}
     {readSeal : FilePath → Nat → EStateM IO.Error state ByteArray}

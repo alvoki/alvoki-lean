@@ -1254,6 +1254,25 @@ theorem recoveredRetries_retainUncertainBatch
   · exact recoveredBatch_retains prior recovery binding (.inl (oldFrontier ▸ oldSize))
   · exact recoveredBatch_retains prior recovery binding (.inr (newFrontier ▸ newSize))
 
+private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × ByteArray)}
+    (offsets : left.map Prod.fst = right.map Prod.fst)
+    (leftBytes : ∀ file ∈ left, files.kept file.1 = some file.2)
+    (rightBytes : ∀ file ∈ right, files.kept file.1 = some file.2) : left = right := by
+  induction left generalizing right with
+  | nil => cases right <;> simp_all
+  | cons entry tail ih =>
+    cases right with
+    | nil => simp at offsets
+    | cons other rest =>
+      have head := List.cons.inj offsets
+      have sameBytes := Option.some.inj
+        ((leftBytes entry (by simp)).symm.trans (head.1.symm ▸ rightBytes other (by simp)))
+      have sameEntry := Prod.ext head.1 sameBytes
+      rw [sameEntry]
+      exact congrArg (List.cons other)
+        (ih head.2 (fun file found => leftBytes file (List.mem_cons_of_mem _ found))
+          (fun file found => rightBytes file (List.mem_cons_of_mem _ found)))
+
 /-- The same retry-selected recovery explains the retained submissions and
 fresh snapshot reads on the session installed by the shared open schedule. -/
 theorem recoveredRetries_installedReads
@@ -1304,14 +1323,22 @@ theorem recoveredRetries_installedReads
       .ok extents scannedState)
     (selectedExtents : WalSegmentRepair.selectWalExtentsThrough extents base.committed.toNat
       (selected.frontier.toNat / frameSize) = some (required, newer))
-    {sealed : List (Nat × ByteArray)} {size : Nat}
-    (payloadRead : WalSegmentRepair.readCachedWalPayloads directory (selected.frontier.toNat / frameSize)
-      readSeal readKeeper required scannedState = .ok (sealed ++ [(target.first, plan.keeperBytes)], size) prepared)
+    {sealed : List (Nat × ByteArray)} {keeperMetadata : IO.FS.Metadata} {atKeeper : FileImage}
+    (sealReads : WalSegmentRepair.CachedWalKeeperReached directory readSeal target.first
+      keeperMetadata required scannedState atKeeper)
+    (sealedOffsets : sealed.map Prod.fst = required.dropLast.map Prod.fst)
+    (reportedSeal : ∀ entry ∈ required.dropLast, ∀ {before after bytes},
+      readSeal (directory.file (.walSegment entry.1)) entry.2.byteSize.toNat before = .ok bytes after →
+      prepared.kept entry.1 = some bytes)
+    (keeperSize : target.trimmed.size = (selected.frontier.toNat / frameSize - target.first) * frameSize)
+    (keeperCovers : target.trimmed.size ≤ keeperMetadata.byteSize.toNat)
+    (keeperRead : readKeeper (directory.file (.walSegment target.first)) target.trimmed.size
+      keeperMetadata.byteSize.toNat atKeeper = .ok target.trimmed prepared)
     (openedResult : opened = ⟨opened.table, (checkpointResult.getD (.empty, 0)).2,
       selected.frontier, target.first⟩)
     (barrier : stabilize prepared = .ok ()
       { prepared with directory := settleMarker prepared.directory selected })
-    (repaired : finish ⟨selected.frontier.toNat / frameSize, target.first, newer, plan.keeperBytes⟩ size
+    (repaired : finish ⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩ keeperMetadata.byteSize.toNat
       { prepared with directory := settleMarker prepared.directory selected } = .ok () after)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
     {payload : ByteArray}
@@ -1348,20 +1375,34 @@ theorem recoveredRetries_installedReads
   let readWal := fun start length =>
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
   obtain ⟨_, _, _, aligned, _⟩ := decode_valid acceptedMarker
+  obtain ⟨earlier, earlierOffsets, earlierBytes, payloadRead⟩ :=
+    sealReads.read_success (selected.frontier.toNat / frameSize) readKeeper
+      (selected := fun first bytes => prepared.kept first = some bytes)
+      (fun entry member {_before _after _bytes} seen => reportedSeal entry member seen) keeperSize keeperCovers keeperRead
+  have sameSeals := sealedReads_eq (earlierOffsets.trans sealedOffsets.symm) earlierBytes sealedRead
+  rw [sameSeals] at payloadRead
   have walRead := WalSegmentRepair.readSelectedWithCachedExtents_stateful directory
     base.committed.toNat selected.frontier list lstat readSeal readKeeper
     ⟨aligned, watermark⟩ listed scanned selectedExtents payloadRead
+  obtain ⟨tail, fullKeeper⟩ := preparedPlan.keeperPrefix.activeValid
+  have full : plan.keeperBytes = target.trimmed ++ tail :=
+    Option.some.inj (preparedPlan.keeperRead.symm.trans fullKeeper)
+  have boundedReplay : recoverMarkedWalSegments base selected.frontier
+      (sealed ++ [(target.first, target.trimmed)]) = .ok (payload, opened.table) := by
+    rw [full] at checked selectedReplay
+    exact (recoverMarkedWalSegments_removeKeeperTail base selected.frontier sealed target.first
+      target.trimmed tail aligned (Nat.le_of_eq keeperSize.symm) checked).symm.trans selectedReplay
   have read := prepareSelected_stateful directory (Boundary.encode selected.frontier)
     selected.frontier (Boundary.decode_encode _) readCheckpoint readWal checkpointRead
     (checkpointBase.symm ▸ walRead)
     (show recoverMarkedWalSegments (checkpointResult.getD (.empty, 0)).1 selected.frontier
-      (sealed ++ [(target.first, plan.keeperBytes)]) = .ok (payload, opened.table) from
-      checkpointBase.symm ▸ selectedReplay)
-    (keeper := target.first) (bytes := plan.keeperBytes) (by simp)
+      (sealed ++ [(target.first, target.trimmed)]) = .ok (payload, opened.table) from
+      checkpointBase.symm ▸ boundedReplay)
+    (keeper := target.first) (bytes := target.trimmed) (by simp)
   have preparedRead : WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
       (fun _ => pure (some (Boundary.encode selected.frontier))) readWal openedFrom.image =
-      .ok (⟨selected.frontier.toNat / frameSize, target.first, newer, plan.keeperBytes⟩,
-        opened, size) prepared :=
+      .ok (⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩,
+        opened, keeperMetadata.byteSize.toNat) prepared :=
     openedResult.symm ▸ read
   obtain ⟨session, final, returned, installed, reached, owner, freshSession⟩ :=
     reopenWith_installsPrepared (unlock := unlock) liveRefs fresh acquisition preparedRead barrier repaired

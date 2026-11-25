@@ -1684,6 +1684,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedSealExtentError
 #check_axioms Alvoki.Storage.SyncHandleRouting.readKeeperWith_rejectsExtent
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.read_error
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.read_success
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.reachesRead
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_keeperSuccess
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.keeperReached_eq_of_readonly
