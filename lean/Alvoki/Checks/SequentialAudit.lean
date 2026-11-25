@@ -2863,6 +2863,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.selectedWalReachesKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.beforeKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.preparesFromCensus
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.preparesFromSelectedWal
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.liveAtRead
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.closedDescription
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.custody
