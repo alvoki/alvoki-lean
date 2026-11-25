@@ -46,6 +46,21 @@ theorem lookupAfter (report : WalUnlinkPhysicalEffect root first view before aft
       exact equal (by simpa only [parseWalSegmentName_render, Option.some.injEq] using congrArg parseWalSegmentName same)
     simp [equal, report.frame _ different]
 
+/-- Lift the physical name frame to the ordered list of immutable seals. -/
+theorem sealedAfter (report : WalUnlinkPhysicalEffect root first view before afterView after)
+    (bound : ∀ segment ∈ before.visible.sealed,
+      (view.child root (renderWalSegmentName segment.first)).isSome = true) :
+    after.visible.sealed = before.visible.sealed.filter (fun segment => !report.removed || segment.first != first) := by
+  rw [report.visible]
+  apply List.filter_congr
+  intro segment member
+  rw [report.lookupAfter]
+  have present := bound segment member
+  by_cases same : segment.first = first
+  · rw [same] at present ⊢
+    cases report.removed <;> simp [present]
+  · simp [same, present]
+
 end WalUnlinkPhysicalEffect
 
 namespace WalUnlinkEffect
@@ -76,34 +91,6 @@ theorem accepted (report : WalUnlinkEffect root first view before result afterVi
   rcases RunCollection.ownedUnlinkResult_ok_iff.mp success with completed | ⟨path, message, missing⟩
   · exact .inl (report.completed completed)
   · exact .inr (report.lookup.trans (report.missing path message missing))
-
-end WalUnlinkEffect
-
-namespace WalUnlinkPhysicalEffect
-
-variable {root : DeviceInode} {first : Nat} {view afterView : DirectoryReadNamespace} {before after : WalSealedUnlinkImage}
-
-/-- Lift the physical name frame to the ordered list of immutable seals. -/
-theorem sealedAfter (report : WalUnlinkPhysicalEffect root first view before afterView after)
-    (bound : ∀ segment ∈ before.visible.sealed,
-      (view.child root (renderWalSegmentName segment.first)).isSome = true) :
-    after.visible.sealed = before.visible.sealed.filter (fun segment => !report.removed || segment.first != first) := by
-  rw [report.visible]
-  apply List.filter_congr
-  intro segment member
-  rw [report.lookupAfter]
-  have present := bound segment member
-  by_cases same : segment.first = first
-  · rw [same] at present ⊢
-    cases report.removed <;> simp [present]
-  · simp [same, present]
-
-end WalUnlinkPhysicalEffect
-
-namespace WalUnlinkEffect
-
-variable {root : DeviceInode} {first : Nat} {view afterView : DirectoryReadNamespace}
-  {before after : WalSealedUnlinkImage} {result : Except IO.Error Unit}
 
 theorem sealedAfter (report : WalUnlinkEffect root first view before result afterView after)
     (bound : ∀ segment ∈ before.visible.sealed,

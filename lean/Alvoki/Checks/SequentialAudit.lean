@@ -246,6 +246,7 @@ import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkPowerLoss
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
+import Alvoki.Storage.Disk.NativeCoveredWalUnlinkReopen
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeReadyClose
 import Alvoki.Storage.Disk.NativeCloseAlignedReopen
@@ -1580,6 +1581,18 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.runs
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsCustody
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsLock
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.stops
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.inspectedSeal
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.projects
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.selections
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.sameCensus
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.retainsCustody
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.survivorValid
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkStop.survivingReads
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkCrash.keepsReachedBinding
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkCrash.survivingSeal
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkCrash.survivingKeeper
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversInterruptedCoveredWalUnlink
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPlan.plans
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPass.barrierCensus
@@ -2056,6 +2069,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkInvariant.start
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkInvariant.bound
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkInvariant.unlink
+#check_axioms Alvoki.Storage.DiskSession.WalUnlinkPhysicalEffect.lookupAfter
+#check_axioms Alvoki.Storage.DiskSession.WalUnlinkPhysicalEffect.sealedAfter
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.afterWalProjection
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.lookupAfter
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.dispatch
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.projects
