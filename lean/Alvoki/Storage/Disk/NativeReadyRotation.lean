@@ -22,12 +22,36 @@ private theorem releaseRotationActive_closes (cache : CensusDirectoryCache) (fil
 /-- At the active reset, the cache still owns the original append handle
 when present. The report gives the observed descriptor-only release at
 this step, including the live root and writer slots after reset. -/
-structure NativeRotationCacheReset (state : NativeReadyState) (cache : CensusDirectoryCache) (files : Files) where
+structure NativeRotationCacheReset (state : NativeReadyState) (cache : CensusDirectoryCache)
+    (files : Files) (keeper : DeviceInode) where
+  activePath : ∀ entry ∈ cache.active, entry.1 = state.session.directory.file (.walSegment state.writer.installed.activeFirst)
   live : ∀ entry ∈ cache.active, entry.2.2.1 ∈ files.1.slots
+  capturedObject : ∀ entry ∈ cache.active,
+    entry.2.1.inode entry.2.2.1.description = files.1.inode entry.2.2.1.description
+  keeperObject : ∀ entry ∈ cache.active,
+    files.2.view.modelObject keeper = files.1.inode entry.2.2.1.description
   drops : List LockReferenceDrop
   observed : drops = cache.active.toList.map (fun entry => entry.2.2.1.closeEvent)
   owner : state.owner ∈ (files.1.afterDrops drops).slots
   directory : state.directorySlot ∈ (files.1.afterDrops drops).slots
+
+/-- If an append handle is cached, its live slot names the old keeper
+at the reset, and that exact slot is gone from the returned census. -/
+structure NativeRotationActiveCustody (state : NativeReadyState) (files : Files) (keeper : DeviceInode)
+    (entry : FilePath × RotationSuccessorHandle) (after : DescriptorInventory) : Prop where
+  path : entry.1 = state.session.directory.file (.walSegment state.writer.installed.activeFirst)
+  live : entry.2.2.1 ∈ files.1.slots
+  capturedObject : entry.2.1.inode entry.2.2.1.description = files.1.inode entry.2.2.1.description
+  keeperObject : files.2.view.modelObject keeper = files.1.inode entry.2.2.1.description
+  closed : entry.2.2.1 ∉ after.slots
+
+theorem NativeRotationCacheReset.retiresKeeper
+    {state : NativeReadyState} {cache : CensusDirectoryCache} {files : Files} {keeper : DeviceInode}
+    (reset : NativeRotationCacheReset state cache files keeper)
+    {entry : FilePath × RotationSuccessorHandle} (cached : entry ∈ cache.active) :
+    NativeRotationActiveCustody state files keeper entry (releaseRotationActive cache files).1 :=
+  ⟨reset.activePath entry cached, reset.live entry cached, reset.capturedObject entry cached,
+    reset.keeperObject entry cached, releaseRotationActive_closes cache files cached⟩
 
 private def NativeReadyState.withRotatedWal (state : NativeReadyState) (valid : state.Valid)
     (census : DescriptorInventory) : NativeReadyState :=
@@ -39,8 +63,8 @@ private def NativeReadyState.withRotatedWal (state : NativeReadyState) (valid : 
     census }
 
 private theorem NativeRotationCacheReset.validNext
-    {state : NativeReadyState} {cache : CensusDirectoryCache} {files : Files}
-    (reset : NativeRotationCacheReset state cache files) (valid : state.Valid)
+    {state : NativeReadyState} {cache : CensusDirectoryCache} {files : Files} {keeper : DeviceInode}
+    (reset : NativeRotationCacheReset state cache files keeper) (valid : state.Valid)
     (nonempty : state.writer.installed.activeFirst < state.writer.installed.walBytes / frameSize) :
     (state.withRotatedWal valid (releaseRotationActive cache files).1).Valid := by
   have retained := valid.retained.rotates nonempty (target := valid.retained.rotationTarget) ⟨rfl, rfl, rfl⟩
@@ -107,7 +131,7 @@ structure NativeReadyExistingRotation (state : NativeReadyState) where
   keeperSurvives : directory.settled.crashNames (renderWalSegmentName state.writer.installed.activeFirst) =
     opened.files.crashNames (renderWalSegmentName state.writer.installed.activeFirst)
   markerSurvives : directory.settled.crashNames "WAL.commit" = opened.files.crashNames "WAL.commit"
-  reset : NativeRotationCacheReset state opened.cache directory.after
+  reset : NativeRotationCacheReset state opened.cache directory.after keeper
 
 namespace NativeReadyExistingRotation
 
@@ -159,6 +183,11 @@ theorem custody (report : NativeReadyExistingRotation state) (valid : state.Vali
     have active : state.cache.active = some entry := member
     exact releaseRotationActive_closes _ _ ((congrArg Cache.active report.cache).trans active)
 
+theorem retiresKeeper (report : NativeReadyExistingRotation state) (valid : state.Valid)
+    {entry : FilePath × RotationSuccessorHandle} (cached : entry ∈ state.cache.active) :
+    NativeRotationActiveCustody state report.directory.after report.keeper entry (report.next valid).census :=
+  report.reset.retiresKeeper (report.cache.symm ▸ cached)
+
 theorem keepsKeeperMarker (report : NativeReadyExistingRotation state) :
     NativeRotationKeeperMarker state.writer report.opened.root report.directory.settled report.keeper report.marker := by
   have keptBytes (object : DeviceInode)
@@ -200,6 +229,8 @@ structure NativeExistingRotationContinuation (current next : NativeReadPosition 
   lockObject : report.directory.settled.view.modelObject report.opened.lock.child =
     next.state.census.inode current.state.owner.description
   temporaryClosed : next.state.census.references report.opened.slot.description = []
+  retiredKeeper : ∀ entry ∈ current.state.cache.active,
+    NativeRotationActiveCustody current.state report.directory.after report.keeper entry next.state.census
   closed : ∀ entry ∈ current.state.cache.active, entry.2.2.1 ∉ next.state.census.slots
 
 theorem NativeReadPosition.rotatesExisting (current : NativeReadPosition history log)
@@ -217,7 +248,8 @@ theorem NativeReadPosition.rotatesExisting (current : NativeReadPosition history
     rw [DescriptorInventory.references_afterDrops, DescriptorInventory.references_afterDrops, report.file.closesReadSlot.2.1]
     rfl
   exact ⟨next, rfl, report.returned valid, current.rotationFrame _ _, atEnd.symm ▸ successor,
-    atEnd.symm ▸ survivor, successorObject, bytes, report.keepsKeeperMarker, directory, lock, object, temporary, closed⟩
+    atEnd.symm ▸ survivor, successorObject, bytes, report.keepsKeeperMarker, directory, lock, object, temporary,
+    fun _ cached => report.retiresKeeper valid cached, closed⟩
 
 /-- The actual exclusive create, pending-cache fsync, and directory
 fsync for the usual healthy rotation with an absent successor. The
@@ -268,7 +300,7 @@ structure NativeReadyCreatedRotation (state : NativeReadyState) where
   markerSurvives : settled.crashNames "WAL.commit" = parent.files.crashNames "WAL.commit"
   reset : NativeRotationCacheReset state state.cache
     (((created.handle.1.afterDrops beforeFile).afterDrops (fileDrops ++ [created.raw.closeEvent])).afterDrops
-      directoryDrops, settled)
+      directoryDrops, settled) parent.keeper.child
   openRead : FilePath → EStateM IO.Error Files RotationSuccessorHandle
 
 namespace NativeReadyCreatedRotation
@@ -464,6 +496,8 @@ structure NativeCreatedRotationContinuation (current next : NativeReadPosition h
   lockObject : report.settled.view.modelObject report.parent.lock.child =
     next.state.census.inode current.state.owner.description
   temporaryClosed : next.state.census.references report.created.raw.description = []
+  retiredKeeper : ∀ entry ∈ current.state.cache.active,
+    NativeRotationActiveCustody current.state report.directorySynced report.parent.keeper.child entry next.state.census
   activeClosed : ∀ entry ∈ current.state.cache.active, entry.2.2.1 ∉ next.state.census.slots
 
 theorem NativeReadPosition.rotatesCreated (current : NativeReadPosition history log)
@@ -478,7 +512,7 @@ theorem NativeReadPosition.rotatesCreated (current : NativeReadPosition history 
     valid.retained.layout.activeEnd.trans valid.retained.rotationAtEnd.symm
   refine ⟨next, rfl, report.returned valid, current.rotationFrame _ _, atEnd.symm ▸ successor, atEnd.symm ▸ settled,
     successorObject.trans (congrFun sameInodes report.created.raw.description).symm, ?_, report.keepsKeeperMarker, directory, lock, object,
-    temporary, active⟩
+    temporary, fun _ cached => report.reset.retiresKeeper cached, active⟩
   rw [successorObject]
   exact bytes
 

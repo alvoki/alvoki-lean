@@ -1473,6 +1473,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyExistingRotation.validNext
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyExistingRotation.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyExistingRotation.keepsKeeperMarker
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationCacheReset.retiresKeeper
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyExistingRotation.retiresKeeper
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rotatesExisting
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCreatedRotation.readsAbsent
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCreatedRotation.fileGroup
