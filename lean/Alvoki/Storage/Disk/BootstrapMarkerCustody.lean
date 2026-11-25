@@ -139,6 +139,9 @@ namespace BootstrapMarkerCustody
 
 variable {listed : BootstrapCheckedListing captured}
 
+abbrev publishedState (_ : BootstrapMarkerCustody listed) : WalSegmentRotation.State :=
+  settled before.image
+
 /-- The stage remembers its actual returned slot. The file sync consumes
 that entry and the final sync uses the captured directory description. -/
 theorem callbacks (observed : BootstrapMarkerCustody listed) :
@@ -259,6 +262,20 @@ theorem markerHealthy (observed : BootstrapMarkerCustody listed) : calls.MarkerH
     cases effect
     exact directorySync
   · simp at order
+
+/-- The admitted ready result carries exactly the image produced by the
+reported marker callbacks. Allocation of session references leaves it intact. -/
+theorem publishedImage {input : FilePath} (observed : BootstrapMarkerCustody listed)
+    (admission : OpenAdmissionReports input directory calls.slot) (valid : BootstrapValid before.image)
+    (rotation : calls.RotationHealthy captured.cache) {session : SegmentedSession}
+    {after : LockedFileState WalSegmentRotation.State}
+    (returned : calls.run admission = .ok session after) : after.image = observed.publishedState := by
+  have complete := (bootstrapEmptyWith_completesAt directory before.image valid before.image.observeSuccessor rfl
+    (calls.createEmpty captured.cache) (calls.write captured.cache) (calls.sync captured.cache) calls.renameFile
+    rotation observed.markerHealthy observed.publishedState rfl).1
+  rw [calls.runMarkerless admission captured.captures.1, runOpenWithInstallation_outcome, runOpenWithImage_acquired,
+    calls.reachesPublication captured.cache listed.entries.1 listed.entries.2, complete] at returned
+  exact congrArg LockedFileState.image (EStateM.Result.ok.inj returned).2.symm
 
 /-- The captured marker publication extends either healthy zero-segment
 route and installs the exact empty writer through the admitted opener. -/
