@@ -287,6 +287,7 @@ import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenEarlyError
 import Alvoki.Storage.Disk.NativeRawMarkerRouteError
 import Alvoki.Storage.Disk.NativeCacheOpenRejection
+import Alvoki.Storage.Disk.NativeRawDirectoryCacheRejection
 import Alvoki.Storage.Disk.NativeContendedOpen
 import Alvoki.Storage.Disk.NativeRawContendedOpen
 import Alvoki.Storage.Disk.NativeManifestDecodeError
@@ -1835,6 +1836,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.disposes
 #check_axioms Alvoki.Storage.DiskSession.NativeCacheOpenRejection.censusInodes
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionCallbacks.returnsDirectoryOpenError
+#check_axioms Alvoki.Storage.DiskSession.RawDirectoryCacheRejection.returns
+#check_axioms Alvoki.Storage.DiskSession.RawDirectoryCacheRejection.continuesRetry
 #check_axioms Alvoki.Storage.DiskSession.NativeContendedOpen.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeContendedOpen.keepsAuthority
 #check_axioms Alvoki.Storage.DiskSession.RawContendedOpen.returns
