@@ -1026,3 +1026,10 @@ whether or not the marker stability projection preceded it. The proof
 allows the marker barrier to narrow pre-directory-sync crash choices.
 This gives the longer-keeper repair proof a common state after its first
 directory barrier.
+
+The longer-keeper callback proof now accepts the file image reached
+before its first directory sync. If that reported sync reaches the
+common authorized image, the existing prune, stage, file sync, rename
+and final directory sync proof applies directly. The same proof
+still supplies the rename-backed reopen. Its full report currently
+also includes rename-specific admission premises.

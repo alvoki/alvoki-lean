@@ -253,9 +253,12 @@ private theorem syncDirectory (finish : CapturedLongKeeperFinish calls report va
 reported staged write inserts exactly the handle consumed by the staged
 fsync. Rename follows that sync, and the last directory sync uses the
 original directory handle and the cache with the staged entry removed. -/
-theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant selected) :
+theorem repairAt_returns_from (finish : CapturedLongKeeperFinish calls report vacant selected)
+    (before : LockedFileState FileImage)
+    (authorizedEffect : finish.authorization.fsync (admission.reached, admission.cached, 0) before =
+      .ok () { admission.held with image := retry.image.syncDirectory }) :
     finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size
-      (admission.cache, (finish.reader.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent], admission.held),
+      (admission.cache, (finish.reader.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent], before),
         finish.syncDrops) = .ok () (admission.cache, (finish.census, finish.settled), []) := by
   let entered := finish.reader.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent]
   let beforeStage := entered.afterDrops finish.prune.afterAuthorization
@@ -276,11 +279,9 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
     congrArg (fun inventory => inventory.afterDrops finish.stage.beforeSync) allocated.symm
   let afterSync := beforeSync.afterDrops finish.rename.afterStageSync
   let movedCensus := afterSync.afterDrops finish.settlement.afterRename
-  have firstEffect := finish.authorization.effect
-  rw [finish.prune.completed] at firstEffect
-  have first : finish.syncAt directory #[directory.path] (admission.cache, (entered, admission.held), finish.syncDrops) =
+  have first : finish.syncAt directory #[directory.path] (admission.cache, (entered, before), finish.syncDrops) =
       .ok () (admission.cache, (beforeStage, authorized), [[], finish.rename.afterStageSync, finish.afterSettlement]) :=
-    finish.syncDirectory rfl firstEffect
+    finish.syncDirectory rfl authorizedEffect
   have removed : ((layout.boundedPlan.newer.map Step.unlink).forM finish.repairStep)
       (admission.cache, (beforeStage, authorized), [[], finish.rename.afterStageSync, finish.afterSettlement]) =
         .ok () (admission.cache, (beforeStage, atUnlinks), [[], finish.rename.afterStageSync, finish.afterSettlement]) :=
@@ -350,7 +351,7 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
     exact finish.longer
   have keeper : layout.boundedPlan.keeper = layout.keeper.first := rfl
   change finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size
-    (admission.cache, (entered, admission.held), finish.syncDrops) = _
+    (admission.cache, (entered, before), finish.syncDrops) = _
   unfold repairAt
   rw [finishBoundedMarkedOpen_long _ _ _ _ _ _ _ valid size long]
   change (do
@@ -361,10 +362,19 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
     finish.repairStep (.replace .renameStaged)
     finish.repairStep (.replace .syncDirectory)
     pure () : EStateM IO.Error ReplacementState Unit)
-    (admission.cache, (entered, admission.held), finish.syncDrops) = _
+    (admission.cache, (entered, before), finish.syncDrops) = _
   simp only [Bind.bind, EStateM.bind, first, pruned]
   simp only [repairStep, performPaths, Publication.performReplacement, bytes, keeper,
     Array.push_empty, Pure.pure, EStateM.pure, stage, persisted, moved, settled, stagePath]
+
+theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant selected) :
+    finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size
+      (admission.cache, (finish.reader.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent], admission.held),
+        finish.syncDrops) = .ok () (admission.cache, (finish.census, finish.settled), []) := by
+  apply finish.repairAt_returns_from
+  have first := finish.authorization.effect
+  rw [finish.prune.completed] at first
+  exact first
 
 private noncomputable def repairFromCensus (finish : CapturedLongKeeperFinish calls report vacant selected)
     (resolved : DiskDirectory) (plan : Plan) (size : Nat) :
@@ -373,10 +383,22 @@ private noncomputable def repairFromCensus (finish : CapturedLongKeeperFinish ca
   | .ok () (cache, reached, _) => .ok () (cache, reached)
   | .error cause (cache, reached, _) => .error cause (cache, reached)
 
-private noncomputable def repairAfterRead (finish : CapturedLongKeeperFinish calls report vacant selected)
+noncomputable def repairAfterRead (finish : CapturedLongKeeperFinish calls report vacant selected)
     (resolved : DiskDirectory) (plan : Plan) (size : Nat) :
     EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit := fun (cache, reached, before) =>
   finish.repairFromCensus resolved plan size (cache, reached.afterDrops [report.wal.keeper.calls.slot.closeEvent], before)
+
+/-- The caller passes the reached state of the temporary keeper read.
+A marker barrier may have updated the files before the first directory
+sync. The remaining repair uses the same reported callbacks. -/
+theorem repairAfterRead_returns_from (finish : CapturedLongKeeperFinish calls report vacant selected)
+    (before : LockedFileState FileImage)
+    (authorizedEffect : finish.authorization.fsync (admission.reached, admission.cached, 0) before =
+      .ok () { admission.held with image := retry.image.syncDirectory }) :
+    finish.repairAfterRead directory layout.boundedPlan layout.plan.keeperBytes.size
+      (admission.cache, finish.reader.afterRead, before) =
+        .ok () (admission.cache, finish.census, finish.settled) := by
+  simp only [repairAfterRead, repairFromCensus, finish.repairAt_returns_from before authorizedEffect]
 
 private noncomputable def readRepair (finish : CapturedLongKeeperFinish calls report vacant selected) :
     EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit := do

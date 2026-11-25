@@ -2566,6 +2566,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.sameCensusObjects
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.replacementInodes
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.repairAt_returns
+#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.repairAfterRead_returns_from
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.readRepair_returns
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.installsAfterVacancy
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.installsFromCensus
