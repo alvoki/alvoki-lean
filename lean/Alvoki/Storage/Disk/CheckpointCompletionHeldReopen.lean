@@ -45,7 +45,9 @@ structure CheckpointCompletionReports.CloseFiles {image : Type} {directory : Dis
   finalDirectory : (files reports.observed.completed.2).directory =
     (files reports.observed.renamed.2).directory.syncDirectory
 
-private theorem successfulFrame {state view : Type}
+/-- Compose reached local frames over the exact returned checkpoint
+callback prefix. Each premise concerns a callback at its reached state. -/
+theorem _root_.Alvoki.Storage.CheckpointPublication.successfulFrame {state view : Type}
     (perform : CheckpointPublication.Step → EStateM IO.Error state Unit) (project : state → view)
     {actions : List CheckpointPublication.Step} {initial final : state} (ran : (actions.forM perform) initial = .ok () final)
     (frame : ∀ (done : List CheckpointPublication.Step) step todo prior reached, actions = done ++ step :: todo →

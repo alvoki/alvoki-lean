@@ -123,6 +123,7 @@ lake env leanchecker Alvoki.Storage.Disk.ReturnedWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.PendingAlignedReopen
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
+lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
 lake env leanchecker Alvoki.Storage.Disk.BatchGroupedWriteError
 lake env leanchecker Alvoki.Storage.Disk.ClientSnapshotTransitions
 lake env leanchecker Alvoki.Storage.Disk.ClientRunMaintenance
