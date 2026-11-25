@@ -67,10 +67,10 @@ structure MarkedReadCacheFrame (seed : OpenSyncCacheAllocations admission.opened
   directoryHandle : view.handle after seed.handle = view.handle before seed.handle
   files : view.files after = view.files before
 
-private theorem MarkedReadCacheFrame.refl (seed : OpenSyncCacheAllocations admission.opened view init entry) (state : heap) :
+theorem MarkedReadCacheFrame.refl (seed : OpenSyncCacheAllocations admission.opened view init entry) (state : heap) :
     MarkedReadCacheFrame seed state state := ⟨rfl, rfl, rfl, rfl, rfl⟩
 
-private theorem MarkedReadCacheFrame.trans (left : MarkedReadCacheFrame seed before middle)
+theorem MarkedReadCacheFrame.trans (left : MarkedReadCacheFrame seed before middle)
     (right : MarkedReadCacheFrame seed middle after) : MarkedReadCacheFrame seed before after :=
   ⟨right.directoryCell.trans left.directoryCell, right.activeCell.trans left.activeCell,
     right.pendingCell.trans left.pendingCell, right.directoryHandle.trans left.directoryHandle,
