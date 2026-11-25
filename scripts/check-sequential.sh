@@ -67,6 +67,8 @@ lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestRenameCut
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestRenameReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunBarrierReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestStageCut
+lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestStageFailure
+lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestStageFailureReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointObservedDispatch
 lake env leanchecker Alvoki.Storage.Disk.CheckpointLockHandoff
 lake env leanchecker Alvoki.Storage.Disk.CheckpointCutSession
