@@ -78,7 +78,10 @@ def Returned (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
       view.descriptors seen.reached = (view.descriptors before).afterDrops [admission.cached.closeEvent] ∧
       admission.cached ∈ (view.descriptors before).slots ∧ admission.owner ∈ (view.descriptors seen.reached).slots ∧
       (view.files seen.reached).image = retry.image ∧
-      (TryLockObserves (view.files seen.reached).owners directory (.ok true) ↔ seen.unlockResult = .ok ())
+      (TryLockObserves (view.files seen.reached).owners directory (.ok true) ↔ seen.unlockResult = .ok ()) ∧
+      (view.files seen.reached).owners (directory.file .lock) = match seen.unlockResult with
+        | .ok () => none
+        | .error _ => some admission.owner.description
 
 /-- The report and fixed held schedule determine the error at the
 outer unlock return. The final lock-handle drop is a later effect. -/
@@ -91,7 +94,7 @@ theorem returns (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
   have rawLock := congrArg Prod.fst (seen.lock.trans (congrArg Prod.snd (admitted.sameLock.trans admitted.appendHandle)))
   have files := seen.files.trans held
   refine ⟨cacheOpen, makeCache, cache, isOpen, source, initialized, uses, ?_, rawLock,
-    seen.returnedCensus.trans seen.census, seen.cacheLive, seen.returnedCensus.symm ▸ seen.ownerLive, ?_, ?_⟩
+    seen.returnedCensus.trans seen.census, seen.cacheLive, seen.returnedCensus.symm ▸ seen.ownerLive, ?_, ?_, ?_⟩
   · rw [admitted.startsHeldWorker init seed initialized (seen.errorScope recover)]
     simp only [errorScope, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, failed cache, EStateM.Backtrackable.restore,
       EStateM.dummyRestore, Bind.bind, EStateM.bind, seen.disposed cache uses, throw, throwThe, MonadExceptOf.throw,
@@ -105,6 +108,8 @@ theorem returns (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
     cases seen.unlockResult <;> simp [filesAfterUnlock, CensusOpenAdmissionReports.held]
   · rw [seen.returnedFiles, files]
     cases seen.unlockResult <;> simp [filesAfterUnlock, TryLockObserves, CensusOpenAdmissionReports.held, LockOwners.set]
+  · rw [seen.returnedFiles, files]
+    cases seen.unlockResult <;> simp [filesAfterUnlock, CensusOpenAdmissionReports.held, LockOwners.set]
 
 end RawOpenCacheDisposal
 
