@@ -175,6 +175,30 @@ theorem projects :
       checked.next.walBytes source.append source.stage source.sync source.rename (source.cache, initial))
   exact (congrArg returnOf seen.sameCalls).symm.trans seen.observed.projectsReturn
 
+include seen in
+/-- Interpret the exact committed result of one checked request. The
+scoped publication describes these callbacks and the returned files. -/
+theorem acknowledgesReturnedCommit {reached : SyncHandleRouting.Cache handle × WriteFiles}
+    (committed : commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch checked.batch)
+      checked.next.walBytes calls.append calls.stage calls.sync calls.rename
+      (calls.cache, WriteFiles.initial before.history (before.files.directory.staged .walBoundary)) = .ok () reached) :
+    WriteRequest.ReturnedReports request directory before handle calls := by
+  have projected := seen.projects
+  dsimp only at projected
+  rw [committed] at projected
+  let report : SegmentedBatchAppendReport directory before := {
+    rows := request.rows, batch := checked.batch, table := checked.table, effects := seen.effects
+    append := seen.append, stage := seen.stage, sync := seen.sync, rename := seen.rename
+    written := reached.2, nonempty := checked.nonempty, prepared := checked.prepared, fits := checked.fits
+    reports := seen.reports, committed := projected.symm }
+  let observed : ObservedBatchWrite report handle := ⟨seen.observed, checked.guard⟩
+  have same : WriteRequest.Calls.ofSuccess observed = calls := by
+    unfold WriteRequest.Calls.ofSuccess
+    change (⟨seen.observed.cache, checked.guard.lookup, seen.observed.append, seen.observed.stage,
+      seen.observed.sync, seen.observed.rename⟩ : WriteRequest.Calls handle) = calls
+    rw [checked.sameLookup, seen.sameCalls]
+  exact same ▸ .acknowledged report observed rfl
+
 end WriteCallPublication
 
 /-- Recover the existing client-facing report from the actual schedule.
@@ -195,21 +219,7 @@ theorem WriteRequest.Calls.classifiesReturnedReports {handle : Type} {directory 
   | rejected guard => exact .rejected guard
   | acknowledged checked committed =>
     obtain ⟨seen⟩ := observe checked
-    have projected := seen.projects
-    dsimp only at projected
-    rw [committed] at projected
-    let report : SegmentedBatchAppendReport directory before := {
-      rows := request.rows, batch := checked.batch, table := checked.table, effects := seen.effects
-      append := seen.append, stage := seen.stage, sync := seen.sync, rename := seen.rename
-      written := _, nonempty := checked.nonempty, prepared := checked.prepared, fits := checked.fits
-      reports := seen.reports, committed := projected.symm }
-    let observed : ObservedBatchWrite report handle := ⟨seen.observed, checked.guard⟩
-    have same : Calls.ofSuccess observed = calls := by
-      unfold Calls.ofSuccess
-      change (⟨seen.observed.cache, checked.guard.lookup, seen.observed.append, seen.observed.stage,
-        seen.observed.sync, seen.observed.rename⟩ : Calls handle) = calls
-      rw [checked.sameLookup, seen.sameCalls]
-    exact same ▸ .acknowledged report observed rfl
+    exact seen.acknowledgesReturnedCommit committed
   | uncertain checked stopped =>
     obtain ⟨seen⟩ := observe checked
     have projected := seen.projects
