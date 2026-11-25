@@ -575,6 +575,7 @@ import Alvoki.Storage.Disk.MaintainedRecoveryWork
 import Alvoki.Storage.Disk.NativeRotatedMaintenanceBound
 import Alvoki.Storage.Disk.RotatedMaintenanceRecoveryWork
 import Alvoki.Storage.Disk.NativeMaintenanceFrameBudget
+import Alvoki.Storage.Disk.NativeScheduledRunReclamation
 import Alvoki.Storage.Disk.MaintainedDirectoryWork
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
 import Alvoki.Storage.Disk.WalSegmentCollectionNames
@@ -2350,6 +2351,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunCollection.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPass.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunCollection.reclaims
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.reclaimsAtFirstCompletedObsoleteRunCollection
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.collectsObsoleteRuns
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPass.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPass.preservesReady

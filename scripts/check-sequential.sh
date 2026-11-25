@@ -302,6 +302,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeOpenedWalCollection
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenObsoleteRunCollection
 lake env leanchecker Alvoki.Storage.Disk.NativeFileEffectProjection
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunCollection
+lake env leanchecker Alvoki.Storage.Disk.NativeScheduledRunReclamation
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
