@@ -301,6 +301,38 @@ theorem reopenSync_projectsCrashBindings
     simp [List.mapM_cons, head, tail, Bind.bind, Except.bind, Pure.pure, Except.pure,
       Function.comp_def]
 
+/-- A successful descriptor barrier yields the exact directory image
+that precedes shared keeper repair. Staging is untouched by file sync. -/
+theorem reopenSync_projectsRepairDirectory
+    {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
+    (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      handle marker (fun inode files => files.completeFileSync inode) (.ok () settled))
+    (current : handle.inode = marker.active)
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selected : Selection} (observed : decode (marker.visible handle.inode) = .ok selected)
+    (directory : DirectoryPublication.Image)
+    (bound : directory.active.walBoundary.isSome = true)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode) :
+    (do
+      let active ← projectBinding directory.active (marker.visible handle.inode)
+      let crashImages ← choices.mapM fun (choice : DirectoryPublication.Bindings × Option ByteArray) =>
+        match choice.2 with
+        | none => Except.ok (⟨choice.1.manifest, none⟩ : DirectoryPublication.Bindings)
+        | some payload => projectBinding choice.1 payload
+      pure { directory with active, crashImages }) = .ok (settleMarker directory selected) := by
+  have crashes := reopenSync_projectsCrashBindings sync current sameBinding observed choices presence physical
+  have active := projectBinding_decodes (visible := directory.active) observed
+  have activeMap : directory.active.walBoundary.map (fun _ => Boundary.encode selected.frontier) =
+      some (Boundary.encode selected.frontier) := by
+    cases boundary : directory.active.walBoundary <;> simp_all
+  rw [enumerated] at crashes
+  simp only [Bind.bind, Except.bind, active, crashes, Pure.pure, Except.pure]
+  simp [settleMarker, activeMap]
+
 /-- A successful barrier on each held descriptor fixes the bytes used by
 recovery. The marker encoding comes from the reported positional write;
 the WAL prefix comes from the reported append on the selected keeper. -/
