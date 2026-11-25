@@ -144,6 +144,8 @@ A nonempty write returning `commitUnknown` can continue from the same native rea
 
 The uncertain-write continuation now produces the same typed ready position used by the mixed trace. The report carries the original write request, returned error and reopen path. The submission ledger adds one uncertain group. The committed WAL extends by zero rows or the whole batch, according to the marker read during the reported reopen. The exact next position keeps the earlier read responses, and the continuation records the physical close and open observations. [Uncertain execution continuation](../lean/Alvoki/Storage/Disk/NativeUncertainExecution.lean)
 
+The uncertain-write prefix can also end at the actual error return. Its poisoned phase retains the exact cache and failed byte image while the reported census keeps the original owner and cached directory live. The original session references now reject snapshot acquisition and reads at the phase check. The failed file image carries all reported crash choices together with the single uncertain submission. Its live marker and every later reported retry or crash survivor select the prior history or the whole attempted batch, with earlier responses still bounded and correct. These facts require the local publication effects and postwrite census only. [Pending native write](../lean/Alvoki/Storage/Disk/NativeExecutionPendingWrite.lean)
+
 Prove a single invariant for every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and

@@ -23,7 +23,9 @@ def returnedAt (seen : NativeReadyWriteFailure state) (cache : CensusDirectoryCa
   calls.run seen.request state.session.directory state.writer =
     .error (.commitUnknown seen.failure.cause) (.poisoned, ⟨(cache, seen.failure.failed), state.writer.owners⟩)
 
-private theorem returnsUnknown (seen : NativeReadyWriteFailure state) (valid : state.Valid) :
+/-- The actual single or batch schedule returns its reported publication
+error and reached poisoned cache. -/
+theorem returnsUnknown (seen : NativeReadyWriteFailure state) (valid : state.Valid) :
     ∃ cache, seen.returnedAt cache := by
   obtain ⟨cache, returned⟩ := seen.observed.commitUnknown
   refine ⟨cache, ?_⟩
