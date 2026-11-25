@@ -1767,6 +1767,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseClears.emptyCache
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseObservation.returns
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.closesViaOpenReferences
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.closesOnOpenedReferences
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.closesAndReopens
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.closesThenAdmitsAligned
 #check_axioms Alvoki.Storage.DiskSession.NativeCloseAlignedReads.markedReport_admission

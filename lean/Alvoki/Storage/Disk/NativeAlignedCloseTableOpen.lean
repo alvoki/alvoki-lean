@@ -171,6 +171,15 @@ variable {opened : NativeOpenedHandle heap} {initial current : NativeOpenedPosit
   {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
   {directory : IO.Ref (Option IO.FS.Handle)}
 
+private theorem NativeCloseRelease.successInventory {state : NativeReadyState} {close : NativeReadyClose state}
+    {inventory : DescriptorInventory} (release : NativeCloseRelease close inventory)
+    (success : close.report.result = .ok ()) : inventory = close.report.finished.descriptors := by
+  cases release with
+  | success => rfl
+  | failed error =>
+    rw [success] at error
+    contradiction
+
 /-- A finite trace on an opened table can close that exact table, run a
 healthy aligned reopen from its returned heap, and admit later calls
 at the new table's reported ready position. The selected reader is the
@@ -187,7 +196,7 @@ theorem NativeOpenedTrace.closesThenOpensAligned
     (success : observed.close.report.result = .ok ())
     (openCalls : RawOpenAdmissionCallbacks heap) (init : OpenSyncCacheCallbacks heap)
     (observe : ∀ after, current.closeOnOpenedCells closeCalls active pending directory = .ok () after →
-      ∀ (plan : ClosedReadyReopenLayout current.current.ready.state.writer current.current.ready.state.releasedFiles)
+      ∃ (plan : ClosedReadyReopenLayout current.current.ready.state.writer current.current.ready.state.releasedFiles)
         (selected : SelectedIntegrityCheckpoint current.current.ready.state.writer.published.durable
           current.current.ready.state.releasedFiles.image.directory.active.manifest current.current.ready.state.writer.checkpoint)
         (reader : NativeCloseAlignedReads observed.files input observed.inventory plan.layout selected),
@@ -216,6 +225,7 @@ theorem NativeOpenedTrace.closesThenOpensAligned
       current.closeOnOpenedCells closeCalls active pending directory = .ok () after ∧
       opened.contents after opened.phase = some .closed ∧
       view.files after = state.releasedFiles ∧ view.descriptors after = observed.inventory ∧
+      reader.run = next.opened ∧ next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
       NativeCloseSelectedReads reader ∧ NativeCloseReopenStep current.current.ready observed next ∧
       NativeExecutionTrace initial.current (events ++ [.closedAndReopened input (.ok ())]) start.current ∧
       seen.openTable remove write rename bootstrap assemble makeCache = .ok handle.table start.reached ∧
@@ -226,27 +236,38 @@ theorem NativeOpenedTrace.closesThenOpensAligned
       view.cacheAt start.reached seen.admission.seed.directoryRef seen.admission.seed.activeRef
         seen.admission.seed.pendingRef = next.state.cache := by
   intro state
-  obtain ⟨source, next, reopened, trace, physical⟩ :=
-    prior.closesAndReopens references view closeCalls samePhase sameGet sameSet observed close
-  rw [success] at trace physical
-  obtain ⟨after, returned, shut, _, files, census⟩ := physical
-  obtain ⟨plan, selected, reader, nextReturned, nextOpened, _, owner, slot, cache, _, reads⟩ := reopened.exactOpen
   obtain ⟨valid, rows, previous⟩ := current.current.ready.readPrefix.refines
+  have closed : observed.CloseReturned := by
+    obtain ⟨returned, phase, cleared, census, _⟩ := observed.close.closes valid success
+    have inventory := observed.release.successInventory success
+    simp only [NativeCloseReopenObservation.CloseReturned, success]
+    exact ⟨returned, phase, cleared, inventory, inventory.trans census⟩
+  obtain ⟨source, physical⟩ := current.closesOnOpenedReferences references view closeCalls samePhase sameGet
+    sameSet observed close closed
+  rw [success] at physical
+  obtain ⟨after, returned, shut, _, files, census⟩ := physical
+  obtain ⟨plan, selected, reader, ⟨seen⟩⟩ := observe after returned
+  have recovered := observed.files.reopensReleasedAlignedAt valid.retained rows previous
+    current.current.ready.readPrefix.readsBounded plan selected reader
+  obtain ⟨next, reopened, nextOpened, nextReturned, owner, slot, cache, reads⟩ :=
+    NativeCloseReopenStep.fromSelectedOpen current.current.ready observed closed
+      (plan := plan) (selected := selected) reader recovered
+  have trace := NativeExecutionTrace.step prior.common (.closeAndReopen current.current observed next reopened)
+  rw [success] at trace
   have pendingReplay : PendingClientReplay current.current.submissions current.current.ready.reads state.writer.history := by
     simpa only [state, rows] using previous
   have bounded : ∀ read ∈ current.current.ready.reads, read.BoundedBy state.writer.history.length := by
     simpa only [state, rows] using current.current.ready.readPrefix.readsBounded
-  obtain ⟨seen⟩ := observe after returned plan selected reader
   obtain ⟨installed, _, makeCache, _, _, rawOpen⟩ :=
     RawAlignedReopenEffects.opens valid.retained pendingReplay bounded seen remove write rename bootstrap assemble constructs
   have phaseEffects : OpenPhaseCellEffects view.phase opened.get opened.set := by
     rw [samePhase]
     exact opened.phaseEffects
   obtain ⟨handle, start, reachedPosition, table, lock, _, _, _, getEq, setEq, compared, reachedHeap, pins,
-    sameFiles, sameCensus, sameCache⟩ := startsAtSameHistory installed rows next nextOpened.symm
-      (nextOpened.trans nextReturned) cache owner slot phaseEffects opened.ptrEq
+    sameFiles, sameCensus, sameCache⟩ := startsAtSameHistory installed rows next nextOpened
+      nextReturned cache owner slot phaseEffects opened.ptrEq
   refine ⟨source, next, after, plan, selected, reader, seen, makeCache, handle, start,
-    returned, shut, files, census, reads, reopened, ?_, ?_, reachedPosition, lock, getEq, setEq, compared,
+    returned, shut, files, census, nextOpened, nextReturned, reads, reopened, ?_, ?_, reachedPosition, lock, getEq, setEq, compared,
     pins, sameFiles, sameCensus, sameCache⟩
   · rw [reachedPosition]
     exact trace
