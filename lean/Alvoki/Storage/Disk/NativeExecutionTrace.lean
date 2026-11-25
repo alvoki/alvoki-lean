@@ -50,6 +50,8 @@ import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
 import Alvoki.Storage.Disk.NativeRotationErrorReopen
 import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
 
+import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
+
 namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
@@ -384,6 +386,20 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (reopened : NativeRejectedOpenAlignedResult current.ready observed.after observed.files input next) :
       NativeExecutionStep current (.rejectedOpenSequenceRecovered inputs input observed.errors)
         ⟨current.history, current.submissions, next⟩
+  | recoverFinalizedOpenSequence (current : NativeExecutionPosition) {heap : Type} {input : FilePath}
+      {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
+      {init : OpenSyncCacheCallbacks heap} {release : IO.FS.Handle → heap → heap}
+      {first after : heap} {errors : List (FilePath × IO.Error)}
+      (close : NativeReadyClose current.ready.state)
+      (closed : close.report.run = .ok () close.report.finished)
+      (initialFiles : view.files first = current.ready.state.releasedFiles)
+      (initialCensus : view.descriptors first = close.report.finished.descriptors)
+      (attempts : RawFinalizedOpenAttempts view current.ready.state.session.directory calls init release first errors after)
+      (files : NativeCloseFiles current.ready.state)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeRejectedOpenAlignedResult current.ready (view.descriptors after, view.files after) files input next) :
+      NativeExecutionStep current (.rejectedOpenSequenceRecovered (errors.map Prod.fst) input (errors.map Prod.snd))
+        ⟨current.history, current.submissions, next⟩
   | recoverReadyExit (current : NativeExecutionPosition) {input : FilePath}
       (seen : NativeReadyProcessExitObservation current.ready.state input)
       (next : NativeReadPosition current.history current.submissions)
@@ -647,6 +663,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
   case recoverMarkedBarrierRetries reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverRejectedOpenSequence reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverFinalizedOpenSequence reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverReadyExit reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩

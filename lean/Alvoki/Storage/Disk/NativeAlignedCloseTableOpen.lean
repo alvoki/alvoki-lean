@@ -135,7 +135,7 @@ variable {root : DiskDirectory} {modelHistory : List WAL.Write}
 
 /-- The same exact returned table can start at the ready position with
 the client's already proved history. The two histories agree by refinement. -/
-private theorem startsAtSameHistory
+theorem MarkedHeapInstallation.startsAtSameHistory
     (installed : MarkedHeapInstallation report view init entry seed lock lockIdentity phaseIdentity tokenIdentity
       allocatePhase allocateToken reached)
     {priorHistory : List WAL.Write} (rows : modelHistory = priorHistory)
@@ -274,7 +274,7 @@ theorem NativeOpenedTrace.closesThenOpensAligned
     rw [samePhase]
     exact opened.phaseEffects
   obtain ⟨handle, start, reachedPosition, table, lock, cacheFiles, _, _, contents, getEq, setEq, compared, tokenRef, reachedHeap, pins,
-    sameFiles, sameCensus, sameCache⟩ := startsAtSameHistory installed rows next nextOpened
+    sameFiles, sameCensus, sameCache⟩ := installed.startsAtSameHistory rows next nextOpened
       nextReturned cache owner slot phaseEffects opened.ptrEq
   refine ⟨source, next, after, plan, selected, reader, seen, cacheOpen, makeCache, handle, start,
     returned, shut, files, census, cacheAction, cacheSource, nextOpened, nextReturned, reads, reopened, ?_, ?_,

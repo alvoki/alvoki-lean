@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 import Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
+import Alvoki.Storage.Disk.NativeOpenedFinalizedRetryReport
 import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
@@ -140,6 +141,7 @@ inductive NativeOpenedSessionAction : Type 1 where
   | quietRestart (input : FilePath)
   | processExitAndReopen (input : FilePath)
   | closeAndReopen (input : FilePath)
+  | closeRetriesAndReopen (inputs : List FilePath) (input : FilePath)
   | checkpointRenameReboot (input : FilePath)
   | stoppedCheckpointReboot (input : FilePath)
   | uncertainWriteReboot (request : WriteRequest) (input : FilePath)
@@ -167,6 +169,12 @@ inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
   | closeAfterFailedUnlock {input : FilePath} (seen : NativeOpenedFailedCloseReport before.position input view)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.closeAndReopen input) [.closedAndReopened input (.error seen.cause)] next
+  | closeRetries {inputs : List FilePath} {input : FilePath}
+      (seen : NativeOpenedFinalizedRetryReport before.position inputs input view)
+      {errors : List (FilePath × IO.Error)} {next : NativeOpenedSessionPoint heap}
+      (returned : seen.Returned next.position errors) :
+      NativeOpenedSessionStep view names bytes before (.closeRetriesAndReopen inputs input)
+        [.rejectedOpenSequenceRecovered inputs input (errors.map Prod.snd)] next
   | checkpointRename {input : FilePath} (seen : NativeOpenedManifestRenameReport before.position input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.checkpointRenameReboot input) [seen.event] next
@@ -208,6 +216,7 @@ theorem NativeOpenedSessionTrace.common (trace : NativeOpenedSessionTrace view n
     | processExit _ returned => exact .step prior returned.common
     | close _ returned => exact .step prior returned.common
     | closeAfterFailedUnlock _ returned => exact .step prior returned.common
+    | closeRetries _ returned => exact .step prior returned.common
     | checkpointRename _ returned => exact .step prior returned.common
     | stoppedCheckpoint _ returned => exact .step prior returned.common
     | uncertainWrite _ returned => exact .step prior returned.common
@@ -228,6 +237,9 @@ inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
       NativeOpenedSessionReport view names bytes before (.closeAndReopen input)
   | closeAfterFailedUnlock (input : FilePath) (report : NativeOpenedFailedCloseReport before.position input view) :
       NativeOpenedSessionReport view names bytes before (.closeAndReopen input)
+  | closeRetries (inputs : List FilePath) (input : FilePath)
+      (report : NativeOpenedFinalizedRetryReport before.position inputs input view) :
+      NativeOpenedSessionReport view names bytes before (.closeRetriesAndReopen inputs input)
   | checkpointRename (input : FilePath) (report : NativeOpenedManifestRenameReport before.position input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.checkpointRenameReboot input)
   | stoppedCheckpoint (input : FilePath) (report : NativeOpenedStoppedCheckpointReport before.position input view names bytes) :
@@ -260,6 +272,9 @@ theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport vi
   | closeAfterFailedUnlock input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .closeAfterFailedUnlock seen returned⟩
+  | closeRetries _ _ seen =>
+    obtain ⟨handle, start, _, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .closeRetries seen returned⟩
   | checkpointRename input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .checkpointRename seen returned⟩
