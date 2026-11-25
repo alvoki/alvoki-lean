@@ -345,6 +345,25 @@ theorem publish_markerSyncInterrupted {stop image : Type}
   simp [publish, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind,
     wrote, walBarrier, slot, cut]
 
+/-- A stop during cache installation comes after both durable barriers
+and still cannot return an acknowledgement to the caller. -/
+theorem publish_installInterrupted {stop image : Type}
+    (append syncWal writeSlot syncSlot install : ExceptT IO.Error (EStateM stop image) Unit)
+    {before appended durable written synced reached : image} {stopped : stop}
+    (wrote : append.run before = .ok (.ok ()) appended)
+    (walBarrier : syncWal.run appended = .ok (.ok ()) durable)
+    (slot : writeSlot.run durable = .ok (.ok ()) written)
+    (markerBarrier : syncSlot.run written = .ok (.ok ()) synced)
+    (cut : install.run synced = .error stopped reached) :
+    (publish append syncWal writeSlot syncSlot install).run before = .error stopped reached := by
+  change append before = .ok (.ok ()) appended at wrote
+  change syncWal appended = .ok (.ok ()) durable at walBarrier
+  change writeSlot durable = .ok (.ok ()) written at slot
+  change syncSlot written = .ok (.ok ()) synced at markerBarrier
+  change install synced = .error stopped reached at cut
+  simp [publish, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind,
+    wrote, walBarrier, slot, markerBarrier, cut]
+
 open OrderedTwoSlot
 
 /-- An uncertain slot update selects the exact pre-write history or the
@@ -2289,7 +2308,12 @@ structure InterruptedBatchMarkerPublication (directory : DiskDirectory) (prior :
       (((syncWal active).run appended = .error stopped reached ∧ reached.2 = initialMarker) ∨
         ∃ durable, (syncWal active).run appended = .ok (.ok ()) durable ∧
           ((writeSlot marker (next.slot * stride).toUInt64 next.encode).run durable = .error stopped reached ∨
-            ∃ written, (writeSlot marker (next.slot * stride).toUInt64 next.encode).run durable = .ok (.ok ()) written ∧ (syncSlot marker).run written = .error stopped reached))
+            ∃ written, (writeSlot marker (next.slot * stride).toUInt64 next.encode).run durable =
+              .ok (.ok ()) written ∧
+              ((syncSlot marker).run written = .error stopped reached ∨
+                ∃ synced, (syncSlot marker).run written = .ok (.ok ()) synced ∧
+                  (install marker next).run synced = .error stopped reached ∧
+                  reached.1.keeper = written.1.keeper)))
 
 def InterruptedBatchMarkerPublication.markerHandle
     {directory : DiskDirectory} {prior : SegmentedWriterState} {batch : List WAL.Write}
@@ -2316,13 +2340,15 @@ theorem InterruptedBatchMarkerPublication.stops
   let syncSlot := report.syncSlot report.markerHandle
   let install := report.install report.markerHandle next
   apply runBatchWriteWithInterruption_stopped report.nonempty report.prepared report.fits report.guard
-  rcases report.cut with ⟨appendCut, _⟩ | ⟨_, wrote, ⟨walCut, _⟩ | ⟨_, walBarrier, slotCut | ⟨_, slot, syncCut⟩⟩⟩
+  rcases report.cut with ⟨appendCut, _⟩ | ⟨_, wrote, ⟨walCut, _⟩ | ⟨_, walBarrier, slotCut | ⟨_, slot, syncCut | ⟨_, markerBarrier, installCut, _⟩⟩⟩⟩
   · exact publish_appendInterrupted append syncWal writeSlot syncSlot install appendCut
   · exact publish_walSyncInterrupted append syncWal writeSlot syncSlot install wrote walCut
   · exact publish_slotWriteInterrupted append syncWal writeSlot syncSlot install
       wrote walBarrier slotCut
   · exact publish_markerSyncInterrupted append syncWal writeSlot syncSlot install
       wrote walBarrier slot syncCut
+  · exact publish_installInterrupted append syncWal writeSlot syncSlot install
+      wrote walBarrier slot markerBarrier installCut
 
 /-- If the writer stops before the slot write, the report preserves the
 previous physical marker. The later cases require the completed WAL sync. -/
@@ -2393,9 +2419,10 @@ theorem InterruptedBatchMarkerPublication.keeperUnchangedOrWalSynced
   · exact .inl unchanged
   · exact .inl unchanged
   · refine .inr ⟨appended, durable, wrote, synced, ?_⟩
-    rcases cut with writeCut | ⟨written, writeReturned, syncCut⟩
+    rcases cut with writeCut | ⟨written, writeReturned, syncCut | ⟨_, _, _, keepsKeeper⟩⟩
     · exact writeKeepsKeeper durable _ writeCut
     · exact (syncKeepsKeeper written syncCut).trans (writeKeepsKeeper durable _ writeReturned)
+    · exact keepsKeeper.trans (writeKeepsKeeper durable _ writeReturned)
 
 /-- If the marker changed, the first reboot sees exactly the keeper
 bytes from the append, under the successful WAL barrier's persistence contract. -/
