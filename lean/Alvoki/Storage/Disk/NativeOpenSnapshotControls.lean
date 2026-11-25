@@ -5,6 +5,20 @@ namespace Alvoki.Storage.DiskSession
 open System
 open Sequential (SnapshotPin)
 
+/-- Both public acquisition schedules read the same phase reference
+and build the pin with the opened table's original token. -/
+theorem _root_.Alvoki.Storage.DiskTable.UsesOpenReferences.snapshotAcquisitions
+    {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) :
+    ∃ issue : SnapshotPin → DiskSnapshotPin,
+      (∀ pin, (issue pin).UsesOpenToken token pin) ∧
+      (∀ sequence, db.acquireAt sequence = acquireSnapshotWith (m := IO) (do (← phase.get).installed)
+        phase.set issue sequence) ∧
+      db.acquire = acquireLatestWith (m := IO) (do (← phase.get).installed)
+        (acquireSnapshotWith (do (← phase.get).installed) phase.set issue) := by
+  obtain ⟨_, _, _, rfl, rfl⟩ := uses
+  exact ⟨_, fun _ => ⟨rfl, rfl, rfl⟩, db.acquireAt_schedule, db.acquire_schedule⟩
+
 variable {heap : Type}
 
 /-- A foreign pin skips the setter. A local token always reaches the

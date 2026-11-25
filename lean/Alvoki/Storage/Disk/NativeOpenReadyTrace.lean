@@ -345,19 +345,6 @@ private theorem reachesSnapshotControl {current : NativeExecutionPosition}
     have directory := congrArg (fun value : NativeReadyState => value.session.directory) state
     exact ⟨step, directory⟩
 
-/-- Both getters in the latest acquisition use the private phase cell
-projected by the opened table. The issuer is the same raw session token. -/
-private theorem latestSchedule {db : DiskTable} {directory lock files phase token}
-    (uses : db.UsesOpenReferences directory lock files phase token) :
-    ∃ issue : SnapshotPin → DiskSnapshotPin,
-      (∀ pin, (issue pin).UsesOpenToken token pin) ∧
-      db.acquire = acquireLatestWith (m := IO) (do (← phase.get).installed)
-        (acquireSnapshotWith (do (← phase.get).installed) phase.set issue) := by
-  obtain ⟨_, _, _, rfl, rfl⟩ := uses
-  refine ⟨_, ?_, db.acquire_schedule⟩
-  intro pin
-  exact ⟨rfl, rfl, rfl⟩
-
 /-- Derive the next common step and the exact raw phase interpretation
 from the local report. The step acquires its next position here. -/
 theorem reaches (report : NativeOpenedReport start instruction) :
@@ -523,7 +510,7 @@ theorem reaches (report : NativeOpenedReport start instruction) :
     change before.writer.installed.table.acquireAt before.writer.installed.table.committed = some (pin, table) at acquired
     have selected : start.current.ready.state.writer.installed.table.acquireAt
         start.current.ready.state.writer.installed.table.committed = some (pin, table) := acquired
-    obtain ⟨issue, issued, source⟩ := latestSchedule start.uses
+    obtain ⟨issue, issued, _, source⟩ := start.uses.snapshotAcquisitions
     obtain ⟨next, transition⟩ := start.current.ready.updatesSnapshot (.acquire)
     have ready : before.session.phase = .ready before.writer.installed := valid.phase
     have returned : before.session.runAcquire = .ok (before.session.sessionRef, pin) next.state.session := by

@@ -161,6 +161,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeOpenClose
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenCloseReopenTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenCloseAdmissionTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenSnapshotControls
+lake env leanchecker Alvoki.Storage.Disk.NativeInactiveOpenedSnapshots
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedPosition
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
