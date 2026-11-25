@@ -211,6 +211,7 @@ import Alvoki.Storage.Disk.ReturnedWriteRecovery
 import Alvoki.Storage.Disk.PendingClientReplay
 import Alvoki.Storage.Disk.PendingAlignedReopen
 import Alvoki.Storage.Disk.PendingFirstAppendReopen
+import Alvoki.Storage.Disk.SnapshotReadHistoryBounds
 import Alvoki.Storage.Disk.NativeReadyReadPrefix
 import Alvoki.Storage.Disk.NativeReadyClose
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
@@ -1370,6 +1371,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.Valid.acquirePreserves
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.frames
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.refines
+#check_axioms Alvoki.Storage.DiskSession.RecordedSnapshotRead.Observed.boundedBy
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.responsesBounded
+#check_axioms Alvoki.Storage.DiskSession.RecordedSnapshotRead.agreesAfterSuffix
+#check_axioms Alvoki.Storage.DiskSession.PendingClientReplay.appendAcknowledged
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readsBounded
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.guardedReplay
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readAt
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.startsNativeReadPrefix

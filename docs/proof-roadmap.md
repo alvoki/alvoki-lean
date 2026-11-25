@@ -176,6 +176,8 @@ The first native ready-session prefix starts at the session returned by a chrono
 
 Explicit close starts with that same returned session after its read prefix. Successful unlock clears the cache in schedule order, preserves the selected files and permits the next open even if old descriptors still reference the former owner. A returned unlock error leaves the phase, files, cache and descriptor inventory at the ready state. The chronological slot reports then make the original lock vacant exactly when its final reference drops. Both paths reach the shared admission callback on the selected files and the original lock and directory objects. They carry the earlier read replay through admission, which takes the next primitive open reports and the stable object bindings as premises. [Close after native reads](../lean/Alvoki/Storage/Disk/NativeReadyClose.lean)
 
+The ready prefix carries each successful read’s committed-sequence bound, derived from the reached pin and preserved across restart. Acknowledging a later batch keeps all earlier recorded responses valid in the extended replay. The observed native publication can use this ledger transition to continue the same execution. [Bounds and replay of prior reads](../lean/Alvoki/Storage/Disk/SnapshotReadHistoryBounds.lean)
+
 Close the induction by operation family. Each row is complete when every reached branch under the stated contract constructs its successor from the same returned state and observations.
 
 | Entry points | Coverage to connect |

@@ -93,7 +93,7 @@ theorem startsNativeReadPrefixFromEmpty {input : FilePath} (observed : Bootstrap
       ⟨captured.reached, rfl⟩, start.canonicalDirectory.symm ▸ start.lockDescription.symm ▸ ready⟩
   have pending : PendingClientReplay [] [] [] := ⟨.empty, .nil _, .start, .slnil, .slnil, by simp⟩
   exact ⟨start, start.returned, rfl, rfl, emptyHistory, effects.stageClosed,
-    keeperName, markerName, keeperBytes, markerBytes, .installed rfl valid emptyHistory pending⟩
+    keeperName, markerName, keeperBytes, markerBytes, .installed rfl valid emptyHistory pending (by simp)⟩
 
 end BootstrapKeeperMarkerHandoff
 

@@ -184,6 +184,7 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
   have continued : NativeReadyReadPrefix (observations.finish.run observations.chronology)
       state before.history (log ++ [.uncertainBatch report.batch]) recorded state :=
     .installed (exactFiles.symm ▸ returned) valid history pending
+      (client.responsesBounded (start.bootstrap.writerReady start.held).toRetained)
   exact ⟨observed.stopsWriteRequest request rows stage sync rename, attempts, layout, selected, observations, session,
     final, after, prepared.target, returned, samePair.trans pair, path, lock, nextPhase, files, owners,
     lock.symm ▸ nextReady, sameTarget, history, sameCheckpoint, generation, durable, sealed,

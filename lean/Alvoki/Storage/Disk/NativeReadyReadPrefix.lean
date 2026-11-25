@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
 import Alvoki.Storage.Disk.RetainedWriterReopen
-import Alvoki.Storage.Disk.PendingClientReplay
+import Alvoki.Storage.Disk.SnapshotReadHistoryBounds
 
 namespace Alvoki.Storage.DiskSession
 
@@ -70,7 +70,9 @@ inductive NativeReadyReadPrefix
     List RecordedSnapshotRead → NativeReadyState → Prop where
   | installed {reads} (returned : opened = .ok initial.session (initial.census, initial.files))
       (valid : initial.Valid) (sameHistory : initial.writer.history = history)
-      (replay : PendingClientReplay log reads history) : NativeReadyReadPrefix opened initial history log reads initial
+      (replay : PendingClientReplay log reads history)
+      (bounded : ∀ read ∈ reads, read.BoundedBy history.length) :
+      NativeReadyReadPrefix opened initial history log reads initial
   | acquireRead {reads : List RecordedSnapshotRead} {state : NativeReadyState} {snapshot : UInt64} {pin : SnapshotPin} {table : PackedTable}
       {α : Type} {request : SnapshotReadRequest α} {response : α}
       (prior : NativeReadyReadPrefix opened initial history log reads state)
@@ -85,6 +87,13 @@ private theorem readReplay (request : SnapshotReadRequest α) (reference : Snaps
     (snapshot : UInt64) : (request.record snapshot (request.replay reference snapshot)).agrees reference := by
   cases request <;> rfl
 
+private theorem acquiredAtBounds {before after : PackedTable} {snapshot : UInt64} {pin : SnapshotPin}
+    (acquired : before.acquireAt snapshot = some (pin, after)) :
+    before.pins.floor ≤ snapshot ∧ snapshot ≤ before.committed := by
+  obtain ⟨⟨_, _⟩, pinned, _⟩ := Option.map_eq_some_iff.mp acquired
+  have bounds := Sequential.SnapshotPins.acquire_spec pinned
+  exact ⟨bounds.1, bounds.2.1⟩
+
 private theorem NativeReadyState.Valid.exactRead {state : NativeReadyState} (valid : state.Valid)
     {reference : SnapshotTable UInt64} (replayed : SnapshotWalReplay .empty state.writer.history reference)
     {snapshot : UInt64} {pin : SnapshotPin} {table : PackedTable}
@@ -93,10 +102,9 @@ private theorem NativeReadyState.Valid.exactRead {state : NativeReadyState} (val
     (state.withTable table).session.runSnapshotRead true (request.read pin.handle) =
       .ok (some (request.replay reference snapshot)) (state.withTable table).session := by
   obtain ⟨_, refined, represented⟩ := valid.retained.resumed.canonical
-  obtain ⟨⟨_, _⟩, pinned, _⟩ := Option.map_eq_some_iff.mp acquired
-  have within := Sequential.SnapshotPins.acquire_spec pinned
+  have within := acquiredAtBounds acquired
   obtain ⟨expectedPin, expectedTable, expected, lookup, range⟩ :=
-    represented.acquireReads refined valid.retained.resumed.bounds replayed within.1 within.2.1
+    represented.acquireReads refined valid.retained.resumed.bounds replayed within.1 within.2
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj (expected.symm.trans acquired))
   apply state.readReturns request
   cases request with
@@ -112,7 +120,7 @@ theorem NativeReadyReadPrefix.frames
     state.session.sessionRef = initial.session.sessionRef ∧ state.session.phaseRef = initial.session.phaseRef ∧
     state.owner = initial.owner ∧ state.directorySlot = initial.directorySlot := by
   induction observed with
-  | installed returned _ _ _ => exact ⟨returned, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  | installed returned _ _ _ _ => exact ⟨returned, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   | acquireRead _ _ _ _ ih => exact ih
 
 /-- The ledger and exact native read results are preserved by induction
@@ -121,7 +129,7 @@ theorem NativeReadyReadPrefix.refines
     (observed : NativeReadyReadPrefix opened initial history log reads state) :
     state.Valid ∧ state.writer.history = history ∧ PendingClientReplay log reads history := by
   induction observed with
-  | installed _ valid history replay => exact ⟨valid, history, replay⟩
+  | installed _ valid history replay _ => exact ⟨valid, history, replay⟩
   | @acquireRead reads state snapshot pin table α request response _ acquired _ read ih =>
     obtain ⟨valid, history, reference, replayed, retained, acknowledged, submitted, responses⟩ := ih
     have expected := valid.exactRead (history.symm ▸ replayed) acquired request
@@ -132,6 +140,26 @@ theorem NativeReadyReadPrefix.refines
     · exact responses _ old
     · obtain rfl := List.mem_singleton.mp new
       exact equal.symm ▸ readReplay request reference snapshot
+
+/-- Each successful response in the native prefix records a sequence
+within the history that supported its actual pin acquisition. -/
+theorem NativeReadyReadPrefix.readsBounded
+    (observed : NativeReadyReadPrefix opened initial history log reads state) :
+    ∀ read ∈ reads, read.BoundedBy history.length := by
+  induction observed with
+  | installed _ _ _ _ bounded => exact bounded
+  | @acquireRead reads state snapshot pin table α request response prior acquired _ _ ih =>
+    intro read member
+    rcases List.mem_append.mp member with earlier | latest
+    · exact ih read earlier
+    · obtain rfl := List.mem_singleton.mp latest
+      obtain ⟨valid, sameHistory, _⟩ := prior.refines
+      obtain ⟨_, refined, represented⟩ := valid.retained.resumed.canonical
+      have committedCount : state.writer.installed.table.committed.toNat = history.length :=
+        (congrArg UInt64.toNat refined.committed).trans
+          (represented.committed_count.trans (congrArg List.length sameHistory))
+      have committed := committedCount ▸ UInt64.le_iff_toNat_le.mp (acquiredAtBounds acquired).2
+      cases request <;> exact committed
 
 /-- The same replay already observed by the prefix still explains every
 supported local snapshot in the reached ready session. -/
@@ -205,7 +233,8 @@ theorem CapturedLongKeeperFinish.startsNativeReadPrefix
     (spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize)
     (active : wal.directory.active = layout.target.pair) (keeper : layout.target.first = wal.active.first)
     (kept : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept)
-    (pending : PendingClientReplay log reads history) :
+    (pending : PendingClientReplay log reads history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy history.length) :
     ∃ state, NativeReadyReadPrefix (finish.runFromCensus metadataRelease runs.released released)
       state history log reads state ∧
       state.cache = admission.cache ∧ state.census = finish.census ∧ state.files = finish.settled ∧
@@ -224,7 +253,7 @@ theorem CapturedLongKeeperFinish.startsNativeReadPrefix
     ⟨phase, description.symm, ownerLive, directoryLive, ⟨admission.reached, rfl⟩, path.symm ▸ description.symm ▸ ready⟩
   have chosen := ready.resumed.selected
   rw [target, durable] at chosen
-  exact ⟨state, .installed (exactFiles.symm ▸ returned) correct history pending, rfl, rfl, exactFiles, durable,
+  exact ⟨state, .installed (exactFiles.symm ▸ returned) correct history pending bounded, rfl, rfl, exactFiles, durable,
     chosen.uniqueResult selected⟩
 
 end Alvoki.Storage.DiskSession

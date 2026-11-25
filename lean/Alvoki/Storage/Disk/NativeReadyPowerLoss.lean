@@ -340,7 +340,7 @@ theorem NativeReadyReadPrefix.restartsAfterPowerLoss
     ⟨phase, description.symm, ownerLive, directoryLive, ⟨opening.admission.reached, rfl⟩,
       path.symm ▸ description.symm ▸ retained⟩
   have newPrefix : NativeReadyReadPrefix observed.run next history log reads next :=
-    .installed (sameFiles.symm ▸ returned) nextValid (nextHistory.trans originalHistory) pending
+    .installed (sameFiles.symm ▸ returned) nextValid (nextHistory.trans originalHistory) pending prior.readsBounded
   have actualSelection := retained.resumed.selected
   rw [selectedTarget.trans target, durable] at actualSelection
   have checkpoint := actualSelection.uniqueResult ready.resumed.selected
