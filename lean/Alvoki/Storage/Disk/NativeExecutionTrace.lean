@@ -30,6 +30,7 @@ import Alvoki.Storage.Disk.NativeRunMaintenanceReopen
 import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
 import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
+import Alvoki.Storage.Disk.NativeContendedOpen
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
@@ -75,6 +76,7 @@ inductive NativeExecutionEvent : Type 1 where
   | obsoleteRunCollectionError (held : List UInt64) (error : IO.Error)
   | interruptedRunUnlinkRecovered (held : List UInt64) (input : FilePath)
   | collectedObsoleteRunsAfterRetries (held : List UInt64) (errors : List IO.Error)
+  | contendedOpenRejected (input : FilePath) (error : IO.Error)
   | markedBarrierRetriesRecovered (input : FilePath) (attempts : List NativeMarkedBarrierEvent)
   | rejectedOpenSequenceRecovered (inputs : List FilePath) (input : FilePath) (errors : List IO.Error)
   | rewroteRun (request : RunMaintenance) (result : Bool)
@@ -328,6 +330,14 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (returned : NativeObsoleteRunBarrierErrorStep current.ready observed next) :
       NativeExecutionStep current (.obsoleteRunCollectionError observed.reports.held observed.diagnostic)
         ⟨current.history, current.submissions, next⟩
+  | rejectsContendedOpen (current : NativeExecutionPosition) {input : FilePath}
+      (seen : NativeContendedOpen current.ready.state input) (drop : LockReferenceDrop)
+      (retired : drop = seen.slot.closeEvent)
+      (returned : ∀ recover : DiskDirectory → DescriptorSlot → EStateM IO.Error CensusOpenState SegmentedSession,
+        seen.run recover = .error seen.diagnostic
+          (current.ready.state.census.insert seen.slot seen.free, current.ready.state.files))
+      (disposed : (current.ready.state.census.insert seen.slot seen.free).afterDrops [drop] = current.ready.state.census) :
+      NativeExecutionStep current (.contendedOpenRejected input seen.diagnostic) current
   | recoverMarkedBarrierRetries (current : NativeExecutionPosition) {inputs : List FilePath} {input : FilePath}
       (seen : NativeCloseMarkedBarrierObservation current.ready.state inputs input)
       (closed : seen.close.report.run = .ok () seen.close.report.finished)
@@ -561,6 +571,7 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.reads⟩
   case obsoleteRunCollectionError returned => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.reads⟩
+  case rejectsContendedOpen => simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads]
   case recoverMarkedBarrierRetries reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverRejectedOpenSequence reopened => exact ⟨by simp [NativeExecutionEvent.writes],
@@ -692,6 +703,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | retryObsoleteRunCollection (held : List UInt64) (failedAttempts : Nat)
   | rewriteRun (request : RunMaintenance)
   | rewriteRunThenCheckpointAndReopen (request : RunMaintenance) (input : FilePath)
+  | openContended (input : FilePath)
   | closeThenRetryMarkedBarriers (inputs : List FilePath) (input : FilePath)
   | closeThenRetryAndReopen (inputs : List FilePath) (input : FilePath)
   | closeAndReopen (input : FilePath)
@@ -740,6 +752,7 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .collectObsoleteRuns held, .obsoleteRunCollectionError issued _ => issued = held
   | .interruptedRunUnlinkThenReopen held input, .interruptedRunUnlinkRecovered issued opened =>
     issued = held ∧ opened = input
+  | .openContended input, .contendedOpenRejected issued _ => issued = input
   | .closeThenRetryMarkedBarriers inputs input, .markedBarrierRetriesRecovered opened attempts =>
     attempts.map (·.input) = inputs ∧ opened = input
   | .closeThenRetryAndReopen inputs input, .rejectedOpenSequenceRecovered attempted opened _ =>
@@ -914,6 +927,8 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
       (observe : NativeRunMaintenanceReopenObservation current.state request input)
   | obsoleteRunCollectionError (observed : NativeObsoleteRunBarrierError current.state)
   | obsoleteRunUnlinkError (cut : NativeObsoleteRunUnlinkCut current.state) (error : NativeObsoleteRunUnlinkError cut)
+  | openContended (input : FilePath) (seen : NativeContendedOpen current.state input)
+      (drop : LockReferenceDrop) (retired : drop = seen.slot.closeEvent)
   | closeThenRetryMarkedBarriers (inputs : List FilePath) (input : FilePath)
       (seen : NativeCloseMarkedBarrierObservation current.state inputs input)
   | closeThenRetryAndReopen (inputs : List FilePath) (input : FilePath)
@@ -965,6 +980,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .rewriteRunThenCheckpointAndReopen request input _ => .rewriteRunThenCheckpointAndReopen request input
   | .obsoleteRunCollectionError observed => .collectObsoleteRuns observed.reports.held
   | .obsoleteRunUnlinkError cut _ => .collectObsoleteRuns cut.plan.reports.held
+  | .openContended input _ _ _ => .openContended input
   | .closeThenRetryMarkedBarriers inputs input _ => .closeThenRetryMarkedBarriers inputs input
   | .closeThenRetryAndReopen inputs input _ => .closeThenRetryAndReopen inputs input
 
@@ -1116,6 +1132,10 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | obsoleteRunUnlinkError cut error =>
     obtain ⟨next, returned⟩ := current.ready.reachesObsoleteRunUnlinkError cut error
     exact ⟨_, _, .obsoleteRunUnlinkError current cut error next returned, rfl⟩
+  | openContended _ seen drop retired =>
+    have disposed : (current.ready.state.census.insert seen.slot seen.free).afterDrops [drop] = current.ready.state.census :=
+      retired.symm ▸ checkpointTemporaryClose _ _ _
+    exact ⟨_, current, .rejectsContendedOpen current seen drop retired seen.returns disposed, rfl⟩
   | closeThenRetryMarkedBarriers _ _ seen =>
     obtain ⟨closed, _, _, next, reopened⟩ :=
       current.ready.reopensAfterMarkedBarriers seen.close seen.success seen.lineage seen.files seen.observe
