@@ -587,6 +587,11 @@ private def checkSnapshotSessions (root : FilePath) : IO Unit := do
       rejectsClosed (original.collectObsoleteRuns [1]) "obsolete-run collection"
       rejectsClosed (original.compact 0) "compaction"
       rejectsClosed (original.retainRunVersions 0) "run-version retention"
+      original.close
+      let resolved ← IO.FS.realPath firstDir
+      let .error (.userError busy) ← (DiskTable.open firstDir).toBaseIO
+        | throw (IO.userError "closing the old receiver did not leave the reopened table locked")
+      check (busy == s!"database already open: {resolved}") "old close changed the contender's diagnostic"
       check ((← first.lookup firstPin.handle 7) == some (some 70))
         "a call on the closed table changed the reopened table's snapshot"
     finally second.close

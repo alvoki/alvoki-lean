@@ -1990,6 +1990,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveRotation
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveObsoleteRunCollection
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveRunMaintenance
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.reclosesWithoutEffects
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotRead
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotRelease
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotAcquire

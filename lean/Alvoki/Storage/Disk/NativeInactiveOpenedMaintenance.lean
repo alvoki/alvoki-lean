@@ -71,4 +71,21 @@ theorem rejectsInactiveRunMaintenance
   refine ⟨opened.uses.rewriteRun request, ?_⟩
   simp only [rewriteRunWith, Bind.bind, EStateM.bind, opened.rejectsInstalled stored]
 
+/-- A repeated public close sees the old table's closed phase and returns
+before touching its lock or cache, even if another table now owns the database. -/
+theorem reclosesWithoutEffects
+    (stored : opened.contents before opened.phase = some .closed) (calls : OpenCloseCallbacks heap) :
+    ∃ (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+      (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (directory : IO.Ref (Option IO.FS.Handle)),
+      opened.files.UsesCacheReferences active pending directory ∧
+      opened.table.close = closeSchedule opened.phase.get (fun _ => opened.lock.unlock)
+        (active.set none) (pending.set []) (directory.set none) (opened.phase.set .closed) ∧
+      closeSchedule (opened.get opened.phase) (fun _ => calls.unlock opened.lock)
+        (calls.set active none) (calls.set pending []) (calls.set directory none)
+        (opened.set opened.phase .closed) before = .ok () before := by
+  obtain ⟨active, pending, directory, references, source⟩ := opened.uses.close
+  have loaded := opened.phaseEffects.reads before opened.phase .closed stored
+  refine ⟨active, pending, directory, references, source, ?_⟩
+  simp only [closeSchedule, Bind.bind, EStateM.bind, loaded, Phase.close, Pure.pure, EStateM.pure]
+
 end Alvoki.Storage.DiskSession.NativeOpenedHandle
