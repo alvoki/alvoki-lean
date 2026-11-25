@@ -235,6 +235,7 @@ import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeReadyClose
 import Alvoki.Storage.Disk.NativeCloseAlignedReopen
 import Alvoki.Storage.Disk.NativeReadyRotation
+import Alvoki.Storage.Disk.NativePendingRotation
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeSnapshotExecution
@@ -1516,6 +1517,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCreatedRotation.keepsKeeperMarker
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rotatesCreated
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rotatesEmpty
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryStop.cachePreserved
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryStop.temporaryReleased
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryStop.custody
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryStop.keepsKeeperMarker
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryStop.rejectsReads
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsDuringRotation
+#check_axioms Alvoki.Storage.DiskSession.NativePendingRotation.selectsReportedSurvivor
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyClose.followsFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reachesClose
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.closeAdmits
