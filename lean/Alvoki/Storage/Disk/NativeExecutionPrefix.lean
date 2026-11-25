@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeExecutionTrace
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
+import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 
 namespace Alvoki.Storage.DiskSession
@@ -15,14 +16,22 @@ inductive NativeExecutionEndInstruction where
   | checkpoint
   | collectCoveredWal
 
-/-- An execution can stop at a ready session or at the exact reached
-return of an operation that requires recovery. No reopen is needed to
-observe the returned error, files, or ownership. -/
+/-- An execution can stop at a ready session, the return of an
+operation that requires recovery, or an interrupted native call.
+The reached files and ownership remain available at each endpoint. -/
 inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
   | ready
   | uncertainWrite (pending : NativePendingWrite current.ready)
   | closeAfterUncertainWrite (pending : NativePendingWrite current.ready) (close : NativePendingClose pending)
   | close (reported : NativeReadyClose current.ready.state)
+  | interruptedClose
+      (cut : NativeCloseUnlockInterruption current.ready.state.session.directory
+        current.ready.state.session.descriptor current.ready.state.closeState)
+      (owner : cut.slot = current.ready.state.owner)
+  | interruptedCloseAfterUncertainWrite (pending : NativePendingWrite current.ready)
+      (cut : NativeCloseUnlockInterruption current.ready.state.session.directory
+        current.ready.state.session.descriptor pending.poisoned)
+      (owner : cut.slot = current.ready.state.owner)
   | checkpointError {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointDirectoryError (image := image) current.ready.state cut) (physical : reported.Physical)
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
@@ -35,19 +44,23 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .uncertainWrite pending => .write pending.write.request
   | .closeAfterUncertainWrite pending _ => .writeThenClose pending.write.request
   | .close _ => .close
+  | .interruptedClose _ _ => .close
+  | .interruptedCloseAfterUncertainWrite pending _ _ => .writeThenClose pending.write.request
   | .checkpointError _ _ => .checkpoint
   | .collectionError _ _ _ => .collectCoveredWal
 
 def uncertainBatch : NativeExecutionEnd current → Option (List WAL.Write)
   | .uncertainWrite pending | .closeAfterUncertainWrite pending _ => some pending.write.failure.batch
+  | .interruptedCloseAfterUncertainWrite pending _ _ => some pending.write.failure.batch
   | _ => none
 
 def submissions (ending : NativeExecutionEnd current) : List DatabaseSubmissions :=
   current.submissions ++ (ending.uncertainBatch.map DatabaseSubmissions.uncertainBatch).toList
 
-/-- Keep the exact endpoint of the interpreted native call, including
-the original write return when a close follows it. -/
-def Returned : NativeExecutionEnd current → Prop
+/-- Retain the native schedule's exact endpoint, including the original
+write return when close follows it. An interruption keeps the issued
+unlock slot and determines when reported drops allow another opener. -/
+def Reached : NativeExecutionEnd current → Prop
   | .ready => current.ready.opened =
       .ok current.ready.initial.session (current.ready.initial.census, current.ready.initial.files)
   | .uncertainWrite pending => pending.write.returnedAt pending.cache
@@ -57,6 +70,24 @@ def Returned : NativeExecutionEnd current → Prop
         | .ok () => .ok () closed.reached
         | .error cause => .error cause closed.reached
   | .close reported => reported.Returned
+  | .interruptedClose cut _ =>
+      (∀ clear, cut.run clear = .error current.ready.state.owner cut.atCut ∧
+        cut.atCut.phase = .ready current.ready.state.writer.installed ∧
+        cut.atCut.files.image = (current.ready.state.cache, current.ready.state.files.image) ∧
+        cut.atCut.descriptors = cut.issueCensus ∧
+        cut.bindings (current.ready.state.session.directory.file .lock) =
+          some (current.ready.state.census.inode current.ready.state.owner.description)) ∧
+      ∀ drops, TryLockObserves (cut.afterDrops drops).files.owners current.ready.state.session.directory (.ok true) ↔
+        cut.effective = true ∨ (cut.afterDrops drops).descriptors.references current.ready.state.session.descriptor = []
+  | .interruptedCloseAfterUncertainWrite pending cut _ =>
+      pending.write.returnedAt pending.cache ∧
+      (∀ clear, cut.run clear = .error current.ready.state.owner cut.atCut ∧
+        cut.atCut.phase = .poisoned ∧ cut.atCut.files.image = (pending.cache, pending.write.failure.failed) ∧
+        cut.atCut.descriptors = cut.issueCensus ∧
+        cut.bindings (current.ready.state.session.directory.file .lock) =
+          pending.observed.bindings (current.ready.state.session.directory.file .lock)) ∧
+      ∀ drops, TryLockObserves (cut.afterDrops drops).files.owners current.ready.state.session.directory (.ok true) ↔
+        cut.effective = true ∨ (cut.afterDrops drops).descriptors.references current.ready.state.session.descriptor = []
   | .checkpointError (cut := cut) reported physical =>
       reported.run = .error reported.error
         (.poisoned, ⟨(current.ready.state.cache, reported.after), current.ready.state.files.owners⟩) ∧
@@ -71,7 +102,7 @@ def Returned : NativeExecutionEnd current → Prop
       ∀ sealed ∈ reported.pending.image.crashSealed,
         Nonempty (CoveredWalRetrySelection current.ready.state.writer { reported.pending.image.visible with sealed })
 
-theorem returned (ending : NativeExecutionEnd current) : ending.Returned := by
+theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   cases ending with
   | ready => exact current.ready.readPrefix.frames.1
   | uncertainWrite pending => exact pending.returned
@@ -87,6 +118,16 @@ theorem returned (ending : NativeExecutionEnd current) : ending.Returned := by
       rw [status] at result
       simpa only [status] using result.1
   | close reported => exact (current.ready.closes reported).returned
+  | interruptedClose cut owner =>
+    refine ⟨?_, cut.admitsAfterDrops⟩
+    intro clear
+    obtain ⟨stopped, phase, files, inventory, _, _, bound, _⟩ := current.ready.stopsDuringClose cut owner clear
+    exact ⟨stopped, phase, files, inventory, bound⟩
+  | interruptedCloseAfterUncertainWrite pending cut owner =>
+    refine ⟨pending.returned, ?_, cut.admitsAfterDrops⟩
+    intro clear
+    obtain ⟨stopped, phase, files, inventory, _, _, bound, _⟩ := pending.stopsDuringClose cut owner clear
+    exact ⟨stopped, phase, files, inventory, bound⟩
   | checkpointError reported physical => exact current.ready.readPrefix.checkpointDirectoryError reported physical
   | collectionError reported _ failed =>
     obtain ⟨returned, _, _, _, _, _, _, _, _, _, _, _, _, survivors, _⟩ :=
@@ -110,11 +151,10 @@ theorem guarded (ending : NativeExecutionEnd current) : ending.ReadyReplay := by
 def allows (ending : NativeExecutionEnd current) (chosen : List WAL.Write) : Prop :=
   chosen = current.history ∨ ∃ group, ending.uncertainBatch = some group ∧ chosen = current.history ++ group
 
-/-- The start of recovery still has the same finite ledger. At a write
-error or a subsequent close, its live marker selects the old history or
-the whole pending submission. Every earlier recorded read keeps its
-committed bound in the selected history. -/
-theorem selectsAtReturn (ending : NativeExecutionEnd current) :
+/-- At the end of the execution, a pending write's live marker selects
+the old history or the whole submission. Each earlier recorded read
+keeps its committed bound in the selected history. -/
+theorem selectsAtEnd (ending : NativeExecutionEnd current) :
     ∃ chosen, ending.allows chosen ∧ PendingClientReplay ending.submissions current.ready.reads chosen ∧
       ∀ read ∈ current.ready.reads, read.BoundedBy chosen.length := by
   cases ending with
@@ -124,7 +164,10 @@ theorem selectsAtReturn (ending : NativeExecutionEnd current) :
   | closeAfterUncertainWrite pending close =>
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := close.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
-  | ready | close | checkpointError | collectionError =>
+  | interruptedCloseAfterUncertainWrite pending =>
+    obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
+    exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
+  | ready | close | interruptedClose | checkpointError | collectionError =>
     refine ⟨current.history, .inl rfl, ?_, current.ready.readPrefix.readsBounded⟩
     all_goals simpa [submissions, uncertainBatch] using current.ready.readPrefix.refines.2.2
 
@@ -144,6 +187,16 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
       (close : ∀ pending : NativePendingWrite current.ready, pending.write = write → Nonempty (NativePendingClose pending)) :
       NativeExecutionEndObservation current (.writeThenClose write.request)
   | close (reported : NativeReadyClose current.ready.state) : NativeExecutionEndObservation current .close
+  | interruptedClose
+      (cut : NativeCloseUnlockInterruption current.ready.state.session.directory
+        current.ready.state.session.descriptor current.ready.state.closeState)
+      (owner : cut.slot = current.ready.state.owner) : NativeExecutionEndObservation current .close
+  | interruptedCloseAfterUncertainWrite (write : NativeReadyWriteFailure current.ready.state)
+      (inspect : ∀ cache, write.returnedAt cache → Nonempty (NativePendingWriteCensus current.ready.state cache))
+      (stop : ∀ pending : NativePendingWrite current.ready, pending.write = write →
+        ∃ cut : NativeCloseUnlockInterruption current.ready.state.session.directory
+          current.ready.state.session.descriptor pending.poisoned, cut.slot = current.ready.state.owner) :
+      NativeExecutionEndObservation current (.writeThenClose write.request)
   | checkpointError {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointDirectoryError (image := image) current.ready.state cut) (physical : reported.Physical) :
       NativeExecutionEndObservation current .checkpoint
@@ -152,9 +205,9 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
       NativeExecutionEndObservation current .collectCoveredWal
 
 theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObservation current requested) :
-    ∃ ending : NativeExecutionEnd current, ending.instruction = requested ∧ ending.Returned := by
+    ∃ ending : NativeExecutionEnd current, ending.instruction = requested ∧ ending.Reached := by
   cases observed with
-  | ready => exact ⟨.ready, rfl, NativeExecutionEnd.returned _⟩
+  | ready => exact ⟨.ready, rfl, NativeExecutionEnd.reached _⟩
   | uncertainWrite write inspect =>
     obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite write inspect
     refine ⟨.uncertainWrite pending, ?_, pending.returned⟩
@@ -163,17 +216,24 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
   | closeAfterUncertainWrite write inspect close =>
     obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite write inspect
     obtain ⟨closed⟩ := close pending same
-    refine ⟨.closeAfterUncertainWrite pending closed, ?_, NativeExecutionEnd.returned _⟩
+    refine ⟨.closeAfterUncertainWrite pending closed, ?_, NativeExecutionEnd.reached _⟩
     change NativeExecutionEndInstruction.writeThenClose pending.write.request = .writeThenClose write.request
     rw [same]
-  | close reported => exact ⟨.close reported, rfl, NativeExecutionEnd.returned _⟩
-  | checkpointError reported physical => exact ⟨.checkpointError reported physical, rfl, NativeExecutionEnd.returned _⟩
-  | collectionError reported cause failed => exact ⟨.collectionError reported cause failed, rfl, NativeExecutionEnd.returned _⟩
+  | close reported => exact ⟨.close reported, rfl, NativeExecutionEnd.reached _⟩
+  | interruptedClose cut owner => exact ⟨.interruptedClose cut owner, rfl, NativeExecutionEnd.reached _⟩
+  | interruptedCloseAfterUncertainWrite write inspect stop =>
+    obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite write inspect
+    obtain ⟨cut, owner⟩ := stop pending same
+    refine ⟨.interruptedCloseAfterUncertainWrite pending cut owner, ?_, NativeExecutionEnd.reached _⟩
+    change NativeExecutionEndInstruction.writeThenClose pending.write.request = .writeThenClose write.request
+    rw [same]
+  | checkpointError reported physical => exact ⟨.checkpointError reported physical, rfl, NativeExecutionEnd.reached _⟩
+  | collectionError reported cause failed => exact ⟨.collectionError reported cause failed, rfl, NativeExecutionEnd.reached _⟩
 
-/-- Use one native execution from the exact empty bootstrap return.
-The completed instructions retain their one ordered replay. The next
-reported instruction can end that execution in a poisoned or closed
-state while keeping its original response and permitted history. -/
+/-- The exact empty bootstrap starts one native execution. Completed
+instructions retain their ordered replay. The final report can stop at
+an issued unlock or a returned result and retains the reached native
+state and permitted history. -/
 theorem BootstrapKeeperMarkerHandoff.executesPrefixFromEmpty
     {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
     {calls : BootstrapOpenCalls (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory before}
@@ -196,7 +256,7 @@ theorem BootstrapKeeperMarkerHandoff.executesPrefixFromEmpty
           last.submissions = events.flatMap NativeExecutionEvent.submissions ∧
           last.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
           (∀ event ∈ events, event.uncertainBatchWhole) ∧
-          ending.instruction = requested ∧ ending.Returned ∧ ending.ReadyReplay ∧
+          ending.instruction = requested ∧ ending.Reached ∧ ending.ReadyReplay ∧
           ∃ chosen, ending.allows chosen ∧ PendingClientReplay ending.submissions last.ready.reads chosen ∧
             ∀ read ∈ last.ready.reads, read.BoundedBy chosen.length := by
   obtain ⟨boot, start, opened, session, writer, census, executes⟩ := bootstrap.executesFromEmpty admission empty effects
@@ -204,8 +264,8 @@ theorem BootstrapKeeperMarkerHandoff.executesPrefixFromEmpty
   intro instructions requested reports terminal
   obtain ⟨events, last, matched, trace, writes, submissions, reads, whole, _⟩ := executes instructions reports
   obtain ⟨observed⟩ := terminal events last matched trace
-  obtain ⟨ending, request, returned⟩ := observed.reaches
-  exact ⟨events, last, ending, matched, trace, writes, submissions, reads, whole, request, returned,
-    ending.guarded, ending.selectsAtReturn⟩
+  obtain ⟨ending, request, reached⟩ := observed.reaches
+  exact ⟨events, last, ending, matched, trace, writes, submissions, reads, whole, request, reached,
+    ending.guarded, ending.selectsAtEnd⟩
 
 end Alvoki.Storage.DiskSession

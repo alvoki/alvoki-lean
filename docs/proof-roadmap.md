@@ -160,6 +160,8 @@ The execution-prefix theorem follows the same prescribed ready trace from empty,
 
 After successful native lock acquisition and cache capture, the no-follow `WAL.commit` route probe can return an error other than ENOENT. The held open stops before either recovery worker or session installation. The actual unlock handler receives the same captured owner and census. Successful unlock returns the probe diagnostic. Failed local unlock returns its own error and retains ownership until the last reported reference drops. The file image is preserved. [Early native open error](../lean/Alvoki/Storage/Disk/NativeOpenEarlyError.lean)
 
+The same prefix also permits an interruption at the issued unlock, from a ready session or the exact poisoned write return. It keeps the reached census and distinguishes a stopped call from a returned diagnostic. The reported effect and later descriptor drops determine when the same lock becomes available. Earlier reads remain valid for the retained marker-selected history. [Interrupted close in the execution prefix](../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean)
+
 Extend the invariant to every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and
