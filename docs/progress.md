@@ -1020,6 +1020,11 @@ the exact reached cache. The sync result identifies the descriptor
 whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
+The held recovery theorem accepts the exact first power-loss outcome
+as the start of its retry suffix. It checks membership of the survived
+directory bindings, keeper bytes, and later names in the interrupted
+writer image and constructs the initial reboot transition.
+
 Reported marker retry traces can be joined at the same reached file
 image. This allows the writer's crash observation and a subsequent
 reopen trace to be checked separately and then passed as one trace

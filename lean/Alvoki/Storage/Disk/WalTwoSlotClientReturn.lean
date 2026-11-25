@@ -2229,7 +2229,11 @@ theorem installsAfterAcquiredRecovery_replays
     (acceptedCheckpoint : published.AcceptsVersioned prior.history.length.toUInt64
       (Boundary.CheckpointRepresentsPrefix prior.history) retry.image.directory.active.manifest)
     {interrupted firstPrepared : FileImage} {firstRepair : LockedFileState FileImage}
-    (reportedBeforeBarrier : ReportedMarkerRetries interrupted firstPrepared)
+    (reportedBeforeBarrier : ReportedMarkerRetries interrupted firstPrepared ∨
+      ∃ (crashPair : DirectoryPublication.Bindings) (crashKeeper : Option ByteArray) (crashLater : List Nat),
+        crashPair ∈ interrupted.directory.crashImages ∧ crashKeeper ∈ interrupted.keeper.crashImages ∧
+        crashLater ∈ interrupted.later.crashImages ∧
+        ReportedMarkerRetries (interrupted.crash crashPair crashKeeper crashLater) firstPrepared)
     {checkpoint : Option ByteArray} {active : OrderedTwoSlot.Slot}
     {current next : Selection}
     (offset : current.slot = slotIndex active)
@@ -2290,7 +2294,10 @@ theorem installsAfterAcquiredRecovery_replays
   obtain ⟨transferredAddresses, transfers⟩ := SlotWriteTransfers.ofCounts (next.slot * stride) 0
     (completedCounts ++ [inFlightCount]) (by simpa using transfersFit)
   simp only [Nat.zero_add, List.sum_append, List.sum_cons, List.sum_nil, Nat.add_zero] at transfers
-  have beforeBarrier := reportedBeforeBarrier.refines
+  have beforeBarrier : UnsettledRetries interrupted firstPrepared := by
+    rcases reportedBeforeBarrier with direct | ⟨_, _, _, metadata, keeperBytes, laterNames, retries⟩
+    · exact direct.refines
+    · exact ((ReportedMarkerRetries.start.powerLoss metadata keeperBytes laterNames).trans retries).refines
   have finished := repair.returns
   have authorizedRepair : EffectTrace layout.target
       { firstPrepared with directory := settleMarker firstPrepared.directory selection } firstRepair.image := by
