@@ -110,4 +110,27 @@ theorem NativeStoppedAppendFinalizedRetry.recordsContendedRetry
   · rw [seen.rawExit.exitCensus, seen.rawExit.cutCensus]
   · rw [seen.rawExit.exitFiles, seen.rawExit.cutCensus, seen.rawExit.cutFiles]
 
+
+/-- Reify the ordinary contention branch from the fixed source's
+returned append handle and false flock. The contender's other reports
+supply only physical effects, custody and finalization. -/
+theorem NativeStoppedAppendFinalizedRetry.recordsContentionFromCallbacks
+    {opened : NativeOpenedHandle heap} {current : NativeOpenedPosition opened}
+    {request : WriteRequest} {inputs : List FilePath} {input contended : FilePath}
+    {view : OpenCloseHeapView heap FileImage}
+    {names : heap → FilePath → Option Nat} {bytes : heap → Nat → ByteArray}
+    (seen : NativeStoppedAppendFinalizedRetry current request inputs input view names bytes)
+    (effects : RawContendedAliasEffects view seen.calls seen.release current.current.ready.state.session.directory
+      current.current.ready.state.session.descriptor seen.stop.view seen.stop.root contended seen.rawExit.afterExit)
+    (appended : seen.calls.beforeFlock contended seen.rawExit.afterExit =
+      .ok (current.current.ready.state.session.directory, effects.lock) effects.afterAppend)
+    (busy : seen.calls.flock effects.lock effects.afterAppend = .ok false effects.blocked) :
+    let attempt : RawContendedAliasOpen view seen.calls seen.release current.current.ready.state.session.directory
+      current.current.ready.state.session.descriptor seen.stop.view seen.stop.root contended seen.rawExit.afterExit :=
+      ⟨effects, appended, busy⟩
+    seen.rawExit.ContendedReturn attempt ∧
+    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
+      seen.Returned start (some (contended, attempt.diagnostic)) :=
+  seen.recordsContendedRetry ⟨effects, appended, busy⟩
+
 end Alvoki.Storage.DiskSession

@@ -90,6 +90,23 @@ theorem RawOpenAdmissionCallbacks.classifiesBeforeFlock (calls : RawOpenAdmissio
         | error cause reached => exact .appendError resolved flat checked appended
         | ok handle reached => exact .appended resolved flat checked appended
 
+/-- Recover the exact successful prefix stages from the append handle
+returned by the fixed admission interpreter. The stages can change
+the raw heap before the checked lock is opened. -/
+theorem RawOpenAdmissionCallbacks.beforeFlock_steps (calls : RawOpenAdmissionCallbacks heap) {input : FilePath}
+    {entry afterAppend : heap} {directory : DiskDirectory} {handle : IO.FS.Handle}
+    (opened : calls.beforeFlock input entry = .ok (directory, handle) afterAppend) :
+    ∃ afterResolve afterFlat afterGuard,
+      DiskDirectory.openWith calls.realPath input entry = .ok directory afterResolve ∧
+      rejectFlatWalWith directory (optionalMetadataWith (calls.lookup (directory.file .wal))) afterResolve =
+        .ok () afterFlat ∧
+      calls.checkLock directory afterFlat = .ok () afterGuard ∧
+      calls.openAppend (directory.file .lock) afterGuard = .ok handle afterAppend := by
+  have classified := calls.classifiesBeforeFlock input entry
+  rw [opened] at classified
+  cases classified with
+  | appended resolved flat checked appended => exact ⟨_, _, _, resolved, flat, checked, appended⟩
+
 /-- The public open calls flock on precisely the handle and heap from
 the prefix. A failed prefix returns directly without cache allocation,
 recovery, or attempting an unlock. -/
