@@ -37,6 +37,28 @@ private def decodeSlot (bytes : ByteArray) (slot : Nat) : Option Selection := do
   else
     none
 
+/-- A positional write in the other slot's range preserves every byte
+observed by the active decoder. This is the byte-range consequence of the
+write report. Crash failure isolation remains a storage premise. -/
+theorem decodeSlot_unchanged {before after : ByteArray} {slot : Nat} (valid : slot < 2)
+    (unchanged : ∀ position, (position < (1 - slot) * stride ∨ (1 - slot) * stride + 40 ≤ position) →
+      after.get! position = before.get! position) :
+    decodeSlot after slot = decodeSlot before slot := by
+  have sameWord (offset : Nat) (small : offset ≤ 32) :
+      word after (slot * stride + offset) = word before (slot * stride + offset) := by
+    have sameByte (lane : Nat) (inWord : lane ≤ 7) :
+        after.get! (slot * stride + offset + lane) = before.get! (slot * stride + offset + lane) := by
+      apply unchanged
+      have slots : slot = 0 ∨ slot = 1 := by omega
+      rcases slots with rfl | rfl <;> simp [stride] at * <;> omega
+    simp only [word, joinBytes, sameByte 0 (by decide), sameByte 1 (by decide),
+      sameByte 2 (by decide), sameByte 3 (by decide), sameByte 4 (by decide),
+      sameByte 5 (by decide), sameByte 6 (by decide), sameByte 7 (by decide)]
+  have magicWord : word after (slot * stride) = word before (slot * stride) := by
+    simpa using sameWord 0 (by decide)
+  simp only [decodeSlot, magicWord, sameWord 8 (by decide), sameWord 16 (by decide),
+    sameWord 24 (by decide), sameWord 32 (by decide)]
+
 /-- Select the latest valid slot. Two valid slots must be consecutive and
 advance the frontier. Validation of the selected WAL is the caller's
 responsibility, with no fallback if the selected WAL is invalid. -/

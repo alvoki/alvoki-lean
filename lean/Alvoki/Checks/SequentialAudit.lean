@@ -2141,3 +2141,4 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.settleMarker_syncDirectory
 #check_axioms Alvoki.WAL.TwoSlot.repair_preserves_settledMarker
 #check_axioms Alvoki.WAL.TwoSlot.reopenWith_reports
+#check_axioms Alvoki.WAL.TwoSlot.decodeSlot_unchanged
