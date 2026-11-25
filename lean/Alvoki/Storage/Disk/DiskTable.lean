@@ -854,6 +854,24 @@ theorem DiskTable.acquireAt_schedule (db : DiskTable) (snapshot : UInt64) :
     db.acquireAt snapshot = DiskSession.acquireSnapshotWith (m := IO) db.installed db.phase.set
       (fun pin => ⟨⟨db.session, pin.handle⟩, pin.sequence⟩) snapshot := rfl
 
+/-- The returned pin carries the exact token of its issuing table
+and the local handle and sequence produced by the pure pin allocator. -/
+def DiskSnapshotPin.UsesOpenToken (pin : DiskSnapshotPin) (token : IO.Ref Unit)
+    (issued : Alvoki.Sequential.SnapshotPin) : Prop :=
+  pin.handle.session = token ∧ pin.handle.localHandle = issued.handle ∧ pin.sequence = issued.sequence
+
+/-- On the handle returned by open, the actual public acquisition uses
+the reported phase cell for both its read and its possible update. -/
+theorem DiskTable.UsesOpenReferences.acquireAt {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) (snapshot : UInt64) :
+    ∃ issue : Alvoki.Sequential.SnapshotPin → DiskSnapshotPin,
+      (∀ pin, (issue pin).UsesOpenToken token pin) ∧
+      db.acquireAt snapshot = DiskSession.acquireSnapshotWith (m := IO)
+        (do (← phase.get).installed) phase.set issue snapshot := by
+  obtain ⟨_, _, _, cell, identity⟩ := uses
+  refine ⟨fun pin => ⟨⟨token, pin.handle⟩, pin.sequence⟩, fun _ => ⟨rfl, rfl, rfl⟩, ?_⟩
+  simp only [DiskTable.acquireAt_schedule, DiskTable.installed, cell, identity]
+
 def DiskTable.acquire (db : DiskTable) : IO DiskSnapshotPin := do
   let state ← db.installed
   fromOption (← db.acquireAt state.table.committed) "cannot acquire the latest snapshot"
