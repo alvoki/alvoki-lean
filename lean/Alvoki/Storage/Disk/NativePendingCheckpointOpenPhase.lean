@@ -19,15 +19,35 @@ private def fileCalls {files : Type} (call : EStateM IO.Error files Unit) : ESta
     | .ok result reached => .ok result (phase, reached)
     | .error cause reached => .error cause (phase, reached)
 
+/-- Source preparation and poison setter followed by a returned prefix
+of the checkpoint file callbacks. -/
+def runCheckpointPrefixOnOpenPhase {files : Type} (opened : NativeOpenedHandle heap)
+    (completed : Installed → List Step) (perform : Installed → ByteArray → Step → EStateM IO.Error files Unit) :
+    EStateM IO.Error (heap × files) Unit :=
+  withPreparedCheckpoint (do (← phaseCall (opened.get opened.phase)).installed) liftCheckpointExcept
+    (fun next manifest => do
+      phaseCall (opened.set opened.phase .poisoned)
+      fileCalls ((completed next).forM (perform next manifest)))
+
+theorem CheckpointPreflight.reachesOpenPrefix {files : Type}
+    {phase : Phase Installed} {next : Installed} {manifest : ByteArray}
+    (preflight : CheckpointPreflight phase (.ok (next, manifest))) (opened : NativeOpenedHandle heap)
+    {completed : Installed → List Step} {perform : Installed → ByteArray → Step → EStateM IO.Error files Unit}
+    {entry poisoned : heap} {before reached : files}
+    (loaded : opened.get opened.phase entry = .ok phase entry)
+    (written : opened.set opened.phase .poisoned entry = .ok () poisoned)
+    (ran : ((completed next).forM (perform next manifest)) before = .ok () reached) :
+    runCheckpointPrefixOnOpenPhase opened completed perform (entry, before) = .ok () (poisoned, reached) := by
+  unfold runCheckpointPrefixOnOpenPhase
+  rw [preflight.preparesFrom _ (by simp only [Bind.bind, EStateM.bind, phaseCall, loaded])]
+  simp only [Bind.bind, EStateM.bind, phaseCall, fileCalls, written, ran]
+
 /-- The public checkpoint's returned source prefix through manifest
 rename, before the last directory barrier or ready setter. -/
 noncomputable def NativeCheckpointFinalBarrier.beforeDirectoryOnOpenPhase
     (barrier : NativeCheckpointFinalBarrier (image := image) state cut) (opened : NativeOpenedHandle heap) :
     EStateM IO.Error (heap × (CensusDirectoryCache × image)) Unit :=
-  withPreparedCheckpoint (do (← phaseCall (opened.get opened.phase)).installed) liftCheckpointExcept
-    (fun next manifest => do
-      phaseCall (opened.set opened.phase .poisoned)
-      fileCalls ((manifestDirectoryPrefix next.table.runs.length).forM (barrier.perform next manifest)))
+  runCheckpointPrefixOnOpenPhase opened (fun next => manifestDirectoryPrefix next.table.runs.length) barrier.perform
 
 /-- Interpret the same source prefix and the issued grouped sync with
 an outer interruption. Inner errors still denote ordinary returns. -/
@@ -79,11 +99,9 @@ theorem NativeOpenedPosition.stopsCheckpointOnOpenPhase (current : NativeOpenedP
       exact ran.trans (congrArg (EStateM.Result.ok ()) same)
     · contradiction
   have arrived : stop.barrier.beforeDirectoryOnOpenPhase opened before = .ok () (poisoned, stop.barrier.observed.renamed) := by
-    unfold NativeCheckpointFinalBarrier.beforeDirectoryOnOpenPhase
-    rw [preflight.preparesFrom _ (by simp only [before, Bind.bind, EStateM.bind, phaseCall, loaded])]
     have completed : manifestDirectoryPrefix cut.checkpoint.prepared.table.runs.length = cut.completed :=
       stop.barrier.completed.symm
-    simp only [Bind.bind, EStateM.bind, phaseCall, excluded, fileCalls, before, completed, returnedPrefix]
+    exact preflight.reachesOpenPrefix opened loaded excluded (by simpa only [completed] using returnedPrefix)
   refine ⟨current.uses.checkpoint, pending, ?_, poisoned, loaded, excluded, poison, arrived, ?_⟩
   · rw [stop.barrier.completed]
     exact manifestDirectoryPrefix_steps _

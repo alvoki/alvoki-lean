@@ -8,6 +8,34 @@ open System CheckpointPublication SyncHandleRouting
 variable {image : Type} {state : NativeReadyState}
   {cut : CheckpointPowerCut state.session.directory state.writer}
 
+/-- Interpret one grouped sync path with the same handle resolver.
+A reported interruption bypasses the ordinary sync error handler. -/
+def checkpointSyncUntilStop (directory : FilePath)
+    (openRead : FilePath → EStateM IO.Error image CheckpointOpenHandle)
+    (fsync : CheckpointOpenHandle → EStateM FilePath image (Except IO.Error Unit))
+    (path : FilePath) : ExceptT IO.Error (EStateM FilePath (CensusDirectoryCache × image)) Unit :=
+  fun (cache, files) =>
+    match cache.resolve directory path openRead files with
+    | .error cause reached => .ok (.error cause) reached
+    | .ok handle (cache, files) =>
+      match fsync handle files with
+      | .ok result reached => .ok result (cache, reached)
+      | .error path reached => .error path (cache, reached)
+
+theorem checkpointCachedDirectorySyncStops {directory : FilePath} {cache : CensusDirectoryCache}
+    {openRead : FilePath → EStateM IO.Error image CheckpointOpenHandle}
+    {fsync : CheckpointOpenHandle → EStateM FilePath image (Except IO.Error Unit)}
+    {handle : CheckpointOpenHandle} {files reached : image}
+    (cached : cache.directory = some handle) (issued : fsync handle files = .error directory reached) :
+    (SyncPathGroup.run (checkpointSyncUntilStop directory openRead fsync) #[directory]).run (cache, files) =
+      .error directory (cache, reached) := by
+  have stopped : checkpointSyncUntilStop directory openRead fsync directory (cache, files) =
+      .error directory (cache, reached) := by
+    simp only [checkpointSyncUntilStop, Cache.resolve, beq_self_eq_true, ↓reduceIte, cached, issued]
+  simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil, MonadExcept.tryCatch, MonadExceptOf.tryCatch,
+    tryCatchThe, ExceptT.tryCatch, Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind,
+    StateT.pure, Pure.pure, ExceptT.pure, stopped]
+
 /-- The issued final directory fsync stops without a native return.
 The outer path identifies the interruption. Any ordinary return would
 instead carry its result inside the callback. -/
@@ -29,13 +57,7 @@ def session (_stop : NativeCheckpointDirectoryStop (image := image) state cut) :
 a reported interruption separate from the public checkpoint error. -/
 def syncPath (path : FilePath) :
     ExceptT IO.Error (EStateM FilePath (CensusDirectoryCache × image)) Unit :=
-  fun (cache, files) =>
-    match cache.resolve state.session.directory.path path stop.barrier.callbackPrefix.primitives.openRead files with
-    | .error cause reached => .ok (.error cause) reached
-    | .ok handle (cache, files) =>
-      match stop.fsync handle files with
-      | .ok result reached => .ok result (cache, reached)
-      | .error path reached => .error path (cache, reached)
+  checkpointSyncUntilStop state.session.directory.path stop.barrier.callbackPrefix.primitives.openRead stop.fsync path
 
 theorem stopsGroup :
     (SyncPathGroup.run stop.syncPath #[state.session.directory.path]).run stop.barrier.observed.renamed =
@@ -43,20 +65,10 @@ theorem stopsGroup :
   have atIssue : stop.barrier.observed.renamed = (state.cache, stop.barrier.observed.renamed.2) :=
     Prod.ext stop.barrier.callbackPrefix.beforeFinalDirectory.1 rfl
   have cached : state.cache.directory = some stop.barrier.handle := stop.barrier.callbackPrefix.directoryCached
-  have stopped : stop.syncPath state.session.directory.path stop.barrier.observed.renamed =
-      .error state.session.directory.path (state.cache, stop.reached) := by
-    rw [atIssue]
-    change (match state.cache.resolve state.session.directory.path state.session.directory.path
-      stop.barrier.callbackPrefix.primitives.openRead stop.barrier.observed.renamed.2 with
-      | .error cause reached => EStateM.Result.ok (Except.error cause) reached
-      | .ok handle (cache, files) =>
-        match stop.fsync handle files with
-        | .ok result reached => EStateM.Result.ok result (cache, reached)
-        | .error path reached => EStateM.Result.error path (cache, reached)) = _
-    simp only [Cache.resolve, beq_self_eq_true, ↓reduceIte, cached, stop.stopped]
-  simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil, MonadExcept.tryCatch, MonadExceptOf.tryCatch,
-    tryCatchThe, ExceptT.tryCatch, Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind,
-    StateT.pure, Pure.pure, ExceptT.pure, stopped]
+  calc
+    _ = (SyncPathGroup.run stop.syncPath #[state.session.directory.path]).run
+        (state.cache, stop.barrier.observed.renamed.2) := congrArg _ atIssue
+    _ = _ := checkpointCachedDirectorySyncStops cached stop.stopped
 
 /-- The previous session remains poisoned at the issued callback.
 Acquisition and reads through its original references see that phase. -/
