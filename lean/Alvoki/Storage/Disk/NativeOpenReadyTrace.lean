@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
 import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 import Alvoki.Storage.Disk.NativeOpenRunMaintenance
+import Alvoki.Storage.Disk.NativeOpenExternalPinRead
 
 namespace Alvoki.Storage.DiskSession
 
@@ -20,9 +21,11 @@ inductive NativeOpenedInstruction : Type 1 where
   | releaseAt (index : Nat)
   | advanceFloor (floor : UInt64)
   | readAt (index : Nat) (request : SnapshotReadRequest α)
+  | readSupplied (pin : DiskSnapshotPin) (request : SnapshotReadRequest α)
 
-/-- Per-call observations at the reached position. Reads and releases
-address issued pins by index. The table tracks whether each pin is active. -/
+/-- Per-call observations at the reached position. Indexed operands
+select tracked pins. A supplied pin retains its original issuer, and
+the reached table's registry decides whether a local handle is active. -/
 inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpenedInstruction → Type 1 where
   | write (request : WriteRequest) (nonempty : request.rows ≠ [])
       (calls : WriteRequest.Calls (DescriptorInventory × DescriptorSlot × Nat))
@@ -75,6 +78,14 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
       (issued : start.pins[index]? = some pin)
       (compared : opened.ptrEq opened.token opened.token start.reached = .ok true start.reached) :
       NativeOpenedReport start (.readAt index request)
+  | readSupplied (pin : DiskSnapshotPin) (request : SnapshotReadRequest α)
+      {issuer : IO.Ref Unit} {issued : SnapshotPin} (owns : pin.UsesOpenToken issuer issued)
+      (tokenIdentity : IO.Ref Unit → Nat)
+      (currentToken : tokenIdentity opened.token = start.current.ready.state.session.sessionRef)
+      (identifies : tokenIdentity issuer = tokenIdentity opened.token ↔ issuer = opened.token)
+      (compared : opened.ptrEq issuer opened.token start.reached =
+        .ok (decide (tokenIdentity issuer = tokenIdentity opened.token)) start.reached) :
+      NativeOpenedReport start (.readSupplied pin request)
 
 namespace NativeOpenedReport
 
@@ -181,6 +192,23 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
       event = .snapshotHandleRead start.current.ready.state.session.sessionRef pin.localPin.handle
         request response recorded ∧
       next.reached = start.reached ∧ next.pins = start.pins
+  | .readSupplied pin request (issuer := issuer) (issued := issued) _ tokenIdentity _ _ _ =>
+    (match request with
+      | .lookup key => opened.table.lookup pin.handle key = readSnapshotWith (m := IO)
+          (do (← opened.phase.get).installed) (issuer.ptrEq opened.token)
+          (fun table => table.lookup issued.handle key)
+      | .range lo hi => opened.table.range pin.handle lo hi = readSnapshotWith (m := IO)
+          (do (← opened.phase.get).installed) (issuer.ptrEq opened.token)
+          (fun table => table.range issued.handle lo hi)) ∧
+    ∃ response recorded,
+      readSnapshotWith (m := EStateM IO.Error heap) (do (← opened.get opened.phase).installed)
+        (opened.ptrEq issuer opened.token) (request.read issued.handle) start.reached =
+          .ok response next.reached ∧
+      (response = none ↔ issuer ≠ opened.token ∨
+        (issuer = opened.token ∧ start.current.ready.state.writer.installed.table.pins.find issued.handle = none)) ∧
+      event = .snapshotHandleRead (tokenIdentity issuer) issued.handle request response recorded ∧
+      next.current.ready.state = start.current.ready.state ∧ next.reached = start.reached ∧ next.pins = start.pins ∧
+      next.current.ready.reads = start.current.ready.reads ++ [recorded]
 
 structure Reached (report : NativeOpenedReport start instruction) (event : NativeExecutionEvent)
     (next : NativeOpenedPosition opened) : Prop where
@@ -305,6 +333,12 @@ theorem reaches (report : NativeOpenedReport start instruction) :
       ⟨pin.localPin.handle, start.current.ready.state.session.sessionRef, true, by simp⟩ request response recorded next observed
     refine ⟨_, nextPosition, common, ?_, response, recorded, raw, rfl, rfl, rfl⟩
     cases request <;> exact source
+  | readSupplied _ request owns tokenIdentity currentToken identifies compared =>
+    obtain ⟨source, response, recorded, next, raw, denied, step, state, heap, pins, reads, _, _⟩ :=
+      start.readsSuppliedPin owns tokenIdentity currentToken identifies compared request
+    refine ⟨_, next, step, source, response, recorded, ?_, denied, rfl, state, heap, pins, reads⟩
+    rw [heap]
+    exact raw
 
 end NativeOpenedReport
 

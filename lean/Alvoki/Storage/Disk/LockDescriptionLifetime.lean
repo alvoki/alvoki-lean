@@ -73,6 +73,13 @@ theorem HeldLockReferences.afterFileDrops_surviving {image : Type} {description 
     references.afterFileDrops drops directory before = before := by
   simp [afterFileDrops, ownersAfterDrops, List.isEmpty_eq_false_iff.mpr retained]
 
+theorem HeldLockReferences.afterFileDrops_unowned {image : Type} {description : Nat}
+    {directory : DiskDirectory} {before : LockedFileState image} {drops : List LockReferenceDrop}
+    (references : HeldLockReferences description)
+    (unowned : before.owners (directory.file .lock) ≠ some description) :
+    references.afterFileDrops drops directory before = before := by
+  simp [afterFileDrops, ownersAfterDrops, LockOwners.release_unowned unowned]
+
 theorem HeldLockReferences.afterFileDrops_released {image : Type} {description : Nat}
     {directory : DiskDirectory} {before : LockedFileState image} {drops : List LockReferenceDrop}
     (references : HeldLockReferences description) (ownership : before.owners.Owns directory description)

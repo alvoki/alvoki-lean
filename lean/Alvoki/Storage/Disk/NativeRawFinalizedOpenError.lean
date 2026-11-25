@@ -1,0 +1,47 @@
+import Alvoki.Storage.Disk.NativeOpenErrorLockFinalization
+import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
+
+namespace Alvoki.Storage.DiskSession
+
+open System WalSegmentRepair
+
+variable {heap α : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
+  {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
+  {view : OpenCloseHeapView heap FileImage} {init : OpenSyncCacheCallbacks heap}
+  {calls : RawOpenAdmissionCallbacks heap} {entry : heap}
+  {admitted : RawOpenAdmissionReport admission view calls entry}
+  {seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock}
+
+/-- Compose the two reported runtime drops around local unlock. The
+failed open uses the same canonical cache constructor, worker and lock
+handle and returns its chosen diagnostic after the final lock close. -/
+theorem RawOpenCacheDisposal.returnsAfterLockFinalization {before : heap}
+    (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
+    (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α)
+    (cause : IO.Error) (returned : seen.Returned recover cause)
+    {release : IO.FS.Handle → heap → heap}
+    (finalized : RawOpenErrorLockFinalization view directory release admitted.lock admission.owner seen.reached) :
+    ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
+      (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+        IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
+      (cache : DiskTable.OpenSyncFiles),
+      DiskTable.OpenSyncFiles.IsOpenAction directory.path cacheOpen ∧
+      cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
+        (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
+        (fun value => liftM (IO.mkRef value)) makeCache ∧
+      openSyncFilesWith (init.openDirectory directory.path) init.newRef init.newRef init.newRef makeCache
+        admitted.afterFlock = .ok cache seed.afterPending ∧
+      cache.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef ∧
+      finishFailedOpen (calls.runOpen input init makeCache (seen.errorScope recover)) release admitted.lock entry =
+        .error (seen.diagnostic cause) finalized.reached ∧
+      view.descriptors finalized.reached =
+        ((view.descriptors before).afterDrops [admission.cached.closeEvent]).afterDrops [admission.owner.closeEvent] ∧
+      (view.files finalized.reached).image = retry.image ∧
+      (TryLockObserves (view.files finalized.reached).owners directory (.ok true) ↔
+        seen.unlockResult = .ok () ∨ (view.descriptors finalized.reached).references admission.owner.description = []) := by
+  obtain ⟨cacheOpen, makeCache, cache, isOpen, source, initialized, uses, ran, _, droppedCache, _, _, stable, _, owner⟩ := returned
+  obtain ⟨result, _, _, files, available⟩ := finalized.returns _ ran seen.unlockResult owner
+  refine ⟨cacheOpen, makeCache, cache, isOpen, source, initialized, uses, result, ?_, files.trans stable, available⟩
+  rw [finalized.census, droppedCache]
+
+end Alvoki.Storage.DiskSession

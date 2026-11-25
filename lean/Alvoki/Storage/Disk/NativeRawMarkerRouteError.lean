@@ -11,33 +11,33 @@ variable {heap : Type} {input : FilePath} {directory : DiskDirectory} {inventory
   {calls : RawOpenAdmissionCallbacks heap} {entry : heap}
   {admitted : RawOpenAdmissionReport admission view calls entry}
 
-/-- A held read-only probe can fail before either recovery worker. The
-local unlock uses the same initialized cache heap and acquired lock.
-The report ends at its return, before any later reference drops. -/
-structure RawHeldOpenCleanup (cleanup : NativeOpenErrorUnlock admission admission.reached)
-    (seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock) where
+/-- A held read-only failure reaches local unlock with the same acquired
+lock. The report ends at its return, before any later reference drops. -/
+structure RawHeldOpenCleanup {census : DescriptorInventory} (cleanup : NativeOpenErrorUnlock admission census)
+    (seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock)
+    (before : heap := seed.afterPending) where
   reached : heap
-  lockFrame : (view.handle seed.afterPending admitted.lock).2 = (view.handle admitted.afterFlock admitted.lock).2
-  unlock : calls.unlock admitted.lock seed.afterPending =
+  lockFrame : (view.handle before admitted.lock).2 = (view.handle admitted.afterFlock admitted.lock).2
+  unlock : calls.unlock admitted.lock before =
     match cleanup.result with
     | .ok () => .ok () reached
     | .error cause => .error cause reached
-  image : (view.files reached).image = (view.files seed.afterPending).image
+  image : (view.files reached).image = (view.files before).image
   owners : (view.files reached).owners =
     match cleanup.result with
-    | .ok () => (view.files seed.afterPending).owners.set (directory.file .lock) none
-    | .error _ => (view.files seed.afterPending).owners
-  census : view.descriptors reached = view.descriptors seed.afterPending
+    | .ok () => (view.files before).owners.set (directory.file .lock) none
+    | .error _ => (view.files before).owners
+  census : view.descriptors reached = view.descriptors before
   cache : view.cacheAt reached seed.directoryRef seed.activeRef seed.pendingRef =
-    view.cacheAt seed.afterPending seed.directoryRef seed.activeRef seed.pendingRef
+    view.cacheAt before seed.directoryRef seed.activeRef seed.pendingRef
 
 namespace RawHeldOpenCleanup
 
-variable {cleanup : NativeOpenErrorUnlock admission admission.reached}
+variable {census : DescriptorInventory} {cleanup : NativeOpenErrorUnlock admission census} {before : heap}
   {seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock}
 
 /-- The raw error return and its existing file, lock and cache projection. -/
-def Returned (seen : RawHeldOpenCleanup (admitted := admitted) cleanup seed)
+def Returned (seen : RawHeldOpenCleanup (admitted := admitted) cleanup seed before)
     (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α)
     (cause : IO.Error) : Prop :=
   ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
@@ -51,23 +51,24 @@ def Returned (seen : RawHeldOpenCleanup (admitted := admitted) cleanup seed)
       openSyncFilesWith (init.openDirectory directory.path) init.newRef init.newRef init.newRef makeCache
         admitted.afterFlock = .ok cache seed.afterPending ∧
       cache.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef ∧
-      (view.handle seed.afterPending admitted.lock).2.1 = admission.owner ∧
+      (view.handle before admitted.lock).2.1 = admission.owner ∧
       calls.runOpen input init makeCache recover entry =
         .error (cleanup.diagnostic cause) seen.reached ∧
-      (view.descriptors seen.reached, view.files seen.reached) = (admission.reached, cleanup.files) ∧
+      (view.descriptors seen.reached, view.files seen.reached) = (census, cleanup.files) ∧
       view.cacheAt seen.reached seed.directoryRef seed.activeRef seed.pendingRef = admission.cache ∧
       (view.files seen.reached).image = retry.image ∧
       (TryLockObserves (view.files seen.reached).owners directory (.ok true) ↔ cleanup.result = .ok ())
 
-/-- A reported rejection at the initialized heap runs the actual open's
-local unlock. Its result selects the diagnostic and the current owner. -/
-theorem returnsError (seen : RawHeldOpenCleanup (admitted := admitted) cleanup seed)
+/-- The actual open's error handler uses the heap reached by the failed
+worker. The local unlock selects the diagnostic and the current owner. -/
+theorem returnsErrorAt (seen : RawHeldOpenCleanup (admitted := admitted) cleanup seed before)
     (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α)
     (cause : IO.Error)
-    (rejected : ∀ cache, recover directory admitted.lock cache seed.afterPending = .error cause seed.afterPending) :
+    (rejected : ∀ cache, recover directory admitted.lock cache seed.afterPending = .error cause before)
+    (heldFiles : view.files before = admission.held) (heldCensus : view.descriptors before = census)
+    (heldCache : view.cacheAt before seed.directoryRef seed.activeRef seed.pendingRef = admission.cache) :
     seen.Returned recover cause := by
-  obtain ⟨cacheOpen, makeCache, cache, isOpen, source, initialized, uses, _, _, _, _, initialCache,
-    heldFiles, heldCensus, _, _, _, _⟩ := seed.installs
+  obtain ⟨cacheOpen, makeCache, cache, isOpen, source, initialized, uses, _⟩ := seed.installs
   have opened := admitted.startsHeldWorker init seed initialized recover
   have returned : calls.runOpen input init makeCache recover entry =
       .error (cleanup.diagnostic cause) seen.reached := by
@@ -82,9 +83,8 @@ theorem returnsError (seen : RawHeldOpenCleanup (admitted := admitted) cleanup s
   have reachedFiles : view.files seen.reached = cleanup.files := by
     have image := seen.image.trans (congrArg LockedFileState.image heldFiles)
     have owners : (view.files seen.reached).owners = cleanup.files.owners := by
-      have held : view.files seed.afterPending = admission.held := heldFiles
       have framed := seen.owners
-      rw [held] at framed
+      rw [heldFiles] at framed
       cases result : cleanup.result with
       | ok value =>
         cases value
@@ -94,9 +94,20 @@ theorem returnsError (seen : RawHeldOpenCleanup (admitted := admitted) cleanup s
   have slot := congrArg Prod.fst seen.lockFrame
   rw [admitted.sameLock, admitted.appendHandle] at slot
   exact ⟨cacheOpen, makeCache, cache, isOpen, source, initialized, uses, slot, returned,
-    Prod.ext (seen.census.trans heldCensus) reachedFiles, seen.cache.trans initialCache,
+    Prod.ext (seen.census.trans heldCensus) reachedFiles, seen.cache.trans heldCache,
     (congrArg LockedFileState.image reachedFiles).trans cleanup.keepsFiles,
     reachedFiles.symm ▸ cleanup.admits⟩
+
+/-- Rejections at the initialized heap take their frames directly from
+the same cache allocation. -/
+theorem returnsError {cleanup : NativeOpenErrorUnlock admission admission.reached}
+    (seen : RawHeldOpenCleanup (admitted := admitted) cleanup seed)
+    (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α)
+    (cause : IO.Error)
+    (rejected : ∀ cache, recover directory admitted.lock cache seed.afterPending = .error cause seed.afterPending) :
+    seen.Returned recover cause := by
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, cached, files, census, _⟩ := seed.installs
+  exact seen.returnsErrorAt recover cause rejected files census cached
 
 end RawHeldOpenCleanup
 

@@ -17,7 +17,8 @@ structure NativePendingCheckpointCrashObservation (state : NativeReadyState) (in
   lock : stop.barrier.bindings stop.reached (state.session.directory.file .lock) =
     stop.barrier.bindings stop.barrier.observed.renamed.2 (state.session.directory.file .lock)
   crash : NativeCheckpointCrashFiles stop.physical
-  reopen : ∀ plan : crash.Plan, Nonempty (NativeCheckpointCrashAlignedReads crash input plan)
+  plan : crash.Plan
+  reopen : NativeCheckpointCrashAlignedReads crash input plan
 
 /-- The original checkpoint never returned. The resumed position starts
 at the actual reported open of one allowed survivor, with the same
@@ -27,13 +28,23 @@ structure NativePendingCheckpointReopened (current : NativeReadPosition history 
     extends NativeCheckpointRebootContinuation current observed.crash input next where
   pending : NativePendingCheckpoint current observed.stop
 
+theorem NativeReadPosition.recoversStoppedCheckpointWithReader (current : NativeReadPosition history log) {input : FilePath}
+    (observed : NativePendingCheckpointCrashObservation current.state input) :
+    ∃ next, NativePendingCheckpointReopened current observed next ∧
+      observed.reopen.run = next.opened ∧ next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
+      next.state.owner = observed.reopen.opening.admission.owner ∧
+      next.state.directorySlot = observed.reopen.opening.admission.cached ∧
+      next.state.cache = observed.reopen.opening.admission.cache := by
+  have stopped := current.stopsDuringCheckpoint observed.stop
+  have paths := observed.stop.barrier.issueBindings observed.stop.barrier.observed.renamed.2 (by simp)
+  obtain ⟨next, reopened, sameReturn, returned, owner, slot, cache⟩ := current.reopensCheckpointSurvivorWith observed.crash
+    (observed.directory.trans paths.1) (observed.lock.trans paths.2) observed.reopen
+  exact ⟨next, ⟨reopened, stopped⟩, sameReturn, returned, owner, slot, cache⟩
+
 theorem NativeReadPosition.recoversStoppedCheckpoint (current : NativeReadPosition history log) {input : FilePath}
     (observed : NativePendingCheckpointCrashObservation current.state input) :
     ∃ next, NativePendingCheckpointReopened current observed next := by
-  have stopped := current.stopsDuringCheckpoint observed.stop
-  have paths := observed.stop.barrier.issueBindings observed.stop.barrier.observed.renamed.2 (by simp)
-  obtain ⟨next, reopened⟩ := current.reopensCheckpointSurvivor observed.crash
-    (observed.directory.trans paths.1) (observed.lock.trans paths.2) observed.reopen
-  exact ⟨next, reopened, stopped⟩
+  obtain ⟨next, reopened, _⟩ := current.recoversStoppedCheckpointWithReader observed
+  exact ⟨next, reopened⟩
 
 end Alvoki.Storage.DiskSession
