@@ -348,6 +348,7 @@ import Alvoki.Storage.Disk.NativePoisonedCloseReopen
 import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeOpenedWalPlanning
+import Alvoki.Storage.Disk.NativeOpenRotation
 import Alvoki.Storage.Disk.NativeObsoleteRunCollection
 import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
@@ -2216,6 +2217,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCreatedRotation.keepsKeeperMarker
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rotatesCreated
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rotatesEmpty
+#check_axioms Alvoki.Storage.DiskSession.rotationSchedule
+#check_axioms Alvoki.Storage.DiskSession.RotationProjects.rotateFiles
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotatesEmptyOnOpenPhase
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotatesCreatedOnOpenPhase
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotatesExistingOnOpenPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryFailure.cachePreserved
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryFailure.temporaryReleased
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryFailure.custody

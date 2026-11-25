@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
+import Alvoki.Storage.Disk.NativeOpenRotation
 import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
 import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
@@ -17,6 +18,7 @@ variable {heap : Type} {opened : NativeOpenedHandle heap}
 inductive NativeOpenedInstruction : Type 1 where
   | write (request : WriteRequest)
   | checkpoint
+  | rotateWal
   | rewriteRun (request : RunMaintenance)
   | acquireAt (sequence : UInt64)
   | releaseAt (index : Nat)
@@ -64,6 +66,15 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
           .error cause (reached, after))
       (stillReady : opened.contents reached opened.phase = some start.current.ready.state.session.phase) :
       NativeOpenedReport start .checkpoint
+  | rotateCreated (report : NativeReadyCreatedRotation start.current.ready.state)
+      (seen : OpenRotationObservation.Created start report) : NativeOpenedReport start .rotateWal
+  | rotateExisting (report : NativeReadyExistingRotation start.current.ready.state)
+      (seen : OpenRotationObservation.Existing start report) : NativeOpenedReport start .rotateWal
+  | rotateEmpty (calls : OpenRotationCallbacks heap) (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+      {active pending directory} (references : opened.files.UsesCacheReferences active pending directory)
+      (cachePath : opened.files.AtDirectory opened.directory.path)
+      (empty : start.current.ready.state.writer.installed.walBytes / WAL.frameSize ≤
+        start.current.ready.state.writer.installed.activeFirst) : NativeOpenedReport start .rotateWal
   | rewriteRun (request : RunMaintenance) :
       NativeOpenedReport start (.rewriteRun request)
   | acquireAt (sequence : UInt64) {pin : SnapshotPin} {table : PackedTable}
@@ -147,6 +158,19 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
         .error cause (next.reached, state.cache, atEntry) ∧
     CheckpointPreflight (.ready state.writer.installed) (.error cause) ∧
     event = .checkpointRejected cause ∧ next = start
+  | .rotateCreated report seen =>
+    seen.Reached report.lookup next ∧ event = .rotatedWal ∧
+      ∃ returned : NativeReadPosition start.current.history start.current.submissions,
+        NativeCreatedRotationContinuation start.current.ready returned report ∧
+        next.current = ⟨start.current.history, start.current.submissions, returned⟩
+  | .rotateExisting report seen =>
+    seen.Reached report.opened.lookup next ∧ event = .rotatedWal ∧
+      ∃ returned : NativeReadPosition start.current.history start.current.submissions,
+        NativeExistingRotationContinuation start.current.ready returned report ∧
+        next.current = ⟨start.current.history, start.current.submissions, returned⟩
+  | .rotateEmpty calls lookup (active := active) (pending := pending) (directory := directory) _ _ _ =>
+    UsesRotationSchedule opened.table opened.directory opened.phase active pending directory ∧
+      calls.run opened lookup active start.reached = .ok () next.reached ∧ event = .rotatedWal ∧ next = start
   | .rewriteRun request =>
     request.publicCall opened.table = rewriteRunWith (m := IO) (do (← opened.phase.get).installed)
       opened.phase.set request.update ∧
@@ -336,6 +360,15 @@ theorem reaches (report : NativeOpenedReport start instruction) :
     obtain ⟨source, reached, after, preflight, _, step⟩ :=
       start.rejectsCheckpointFromReturn calls atEntry returned stillReady
     exact ⟨_, start, step, source, by simpa only [reached, after] using returned, preflight, rfl, rfl⟩
+  | rotateCreated report seen =>
+    obtain ⟨next, position, physical, common, same, returned⟩ := start.rotatesCreatedOnOpenPhase report seen
+    exact ⟨_, position, common, returned, rfl, next, physical, same⟩
+  | rotateExisting report seen =>
+    obtain ⟨next, position, physical, common, same, returned⟩ := start.rotatesExistingOnOpenPhase report seen
+    exact ⟨_, position, common, returned, rfl, next, physical, same⟩
+  | rotateEmpty calls lookup references cachePath empty =>
+    obtain ⟨source, returned, common⟩ := start.rotatesEmptyOnOpenPhase calls lookup references cachePath empty
+    exact ⟨_, start, common, source, returned, rfl, rfl⟩
   | rewriteRun request =>
     obtain ⟨source, result, next, reached, returned, raw, stored, directory, refused, setter⟩ :=
       start.rewritesRunViaOpenReferences request
