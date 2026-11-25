@@ -162,7 +162,7 @@ theorem NativeReadPosition.acknowledgesWrite (current : NativeReadPosition histo
       let reached := observed.next target
       observed.calls.run request current.state.session.directory current.state.writer =
         .ok prepared.table.committed (reached.session.phase, ⟨(reached.cache, prepared.settled), reached.files.owners⟩) ∧
-      next.state = reached ∧ next.reads = current.reads ∧
+      next.state = reached ∧ next.initial = reached ∧ next.reads = current.reads ∧
       next.opened = .ok reached.session (reached.census, reached.files) ∧
       next.state.session.sessionRef = current.state.session.sessionRef ∧
       next.state.writer.history = history ++ prepared.batch ∧
@@ -179,6 +179,6 @@ theorem NativeReadPosition.acknowledgesWrite (current : NativeReadPosition histo
   let next : NativeReadPosition (history ++ prepared.batch) (log ++ [.acknowledgedBatch prepared.batch]) :=
     ⟨.ok reached.session (reached.census, reached.files), reached, reached, current.reads,
       .installed rfl ready nextHistory replayed bounded⟩
-  exact ⟨target, next, returned, rfl, rfl, rfl, sameToken, nextHistory, next.readPrefix.guardedReplay⟩
+  exact ⟨target, next, returned, rfl, rfl, rfl, rfl, sameToken, nextHistory, next.readPrefix.guardedReplay⟩
 
 end Alvoki.Storage.DiskSession
