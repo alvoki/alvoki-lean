@@ -277,6 +277,72 @@ theorem decode_newer {bytes : ByteArray} {before next : Selection}
       omega
     simp [decode, size, zero, one, select, notOlder, epoch, frontier]
 
+/-- With a complete container and an isolated active slot, every admitted
+inactive-slot outcome decodes. The old outcome reuses the previous accepted
+container's consistency check. The invalid outcome uses only the active slot. -/
+theorem decode_interruptedWrite {before after : ByteArray} {active : OrderedTwoSlot.Slot}
+    {current next : Selection}
+    (prior : decode before = .ok current)
+    (size : after.size = containerSize)
+    (observed : decodeSlot before (slotIndex active) = some current)
+    (unchanged : ∀ position,
+      (position < slotIndex active.other * stride ∨ slotIndex active.other * stride + 40 ≤ position) →
+        after.get! position = before.get! position)
+    (target : decodeSlot after (slotIndex active.other) = decodeSlot before (slotIndex active.other) ∨
+      decodeSlot after (slotIndex active.other) = none ∨
+      decodeSlot after (slotIndex active.other) = some next)
+    (epoch : current.epoch.toNat + 1 = next.epoch.toNat)
+    (frontier : current.frontier < next.frontier) :
+    decode after = .ok current ∨ decode after = .ok next := by
+  have bounded : slotIndex active < 2 := by cases active <;> decide
+  have offset : slotIndex active.other = 1 - slotIndex active := by cases active <;> rfl
+  rw [offset] at unchanged
+  have kept := decodeSlot_unchanged bounded unchanged
+  rcases target with old | invalid | written
+  · left
+    have previousSize : before.size = containerSize := by
+      by_cases h : before.size = containerSize
+      · exact h
+      · simp [decode, h] at prior
+    cases active <;> simp only [slotIndex, OrderedTwoSlot.Slot.other] at kept old <;>
+      simpa [decode, size, previousSize, kept, old] using prior
+  · left
+    cases active <;> simp_all [slotIndex, OrderedTwoSlot.Slot.other, decode, select]
+  · right
+    apply decode_newer size epoch frontier
+    cases active with
+    | first => exact .inl ⟨kept.trans observed, written⟩
+    | second => exact .inr ⟨written, kept.trans observed⟩
+
+/-- Exact bytes at the synced target and an isolated active slot suffice
+for the native decoder to accept the just-published successor. -/
+theorem decode_syncedWrite {before after : ByteArray} {active : OrderedTwoSlot.Slot}
+    {current next : Selection}
+    (size : after.size = containerSize)
+    (observed : decodeSlot before (slotIndex active) = some current)
+    (targetSlot : next.slot = slotIndex active.other)
+    (unchanged : ∀ position,
+      (position < next.slot * stride ∨ next.slot * stride + 40 ≤ position) →
+        after.get! position = before.get! position)
+    (inside : next.slot * stride + 40 ≤ after.size)
+    (written : after.extract (next.slot * stride) (next.slot * stride + 40) = next.encode)
+    (parity : next.epoch.toNat % 2 = next.slot)
+    (aligned : next.frontier.toNat % frameSize = 0)
+    (counts : next.epoch.toNat ≤ next.frontier.toNat / frameSize)
+    (epoch : current.epoch.toNat + 1 = next.epoch.toNat)
+    (frontier : current.frontier < next.frontier) :
+    decode after = .ok next := by
+  have target := decodeSlot_exact next inside written parity aligned counts
+  rw [targetSlot] at target unchanged
+  have bounded : slotIndex active < 2 := by cases active <;> decide
+  have offset : slotIndex active.other = 1 - slotIndex active := by cases active <;> rfl
+  rw [offset] at unchanged
+  have kept := (decodeSlot_unchanged bounded unchanged).trans observed
+  apply decode_newer size epoch frontier
+  cases active with
+  | first => exact .inl ⟨kept, target⟩
+  | second => exact .inr ⟨target, kept⟩
+
 /-- Schedule used by the native writer. On a reported failure the remaining
 operations are skipped, including the installation of the cached slot. -/
 @[macro_inline] def publish [Monad m] (append syncWal writeSlot syncSlot install : m Unit) :
