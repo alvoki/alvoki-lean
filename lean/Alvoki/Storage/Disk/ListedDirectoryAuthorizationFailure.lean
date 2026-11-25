@@ -68,6 +68,45 @@ theorem HeldMarkedMetadata.cachedAttemptPrepared (metadata : HeldMarkedMetadata 
       reads.markerRead
   exact ⟨opened, prepared⟩
 
+/-- Exact read preparation and a reported finisher error determine the
+admitted result, its cleanup, and the next state of the bounded retry. -/
+theorem HeldMarkedMetadata.continuesAfterRepairError {input : FilePath} {source : LockedFileState FileImage}
+    {admits : Target → Prop} (metadata : HeldMarkedMetadata report)
+    (admission : OpenAdmissionReports input directory operations.slot)
+    (localUnlock : operations.unlock.LocalFlock)
+    (keeperValid : before.image.keeper.Valid layout.target.Accepts)
+    (laterValid : before.image.later.Beyond layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      before.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    {cause : IO.Error} {reached : FileImage}
+    (finish : finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size
+      operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
+      operations.renameFile before.image = .error cause reached)
+    (effects : EffectTrace layout.target before.image reached)
+    (prior : BoundedReopenTrace directory admits source before) (admitted : admits layout.target) :
+    let cleanup := (operations.cachedAttempt localUnlock).cleanupError cause reached
+    operations.runWithAdmission admission = .error cleanup.1 cleanup.2 ∧
+    BoundedReopenTrace directory admits source cleanup.2 ∧ cleanup.2.image = reached ∧
+    match operations.unlock with
+    | .success => cleanup.1 = cause ∧ cleanup.2.owners (directory.file .lock) = none
+    | .failure unlockError _ =>
+      cleanup.1 = unlockError ∧ cleanup.2.owners (directory.file .lock) = some operations.slot.description := by
+  intro cleanup
+  let attempt := operations.cachedAttempt localUnlock
+  obtain ⟨opened, preparedRead⟩ := metadata.cachedAttemptPrepared localUnlock laterValid following accepted ordered
+  have ran := attempt.run_repairError preparedRead finish
+  have prepared : Prepared before.image layout.target layout.plan :=
+    ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
+  exact ⟨(operations.runWithAdmission_eq_cached admission localUnlock metadata.callbackMetadata.markerPresent).trans ran,
+    .cachedRepairFailed prior attempt admitted prepared effects ran,
+    attempt.cleanupError_keepsFiles _ _, by
+      cases reported : operations.unlock <;>
+        simp [cleanup, MarkedRetryChunkOperations.cachedAttempt, CachedOpenAttempt.cleanupError,
+          CachedRetryReadReports.withReaders, reported, LockOwners.set]⟩
+
 namespace ListedDirectoryAuthorization
 
 /-- A reported failure of the first grouped directory barrier returns

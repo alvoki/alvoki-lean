@@ -42,21 +42,7 @@ theorem continuesAfterError {input : FilePath} {source : LockedFileState FileIma
     | .success => cleanup.1 = groupedError ∧ cleanup.2.owners (directory.file .lock) = none
     | .failure unlockError _ =>
       cleanup.1 = unlockError ∧ cleanup.2.owners (directory.file .lock) = some operations.slot.description := by
-  intro path groupedError reached cleanup
-  let attempt := operations.cachedAttempt localUnlock
-  obtain ⟨opened, preparedRead⟩ := metadata.cachedAttemptPrepared localUnlock laterValid following accepted ordered
-  have projected := repair.syncError failed
-  have finish : finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size
-      attempt.removeFile attempt.write attempt.sync attempt.renameFile before.image = .error groupedError reached :=
-    repair.finishResult.trans projected
-  have ran := attempt.run_repairError preparedRead finish
-  have prepared : Prepared before.image layout.target layout.plan :=
-    ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
-  exact ⟨(operations.runWithAdmission_eq_cached admission localUnlock metadata.callbackMetadata.markerPresent).trans ran,
-    .cachedRepairFailed prior attempt admitted prepared repair.effects ran,
-    attempt.cleanupError_keepsFiles _ _, by
-      cases reported : operations.unlock <;>
-        simp [cleanup, MarkedRetryChunkOperations.cachedAttempt, CachedOpenAttempt.cleanupError,
-          CachedRetryReadReports.withReaders, reported, LockOwners.set]⟩
+  exact metadata.continuesAfterRepairError admission localUnlock keeperValid laterValid following accepted ordered
+    (repair.finishResult.trans (repair.syncError failed)) repair.effects prior admitted
 
 end Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair
