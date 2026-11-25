@@ -239,6 +239,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunChunkReports
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
+lake env leanchecker Alvoki.Storage.Disk.CheckedDirectoryRead
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 lake env leanchecker Alvoki.Storage.Disk.SizedCheckpointOpenFailure

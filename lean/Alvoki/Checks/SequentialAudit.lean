@@ -171,6 +171,7 @@ import Alvoki.Storage.Disk.LongWalStagedCustody
 import Alvoki.Storage.Disk.LongWalBindingPublication
 import Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
+import Alvoki.Storage.Disk.CheckedDirectoryRead
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
@@ -1266,6 +1267,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_requestBound
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_requestBound
 #check_axioms Alvoki.Storage.WalSegmentRepair.countCachedMarkedOpenRequests_bound
+#check_axioms Alvoki.Storage.OpenedDirectoryScan.entries_size
+#check_axioms Alvoki.Storage.CheckedDirectoryReadReport.scan_complete
+#check_axioms Alvoki.Storage.CheckedDirectoryReadReport.scan_readError
+#check_axioms Alvoki.Storage.CheckedDirectoryReadReport.scan_closeError
+#check_axioms Alvoki.Storage.CheckedDirectoryReadReport.materialized_le_reads
+#check_axioms Alvoki.Storage.CheckedDirectoryReadReport.listedWalNames_le_materialized
+#check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofDirectoryReadError
 #check_axioms Alvoki.Storage.readExactPrefixWith_requestBound
 #check_axioms Alvoki.Storage.readPrefixUntilEofWith_requestBound
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reported
