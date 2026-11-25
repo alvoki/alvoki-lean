@@ -11,44 +11,46 @@ inductive NativeMarkerPublicationStop {state : NativeReadyState} (prepared : Nat
   | rename (stop : NativeWriteMarkerRenameStop prepared)
   | directorySync (stop : NativeWriteMarkerDirectoryStop prepared)
       (oldMarker : RunChildLookup stop.renamed.root "WAL.commit" stop.renamed.stageView)
+      (freshMarkerInode : stop.renamed.stageView.modelObject stop.renamed.openedMarker.child ≠
+        stop.renamed.stageView.modelObject oldMarker.child)
 
 namespace NativeMarkerPublicationStop
 
 variable {state : NativeReadyState} {prepared : NativeReadyWritePreparation state}
 
 def request : NativeMarkerPublicationStop prepared → WriteRequest
-  | .rename stop | .directorySync stop _ => stop.request
+  | .rename stop | .directorySync stop _ _ => stop.request
 
 def files : NativeMarkerPublicationStop prepared → FileImage
-  | .rename stop | .directorySync stop _ => stop.files
+  | .rename stop | .directorySync stop _ _ => stop.files
 
 def cut : NativeMarkerPublicationStop prepared → MarkerInterruption
-  | .rename stop | .directorySync stop _ => stop.cut
+  | .rename stop | .directorySync stop _ _ => stop.cut
 
 def synced : NativeMarkerPublicationStop prepared → NativeReadyWriteFileSyncs prepared
   | .rename stop => stop.synced
-  | .directorySync stop _ => stop.renamed.toNativeReadyWriteFileSyncs
+  | .directorySync stop _ _ => stop.renamed.toNativeReadyWriteFileSyncs
 
 def oldMarkerChild : NativeMarkerPublicationStop prepared → DeviceInode
   | .rename stop => stop.oldMarker.child
-  | .directorySync _ oldMarker => oldMarker.child
+  | .directorySync _ oldMarker _ => oldMarker.child
 
 def Reached {history log} (current : NativeReadPosition history log)
     {prepared : NativeReadyWritePreparation current.state} : NativeMarkerPublicationStop prepared → Prop
   | .rename stop => NativePendingMarkerRename current stop
-  | .directorySync stop _ => NativePendingMarkerDirectory current stop
+  | .directorySync stop _ _ => NativePendingMarkerDirectory current stop
 
 theorem reaches (current : NativeReadPosition history log) {prepared : NativeReadyWritePreparation current.state}
     (stop : NativeMarkerPublicationStop prepared) : stop.Reached current := by
   cases stop with
   | rename stopped => exact current.stopsAtMarkerRename stopped
-  | directorySync stopped _ => exact current.stopsAtMarkerDirectory stopped
+  | directorySync stopped _ _ => exact current.stopsAtMarkerDirectory stopped
 
 theorem batchCut (stop : NativeMarkerPublicationStop prepared) (valid : state.Valid) :
     BatchCutProjection stop.files (prepared.modeledMarkerCut stop.cut) := by
   cases stop with
   | rename stopped => exact stopped.batchCut valid
-  | directorySync stopped _ => exact stopped.batchCut valid
+  | directorySync stopped _ _ => exact stopped.batchCut valid
 
 theorem kept (stop : NativeMarkerPublicationStop prepared) :
     stop.files.kept = state.files.image.kept := by
@@ -62,7 +64,7 @@ theorem keeperSurvives (stop : NativeMarkerPublicationStop prepared) (valid : st
     change _ ∈ stopped.files.keeper.crashImages
     rw [durable, active]
     exact List.mem_singleton_self _
-  | directorySync stopped _ =>
+  | directorySync stopped _ _ =>
     obtain ⟨_, _, _, active, durable⟩ := stopped.choices valid
     change _ ∈ stopped.files.keeper.crashImages
     rw [durable, active]
