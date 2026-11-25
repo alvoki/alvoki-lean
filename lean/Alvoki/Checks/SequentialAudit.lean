@@ -426,6 +426,7 @@ import Alvoki.Storage.Disk.NativeMarkedBarrierRetryReopen
 import Alvoki.Storage.Disk.NativeCloseMarkedBarrierReopen
 import Alvoki.Storage.Disk.NativeMarkedFirstUnlinkError
 import Alvoki.Storage.Disk.NativeMarkedUnlinkRetryReopen
+import Alvoki.Storage.Disk.NativeMarkedLongStageCreateError
 import Alvoki.Storage.Disk.NativeRejectedOpenWork
 import Alvoki.Storage.Disk.NativeMarkedListingWork
 import Alvoki.Storage.Disk.MaintainedRecoveryWork
@@ -2985,6 +2986,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedUnlinkReopenReads.observesFailedTarget
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedUnlinkReopenReads.checkedRemaining
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedUnlinkReopenReads.reopens
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedLongStageCreateError.readsAndCloses
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedLongStageCreateError.groups
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedLongStageCreateError.createReturns
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedLongStageCreateError.stageFails
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedLongStageCreateError.finishes
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedLongStageCreateError.recoveryFails
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedLongStageCreateError.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeManifestDecodeError.countedManifest_projects
 #check_axioms Alvoki.Storage.DiskSession.NativeManifestDecodeError.countedManifest_le
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenRejectionRoute.chunkRequests_le
