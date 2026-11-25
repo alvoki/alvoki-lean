@@ -564,4 +564,6 @@ reads the original physical manifest and run map after the reported retries, rei
 the same client ledgers. The filesystem observations supply the initial file projection, the local WAL frame and
 the directory sync effect. [Checkpoint close through retries](../lean/Alvoki/Storage/Disk/CheckpointCompletionHeldReopen.lean)
 
+An interrupted rotation now follows the public call through its active-file guard and absent successor read to the exact exclusive open. The reached phase is poisoned, the old owner remains held, and the handle has not entered the pending cache. The observed file effect leaves the successor absent or creates its empty binding. After observed power loss selects a survivor, the ordinary retry prefix derives the exact keeper and prepares the original history before any successful open. The primitive reports supply the name effect and survivors. [Interrupted rotation creation](../lean/Alvoki/Storage/Disk/RotationCreateInterruption.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
