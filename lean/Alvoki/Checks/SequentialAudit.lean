@@ -484,6 +484,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.withOpenAdmission_lockRefused
 #check_axioms Alvoki.Storage.DiskTable.withOpenAdmission_lockOpenError
 #check_axioms Alvoki.Storage.DiskTable.acquireAt_schedule
+#check_axioms Alvoki.Storage.DiskTable.release_schedule
 #check_axioms Alvoki.Storage.OpenPathReadReports.checkpointCompletes
 #check_axioms Alvoki.WAL.Boundary.RecoveryReads.ofLockedPaths
 #check_axioms Alvoki.WAL.Boundary.RecoveryBoundary.exposesExecution
@@ -965,6 +966,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.guardedKeyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.guardedAcquireReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquireAt_ready
+#check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquireAt_unsupported
+#check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runRelease_ready
+#check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runRelease_local
+#check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runRelease_preservesReads
+#check_axioms Alvoki.Sequential.SnapshotPins.find_released
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reacquireReadsStable
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reacquireGuardedReadsStable
 #check_axioms Alvoki.Storage.DiskSession.DatabaseBatchRetention.orderedSubmissions

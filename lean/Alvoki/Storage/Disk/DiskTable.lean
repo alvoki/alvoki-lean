@@ -724,6 +724,18 @@ def DiskTable.release (db : DiskTable) (handle : DiskSnapshotHandle) : IO Unit :
   DiskSession.withLocalHandle db.installed (handle.session.ptrEq db.session) () fun state =>
     db.phase.set (.ready { state with table := state.table.release handle.localHandle })
 
+/-- Apply the release update only after the ready and local handle checks. -/
+@[macro_inline] def DiskSession.releaseSnapshotWith [Monad m]
+    (installed : m DiskSession.Installed) (sameSession : m Bool)
+    (record : DiskSession.Phase DiskSession.Installed → m Unit)
+    (handle : Alvoki.Sequential.SnapshotHandle) : m Unit :=
+  DiskSession.withLocalHandle installed sameSession () fun state =>
+    record (.ready { state with table := state.table.release handle })
+
+theorem DiskTable.release_schedule (db : DiskTable) (handle : DiskSnapshotHandle) :
+    db.release handle = DiskSession.releaseSnapshotWith (m := IO) db.installed
+      (handle.session.ptrEq db.session) db.phase.set handle.localHandle := rfl
+
 def DiskTable.lookup (db : DiskTable) (handle : DiskSnapshotHandle) (key : UInt64) :
     IO (Option (Option UInt64)) :=
   DiskSession.withLocalHandle db.installed (handle.session.ptrEq db.session) none fun state =>

@@ -181,6 +181,12 @@ theorem SnapshotPins.find_of_mem (pins : SnapshotPins) {pin : SnapshotPin}
     (active : pin ∈ pins.active) : pins.find pin.handle = some pin :=
   pinAt_mem pins.unique active
 
+theorem SnapshotPins.find_released (pins : SnapshotPins) (handle : SnapshotHandle) :
+    (pins.release handle).find handle = none := by
+  apply List.find?_eq_none.mpr
+  intro pin active matched
+  exact ((pins.mem_release handle pin).mp active).2 (of_decide_eq_true matched)
+
 /-- Outer absence means the handle is inactive. Inner absence means the key is absent. -/
 def SnapshotTable.lookup (state : SnapshotTable α) (handle : SnapshotHandle)
     (key : UInt64) : Option (Option α) :=

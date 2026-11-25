@@ -23,6 +23,37 @@ theorem SegmentedSession.runAcquireAt_ready {session : SegmentedSession} {instal
   simp only [SegmentedSession.runAcquireAt, acquireSnapshotWith, phase, Phase.installed, Bind.bind, EStateM.bind,
     Pure.pure, EStateM.pure, acquired]
 
+/-- A request outside the supported interval leaves the ready session unchanged. -/
+theorem SegmentedSession.runAcquireAt_unsupported {session : SegmentedSession} {installed : Installed}
+    (phase : session.phase = .ready installed) {snapshot : UInt64}
+    (unsupported : ¬ (installed.table.pins.floor ≤ snapshot ∧ snapshot ≤ installed.table.committed)) :
+    SegmentedSession.runAcquireAt snapshot session = .ok none session := by
+  have absent : installed.table.pins.acquire installed.table.committed snapshot = none := by
+    cases acquired : installed.table.pins.acquire installed.table.committed snapshot with
+    | none => rfl
+    | some found =>
+      exact False.elim (unsupported ((installed.table.pins.acquire_iff _ _).mp (by rw [acquired]; rfl)))
+  simp [SegmentedSession.runAcquireAt, acquireSnapshotWith, phase, Phase.installed, Bind.bind, EStateM.bind,
+    Pure.pure, EStateM.pure, PackedTable.acquireAt, absent]
+
+/-- Interpret the native release schedule with the reached session and the
+observed token comparison. Only the phase cell can change. -/
+def SegmentedSession.runRelease (sameSession : Bool) (handle : SnapshotHandle) :
+    EStateM IO.Error SegmentedSession Unit := fun session =>
+  releaseSnapshotWith (m := EStateM IO.Error SegmentedSession) session.phase.installed (pure sameSession)
+    (fun phase state => .ok () { state with phase }) handle session
+
+theorem SegmentedSession.runRelease_ready {session : SegmentedSession} {installed : Installed}
+    (phase : session.phase = .ready installed) (handle : SnapshotHandle)
+    {sameSession : Bool} {issuer : Nat} (compared : sameSession = decide (issuer = session.sessionRef)) :
+    SegmentedSession.runRelease sameSession handle session = .ok ()
+      (if issuer = session.sessionRef then
+        { session with phase := .ready { installed with table := installed.table.release handle } }
+      else session) := by
+  by_cases localToken : issuer = session.sessionRef <;>
+    simp [SegmentedSession.runRelease, releaseSnapshotWith, withLocalHandle, phase, Phase.installed,
+      compared, localToken, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
 /-- Interpret the same phase and handle decisions used by `DiskTable.lookup`
 and `DiskTable.range` after observing the native pointer comparison. -/
 def readWithHandle (phase : Phase PackedTable) (sameSession : Bool)
@@ -95,6 +126,53 @@ theorem readWithHandle_inactive (table : PackedTable) (sameSession : Bool) (hand
     · intro start stop
       change Except.ok (table.range handle start stop) = .ok none
       simp only [PackedTable.range, missing, Option.map_none]
+
+/-- Releasing a local handle keeps the data and floor, removes precisely
+that handle from the active registry, and makes its guarded reads inactive. -/
+theorem SegmentedSession.runRelease_local {session : SegmentedSession} {installed : Installed}
+    (phase : session.phase = .ready installed) (handle : SnapshotHandle)
+    {sameSession : Bool} {issuer : Nat} (compared : sameSession = decide (issuer = session.sessionRef))
+    (localToken : issuer = session.sessionRef) :
+    let table := installed.table.release handle
+    let next := { session with phase := .ready { installed with table } }
+    SegmentedSession.runRelease sameSession handle session = .ok () next ∧
+    table.SameData installed.table ∧
+    (∀ pin, pin ∈ table.pins.active ↔ pin ∈ installed.table.pins.active ∧ pin.handle ≠ handle) ∧
+    (∀ key, readWithHandle (.ready table) sameSession (fun data => data.lookup handle key) = .ok none) ∧
+    ∀ start stop, readWithHandle (.ready table) sameSession (fun data => data.range handle start stop) =
+      .ok none := by
+  refine ⟨?_, ⟨rfl, rfl, rfl, rfl⟩, installed.table.pins.mem_release handle, ?_⟩
+  · simpa [localToken] using SegmentedSession.runRelease_ready phase handle compared
+  · exact readWithHandle_inactive _ _ _ (installed.table.pins.find_released handle)
+
+/-- Other active handles continue to read at the same sequences immediately
+after the local release. -/
+theorem SegmentedSession.runRelease_preservesReads {session : SegmentedSession} {installed : Installed}
+    (phase : session.phase = .ready installed) (handle : SnapshotHandle)
+    {sameSession : Bool} {issuer : Nat} (compared : sameSession = decide (issuer = session.sessionRef))
+    (localToken : issuer = session.sessionRef) {pin : SnapshotPin}
+    (active : pin ∈ installed.table.pins.active) (distinct : pin.handle ≠ handle) :
+    let table := installed.table.release handle
+    let next := { session with phase := .ready { installed with table } }
+    SegmentedSession.runRelease sameSession handle session = .ok () next ∧
+    (∀ key, readWithHandle (.ready table) sameSession (fun data => data.lookup pin.handle key) =
+      readWithHandle (.ready installed.table) sameSession (fun data => data.lookup pin.handle key)) ∧
+    ∀ start stop, readWithHandle (.ready table) sameSession (fun data => data.range pin.handle start stop) =
+      readWithHandle (.ready installed.table) sameSession (fun data => data.range pin.handle start stop) := by
+  dsimp only
+  obtain ⟨released, same, kept, _⟩ := SegmentedSession.runRelease_local phase handle compared localToken
+  have before := installed.table.pins.find_of_mem active
+  have after := (installed.table.release handle).pins.find_of_mem ((kept pin).mpr ⟨active, distinct⟩)
+  have sameSession' : sameSession = true := compared.trans (decide_eq_true localToken)
+  refine ⟨released, fun key => ?_, fun start stop => ?_⟩
+  · rw [sameSession']
+    change Except.ok ((installed.table.release handle).lookup pin.handle key) =
+      Except.ok (installed.table.lookup pin.handle key)
+    simp only [PackedTable.lookup, before, after, Option.map_some, PackedTable.lookupAt_eq, same.describe]
+  · rw [sameSession']
+    change Except.ok ((installed.table.release handle).range pin.handle start stop) =
+      Except.ok (installed.table.range pin.handle start stop)
+    simp only [PackedTable.range, before, after, Option.map_some, PackedTable.rangeAt_eq, same.describe]
 
 end Alvoki.Storage.DiskSession
 
