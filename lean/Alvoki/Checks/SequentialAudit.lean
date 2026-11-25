@@ -192,6 +192,7 @@ import Alvoki.Storage.Disk.ListedDirectoryAuthorization
 import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
 import Alvoki.Storage.Disk.ListedPrunedAlignedKeeper
+import Alvoki.Storage.Disk.ListedPrunedAlignedKeeperFailure
 import Alvoki.Storage.Disk.ListedStagedKeeperRepair
 import Alvoki.Storage.Disk.ListedStagedKeeperFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperFailure
@@ -1456,6 +1457,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.finishResult
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.healthyFinish
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.installs
+#check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.finishError
+#check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.continuesAfterError
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperPrune.pruneCustody
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperPrune.barriers
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.stageCallbacks
