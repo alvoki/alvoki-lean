@@ -16,7 +16,7 @@ def zeroKeeperProjection : EStateM.Result IO.Error (Cache Handle × Files) Unit 
   | .ok () (_, rotation, _) => .ok () rotation
   | .error cause (_, rotation, _) => .error cause rotation
 
-private theorem zeroPath_ne_directory (directory : DiskDirectory) : zeroPath directory ≠ directory.path := by
+theorem zeroPath_ne_directory (directory : DiskDirectory) : zeroPath directory ≠ directory.path := by
   intro same
   have lengths := congrArg (fun path : FilePath => path.toString.length) same
   rw [show zeroPath directory = directory.file (.walSegment 0) from rfl, directory.walSegment_path] at lengths
@@ -95,8 +95,8 @@ variable {directory : DiskDirectory} {before : LockedFileState WalSegmentRotatio
 /-- At a markerless bootstrap that sees no segment zero, the exclusive
 open adds the reported slot to the reached listing census. The namespace
 reports identify the new named empty inode and the retained directory.
-Its file sync precedes the independent directory effect. -/
-structure BootstrapFreshZeroKeeperPrefix (listed : BootstrapCheckedListing captured) where
+The pending description is available at the next file barrier. -/
+structure BootstrapFreshZeroKeeperOpen (listed : BootstrapCheckedListing captured) where
   lookup : FilePath → Except IO.Error IO.FS.Metadata
   absent : ∃ name message, lookup (zeroPath directory) = .error (.noFileOrDirectory name 2 message)
   probeProjection : calls.readEmpty (zeroPath directory) =
@@ -133,10 +133,6 @@ structure BootstrapFreshZeroKeeperPrefix (listed : BootstrapCheckedListing captu
     (beforeFile ++ afterFile)).slots
   directoryLive : captured.cached ∈ (((listed.scan.afterClose.afterDrops beforeCreate).insert slot free).afterDrops
     (beforeFile ++ afterFile)).slots
-  fileSynced :
-    let keeper := ((listed.scan.afterClose.afterDrops beforeCreate).insert slot free, slot, 0)
-    fsync keeper (⟨before.image.metadata, .created⟩, opened) =
-      .ok () (⟨before.image.metadata, .fileSynced⟩, opened.completeFileSync opened.active)
   projectCreate :
     calls.createEmpty captured.cache (zeroPath directory) before.image =
       zeroKeeperProjection (stageFreshWithCache (zeroPath directory) ByteArray.empty (fun name _ => openExclusive name)
@@ -146,6 +142,14 @@ structure BootstrapFreshZeroKeeperPrefix (listed : BootstrapCheckedListing captu
     calls.sync captured.cache #[zeroPath directory] ⟨before.image.metadata, .created⟩ =
       zeroKeeperProjection (SyncPathGroup.run (sync directory.path openRead fsync) #[zeroPath directory]
         (captured.cache.remember (zeroPath directory) keeper, ⟨before.image.metadata, .created⟩, opened))
+
+/-- The opened keeper prefix followed by a successful file barrier. -/
+structure BootstrapFreshZeroKeeperPrefix (listed : BootstrapCheckedListing captured)
+    extends BootstrapFreshZeroKeeperOpen listed where
+  fileSynced :
+    let keeper := ((listed.scan.afterClose.afterDrops beforeCreate).insert slot free, slot, 0)
+    fsync keeper (⟨before.image.metadata, .created⟩, opened) =
+      .ok () (⟨before.image.metadata, .fileSynced⟩, opened.completeFileSync opened.active)
   projectDirectory :
     calls.sync captured.cache #[directory.path] ⟨before.image.metadata, .fileSynced⟩ =
       zeroKeeperProjection (SyncPathGroup.run (sync directory.path openRead fsync) #[directory.path]
@@ -162,14 +166,31 @@ structure BootstrapFreshZeroKeeper (listed : BootstrapCheckedListing captured)
 
 variable {listed : BootstrapCheckedListing captured}
 
-namespace BootstrapFreshZeroKeeperPrefix
+namespace BootstrapFreshZeroKeeperOpen
 
-theorem absentSegment (observed : BootstrapFreshZeroKeeperPrefix listed) : before.image.successor = .absent := by
+theorem absentSegment (observed : BootstrapFreshZeroKeeperOpen listed) : before.image.successor = .absent := by
   obtain ⟨_, _, raw⟩ := observed.absent
   have probe := observed.probeProjection
   rw [raw, calls.zeroRead] at probe
   have missing : before.image.observeSuccessor = none := Except.ok.inj probe
   simpa [WalSegmentRotation.State.observeSuccessor] using missing
+
+theorem create (observed : BootstrapFreshZeroKeeperOpen listed) :
+    let path := zeroPath directory
+    let keeper : Handle := ((listed.scan.afterClose.afterDrops observed.beforeCreate).insert
+      observed.slot observed.free, observed.slot, 0)
+    stageFreshWithCache path ByteArray.empty (fun name _ => observed.openExclusive name)
+      (captured.cache, before.image, observed.initial) =
+      .ok () (captured.cache.remember path keeper, (⟨before.image.metadata, .created⟩, observed.opened)) := by
+  dsimp only
+  rw [stageFreshWithCache, observed.created]
+
+end BootstrapFreshZeroKeeperOpen
+
+namespace BootstrapFreshZeroKeeperPrefix
+
+abbrev absentSegment (observed : BootstrapFreshZeroKeeperPrefix listed) : before.image.successor = .absent :=
+  observed.toBootstrapFreshZeroKeeperOpen.absentSegment
 
 /-- The exclusive create and file barrier thread the exact cached keeper
 through the file sync and consume its pending entry. -/
@@ -188,7 +209,7 @@ theorem filePrefix (observed : BootstrapFreshZeroKeeperPrefix listed) :
     grouped #[path] (pending, atFile) = .ok () (consumed, atDirectory) := by
   intro path keeper atFile atDirectory grouped pending consumed
   refine ⟨?_, ?_⟩
-  · simp [stageFreshWithCache, path, observed.created, pending, atFile, keeper]
+  · exact observed.toBootstrapFreshZeroKeeperOpen.create
   · change SyncPathGroup.run (sync directory.path observed.openRead observed.fsync) #[path] (pending, atFile) = _
     rw [SyncPathGroup.run_single]
     dsimp only [pending]
@@ -280,7 +301,7 @@ end BootstrapFreshZeroKeeper
 /-- A checked, already present zero keeper is reused. The separate
 no-follow lookup and read open resolve the same canonical child in the
 captured root. Only the file sync uses the new read description. -/
-structure BootstrapReusedZeroKeeperPrefix (listed : BootstrapCheckedListing captured) where
+structure BootstrapReusedZeroKeeperOpen (listed : BootstrapCheckedListing captured) where
   lookup : FilePath → Except IO.Error (IO.FS.Metadata × DeviceInode)
   metadata : IO.FS.Metadata
   statChild : RunChildLookup captured.root (renderWalSegmentName 0) captured.view
@@ -314,14 +335,18 @@ structure BootstrapReusedZeroKeeperPrefix (listed : BootstrapCheckedListing capt
     (beforeFile ++ afterFile)).slots
   directoryLive : captured.cached ∈ (((listed.scan.afterClose.afterDrops beforeOpen).insert slot free).afterDrops
     (beforeFile ++ afterFile)).slots
-  fileSynced :
-    let keeper := ((listed.scan.afterClose.afterDrops beforeOpen).insert slot free, slot, 0)
-    fsync keeper (before.image, files) =
-      .ok () (afterZeroFileSync before.image, files.completeFileSync files.active)
   projectFile :
     calls.sync captured.cache #[zeroPath directory] before.image =
       zeroKeeperProjection (SyncPathGroup.run (sync directory.path openRead fsync) #[zeroPath directory]
         (captured.cache, before.image, files))
+
+/-- The opened keeper prefix followed by a successful file barrier. -/
+structure BootstrapReusedZeroKeeperPrefix (listed : BootstrapCheckedListing captured)
+    extends BootstrapReusedZeroKeeperOpen listed where
+  fileSynced :
+    let keeper := ((listed.scan.afterClose.afterDrops beforeOpen).insert slot free, slot, 0)
+    fsync keeper (before.image, files) =
+      .ok () (afterZeroFileSync before.image, files.completeFileSync files.active)
   projectDirectory :
     calls.sync captured.cache #[directory.path] (afterZeroFileSync before.image) =
       zeroKeeperProjection (SyncPathGroup.run (sync directory.path openRead fsync) #[directory.path]
@@ -335,14 +360,11 @@ structure BootstrapReusedZeroKeeper (listed : BootstrapCheckedListing captured)
     fsync (captured.reached, captured.cached, 0) (afterZeroFileSync before.image, childSynced) =
       .ok () (⟨before.image.metadata.syncDirectory, .durable⟩, childSynced.settleBinding)
 
-namespace BootstrapReusedZeroKeeperPrefix
-
-abbrev fileSyncedState (_ : BootstrapReusedZeroKeeperPrefix listed) : WalSegmentRotation.State :=
-  afterZeroFileSync before.image
+namespace BootstrapReusedZeroKeeperOpen
 
 /-- The checked metadata probe produces the literal empty byte array.
 The observed extent also identifies the physical contents as empty. -/
-theorem readEmpty (observed : BootstrapReusedZeroKeeperPrefix listed) :
+theorem readEmpty (observed : BootstrapReusedZeroKeeperOpen listed) :
     calls.readEmpty (zeroPath directory) = .ok (some ByteArray.empty) ∧
     before.image.observeSuccessor = some ByteArray.empty ∧
     observed.files.visible observed.files.active = ByteArray.empty := by
@@ -354,6 +376,16 @@ theorem readEmpty (observed : BootstrapReusedZeroKeeperPrefix listed) :
   have empty := observed.extent.symm
   rw [observed.size] at empty
   exact ⟨read, Except.ok.inj (calls.zeroRead.symm.trans read), ByteArray.size_eq_zero_iff.mp empty⟩
+
+end BootstrapReusedZeroKeeperOpen
+
+namespace BootstrapReusedZeroKeeperPrefix
+
+abbrev fileSyncedState (_ : BootstrapReusedZeroKeeperPrefix listed) : WalSegmentRotation.State :=
+  afterZeroFileSync before.image
+
+abbrev readEmpty (observed : BootstrapReusedZeroKeeperPrefix listed) :=
+  observed.toBootstrapReusedZeroKeeperOpen.readEmpty
 
 /-- The read-only file open occurs on a cache miss. The directory barrier
 still routes to the original captured handle, even though the file open
