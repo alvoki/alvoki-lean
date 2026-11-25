@@ -1019,3 +1019,10 @@ Before replacing a longer keeper, the old keeper's temporary descriptor
 can now be released while preserving the held two-slot marker.
 The proof uses the observed free keeper address and surviving ambient
 drops. The marker remains available in the census that enters staging.
+
+When the active logical frontier already matches the selected slot, the
+first successful repair directory sync reaches the same file image
+whether or not the marker stability projection preceded it. The proof
+allows the marker barrier to narrow pre-directory-sync crash choices.
+This gives the longer-keeper repair proof a common state after its first
+directory barrier.

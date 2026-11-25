@@ -160,6 +160,20 @@ theorem settleMarker_syncDirectory (image : Image) (selected : Selection)
 
 open Alvoki.Storage.WalSegmentRepair
 
+/-- A directory sync after marker stabilization reaches the same repair
+image when the active logical frontier already matches the selected slot.
+The file barrier can narrow earlier crash choices, which the following
+directory barrier then settles. -/
+theorem syncDirectory_afterSelectedMarker (image : FileImage) (selected : Selection)
+    (frontier : image.directory.active.walBoundary = some (Boundary.encode selected.frontier)) :
+    ({ image with directory := settleMarker image.directory selected } : FileImage).syncDirectory =
+      image.syncDirectory := by
+  have active : (settleMarker image.directory selected).active = image.directory.active := by
+    simp only [settleMarker, frontier, Option.map_some]
+    rw [← frontier]
+  simp only [FileImage.syncDirectory, Image.syncDirectory, active]
+  rfl
+
 /-- Once the positional marker is settled, each reached shared destructive
 repair prefix preserves that exact logical marker, including admitted cuts
 while replacing or pruning a keeper. -/
