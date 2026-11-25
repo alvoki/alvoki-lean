@@ -11,9 +11,9 @@ private def bootstrapMetadata (lookup : FilePath → Except IO.Error IO.FS.Metad
     Except IO.Error (Option IO.FS.Metadata) :=
   optionalMetadataWith (.ok (lookup path))
 
-/-- Reached primitive callbacks and markerless probes before certifying the
-directory cache, listing, and publication results. -/
-structure BootstrapOpenCalls (files : Type) (directory : DiskDirectory)
+/-- Calls shared by either recovery route when starting from a bootstrap
+image under the admitted lock. -/
+structure BootstrapAdmissionCalls (files : Type) (directory : DiskDirectory)
     (before : LockedFileState WalSegmentRotation.State) where
   slot : DescriptorSlot
   flock : DescriptorSlot → Except IO.Error Bool
@@ -24,9 +24,14 @@ structure BootstrapOpenCalls (files : Type) (directory : DiskDirectory)
   openFiles : FilePath → EStateM IO.Error WalSegmentRotation.State files
   lookup : FilePath → Except IO.Error IO.FS.Metadata
   flatAbsent : ∃ name message, lookup (directory.file .wal) = .error (.noFileOrDirectory name 2 message)
+  marked : DiskDirectory → files → EStateM IO.Error WalSegmentRotation.State Reopened
+
+/-- Reached markerless probes and callbacks before certifying the cache,
+listing, and publication results. -/
+structure BootstrapOpenCalls (files : Type) (directory : DiskDirectory)
+    (before : LockedFileState WalSegmentRotation.State) extends BootstrapAdmissionCalls files directory before where
   markerAbsent : before.image.metadata.active.walBoundary = none ∧
     ∃ name message, lookup (directory.file .walBoundary) = .error (.noFileOrDirectory name 2 message)
-  marked : DiskDirectory → files → EStateM IO.Error WalSegmentRotation.State Reopened
   list : FilePath → Except IO.Error (Array IO.FS.DirEntry)
   readEmpty : FilePath → Except IO.Error (Option ByteArray)
   zeroRead : readEmpty (directory.file (.walSegment 0)) = .ok before.image.observeSuccessor
@@ -74,6 +79,55 @@ structure BootstrapOpenReports (files : Type) (directory : DiskDirectory)
   rotation : toBootstrapOpenCalls.RotationHealthy cache
   marker : toBootstrapOpenCalls.MarkerHealthy cache
 
+namespace BootstrapAdmissionCalls
+
+variable {files : Type} {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
+
+private def recoverAt (observed : BootstrapAdmissionCalls files directory before)
+    (bootstrap : DiskDirectory → files → EStateM IO.Error WalSegmentRotation.State Reopened)
+    (resolved : DiskDirectory) :
+    EStateM IO.Error WalSegmentRotation.State Reopened := do
+  let cache ← observed.openFiles resolved.path
+  recoverSegmentedWalWith
+    (rejectFlatWalWith resolved (optionalMetadataWith (pure (observed.lookup (resolved.file .wal)))))
+    (optionalMetadataWith (pure (observed.lookup (resolved.file .walBoundary))))
+    (observed.marked resolved cache) (bootstrap resolved cache)
+
+private def runAt (observed : BootstrapAdmissionCalls files directory before)
+    (bootstrap : DiskDirectory → files → EStateM IO.Error WalSegmentRotation.State Reopened) (resolved : DiskDirectory)
+    (slot : DescriptorSlot) : EStateM IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession :=
+  runOpenWithInstallation resolved slot.description observed.nextRef (observed.flock slot) observed.unlock
+    (observed.recoverAt bootstrap resolved)
+
+def run {input : FilePath} (observed : BootstrapAdmissionCalls files directory before)
+    (bootstrap : DiskDirectory → files → EStateM IO.Error WalSegmentRotation.State Reopened)
+    (admission : OpenAdmissionReports input directory observed.slot) :
+    EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession :=
+  DiskTable.withOpenAdmission input (fun path => liftExcept (admission.realPath path))
+    (fun path => pure (admission.lookup path)) (fun path => liftExcept (admission.openAppend path))
+    (observed.runAt bootstrap) before
+
+/-- A reached marker probe dispatches the admitted open, retaining the
+exact lock slot, initialized files and reached image. -/
+theorem runSelected {input : FilePath} (calls : BootstrapAdmissionCalls files directory before)
+    (bootstrap : DiskDirectory → files → EStateM IO.Error WalSegmentRotation.State Reopened)
+    (admission : OpenAdmissionReports input directory calls.slot) {cache : files}
+    (initialized : calls.openFiles directory.path before.image = .ok cache before.image)
+    {marker : Option IO.FS.Metadata}
+    (markerRead : optionalMetadataWith
+      (pure (calls.lookup (directory.file .walBoundary)) : EStateM IO.Error WalSegmentRotation.State _)
+      before.image = .ok marker before.image) :
+    calls.run bootstrap admission = runOpenWithInstallation directory calls.slot.description calls.nextRef (.ok true)
+      calls.unlock (if marker.isSome then calls.marked directory cache else bootstrap directory cache) before := by
+  obtain ⟨flatName, flatMessage, flat⟩ := calls.flatAbsent
+  have branch := runOpenWithInstallation_recoveryBranch directory calls.slot.description calls.nextRef before
+    calls.unlock (calls.openFiles directory.path) (fun path => pure (calls.lookup path))
+    (calls.marked directory) (bootstrap directory) cache initialized flatName flatMessage
+    (by simp [flat, Pure.pure, EStateM.pure]) marker markerRead
+  rw [run, admission.admits, runAt, calls.acquired, recoverAt, branch]
+
+end BootstrapAdmissionCalls
+
 namespace BootstrapOpenCalls
 
 variable {files : Type} {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
@@ -84,24 +138,9 @@ def bootstrapAt (observed : BootstrapOpenCalls files directory before) (resolved
     (fun path => liftExcept (observed.readEmpty path)) (fun path => liftExcept (bootstrapMetadata observed.lookup path))
     (observed.createEmpty cache) (observed.write cache) (observed.sync cache) observed.renameFile
 
-private def recoverAt (observed : BootstrapOpenCalls files directory before) (resolved : DiskDirectory) :
-    EStateM IO.Error WalSegmentRotation.State Reopened := do
-  let cache ← observed.openFiles resolved.path
-  recoverSegmentedWalWith
-    (rejectFlatWalWith resolved (optionalMetadataWith (pure (observed.lookup (resolved.file .wal)))))
-    (optionalMetadataWith (pure (observed.lookup (resolved.file .walBoundary))))
-    (observed.marked resolved cache) (observed.bootstrapAt resolved cache)
-
-private def runAt (observed : BootstrapOpenCalls files directory before) (resolved : DiskDirectory)
-    (slot : DescriptorSlot) : EStateM IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession :=
-  runOpenWithInstallation resolved slot.description observed.nextRef (observed.flock slot) observed.unlock
-    (observed.recoverAt resolved)
-
-def run {input : FilePath} (observed : BootstrapOpenCalls files directory before)
-    (admission : OpenAdmissionReports input directory observed.slot) :
-    EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession :=
-  DiskTable.withOpenAdmission input (fun path => liftExcept (admission.realPath path))
-    (fun path => pure (admission.lookup path)) (fun path => liftExcept (admission.openAppend path)) observed.runAt before
+abbrev run {input : FilePath} (observed : BootstrapOpenCalls files directory before)
+    (admission : OpenAdmissionReports input directory observed.slot) :=
+  observed.toBootstrapAdmissionCalls.run observed.bootstrapAt admission
 
 /-- The admitted calls expose the exact markerless worker, whether that
 worker installs a table or stops at a reported error. -/
@@ -110,14 +149,9 @@ theorem runMarkerless {input : FilePath} (calls : BootstrapOpenCalls files direc
     (initialized : calls.openFiles directory.path before.image = .ok cache before.image) :
     calls.run admission = runOpenWithInstallation directory calls.slot.description calls.nextRef (.ok true)
       calls.unlock (calls.bootstrapAt directory cache) before := by
-  obtain ⟨flatName, flatMessage, flat⟩ := calls.flatAbsent
-  obtain ⟨_, markerName, markerMessage, marker⟩ := calls.markerAbsent
-  have branch := runOpenWithInstallation_markerlessBranch directory calls.slot.description calls.nextRef before
-    calls.unlock (calls.openFiles directory.path) (fun path => pure (calls.lookup path))
-    (calls.marked directory) (calls.bootstrapAt directory) cache initialized
-    flatName flatMessage markerName markerMessage (by simp [flat, Pure.pure, EStateM.pure])
-    (by simp [marker, Pure.pure, EStateM.pure])
-  rw [run, admission.admits, runAt, calls.acquired, recoverAt, branch]
+  obtain ⟨_, _, _, marker⟩ := calls.markerAbsent
+  exact calls.toBootstrapAdmissionCalls.runSelected calls.bootstrapAt admission initialized (marker := none)
+    (by simp [optionalMetadataWith, Bind.bind, EStateM.bind, marker, Pure.pure, EStateM.pure])
 
 /-- The reached listing, empty segment probe and staging guard authorize
 the same first publication callback on the observed cache. -/

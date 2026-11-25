@@ -15,7 +15,7 @@ private def bootstrapHeld (before : LockedFileState WalSegmentRotation.State)
 file-image callbacks. Its captured handle and initial census are supplied by
 the observed open of the directory while the admitted lock slot is live. -/
 structure BootstrapCacheOpen {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
-    (calls : BootstrapOpenCalls (Cache BootstrapHandle) directory before) where
+    (calls : BootstrapAdmissionCalls (Cache BootstrapHandle) directory before) where
   initial : DescriptorInventory
   cached : DescriptorSlot
   view : DirectoryReadNamespace
@@ -32,7 +32,7 @@ structure BootstrapCacheOpen {directory : DiskDirectory} {before : LockedFileSta
 namespace BootstrapCacheOpen
 
 variable {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
-  {calls : BootstrapOpenCalls (Cache BootstrapHandle) directory before}
+  {calls : BootstrapAdmissionCalls (Cache BootstrapHandle) directory before}
 
 def reached (observed : BootstrapCacheOpen calls) : DescriptorInventory :=
   observed.initial.insert observed.cached observed.opened.free
@@ -59,7 +59,8 @@ end BootstrapCacheOpen
 and observes that directory. The reported namespace has no conflicting
 bootstrap names. The prior flat-WAL and marker probes are separate. -/
 structure BootstrapCheckedListing {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
-    {calls : BootstrapOpenCalls (Cache BootstrapHandle) directory before} (captured : BootstrapCacheOpen calls) where
+    {calls : BootstrapOpenCalls (Cache BootstrapHandle) directory before}
+    (captured : BootstrapCacheOpen calls.toBootstrapAdmissionCalls) where
   lifetime : HeldDirectoryReadLifetime captured.reached calls.slot
   sameDirectorySlot : lifetime.directorySlot = captured.cached
   sameView : lifetime.namespaceView = captured.view
@@ -71,7 +72,8 @@ structure BootstrapCheckedListing {directory : DiskDirectory} {before : LockedFi
 namespace BootstrapCheckedListing
 
 variable {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
-  {calls : BootstrapOpenCalls (Cache BootstrapHandle) directory before} {captured : BootstrapCacheOpen calls}
+  {calls : BootstrapOpenCalls (Cache BootstrapHandle) directory before}
+  {captured : BootstrapCacheOpen calls.toBootstrapAdmissionCalls}
 
 theorem entries (listed : BootstrapCheckedListing captured) :
     let entries := listed.scan.scan.entries directory.path
@@ -129,7 +131,7 @@ segment and marker publication effects then install the empty writer. -/
 theorem SegmentedBatchDatabaseTrace.fromBootstrapWithCapturedCache
     {input : FilePath} {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
     {calls : BootstrapOpenCalls (Cache BootstrapHandle) directory before}
-    (captured : BootstrapCacheOpen calls) (listed : BootstrapCheckedListing captured)
+    (captured : BootstrapCacheOpen calls.toBootstrapAdmissionCalls) (listed : BootstrapCheckedListing captured)
     (admission : OpenAdmissionReports input directory calls.slot) (valid : BootstrapValid before.image)
     (rotation : calls.RotationHealthy captured.cache) (marker : calls.MarkerHealthy captured.cache)
     (allowCollection : Bool) :
