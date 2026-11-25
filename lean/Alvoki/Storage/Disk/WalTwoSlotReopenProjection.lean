@@ -289,4 +289,23 @@ theorem reopenWith_installsPrepared {image : Type} {directory : Storage.DiskDire
     runOpenWithInstallation_ready (unlock := unlock) liveRefs fresh acquisition report
   exact ⟨session, final, success, phase, files, owner, freshSession⟩
 
+/-- For an installed segmented replay of the selected frontier, the table
+behind a fresh snapshot agrees with the client history at that frontier. -/
+theorem installedSnapshot_reads
+    {opened : Reopened} {session : SegmentedSession}
+    (installed : session.phase = .ready opened.installed)
+    {image : Storage.WalSegmentImage} {pair : Bindings} {range : Storage.MarkedWalRange}
+    {history : List Write} {base : Storage.PackedTable}
+    (recovery : Storage.WalSegmentRecovery image pair range history base opened.keeper opened.table)
+    {reference : Alvoki.Sequential.SnapshotTable UInt64}
+    (replayed : Storage.SnapshotWalReplay .empty (history.take range.through) reference)
+    {snapshot : UInt64} (retained : opened.table.pins.floor ≤ snapshot)
+    (within : snapshot.toNat ≤ range.through) :
+    ∃ state pin pinned, session.phase = .ready state ∧
+      state.table.acquireAt snapshot = some (pin, pinned) ∧
+      (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+      ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) := by
+  obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
+  exact ⟨opened.installed, pin, pinned, installed, acquired, points, ranges⟩
+
 end Alvoki.WAL.TwoSlot
