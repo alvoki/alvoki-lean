@@ -101,14 +101,25 @@ Under the slot survivor contract, recovery chooses the old or new frontier
 for an uncertain write, chooses the new frontier after acknowledgment, and
 rejects an unavailable WAL at the selected frontier.
 
-The remaining native refinement must derive the slot survivor report from
-reached positional writes and sync events. It needs the unaffected slot to
-survive an interrupted update, the target to decode only as old, new, or
-invalid, and prior synced WAL bytes to remain durable. It must also thread
-successful marker stabilization through interrupted reopen and subsequent
-checkpoint, reclamation and marker reuse.
+The callback model keeps the exact reached file state when publication
+poisons the session, and the old-or-whole selection feeds exact WAL bytes
+to replay. Reopen validates before its file barrier, then calls the shared
+keeper repair. The logical marker projection preserves an absent crash
+binding after a pending bootstrap rename until the directory barrier.
+After authorization, the shared repair proof keeps the selected marker
+through its crash prefixes.
+
+The remaining native refinement derives the slot survivor from reached
+positional writes and syncs on the same held file. It needs successful sync
+to preserve the WAL prefix, an interrupted write to leave the active slot
+intact, and the target to decode only as old, new, or invalid. Connect
+failed stabilization, repeated admitted reopen attempts and the returned
+session to the common client ledger. Use the physical reports for checkpoint
+selection and segmented extents from that same attempt.
 [Slot model](../lean/Alvoki/Storage/Disk/WalOrderedTwoSlot.lean) ·
-[Decoder and write schedule](../lean/Alvoki/Storage/Disk/WalTwoSlot.lean)
+[Decoder and schedules](../lean/Alvoki/Storage/Disk/WalTwoSlot.lean) ·
+[Write outcomes](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean) ·
+[Reopen projection](../lean/Alvoki/Storage/Disk/WalTwoSlotReopenProjection.lean)
 
 ### Completion checklist for native key-value refinement
 
