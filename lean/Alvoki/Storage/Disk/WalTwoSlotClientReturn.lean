@@ -1330,7 +1330,6 @@ theorem recoveredRetries_installedReads
     (reportedSeal : ∀ entry ∈ required.dropLast, ∀ {before after bytes},
       readSeal (directory.file (.walSegment entry.1)) entry.2.byteSize.toNat before = .ok bytes after →
       prepared.kept entry.1 = some bytes)
-    (keeperSize : target.trimmed.size = (selected.frontier.toNat / frameSize - target.first) * frameSize)
     (keeperCovers : target.trimmed.size ≤ keeperMetadata.byteSize.toNat)
     (keeperRead : readKeeper (directory.file (.walSegment target.first)) target.trimmed.size
       keeperMetadata.byteSize.toNat atKeeper = .ok target.trimmed prepared)
@@ -1375,6 +1374,18 @@ theorem recoveredRetries_installedReads
   let readWal := fun start length =>
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
   obtain ⟨_, _, _, aligned, _⟩ := decode_valid acceptedMarker
+  have markerRead : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
+    congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
+  obtain ⟨_, _, marker, length, binding, decoded, absolute⟩ :=
+    DirectoryPublication.Bindings.walRange_accounting target.decoded
+  have sameMarker := Option.some.inj (binding.symm.trans markerRead)
+  have sameLength := Except.ok.inj ((sameMarker ▸ decoded).symm.trans (Boundary.decode_encode _))
+  have through : selected.frontier.toNat / frameSize = target.range.through := by
+    rw [← sameLength, absolute, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
+  have keeperSize : target.trimmed.size =
+      (selected.frontier.toNat / frameSize - target.first) * frameSize := by
+    rw [through]
+    exact target.trimmedSize
   obtain ⟨earlier, earlierOffsets, earlierBytes, payloadRead⟩ :=
     sealReads.read_success (selected.frontier.toNat / frameSize) readKeeper
       (selected := fun first bytes => prepared.kept first = some bytes)
@@ -1406,8 +1417,6 @@ theorem recoveredRetries_installedReads
     openedResult.symm ▸ read
   obtain ⟨session, final, returned, installed, reached, owner, freshSession⟩ :=
     reopenWith_installsPrepared (unlock := unlock) liveRefs fresh acquisition preparedRead barrier repaired
-  have markerRead : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
-    congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
   have authorized := prepared_settleMarker preparedPlan selected observed
   have physical bytes survives := retries.replayUnchanged authorizedRepair authorized base sealed
     sealedRead markerRead (Boundary.decode_encode selected.frontier) checked (bytes := bytes) survives
