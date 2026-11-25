@@ -10,7 +10,7 @@ guards, result and next state. -/
 def NativeOpenedInstruction.SnapshotOperands (instruction : NativeOpenedInstruction)
     (start : NativeOpenedPosition opened) : Prop :=
   match instruction with
-  | .acquireAt _ | .advanceFloor _ => True
+  | .acquire | .acquireAt _ | .advanceFloor _ => True
   | .releaseAt index | .readAt index _ =>
     index < start.pins.length ∧ opened.ptrEq opened.token opened.token start.reached = .ok true start.reached
   | .write _ | .checkpoint | .rewriteRun _ | .readSupplied _ _ | .releaseSupplied _ => False
@@ -21,6 +21,7 @@ theorem NativeOpenedInstruction.observesSnapshot
     Nonempty (NativeOpenedReport start instruction) := by
   cases instruction with
   | write | checkpoint | rewriteRun | readSupplied | releaseSupplied => exact False.elim operands
+  | acquire => exact ⟨.acquire⟩
   | acquireAt sequence =>
     cases acquired : start.current.ready.state.writer.installed.table.acquireAt sequence with
     | none => exact ⟨.acquireAtUnavailable sequence acquired⟩
