@@ -553,4 +553,11 @@ same checkpoint, replays the same WAL and continues both client ledgers. The pro
 effect reports, with lock and directory identity for the final open. A shared raw descriptor census across the
 failed opens remains a separate obligation. [Close and retry](../lean/Alvoki/Storage/Disk/ClosedReadyReopen.lean)
 
+Successful checkpoint publication now feeds the failed-reopen prefix directly. Each reached callback supplies the
+local WAL field projection. The final directory barrier settles the same returned manifest, and the run reports
+identify its selected bytes. The exact cached close releases that projected file image. A later healthy held open
+reads the original physical manifest and run map after the reported retries, reinstalls the checkpoint and explains
+the same client ledgers. The filesystem observations supply the initial file projection, the local WAL frame and
+the directory sync effect. [Checkpoint close through retries](../lean/Alvoki/Storage/Disk/CheckpointCompletionHeldReopen.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

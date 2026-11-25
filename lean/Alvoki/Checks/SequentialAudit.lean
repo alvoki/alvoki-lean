@@ -550,7 +550,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointFromObservedSteps
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCompletionReports.Completed.returnedToClose
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCompletionReports.Completed.selectedRuns
+#check_axioms Alvoki.Storage.DiskSession.CheckpointCompletionReports.Completed.closeFiles
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointCloseAndReopen
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointCloseAndReopenAfterRetries
 #check_axioms Alvoki.Storage.commitWalWrite_fileEffects
 #check_axioms Alvoki.Storage.bootstrapSegmented_fileEffects
 #check_axioms Alvoki.Storage.DiskTable.writeWithOutcome_fileEffects
