@@ -152,6 +152,28 @@ theorem readsLong (captured : CapturedKeeperOpenReports report)
       .ok layout.keeper.bytes (admission.cache, captured.afterRead, admission.held) := by
   simpa only [Cache.captureKeeper, ite_eq_right (Nat.ne_of_lt longer)] using captured.reads (Nat.le_of_lt longer)
 
+/-- Opening and reading the keeper leaves a separate marker descriptor
+live in the census returned by the bounded read. -/
+theorem preservesSlotAfterRead
+    (keeper : CapturedKeeperOpenReports report) {slot : DescriptorSlot}
+    (present : slot ∈ keeper.atOpen.slots)
+    (retained : ∀ event ∈ keeper.duringRead, event.removes slot.reference = false) :
+    slot ∈ keeper.afterRead.slots := by
+  unfold CapturedKeeperOpenReports.afterRead
+  rw [keeper.opened]
+  exact List.mem_filter.mpr ⟨List.mem_cons_of_mem _ present,
+    List.all_eq_true.mpr (by simpa using retained)⟩
+
+/-- Closing the temporary keeper before staging the retained prefix
+leaves the already-held marker slot available for the reopened session. -/
+theorem preservesSlotAfterKeeperClose (captured : CapturedKeeperOpenReports report)
+    {slot : DescriptorSlot} (present : slot ∈ captured.atOpen.slots)
+    (retained : ∀ event ∈ captured.duringRead, event.removes slot.reference = false) :
+    slot ∈ (captured.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent]).slots := by
+  have finalizer := DescriptorInventory.closeOtherSlot present captured.free
+  have atRead := captured.preservesSlotAfterRead present retained
+  exact List.mem_filter.mpr ⟨atRead, by simp [finalizer]⟩
+
 /-- The aligned finish uses the cached directory and keeper descriptions
 even when the caller has already stabilized its marker. The first
 barrier hands its reached files and census to the second barrier. -/

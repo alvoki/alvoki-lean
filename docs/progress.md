@@ -1014,3 +1014,8 @@ now derives the bounded finish from the reported directory and keeper
 syncs. The marker barrier supplies the directory sync input, and that
 call's reached census supplies the input to the cached keeper sync.
 The longer-keeper and prune callbacks still need this same handoff.
+
+Before replacing a longer keeper, the old keeper's temporary descriptor
+can now be released while preserving the held two-slot marker.
+The proof uses the observed free keeper address and surviving ambient
+drops. The marker remains available in the census that enters staging.

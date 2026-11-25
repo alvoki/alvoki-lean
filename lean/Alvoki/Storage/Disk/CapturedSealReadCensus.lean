@@ -429,17 +429,4 @@ theorem CapturedKeeperOpenReports.preservesSlotAtOpen
     slot ∈ keeper.atOpen.slots :=
   seals.preservesSlot rfl (report.listing.preservesSlot present duringListing)
 
-/-- Opening and reading the keeper leaves a separate marker descriptor
-live in the census returned by the bounded read. -/
-theorem CapturedKeeperOpenReports.preservesSlotAfterRead
-    {report : CapturedMarkedReadReports admission layout published renameMarker}
-    (keeper : CapturedKeeperOpenReports report) {slot : DescriptorSlot}
-    (present : slot ∈ keeper.atOpen.slots)
-    (retained : ∀ event ∈ keeper.duringRead, event.removes slot.reference = false) :
-    slot ∈ keeper.afterRead.slots := by
-  unfold CapturedKeeperOpenReports.afterRead
-  rw [keeper.opened]
-  exact List.mem_filter.mpr ⟨List.mem_cons_of_mem _ present,
-    List.all_eq_true.mpr (by simpa using retained)⟩
-
 end Alvoki.Storage.DiskSession
