@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.DiskSession
@@ -1281,7 +1282,10 @@ theorem recoveredRetries_installedReads
     {directory : DiskDirectory} {descriptor nextRef : Nat} {unlock : DiskSession.UnlockReport}
     {openedFrom : LockedFileState FileImage}
     (readCheckpoint : EStateM IO.Error FileImage (Option (PackedTable × UInt64)))
-    (readWal : Nat → UInt64 → EStateM IO.Error FileImage (WalSegmentMarkerReads × Nat))
+    (list : System.FilePath → EStateM IO.Error FileImage (Array IO.FS.DirEntry))
+    (lstat : System.FilePath → EStateM IO.Error FileImage (Except IO.Error IO.FS.Metadata))
+    (readSeal : System.FilePath → Nat → EStateM IO.Error FileImage ByteArray)
+    (readKeeper : System.FilePath → Nat → Nat → EStateM IO.Error FileImage ByteArray)
     {stabilize : EStateM IO.Error FileImage Unit}
     {finish : WalSegmentRepair.Plan → Nat → EStateM IO.Error FileImage Unit}
     (prior : DatabaseBatchRetention log history)
@@ -1291,15 +1295,23 @@ theorem recoveredRetries_installedReads
     {checkedState : FileImage} {checkpointResult : Option (PackedTable × UInt64)}
     (checkpointRead : readCheckpoint openedFrom.image = .ok checkpointResult checkedState)
     (checkpointBase : (checkpointResult.getD (.empty, 0)).1 = base)
-    {reads : WalSegmentMarkerReads} {size : Nat}
-    (walRead : readWal base.committed.toNat selected.frontier checkedState = .ok (reads, size) prepared)
-    {sealed : List (Nat × ByteArray)}
-    (selectedFiles : reads.files = sealed ++ [(target.first, plan.keeperBytes)])
+    {markerBytes : ByteArray} (acceptedMarker : decode markerBytes = .ok selected)
+    (watermark : base.committed.toNat ≤ selected.frontier.toNat / frameSize)
+    {entries : Array IO.FS.DirEntry} {listedState scannedState : FileImage}
+    (listed : list directory.path checkedState = .ok entries listedState)
+    {extents required : List (Nat × IO.FS.Metadata)} {newer : List Nat}
+    (scanned : readWalSegmentExtentsWith directory lstat (entries.toList.map (·.fileName)) listedState =
+      .ok extents scannedState)
+    (selectedExtents : WalSegmentRepair.selectWalExtentsThrough extents base.committed.toNat
+      (selected.frontier.toNat / frameSize) = some (required, newer))
+    {sealed : List (Nat × ByteArray)} {size : Nat}
+    (payloadRead : WalSegmentRepair.readCachedWalPayloads directory (selected.frontier.toNat / frameSize)
+      readSeal readKeeper required scannedState = .ok (sealed ++ [(target.first, plan.keeperBytes)], size) prepared)
     (openedResult : opened = ⟨opened.table, (checkpointResult.getD (.empty, 0)).2,
       selected.frontier, target.first⟩)
     (barrier : stabilize prepared = .ok ()
       { prepared with directory := settleMarker prepared.directory selected })
-    (repaired : finish ⟨selected.frontier.toNat / frameSize, target.first, reads.newer, plan.keeperBytes⟩ size
+    (repaired : finish ⟨selected.frontier.toNat / frameSize, target.first, newer, plan.keeperBytes⟩ size
       { prepared with directory := settleMarker prepared.directory selected } = .ok () after)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
     {payload : ByteArray}
@@ -1318,7 +1330,8 @@ theorem recoveredRetries_installedReads
     ∃ session final reference state pin pinned,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
         (reopenWith (WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
-          (fun _ => pure (some (Boundary.encode selected.frontier))) readWal) stabilize finish)
+          (fun _ => pure (some (Boundary.encode selected.frontier))) (fun start length => WalSegmentRepair.readSelectedWithCachedExtents directory start length
+            list lstat readSeal readKeeper)) stabilize finish)
         openedFrom = .ok session final ∧
       final.image = after ∧ final.owners.Owns directory descriptor ∧
       session.sessionRef ∉ liveRefs ∧
@@ -1332,18 +1345,22 @@ theorem recoveredRetries_installedReads
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2
   obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
-  have keeperRead : reads.files.getLast? = some (target.first, plan.keeperBytes) := by
-    rw [selectedFiles]
-    simp
+  let readWal := fun start length =>
+    WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
+  obtain ⟨_, _, _, aligned, _⟩ := decode_valid acceptedMarker
+  have walRead := WalSegmentRepair.readSelectedWithCachedExtents_stateful directory
+    base.committed.toNat selected.frontier list lstat readSeal readKeeper
+    ⟨aligned, watermark⟩ listed scanned selectedExtents payloadRead
   have read := prepareSelected_stateful directory (Boundary.encode selected.frontier)
     selected.frontier (Boundary.decode_encode _) readCheckpoint readWal checkpointRead
     (checkpointBase.symm ▸ walRead)
-    (show recoverMarkedWalSegments (checkpointResult.getD (.empty, 0)).1 selected.frontier reads.files =
-      .ok (payload, opened.table) from by rw [checkpointBase, selectedFiles]; exact selectedReplay)
-    keeperRead
+    (show recoverMarkedWalSegments (checkpointResult.getD (.empty, 0)).1 selected.frontier
+      (sealed ++ [(target.first, plan.keeperBytes)]) = .ok (payload, opened.table) from
+      checkpointBase.symm ▸ selectedReplay)
+    (keeper := target.first) (bytes := plan.keeperBytes) (by simp)
   have preparedRead : WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
       (fun _ => pure (some (Boundary.encode selected.frontier))) readWal openedFrom.image =
-      .ok (⟨selected.frontier.toNat / frameSize, target.first, reads.newer, plan.keeperBytes⟩,
+      .ok (⟨selected.frontier.toNat / frameSize, target.first, newer, plan.keeperBytes⟩,
         opened, size) prepared :=
     openedResult.symm ▸ read
   obtain ⟨session, final, returned, installed, reached, owner, freshSession⟩ :=

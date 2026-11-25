@@ -9,9 +9,11 @@ admitted keeper byte survivor after repair or another crash replays to the
 same installed table, and the earlier sealed bytes remain exact. The proof
 derives successful preparation from the ordered checkpoint and selected
 WAL read reports. It preserves the state reached by those reads and
-supplies their exact keeper to repair. The remaining integration work is
-to derive those read reports and the segmented replay from one native
-descriptor chronology. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
+supplies their exact keeper to repair. The selected WAL reader now derives
+its report from the directory listing, extent scan and payload read, in
+order on their reached states. The remaining integration work is to derive
+those primitive reports and the segmented replay from one native descriptor
+chronology. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
 
 A single write or batch stopped during its first append now connects to the captured healthy marked open. The submitted interface reaches the exact append path, payload, poisoned phase and file cut. The reported process exit or power loss and subsequent retries preserve the earlier marker. It selects the same checkpoint and acknowledged history before the held open uses the reported reads. With no later names, both an aligned keeper and a longer keeper yield the exact returned session. The longer case uses the reported replacement. One replay explains the old responses and guarded reads after reopening. The proof uses a reported vacant lock at the final attempt and the native callback reports of the selected finish. [First append to returned table](../lean/Alvoki/Storage/Disk/PendingFirstAppendReopen.lean)
 

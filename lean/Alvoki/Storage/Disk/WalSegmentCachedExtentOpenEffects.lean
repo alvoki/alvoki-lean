@@ -33,6 +33,29 @@ theorem readWalSegmentExtentsWith_liftReports {state : Type} (dir : DiskDirector
     filterMapM_readReport, ← bind_readReport]
   rfl
 
+/-- A checked list, extent scan and payload read pass their reached states
+in order to the successful selected reader. -/
+theorem readSelectedWithCachedExtents_stateful {state : Type} (directory : DiskDirectory)
+    (watermark : Nat) (length : UInt64)
+    (list : FilePath → EStateM IO.Error state (Array IO.FS.DirEntry))
+    (lstat : FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata))
+    (readSeal : FilePath → Nat → EStateM IO.Error state ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
+    (checked : length.toNat % frameSize = 0 ∧ watermark ≤ length.toNat / frameSize)
+    {before listedState scannedState reached : state}
+    {entries : Array IO.FS.DirEntry} (listed : list directory.path before = .ok entries listedState)
+    {extents required : List (Nat × IO.FS.Metadata)} {newer : List Nat}
+    (scanned : readWalSegmentExtentsWith directory lstat (entries.toList.map (·.fileName)) listedState =
+      .ok extents scannedState)
+    (selected : selectWalExtentsThrough extents watermark (length.toNat / frameSize) = some (required, newer))
+    {files : List (Nat × ByteArray)} {size : Nat}
+    (payload : readCachedWalPayloads directory (length.toNat / frameSize) readSeal readKeeper required scannedState =
+      .ok (files, size) reached) :
+    readSelectedWithCachedExtents directory watermark length list lstat readSeal readKeeper before =
+      .ok (⟨files, newer⟩, size) reached := by
+  simp [readSelectedWithCachedExtents, checked, listed, scanned, selected, payload, Bind.bind,
+    EStateM.bind, Pure.pure, EStateM.pure]
+
 /-- Exact accepted reports reach the selected bytes and keeper extent before
 any repair callback and leave the interpreter state untouched. -/
 theorem readSelectedWithCachedExtents_reportedEffects {state : Type} (dir : DiskDirectory)
