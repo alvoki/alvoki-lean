@@ -13,33 +13,19 @@ open WAL.Boundary (CheckpointRepresentsPrefix)
 variable {image : Type} {state : NativeReadyState}
   {cut : CheckpointPowerCut state.session.directory state.writer}
 
-namespace NativeCheckpointDirectoryError
+namespace NativeCheckpointFinalBarrier.Physical
 
-def closeState (report : NativeCheckpointDirectoryError (image := image) state cut) :
-    CachedCloseState CheckpointOpenHandle image :=
-  ⟨.poisoned, ⟨(state.cache, report.after), state.files.owners⟩, report.callbackPrefix.descriptors report.after⟩
+variable {barrier : NativeCheckpointFinalBarrier (image := image) state cut} {after : image}
 
-variable {report : NativeCheckpointDirectoryError (image := image) state cut}
+noncomputable def publication (physical : barrier.Physical after) : Image :=
+  ⟨(physical.files after).directory.project .manifest, (physical.runs after).guaranteed⟩
 
-namespace Physical
-
-def released (physical : report.Physical) : LockedFileState FileImage :=
-  ⟨physical.files report.after, state.files.owners.set (state.session.directory.file .lock) none⟩
-
-theorem vacant (physical : report.Physical) :
-    TryLockObserves physical.released.owners state.session.directory (.ok true) := by
-  intro _
-  simp [released, LockOwners.set]
-
-noncomputable def publication (physical : report.Physical) : Image :=
-  ⟨(physical.files report.after).directory.project .manifest, (physical.runs report.after).guaranteed⟩
-
-/-- The returned physical image is the retained WAL with the manifest
-publication seen at the error. This equality includes the joint
+/-- The reached physical image is the retained WAL with the observed
+manifest publication. This equality includes the joint
 directory choices and both staging fields. -/
-theorem fileProjection (physical : report.Physical) (valid : state.Valid) :
-    physical.released.image = CheckpointPowerCut.physical state.writer physical.publication := by
-  let actual := (physical.files report.after).directory
+theorem fileProjection (physical : barrier.Physical after) (valid : state.Valid) :
+    physical.files after = CheckpointPowerCut.physical state.writer physical.publication := by
+  let actual := (physical.files after).directory
   let modeled := (physical.publication.segmentedCheckpointView state.writer.wal).directory
   let old := state.writer.wal.directory.active
   let new := old.replace .manifest cut.checkpoint.manifest
@@ -73,36 +59,15 @@ theorem fileProjection (physical : report.Physical) (valid : state.Valid) :
   have kept := congrArg CheckpointWalView.kept physical.wal
   have keeper := congrArg CheckpointWalView.keeper physical.wal
   have later := congrArg CheckpointWalView.later physical.wal
-  change (physical.files report.after).kept = state.writer.files.kept at kept
-  change (physical.files report.after).keeper = state.writer.files.keeper at keeper
-  change (physical.files report.after).later = state.writer.files.later at later
+  change (physical.files after).kept = state.writer.files.kept at kept
+  change (physical.files after).keeper = state.writer.files.keeper at keeper
+  change (physical.files after).later = state.writer.files.later at later
   change (⟨actual, _, _, _⟩ : FileImage) = ⟨modeled, _, _, _⟩
   rw [dirEq, kept, keeper, later]
 
-/-- The direct retry reads the live renamed manifest. Its recovery plan
-and exact durable checkpoint are obtained before the next open reports. -/
-structure LiveRetry (physical : report.Physical) where
-  layout : CanonicalKeeperLayout physical.released.image state.writer.history
-  keeper : layout.keeper = state.writer.wal.active
-  aligned : layout.tail = ByteArray.empty
-  descriptors : layout.sealed ++ [layout.keeper] =
-    (physical.publication.segmentedCheckpointView state.writer.wal).readDescriptors layout.range.watermark
-  offsets : selectWalSegmentReads (state.writer.wal.segments.map WalSegment.first) layout.range.watermark =
-    some (layout.first, ((physical.publication.segmentedCheckpointView state.writer.wal).readDescriptors
-      layout.range.watermark).map WalSegment.first)
-  prepared : Prepared physical.released.image layout.target layout.plan
-  checkpoint : Option (PackedTable × UInt64)
-  selected : SelectedIntegrityCheckpoint physical.publication.durable physical.released.image.directory.active.manifest checkpoint
-  generation : (checkpoint.getD (.empty, 0)).2 = SegmentedCheckpointReport.generation state.writer
-  manifest : physical.released.image.directory.active.manifest = some cut.checkpoint.manifest
-  accepted : physical.publication.AcceptsVersioned state.writer.history.length.toUInt64
-    (CheckpointRepresentsPrefix state.writer.history) physical.released.image.directory.active.manifest
-  walLayout : (physical.publication.segmentedCheckpointView state.writer.wal).ReadLayout state.writer.history
-  walValid : (physical.publication.segmentedCheckpointView state.writer.wal).Valid state.writer.history
-
 /-- Every modeled active or surviving pair is supported by the same retained
 WAL and the physically selected run map. This is shared by live and crash retries. -/
-theorem retrySupport (physical : report.Physical) (valid : state.Valid) :
+theorem retrySupport (physical : barrier.Physical after) (valid : state.Valid) :
     let wal := physical.publication.segmentedCheckpointView state.writer.wal
     wal.ReadLayout state.writer.history ∧ wal.Valid state.writer.history ∧
     ∀ pair, wal.Selects pair →
@@ -148,9 +113,66 @@ theorem retrySupport (physical : report.Physical) (valid : state.Valid) :
           · exact .inr fresh
           · exact .inl (List.mem_singleton.mp prior)
     have runs := cut.selectedRunAgreement valid.retained model pair.manifest binding
-      (physical.runs report.after).guaranteed reached.newRuns reached.priorRuns
+      (physical.runs after).guaranteed reached.newRuns reached.priorRuns
     exact ⟨SelectedRunsAgree.acceptsVersioned (actual := current) runs decoded accepted, range, decoded, through⟩
   exact ⟨⟨oldLayout.ordered, oldLayout.forward, oldLayout.activeEnd, oldLayout.activeBytes⟩, walValid, inputs⟩
+
+end NativeCheckpointFinalBarrier.Physical
+
+namespace NativeCheckpointDirectoryError
+
+def closeState (report : NativeCheckpointDirectoryError (image := image) state cut) :
+    CachedCloseState CheckpointOpenHandle image :=
+  ⟨.poisoned, ⟨(state.cache, report.after), state.files.owners⟩, report.callbackPrefix.descriptors report.after⟩
+
+variable {report : NativeCheckpointDirectoryError (image := image) state cut}
+
+namespace Physical
+
+def released (physical : report.Physical) : LockedFileState FileImage :=
+  ⟨physical.files report.after, state.files.owners.set (state.session.directory.file .lock) none⟩
+
+theorem vacant (physical : report.Physical) :
+    TryLockObserves physical.released.owners state.session.directory (.ok true) := by
+  intro _
+  simp [released, LockOwners.set]
+
+noncomputable abbrev publication (physical : report.Physical) : Image :=
+  NativeCheckpointFinalBarrier.Physical.publication physical
+
+theorem fileProjection (physical : report.Physical) (valid : state.Valid) :
+    physical.released.image = CheckpointPowerCut.physical state.writer physical.publication :=
+  NativeCheckpointFinalBarrier.Physical.fileProjection physical valid
+
+/-- The direct retry reads the live renamed manifest. Its recovery plan
+and exact durable checkpoint are obtained before the next open reports. -/
+structure LiveRetry (physical : report.Physical) where
+  layout : CanonicalKeeperLayout physical.released.image state.writer.history
+  keeper : layout.keeper = state.writer.wal.active
+  aligned : layout.tail = ByteArray.empty
+  descriptors : layout.sealed ++ [layout.keeper] =
+    (physical.publication.segmentedCheckpointView state.writer.wal).readDescriptors layout.range.watermark
+  offsets : selectWalSegmentReads (state.writer.wal.segments.map WalSegment.first) layout.range.watermark =
+    some (layout.first, ((physical.publication.segmentedCheckpointView state.writer.wal).readDescriptors
+      layout.range.watermark).map WalSegment.first)
+  prepared : Prepared physical.released.image layout.target layout.plan
+  checkpoint : Option (PackedTable × UInt64)
+  selected : SelectedIntegrityCheckpoint physical.publication.durable physical.released.image.directory.active.manifest checkpoint
+  generation : (checkpoint.getD (.empty, 0)).2 = SegmentedCheckpointReport.generation state.writer
+  manifest : physical.released.image.directory.active.manifest = some cut.checkpoint.manifest
+  accepted : physical.publication.AcceptsVersioned state.writer.history.length.toUInt64
+    (CheckpointRepresentsPrefix state.writer.history) physical.released.image.directory.active.manifest
+  walLayout : (physical.publication.segmentedCheckpointView state.writer.wal).ReadLayout state.writer.history
+  walValid : (physical.publication.segmentedCheckpointView state.writer.wal).Valid state.writer.history
+
+theorem retrySupport (physical : report.Physical) (valid : state.Valid) :
+    let wal := physical.publication.segmentedCheckpointView state.writer.wal
+    wal.ReadLayout state.writer.history ∧ wal.Valid state.writer.history ∧
+    ∀ pair, wal.Selects pair →
+      physical.publication.AcceptsVersioned state.writer.history.length.toUInt64
+        (CheckpointRepresentsPrefix state.writer.history) pair.manifest ∧
+      ∃ range, pair.walRange = some range ∧ range.through = state.writer.history.length :=
+  NativeCheckpointFinalBarrier.Physical.retrySupport physical valid
 
 theorem liveRetry (physical : report.Physical) (valid : state.Valid)
     (pending : PendingClientReplay log reads state.writer.history) :
@@ -170,7 +192,8 @@ theorem liveRetry (physical : report.Physical) (valid : state.Valid)
       (exactFiles.symm ▸ .before .live)
   have survives : some cut.checkpoint.manifest ∈ current.manifest.crashImages := by
     have choices := (physical.directory valid).2
-    simp only [current, publication, DirectoryPublication.Image.project, choices]
+    change some cut.checkpoint.manifest ∈ ((physical.files report.after).directory.project .manifest).crashImages
+    simp only [DirectoryPublication.Image.project, choices]
     cases cut.tookEffect <;> simp [DirectoryPublication.Bindings.replace, DirectoryPublication.Bindings.get]
   have bound : physical.released.image.directory.active.manifest = some cut.checkpoint.manifest := visible
   obtain ⟨_, checkpoint, _, _, selected, generation, _⟩ := reached.replaysPending valid.retained pending survives

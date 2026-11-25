@@ -8,61 +8,63 @@ open WAL.Boundary (CheckpointRepresentsPrefix)
 
 variable {image : Type} {state : NativeReadyState}
   {cut : CheckpointPowerCut state.session.directory state.writer}
-  {report : NativeCheckpointDirectoryError (image := image) state cut}
-  {physical : report.Physical}
+  {barrier : NativeCheckpointFinalBarrier (image := image) state cut} {after : image}
+  {physical : barrier.Physical after}
 
-/-- An actual power-loss report from the returned poisoned checkpoint.
+/-- An actual power-loss report from the reached checkpoint barrier.
 One joint directory choice fixes the surviving manifest and marker.
 The inode observations link that choice to the reached namespace and
 the corresponding before-rename or renamed manifest binding. -/
-structure NativeCheckpointErrorCrash (physical : report.Physical) where
+structure NativeCheckpointCrashFiles (physical : barrier.Physical after) where
   pair : DirectoryPublication.Bindings
-  chosen : pair ∈ (physical.files report.after).directory.crashImages
+  chosen : pair ∈ (physical.files after).directory.crashImages
   keeper : Option ByteArray
-  keeperSurvived : keeper ∈ (physical.files report.after).keeper.crashImages
+  keeperSurvived : keeper ∈ (physical.files after).keeper.crashImages
   later : List Nat
-  laterSurvived : later ∈ (physical.files report.after).later.crashImages
+  laterSurvived : later ∈ (physical.files after).later.crashImages
   names : FilePath → Option Nat
   contents : Nat → ByteArray
-  directory : names state.session.directory.path = report.bindings report.after state.session.directory.path
-  lock : names (state.session.directory.file .lock) = report.bindings report.after (state.session.directory.file .lock)
+  directory : names state.session.directory.path = barrier.bindings after state.session.directory.path
+  lock : names (state.session.directory.file .lock) = barrier.bindings after (state.session.directory.file .lock)
   manifest : names (state.session.directory.file .manifest) =
-    if pair.manifest = some cut.checkpoint.manifest then report.bindings report.after (state.session.directory.file .manifest)
-    else report.bindings report.observed.runsSettled.2 (state.session.directory.file .manifest)
+    if pair.manifest = some cut.checkpoint.manifest then barrier.bindings after (state.session.directory.file .manifest)
+    else barrier.bindings barrier.observed.runsSettled.2 (state.session.directory.file .manifest)
   manifestBytes : (names (state.session.directory.file .manifest)).map contents = pair.manifest
   marker : ∀ payload, pair.walBoundary = some payload →
-    ∃ inode, report.bindings report.after (state.session.directory.file .walBoundary) = some inode ∧
+    ∃ inode, barrier.bindings after (state.session.directory.file .walBoundary) = some inode ∧
       names (state.session.directory.file .walBoundary) = some inode ∧ contents inode = payload
   wal : ∀ segment ∈ state.writer.wal.segments,
-    ∃ inode, report.bindings report.after (state.session.directory.file (.walSegment segment.first)) = some inode ∧
+    ∃ inode, barrier.bindings after (state.session.directory.file (.walSegment segment.first)) = some inode ∧
       names (state.session.directory.file (.walSegment segment.first)) = some inode ∧ contents inode = segment.bytes
   runs : ∀ manifest metadata, pair.manifest = some manifest →
     Manifest.IntegrityCheckpoint.decode manifest = .ok metadata →
     ∀ index < metadata.header.runCount.toNat, ∀ payload,
     physical.publication.durable metadata.header.generation index = some payload →
-      ∃ inode, report.bindings report.after (state.session.directory.file (.run metadata.header.generation index)) =
+      ∃ inode, barrier.bindings after (state.session.directory.file (.run metadata.header.generation index)) =
         some inode ∧ names (state.session.directory.file (.run metadata.header.generation index)) = some inode ∧
         contents inode = payload
   rebootObjects : Nat → Nat
 
-namespace NativeCheckpointErrorCrash
+namespace NativeCheckpointCrashFiles
 
-def reboot (crash : NativeCheckpointErrorCrash physical) : DescriptorInventory :=
+def reboot (crash : NativeCheckpointCrashFiles physical) : DescriptorInventory :=
   ⟨[], by simp, crash.rebootObjects⟩
 
-def retry (crash : NativeCheckpointErrorCrash physical) : LockedFileState FileImage :=
-  ⟨(physical.files report.after).crash crash.pair crash.keeper crash.later, physical.released.owners⟩
+def retry (crash : NativeCheckpointCrashFiles physical) : LockedFileState FileImage :=
+  ⟨(physical.files after).crash crash.pair crash.keeper crash.later, state.files.owners.set (state.session.directory.file .lock) none⟩
 
-theorem vacant (crash : NativeCheckpointErrorCrash physical) :
+theorem vacant (crash : NativeCheckpointCrashFiles physical) :
     TryLockObserves crash.retry.owners state.session.directory (.ok true) :=
-  physical.vacant
+  by
+    intro _
+    simp [retry, LockOwners.set]
 
-theorem losesPower (crash : NativeCheckpointErrorCrash physical) :
+theorem losesPower (crash : NativeCheckpointCrashFiles physical) :
     BoundedReopenTrace state.session.directory (CheckpointRetryTarget state.writer.history state.writer.wal.active.first)
-      ⟨physical.files report.after, state.files.owners⟩ crash.retry :=
+      ⟨physical.files after, state.files.owners⟩ crash.retry :=
   .powerLoss .empty crash.chosen crash.keeperSurvived crash.laterSurvived
 
-theorem classification (crash : NativeCheckpointErrorCrash physical) (valid : state.Valid) :
+theorem classification (crash : NativeCheckpointCrashFiles physical) (valid : state.Valid) :
     crash.pair.walBoundary = state.writer.wal.directory.active.walBoundary ∧
     (cut.tookEffect = true → crash.pair.manifest = some cut.checkpoint.manifest) ∧
     (crash.pair.manifest = state.writer.wal.directory.active.manifest ∨ crash.pair.manifest = some cut.checkpoint.manifest) := by
@@ -84,14 +86,14 @@ theorem classification (crash : NativeCheckpointErrorCrash physical) (valid : st
     have manifest := congrArg DirectoryPublication.Bindings.manifest fresh
     exact ⟨(congrArg DirectoryPublication.Bindings.walBoundary fresh).trans rfl, fun _ => manifest, .inr manifest⟩
 
-theorem chosenPublication (crash : NativeCheckpointErrorCrash physical) (valid : state.Valid) :
+theorem chosenPublication (crash : NativeCheckpointCrashFiles physical) (valid : state.Valid) :
     crash.pair ∈ (physical.publication.segmentedCheckpointView state.writer.wal).directory.crashImages := by
   have same := congrArg (fun files : FileImage => files.directory.crashImages) (physical.fileProjection valid)
   exact same ▸ crash.chosen
 
 /-- The chosen old or new manifest and the retained run bytes determine
 the retry plan before obtaining any healthy-open reports. -/
-structure Plan (crash : NativeCheckpointErrorCrash physical) where
+structure Plan (crash : NativeCheckpointCrashFiles physical) where
   layout : CanonicalKeeperLayout crash.retry.image state.writer.history
   keeper : layout.keeper = state.writer.wal.active
   aligned : layout.tail = ByteArray.empty
@@ -110,28 +112,28 @@ structure Plan (crash : NativeCheckpointErrorCrash physical) where
 
 /-- The settled reboot image keeps the exact pre-existing keeper and
 sealed files. Their already-settled choices identify the payloads. -/
-theorem reachedFiles (crash : NativeCheckpointErrorCrash physical) (valid : state.Valid) :
+theorem reachedFiles (crash : NativeCheckpointCrashFiles physical) (valid : state.Valid) :
     let wal := physical.publication.segmentedCheckpointView state.writer.wal
     crash.retry.image = wal.checkpointReopenFiles (.settled crash.pair) none := by
   intro wal
   let publication := physical.publication
-  have physicalFiles : physical.released.image = wal.checkpointReopenFiles wal.directory state.writer.files.keeper.staged :=
+  have physicalFiles : physical.files after = wal.checkpointReopenFiles wal.directory state.writer.files.keeper.staged :=
     (physical.fileProjection valid).trans (CheckpointPowerCut.physical_eq publication valid.retained)
   have keeper : crash.keeper = some wal.active.bytes := by
     have survived := crash.keeperSurvived
-    change crash.keeper ∈ physical.released.image.keeper.crashImages at survived
+    change crash.keeper ∈ (physical.files after).keeper.crashImages at survived
     rw [physicalFiles] at survived
     exact List.mem_singleton.mp survived
   have later : crash.later = [] := by
     have survived := crash.laterSurvived
-    change crash.later ∈ physical.released.image.later.crashImages at survived
+    change crash.later ∈ (physical.files after).later.crashImages at survived
     rw [physicalFiles] at survived
     exact List.mem_singleton.mp survived
-  change physical.released.image.crash crash.pair crash.keeper crash.later = _
+  change (physical.files after).crash crash.pair crash.keeper crash.later = _
   rw [physicalFiles, keeper, later]
   rfl
 
-theorem plans (crash : NativeCheckpointErrorCrash physical) (valid : state.Valid)
+theorem plans (crash : NativeCheckpointCrashFiles physical) (valid : state.Valid)
     (pending : PendingClientReplay log reads state.writer.history) :
     Nonempty crash.Plan := by
   let publication := physical.publication
@@ -150,11 +152,11 @@ theorem plans (crash : NativeCheckpointErrorCrash physical) (valid : state.Valid
   obtain ⟨_, checkpoint, _, _, reads, generation, _⟩ := reached.replaysPending valid.retained pending acceptedManifest
   exact ⟨⟨layout, keeper, aligned, descriptors, offsets, prepared, checkpoint, reads, generation, accepted⟩⟩
 
-end NativeCheckpointErrorCrash
+end NativeCheckpointCrashFiles
 
 /-- Primitive admission, ordered reads and aligned repair from the
 reported reboot census and selected surviving files. -/
-structure NativeCheckpointCrashAlignedReads (crash : NativeCheckpointErrorCrash physical)
+structure NativeCheckpointCrashAlignedReads (crash : NativeCheckpointCrashFiles physical)
     (input : FilePath) (plan : crash.Plan) where
   opening : CheckpointBarrierAlignedReports input state.session.directory crash.reboot crash.retry plan.layout
     physical.publication crash.vacant plan.selected crash.names
@@ -165,7 +167,7 @@ structure NativeCheckpointCrashAlignedReads (crash : NativeCheckpointErrorCrash 
 
 namespace NativeCheckpointCrashAlignedReads
 
-variable {crash : NativeCheckpointErrorCrash physical} {input : FilePath} {plan : crash.Plan}
+variable {crash : NativeCheckpointCrashFiles physical} {input : FilePath} {plan : crash.Plan}
 
 noncomputable def run (seen : NativeCheckpointCrashAlignedReads crash input plan) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
@@ -250,19 +252,16 @@ theorem readsSelected (seen : NativeCheckpointCrashAlignedReads crash input plan
 
 end NativeCheckpointCrashAlignedReads
 
-/-- Exact native checkpoint error, following power loss and healthy
-direct aligned open. The error retains the prior owner up to the crash,
-and the newly opened position uses the reported reboot namespace. -/
-structure NativeCheckpointCrashContinuation (current : NativeReadPosition history log)
+/-- The direct aligned reopen of one reported survivor. Returned and
+interrupted checkpoint calls use the same proof after power loss. -/
+structure NativeCheckpointRebootContinuation (current : NativeReadPosition history log)
     {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
-    {report : NativeCheckpointDirectoryError (image := image) current.state cut} {physical : report.Physical}
-    (crash : NativeCheckpointErrorCrash physical) (input : FilePath) (next : NativeReadPosition history log) : Prop where
-  returned : report.run = .error report.error
-    (.poisoned, ⟨(current.state.cache, report.after), current.state.files.owners⟩)
-  reachedCensus : report.callbackPrefix.descriptors report.after = current.state.census
+    {barrier : NativeCheckpointFinalBarrier (image := image) current.state cut} {after : image}
+    {physical : barrier.Physical after}
+    (crash : NativeCheckpointCrashFiles physical) (input : FilePath) (next : NativeReadPosition history log) : Prop where
   lost : BoundedReopenTrace current.state.session.directory
     (CheckpointRetryTarget current.state.writer.history current.state.writer.wal.active.first)
-    ⟨physical.files report.after, current.state.files.owners⟩ crash.retry
+    ⟨physical.files after, current.state.files.owners⟩ crash.retry
   rebooted : crash.reboot.slots = []
   reads : next.reads = current.reads
   directory : next.state.session.directory = current.state.session.directory
@@ -287,12 +286,17 @@ structure NativeCheckpointCrashContinuation (current : NativeReadPosition histor
     next.state.writer.published.durable = physical.publication.durable ∧ seen.SelectedReads
   replay : InstalledClientReplay log current.reads history next.state.writer.installed next.state.session
 
-theorem NativeReadPosition.recoversCheckpointAfterPowerLoss (current : NativeReadPosition history log)
+theorem NativeReadPosition.reopensCheckpointSurvivor (current : NativeReadPosition history log)
     {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
-    {report : NativeCheckpointDirectoryError (image := image) current.state cut} {physical : report.Physical}
-    (crash : NativeCheckpointErrorCrash physical) {input : FilePath}
+    {barrier : NativeCheckpointFinalBarrier (image := image) current.state cut} {after : image}
+    {physical : barrier.Physical after}
+    (crash : NativeCheckpointCrashFiles physical) {input : FilePath}
+    (root : barrier.bindings after current.state.session.directory.path =
+      some (current.state.census.inode current.state.directorySlot.description))
+    (lock : barrier.bindings after (current.state.session.directory.file .lock) =
+      some (current.state.census.inode current.state.owner.description))
     (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointCrashAlignedReads crash input plan)) :
-    ∃ next, NativeCheckpointCrashContinuation current crash input next := by
+    ∃ next, NativeCheckpointRebootContinuation current crash input next := by
   obtain ⟨valid, exactHistory, replay⟩ := current.readPrefix.refines
   have ready := valid.retained
   have pending : PendingClientReplay log current.reads current.state.writer.history :=
@@ -336,25 +340,58 @@ theorem NativeReadPosition.recoversCheckpointAfterPowerLoss (current : NativeRea
       (opening.finish.repair.beforeAuthorization ++ opening.finish.repair.afterAuthorization ++ opening.finish.afterKeeper)).inode = _
     rw [opening.finish.repair.opened]
     rfl
-  have paths := report.heldBindings report.after (by simp)
   have objects := opening.reads.sameObjects
   have generation := continued.refines.1.retained.resumed.generation.trans
     (congrArg (fun cp => (cp.getD (.empty, 0)).2) checkpoint)
   have recoveredSeals : state.files.image.kept = current.state.files.image.kept :=
     seals.trans (congrArg CheckpointWalView.kept physical.wal)
-  refine ⟨next, report.returns valid, ((report.custody valid).2 report.after (by simp)).1, crash.losesPower, rfl, rfl,
+  refine ⟨next, crash.losesPower, rfl, rfl,
     directory, ?_, ?_, fun same => phaseFresh (same.symm ▸ seen.earlierTokens.1),
     fun same => sessionFresh (same.symm ▸ seen.earlierTokens.2), settled, (crash.classification valid).2.1,
     ?_, recoveredSeals, ⟨plan, seen, continued.frames.1, rfl, rfl, owner, directorySlot, cache, census, target,
       checkpoint, runs, seen.readsSelected valid⟩, continued.guardedReplay⟩
   · change state.census.inode state.directorySlot.description = _
     rw [inodes, directorySlot]
-    exact Option.some.inj (objects.1.symm.trans (seen.directoryObject.trans (crash.directory.trans paths.1)))
+    exact Option.some.inj (objects.1.symm.trans (seen.directoryObject.trans (crash.directory.trans root)))
   · change state.census.inode state.owner.description = _
     rw [inodes, owner]
-    exact Option.some.inj (objects.2.1.symm.trans (seen.lockObject.trans (crash.lock.trans paths.2)))
+    exact Option.some.inj (objects.2.1.symm.trans (seen.lockObject.trans (crash.lock.trans lock)))
   · exact plan.generation.imp (fun old => ⟨generation.trans old.1, old.2⟩)
       (fun fresh => ⟨generation.trans fresh.1, fresh.2⟩)
+
+/-- The returned-error route supplies the same observed crash files. -/
+abbrev NativeCheckpointErrorCrash
+    {report : NativeCheckpointDirectoryError (image := image) state cut}
+    (physical : report.Physical) :=
+  NativeCheckpointCrashFiles (barrier := report.barrier) (after := report.after) physical
+
+namespace NativeCheckpointErrorCrash
+
+export NativeCheckpointCrashFiles (losesPower classification reachedFiles plans)
+
+end NativeCheckpointErrorCrash
+
+/-- Exact native checkpoint error, following power loss and healthy
+direct aligned open. The error retains the prior owner up to the crash,
+and the newly opened position uses the reported reboot namespace. -/
+structure NativeCheckpointCrashContinuation (current : NativeReadPosition history log)
+    {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
+    {report : NativeCheckpointDirectoryError (image := image) current.state cut} {physical : report.Physical}
+    (crash : NativeCheckpointErrorCrash physical) (input : FilePath) (next : NativeReadPosition history log) : Prop
+    extends NativeCheckpointRebootContinuation current crash input next where
+  returned : report.run = .error report.error
+    (.poisoned, ⟨(current.state.cache, report.after), current.state.files.owners⟩)
+  reachedCensus : report.callbackPrefix.descriptors report.after = current.state.census
+theorem NativeReadPosition.recoversCheckpointAfterPowerLoss (current : NativeReadPosition history log)
+    {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
+    {report : NativeCheckpointDirectoryError (image := image) current.state cut} {physical : report.Physical}
+    (crash : NativeCheckpointErrorCrash physical) {input : FilePath}
+    (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointCrashAlignedReads crash input plan)) :
+    ∃ next, NativeCheckpointCrashContinuation current crash input next := by
+  let valid := current.readPrefix.refines.1
+  have paths := report.heldBindings report.after (by simp)
+  obtain ⟨next, reopened⟩ := current.reopensCheckpointSurvivor crash paths.1 paths.2 observe
+  exact ⟨next, reopened, report.returns valid, ((report.custody valid).2 report.after (by simp)).1⟩
 
 /-- Reports for the returned checkpoint error, one later power loss,
 and a direct healthy open of its chosen files. -/

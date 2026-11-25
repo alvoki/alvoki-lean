@@ -68,6 +68,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeReadyCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointPreflight
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpoint
+lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointErrorReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointErrorPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.CheckpointCompletionClientTrace
