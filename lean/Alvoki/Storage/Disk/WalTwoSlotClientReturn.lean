@@ -1242,6 +1242,42 @@ theorem reopenSyncError_preservesRetry
   | errorBefore => exact .inl (reachedImage.symm.trans priorImage)
   | errorAfter => exact .inr (reachedImage.symm.trans syncImage)
 
+/-- File observations before directory authorization. The marker sync
+reports its effect on the held inode. A power loss names the survivors
+of that exact reached file image. -/
+inductive ReportedMarkerRetries (initial : FileImage) : FileImage → Prop where
+  | start : ReportedMarkerRetries initial initial
+  | markerSync {before : FileImage} (prior : ReportedMarkerRetries initial before)
+      {physical : WalInodeImage} {handle : KeeperDescriptorIdentity} {returned}
+      (report : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+        handle physical (fun inode files => files.completeFileSync inode) returned)
+      (project : WalInodeImage → FileImage) (source : project physical = before)
+      (selection : Selection)
+      (observed : before.directory.active.walBoundary = some (Boundary.encode selection.frontier))
+      (persisted : project (physical.completeFileSync handle.inode) =
+        { before with directory := settleMarker before.directory selection }) :
+      ReportedMarkerRetries initial (match returned with
+        | .ok _ after | .error _ after => project after)
+  | powerLoss {before : FileImage} (prior : ReportedMarkerRetries initial before)
+      {pair bytes names}
+      (metadata : pair ∈ before.directory.crashImages)
+      (payload : bytes ∈ before.keeper.crashImages) (later : names ∈ before.later.crashImages) :
+      ReportedMarkerRetries initial (before.crash pair bytes names)
+
+theorem ReportedMarkerRetries.refines {initial after : FileImage}
+    (reported : ReportedMarkerRetries initial after) : UnsettledRetries initial after := by
+  induction reported with
+  | start => exact .start
+  | markerSync _ report project source selection observed persisted ih =>
+    have effect := report.effect
+    rw [report.sameInode] at effect
+    generalize report.effective = effective at effect
+    cases effect with
+    | completed => exact cast (congrArg (UnsettledRetries initial) persisted.symm) (ih.settle selection observed)
+    | errorBefore => exact cast (congrArg (UnsettledRetries initial) source.symm) ih
+    | errorAfter => exact cast (congrArg (UnsettledRetries initial) persisted.symm) (ih.settle selection observed)
+  | powerLoss _ metadata payload later ih => exact ih.crash metadata payload later
+
 /-- Derive the initial retry alternatives from the physical marker
 survivors of the interrupted slot write. An absent binding can arise
 before bootstrap has settled the marker name. -/
@@ -1879,7 +1915,7 @@ theorem installsAfterAcquiredRecovery_replays
     (acceptedCheckpoint : published.AcceptsVersioned prior.history.length.toUInt64
       (Boundary.CheckpointRepresentsPrefix prior.history) retry.image.directory.active.manifest)
     {interrupted firstPrepared : FileImage} {firstRepair : LockedFileState FileImage}
-    (beforeBarrier : UnsettledRetries interrupted firstPrepared)
+    (reportedBeforeBarrier : ReportedMarkerRetries interrupted firstPrepared)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
     {current next : Selection}
     (accepted : decode before = .ok current)
@@ -1890,8 +1926,11 @@ theorem installsAfterAcquiredRecovery_replays
       ∃ bytes, InterruptedSlotBytes before bytes active next ∧
         projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
     (observedFirst : firstPrepared.directory.active.walBoundary = some (Boundary.encode selection.frontier))
-    (authorizedRepair : EffectTrace layout.target
-      { firstPrepared with directory := settleMarker firstPrepared.directory selection } firstRepair.image)
+    (firstBarrier : DelayedDirectorySync directory)
+    (firstEffective : firstBarrier.outcome.effective = true)
+    {firstOwner : LockOwners}
+    (firstReached : firstBarrier.after
+      ⟨{ firstPrepared with directory := settleMarker firstPrepared.directory selection }, firstOwner⟩ = firstRepair)
     {firstPlan : Plan} (preparedPlan : WalSegmentRepair.Prepared firstPrepared layout.target firstPlan)
     (reportedRetries : ReportedReopenPrefix directory layout.target.first firstRepair retry)
     (oldSize : current.frontier.toNat = (WAL.encode prior.history).size)
@@ -1913,7 +1952,12 @@ theorem installsAfterAcquiredRecovery_replays
         opened.installed session ∧ after.2.image.directory.active = layout.target.pair ∧
       after.2.image.kept = interrupted.kept := by
   intro opened prepare
+  have beforeBarrier := reportedBeforeBarrier.refines
   have finished := repair.returns
+  have authorizedRepair : EffectTrace layout.target
+      { firstPrepared with directory := settleMarker firstPrepared.directory selection } firstRepair.image := by
+    rw [← firstReached, firstBarrier.after_effective firstEffective]
+    exact .authorized
   have authorized := prepared_settleMarker preparedPlan selection observedFirst
   have validFirst := authorizedRepair.valid authorized.pair authorized.keeperPrefix authorized.newer
   have boundedRetries : BoundedReopenTrace directory (fun candidate => candidate = layout.target)

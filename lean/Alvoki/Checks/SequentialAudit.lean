@@ -3082,6 +3082,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.installsAfterAcquiredRecovery
 #check_axioms Alvoki.Storage.DiskSession.PendingClientReplay.install
 #check_axioms Alvoki.WAL.TwoSlot.installsAfterAcquiredRecovery_replays
+#check_axioms Alvoki.WAL.TwoSlot.ReportedMarkerRetries.refines
+#check_axioms Alvoki.WAL.TwoSlot.settledRetriesOfBoundedReopen
 #check_axioms Alvoki.WAL.TwoSlot.CapturedFinalRepair.returns
 #check_axioms Alvoki.WAL.TwoSlot.reopensLongAfterCapturedPreparation
 #check_axioms Alvoki.WAL.TwoSlot.reopensPrunedAfterCapturedPreparation

@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The client theorem derives the pre-authorization retry file lineage from
+held marker fsync reports and exact power-loss survivors. It derives
+the first authorization effect from the effective directory sync report,
+including an error after the effect. The remaining boundary is the
+projection from native marker and directory calls to these observations
+and the linkage to the interrupted writer state.
+
 After the first effective repair barrier, the client proof consumes
 the shared reported reopen prefix. It derives the canonical preparation
 at each reached image and refines the reports to the settled retry
