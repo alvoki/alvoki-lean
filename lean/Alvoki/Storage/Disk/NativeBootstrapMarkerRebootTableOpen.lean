@@ -6,7 +6,7 @@ namespace Alvoki.Storage.DiskSession
 open System SyncHandleRouting WalSegmentRepair
 open WAL.Boundary (CheckpointRepresentsPrefix)
 
-namespace RawBootstrapMarkerDirectoryStop.EffectiveReboot
+namespace RawBootstrapMarkerDirectoryStop.MarkedRebootSelection
 
 variable {heap : Type} {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
   {fileCalls : BootstrapOpenCalls (Cache CheckpointOpenHandle) directory before}
@@ -16,59 +16,59 @@ variable {heap : Type} {directory : DiskDirectory} {before : LockedFileState Wal
   {observed : BootstrapReusedZeroKeeper listed} {guards : ReusedBootstrapKeeperGuards observed seed calls}
   {keeper : ReusedBootstrapKeeperHeap guards} {stop : RawBootstrapMarkerDirectoryStop keeper}
   {marker : BootstrapMarkerRenamed listed} {handoff : BootstrapKeeperMarkerRename (.reused observed) marker}
-  {physical : stop.Physical handoff} (reboot : EffectiveReboot physical) (valid : BootstrapValid before.image)
+  {physical : stop.Physical handoff} {rebooted : heap} (selection : MarkedRebootSelection physical rebooted)
 
 /-- Interpret the selected bootstrap reboot in the marked recovery
 model. The directory image and vacant owner are those of the reboot. -/
 def markedInput : LockedFileState FileImage :=
-  ⟨(reboot.selects valid).marked.files, (view.files reboot.rebooted).owners⟩
+  ⟨selection.marked.files, (view.files rebooted).owners⟩
 
-def layout : CanonicalKeeperLayout (reboot.markedInput valid).image [] :=
-  (reboot.selects valid).marked.layout
+def layout : CanonicalKeeperLayout selection.markedInput.image [] :=
+  selection.marked.layout
 
 def checkpointImage : CheckpointPublication.Image :=
-  (reboot.selects valid).marked.checkpoint
+  selection.marked.checkpoint
 
-theorem noCheckpoint : SelectedIntegrityCheckpoint (reboot.checkpointImage valid).durable
-    (reboot.markedInput valid).image.directory.active.manifest none := by
-  change SelectedIntegrityCheckpoint _ (view.files reboot.rebooted).image.metadata.active.manifest none
-  rw [(reboot.selects valid).ready.manifestAbsent]
+theorem noCheckpoint : SelectedIntegrityCheckpoint selection.checkpointImage.durable
+    selection.markedInput.image.directory.active.manifest none := by
+  change SelectedIntegrityCheckpoint _ (view.files rebooted).image.metadata.active.manifest none
+  rw [selection.ready.manifestAbsent]
   exact .absent
 
 private theorem prepared :
-    Prepared (reboot.markedInput valid).image (reboot.layout valid).target (reboot.layout valid).plan := by
+    Prepared selection.markedInput.image selection.layout.target selection.layout.plan := by
   refine ⟨rfl, ?_, ?_, rfl, rfl, rfl, rfl⟩
-  · exact Publication.Image.settled_valid (reboot.layout valid).target.acceptsTrimmed
+  · exact Publication.Image.settled_valid selection.layout.target.acceptsTrimmed
   · simp [markedInput, BootstrapMarkedZero.files, LaterNames.settled, LaterNames.Beyond]
 
 variable {input : FilePath}
 
-private abbrev OpenObservation (reboot : EffectiveReboot physical) (valid : BootstrapValid before.image) :=
-  MarkedReadyOpenObservations input directory (view.descriptors reboot.rebooted)
-    (reboot.markedInput valid) (reboot.layout valid) (reboot.checkpointImage valid)
-    (reboot.selects valid).vacant (reboot.noCheckpoint valid)
+abbrev OpenObservation (selection : MarkedRebootSelection physical rebooted) :=
+  MarkedReadyOpenObservations input directory (view.descriptors rebooted)
+    (selection.markedInput) selection.layout selection.checkpointImage
+    selection.vacant (selection.noCheckpoint)
 
 /-- The accepted marked preparation and empty replay are fixed by the
 selected reboot. The caller supplies the reached read and repair events. -/
-def markedReport (opening : OpenObservation (input := input) reboot valid) :
+def markedReport (opening : OpenObservation (input := input) selection) :
     MarkedOpenSuccessReports input directory [] [] [] where
-  inventory := view.descriptors reboot.rebooted
-  retry := reboot.markedInput valid
-  layout := reboot.layout valid
-  published := reboot.checkpointImage valid
+  inventory := view.descriptors rebooted
+  retry := selection.markedInput
+  layout := selection.layout
+  published := selection.checkpointImage
   checkpoint := none
-  selected := reboot.noCheckpoint valid
-  vacant := (reboot.selects valid).vacant
+  selected := selection.noCheckpoint
+  vacant := selection.vacant
   opening := opening
-  prepared := reboot.prepared valid
+  prepared := selection.prepared
   following := by
     intro offset occurs
     cases occurs
-  accepted := (reboot.selects valid).ready.appendReady.accepted
+  accepted := selection.ready.appendReady.accepted
   ordered := trivial
-  wal := (reboot.selects valid).ready.walImage
-  walLayout := (reboot.selects valid).ready.walCanonical.2.1
-  walValid := (reboot.selects valid).ready.walCanonical.2.2
+  wal := selection.ready.walImage
+  walLayout := selection.ready.walCanonical.2.1
+  walValid := selection.ready.walCanonical.2.2
   spans := by
     intro segment occurs
     cases occurs
@@ -82,61 +82,60 @@ def markedReport (opening : OpenObservation (input := input) reboot valid) :
 
 /-- Both actual reads come from the same selected reboot objects. The
 root and its stable child and object maps are local filesystem reports. -/
-structure SameReboot (opening : OpenObservation (input := input) reboot valid) : Prop where
+structure SameReboot (opening : OpenObservation (input := input) selection) : Prop where
   root : opening.admission.root = captured.root
   children : ∀ name, opening.admission.view.child opening.admission.root name =
-    (physical.names reboot.rebooted).child captured.root name
-  objects : opening.admission.view.modelObject = (physical.names reboot.rebooted).modelObject
+    (physical.names rebooted).child captured.root name
+  objects : opening.admission.view.modelObject = (physical.names rebooted).modelObject
 
-structure SelectedReads (opening : OpenObservation (input := input) reboot valid) : Prop where
+structure SelectedReads (opening : OpenObservation (input := input) selection) : Prop where
   directoryObject : opening.reads.bindings directory.path =
     some ((view.descriptors stop.afterRename).inode captured.cached.description)
   lockObject : opening.reads.bindings (directory.file .lock) =
     some (captured.reached.inode fileCalls.slot.description)
   manifest : opening.admission.view.child opening.admission.root "MANIFEST" = none
   marker : ∃ file : opening.reads.reads.ObservesFile (directory.file .walBoundary) (WAL.Boundary.encode 0),
-    file.object = (physical.names reboot.rebooted).modelObject marker.stageChild.child
+    file.object = (physical.names rebooted).modelObject marker.stageChild.child
   keeper : ∃ file : opening.reads.reads.ObservesFile (directory.file (.walSegment 0)) ByteArray.empty,
-    file.object = (physical.names reboot.rebooted).modelObject observed.statChild.child
+    file.object = (physical.names rebooted).modelObject observed.statChild.child
 
-theorem readsSelectedReboot (opening : OpenObservation (input := input) reboot valid)
-    (same : reboot.SameReboot valid opening) : reboot.SelectedReads valid opening := by
-  have chosen := reboot.selects valid
-  have mark := opening.reads.metadata.markerFile (WAL.Boundary.encode 0) chosen.ready.zeroMarker
+theorem readsSelectedReboot (opening : OpenObservation (input := input) selection)
+    (same : selection.SameReboot opening) : selection.SelectedReads opening := by
+  have mark := opening.reads.metadata.markerFile (WAL.Boundary.encode 0) selection.ready.zeroMarker
   obtain ⟨markerRead, _⟩ := mark
   have rawKeeper := opening.reads.wal.keeper
   have markerID : markerRead.object = marker.stageChild.child := by
     apply Option.some.inj
-    exact markerRead.bound.symm.trans ((same.children "WAL.commit").trans chosen.markerBinding)
+    exact markerRead.bound.symm.trans ((same.children "WAL.commit").trans selection.markerBinding)
   have lockID : opening.reads.lock = listed.lifetime.lock := by
     apply Option.some.inj
-    exact opening.reads.lockEntry.symm.trans ((same.children "LOCK").trans chosen.lock)
-  refine ⟨?_, ?_, (same.children "MANIFEST").trans chosen.manifestMissing, ⟨markerRead.observesFile, ?_⟩, ?_⟩
-  · rw [opening.reads.canonicalDirectory, same.root, same.objects, chosen.directory]
-  · rw [opening.reads.canonicalLock, lockID, same.objects, chosen.lockObject]
+    exact opening.reads.lockEntry.symm.trans ((same.children "LOCK").trans selection.lock)
+  refine ⟨?_, ?_, (same.children "MANIFEST").trans selection.manifestMissing, ⟨markerRead.observesFile, ?_⟩, ?_⟩
+  · rw [opening.reads.canonicalDirectory, same.root, same.objects, selection.rootObject]
+  · rw [opening.reads.canonicalLock, lockID, same.objects, selection.lockObject]
   · change markerRead.calls.statObject = _
     rw [← markerRead.calls.identifiedStat, markerRead.calls.statLookup.child_eq markerRead.bound, markerID, same.objects]
   · have bound := rawKeeper.bound
     change opening.admission.view.child opening.admission.root (renderWalSegmentName 0) = some rawKeeper.object at bound
     have keeperID : rawKeeper.object = observed.statChild.child := by
       apply Option.some.inj
-      exact bound.symm.trans ((same.children _).trans chosen.keeperBinding)
+      exact bound.symm.trans ((same.children _).trans selection.keeperBinding)
     refine ⟨rawKeeper.observesFile, ?_⟩
     change rawKeeper.calls.statObject = _
     rw [← rawKeeper.calls.identifiedStat, rawKeeper.calls.statLookup.child_eq rawKeeper.bound, keeperID, same.objects]
 
-private theorem exactEmptyPhase (opening : OpenObservation (input := input) reboot valid)
+private theorem exactEmptyPhase (opening : OpenObservation (input := input) selection)
     {session : SegmentedSession} {census : DescriptorInventory} {files : LockedFileState FileImage}
     (returned : opening.finish.run opening.chronology = .ok session (census, files)) :
     session.phase = .ready ⟨.empty, 0, 0, 0⟩ := by
-  let report := reboot.markedReport valid opening
+  let report := selection.markedReport opening
   obtain ⟨installed, final, ran, _, _, _, normalized⟩ := opening.finish.installsFromCensus opening.chronology
     opening.markerFound report.prepared report.following report.accepted report.ordered
   obtain ⟨opened, checkpoint, _, result, reached, exactResult, _, _, phase,
     _, _, _, _, _, _, _, _, _, _, selected, replay, generation, bytes, keeperFirst, _⟩ := normalized
   have sameSession : session = result :=
     (EStateM.Result.ok.inj (returned.symm.trans ran)).1.trans (EStateM.Result.ok.inj exactResult).1
-  have noCheckpoint := selected.uniqueResult (reboot.noCheckpoint valid)
+  have noCheckpoint := selected.uniqueResult (selection.noCheckpoint)
   have replayEmpty : recoverSelected .empty (WAL.encode []) = .ok .empty :=
     recoverSelected_encoded .empty [] [] trivial rfl
   rw [noCheckpoint, show (none : Option (PackedTable × UInt64)).getD (.empty, 0) = (.empty, 0) from rfl,
@@ -145,9 +144,9 @@ private theorem exactEmptyPhase (opening : OpenObservation (input := input) rebo
   rw [sameSession, phase]
   simp [Reopened.installed, empty, generation, noCheckpoint, bytes, keeperFirst, layout, BootstrapMarkedZero.layout]
 
-private theorem choosesAligned (opening : OpenObservation (input := input) reboot valid) :
-    ∃ finish : CapturedAlignedFinish opening.callbacks opening.reads (reboot.selects valid).vacant
-      (reboot.noCheckpoint valid), opening.finish = .aligned finish := by
+private theorem choosesAligned (opening : OpenObservation (input := input) selection) :
+    ∃ finish : CapturedAlignedFinish opening.callbacks opening.reads selection.vacant
+      (selection.noCheckpoint), opening.finish = .aligned finish := by
   have measured := opening.finish.usesMeasuredRepair
   have extent : opening.reads.wal.keeper.calls.metadata.byteSize.toNat = 0 :=
     opening.reads.wal.keeper.observesFile.extent
@@ -170,25 +169,19 @@ variable {nextView : OpenCloseHeapView heap FileImage}
   {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)} {stage : LongKeeperStageCallbacks heap}
   {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
 
-/-- The first admitted marked open after the effective bootstrap stop
-reads those same files and allocates an empty ready table on its reached
-heap. Its original phase, cache, lock and fresh token seed the next call. -/
-theorem opensEmptyTable (opening : OpenObservation (input := input) reboot valid)
-    (same : reboot.SameReboot valid opening)
-    (raw : RawHealthyMarkedOpenEffects opening nextView nextCalls nextInit reboot.rebooted
+def Opened (opening : OpenObservation (input := input) selection)
+    (raw : RawHealthyMarkedOpenEffects opening nextView nextCalls nextInit rebooted
       phaseIdentity tokenIdentity allocatePhase allocateToken stream remove stage rename)
     (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
     (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles →
       IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
-    (constructs : ∀ resolved lock cache, DiskTable.OpenReferenceAssembly resolved lock cache (assemble resolved lock cache))
     (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
     (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
-    (phaseEffects : OpenPhaseCellEffects nextView.phase get set)
-    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
-    reboot.SelectedReads valid opening ∧
-    (∃ finish : CapturedAlignedFinish opening.callbacks opening.reads (reboot.selects valid).vacant
-      (reboot.noCheckpoint valid), opening.finish = .aligned finish) ∧
-    (nextView.descriptors reboot.rebooted).slots = [] ∧ nextView.files reboot.rebooted = reboot.markedInput valid ∧
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) : Prop :=
+    selection.SelectedReads opening ∧
+    (∃ finish : CapturedAlignedFinish opening.callbacks opening.reads selection.vacant
+      (selection.noCheckpoint), opening.finish = .aligned finish) ∧
+    (nextView.descriptors rebooted).slots = [] ∧ nextView.files rebooted = selection.markedInput ∧
     ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
       (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
         IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
@@ -206,20 +199,36 @@ theorem opensEmptyTable (opening : OpenObservation (input := input) reboot valid
       nextView.descriptors start.reached = start.current.ready.state.census ∧
       nextView.cacheAt start.reached raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef =
         start.current.ready.state.cache ∧
-      start.current.history = [] ∧ start.current.submissions = [] ∧ start.current.ready.reads = [] ∧ start.pins = [] := by
-  have selected := reboot.selects valid
-  let report := reboot.markedReport valid opening
+      start.current.history = [] ∧ start.current.submissions = [] ∧ start.current.ready.reads = [] ∧ start.pins = []
+
+/-- The first admitted marked open from the selected bootstrap reboot
+reads those same files and allocates an empty ready table on its reached
+heap. Its original phase, cache, lock and fresh token seed the next call. -/
+theorem opensEmptyTable (opening : OpenObservation (input := input) selection)
+    (same : selection.SameReboot opening)
+    (raw : RawHealthyMarkedOpenEffects opening nextView nextCalls nextInit rebooted
+      phaseIdentity tokenIdentity allocatePhase allocateToken stream remove stage rename)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles →
+      IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    (constructs : ∀ resolved lock cache, DiskTable.OpenReferenceAssembly resolved lock cache (assemble resolved lock cache))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    (phaseEffects : OpenPhaseCellEffects nextView.phase get set)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
+    selection.Opened opening raw bootstrap assemble get set ptrEq := by
+  let report := selection.markedReport opening
   obtain ⟨_, installed, cacheOpen, makeCache, cacheAction, cacheSource, returned⟩ :=
     report.opensHealthyFromAdmission raw.raw raw.seed raw.checkpoint raw.listing raw.extents raw.seals raw.keeper
       raw.sameLookup raw.flat raw.marked bootstrap assemble constructs raw.allocations
-  have exactPhase := reboot.exactEmptyPhase valid opening installed.nativeReturned
+  have exactPhase := selection.exactEmptyPhase opening installed.nativeReturned
   obtain ⟨handle, start, table, _, lock, files, phase, _, contents, actualGet, actualSet, actualCompare,
     reached, state, history, submissions, reads, pins⟩ :=
     installed.fromOpen get set phaseEffects ptrEq
-  have empty : (nextView.descriptors reboot.rebooted).slots = [] := by
+  have empty : (nextView.descriptors rebooted).slots = [] := by
     rw [raw.raw.entryCensus]
-    exact selected.emptyCensus
-  refine ⟨reboot.readsSelectedReboot valid opening same, reboot.choosesAligned valid opening, empty,
+    exact selection.emptyCensus
+  refine ⟨selection.readsSelectedReboot opening same, selection.choosesAligned opening, empty,
     raw.raw.entryFiles, cacheOpen, makeCache, handle, start, cacheAction, cacheSource, ?_, ?_, ?_, lock,
     files.symm ▸ installed.cacheReferences, contents, actualGet, actualSet, actualCompare, ?_, ?_, ?_,
     history, submissions, reads, pins⟩
@@ -235,5 +244,5 @@ theorem opensEmptyTable (opening : OpenObservation (input := input) reboot valid
   · rw [reached, state]
     exact installed.cachePreserved
 
-end RawBootstrapMarkerDirectoryStop.EffectiveReboot
+end RawBootstrapMarkerDirectoryStop.MarkedRebootSelection
 end Alvoki.Storage.DiskSession

@@ -32,11 +32,14 @@ theorem settlesDirectoryStep (stop : RawBootstrapMarkerDirectoryStop keeper) :
     bootstrapMarkerStep (view.files stop.afterRename).image .syncDirectory = some stop.settledImage := by
   simp [bootstrapMarkerStep, settledImage, DirectoryPublication.Image.step]
 
-/-- The restart selects the settled directory and retains the empty
-keeper. The old owner is dropped by the reboot. -/
-def settledReboot (stop : RawBootstrapMarkerDirectoryStop keeper) : LockedFileState WalSegmentRotation.State :=
+/-- A reboot selecting the marker already visible at the issue settles
+that pair and keeps the empty keeper. The reboot drops the old owner. -/
+def visibleMarkerReboot (stop : RawBootstrapMarkerDirectoryStop keeper) : LockedFileState WalSegmentRotation.State :=
   let issue := view.files stop.afterRename
-  bootstrapPowerLoss directory {issue with image := stop.settledImage} stop.settledImage.metadata.active true
+  bootstrapPowerLoss directory issue issue.image.metadata.active true
+
+abbrev settledReboot (stop : RawBootstrapMarkerDirectoryStop keeper) : LockedFileState WalSegmentRotation.State :=
+  stop.visibleMarkerReboot
 
 /-- One reported reboot after the issued final barrier took effect.
 The same namespace projection observes its issued and restarted heaps.
@@ -58,62 +61,62 @@ structure EffectiveReboot (physical : stop.Physical handoff) where
       (keeper.inodes afterEffect).crashBytes ((physical.names afterEffect).modelObject child)
 
 theorem readyAtSettledReboot (physical : stop.Physical handoff) (valid : BootstrapValid before.image) :
-    BootstrapReady stop.settledReboot.image := by
+    BootstrapReady stop.visibleMarkerReboot.image := by
   have reached := stop.reachesPhysical physical
   have absent := valid.nextSelection.1
   refine ⟨rfl, ?_, ?_, rfl⟩
-  · simp only [settledReboot, bootstrapPowerLoss, settledImage, reached.image]
+  · simp only [visibleMarkerReboot, bootstrapPowerLoss, reached.image]
     exact absent
-  · simp only [settledReboot, bootstrapPowerLoss, settledImage, reached.image]
+  · simp only [visibleMarkerReboot, bootstrapPowerLoss, reached.image]
     rfl
 
-namespace EffectiveReboot
-
-variable {physical : stop.Physical handoff} (report : EffectiveReboot physical)
-
-/-- The reported effective sync and reboot select the same names and both
-exact payloads. The old lock's directory entry survives but no old slot
-or owner survives. This is the input needed by the next marked opener. -/
-structure Selected : Prop where
-  issued : report.fsync seed.handle stop.afterRename = .error (directory.path, seed.handle) report.afterEffect
-  effectStep : bootstrapMarkerStep (view.files stop.afterRename).image .syncDirectory =
-    some (view.files report.afterEffect).image
-  ready : BootstrapReady (view.files report.rebooted).image
-  marked : BootstrapMarkedZero (view.files report.rebooted).image
-  vacant : TryLockObserves (view.files report.rebooted).owners directory (.ok true)
-  emptyCensus : (view.descriptors report.rebooted).slots = []
-  directory : (physical.names report.rebooted).modelObject captured.root =
+/-- A selected marked reboot supplies just the files, namespace and vacant
+owner used by the next opener. The barrier effect is accounted for by
+the report that produces this witness. -/
+structure MarkedRebootSelection (physical : stop.Physical handoff) (rebooted : heap) : Prop where
+  ready : BootstrapReady (view.files rebooted).image
+  marked : BootstrapMarkedZero (view.files rebooted).image
+  vacant : TryLockObserves (view.files rebooted).owners directory (.ok true)
+  emptyCensus : (view.descriptors rebooted).slots = []
+  rootObject : (physical.names rebooted).modelObject captured.root =
     (view.descriptors stop.afterRename).inode captured.cached.description
-  lock : (physical.names report.rebooted).child captured.root "LOCK" = some listed.lifetime.lock
-  lockObject : (physical.names report.rebooted).modelObject listed.lifetime.lock =
+  lock : (physical.names rebooted).child captured.root "LOCK" = some listed.lifetime.lock
+  lockObject : (physical.names rebooted).modelObject listed.lifetime.lock =
     captured.reached.inode fileCalls.slot.description
-  manifestMissing : (physical.names report.rebooted).child captured.root "MANIFEST" = none
+  manifestMissing : (physical.names rebooted).child captured.root "MANIFEST" = none
   noConflict : ∀ name, name ≠ scratchName → name ≠ markerName → conflictsWithBootstrap name = true →
-    (physical.names report.rebooted).child captured.root name = none
-  scratchMissing : (physical.names report.rebooted).child captured.root scratchName = none
-  keeperBinding : (physical.names report.rebooted).child captured.root keeperName = some observed.statChild.child
-  markerBinding : (physical.names report.rebooted).child captured.root markerName = some marker.stageChild.child
-  sameKeeperObject : (physical.names report.rebooted).modelObject observed.statChild.child =
+    (physical.names rebooted).child captured.root name = none
+  scratchMissing : (physical.names rebooted).child captured.root scratchName = none
+  keeperBinding : (physical.names rebooted).child captured.root keeperName = some observed.statChild.child
+  markerBinding : (physical.names rebooted).child captured.root markerName = some marker.stageChild.child
+  sameKeeperObject : (physical.names rebooted).modelObject observed.statChild.child =
     (physical.names stop.afterRename).modelObject observed.statChild.child
-  sameMarkerObject : (physical.names report.rebooted).modelObject marker.stageChild.child =
+  sameMarkerObject : (physical.names rebooted).modelObject marker.stageChild.child =
     (physical.names stop.afterRename).modelObject marker.stageChild.child
-  keeperBytes : (keeper.inodes report.rebooted).visible
-    ((physical.names report.rebooted).modelObject observed.statChild.child) = ByteArray.empty
-  markerBytes : (keeper.inodes report.rebooted).visible
-    ((physical.names report.rebooted).modelObject marker.stageChild.child) = WAL.Boundary.encode 0
+  keeperBytes : (keeper.inodes rebooted).visible
+    ((physical.names rebooted).modelObject observed.statChild.child) = ByteArray.empty
+  markerBytes : (keeper.inodes rebooted).visible
+    ((physical.names rebooted).modelObject marker.stageChild.child) = WAL.Boundary.encode 0
 
-theorem selects (valid : BootstrapValid before.image) : report.Selected := by
+/-- Once the power loss selects the visible marker and empty keeper,
+both routes identify the same checked root and physical payloads. -/
+theorem selectsVisibleMarker (physical : stop.Physical handoff) (valid : BootstrapValid before.image)
+    {rebooted : heap} (files : view.files rebooted = stop.visibleMarkerReboot)
+    (census : (view.descriptors rebooted).slots = [])
+    (objectMap : (physical.names rebooted).modelObject = (physical.names stop.afterRename).modelObject)
+    (sameNames : ∀ name, (physical.names rebooted).child captured.root name =
+      (physical.names stop.afterRename).child captured.root name)
+    (keeperBytes : (keeper.inodes rebooted).visible
+      ((physical.names rebooted).modelObject observed.statChild.child) = ByteArray.empty)
+    (markerBytes : (keeper.inodes rebooted).visible
+      ((physical.names rebooted).modelObject marker.stageChild.child) = WAL.Boundary.encode 0) :
+    MarkedRebootSelection physical rebooted := by
   have reached := stop.reachesPhysical physical
   have ready := stop.readyAtSettledReboot physical valid
-  have sameNames (name : String) :
-      (physical.names report.rebooted).child captured.root name =
-      (physical.names stop.afterRename).child captured.root name := by
-    rw [report.chosen, report.effectNames]
-  have sameObjects : (physical.names report.rebooted).modelObject = captured.view.modelObject :=
-    report.sameObjects.trans ((congrArg DirectoryReadNamespace.modelObject
-      (report.effectNames.trans physical.renamedNames)).trans handoff.renameObjects)
+  have sameObjects : (physical.names rebooted).modelObject = captured.view.modelObject :=
+    objectMap.trans ((congrArg DirectoryReadNamespace.modelObject physical.renamedNames).trans handoff.renameObjects)
   have sameOldName (name : String) (stage : name ≠ scratchName) (active : name ≠ markerName) :
-      (physical.names report.rebooted).child captured.root name = captured.view.child captured.root name := by
+      (physical.names rebooted).child captured.root name = captured.view.child captured.root name := by
     rw [sameNames name, physical.renamedNames, handoff.renameNames name stage active]
     exact handoff.stageNames name stage
   have lock : captured.view.child captured.root "LOCK" = some listed.lifetime.lock := by
@@ -122,7 +125,7 @@ theorem selects (valid : BootstrapValid before.image) : report.Selected := by
     exact bound
   have noConflict (name : String) (notScratch : name ≠ scratchName) (notMarker : name ≠ markerName)
       (conflicts : conflictsWithBootstrap name = true) :
-      (physical.names report.rebooted).child captured.root name = none := by
+      (physical.names rebooted).child captured.root name = none := by
     rw [sameOldName name notScratch notMarker]
     cases found : captured.view.child captured.root name with
     | none => rfl
@@ -130,10 +133,35 @@ theorem selects (valid : BootstrapValid before.image) : report.Selected := by
       have present := (captured.view.namesExact captured.root name).mpr ⟨child, found⟩
       rw [listed.noConflict name present] at conflicts
       contradiction
-  have locked : TryLockObserves (view.files report.rebooted).owners directory (.ok true) := by
-    rw [report.files]
+  have locked : TryLockObserves (view.files rebooted).owners directory (.ok true) := by
+    rw [files]
     intro _
-    simp [settledReboot, bootstrapPowerLoss, LockOwners.set]
+    simp [visibleMarkerReboot, bootstrapPowerLoss, LockOwners.set]
+  exact ⟨files.symm ▸ ready, files.symm ▸ ⟨ready.manifestAbsent, ready.zeroMarker, ready.zeroDurable⟩,
+    locked, census, objectMap.symm ▸ reached.directoryInode, (sameOldName "LOCK" (by decide) (by decide)).trans lock,
+    sameObjects.symm ▸ (by simpa only [listed.sameView] using listed.lifetime.identifiesLock),
+    noConflict "MANIFEST" (by decide) (by decide) rfl, noConflict, (sameNames scratchName).trans reached.scratchGone,
+    (sameNames keeperName).trans reached.keeperBinding, (sameNames markerName).trans reached.markerBinding,
+    congrFun objectMap _, congrFun objectMap _, keeperBytes, markerBytes⟩
+
+namespace EffectiveReboot
+
+variable {physical : stop.Physical handoff} (report : EffectiveReboot physical)
+
+/-- The effective barrier additionally settles at its reported syscall
+effect heap. The marked reboot input is shared with a selection before
+that effect. -/
+structure Selected : Prop extends MarkedRebootSelection physical report.rebooted where
+  issued : report.fsync seed.handle stop.afterRename = .error (directory.path, seed.handle) report.afterEffect
+  effectStep : bootstrapMarkerStep (view.files stop.afterRename).image .syncDirectory =
+    some (view.files report.afterEffect).image
+
+theorem selects (valid : BootstrapValid before.image) : report.Selected := by
+  have reached := stop.reachesPhysical physical
+  have sameNames (name : String) :
+      (physical.names report.rebooted).child captured.root name =
+      (physical.names stop.afterRename).child captured.root name := by
+    rw [report.chosen, report.effectNames]
   have keeperBinding := (sameNames keeperName).trans reached.keeperBinding
   have markerBinding := (sameNames markerName).trans reached.markerBinding
   have keeperBytes := report.payload keeperName (by simp) _ keeperBinding
@@ -146,18 +174,8 @@ theorem selects (valid : BootstrapValid before.image) : report.Selected := by
     exact stop.settlesDirectoryStep
   have objectMap : (physical.names report.rebooted).modelObject = (physical.names stop.afterRename).modelObject :=
     report.sameObjects.trans (congrArg DirectoryReadNamespace.modelObject report.effectNames)
-  refine ⟨report.stopped, effectStep, report.files.symm ▸ ready,
-    report.files.symm ▸ ⟨ready.manifestAbsent, ready.zeroMarker, ready.zeroDurable⟩,
-    locked, report.emptyCensus, ?_, (sameOldName "LOCK" (by decide) (by decide)).trans lock, ?_,
-    noConflict "MANIFEST" (by decide) (by decide) rfl, noConflict, (sameNames scratchName).trans reached.scratchGone,
-    keeperBinding, markerBinding, congrFun objectMap _, congrFun objectMap _, List.mem_singleton.mp keeperBytes,
-    List.mem_singleton.mp markerBytes⟩
-  · rw [report.sameObjects, report.effectNames]
-    exact reached.directoryInode
-  · rw [sameObjects]
-    have identity := listed.lifetime.identifiesLock
-    rw [listed.sameView] at identity
-    exact identity
+  exact ⟨selectsVisibleMarker physical valid report.files report.emptyCensus objectMap sameNames
+      (List.mem_singleton.mp keeperBytes) (List.mem_singleton.mp markerBytes), report.stopped, effectStep⟩
 
 end EffectiveReboot
 end RawBootstrapMarkerDirectoryStop

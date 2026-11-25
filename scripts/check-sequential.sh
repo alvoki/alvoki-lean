@@ -225,6 +225,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectReboot
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerDirectoryReboot
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerRebootTableOpen
+lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectMarkedReboot
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerStopSessions
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectSessions
 lake env leanchecker Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap

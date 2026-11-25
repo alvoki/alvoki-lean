@@ -105,10 +105,11 @@ theorem executesOpenedSessions (reboot : EffectiveReboot physical) (valid : Boot
     (absent : calls.metadata (directory.file .walBoundary) seed.afterPending = .ok none seed.afterPending)
     (firstMarked : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
     (firstInstall : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap DiskTable)
-    (opening : MarkedReadyOpenObservations nextInput directory (view.descriptors reboot.rebooted)
-      (reboot.markedInput valid) (reboot.layout valid) (reboot.checkpointImage valid)
-      (reboot.selects valid).vacant (reboot.noCheckpoint valid))
-    (same : reboot.SameReboot valid opening)
+    (opening : let selection := (reboot.selects valid).toMarkedRebootSelection
+      MarkedReadyOpenObservations nextInput directory (view.descriptors reboot.rebooted)
+      (selection.markedInput) (selection.layout) (selection.checkpointImage)
+      selection.vacant (selection.noCheckpoint))
+    (same : (reboot.selects valid).toMarkedRebootSelection.SameReboot opening)
     (next : RawHealthyMarkedOpenEffects opening nextView nextCalls nextInit reboot.rebooted
       phaseIdentity tokenIdentity allocatePhase allocateToken stream remove stage rename)
     (fallback : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
@@ -121,7 +122,7 @@ theorem executesOpenedSessions (reboot : EffectiveReboot physical) (valid : Boot
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) :
     PublicStop admitted stop firstMarked firstInstall ∧
-    reboot.Selected ∧ reboot.SelectedReads valid opening ∧
+    reboot.Selected ∧ (reboot.selects valid).toMarkedRebootSelection.SelectedReads opening ∧
     ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
       (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
         IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles) (start : NativeOpenedSessionPoint heap),
@@ -138,7 +139,7 @@ theorem executesOpenedSessions (reboot : EffectiveReboot physical) (valid : Boot
     flat absent firstMarked firstInstall
   obtain ⟨selectedReads, _, _, _, cacheOpen, makeCache, handle, position, cacheAction, cacheSource, returned, phase,
     _, _, _, _, _, _, _, _, _, _, history, submissions, reads, pins⟩ :=
-    reboot.opensEmptyTable valid opening same next fallback assemble constructs get set phaseEffects ptrEq
+    (reboot.selects valid).toMarkedRebootSelection.opensEmptyTable opening same next fallback assemble constructs get set phaseEffects ptrEq
   let start : NativeOpenedSessionPoint heap := ⟨handle, position⟩
   exact ⟨interrupted, reboot.selects valid, selectedReads, cacheOpen, makeCache, start, cacheAction, cacheSource,
     returned, phase, history, submissions, reads, pins,
