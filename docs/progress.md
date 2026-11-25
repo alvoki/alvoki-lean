@@ -1067,7 +1067,9 @@ inode, including when the cache routes sync through a pending handle.
 The native-shaped marker read now has an explicit proof edge from
 the read-write open to the rewind and bounded read on the returned
 handle. The bounded read starts on the exact heap reached by rewind.
-The effect on the cursor remains a primitive observation.
+Given the observed reset to offset zero and the held chunk reports,
+Lean now derives that the shared reader decodes the bytes of the
+selected marker inode.
 
 The two-slot installer now has a shared reference-allocation proof.
 It follows the successful marker probe to the acquired marker

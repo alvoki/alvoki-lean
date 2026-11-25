@@ -587,6 +587,21 @@ theorem readMarkerAfterRewind_reports
         pure (marker, bytes)) reached := by
   simp only [readMarkerBytesWith, Bind.bind, EStateM.bind, openedMarker, rewound]
 
+/-- After a reported rewind to zero, the shared native reader decodes
+the bytes of the inode identified by the held marker open. -/
+theorem readMarkerBytesWith_decodesHeldMarker
+    {reads : WalSegmentRepair.CheckpointRunChunkReads} {directory : DiskDirectory}
+    {view : DiskSession.DirectoryReadNamespace} {root : DiskSession.DeviceInode}
+    {payload : ByteArray}
+    (file : DiskSession.HeldMetadataFile reads (directory.file .walBoundary) "WAL.commit" view root payload)
+    (available : PrefixChunksAvailableUntilEof payload (reads.readChunk file.calls.slot.description))
+    (rewind : EStateM IO.Error Nat Unit) (cursor : Nat)
+    (rewound : rewind cursor = .ok () 0) :
+    ∃ bytes, readMarkerBytesWith rewind (reads.readChunk file.calls.slot.description) cursor =
+        .ok bytes (min acquisitionLimit payload.size) ∧ decode bytes = decode payload := by
+  simpa only [readMarkerBytesWith, Bind.bind, EStateM.bind, rewound] using
+    decode_markerFromHeldDirectory file available
+
 /-- The successful reopen barrier persists the same marker that the
 bounded read observed. WAL repair may rely on this frontier for every
 subsequent surviving marker binding to that inode. A pending directory
