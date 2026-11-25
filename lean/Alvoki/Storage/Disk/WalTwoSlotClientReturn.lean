@@ -1850,43 +1850,64 @@ theorem settledRetriesOfBoundedReopen
 The reached state supplies both the logical file image and physical
 marker image used by the retry proof. -/
 structure InterruptedBatchMarkerPublication (directory : DiskDirectory) (prior : SegmentedWriterState)
-    (batch : List WAL.Write) (reached : FileImage × WalInodeImage) where
+    (batch : List WAL.Write) (next : Selection) (reached : FileImage × WalInodeImage) where
   Stop : Type
   rows : List (UInt64 × Option UInt64)
   table : PackedTable
   initialMarker : WalInodeImage
+  markerDescription : Nat
   lookup : System.FilePath → Except IO.Error IO.FS.Metadata
   nonempty : rows ≠ []
   prepared : prepareBatch prior.installed.table rows = some (batch, table)
   fits : prior.installed.walBytes + frameSize * rows.length < UInt64.size
   guard : checkActiveSegmentWith directory prior.installed lookup = .ok ()
-  append : ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
-  syncWal : ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
-  writeSlot : ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
-  syncSlot : ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
-  install : ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
+  append : System.FilePath → ByteArray → ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
+  syncWal : System.FilePath → ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
+  writeSlot : KeeperDescriptorIdentity → UInt64 → ByteArray → ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
+  syncSlot : KeeperDescriptorIdentity → ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
+  install : KeeperDescriptorIdentity → Selection → ExceptT IO.Error (EStateM Stop (FileImage × WalInodeImage)) Unit
   stopped : Stop
-  cut : append.run (prior.files, initialMarker) = .error stopped reached ∨
-    ∃ appended, append.run (prior.files, initialMarker) = .ok (.ok ()) appended ∧
-      (syncWal.run appended = .error stopped reached ∨
-        ∃ durable, syncWal.run appended = .ok (.ok ()) durable ∧
-          (writeSlot.run durable = .error stopped reached ∨
-            ∃ written, writeSlot.run durable = .ok (.ok ()) written ∧ syncSlot.run written = .error stopped reached))
+  cut :
+    let active := directory.file (.walSegment prior.installed.activeFirst)
+    let marker : KeeperDescriptorIdentity := ⟨markerDescription, initialMarker.active⟩
+    (append active (WAL.encode batch)).run (prior.files, initialMarker) = .error stopped reached ∨
+    ∃ appended, (append active (WAL.encode batch)).run (prior.files, initialMarker) = .ok (.ok ()) appended ∧
+      ((syncWal active).run appended = .error stopped reached ∨
+        ∃ durable, (syncWal active).run appended = .ok (.ok ()) durable ∧
+          ((writeSlot marker (next.slot * stride).toUInt64 next.encode).run durable = .error stopped reached ∨
+            ∃ written, (writeSlot marker (next.slot * stride).toUInt64 next.encode).run durable = .ok (.ok ()) written ∧ (syncSlot marker).run written = .error stopped reached))
+
+def InterruptedBatchMarkerPublication.markerHandle
+    {directory : DiskDirectory} {prior : SegmentedWriterState} {batch : List WAL.Write}
+    {next : Selection} {reached : FileImage × WalInodeImage}
+    (report : InterruptedBatchMarkerPublication directory prior batch next reached) : KeeperDescriptorIdentity :=
+  ⟨report.markerDescription, report.initialMarker.active⟩
 
 theorem InterruptedBatchMarkerPublication.stops
     {directory : DiskDirectory} {prior : SegmentedWriterState} {batch : List WAL.Write}
-    {reached : FileImage × WalInodeImage} (report : InterruptedBatchMarkerPublication directory prior batch reached) :
+    {next : Selection} {reached : FileImage × WalInodeImage}
+    (report : InterruptedBatchMarkerPublication directory prior batch next reached) :
     runBatchWriteWithInterruption directory report.rows report.lookup
-      (fun _ _ _ => publish report.append report.syncWal report.writeSlot report.syncSlot report.install)
+      (fun _ _ _ => publish
+        (report.append (directory.file (.walSegment prior.installed.activeFirst)) (WAL.encode batch))
+        (report.syncWal (directory.file (.walSegment prior.installed.activeFirst)))
+        (report.writeSlot report.markerHandle (next.slot * stride).toUInt64 next.encode)
+        (report.syncSlot report.markerHandle) (report.install report.markerHandle next))
       (.ready prior.installed, ⟨(prior.files, report.initialMarker), prior.owners⟩) =
       .error report.stopped (.poisoned, ⟨reached, prior.owners⟩) := by
+  let active := (directory.file (.walSegment prior.installed.activeFirst))
+  let append := report.append active (WAL.encode batch)
+  let syncWal := report.syncWal active
+  let writeSlot := report.writeSlot report.markerHandle (next.slot * stride).toUInt64 next.encode
+  let syncSlot := report.syncSlot report.markerHandle
+  let install := report.install report.markerHandle next
   apply runBatchWriteWithInterruption_stopped report.nonempty report.prepared report.fits report.guard
   rcases report.cut with appendCut | ⟨_, wrote, walCut | ⟨_, walBarrier, slotCut | ⟨_, slot, syncCut⟩⟩⟩
-  · exact publish_appendInterrupted report.append report.syncWal report.writeSlot report.syncSlot report.install appendCut
-  · exact publish_walSyncInterrupted report.append report.syncWal report.writeSlot report.syncSlot report.install wrote walCut
-  · exact publish_slotWriteInterrupted report.append report.syncWal report.writeSlot report.syncSlot report.install
+  · exact publish_appendInterrupted append syncWal writeSlot syncSlot install appendCut
+  · exact publish_walSyncInterrupted append syncWal writeSlot syncSlot install wrote walCut
+  · exact publish_slotWriteInterrupted append syncWal writeSlot syncSlot install
       wrote walBarrier slotCut
-  · exact publish_markerSyncInterrupted report.append report.syncWal report.writeSlot report.syncSlot report.install
+  · exact publish_markerSyncInterrupted append syncWal writeSlot syncSlot install
       wrote walBarrier slot syncCut
 
 /-- The guarded marked opener returns a session whose reads use the
@@ -1964,7 +1985,7 @@ theorem installsAfterAcquiredRecovery_replays
     (offset : current.slot = slotIndex active)
     (advanced : advance current (WAL.encode (prior.history ++ batch)).size = .ok next)
     {interruptedMarker : WalInodeImage}
-    (writeCut : InterruptedBatchMarkerPublication directory prior batch (interrupted, interruptedMarker))
+    (writeCut : InterruptedBatchMarkerPublication directory prior batch next (interrupted, interruptedMarker))
     (accepted : decode (writeCut.initialMarker.visible writeCut.initialMarker.active) = .ok current)
     (retainedBinding : ∀ inode ∈ interruptedMarker.crashBindings, inode = interruptedMarker.active)
     (slotOutcome : ∀ bytes ∈ interruptedMarker.visible interruptedMarker.active ::
@@ -2002,7 +2023,11 @@ theorem installsAfterAcquiredRecovery_replays
         opened.installed session ∧ after.2.image.directory.active = layout.target.pair ∧
       after.2.image.kept = interrupted.kept ∧
       runBatchWriteWithInterruption directory writeCut.rows writeCut.lookup
-        (fun _ _ _ => publish writeCut.append writeCut.syncWal writeCut.writeSlot writeCut.syncSlot writeCut.install)
+        (fun _ _ _ => publish
+          (writeCut.append (directory.file (.walSegment prior.installed.activeFirst)) (WAL.encode batch))
+          (writeCut.syncWal (directory.file (.walSegment prior.installed.activeFirst)))
+          (writeCut.writeSlot writeCut.markerHandle (next.slot * stride).toUInt64 next.encode)
+          (writeCut.syncSlot writeCut.markerHandle) (writeCut.install writeCut.markerHandle next))
         (.ready prior.installed, ⟨(prior.files, writeCut.initialMarker), prior.owners⟩) =
         .error writeCut.stopped (.poisoned, ⟨(interrupted, interruptedMarker), prior.owners⟩) := by
   intro opened prepare

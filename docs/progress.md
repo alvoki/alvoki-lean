@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The interrupted writer report now uses the same arguments as the
+native publication schedule: the active segment pathname, encoded batch,
+selected marker offset and record, and one marker handle for the slot
+write, sync and cache update. The actual syscall effects on those
+arguments remain the filesystem observation boundary.
+
 The interrupted batch report covers stops during WAL append and WAL
 sync as well as during the inactive slot write and marker sync. A stop
 at either early callback leaves its exact reached state before the
