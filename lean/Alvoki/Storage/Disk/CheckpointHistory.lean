@@ -164,6 +164,25 @@ theorem RepresentsWalHistory.acquireAt {before after : PackedTable} {model : Sna
     exact represented.preserve rfl (UInt64.le_of_eq floor.symm)
       (refined.rowsBounded (bounded.acquireAt acquired)) (fun _ _ _ => rfl)
 
+/-- A supported acquisition preserves the WAL representation, so the
+new pin reads from the same replay as the table before acquisition. -/
+theorem RepresentsWalHistory.acquireReads {table : PackedTable} {model reference : SnapshotTable UInt64}
+    {history : List WAL.Write} (represented : RepresentsWalHistory history model)
+    (refined : table.Refines model) (bounded : table.RowBounds)
+    (replayed : SnapshotWalReplay .empty history reference) {snapshot : UInt64}
+    (floor : table.pins.floor ≤ snapshot) (committed : snapshot ≤ table.committed) :
+    ∃ pin pinned, table.acquireAt snapshot = some (pin, pinned) ∧
+      (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+      ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) := by
+  have available : (table.acquireAt snapshot).isSome = true := by
+    simpa only [PackedTable.acquireAt, Option.isSome_map] using
+      (SnapshotPins.acquire_iff table.pins _ _).mpr ⟨floor, committed⟩
+  obtain ⟨⟨pin, pinned⟩, acquired⟩ := Option.isSome_iff_exists.mp available
+  obtain ⟨_, pinnedRefined, pinnedHistory⟩ := represented.acquireAt refined bounded acquired
+  have pinSpec := PackedTable.acquireAt_spec acquired
+  exact ⟨pin, pinned, acquired,
+    by simpa only [pinSpec.sequence] using pinnedHistory.packedPinnedReads pinnedRefined replayed pinSpec.active⟩
+
 theorem RepresentsWalHistory.release {model : SnapshotTable UInt64} {history : List WAL.Write}
     (represented : RepresentsWalHistory history model) (handle : SnapshotHandle) :
     RepresentsWalHistory history (model.release handle) := by

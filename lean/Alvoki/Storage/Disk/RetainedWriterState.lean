@@ -120,14 +120,7 @@ theorem SegmentedWriterState.RetainedReady.acquireReads {directory descriptor st
         ∀ start stop, pinned.range pin.handle start stop = some (reference.table.range start stop snapshot) := by
   obtain ⟨_, refined, represented⟩ := ready.resumed.canonical
   obtain ⟨reference, replayed⟩ := SnapshotWalReplay.fromEmpty state.history ready.resumed.ordered
-  have available : (state.installed.table.acquireAt snapshot).isSome = true := by
-    simpa only [PackedTable.acquireAt, Option.isSome_map] using
-      (SnapshotPins.acquire_iff state.installed.table.pins _ _).mpr ⟨retained, committed⟩
-  obtain ⟨⟨pin, pinned⟩, acquired⟩ := Option.isSome_iff_exists.mp available
-  obtain ⟨_, refined, represented⟩ := represented.acquireAt refined ready.resumed.bounds acquired
-  have pinSpec := PackedTable.acquireAt_spec acquired
-  exact ⟨reference, replayed, pin, pinned, acquired,
-    by simpa only [pinSpec.sequence] using represented.packedPinnedReads refined replayed pinSpec.active⟩
+  exact ⟨reference, replayed, represented.acquireReads refined ready.resumed.bounds replayed retained committed⟩
 
 /-- A sequence still above the retention floor has the same reads after
 reacquisition, even if collection removed physical files covering it. -/
