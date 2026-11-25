@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The client theorem now follows retries up to the admission of the last
+open. It then consumes that open's repair return and effects together.
+Lean derives the final marker binding and equality of the sealed bytes
+with the interrupted image across both retry phases and the final
+repair. Supplying the native evidence for the repair branch and the
+preceding retry phases remains open.
+
 The replacement and prune callbacks now return their successful
 filesystem-effect proof with their exact result, starting at the
 marker-stabilized input. Their reopen theorems consume that single

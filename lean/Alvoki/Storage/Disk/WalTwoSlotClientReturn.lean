@@ -1777,7 +1777,9 @@ theorem installsAfterAcquiredRecovery_replays
         (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
         layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead,
         { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) =
-      .ok () (admission.cache, after))
+      .ok () (admission.cache, after) ∧
+      EffectTrace layout.target { retry.image with directory := settleMarker retry.image.directory selection }
+        after.2.image)
     {bootstrapFirst writer : Nat}
     {initial : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession}
     (start : BootstrapClientStart directory bootstrapFirst initial)
@@ -1785,8 +1787,8 @@ theorem installsAfterAcquiredRecovery_replays
     {batch : List WAL.Write}
     (acceptedCheckpoint : published.AcceptsVersioned prior.history.length.toUInt64
       (Boundary.CheckpointRepresentsPrefix prior.history) retry.image.directory.active.manifest)
-    {interrupted firstRepair : FileImage}
-    (beforeBarrier : UnsettledRetries interrupted retry.image)
+    {interrupted firstPrepared firstRepair : FileImage}
+    (beforeBarrier : UnsettledRetries interrupted firstPrepared)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
     {current next : Selection}
     (accepted : decode before = .ok current)
@@ -1796,11 +1798,11 @@ theorem installsAfterAcquiredRecovery_replays
       pair = ⟨checkpoint, none⟩ ∨
       ∃ bytes, InterruptedSlotBytes before bytes active next ∧
         projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
-    (observed : retry.image.directory.active.walBoundary = some (Boundary.encode selection.frontier))
+    (observedFirst : firstPrepared.directory.active.walBoundary = some (Boundary.encode selection.frontier))
     (authorizedRepair : EffectTrace layout.target
-      { retry.image with directory := settleMarker retry.image.directory selection } firstRepair)
-    (preparedPlan : WalSegmentRepair.Prepared retry.image layout.target layout.plan)
-    (retries : SettledRetries layout.target firstRepair after.2.image)
+      { firstPrepared with directory := settleMarker firstPrepared.directory selection } firstRepair)
+    {firstPlan : Plan} (preparedPlan : WalSegmentRepair.Prepared firstPrepared layout.target firstPlan)
+    (retries : SettledRetries layout.target firstRepair retry.image)
     (oldSize : current.frontier.toNat = (WAL.encode prior.history).size)
     (sameHistory : history = (prior.history ++ batch).take layout.range.through) :
     let opened : Reopened := ⟨table, (loaded.getD (.empty, 0)).2, selection.frontier, layout.keeper.first⟩
@@ -1817,8 +1819,17 @@ theorem installsAfterAcquiredRecovery_replays
         | .error cause (_, reached) => .error cause reached) =
         .ok session after ∧
       InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take layout.range.through)
-        opened.installed session ∧ after.2.image.directory.active = layout.target.pair := by
+        opened.installed session ∧ after.2.image.directory.active = layout.target.pair ∧
+      after.2.image.kept = interrupted.kept := by
   intro opened prepare
+  have authorized := prepared_settleMarker preparedPlan selection observedFirst
+  have ⟨validRetry, keptRetry⟩ := retries.preserves
+    (authorizedRepair.valid authorized.pair authorized.keeperPrefix authorized.newer)
+  have observed : retry.image.directory.active.walBoundary = some (Boundary.encode selection.frontier) := by
+    rw [validRetry.selected, ← authorized.pair]
+    simp [settleMarker, observedFirst]
+  have effects := finished.2.ofSameAuthorizedImage (syncDirectory_afterSelectedMarker _ _ observed).symm
+  have validAfter := effects.valid validRetry.selected validRetry.keeper validRetry.later
   obtain ⟨_, _, markerPayload, frontier, present, markerDecoded, count⟩ :=
     DirectoryPublication.Bindings.walRange_accounting layout.decoded
   have samePayload := Option.some.inj (observed.symm.trans present)
@@ -1827,15 +1838,12 @@ theorem installsAfterAcquiredRecovery_replays
   obtain ⟨acquisition, prepared, markerLive, sameInode⟩ := preparesFromHeldMarker file privateFile available report
     manifest runs checkpointSelected chronology selection decoded (sameFrontier.symm ▸ count) orderedLayout replay keeper
     seals offsets retained following later keepsMarker listingDrops keeperDrops
-  have authorized := prepared_settleMarker preparedPlan selection observed
-  have ⟨validAfter, _⟩ := retries.preserves
-    (authorizedRepair.valid authorized.pair authorized.keeperPrefix authorized.newer)
   obtain ⟨_, epoch, newSize, _, _⟩ := advance_fields advanced
   have newer : current.toRecord.epoch < next.toRecord.epoch := by
     change current.epoch.toNat < next.epoch.toNat
     omega
   have choicesBefore := interruptedMarker_retryChoices accepted offset newer observations
-  have choice := (beforeBarrier.selectsOldOrNew checkpoint current.frontier next.frontier choicesBefore observed).2
+  have choice := (beforeBarrier.selectsOldOrNew checkpoint current.frontier next.frontier choicesBefore observedFirst).2
   have bytes := choice.imp (fun old => old ▸ oldSize) (fun all => all ▸ newSize)
   have chosenCount := sameFrontier.symm ▸ count
   have lengthChoice : layout.range.through = prior.history.length ∨
@@ -1879,12 +1887,13 @@ theorem installsAfterAcquiredRecovery_replays
     simp only [reopenWith_reports, prepare, opened, prepared, syncProjection,
       stabilizeCapturedMarker, show admission.held.image.directory = retry.image.directory from rfl,
       projected]
-    erw [finished]
+    erw [finished.1]
   have returned := installsAfterAcquiredRecovery calls marker
     (fun resolved => acquireMarkerInCensus markerReads (resolved.file .walBoundary))
     prepare stabilize finish acquisition recovery
   exact ⟨_, returned, pending.install rfl represented refined (recoverSelected_rowBounds baseBounds replay),
-    validAfter.selected⟩
+    validAfter.selected,
+    effects.keepsSealed.trans (keptRetry.trans (authorizedRepair.keepsSealed.trans beforeBarrier.keepsSealed))⟩
 
 /-- After marker stabilization, a longer keeper uses the shared native
 replacement schedule once its first directory sync authorizes repair. -/
