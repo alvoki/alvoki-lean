@@ -138,6 +138,14 @@ error keeps the writer poisoned and returns the actual reached files with the pa
 Both error timings preserve a valid WAL for recovery. The native contract supplies slot liveness, directory
 identity and sync effects. [Final collection directory sync](../lean/Alvoki/Storage/Disk/WalCollectionDirectoryFsync.lean)
 
+A clean checked directory scan under the writer's retained lock now gives the complete native WAL collection plan.
+The reported canonical no-follow stats determine the exact ordered extents. The retained chain proves the installed
+suffix check, and the actual read-only planner returns every eligible seal in order. The proof reads metadata and
+the manifest and marker, with no payload reads of WAL or checkpoint runs. A complete reported pass reuses the same
+directory and writer slots at the final sync. Once that sync takes effect, every eligible seal is absent from every
+reported crash survivor. The native contract supplies enumeration completeness, stable names, truthful sizes and
+the local mutation effects. [Complete WAL collection](../lean/Alvoki/Storage/Disk/WalCollectionCompletePlan.lean)
+
 `DiskTable.collectCoveredWal` executes that preflight and the shared canonical unlink and directory-sync schedule under one lock. A failed preflight leaves the writer ready. The adapter poisons the session on a mutation error until it closes; a successful pass keeps the installed table and pins. Native tests inject errors before and after the real directory sync and check reopened data, the next append and the required barrier on an empty retry. Physical effect and descriptor reports remain the trusted boundary. [Native collector](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Fault tests](../lean/Alvoki/Checks/DiskTableChecks.lean)
 
 A reported collection error keeps its pending crash choices through the poisoned session's close. The mixed trace carries exact owner transitions through rejected acquisitions, failed read-only preparations, observed reference drops and reported directory barrier failures. Once an observed barrier settles the list, subsequent failures preserve that settlement. A healthy final bounded open preserves the loaded checkpoint and determines the exact returned writer. [Collection lock handoff](../lean/Alvoki/Storage/Disk/SegmentedCollectionLockHandoff.lean) · [Mixed reopen report](../lean/Alvoki/Storage/Disk/SegmentedCollectionLiveReopen.lean)

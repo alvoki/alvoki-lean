@@ -305,6 +305,7 @@ import Alvoki.Storage.Disk.WalCollectionFirstUnlink
 import Alvoki.Storage.Disk.WalCollectionFirstEffect
 import Alvoki.Storage.Disk.WalCollectionOrderedPrefix
 import Alvoki.Storage.Disk.WalCollectionDirectoryFsync
+import Alvoki.Storage.Disk.WalCollectionCompletePlan
 import Alvoki.Storage.Disk.SelectedRecoveryPayload
 import Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
@@ -1576,6 +1577,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.keepsDirectory
 #check_axioms Alvoki.Storage.DiskSession.WalUnlinkPrefix.completedNamesAbsent
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.reportedWalCollectionBarrier
+#check_axioms Alvoki.Storage.OpenPathReadReports.walCollectionOffsets_of_layout
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionInventoryReport.enumerated
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionInventoryReport.listedCanonical
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionInventoryReport.starts
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionInventoryReport.scanned
+#check_axioms Alvoki.Storage.DiskSession.WalCollectionInventoryReport.checks
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.completeObservedWalPlan
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.collectsCompleteObservedWalPlan
 #check_axioms Alvoki.Storage.OpenPathReadReports.walSegmentExtents_offsets
 #check_axioms Alvoki.Storage.walCollectionOffsetsFromExtents_observed
 #check_axioms Alvoki.Storage.planWalCollectionWith_reported
