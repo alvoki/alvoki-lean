@@ -464,6 +464,7 @@ import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.NativeWriteClassification
 import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
 import Alvoki.Storage.Disk.NativeClassifiedWriteAck
+import Alvoki.Storage.Disk.NativeReadyWriteStorage
 import Alvoki.Storage.Disk.NativeClassifiedUncertainWrite
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
@@ -3782,6 +3783,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RegularFileSyncEffect.pairedStored
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedReturnedStorage
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage
+#check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.Frames.settledFrom
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_iff_write
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.frame
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.frame
+#check_axioms Alvoki.Storage.DiskSession.ClassifiedWriteAcknowledgement.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedFromStaging
 #check_axioms Alvoki.Storage.SyncHandleRouting.Cache.selectAppend_owned
 #check_axioms Alvoki.Storage.SyncHandleRouting.runAppendWithCache_owned

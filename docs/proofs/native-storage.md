@@ -44,10 +44,14 @@ The regular-file effect changes durable byte choices only at the inode bound to 
 descriptor. The grouped success proof composes those two local laws and a frame for the intervening
 pending-reference store. Rename keeps the synced staged inode and the final directory fsync settles
 the keeper and canonical marker in each joint crash map. This uses reported effect, binding and
-descriptor facts at each primitive. The remaining refinement must carry these results, the
-protected checkpoint files and the failure outcomes into the next ready or interrupted position.
+descriptor facts at each primitive. In each allowed joint crash map the keeper and canonical
+marker name the exact visible inodes. On an acknowledged transition the physical WAL files combine
+with one frame for the directory, lock, selected checkpoint and seals to establish the next ready
+storage. The directory barrier settles its child names. The frame still covers the directory's
+own binding. The remaining refinement must derive the classified acknowledgement and filesystem
+effects from the same raw execution and transport them through the final phase-cell update.
 Both ordinary group errors already feed the same uncertain-write endpoint.
-[Shared cache routing](../../lean/Alvoki/Storage/Disk/NativeRawSync.lean) · [Durable WAL publication](../../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean) · [Pending write](../../lean/Alvoki/Storage/Disk/NativeGroupedPendingWrite.lean)
+[Shared cache routing](../../lean/Alvoki/Storage/Disk/NativeRawSync.lean) · [Durable WAL publication](../../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean) · [Ready storage after an acknowledged write](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) · [Pending write](../../lean/Alvoki/Storage/Disk/NativeGroupedPendingWrite.lean)
 
 `NativeReachedExecutionPrefix.keyValueRefinement` adds whole-or-none uncertain events, ready replay when
 the ending returns ready, and the existence of an allowed terminal history that agrees with prior reads.

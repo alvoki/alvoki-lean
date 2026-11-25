@@ -49,6 +49,15 @@ theorem CheckpointStorageObservation.Frames.weaken {entry reached : CheckpointSt
     obtain ⟨prior, earlier, same⟩ := frame.survivors names allowed
     exact ⟨prior, earlier, fun path keep => same path (included path keep)⟩
 
+/-- Settlement of a footprint survives a joint namespace frame. -/
+theorem CheckpointStorageObservation.Frames.settledFrom {entry reached : CheckpointStorageObservation}
+    {footprint : FilePath → Prop} (frame : entry.Frames footprint reached)
+    (settled : ∀ names ∈ entry.crashNames, ∀ path, footprint path → names path = entry.files.names path) :
+    ∀ names ∈ reached.crashNames, ∀ path, footprint path → names path = reached.files.names path := by
+  intro names allowed path selected
+  obtain ⟨prior, earlier, same⟩ := frame.survivors names allowed
+  exact (same path selected).trans ((settled prior earlier path selected).trans (frame.visible path selected).1.symm)
+
 /-- Transport the selected file together with its durable payload. -/
 theorem CheckpointSurvivingFiles.Frames.stored {footprint : FilePath → Prop}
     {first last : CheckpointSurvivingFiles} (frame : first.Frames footprint last)

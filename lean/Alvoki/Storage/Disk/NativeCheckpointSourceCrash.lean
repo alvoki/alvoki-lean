@@ -5,23 +5,61 @@ namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication SyncHandleRouting
 
-/-- The selected files of a ready table before any survivor is chosen. -/
-structure NativeReadyStorage (state : NativeReadyState) (storage : CheckpointStorageObservation) : Prop where
-  directoryBound : storage.files.names state.session.directory.path = some (state.census.inode state.directorySlot.description)
-  lockBound : storage.files.names (state.session.directory.file .lock) = some (state.census.inode state.owner.description)
+/-- Paths that a WAL append and marker publication must preserve.
+The active keeper and commit marker are established by the write. -/
+def NativeReadyState.writeFramePath (state : NativeReadyState) (path : FilePath) : Prop :=
+  let directory := state.session.directory
+  path = directory.path ∨ path = directory.file .lock ∨ path = directory.file .manifest ∨
+  (∃ segment ∈ state.writer.wal.sealed, path = directory.file (.walSegment segment.first)) ∨
+  ∃ bytes metadata index, state.writer.target.pair.manifest = some bytes ∧
+    Manifest.IntegrityCheckpoint.decode bytes = .ok metadata ∧ index < metadata.header.runCount.toNat ∧
+    path = directory.file (.run metadata.header.generation index)
+
+theorem NativeReadyState.crashPath_iff_write {state : NativeReadyState} {path : FilePath} :
+    state.crashPath path ↔ path = state.session.directory.file .walBoundary ∨
+      path = state.session.directory.file (.walSegment state.writer.wal.active.first) ∨ state.writeFramePath path := by
+  simp only [crashPath, checkpointSurvivorPath, checkpointWalPath, writeFramePath, or_left_comm, or_comm]
+
+/-- The recovery bindings and bytes that an ordinary WAL write keeps. -/
+structure NativeReadyProtectedStorage (state : NativeReadyState) (files : CheckpointSurvivingFiles) : Prop where
+  directoryBound : files.names state.session.directory.path = some (state.census.inode state.directorySlot.description)
+  lockBound : files.names (state.session.directory.file .lock) = some (state.census.inode state.owner.description)
   manifest : match state.writer.target.pair.manifest with
-    | none => storage.files.names (state.session.directory.file .manifest) = none
-    | some bytes => storage.files.Stored (state.session.directory.file .manifest) bytes
-  marker : storage.files.Stored (state.session.directory.file .walBoundary)
-    (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64)
-  keeper : storage.files.Stored (state.session.directory.file (.walSegment state.writer.wal.active.first)) state.writer.wal.active.bytes
+    | none => files.names (state.session.directory.file .manifest) = none
+    | some bytes => files.Stored (state.session.directory.file .manifest) bytes
   sealedFiles : ∀ segment ∈ state.writer.wal.sealed,
-    storage.files.Stored (state.session.directory.file (.walSegment segment.first)) segment.bytes
+    files.Stored (state.session.directory.file (.walSegment segment.first)) segment.bytes
   runs : ∀ bytes metadata, state.writer.target.pair.manifest = some bytes →
     Manifest.IntegrityCheckpoint.decode bytes = .ok metadata → ∀ index < metadata.header.runCount.toNat,
     ∀ payload, state.writer.published.durable metadata.header.generation index = some payload →
-    storage.files.Stored (state.session.directory.file (.run metadata.header.generation index)) payload
+    files.Stored (state.session.directory.file (.run metadata.header.generation index)) payload
+
+/-- The selected files of a ready table before any survivor is chosen. -/
+structure NativeReadyStorage (state : NativeReadyState) (storage : CheckpointStorageObservation) : Prop
+    extends NativeReadyProtectedStorage state storage.files where
+  marker : storage.files.Stored (state.session.directory.file .walBoundary)
+    (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64)
+  keeper : storage.files.Stored (state.session.directory.file (.walSegment state.writer.wal.active.first)) state.writer.wal.active.bytes
   settled : ∀ names ∈ storage.crashNames, ∀ path, state.crashPath path → names path = storage.files.names path
+
+theorem NativeReadyProtectedStorage.frame {state : NativeReadyState} {first last : CheckpointSurvivingFiles}
+    (initial : NativeReadyProtectedStorage state first) (frame : first.Frames state.writeFramePath last) :
+    NativeReadyProtectedStorage state last := by
+  refine ⟨(frame _ (.inl rfl)).1.trans initial.directoryBound,
+    (frame _ (.inr (.inl rfl))).1.trans initial.lockBound, ?_, ?_, ?_⟩
+  · have manifest := initial.manifest
+    cases selected : state.writer.target.pair.manifest with
+    | none =>
+      rw [selected] at manifest
+      exact (frame _ (.inr (.inr (.inl rfl)))).1.trans manifest
+    | some bytes =>
+      rw [selected] at manifest
+      exact frame.stored (.inr (.inr (.inl rfl))) manifest
+  · intro segment member
+    exact frame.stored (.inr (.inr (.inr (.inl ⟨segment, member, rfl⟩)))) (initial.sealedFiles segment member)
+  · intro bytes metadata manifest decoded index within payload bound
+    exact frame.stored (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, manifest, decoded, within, rfl⟩))))
+      (initial.runs bytes metadata manifest decoded index within payload bound)
 
 namespace NativeReadyStorage
 
@@ -31,28 +69,12 @@ variable {state : NativeReadyState} {first last : CheckpointStorageObservation}
 footprint. Each surviving map is traced back jointly. -/
 theorem frame (initial : NativeReadyStorage state first) (frame : first.Frames state.crashPath last) :
     NativeReadyStorage state last := by
-  refine ⟨(frame.visible _ (.inl rfl)).1.trans initial.directoryBound,
-    (frame.visible _ (.inr (.inl rfl))).1.trans initial.lockBound, ?_,
-    frame.visible.stored (.inr (.inr (.inr (.inl (.inl rfl))))) initial.marker,
-    frame.visible.stored (.inr (.inr (.inr (.inl (.inr (.inl rfl)))))) initial.keeper, ?_, ?_, ?_⟩
-  · have manifest := initial.manifest
-    cases selected : state.writer.target.pair.manifest with
-    | none =>
-      rw [selected] at manifest
-      exact (frame.visible _ (.inr (.inr (.inl rfl)))).1.trans manifest
-    | some bytes =>
-      rw [selected] at manifest
-      exact frame.visible.stored (.inr (.inr (.inl rfl))) manifest
-  · intro segment member
-    exact frame.visible.stored (.inr (.inr (.inr (.inl (.inr (.inr ⟨segment, member, rfl⟩))))))
-      (initial.sealedFiles segment member)
-  · intro bytes metadata manifest decoded index within payload bound
-    exact frame.visible.stored (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, manifest, decoded, within, rfl⟩))))
-      (initial.runs bytes metadata manifest decoded index within payload bound)
-  · intro names allowed path selected
-    obtain ⟨prior, priorAllowed, frameNames⟩ := frame.survivors names allowed
-    exact (frameNames path selected).trans
-      ((initial.settled prior priorAllowed path selected).trans (frame.visible path selected).1.symm)
+  have included : ∀ path, state.writeFramePath path → state.crashPath path :=
+    fun _ kept => NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept))
+  refine ⟨initial.toNativeReadyProtectedStorage.frame (frame.weaken included).visible,
+    frame.visible.stored (NativeReadyState.crashPath_iff_write.mpr (.inl rfl)) initial.marker,
+    frame.visible.stored (NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))) initial.keeper,
+    frame.settledFrom initial.settled⟩
 
 /-- Sample durable bytes at the bound inodes of one reached survivor. -/
 def observeCrash (stable : NativeReadyStorage state first)
