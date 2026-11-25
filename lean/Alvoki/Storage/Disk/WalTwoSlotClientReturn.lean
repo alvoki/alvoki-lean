@@ -914,8 +914,14 @@ theorem markerError_selectBatch {α : Type}
     (prior : decode before = .ok current)
     (activeOffset : current.slot = slotIndex active)
     (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
+    (completedCounts : List Nat) (transfersFit : completedCounts.sum ≤ 40)
     (slotOutcome : ∀ bytes ∈ reached.2.crashBytes markerHandle.inode,
-      InterruptedSlotBytes before bytes active next)
+      bytes.size = containerSize ∧
+      (∀ position, bytes.get! position ≠ before.get! position →
+        next.slot * stride ≤ position ∧ position < next.slot * stride + completedCounts.sum) ∧
+      (decodeSlot bytes (slotIndex active.other) = decodeSlot before (slotIndex active.other) ∨
+        decodeSlot bytes (slotIndex active.other) = none ∨
+        decodeSlot bytes (slotIndex active.other) = some next))
     (oldCount : current.frontier.toNat = (WAL.encode history).size)
     (appendedBytes : ∃ tail, appended.1.visible appended.1.active = WAL.encode (history ++ batch) ++ tail) :
     DiskSession.publishPreparedWrite nextTable sequence setPhase
@@ -927,8 +933,16 @@ theorem markerError_selectBatch {α : Type}
   refine ⟨prepared_write_markerError nextTable sequence phase append syncWal writeSlot syncSlot install
     wrote walBarrier failed, ?_⟩
   rw [walUnchanged] at walSurvived
-  exact interruptedDescriptors_selectBatch walSync walCurrent markerCurrent walSettled markerSettled
-    walSurvived markerSurvived prior activeOffset advanced slotOutcome oldCount appendedBytes
+  refine interruptedDescriptors_selectBatch walSync walCurrent markerCurrent walSettled markerSettled
+    walSurvived markerSurvived prior activeOffset advanced ?_ oldCount appendedBytes
+  obtain ⟨_, transfers⟩ := SlotWriteTransfers.ofCounts (next.slot * stride) 0 completedCounts
+    (by simpa using transfersFit)
+  simp only [Nat.zero_add] at transfers
+  intro bytes survives
+  obtain ⟨size, changed, decoded⟩ := slotOutcome bytes survives
+  apply transfers.interruptedBytes activeOffset advanced size _ decoded
+  intro position differs
+  exact (transfers.coversPrefix position).mpr (by simpa using changed position differs)
 
 /-- Before the schedule issues a marker write, append and WAL sync
 may leave different suffixes on disk, but the previous durable frontier

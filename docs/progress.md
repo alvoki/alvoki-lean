@@ -969,6 +969,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+For a returned marker write or sync error, the client proof now uses
+the completed positional-write counts to derive slot isolation for the
+reported survivors. This requires that changed bytes lie within the
+counted prefix, including that a terminal write error contributes no
+uncounted changes. The recovery proof still takes the filesystem's
+torn-record decode alternatives as a premise.
+
 The native batch API now has matching coverage for returned I/O
 errors after all 40 strict marker-write prefixes, with and without a
 rotated keeper. Each cut returns commit-unknown, poisons the writer,
