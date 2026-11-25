@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The client-session proof now derives marker settlement from the
+reported successful file sync on the inode acquired by the marker
+read. The WAL read proof supplies the still-live descriptor and inode
+identity at that sync. The remaining native boundary includes the
+projection of the sync callback and the exact finish and retry reports.
+
 The client replay theorem derives successful preparation from the
 chronological manifest, checkpoint runs, directory scan, seals and
 bounded keeper read. It constructs the reopened table, repair plan,

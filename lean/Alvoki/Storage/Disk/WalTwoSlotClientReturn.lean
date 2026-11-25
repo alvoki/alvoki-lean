@@ -1722,14 +1722,23 @@ theorem installsAfterAcquiredRecovery_replays
     (listingDrops : ∀ event ∈ report.listing.beforeOpen ++ report.listing.duringScan,
       event.removes file.calls.slot.reference = false)
     (keeperDrops : ∀ event ∈ keeper.duringRead, event.removes file.calls.slot.reference = false)
-    (stabilized : stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩
-      (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
+    {markerImage settledMarker : WalInodeImage}
+    (markerInode : file.calls.inventory.inode file.calls.slot.description = markerImage.active)
+    (markerBytes : payload = markerImage.visible markerImage.active)
+    (effect : Storage.SyncHandleRouting.FsyncResult markerImage
+      (markerImage.completeFileSync markerImage.active) true (.ok () settledMarker))
+    (sameBinding : ∀ inode ∈ markerImage.crashBindings, inode = markerImage.active)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = retry.image.directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ settledMarker.crashBindings, bytes ∈ settledMarker.crashBytes inode)
+    (syncProjection :
+      let reached := (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
         (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
-        layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead, admission.held) =
-      .ok () (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
-        (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
-        layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead,
-        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }))
+        layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead, admission.held)
+      stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩ reached =
+        stabilizeCapturedMarker (markerImage.visible markerImage.active) choices reached)
     (finished : finish directory layout.boundedPlan report.wal.keeper.calls.metadata.byteSize.toNat
       (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
         (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
@@ -1779,7 +1788,7 @@ theorem installsAfterAcquiredRecovery_replays
       InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take range.through)
         opened.installed session := by
   intro opened prepare
-  obtain ⟨acquisition, prepared, _, _⟩ := preparesFromHeldMarker file privateFile available report
+  obtain ⟨acquisition, prepared, markerLive, sameInode⟩ := preparesFromHeldMarker file privateFile available report
     manifest runs checkpointSelected chronology selection decoded count orderedLayout replay keeper
     seals offsets retained following later keepsMarker listingDrops keeperDrops
   obtain ⟨_, _, previous, _, _, _⟩ := trace.keyValueRefinement start.bootstrap start.held
@@ -1787,11 +1796,16 @@ theorem installsAfterAcquiredRecovery_replays
     observations selection observed authorizedRepair preparedPlan retries previous oldSize selected).2.2
   obtain ⟨reference, replayed, retained, acknowledged, bounded, priorReads⟩ :=
     trace.replaysUncertainSubmission start whole ordered
+  have projected := stabilizesAfterKeeperRead report keeper markerLive (sameInode.trans markerInode)
+    effect sameBinding (markerBytes ▸ decoded) (by rw [observed]; rfl) choices enumerated presence physical
   have recovery : reopenWith (prepare directory selection)
       (stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩)
       (finish directory) (admission.cache, file.calls.inventory, admission.held) =
         .ok opened (admission.cache, after) := by
-    simp only [reopenWith_reports, prepare, opened, prepared, stabilized, finished]
+    simp only [reopenWith_reports, prepare, opened, prepared, syncProjection,
+      stabilizeCapturedMarker, show admission.held.image.directory = retry.image.directory from rfl,
+      projected]
+    erw [finished]
   have returned := installsAfterAcquiredRecovery calls marker
     (fun resolved => acquireMarkerInCensus markerReads (resolved.file .walBoundary))
     prepare stabilize finish acquisition recovery
