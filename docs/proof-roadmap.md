@@ -113,10 +113,11 @@ identity for the recovered table. Modeled marker-sync errors preserve the
 reached file image through lock cleanup. Native fault injection checks errors
 before and after the marker sync with a keeper tail still pending repair.
 
-The remaining native refinement derives the slot survivor from reached
-positional writes and syncs on the same held file. It needs successful sync
-to preserve the WAL prefix, an interrupted write to leave the active slot
-intact, and the target to decode only as old, new, or invalid. Derive the projected retry steps from reached native events and connect the
+The codec proof derives the ordered slot survivor from the reported bytes.
+A synced record needs the exact target encoding, and an interrupted write
+needs unchanged bytes outside the inactive record and an old, exact-new or
+invalid decode at that record. The remaining native refinement must justify
+these reports for the same held file and connect the WAL sync to persistence. Derive the projected retry steps from reached native events and connect the
 returned session to the common client ledger. Use the physical reports for checkpoint
 selection and segmented extents from that same attempt.
 [Slot model](../lean/Alvoki/Storage/Disk/WalOrderedTwoSlot.lean) ·
