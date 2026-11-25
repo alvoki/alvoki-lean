@@ -1400,6 +1400,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCloseAlignedReads.readsMarker
 #check_axioms Alvoki.Storage.DiskSession.NativeCloseAlignedReads.readsWal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensAfterClose
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensAfterFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyQuietCrash.vacant
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyQuietCrash.runSurvives
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyRestartReads.readsManifest

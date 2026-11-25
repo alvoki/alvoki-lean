@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeReadyClose
+import Alvoki.Storage.Disk.NativeMarkedReadPrefix
 import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
 
 namespace Alvoki.Storage.DiskSession
@@ -148,28 +149,15 @@ theorem readsWal (seen : NativeCloseAlignedReads files input inventory layout se
 
 end NativeCloseAlignedReads
 
-/-- The exact successful close supplies both the files and the census
-to a chronological, healthy aligned open. The earlier responses still
-agree with the replay used by the new live session. -/
-theorem NativeReadyReadPrefix.reopensAfterClose
-    {opened : EStateM.Result IO.Error CensusOpenState SegmentedSession}
-    {initial state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
-    {reads : List RecordedSnapshotRead}
-    (prior : NativeReadyReadPrefix opened initial history log reads state)
-    (close : NativeReadyClose state) (success : close.report.result = .ok ()) (files : NativeCloseFiles state)
-    {input : FilePath}
-    (observe : ∀ plan : ClosedReadyReopenLayout state.writer state.releasedFiles,
-      ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
-        state.releasedFiles.image.directory.active.manifest state.writer.checkpoint,
-      Nonempty (NativeCloseAlignedReads files input close.report.finished.descriptors plan.layout selected)) :
-    close.report.run = .ok () close.report.finished ∧ close.report.finished.phase = .closed ∧
-    close.report.finished.files = ⟨(⟨none, none, []⟩, state.files.image), state.releasedFiles.owners⟩ ∧
-    close.report.finished.descriptors = state.census.afterDrops
-      (close.report.drops .active ++ close.report.drops .pending ++ close.report.drops .directory) ∧
+/-- The exact return and selected-object observations for a healthy
+aligned reopen on the released writer's files and reached census. -/
+def NativeCloseAlignedResult {state : NativeReadyState} (files : NativeCloseFiles state)
+    (input : FilePath) (inventory : DescriptorInventory) (history : List WAL.Write)
+    (log : List DatabaseSubmissions) (reads : List RecordedSnapshotRead) : Prop :=
     ∃ (plan : ClosedReadyReopenLayout state.writer state.releasedFiles)
       (selected : SelectedIntegrityCheckpoint state.writer.published.durable
         state.releasedFiles.image.directory.active.manifest state.writer.checkpoint)
-      (seen : NativeCloseAlignedReads files input close.report.finished.descriptors plan.layout selected)
+      (seen : NativeCloseAlignedReads files input inventory plan.layout selected)
       (next : NativeReadyState),
       NativeReadyReadPrefix seen.run next history log reads next ∧
       next.session.directory = state.session.directory ∧ next.owner = seen.opening.admission.owner ∧
@@ -193,9 +181,20 @@ theorem NativeReadyReadPrefix.reopensAfterClose
         (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) ∧
       (∀ segment ∈ plan.layout.sealed ++ [plan.layout.keeper],
         seen.ReadsOriginal (state.session.directory.file (.walSegment segment.first)) segment.bytes) ∧
-      InstalledClientReplay log reads history next.writer.installed next.session := by
+      InstalledClientReplay log reads history next.writer.installed next.session
+
+private theorem reopenReleasedAligned
+    {opened : EStateM.Result IO.Error CensusOpenState SegmentedSession}
+    {initial state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
+    {reads : List RecordedSnapshotRead}
+    (prior : NativeReadyReadPrefix opened initial history log reads state)
+    (files : NativeCloseFiles state) {input : FilePath} {inventory : DescriptorInventory}
+    (observe : ∀ plan : ClosedReadyReopenLayout state.writer state.releasedFiles,
+      ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
+        state.releasedFiles.image.directory.active.manifest state.writer.checkpoint,
+      Nonempty (NativeCloseAlignedReads files input inventory plan.layout selected)) :
+    NativeCloseAlignedResult files input inventory history log reads := by
   obtain ⟨valid, originalHistory, pending⟩ := prior.refines
-  obtain ⟨closed, phase, cleared, census, _⟩ := close.closes valid success
   let ready := valid.retained
   obtain ⟨plan⟩ : Nonempty (ClosedReadyReopenLayout state.writer state.releasedFiles) := ready.cleanReopenLayout
   have pair := plan.prepared.pair.trans (congrArg Target.pair plan.target)
@@ -208,55 +207,93 @@ theorem NativeReadyReadPrefix.reopensAfterClose
   obtain ⟨seen⟩ := observe plan selected
   let opening := seen.opening
   let finish := opening.finish
-  let chrono := seen.chronology
+  let keeperFinish : CapturedKeeperFinish opening.callbacks opening.reads state.releasedVacant selected := .aligned finish
   have following := opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors
-  obtain ⟨session, final, returned, finalPair, ownerLive, directoryLive, installed⟩ := finish.installsFromCensus
-    chrono.manifest chrono.runs chrono.marker chrono.beforeListing chrono.seals chrono.offsets chrono.retained
-    opening.markerFound plan.prepared.keeperPrefix plan.prepared.newer following accepted ready.resumed.ordered
-  obtain ⟨_, appendReady⟩ := installed.readyForAppend accepted ready.resumed.ordered
-  obtain ⟨_, _, writer, indexed, path, description, newPhase, exactFiles, exactOwners, wal, selectedTarget, nextHistory,
-    _, durable, retained⟩ := appendReady.writerRetained ready.layout ready.valid ready.spans
-      (ready.walPair.trans (congrArg Target.pair plan.target).symm) (congrArg WalSegment.first plan.keeper) ready.sealedFiles
-  obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj indexed
-  let next : NativeReadyState := ⟨session, writer, finish.census, opening.admission.cache, opening.admission.owner,
-    opening.admission.cached⟩
-  have sameFiles : next.files = final := by
-    change (⟨writer.files, writer.owners⟩ : LockedFileState FileImage) = final
-    rw [exactFiles, exactOwners]
-  have nextValid : next.Valid := ⟨newPhase, description.symm, ownerLive, directoryLive,
-    ⟨opening.admission.reached, rfl⟩, path.symm ▸ description.symm ▸ retained⟩
+  obtain ⟨next, seeded, cache, census, owner, cached, finalPair, durable, checkpoint, path, target,
+    kept, phaseFresh, sessionFresh⟩ := keeperFinish.startsNativeReadPrefix seen.chronology opening.markerFound
+      plan.prepared following accepted ready.resumed.ordered ready.layout ready.valid ready.spans
+      (ready.walPair.trans (congrArg Target.pair plan.target).symm) (congrArg WalSegment.first plan.keeper)
+      ready.sealedFiles (originalHistory.symm ▸ pending) (originalHistory.symm ▸ prior.readsBounded)
   have continued : NativeReadyReadPrefix seen.run next history log reads next :=
-    .installed (sameFiles.symm ▸ returned) nextValid (nextHistory.trans originalHistory) pending prior.readsBounded
-  have nextTarget := selectedTarget.trans plan.target
-  have chosen := retained.resumed.selected
-  rw [nextTarget, durable] at chosen
-  have checkpoint := chosen.uniqueResult ready.resumed.selected
-  have fresh : session.sessionRef ≠ state.session.sessionRef ∧ session.phaseRef ≠ state.session.phaseRef := by
-    obtain ⟨_, _, _, _, _, indexed, _, _, _, _, _, _, _, _, _, phaseFresh, sessionFresh, _⟩ := installed
-    obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj indexed
-    exact ⟨fun same => sessionFresh (same.symm ▸ seen.earlierTokens.2),
-      fun same => phaseFresh (same.symm ▸ seen.earlierTokens.1)⟩
+    originalHistory ▸ seeded
   have sameCensus : next.census.inode = opening.admission.reached.inode := by
-    unfold next CapturedAlignedFinish.census
-    rw [finish.repair.opened]
+    change next.census = finish.census at census
+    rw [census, CapturedAlignedFinish.census, finish.repair.opened]
     rfl
   have marker : state.writer.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) :=
     (congrArg DirectoryPublication.Bindings.walBoundary ready.resumed.ready.selected).symm.trans
       (congrArg Publication.Image.active ready.resumed.markerImage)
-  refine ⟨closed, phase, cleared, census, plan, selected, seen, next, continued, path, rfl, rfl, rfl, rfl,
-    fresh.1, fresh.2, ?_, ?_, sameFiles.symm ▸ finalPair, ?_, nextTarget, checkpoint, durable, seen.manifestMissing pair,
+  refine ⟨plan, selected, seen, next, continued, path, owner, cached, cache, census,
+    fun same => sessionFresh (same.symm ▸ seen.earlierTokens.2),
+    fun same => phaseFresh (same.symm ▸ seen.earlierTokens.1), ?_, ?_, finalPair, kept, target.trans plan.target,
+    checkpoint, durable, seen.manifestMissing pair,
     fun _ present => seen.readsManifest pair present, fun _ _ present decoded _ within _ stored =>
       seen.readsRun pair present decoded within stored,
     seen.readsMarker pair marker, seen.readsWal plan.aligned plan.descriptors, continued.guardedReplay⟩
-  · change next.census.inode opening.admission.owner.description = _
-    rw [sameCensus]
+  · rw [owner, sameCensus]
     exact seen.admission.lockObject
-  · change next.census.inode opening.admission.cached.description = _
-    rw [sameCensus]
+  · rw [cached, sameCensus]
     exact opening.admission.opened.captures.2.2.2.2.1.symm.trans seen.admission.directoryObject
-  · have kept := retained.sealedFiles
-    change writer.files.kept = state.writer.files.kept
-    rw [kept, wal]
-    exact ready.sealedFiles.symm
+
+/-- The successful close supplies its exact file and census projection
+to the shared aligned reopen and the subsequent read prefix. -/
+theorem NativeReadyReadPrefix.reopensAfterClose
+    {opened : EStateM.Result IO.Error CensusOpenState SegmentedSession}
+    {initial state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
+    {reads : List RecordedSnapshotRead}
+    (prior : NativeReadyReadPrefix opened initial history log reads state)
+    (close : NativeReadyClose state) (success : close.report.result = .ok ()) (files : NativeCloseFiles state)
+    {input : FilePath}
+    (observe : ∀ plan : ClosedReadyReopenLayout state.writer state.releasedFiles,
+      ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
+        state.releasedFiles.image.directory.active.manifest state.writer.checkpoint,
+      Nonempty (NativeCloseAlignedReads files input close.report.finished.descriptors plan.layout selected)) :
+    close.report.run = .ok () close.report.finished ∧ close.report.finished.phase = .closed ∧
+    close.report.finished.files = ⟨(⟨none, none, []⟩, state.files.image), state.releasedFiles.owners⟩ ∧
+    close.report.finished.descriptors = state.census.afterDrops
+      (close.report.drops .active ++ close.report.drops .pending ++ close.report.drops .directory) ∧
+    NativeCloseAlignedResult files input close.report.finished.descriptors history log reads := by
+  obtain ⟨closed, phase, cleared, census, _⟩ := close.closes prior.refines.1 success
+  exact ⟨closed, phase, cleared, census, reopenReleasedAligned prior files observe⟩
+
+/-- A failed `LOCK_UN` returns the original ready state. Its subsequent
+reported reference trace ends with the event that removes the last
+reference. Only then does the same file image admit the next open. -/
+theorem NativeReadyReadPrefix.reopensAfterFailedUnlock
+    {opened : EStateM.Result IO.Error CensusOpenState SegmentedSession}
+    {initial state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
+    {reads : List RecordedSnapshotRead}
+    (prior : NativeReadyReadPrefix opened initial history log reads state)
+    (close : NativeReadyClose state) {cause : IO.Error} (failure : close.report.result = .error cause)
+    {inventory : DescriptorInventory} {reached : LockedFileState FileImage}
+    (beforeDrop : LockCensusTrace state.session.directory state.session.descriptor state.census state.files inventory reached)
+    (event : LockReferenceDrop) (live : inventory.references state.session.descriptor ≠ [])
+    (last : (inventory.afterDrops [event]).references state.session.descriptor = [])
+    (files : NativeCloseFiles state) {input : FilePath}
+    (observe : ∀ plan : ClosedReadyReopenLayout state.writer state.releasedFiles,
+      ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
+        state.releasedFiles.image.directory.active.manifest state.writer.checkpoint,
+      Nonempty (NativeCloseAlignedReads files input (inventory.afterDrops [event]) plan.layout selected)) :
+    let released := inventory.dropLockState state.session.descriptor [event] state.session.directory reached
+    close.report.run = .error cause state.closeState ∧ reached = state.files ∧
+    ¬ TryLockObserves reached.owners state.session.directory (.ok true) ∧
+    (∀ reference ∈ inventory.references state.session.descriptor, event.removes reference = true) ∧
+    released = state.releasedFiles ∧ TryLockObserves released.owners state.session.directory (.ok true) ∧
+    ReportedReopenPrefix state.session.directory state.writer.wal.active.first state.files released ∧
+    NativeCloseAlignedResult files input (inventory.afterDrops [event]) history log reads := by
+  let completed := LockCensusTrace.drops beforeDrop [event]
+  obtain ⟨failed, _, released, allowed⟩ := close.followsFailedUnlock prior.refines.1 failure completed
+  have same : reached = state.files := by simpa only [ite_eq_right live] using beforeDrop.reached.2.2
+  have removed : ∀ reference ∈ inventory.references state.session.descriptor, event.removes reference = true := by
+    intro reference present
+    by_cases hit : event.removes reference = true
+    · exact hit
+    · have keeps : reference ∈ (inventory.afterDrops [event]).references state.session.descriptor := by
+        rw [DescriptorInventory.references_afterDrops]
+        exact List.mem_filter.mpr ⟨present, by simp [Bool.eq_false_iff.mpr hit]⟩
+      simp only [last, List.not_mem_nil] at keeps
+  exact ⟨failed, same, fun vacant => live (beforeDrop.freshFlockAllowed.mp vacant), removed,
+    by simpa only [last, ite_true] using released, allowed.mpr last, completed.reopenTrace .start,
+    reopenReleasedAligned prior files observe⟩
 
 end Alvoki.Storage.DiskSession

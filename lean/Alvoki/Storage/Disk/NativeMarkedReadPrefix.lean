@@ -37,11 +37,14 @@ theorem CapturedKeeperFinish.startsNativeReadPrefix
     ∃ state, NativeReadyReadPrefix (finish.run chronology) state history log recorded state ∧
       state.cache = admission.cache ∧ state.census = finish.census ∧ state.owner = admission.owner ∧
       state.directorySlot = admission.cached ∧ state.files.image.directory.active = retry.image.directory.active ∧
-      state.writer.published.durable = published.durable ∧ state.writer.checkpoint = checkpoint := by
+      state.writer.published.durable = published.durable ∧ state.writer.checkpoint = checkpoint ∧
+      state.session.directory = directory ∧ state.writer.target = layout.target ∧
+      state.files.image.kept = retry.image.kept ∧
+      state.session.phaseRef ∉ calls.liveRefs ∧ state.session.sessionRef ∉ calls.liveRefs := by
   obtain ⟨session, final, returned, pair, ownerLive, directoryLive, installed⟩ :=
     finish.installsFromCensus chronology marker prepared following accepted ordered
   obtain ⟨_, appendReady⟩ := installed.readyForAppend accepted ordered
-  obtain ⟨sameSession, sameFinal, writer, indexed, path, description, phase, files, owners, _, target,
+  obtain ⟨sameSession, sameFinal, writer, indexed, path, description, phase, files, owners, retainedWal, target,
     exactHistory, _, durable, ready⟩ := appendReady.writerRetained walLayout walValid spans active keeper kept
   obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj indexed
   let state : NativeReadyState := ⟨session, writer, finish.census, admission.cache, admission.owner, admission.cached⟩
@@ -52,7 +55,16 @@ theorem CapturedKeeperFinish.startsNativeReadPrefix
     ⟨phase, description.symm, ownerLive, directoryLive, ⟨admission.reached, rfl⟩, path.symm ▸ description.symm ▸ ready⟩
   have chosen := ready.resumed.selected
   rw [target, durable] at chosen
+  have seals : state.files.image.kept = retry.image.kept := by
+    change writer.files.kept = retry.image.kept
+    rw [ready.sealedFiles, retainedWal]
+    exact kept.symm
+  have freshness : session.phaseRef ∉ calls.liveRefs ∧ session.sessionRef ∉ calls.liveRefs := by
+    obtain ⟨_, _, _, _, _, indexed, _, _, _, _, _, _, _, _, _, phaseFresh, sessionFresh, _⟩ := installed
+    obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj indexed
+    exact ⟨phaseFresh, sessionFresh⟩
   exact ⟨state, .installed (exactFiles.symm ▸ returned) valid exactHistory pending bounded,
-    rfl, rfl, rfl, rfl, exactFiles.symm ▸ pair, durable, chosen.uniqueResult selected⟩
+    rfl, rfl, rfl, rfl, exactFiles.symm ▸ pair, durable, chosen.uniqueResult selected, path, target, seals,
+    freshness.1, freshness.2⟩
 
 end Alvoki.Storage.DiskSession
