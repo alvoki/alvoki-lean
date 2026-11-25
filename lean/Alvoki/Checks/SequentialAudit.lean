@@ -1362,6 +1362,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.validAfterPublicationError
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCacheOpen.retrySelects
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.retryAfterPublicationError
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.validAfterPublicationCrash
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.markerAbsentFromScan
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.installsMarkerlessRetry
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.installsMarkerlessAfterPublicationError
@@ -1372,9 +1373,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkedRetryOpen.installed
 #check_axioms Alvoki.Storage.DiskSession.BootstrapMarkedRetryOpen.installs
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.installsMarkedZeroAfterPublicationError
+#check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.installsMarkedZeroAfterPublicationCrash
 #check_axioms Alvoki.Storage.DiskSession.BootstrapClientStart.starts
 #check_axioms Alvoki.Storage.DiskSession.BootstrapClientStart.keyValueRefinement
+#check_axioms Alvoki.Storage.DiskSession.BootstrapClientStart.ofMarkedRetry
+#check_axioms Alvoki.Storage.DiskSession.BootstrapClientStart.ofMarkerlessRetry
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.fromMarkedBootstrapRetry
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.fromMarkedBootstrapCrashRetry
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.fromBootstrapWithCapturedCache
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.uniqueResult
 #check_axioms Alvoki.Storage.DiskSession.CachedRetryInstalled.sameInstalled

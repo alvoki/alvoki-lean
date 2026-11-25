@@ -100,6 +100,14 @@ variable {directory : DiskDirectory} {before : LockedFileState WalSegmentRotatio
   {retry : BootstrapAdmissionCalls (Cache Handle) directory before} {captured : BootstrapCacheOpen retry}
   {zero : BootstrapMarkedZero before.image}
 
+/-- A marked bootstrap retry returns the exact empty installation with
+the directory's settled zero marker and its acquired lock. -/
+def Installed (directory : DiskDirectory) (descriptor : Nat)
+    (result : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession) : Prop :=
+  ∃ (session : SegmentedSession) (after : LockedFileState WalSegmentRotation.State),
+    result = .ok session after ∧ session.directory = directory ∧ session.descriptor = descriptor ∧
+    session.phase = .ready ⟨.empty, 0, 0, 0⟩ ∧ after.owners.Owns directory descriptor ∧ BootstrapReady after.image
+
 /-- The held marked listing starts with the directory slot and census
 captured by this next admitted open. -/
 theorem capturedDirectory (observed : BootstrapMarkedRetryOpen captured zero) :
@@ -155,10 +163,7 @@ theorem installs {input : FilePath} (observed : BootstrapMarkedRetryOpen capture
     (admission : OpenAdmissionReports input directory retry.slot) (valid : BootstrapValid before.image)
     (marker : BootstrapRetryMarker retry)
     (bootstrap : DiskDirectory → Cache Handle → EStateM IO.Error WalSegmentRotation.State Reopened) :
-    ∃ (session : SegmentedSession) (after : LockedFileState WalSegmentRotation.State),
-      retry.run bootstrap admission = .ok session after ∧ session.directory = directory ∧
-      session.descriptor = retry.slot.description ∧ session.phase = .ready ⟨.empty, 0, 0, 0⟩ ∧
-      after.owners.Owns directory retry.slot.description ∧ BootstrapReady after.image := by
+    Installed directory retry.slot.description (retry.run bootstrap admission) := by
   let ops := observed.reads.operations
   have installed := observed.installed admission
   dsimp only at installed
@@ -241,11 +246,32 @@ theorem BootstrapCheckedListing.installsMarkedZeroAfterPublicationError
     (visible : after.image.metadata.active.walBoundary ≠ none)
     (reports : ∀ zero : BootstrapMarkedZero after.image, Nonempty (BootstrapMarkedRetryOpen nextCache zero))
     (bootstrap : DiskDirectory → Cache Handle → EStateM IO.Error WalSegmentRotation.State Reopened) :
-    ∃ (session : SegmentedSession) (final : LockedFileState WalSegmentRotation.State),
-      retry.run bootstrap nextAdmission = .ok session final ∧ session.directory = directory ∧
-      session.descriptor = retry.slot.description ∧ session.phase = .ready ⟨.empty, 0, 0, 0⟩ ∧
-      final.owners.Owns directory retry.slot.description ∧ BootstrapReady final.image := by
+    BootstrapMarkedRetryOpen.Installed directory retry.slot.description (retry.run bootstrap nextAdmission) := by
   have reached := listed.validAfterPublicationError admission valid localUnlock effects failed
+  obtain ⟨observed⟩ := reports (reached.markedZero visible)
+  exact observed.installs nextAdmission reached (.present visible marker) bootstrap
+
+/-- An admitted power-loss survivor with a visible marker carries the
+durable empty keeper into the exact marked worker of the next open. -/
+theorem BootstrapCheckedListing.installsMarkedZeroAfterPublicationCrash
+    {input nextInput : FilePath} {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
+    {calls : BootstrapOpenCalls (Cache Handle) directory before}
+    {captured : BootstrapCacheOpen calls.toBootstrapAdmissionCalls}
+    (listed : BootstrapCheckedListing captured) (admission : OpenAdmissionReports input directory calls.slot)
+    (valid : BootstrapValid before.image) (localUnlock : calls.unlock.LocalFlock)
+    (effects : BootstrapPublicationEffects calls captured.cache) {error : IO.Error}
+    {after : LockedFileState WalSegmentRotation.State} (failed : calls.run admission = .error error after)
+    {pair : DirectoryPublication.Bindings} (selected : pair ∈ after.image.metadata.crashImages)
+    {keeperSurvives : Bool} (keeper : after.image.successor.MaySurvive keeperSurvives)
+    {retry : BootstrapAdmissionCalls (Cache Handle) directory (bootstrapPowerLoss directory after pair keeperSurvives)}
+    (nextCache : BootstrapCacheOpen retry) (nextAdmission : OpenAdmissionReports nextInput directory retry.slot)
+    {metadata : IO.FS.Metadata} (marker : retry.lookup (directory.file .walBoundary) = .ok metadata)
+    (visible : pair.walBoundary ≠ none)
+    (reports : ∀ zero : BootstrapMarkedZero (bootstrapPowerLoss directory after pair keeperSurvives).image,
+      Nonempty (BootstrapMarkedRetryOpen nextCache zero))
+    (bootstrap : DiskDirectory → Cache Handle → EStateM IO.Error WalSegmentRotation.State Reopened) :
+    BootstrapMarkedRetryOpen.Installed directory retry.slot.description (retry.run bootstrap nextAdmission) := by
+  have reached := listed.validAfterPublicationCrash admission valid localUnlock effects failed selected keeper
   obtain ⟨observed⟩ := reports (reached.markedZero visible)
   exact observed.installs nextAdmission reached (.present visible marker) bootstrap
 

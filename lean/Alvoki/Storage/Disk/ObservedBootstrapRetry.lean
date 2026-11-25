@@ -74,4 +74,26 @@ theorem BootstrapCheckedListing.retryAfterPublicationError
   nextCache.retrySelects nextAdmission (listed.validAfterPublicationError admission valid localUnlock effects failed)
     nextMarker bootstrap
 
+/-- A reported power-loss survivor has its selected metadata settled.
+The empty segment can survive if the preceding binding permits it. -/
+def bootstrapPowerLoss (directory : DiskDirectory) (before : LockedFileState WalSegmentRotation.State)
+    (pair : DirectoryPublication.Bindings) (keeperSurvives : Bool) : LockedFileState WalSegmentRotation.State :=
+  ⟨⟨.settled pair, if keeperSurvives then .durable else .absent⟩,
+    before.owners.set (directory.file .lock) none⟩
+
+/-- Either retry route starts from the same admitted crash selection of
+the exact failed publication's returned file image. -/
+theorem BootstrapCheckedListing.validAfterPublicationCrash
+    {input : FilePath} {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
+    {calls : BootstrapOpenCalls (Cache BootstrapHandle) directory before}
+    {captured : BootstrapCacheOpen calls.toBootstrapAdmissionCalls}
+    (listed : BootstrapCheckedListing captured) (admission : OpenAdmissionReports input directory calls.slot)
+    (valid : BootstrapValid before.image) (localUnlock : calls.unlock.LocalFlock)
+    (effects : BootstrapPublicationEffects calls captured.cache) {error : IO.Error}
+    {after : LockedFileState WalSegmentRotation.State} (failed : calls.run admission = .error error after)
+    {pair : DirectoryPublication.Bindings} (selected : pair ∈ after.image.metadata.crashImages)
+    {keeperSurvives : Bool} (keeper : after.image.successor.MaySurvive keeperSurvives) :
+    BootstrapValid (bootstrapPowerLoss directory after pair keeperSurvives).image :=
+  (listed.validAfterPublicationError admission valid localUnlock effects failed).crash selected keeper
+
 end Alvoki.Storage.DiskSession

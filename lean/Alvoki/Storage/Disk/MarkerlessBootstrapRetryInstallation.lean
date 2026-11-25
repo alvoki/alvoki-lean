@@ -77,13 +77,6 @@ theorem BootstrapCheckedListing.installsMarkerlessAfterPublicationError
   nextListing.installsMarkerlessRetry nextAdmission
     (listed.validAfterPublicationError admission valid localUnlock effects failed) missing rotation marker allowCollection
 
-/-- A reported power-loss survivor has its selected metadata settled.
-The empty segment can survive if the preceding binding permits it. -/
-def bootstrapPowerLoss (directory : DiskDirectory) (before : LockedFileState WalSegmentRotation.State)
-    (pair : DirectoryPublication.Bindings) (keeperSurvives : Bool) : LockedFileState WalSegmentRotation.State :=
-  ⟨⟨.settled pair, if keeperSurvives then .durable else .absent⟩,
-    before.owners.set (directory.file .lock) none⟩
-
 /-- When an admitted crash survivor of that error has no marker, its
 settled image supplies the exact next markerless install. The lock is
 reacquired from the crash state and the retry reports use that state. -/
@@ -104,8 +97,8 @@ theorem BootstrapCheckedListing.installsMarkerlessAfterPublicationCrash
     (rotation : retry.RotationHealthy nextCache.cache) (marker : retry.MarkerHealthy nextCache.cache)
     (allowCollection : Bool) :
     pair.walBoundary = none ∧ nextListing.MarkerlessRetryInstalled nextAdmission allowCollection := by
-  have reached := listed.validAfterPublicationError admission valid localUnlock effects failed
+  have reached := listed.validAfterPublicationCrash admission valid localUnlock effects failed selected keeper
   exact ⟨retry.markerAbsent.1,
-    nextListing.installsMarkerlessRetry nextAdmission (reached.crash selected keeper) missing rotation marker allowCollection⟩
+    nextListing.installsMarkerlessRetry nextAdmission reached missing rotation marker allowCollection⟩
 
 end Alvoki.Storage.DiskSession
