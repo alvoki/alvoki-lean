@@ -105,6 +105,7 @@ import Alvoki.Storage.Disk.NativeCheckpointManifestSyncError
 import Alvoki.Storage.Disk.NativeCheckpointManifestSyncReopen
 import Alvoki.Storage.Disk.NativeCheckpointManifestDataError
 import Alvoki.Storage.Disk.NativeCheckpointManifestOpenError
+import Alvoki.Storage.Disk.NativeCheckpointManifestRenameError
 import Alvoki.Storage.Disk.NativePendingCheckpoint
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeCheckpointErrorReopen
@@ -775,6 +776,18 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestOpenError.freshRunBytes
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestOpenError.selectedCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointManifestOpenError
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSynced.stageReturns
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSynced.keepsCensus
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSynced.priorManifest
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.issues
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.custody
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.liveManifest
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.crashSelection
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.priorRunAtReturn
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.freshRunAtReturn
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameError.replaysFiles
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointManifestRenameError
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.issues
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.routes
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.custody
