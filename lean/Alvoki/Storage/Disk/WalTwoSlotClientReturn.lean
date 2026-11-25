@@ -1253,4 +1253,49 @@ theorem recoveredRetries_retainUncertainBatch
   · exact recoveredBatch_retains prior recovery binding (.inl (oldFrontier ▸ oldSize))
   · exact recoveredBatch_retains prior recovery binding (.inr (newFrontier ▸ newSize))
 
+/-- The same retry-selected recovery explains the retained submissions and
+fresh snapshot reads on a session with that recovered table installed. -/
+theorem recoveredRetries_installedReads
+    {initial prepared firstRepair after : FileImage} {target : Target}
+    (beforeBarrier : UnsettledRetries initial prepared)
+    {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
+    {current : Selection} {next : Selection}
+    (accepted : decode before = .ok current)
+    (offset : current.slot = slotIndex active)
+    {history batch : List Write}
+    (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
+    (observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
+      pair = ⟨checkpoint, none⟩ ∨
+      ∃ bytes,
+        InterruptedSlotBytes before bytes active next ∧
+        projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
+    (selected : Selection)
+    (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
+    (authorizedRepair : EffectTrace target
+      { prepared with directory := settleMarker prepared.directory selected } firstRepair)
+    {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared prepared target plan)
+    (retries : SettledRetries target firstRepair after)
+    {image : WalSegmentImage} {range : MarkedWalRange}
+    {base : PackedTable} {opened : WalSegmentRepair.Reopened}
+    {session : DiskSession.SegmentedSession} {first : Nat} {log : List DatabaseSubmissions}
+    (prior : DatabaseBatchRetention log history)
+    (oldSize : current.frontier.toNat = (WAL.encode history).size)
+    (installed : session.phase = .ready opened.installed)
+    (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
+    {snapshot : UInt64} (retained : opened.table.pins.floor ≤ snapshot)
+    (within : snapshot.toNat ≤ range.through) :
+    DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
+    ∃ reference state pin pinned,
+      SnapshotWalReplay .empty ((history ++ batch).take range.through) reference ∧
+      session.phase = .ready state ∧
+      state.table.acquireAt snapshot = some (pin, pinned) ∧
+      (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
+      ∀ start stop, pinned.range pin.handle start stop =
+        some (reference.table.range start stop snapshot) := by
+  have ledger := recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
+    observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
+  obtain ⟨_, _, reference, replayed, _⟩ := ledger.2
+  obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
+  exact ⟨ledger.1, reference, opened.installed, pin, pinned, replayed, installed, acquired, points, ranges⟩
+
 end Alvoki.WAL.TwoSlot

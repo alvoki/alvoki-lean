@@ -1,5 +1,13 @@
 # Current handoff
 
+For ordered two-slot markers, the retry-selected recovery now supplies both
+the retained client submission ledger and a canonical replay for fresh point
+and range reads at any supported snapshot of the installed table. The proof
+uses the same recovered WAL prefix for both conclusions. It takes the
+segmented recovery and the ready-session phase as premises. The native
+descriptor chronology and its handoff to that ready session remain to be
+connected. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
+
 A single write or batch stopped during its first append now connects to the captured healthy marked open. The submitted interface reaches the exact append path, payload, poisoned phase and file cut. The reported process exit or power loss and subsequent retries preserve the earlier marker. It selects the same checkpoint and acknowledged history before the held open uses the reported reads. With no later names, both an aligned keeper and a longer keeper yield the exact returned session. The longer case uses the reported replacement. One replay explains the old responses and guarded reads after reopening. The proof uses a reported vacant lock at the final attempt and the native callback reports of the selected finish. [First append to returned table](../lean/Alvoki/Storage/Disk/PendingFirstAppendReopen.lean)
 
 A returned uncertain write now composes with an aligned held reopen in a single theorem. The exact poisoned write return supplies the original cache and owner. Its retry prefix and observed descriptor drops determine the marker-selected history and exact keeper layout. The same manifest and durable run map yield the selected checkpoint before the final open. Its reported reads and syncs then return the exact session and table with fresh live slots under the lock inode tracked during the final descriptor interval. That selected replay explains the earlier client responses and each newly supported guarded read. The theorem uses local reports for the write, failed calls, descriptor events and healthy aligned finish. A single write or batch interrupted during marker publication now uses the same aligned finishing proof. Its operation stops at the issued callback before acknowledgement. The physical retry origin is the exact projection of the stopped bytes and owner. The same old-or-whole selection precedes the final reads and guarded client replay. [Client replay across an aligned reopen](../lean/Alvoki/Storage/Disk/PendingAlignedReopen.lean)
