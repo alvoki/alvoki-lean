@@ -179,6 +179,7 @@ import Alvoki.Storage.Disk.SegmentedRotationRecovery
 import Alvoki.Storage.Disk.SegmentedRotationStep
 import Alvoki.Storage.Disk.ObservedRotationSchedule
 import Alvoki.Storage.Disk.RotationExistingSuccessor
+import Alvoki.Storage.Disk.RotationExistingSuccessorReopen
 import Alvoki.Storage.Disk.RotationCreateInterruption
 import Alvoki.Storage.Disk.RotationCreatePhysical
 import Alvoki.Storage.Disk.RotationSuccessorFsyncStop
@@ -1486,6 +1487,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorDirectorySync.directoryGroup
 #check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorDirectorySync.returnsRotation
 #check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorDirectorySync.durableSuccessor
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorPowerLoss.vacant
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorPowerLoss.successor
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorPowerLoss.markerSurvives
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorReopen.readSurvivor
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorPowerLoss.reopensAligned
 #check_axioms Alvoki.Storage.DiskSession.ObservedRotation.rotates
 #check_axioms Alvoki.Storage.DiskSession.ObservedRotation.reopensAfterClose
 #check_axioms Alvoki.Storage.DiskSession.RotationInFlightCut.reopensAdmitted
