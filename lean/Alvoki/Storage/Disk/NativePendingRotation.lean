@@ -10,12 +10,12 @@ open WAL (frameSize)
 after exclusive creation and file sync. Its temporary successor
 description is released before the directory callback. The active
 append cache remains owned until a later successful final barrier. -/
-structure NativeRotationDirectoryStop (state : NativeReadyState) where
+structure NativeRotationDirectoryFailure (state : NativeReadyState) (diagnostic : Option IO.Error) where
   lookup : FilePath → Except IO.Error IO.FS.Metadata
   parent : RotationCreateParent state.session.directory state.writer lookup state.census
   owner : parent.owner = state.owner
   created : RotationRawSuccessor parent
-  reported : RotationDirectoryFsyncStop created
+  reported : RotationDirectoryFsyncFailure created diagnostic
   cache : reported.cache = state.cache
   pending : state.cache.consume (rotationSuccessorPath state.session.directory state.writer) = state.cache
   afterFile : List LockReferenceDrop
@@ -26,14 +26,16 @@ structure NativeRotationDirectoryStop (state : NativeReadyState) where
     entry.2.1.inode entry.2.2.1.description = reported.effectInventory.inode entry.2.2.1.description ∧
     reported.after.view.modelObject parent.keeper.child = reported.effectInventory.inode entry.2.2.1.description
 
-namespace NativeRotationDirectoryStop
+abbrev NativeRotationDirectoryStop (state : NativeReadyState) := NativeRotationDirectoryFailure state none
 
-variable {state : NativeReadyState}
+namespace NativeRotationDirectoryFailure
 
-def session (_stop : NativeRotationDirectoryStop state) : SegmentedSession :=
+variable {state : NativeReadyState} {diagnostic : Option IO.Error}
+
+def session (_stop : NativeRotationDirectoryFailure state diagnostic) : SegmentedSession :=
   { state.session with phase := .poisoned }
 
-theorem cachePreserved (stop : NativeRotationDirectoryStop state) :
+theorem cachePreserved (stop : NativeRotationDirectoryFailure state diagnostic) :
     stop.reported.toRotationSuccessorFileIssue.atIssue = state.cache := by
   let path := rotationSuccessorPath state.session.directory state.writer
   change (stop.reported.cache.remember path stop.created.handle).consume path = state.cache
@@ -42,7 +44,7 @@ theorem cachePreserved (stop : NativeRotationDirectoryStop state) :
   rw [stop.cache, consumed]
   exact stop.pending
 
-theorem temporaryReleased (stop : NativeRotationDirectoryStop state) :
+theorem temporaryReleased (stop : NativeRotationDirectoryFailure state diagnostic) :
     stop.reported.effectInventory =
       state.census.afterDrops (stop.reported.drops ++ stop.afterFile ++ [stop.created.raw.closeEvent]) ∧
     stop.reported.effectInventory.references stop.created.raw.description = [] := by
@@ -60,7 +62,7 @@ theorem temporaryReleased (stop : NativeRotationDirectoryStop state) :
 /-- The stop holds the original writer and cached directory on their
 original objects. The absent successor is now visible at the exact
 canonical path on the newly created and already synced inode. -/
-theorem custody (stop : NativeRotationDirectoryStop state) (valid : state.Valid) :
+theorem custody (stop : NativeRotationDirectoryFailure state diagnostic) (valid : state.Valid) :
     stop.reported.directoryHandle.2.1 = state.directorySlot ∧
     state.directorySlot ∈ stop.reported.effectInventory.slots ∧
     stop.reported.pathObject state.session.directory.path = some stop.parent.root ∧
@@ -98,13 +100,13 @@ theorem custody (stop : NativeRotationDirectoryStop state) (valid : state.Valid)
   · rw [stop.reported.bytes]
     exact stop.created.syncedBytes
 
-theorem keepsKeeperMarker (stop : NativeRotationDirectoryStop state) :
+theorem keepsKeeperMarker (stop : NativeRotationDirectoryFailure state diagnostic) :
     NativeRotationKeeperMarker state.writer stop.parent.root stop.reported.after
       stop.parent.keeper.child stop.parent.marker.child := by
   obtain ⟨keeper, marker, keeperCrash, markerCrash, keeperBytes, markerBytes⟩ := stop.reported.keepsKeeperMarker
   exact ⟨keeper, marker, keeperCrash, markerCrash, keeperBytes, markerBytes⟩
 
-theorem rejectsReads (stop : NativeRotationDirectoryStop state) (sequence : UInt64)
+theorem rejectsReads (stop : NativeRotationDirectoryFailure state diagnostic) (sequence : UInt64)
     (sameSession : Bool) (read : PackedTable → Option α) :
     stop.session.sessionRef = state.session.sessionRef ∧
     stop.session.phaseRef = state.session.phaseRef ∧
@@ -113,62 +115,82 @@ theorem rejectsReads (stop : NativeRotationDirectoryStop state) (sequence : UInt
       .error (IO.userError "publication failed; reopen the database") stop.session :=
   ⟨rfl, rfl, rfl, SegmentedSession.runSnapshotRead_poisoned rfl sameSession read⟩
 
-end NativeRotationDirectoryStop
+end NativeRotationDirectoryFailure
 
-/-- The pending execution retains the exact outer stop, reached session
-and cache. Earlier responses still use the same acknowledged history. -/
-structure NativePendingRotation (current : NativeReadPosition history log)
-    (stop : NativeRotationDirectoryStop current.state) : Prop where
+/-- Both final barrier failure channels preserve the same reached
+authority, physical files and previously acknowledged client responses. -/
+structure NativeRotationFailureState (current : NativeReadPosition history log)
+    (failure : NativeRotationDirectoryFailure current.state diagnostic) : Prop where
   readyBefore : current.state.session.phase = .ready current.state.writer.installed
-  stopped : stop.reported.run = .error current.state.session.directory.path
-    (stop.session.phase, ⟨(current.state.cache, stop.reported.cut.image), current.state.writer.owners⟩)
-  directorySlot : stop.reported.directoryHandle.2.1 = current.state.directorySlot
-  directoryLive : current.state.directorySlot ∈ stop.reported.effectInventory.slots
-  directoryBound : stop.reported.pathObject current.state.session.directory.path = some stop.parent.root
-  directoryObject : stop.reported.after.view.modelObject stop.parent.root =
-    stop.reported.effectInventory.inode current.state.directorySlot.description
-  ownerLive : current.state.owner ∈ stop.reported.effectInventory.slots
+  directorySlot : failure.reported.directoryHandle.2.1 = current.state.directorySlot
+  directoryLive : current.state.directorySlot ∈ failure.reported.effectInventory.slots
+  directoryBound : failure.reported.pathObject current.state.session.directory.path = some failure.parent.root
+  directoryObject : failure.reported.after.view.modelObject failure.parent.root =
+    failure.reported.effectInventory.inode current.state.directorySlot.description
+  ownerLive : current.state.owner ∈ failure.reported.effectInventory.slots
   ownerHeld : current.state.writer.owners.Owns current.state.session.directory current.state.session.descriptor
-  sameInodes : stop.reported.effectInventory.inode = current.state.census.inode
-  lockName : stop.reported.after.view.child stop.parent.root "LOCK" = some stop.parent.lock.child
-  lockObject : stop.reported.after.view.modelObject stop.parent.lock.child =
-    stop.reported.effectInventory.inode current.state.owner.description
-  successorName : stop.reported.after.view.child stop.parent.root
-    (renderWalSegmentName (current.state.writer.installed.walBytes / frameSize)) = some stop.created.child.child
-  successorObject : stop.reported.after.view.modelObject stop.created.child.child =
-    stop.reported.effectInventory.inode stop.created.raw.description
-  successorBytes : stop.reported.after.inodes.crashBytes (stop.reported.effectInventory.inode stop.created.raw.description) =
+  sameInodes : failure.reported.effectInventory.inode = current.state.census.inode
+  lockName : failure.reported.after.view.child failure.parent.root "LOCK" = some failure.parent.lock.child
+  lockObject : failure.reported.after.view.modelObject failure.parent.lock.child =
+    failure.reported.effectInventory.inode current.state.owner.description
+  successorName : failure.reported.after.view.child failure.parent.root
+    (renderWalSegmentName (current.state.writer.installed.walBytes / frameSize)) = some failure.created.child.child
+  successorObject : failure.reported.after.view.modelObject failure.created.child.child =
+    failure.reported.effectInventory.inode failure.created.raw.description
+  successorBytes : failure.reported.after.inodes.crashBytes (failure.reported.effectInventory.inode failure.created.raw.description) =
     [ByteArray.empty]
-  temporaryReleased : stop.reported.effectInventory.references stop.created.raw.description = []
+  temporaryReleased : failure.reported.effectInventory.references failure.created.raw.description = []
   appendRetained : ∀ entry ∈ current.state.cache.active,
     entry.1 = current.state.session.directory.file (.walSegment current.state.writer.installed.activeFirst) ∧
-    entry.2.2.1 ∈ stop.reported.effectInventory.slots ∧
-    entry.2.1.inode entry.2.2.1.description = stop.reported.effectInventory.inode entry.2.2.1.description ∧
-    stop.reported.after.view.modelObject stop.parent.keeper.child = stop.reported.effectInventory.inode entry.2.2.1.description
-  kept : NativeRotationKeeperMarker current.state.writer stop.parent.root stop.reported.after
-    stop.parent.keeper.child stop.parent.marker.child
+    entry.2.2.1 ∈ failure.reported.effectInventory.slots ∧
+    entry.2.1.inode entry.2.2.1.description = failure.reported.effectInventory.inode entry.2.2.1.description ∧
+    failure.reported.after.view.modelObject failure.parent.keeper.child = failure.reported.effectInventory.inode entry.2.2.1.description
+  kept : NativeRotationKeeperMarker current.state.writer failure.parent.root failure.reported.after
+    failure.parent.keeper.child failure.parent.marker.child
   reads : PendingClientReplay log current.reads history
   bounded : ∀ read ∈ current.reads, read.BoundedBy history.length
+
+private theorem NativeReadPosition.rotationFailureState (current : NativeReadPosition history log)
+    (failure : NativeRotationDirectoryFailure current.state diagnostic) : NativeRotationFailureState current failure := by
+  obtain ⟨valid, _, replay⟩ := current.readPrefix.refines
+  obtain ⟨directory, directoryLive, directoryBound, directoryObject, ownerLive, inodes, lock, lockObject, successor,
+    successorObject, bytes⟩ := failure.custody valid
+  exact ⟨valid.phase, directory, directoryLive, directoryBound, directoryObject, ownerLive, valid.retained.held,
+    inodes, lock, lockObject, successor, successorObject, bytes, failure.temporaryReleased.2, failure.appendCustody,
+    failure.keepsKeeperMarker, replay, current.readPrefix.readsBounded⟩
+
+structure NativePendingRotation (current : NativeReadPosition history log)
+    (stop : NativeRotationDirectoryStop current.state) extends NativeRotationFailureState current stop where
+  stopped : stop.reported.run = .error current.state.session.directory.path
+    (stop.session.phase, ⟨(current.state.cache, stop.reported.cut.image), current.state.writer.owners⟩)
 
 /-- The actual stop happens after file sync and before old append
 retirement. The case needs no response or ensuing open. -/
 theorem NativeReadPosition.stopsDuringRotation (current : NativeReadPosition history log)
     (stop : NativeRotationDirectoryStop current.state) : NativePendingRotation current stop := by
-  obtain ⟨valid, _, replay⟩ := current.readPrefix.refines
-  obtain ⟨directory, directoryLive, directoryBound, directoryObject, ownerLive, inodes, lock, lockObject, successor, successorObject, bytes⟩ :=
-    stop.custody valid
   have stopped := stop.reported.stopsSchedule
   rw [stop.cachePreserved] at stopped
-  exact ⟨valid.phase, stopped, directory, directoryLive, directoryBound, directoryObject, ownerLive, valid.retained.held,
-    inodes, lock, lockObject, successor, successorObject, bytes, stop.temporaryReleased.2, stop.appendCustody,
-    stop.keepsKeeperMarker, replay,
-    current.readPrefix.readsBounded⟩
+  exact ⟨current.rotationFailureState stop, stopped⟩
 
-/-- The same stop's physical successor name and selected bytes determine
+structure NativeReturnedRotationError (current : NativeReadPosition history log) (cause : IO.Error)
+    (failure : NativeRotationDirectoryFailure current.state (some cause)) extends NativeRotationFailureState current failure where
+  returned : failure.reported.run =
+    .ok (.error (IO.userError s!"sync failed for '{current.state.session.directory.path}': {cause}"))
+      (failure.session.phase, ⟨(current.state.cache, failure.reported.cut.image), current.state.writer.owners⟩)
+
+/-- The grouped directory fsync returns its original path-specific
+diagnostic and exact poisoned state before the old append cache reset. -/
+theorem NativeReadPosition.rotationReturnsError (current : NativeReadPosition history log) (cause : IO.Error)
+    (failure : NativeRotationDirectoryFailure current.state (some cause)) : NativeReturnedRotationError current cause failure := by
+  have returned := failure.reported.returnsError
+  rw [failure.cachePreserved] at returned
+  exact ⟨current.rotationFailureState failure, returned⟩
+
+/-- The same failure's physical successor name and selected bytes determine
 the bounded retry. Every allowed survivor retains the earlier ledger.
 An effective barrier allows only the new empty successor. -/
-theorem NativePendingRotation.selectsReportedSurvivor {current : NativeReadPosition history log}
-    {stop : NativeRotationDirectoryStop current.state} (pending : NativePendingRotation current stop)
+theorem NativeRotationFailureState.selectsReportedSurvivor {current : NativeReadPosition history log}
+    {stop : NativeRotationDirectoryFailure current.state diagnostic} (pending : NativeRotationFailureState current stop)
     {name : Option DeviceInode}
     (survived : name ∈ stop.reported.after.crashNames
       (renderWalSegmentName (current.state.writer.installed.walBytes / frameSize)))
@@ -191,7 +213,7 @@ theorem NativePendingRotation.selectsReportedSurvivor {current : NativeReadPosit
   let valid := current.readPrefix.refines.1
   have ready : current.state.writer.RetainedReady current.state.session.directory stop.parent.owner.description :=
     (congrArg DescriptorSlot.description stop.owner).symm ▸ valid.owner.symm ▸ valid.retained
-  obtain ⟨_, trace, pair, selected, prepared⟩ := stop.reported.refinesReopenPrefix ready survived bytes reported
+  obtain ⟨trace, pair, selected, prepared⟩ := stop.reported.preparesReopenPrefix ready survived bytes reported
   exact ⟨trace, pair, selected, prepared, pending.reads, pending.bounded⟩
 
 end Alvoki.Storage.DiskSession

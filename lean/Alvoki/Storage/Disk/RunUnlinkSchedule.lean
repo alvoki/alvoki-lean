@@ -141,7 +141,8 @@ theorem runUnlinkSchedule_success {error : Type} (names : List RunAddress) (befo
   rw [← foldl_collectionSteps before names]
   exact runCollectionSteps_success _ perform reports before healthy
 
-private theorem runCollectionSteps_outcome {error : Type} (actions : List (RunCollection.Step RunAddress))
+/-- Any returned prefix projects the exact reached namespace at its cut. -/
+theorem runCollectionSteps_outcome {error : Type} (actions : List (RunCollection.Step RunAddress))
     (before : RunUnlinkImage)
     (perform : RunCollection.Step RunAddress → EStateM error RunUnlinkImage Unit)
     (reports : RunUnlinkEffectContract perform) :
