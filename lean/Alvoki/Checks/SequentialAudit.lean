@@ -1474,6 +1474,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runBatchWrite_rejected
 #check_axioms Alvoki.Storage.DiskSession.runBatchWrite_commitUnknown
 #check_axioms Alvoki.Storage.DiskSession.ObservedBatchFailure.commitUnknown
+#check_axioms Alvoki.Storage.DiskSession.ObservedBatchFailure.cachedCommitError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.acknowledgeObservedBatch
 #check_axioms Alvoki.Storage.DiskSession.BatchCommitReports.run
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchFailure.retainedCut
@@ -1603,6 +1604,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.readsOpenPin
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.writeSchedules
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.acknowledgesViaOpenReferences
+#check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.returnsViaOpenReferences
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorUnlock.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorUnlock.admitsAfterFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.stopsBeforeRecovery

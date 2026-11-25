@@ -422,16 +422,14 @@ theorem ObservedBatchWrite.acknowledges {handle : Type} {directory before}
     subst written
     exact ⟨cacheAfter, runBatchWrite_acknowledges observed.guard report.nonempty report.prepared report.fits committed⟩
 
-/-- The reached batch publication error keeps the original diagnostic and
-poisons the phase. The cache and failed file cut come from that same
-callback run under the original owner. -/
-theorem ObservedBatchFailure.commitUnknown {handle : Type} {directory before}
+/-- Project the same reached cached publication error and file state
+before interpreting the phase assignments around it. -/
+theorem ObservedBatchFailure.cachedCommitError {handle : Type} {directory before}
     {failure : SegmentedBatchFailure directory before} (observed : ObservedBatchFailure failure handle) :
-    ∃ cacheAfter, runBatchWrite directory failure.rows observed.guard.lookup observed.append
-      observed.stage observed.sync observed.rename
-      (.ready before.installed, ⟨(observed.cache, WriteFiles.initial before.history
-        (before.wal.directory.staged .walBoundary)), before.owners⟩) =
-      .error (.commitUnknown failure.cause) (.poisoned, ⟨(cacheAfter, failure.failed), before.owners⟩) := by
+    ∃ cacheAfter, commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch failure.batch)
+      failure.proposed.walBytes observed.append observed.stage observed.sync observed.rename
+      (observed.cache, WriteFiles.initial before.history (before.wal.directory.staged .walBoundary)) =
+      .error failure.cause (cacheAfter, failure.failed) := by
   have projected := observed.toObservedBatchPublication.publisherProjects
   have ran : commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch failure.batch)
       failure.proposed.walBytes failure.append failure.stage failure.sync failure.rename
@@ -448,7 +446,20 @@ theorem ObservedBatchFailure.commitUnknown {handle : Type} {directory before}
     have same : cause = failure.cause ∧ files = failure.failed := by
       simpa [failed, withoutWriteGroupCache] using projected
     obtain ⟨rfl, rfl⟩ := same
-    exact ⟨cacheAfter, runBatchWrite_commitUnknown observed.guard failure.nonempty failure.prepared failure.fits failed⟩
+    exact ⟨cacheAfter, rfl⟩
+
+/-- The reached batch publication error keeps the original diagnostic and
+poisons the phase. The cache and failed file cut come from that same
+callback run under the original owner. -/
+theorem ObservedBatchFailure.commitUnknown {handle : Type} {directory before}
+    {failure : SegmentedBatchFailure directory before} (observed : ObservedBatchFailure failure handle) :
+    ∃ cacheAfter, runBatchWrite directory failure.rows observed.guard.lookup observed.append
+      observed.stage observed.sync observed.rename
+      (.ready before.installed, ⟨(observed.cache, WriteFiles.initial before.history
+        (before.wal.directory.staged .walBoundary)), before.owners⟩) =
+      .error (.commitUnknown failure.cause) (.poisoned, ⟨(cacheAfter, failure.failed), before.owners⟩) := by
+  obtain ⟨cacheAfter, failed⟩ := observed.cachedCommitError
+  exact ⟨cacheAfter, runBatchWrite_commitUnknown observed.guard failure.nonempty failure.prepared failure.fits failed⟩
 
 /-- The publication tail acknowledges the last ordinal after installing
 the prepared table under the same owner. -/

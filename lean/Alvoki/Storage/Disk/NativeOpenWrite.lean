@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeOpenAcquire
+import Alvoki.Storage.Disk.NativeExecutionPendingWrite
 
 namespace Alvoki.Storage.DiskSession
 
@@ -150,5 +151,96 @@ theorem NativeReadPosition.acknowledgesViaOpenReferences {history log}
       committed, publish, Pure.pure, EStateM.pure]
   · rw [nextState]
     exact uses
+
+/-- A reported publication error returns on the same opened phase cell
+while it is poisoned. The exact error and reached cache and file cut are
+those of the existing pending write, with no ready-cell assignment. -/
+theorem NativePendingWrite.returnsViaOpenReferences {history log}
+    {current : NativeReadPosition history log} (pending : NativePendingWrite current) (db : DiskTable)
+    {lock : IO.FS.Handle} {files : DiskTable.OpenSyncFiles} {phase : IO.Ref (Phase Installed)} {token : IO.Ref Unit}
+    (uses : db.UsesOpenReferences current.state.session.directory lock files phase token)
+    {contents : heap → IO.Ref (Phase Installed) → Option (Phase Installed)}
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (effects : OpenPhaseCellEffects contents get set) {entry : heap}
+    (stored : contents entry phase = some current.state.session.phase) :
+    let before := current.state
+    let directory := before.session.directory
+    let seen := pending.write
+    let failure := seen.failure
+    let calls := WriteRequest.Calls.ofFailure seen.observed
+    let initial := WriteFiles.initial before.writer.history (before.writer.files.directory.staged .walBoundary)
+    let load : EStateM DiskWriteError (heap × OpenWriteFiles) Installed := do
+      let state ← heapEffect .rejected (get phase)
+      liftExcept ((state.installed : Except IO.Error Installed).mapError DiskWriteError.rejected)
+    let guard := fun state => liftExcept ((checkActiveSegmentWith directory state calls.lookup :
+      Except IO.Error Unit).mapError DiskWriteError.rejected)
+    let setPhase := fun state => heapEffect .rejected (set phase state)
+    let commit := fun (state : Installed) bytes count =>
+      fileEffect .commitUnknown (commitBytesAt directory state.activeFirst bytes count
+        calls.append calls.stage calls.sync calls.rename)
+    db.UsesOpenWriteSchedules directory files phase ∧
+    ∃ poisoned : heap,
+      get phase entry = .ok before.session.phase entry ∧
+      set phase .poisoned entry = .ok () poisoned ∧ contents poisoned phase = some pending.session.phase ∧
+      (match seen.request with
+        | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected requireWritePreparation guard
+            (fun state event next bytes => publishPreparedWrite { state with table := next, walBytes := bytes }
+              event.sequence setPhase (commit state (WAL.encodeFrame event) bytes))
+        | .batch group => writeBatchSchedule group load DiskWriteError.rejected requireWritePreparation guard setPhase
+            (fun state batch count => commit state (WAL.encodeBatch batch) count))
+        (entry, before.cache, initial) = .error (.commitUnknown failure.cause) (poisoned, pending.cache, failure.failed) ∧
+      db.UsesOpenReferences pending.session.directory lock files phase token := by
+  intro before directory seen failure calls initial load guard setPhase commit
+  have valid := current.readPrefix.refines.1
+  have got := effects.reads entry phase before.session.phase stored
+  have loaded : load (entry, before.cache, initial) = .ok before.writer.installed (entry, before.cache, initial) := by
+    simp [load, heapEffect, before, got, valid.phase, Phase.installed, Bind.bind, EStateM.bind, liftExcept,
+      Pure.pure, EStateM.pure, Except.pure, Except.mapError]
+  have guarded : guard before.writer.installed (entry, before.cache, initial) =
+      .ok () (entry, before.cache, initial) := by
+    have checked : (checkActiveSegmentWith directory before.writer.installed calls.lookup : Except IO.Error Unit) =
+        .ok () := seen.observed.guard.checkedForWrite
+    simp only [guard, checked, Except.mapError, liftExcept, Pure.pure, EStateM.pure]
+  obtain ⟨poisoned, exclude, poisonedPhase⟩ := effects.writes entry phase before.session.phase .poisoned stored
+  have entered := preparedWrite_reachesPublication seen.request seen.rows failure.nonempty failure.prepared
+    failure.fits load guard setPhase commit loaded guarded
+  obtain ⟨cacheAfter, failed⟩ := seen.observed.cachedCommitError
+  let atWal := WriteFiles.initial before.writer.history (before.writer.wal.directory.staged .walBoundary)
+  have projected := runBatchWrite_commitUnknown (before := ⟨(seen.observed.cache, atWal), before.writer.owners⟩)
+    seen.observed.guard failure.nonempty failure.prepared failure.fits failed
+  have returned : calls.run seen.request directory before.writer =
+      .error (.commitUnknown failure.cause) (.poisoned, ⟨(pending.cache, failure.failed), before.writer.owners⟩) := by
+    have reported := pending.returned
+    change seen.returnedAt pending.cache at reported
+    unfold NativeReadyWriteFailure.returnedAt at reported
+    rw [← seen.cache] at reported
+    exact reported
+  unfold WriteRequest.Calls.run at returned
+  rw [seen.request.runReported_eq_batch valid.retained, seen.rows, valid.retained.directoryFiles] at returned
+  change runBatchWrite directory failure.rows seen.observed.guard.lookup seen.observed.append
+    seen.observed.stage seen.observed.sync seen.observed.rename
+    (.ready before.writer.installed, ⟨(seen.observed.cache, atWal), before.writer.owners⟩) = _ at returned
+  rw [projected] at returned
+  have sameCache : cacheAfter = pending.cache := by simpa [failure] using returned
+  subst cacheAfter
+  have committed : commit before.writer.installed (WAL.encodeBatch failure.batch) failure.proposed.walBytes
+      (poisoned, before.cache, initial) = .error (.commitUnknown failure.cause) (poisoned, pending.cache, failure.failed) := by
+    have initialAtWal : initial = atWal := by
+      change WriteFiles.initial before.writer.history (before.writer.files.directory.staged .walBoundary) = atWal
+      rw [valid.retained.directoryFiles]
+    have entryCache : before.cache = seen.observed.cache := seen.cache.symm
+    have failedHere : commitBytesAt directory before.writer.installed.activeFirst (WAL.encodeBatch failure.batch)
+        failure.proposed.walBytes calls.append calls.stage calls.sync calls.rename (before.cache, initial) =
+        .error failure.cause (pending.cache, failure.failed) := by
+      rw [entryCache, initialAtWal]
+      exact failed
+    simp only [commit, fileEffect, failedHere]
+  refine ⟨uses.writeSchedules, poisoned, got, exclude, poisonedPhase, ?_, uses⟩
+  rw [entered]
+  change publishPreparedWrite failure.proposed failure.table.committed setPhase
+    (commit before.writer.installed (WAL.encodeBatch failure.batch) failure.proposed.walBytes)
+    (entry, before.cache, initial) = _
+  simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, setPhase, heapEffect, exclude, committed]
 
 end Alvoki.Storage.DiskSession
