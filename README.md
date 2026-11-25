@@ -28,7 +28,7 @@ The getting-started guide shows how to write a value, close the database, reopen
 ## Explore the project
 
 - See how `DiskTable` writes, checkpoints, and recovers data. [Architecture](docs/architecture.md#sequential-storage)
-- Follow the storage engine and proof milestones. [Roadmap](docs/roadmap.md) · [Proof roadmap](docs/proof-roadmap.md) · [Proof index](docs/proof-index.md)
+- Follow the correctness argument and the remaining engine work. [Proof architecture](docs/proof-architecture.md) · [Proof roadmap](docs/proof-roadmap.md) · [Engine roadmap](docs/roadmap.md)
 - Explore the Lean and Rust performance experiments and the separately verified Verus search core. [Benchmarks](docs/benchmarks.md) · [Documentation index](docs/README.md)
 
 ## License

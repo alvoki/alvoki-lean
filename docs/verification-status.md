@@ -1,5 +1,7 @@
 # Verification status
 
+For the system claims and how the checked evidence composes, start with the [proof architecture](proof-architecture.md). This inventory gives the component and experiment proof scopes.
+
 ## Storage engine guarantees
 
 The current engine is the sequential Linux `DiskTable` API. Lean checks its table, codecs and shared storage protocol against a logical key-value store and a model of the files that survive a crash. The engine uses v3 run files and v2 checkpoint manifests. These version numbers identify different artifacts. The v1 packed blocks and Verus search core are separate experiments. [Engine and I/O protocol](architecture.md#sequential-storage) · [Packed experiments](#packed-block-and-search-experiments)

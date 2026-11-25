@@ -1,6 +1,6 @@
 # Alvoki architecture
 
-Alvoki is a sequential embedded key-value store. The Linux `DiskTable` adapter manages the lock, write-ahead log and checkpoint files. Its in-memory `PackedTable` serves snapshots over a memtable and immutable sorted runs. The logical table and filesystem models specify the behavior of those components. [Getting started](getting-started.md) · [Verification status](verification-status.md)
+Alvoki is a sequential embedded key-value store. The Linux `DiskTable` adapter manages the lock, write-ahead log and checkpoint files. Its in-memory `PackedTable` serves snapshots over a memtable and immutable sorted runs. The logical table and filesystem models specify the behavior of those components. [Getting started](getting-started.md) · [Proof architecture](proof-architecture.md)
 
 ## Lean paths
 

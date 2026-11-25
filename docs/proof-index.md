@@ -1,6 +1,6 @@
 # Proof techniques and reuse in Alvoki
 
-For guarantees and assumptions, see [verification status](verification-status.md). This index starts from techniques that occur in more than one part of the implementation.
+The [proof architecture](proof-architecture.md) starts from public guarantees and their evidence. This index starts from proof techniques that occur in more than one part of the implementation.
 
 ## How to structure a proof
 
