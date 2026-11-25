@@ -1644,6 +1644,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.rejectsReads
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.retainsCustody
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.retainsLock
+#check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.retainsDirectory
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.selects
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.returnsCoveredWalUnlinkError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCoveredWalUnlinkError
@@ -1689,6 +1690,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectionBarrierFailed
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.releasedVacant
 #check_axioms Alvoki.Storage.DiskSession.NativeCollectionCloseFiles.lock
+#check_axioms Alvoki.Storage.DiskSession.NativeCollectionCloseFiles.directoryAtRoot
 #check_axioms Alvoki.Storage.DiskSession.NativeCollectionAlignedReads.readsWal
 #check_axioms Alvoki.Storage.DiskSession.NativeCollectedWal.vacant
 #check_axioms Alvoki.Storage.DiskSession.CoveredWalRetrySelection.sameTarget

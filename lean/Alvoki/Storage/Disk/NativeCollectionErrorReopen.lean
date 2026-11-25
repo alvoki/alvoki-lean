@@ -21,6 +21,7 @@ structure NativeCollectedWal (state : NativeReadyState) where
   lock : DeviceInode
   lockBound : view.child root "LOCK" = some lock
   lockObject : view.modelObject lock = census.inode state.owner.description
+  directoryObject : view.modelObject root = census.inode state.directorySlot.description
 
 namespace NativeCollectedWal
 
@@ -40,9 +41,11 @@ end NativeCollectedWal
 
 namespace NativeReadyWalCollection
 
-def collected (reported : NativeReadyWalCollection state) : NativeCollectedWal state :=
-  ⟨reported.pending.image, reported.census, reported.inventory.lifetime.root, reported.reachedView,
-    reported.inventory.lifetime.lock, reported.retainsLock.2.1, reported.retainsLock.2.2⟩
+def collected (reported : NativeReadyWalCollection state) : NativeCollectedWal state := by
+  refine ⟨reported.pending.image, reported.census, reported.inventory.lifetime.root, reported.reachedView,
+    reported.inventory.lifetime.lock, reported.retainsLock.2.1, reported.retainsLock.2.2, ?_⟩
+  rw [reported.reachedObjects, reported.censusPreserved, ← reported.directoryMatches, ← reported.startsAt]
+  exact reported.inventory.lifetime.identifiesDirectory
 
 def poisonedCloseState (reported : NativeReadyWalCollection state) :
     CachedCloseState CheckpointOpenHandle WalSealedUnlinkImage := reported.collected.closeState
@@ -84,6 +87,10 @@ theorem lock (files : NativeCollectionCloseFiles reached) :
   have bound := files.child "LOCK"
   change files.names (state.session.directory.file .lock) = _ at bound
   rw [bound, reached.lockBound, Option.map_some, reached.lockObject]
+
+theorem directoryAtRoot (files : NativeCollectionCloseFiles reached) :
+    files.names state.session.directory.path = some (reached.view.modelObject reached.root) :=
+  files.directory.trans (congrArg some reached.directoryObject.symm)
 
 end NativeCollectionCloseFiles
 

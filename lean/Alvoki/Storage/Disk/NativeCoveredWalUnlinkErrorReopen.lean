@@ -12,7 +12,7 @@ namespace NativeCoveredWalUnlinkError
 /-- The failed unlink leaves these exact files under the held old lock. -/
 def collected (error : NativeCoveredWalUnlinkError state) : NativeCollectedWal state :=
   ⟨error.after, error.census, error.inventory.lifetime.root, error.afterView,
-    error.inventory.lifetime.lock, error.retainsLock.1, error.retainsLock.2⟩
+    error.inventory.lifetime.lock, error.retainsLock.1, error.retainsLock.2, error.retainsDirectory⟩
 
 end NativeCoveredWalUnlinkError
 
@@ -51,6 +51,8 @@ structure NativeCoveredWalUnlinkErrorContinuation (current : NativeReadPosition 
     next.opened = seen.run ∧ next.initial = next.state ∧
     next.state.owner = seen.opening.admission.owner ∧ next.state.directorySlot = seen.opening.admission.cached ∧
     next.state.cache = seen.opening.admission.cache ∧ next.state.census = seen.opening.finish.census ∧
+    seen.opening.reads.bindings current.state.session.directory.path =
+      some (observed.error.afterView.modelObject observed.error.inventory.lifetime.root) ∧
     NativeCollectionSelectedReads seen
 
 theorem NativeReadPosition.recoversCoveredWalUnlinkError (current : NativeReadPosition history log) {input : FilePath}
@@ -68,6 +70,7 @@ theorem NativeReadPosition.recoversCoveredWalUnlinkError (current : NativeReadPo
     ⟨directory, directoryInode.trans (congrFun entryInodes _), lockInode.trans (congrFun entryInodes _),
       target.trans (selection.sameTarget current.readPrefix.refines.1.retained), checkpoint, durable⟩
   exact ⟨next, failed, ⟨closed, phase, cleared, afterClose, closeLock⟩, rfl, frame, phaseFresh, sessionFresh,
-    pair, seals, selection, seen, readPrefix.frames.1, rfl, rfl, owner, directorySlot, cache, census, physical⟩
+    pair, seals, selection, seen, readPrefix.frames.1, rfl, rfl, owner, directorySlot, cache, census,
+    seen.directoryObject.trans observed.files.directoryAtRoot, physical⟩
 
 end Alvoki.Storage.DiskSession

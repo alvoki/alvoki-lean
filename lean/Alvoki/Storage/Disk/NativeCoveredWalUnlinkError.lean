@@ -120,15 +120,18 @@ theorem retainsLock (error : NativeCoveredWalUnlinkError state) :
   rw [error.sameCensus, error.objects, ← error.sameOwner, ← error.startsAt]
   exact error.inventory.lifetime.identifiesLock
 
+theorem retainsDirectory (error : NativeCoveredWalUnlinkError state) :
+    error.afterView.modelObject error.inventory.lifetime.root = error.census.inode state.directorySlot.description := by
+  rw [error.sameCensus, error.objects, ← error.sameDirectory, ← error.startsAt]
+  exact error.inventory.lifetime.identifiesDirectory
+
 theorem retainsCustody (error : NativeCoveredWalUnlinkError state) (valid : state.Valid) :
     state.owner ∈ error.census.slots ∧ state.directorySlot ∈ error.census.slots ∧
     error.afterView.child error.inventory.lifetime.root "LOCK" = some error.inventory.lifetime.lock ∧
     error.afterView.modelObject error.inventory.lifetime.lock = error.census.inode state.owner.description ∧
     error.afterView.modelObject error.inventory.lifetime.root = error.census.inode state.directorySlot.description := by
-  refine ⟨error.sameCensus.symm ▸ valid.ownerLive, error.sameCensus.symm ▸ valid.directoryLive,
-    error.retainsLock.1, error.retainsLock.2, ?_⟩
-  rw [error.sameCensus, error.objects, ← error.sameDirectory, ← error.startsAt]
-  exact error.inventory.lifetime.identifiesDirectory
+  exact ⟨error.sameCensus.symm ▸ valid.ownerLive, error.sameCensus.symm ▸ valid.directoryLive,
+    error.retainsLock.1, error.retainsLock.2, error.retainsDirectory⟩
 
 /-- The same selected marked read plan is available in the visible
 namespace and every reported surviving seal list. -/
