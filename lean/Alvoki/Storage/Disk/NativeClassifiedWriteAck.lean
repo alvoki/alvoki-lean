@@ -40,16 +40,30 @@ theorem acknowledgesOfNonemptyReturn {directory : DiskDirectory} {writer : Segme
 
 end WriteRequest.ReturnedReports
 
-/-- Keep the same opened session and the cache and descriptor census at
-this return. The acknowledged file report determines the new writer. -/
+def NativeReadyState.afterWrite (before : NativeReadyState) (writer : SegmentedWriterState)
+    (cache : CensusDirectoryCache) (custody : NativePendingWriteCensus before cache) : NativeReadyState :=
+  { before with
+    session := { before.session with phase := .ready writer.installed }
+    writer := writer
+    census := custody.reached
+    cache := cache }
+
 def NativeReadyState.afterClassifiedAck (before : NativeReadyState)
     (report : SegmentedBatchAppendReport before.session.directory before.writer) (target : Target)
     (cache : CensusDirectoryCache) (custody : NativePendingWriteCensus before cache) : NativeReadyState :=
-  { before with
-    session := { before.session with phase := .ready report.nextInstalled }
-    writer := report.next target
-    census := custody.reached
-    cache := cache }
+  before.afterWrite (report.next target) cache custody
+
+/-- Keep the observed reads with the new replay when an acknowledged
+batch extends the ready writer's history. -/
+def NativeReadPosition.afterAcknowledgedWrite {history log}
+    (current : NativeReadPosition history log) (state : NativeReadyState)
+    (valid : state.Valid) {batch : List WAL.Write}
+    (extended : state.writer.history = history ++ batch) :
+    NativeReadPosition (history ++ batch) (log ++ [.acknowledgedBatch batch]) :=
+  let replayed := current.readPrefix.refines.2.2.appendAcknowledged current.readPrefix.readsBounded
+    (extended ▸ valid.retained.resumed.ordered)
+  ⟨.ok state.session (state.census, state.files), state, state, current.reads,
+    .installed rfl valid extended replayed.1 replayed.2⟩
 
 /-- The restored ready position comes from one acknowledged return and
 its reported descriptor census. The sequence, cache and write-file
@@ -89,7 +103,7 @@ theorem NativeReadPosition.acknowledgesProjectedReturn {history log}
     (custody : NativePendingWriteCensus current.state reached.1) :
     ∃ next : ClassifiedWriteAcknowledgement current request calls sequence reached custody,
       returnedPhase = next.next.state.session.phase := by
-  obtain ⟨valid, beforeHistory, prior⟩ := current.readPrefix.refines
+  obtain ⟨valid, beforeHistory, _⟩ := current.readPrefix.refines
   obtain ⟨report, observed, actualCalls, rows, sequenceEq, phaseEq, written⟩ :=
     classified.acknowledgesOfNonemptyReturn valid.retained nonempty returned
   obtain ⟨target, selected, retained⟩ := report.preservesRetained valid.retained
@@ -98,11 +112,7 @@ theorem NativeReadPosition.acknowledgesProjectedReturn {history log}
     ⟨custody.cachedAt, custody.cachedDirectory⟩, retained⟩
   have extended : state.writer.history = history ++ report.batch :=
     congrArg (· ++ report.batch) beforeHistory
-  have ordered : WAL.OrdinalsFrom 1 (history ++ report.batch) := extended ▸ retained.resumed.ordered
-  obtain ⟨replayed, bounded⟩ := prior.appendAcknowledged current.readPrefix.readsBounded ordered
-  let next : NativeReadPosition (history ++ report.batch) (log ++ [.acknowledgedBatch report.batch]) :=
-    ⟨.ok state.session (state.census, state.files), state, state, current.reads,
-      .installed rfl stateReady extended replayed bounded⟩
+  let next := current.afterAcknowledgedWrite state stateReady extended
   have exactReturn := returned.trans (congrArg (fun value =>
     EStateM.Result.ok sequence (value, (⟨reached, current.state.writer.owners⟩ : LockedFileState OpenWriteFiles))) phaseEq)
   exact ⟨⟨report, observed, actualCalls, rows, sequenceEq, written, target, selected, next, exactReturn,

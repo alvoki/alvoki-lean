@@ -1,5 +1,16 @@
 # Current handoff
 
+One successful raw write now yields its next opened position from the prepared batch and the
+published keeper and marker. The former classified-storage adapters are replaced by a local
+protected-file frame and a shared retained-writer proof. The reported write path uses the same
+retained and read-ledger logic. Guard, commit callbacks and phase setters carry the lock and
+cached-directory observations to the actual returned inventory and cache. Separate local laws
+follow the same keeper inode and visible bytes across both fsyncs, rename, directory fsync and
+the ready update. Deriving the complete commit storage facts from the native primitives and
+combining this successor with independent stop, retry and reopen steps remain open.
+[Raw acknowledged successor](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean)
+· [Keeper continuity](../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean)
+
 A successful raw WAL commit now fixes the actual grouped file-sync return, marker rename and
 cached directory fsync in one chronology. The original append and stage payloads fix the durable
 keeper and marker at the group return. The logical acknowledgement uses the one checked request

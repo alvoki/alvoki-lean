@@ -72,6 +72,17 @@ that one request and keeps the prepared batch, sequence, installed phase and ear
 A frame across the ready-cell update carries the published bytes and jointly settled names to
 that return. The remaining composition derives the publication evidence and descriptor custody
 from the reached raw callbacks.
+
+On the successful raw path, the prepared batch and published keeper and marker bytes now suffice
+to construct the next retained writer. The same retained proof serves the reported path. The
+original guard, commit and phase update frame the lock and cached directory independently of the
+WAL descriptors. Their reached heap supplies the exact inventory and cache for the returned
+opened position, with earlier reads and pins preserved. This path consumes the settled payloads
+and frames at the raw commit return directly, without an intermediate normalized publication
+report. The grouped and final barrier proofs also preserve the separate visible keeper payload on
+the same inode for a later append. The remaining composition must derive all of the raw commit
+storage facts from the reached primitive laws and connect independent failures and recovery to
+the same execution induction.
 [Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean) · [Raw return projection](../../lean/Alvoki/Storage/Disk/NativeRawWriteProjection.lean)
 
 At a stopped staged-manifest fsync the returned prefix and pending-cache update identify the same
