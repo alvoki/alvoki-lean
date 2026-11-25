@@ -831,7 +831,8 @@ theorem recoveredRetries_retainUncertainBatch
     {current : Selection} {next : Selection}
     (accepted : decode before = .ok current)
     (offset : current.slot = slotIndex active)
-    (newer : current.toRecord.epoch < next.toRecord.epoch)
+    {history batch : List Write}
+    (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
     (observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
       pair = ⟨checkpoint, none⟩ ∨
       ∃ bytes,
@@ -841,22 +842,25 @@ theorem recoveredRetries_retainUncertainBatch
     (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
     (authorizedRepair : EffectTrace target
       { prepared with directory := settleMarker prepared.directory selected } firstRepair)
-    (targetPair : (settleMarker prepared.directory selected).active = target.pair)
-    (keeper : prepared.keeper.Valid target.Accepts)
-    (later : prepared.later.Beyond target.range.through)
+    {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared prepared target plan)
     (retries : SettledRetries target firstRepair after)
-    {image : WalSegmentImage} {range : MarkedWalRange} {history batch : List Write}
+    {image : WalSegmentImage} {range : MarkedWalRange}
     {base table : PackedTable} {first : Nat} {log : List DatabaseSubmissions}
     (prior : DatabaseBatchRetention log history)
     (oldSize : current.frontier.toNat = (WAL.encode history).size)
-    (newSize : next.frontier.toNat = (WAL.encode (history ++ batch)).size)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first table) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
     ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
+  obtain ⟨_, epoch, newSize, _, _⟩ := advance_fields advanced
+  have newer : current.toRecord.epoch < next.toRecord.epoch := by
+    change current.epoch.toNat < next.epoch.toNat
+    omega
+  have authorized := prepared_settleMarker preparedPlan selected observed
   have choices := interruptedMarker_retryChoices accepted offset newer observations
   obtain ⟨_, binding, choice, _⟩ := retries_preservePublishedFrontier beforeBarrier checkpoint
     current.frontier next.frontier
-    choices selected observed authorizedRepair targetPair keeper later retries (List.mem_cons_self ..)
+    choices selected observed authorizedRepair authorized.pair authorized.keeperPrefix
+    authorized.newer retries (List.mem_cons_self ..)
   rcases choice with oldFrontier | newFrontier
   · exact recoveredBatch_retains prior recovery binding (.inl (oldFrontier ▸ oldSize))
   · exact recoveredBatch_retains prior recovery binding (.inr (newFrontier ▸ newSize))
