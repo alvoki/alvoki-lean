@@ -104,6 +104,8 @@ file before acquisition. The filesystem contract determines which effects may su
 
 After the last observed owner reference drops, the shared open schedule passes the exact census from its reported lock append-open through flock and directory cache initialization to the held recovery callback. The proof derives the reached cache and its two allocations from the primitive reports. The held recovery proofs still supply the selected reads and returned table. [Stateful reopen admission](../lean/Alvoki/Storage/Disk/LockCensusOpenAdmission.lean)
 
+On the held marked route, the read-only projection starts with the actual admission census and derives the marked preparation from the selected stat, open, chunk and complete listing reports. Those reports use the captured root and its canonical lock child. The exact replay and repair plan are available before the repair callback. The proof assumes stable namespace observations and tracks temporary handle effects separately. [Marked read preparation](../lean/Alvoki/Storage/Disk/CapturedMarkedReads.lean)
+
 Prove a single invariant for every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and
