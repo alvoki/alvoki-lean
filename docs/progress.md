@@ -769,3 +769,10 @@ successful final reopen, the modeled repair trace is derived from the
 reported directory sync and reached primitive repair actions. The
 remaining integration work is to derive the selected chain and primitive
 reports from one native descriptor chronology. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
+
+The experiment branch now includes `main` through `8264df2`. The native
+checkpoint and seal custody proofs on `main` provide the starting point
+for that chronology. The two-slot path still needs to thread the held
+marker descriptor through acquisition and stabilization, and connect the
+reported keeper and repair effects to the same reached descriptor census.
+The existing client replay theorem can consume the resulting reports.
