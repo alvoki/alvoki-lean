@@ -425,6 +425,23 @@ theorem cachedPayloads_checkSpans {directory : Storage.DiskDirectory} {through :
     rw [Storage.checkSelectedWalSegmentSpans, Bool.and_eq_true, Storage.checkWalSegmentSpans_iff] at tail ⊢
     exact ⟨by simpa [within] using tail.1, ⟨_, _, rfl, within⟩, .sealed forward size tail.2.2⟩
 
+/-- The last reported payload is the keeper prefix. Its physical size
+and bytes come from the same callback. -/
+theorem cachedPayloads_keeper {directory : Storage.DiskDirectory} {through : Nat}
+    {readSeal : System.FilePath → Nat → Except IO.Error ByteArray}
+    {readKeeper : System.FilePath → Nat → Nat → Except IO.Error ByteArray}
+    {required : List (Nat × IO.FS.Metadata)} {files : List (Nat × ByteArray)} {fileSize : Nat}
+    (reports : CachedWalPayloadReports directory through readSeal readKeeper required files fileSize) :
+    ∃ keeper bytes, files.getLast? = some (keeper, bytes) ∧
+      bytes.size = (through - keeper) * frameSize ∧
+      readKeeper (directory.file (.walSegment keeper)) bytes.size fileSize = .ok bytes := by
+  induction reports with
+  | @keeper first metadata bytes size _ read =>
+    exact ⟨first, bytes, rfl, size, by simpa only [size] using read⟩
+  | sealed _ _ _ _ _ _ ih =>
+    obtain ⟨keeper, bytes, last, size, read⟩ := ih
+    exact ⟨keeper, bytes, by simpa using last, size, read⟩
+
 /-- The bounded read vector for the selected marker can omit bytes after
 its keeper. Given the retained replay from the same bytes, preparation
 returns that table and the physical keeper prefix for repair. -/
@@ -451,14 +468,14 @@ theorem prepareSelected_of_retainedReplay
     {physical tail payload : ByteArray} {table : Storage.PackedTable}
     (exactBytes : physical = Storage.walSegmentPayloadBytes reads.files ++ tail)
     (replayed : Boundary.recoverRetainedMarked (checkpoint.getD (.empty, 0)).1
-      first selection.frontier physical = .ok (payload, table))
-    {keeper : Nat} {bytes : ByteArray}
-    (keeperRead : reads.files.getLast? = some (keeper, bytes)) :
-    prepareBoundedMarkedFromReaders directory readCheckpoint
-      (fun _ => pure (some (Boundary.encode selection.frontier)))
-      (fun start frontier => readSelectedWithCachedExtents directory start frontier list lstat readSeal readKeeper) =
-      .ok (⟨selection.frontier.toNat / frameSize, keeper, reads.newer, bytes⟩,
-        ⟨table, (checkpoint.getD (.empty, 0)).2, selection.frontier, keeper⟩, fileSize) := by
+      first selection.frontier physical = .ok (payload, table)) :
+    ∃ keeper bytes,
+      readKeeper (directory.file (.walSegment keeper)) bytes.size fileSize = .ok bytes ∧
+      prepareBoundedMarkedFromReaders directory readCheckpoint
+        (fun _ => pure (some (Boundary.encode selection.frontier)))
+        (fun start frontier => readSelectedWithCachedExtents directory start frontier list lstat readSeal readKeeper) =
+        .ok (⟨selection.frontier.toNat / frameSize, keeper, reads.newer, bytes⟩,
+          ⟨table, (checkpoint.getD (.empty, 0)).2, selection.frontier, keeper⟩, fileSize) := by
   have readWal := readSelectedWithCachedExtents_reported directory _ _ list lstat readSeal readKeeper
     ⟨aligned, watermark⟩ listed scanned selected reports
   have walRead : readSelectedWithCachedExtents directory (checkpoint.getD (.empty, 0)).1.committed.toNat
@@ -477,6 +494,8 @@ theorem prepareSelected_of_retainedReplay
       have checked := List.all_eq_true.mp (List.all_takeWhile (p := fun item : Nat × IO.FS.Metadata =>
         decide (item.1 ≤ selection.frontier.toNat / frameSize))) entry member
       exact of_decide_eq_true checked
+  obtain ⟨keeper, bytes, keeperRead, _, read⟩ := cachedPayloads_keeper reports
+  refine ⟨keeper, bytes, read, ?_⟩
   refine prepareSelected_reported (payload := payload) directory selection readCheckpoint _ checkpointRead walRead ?_ keeperRead
   have checked := cachedPayloads_checkSpans reports covered
   rw [files] at checked exactBytes ⊢
