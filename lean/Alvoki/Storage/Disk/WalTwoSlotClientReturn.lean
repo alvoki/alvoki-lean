@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.DiskSession
+import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -75,5 +76,59 @@ theorem uncertain_batch_selects_prefix
       (fun frontier => (Boundary.select frontier physical).isOk) present newer
     exact ⟨next, history ++ batch, by simpa [readNext, Except.isOk, Except.toBool] using selection,
       .inr rfl, readNext⟩
+
+open DiskSession (DatabaseSubmissions DatabaseBatchRetention)
+
+private theorem recoveredFrontier_count {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
+    {range : MarkedWalRange} {history : List Write} {base table : PackedTable} {first : Nat}
+    (recovery : WalSegmentRecovery image pair range history base first table)
+    {frontier : UInt64} (selected : pair.walBoundary = some (Boundary.encode frontier)) :
+    frontier.toNat = range.through * frameSize := by
+  obtain ⟨marker, length, _, read, decoded, bytes, _⟩ := recovery.marked
+  have sameMarker := Option.some.inj (selected.symm.trans read)
+  have sameLength : frontier = length :=
+    Except.ok.inj ((Boundary.decode_encode frontier).symm.trans (sameMarker ▸ decoded))
+  exact sameLength ▸ bytes
+
+/-- The client ledger accounts for a recovered uncertain submission as
+one whole batch or no batch. The retained history is exactly the prefix
+represented by the recovered table. -/
+theorem recoveredBatch_retains {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
+    {range : MarkedWalRange} {history batch : List Write} {base table : PackedTable} {first : Nat}
+    {log : List DatabaseSubmissions} (prior : DatabaseBatchRetention log history)
+    (recovery : WalSegmentRecovery image pair range (history ++ batch) base first table)
+    {frontier : UInt64} (selected : pair.walBoundary = some (Boundary.encode frontier))
+    (whole : frontier.toNat = (WAL.encode history).size ∨
+      frontier.toNat = (WAL.encode (history ++ batch)).size) :
+    DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
+    ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
+  have count : range.through = history.length ∨ range.through = (history ++ batch).length := by
+    rw [recoveredFrontier_count recovery selected, WAL.encode_size, WAL.encode_size] at whole
+    unfold frameSize at whole
+    omega
+  refine ⟨?_, recovery.refines⟩
+  rcases count with old | new
+  · rw [old, List.take_append_of_le_length (Nat.le_refl _), List.take_length]
+    simpa using (DatabaseBatchRetention.append (entry := .uncertainBatch batch)
+      (suffix := []) prior (Or.inl rfl))
+  · rw [new, List.take_length]
+    exact DatabaseBatchRetention.append (entry := .uncertainBatch batch) prior (Or.inr rfl)
+
+/-- Acknowledged publication has a single retained history, containing the
+whole submitted batch after all earlier retained writes. -/
+theorem recoveredAcknowledgedBatch_retains {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
+    {range : MarkedWalRange} {history batch : List Write} {base table : PackedTable} {first : Nat}
+    {log : List DatabaseSubmissions} (prior : DatabaseBatchRetention log history)
+    (recovery : WalSegmentRecovery image pair range (history ++ batch) base first table)
+    {frontier : UInt64} (selected : pair.walBoundary = some (Boundary.encode frontier))
+    (complete : frontier.toNat = (WAL.encode (history ++ batch)).size) :
+    DatabaseBatchRetention (log ++ [.acknowledgedBatch batch]) (history ++ batch) ∧
+    ∃ model, table.Refines model ∧ RepresentsWalHistory (history ++ batch) model := by
+  have count : range.through = (history ++ batch).length := by
+    rw [recoveredFrontier_count recovery selected, WAL.encode_size] at complete
+    unfold frameSize at complete
+    omega
+  refine ⟨DatabaseBatchRetention.append (entry := .acknowledgedBatch batch) prior rfl, ?_⟩
+  simpa only [count, List.take_length] using recovery.refines
 
 end Alvoki.WAL.TwoSlot

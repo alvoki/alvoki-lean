@@ -103,8 +103,9 @@ rejects an unavailable WAL at the selected frontier.
 
 The plain and typed write APIs share the same publication and failure effects.
 The callback model keeps the exact reached file state when publication
-poisons the session, and the old-or-whole selection feeds exact WAL bytes
-to replay. Reopen validates before its file barrier, then calls the shared
+poisons the session. The recovered frontier gives the exact history prefix
+represented by the table. The client ledger retains a whole acknowledged
+batch and accounts for an uncertain batch as one whole suffix or no suffix. Reopen validates before its file barrier, then calls the shared
 keeper repair. The logical marker projection preserves an absent crash
 binding after a pending bootstrap rename until the directory barrier.
 Before authorization, retries preserve the old-or-whole frontier choice.

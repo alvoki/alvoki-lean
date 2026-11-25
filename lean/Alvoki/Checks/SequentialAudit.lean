@@ -2170,3 +2170,5 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.TwoSlotDiskTable.write_eq_adaptOutcome
 #check_axioms Alvoki.Storage.TwoSlotDiskTable.writeBatch_eq_adaptOutcome
 #check_axioms Alvoki.Storage.TwoSlotDiskTable.writeWithOutcome_singletonSchedule
+#check_axioms Alvoki.WAL.TwoSlot.recoveredBatch_retains
+#check_axioms Alvoki.WAL.TwoSlot.recoveredAcknowledgedBatch_retains
