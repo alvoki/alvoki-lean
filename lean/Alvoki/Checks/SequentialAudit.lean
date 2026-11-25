@@ -215,6 +215,7 @@ import Alvoki.Storage.Disk.PendingFirstAppendReopen
 import Alvoki.Storage.Disk.SnapshotReadHistoryBounds
 import Alvoki.Storage.Disk.NativeReadyReadPrefix
 import Alvoki.Storage.Disk.NativeMarkedReadPrefix
+import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeReadyClose
 import Alvoki.Storage.Disk.NativeCloseAlignedReopen
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
@@ -1382,6 +1383,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.guardedReplay
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readAt
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperFinish.startsNativeReadPrefix
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.censusPreserved
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.runs
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsCustody
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsLock
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyClose.followsFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reachesClose
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.closeAdmits
