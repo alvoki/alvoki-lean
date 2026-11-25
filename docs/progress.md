@@ -1,5 +1,14 @@
 # Current handoff
 
+The acknowledged WAL proof derives both grouped payloads from the actual append, marker stage
+and two file syncs, using local file and reference effects. The old keeper's visible bytes
+pass the guard and poison assignment on the same named inode. The append flush produces the old
+bytes followed by the batch. The staging write supplies the marker for that same commit. The
+ready setter carries the independently observed visible keeper into the next opened position.
+Fresh open supplies the empty visible keeper at the exact allocation endpoint. The common
+execution still needs to join these steps with the independent error, stop and recovery paths.
+[Grouped WAL effects](../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean) · [Ready writer](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) · [Fresh open](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+
 The fresh marked bootstrap establishes ready storage on the exact returned heap. The observed
 keeper and marker barriers give the empty keeper and zero marker. Exact child observations
 preserve the lock binding and manifest absence. The phase and token allocations carry the
@@ -9,8 +18,8 @@ same selected files. The directory's own settled parent binding remains explicit
 A successful raw write derives all five publication callbacks from its actual commit return.
 The same traversal frames both descriptor authority and the protected files. The reached
 rename and cached directory barrier then establish the canonical marker and keeper in each
-allowed joint crash map. The proof consumes the grouped sync's exact payloads. Those payload
-facts still need to be derived in this path from the literal append, staging and file fsyncs.
+allowed joint crash map. The grouped sync's exact payloads now come from the literal append,
+staging and file fsyncs.
 [Raw acknowledged successor](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean)
 
 One successful raw write now yields its next opened position from the prepared batch and the

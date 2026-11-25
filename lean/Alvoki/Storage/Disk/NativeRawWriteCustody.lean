@@ -21,6 +21,14 @@ def OpenCloseHeapView.writeAuthorityAt {heap image : Type} (view : OpenCloseHeap
     state.directorySlot ∈ census.slots, census.inode state.owner.description,
     census.inode state.directorySlot.description⟩
 
+/-- A WAL primitive may change its own files and descriptors. Its
+authority and other selected file observations have independent frames. -/
+def OpenCloseHeapView.framesWrite {heap image : Type} (view : OpenCloseHeapView heap image) (state : NativeReadyState)
+    (directoryRef : IO.Ref (Option IO.FS.Handle)) (storage : heap → CheckpointStorageObservation)
+    (first last : heap) : Prop :=
+  view.writeAuthorityAt state directoryRef last = view.writeAuthorityAt state directoryRef first ∧
+    (storage first).Frames state.writeFramePath (storage last)
+
 /-- Compose an independent frame across the original WAL commit. An
 ordinary callback error preserves the frame at its own reached heap. -/
 theorem commitBytesAt_frames {heap : Type} (frames : heap → heap → Prop)

@@ -87,10 +87,15 @@ opened position, with earlier reads and pins preserved. The commit return identi
 append and stage results, the grouped sync, the canonical rename and the final fsync on the
 original cached directory. A single frame proof follows the callbacks for both the authority
 and protected footprint. The final rename and directory effects establish durable names in
-one joint selection. This proof takes the exact payloads at the grouped file-sync return and
-local callback laws. The grouped and final barrier proofs separately preserve the live keeper
-for another append. The remaining composition must derive the grouped payload observation
-and connect independent failures and recovery to the same execution induction.
+one joint selection. The returned append, marker staging and grouped file sync supply the
+exact keeper and marker payloads under local file and cache laws. The proof selects the
+actual handles from the active and pending references, then derives the durable bytes of the
+issued inodes. It independently carries the visible keeper bytes through the final namespace
+and reference operations into the next opened position. The fresh-open theorem supplies the
+same visible property for the empty keeper after the actual phase and token allocations.
+The owner must still account for the pending reference contents, the clean cached hit and the
+reported primitive effects. The common execution induction has to compose these write steps
+with independent failures and recovery.
 [Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean) · [Raw return projection](../../lean/Alvoki/Storage/Disk/NativeRawWriteProjection.lean)
 
 At a stopped staged-manifest fsync the returned prefix and pending-cache update identify the same
