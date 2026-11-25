@@ -166,18 +166,22 @@ theorem NativeOpenedPosition.checkpointStopsFromWhole (current : NativeOpenedPos
         rw [phaseAction_run] at stopped
         cases installed : opened.set opened.phase (.ready next) files <;> rw [installed] at stopped <;> cases stopped
 
-private theorem successfulCheckpointStepsFrame {value : Type}
+theorem successfulCheckpointStepsPreserve {value : Type}
     (perform : Step → ExceptT IO.Error (EStateM FilePath (CheckpointWorld heap)) Unit)
-    (observe : CheckpointWorld heap → value) (completed : List Step)
+    (observe : CheckpointWorld heap → value) (related : value → value → Prop)
+    (refl : ∀ item, related item item)
+    (trans : ∀ {first middle last}, related first middle → related middle last → related first last)
+    (completed : List Step)
     (frame : ∀ step ∈ completed, ∀ before after,
-      (perform step).run before = .ok (.ok ()) after → observe after = observe before)
+      (perform step).run before = .ok (.ok ()) after → related (observe before) (observe after))
     {before after : CheckpointWorld heap}
     (returned : (completed.forM perform).run before = .ok (.ok ()) after) :
-    observe after = observe before := by
+    related (observe before) (observe after) := by
   induction completed generalizing before with
   | nil =>
     have same := (EStateM.Result.ok.inj returned).2
-    exact congrArg observe same.symm
+    rw [same]
+    exact refl _
   | cons step remaining ih =>
     change (ExceptT.bind (perform step) (fun _ => remaining.forM perform)).run before = _ at returned
     rw [run_bind] at returned
@@ -190,7 +194,18 @@ private theorem successfulCheckpointStepsFrame {value : Type}
       | ok resultValue =>
         cases resultValue
         have kept := frame step List.mem_cons_self before reached result
-        exact (ih (fun earlier member => frame earlier (List.mem_cons_of_mem step member)) returned).trans kept
+        exact trans kept (ih (fun earlier member => frame earlier (List.mem_cons_of_mem step member)) returned)
+
+private theorem successfulCheckpointStepsFrame {value : Type}
+    (perform : Step → ExceptT IO.Error (EStateM FilePath (CheckpointWorld heap)) Unit)
+    (observe : CheckpointWorld heap → value) (completed : List Step)
+    (frame : ∀ step ∈ completed, ∀ before after,
+      (perform step).run before = .ok (.ok ()) after → observe after = observe before)
+    {before after : CheckpointWorld heap}
+    (returned : (completed.forM perform).run before = .ok (.ok ()) after) :
+    observe after = observe before :=
+  successfulCheckpointStepsPreserve perform observe (fun first last => last = first)
+    (fun _ => rfl) (fun earlier later => later.trans earlier) completed frame returned
 
 /-- File effects frame the original phase cell. Propagate this local
 contract across the derived prefix and the issued step. -/
