@@ -83,7 +83,7 @@ private def heldFiles (before : LockedFileState FileImage) (directory : DiskDire
     (slot : DescriptorSlot) (image : FileImage) : LockedFileState FileImage :=
   { before with image, owners := before.owners.set (directory.file .lock) (some slot.description) }
 
-private def unlinkedSuffix (image : FileImage) : FileImage :=
+def _root_.Alvoki.Storage.WalSegmentRepair.FileImage.unlinkVisibleSuffix (image : FileImage) : FileImage :=
   image.later.visible.foldl FileImage.unlinkLater image.syncDirectory
 
 private abbrev keeperCache (authorization : ListedDirectoryAuthorization held) :=
@@ -111,14 +111,14 @@ structure ListedLaterWalPrune (authorization : ListedDirectoryAuthorization held
   directoryBound : reached directory.path = some (operations.descriptors.inode held.lifetime.directorySlot.description)
   lockBound : reached (directory.file .lock) = some (operations.descriptors.inode operations.slot.description)
   effect :
-    let unlinked := unlinkedSuffix before.image
+    let unlinked := before.image.unlinkVisibleSuffix
     authorization.fsync (operations.descriptors, held.lifetime.directorySlot, 0)
       (heldFiles before directory operations.slot unlinked) =
       .ok () (heldFiles before directory operations.slot unlinked.syncDirectory)
   projected :
-    operations.sync operations.cache #[directory.path] (unlinkedSuffix before.image) =
+    operations.sync operations.cache #[directory.path] (before.image.unlinkVisibleSuffix) =
       projectDirectorySync (SyncPathGroup.run (sync directory.path authorization.openRead authorization.fsync)
-        #[directory.path] (keeperCache authorization, heldFiles before directory operations.slot (unlinkedSuffix before.image)))
+        #[directory.path] (keeperCache authorization, heldFiles before directory operations.slot (before.image.unlinkVisibleSuffix)))
 
 namespace ListedLaterWalPrune
 
@@ -183,17 +183,17 @@ private theorem visibleAfter (initial : FileImage) (names : List Nat) (first : N
 The selected directory pair, sealed bytes and the keeper's old contents
 and staging choices are unchanged through pruning. -/
 theorem settledImage (initial : FileImage) :
-    (unlinkedSuffix initial).syncDirectory.later.DurablyEmpty ∧
-    (unlinkedSuffix initial).syncDirectory.directory = initial.syncDirectory.directory ∧
-    (unlinkedSuffix initial).syncDirectory.kept = initial.kept ∧
-    (unlinkedSuffix initial).syncDirectory.keeper = initial.keeper := by
-  have empty : (unlinkedSuffix initial).later.visible = [] := by
+    (initial.unlinkVisibleSuffix).syncDirectory.later.DurablyEmpty ∧
+    (initial.unlinkVisibleSuffix).syncDirectory.directory = initial.syncDirectory.directory ∧
+    (initial.unlinkVisibleSuffix).syncDirectory.kept = initial.kept ∧
+    (initial.unlinkVisibleSuffix).syncDirectory.keeper = initial.keeper := by
+  have empty : (initial.unlinkVisibleSuffix).later.visible = [] := by
     apply List.eq_nil_iff_forall_not_mem.mpr
     intro first visible
     obtain ⟨present, removed⟩ := (visibleAfter initial.syncDirectory initial.later.visible first).mp visible
     exact removed present
   obtain ⟨metadata, kept, keeper⟩ := preservesFileFields initial.syncDirectory initial.later.visible
-  have durable : (unlinkedSuffix initial).syncDirectory.later.DurablyEmpty := by
+  have durable : (initial.unlinkVisibleSuffix).syncDirectory.later.DurablyEmpty := by
     simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.DurablyEmpty, LaterNames.settled, empty]
   refine ⟨durable, ?_, kept, keeper⟩
   have twice := congrArg DirectoryPublication.Image.syncDirectory metadata
@@ -207,8 +207,8 @@ theorem suffixBarrier (prune : ListedLaterWalPrune authorization) :
     held.lifetime.directorySlot ∈ atBarrier.slots ∧ operations.slot ∈ atBarrier.slots ∧
     prune.reached directory.path = some (atBarrier.inode held.lifetime.directorySlot.description) ∧
     prune.reached (directory.file .lock) = some (atBarrier.inode operations.slot.description) ∧
-    operations.sync operations.cache #[directory.path] (unlinkedSuffix before.image) =
-      .ok () (unlinkedSuffix before.image).syncDirectory := by
+    operations.sync operations.cache #[directory.path] (before.image.unlinkVisibleSuffix) =
+      .ok () (before.image.unlinkVisibleSuffix).syncDirectory := by
   intro atBarrier
   refine ⟨prune.directoryRetained, prune.lockRetained, ?_, ?_, ?_⟩
   · simpa only [atBarrier, DescriptorInventory.afterDrops, held.listing.afterClose_eq] using prune.directoryBound
@@ -218,7 +218,7 @@ theorem suffixBarrier (prune : ListedLaterWalPrune authorization) :
         some (operations.descriptors, held.lifetime.directorySlot, 0) := by
       simp only [keeperCache, Cache.captureKeeper]
       split <;> exact held.capturedDirectory
-    let atUnlink := heldFiles before directory operations.slot (unlinkedSuffix before.image)
+    let atUnlink := heldFiles before directory operations.slot (before.image.unlinkVisibleSuffix)
     have routed : sync directory.path authorization.openRead authorization.fsync directory.path
         (keeperCache authorization, atUnlink) =
         withCache (keeperCache authorization) (authorization.fsync (operations.descriptors, held.lifetime.directorySlot, 0)
@@ -242,7 +242,7 @@ theorem finishAfterPrune (prune : ListedLaterWalPrune authorization)
       run (.replace .syncStaged)
       run (.replace .renameStaged)
       run (.replace .syncDirectory)
-      pure () : EStateM IO.Error FileImage Unit) (unlinkedSuffix before.image).syncDirectory := by
+      pure () : EStateM IO.Error FileImage Unit) (before.image.unlinkVisibleSuffix).syncDirectory := by
   intro run
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have valid : layout.boundedPlan.valid = true :=
@@ -250,11 +250,11 @@ theorem finishAfterPrune (prune : ListedLaterWalPrune authorization)
   have longer : layout.boundedPlan.keeperSize < authorization.keeper.metadata.byteSize.toNat := size ▸ long
   have unlinks :
       ((layout.boundedPlan.newer.map Step.unlink).forM run) before.image.syncDirectory =
-        .ok () (unlinkedSuffix before.image) := prune.unlinks.returned layout.boundedPlan
-  have barrier : run .syncPruned (unlinkedSuffix before.image) =
-      .ok () (unlinkedSuffix before.image).syncDirectory := prune.suffixBarrier.2.2.2.2
+        .ok () (before.image.unlinkVisibleSuffix) := prune.unlinks.returned layout.boundedPlan
+  have barrier : run .syncPruned (before.image.unlinkVisibleSuffix) =
+      .ok () (before.image.unlinkVisibleSuffix).syncDirectory := prune.suffixBarrier.2.2.2.2
   have pruned : (((layout.boundedPlan.newer.map Step.unlink) ++ [Step.syncPruned]).forM run)
-      before.image.syncDirectory = .ok () (unlinkedSuffix before.image).syncDirectory := by
+      before.image.syncDirectory = .ok () (before.image.unlinkVisibleSuffix).syncDirectory := by
     rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
     simp only [Bind.bind, EStateM.bind, unlinks, List.forM_eq_forM, List.forM_cons, List.forM_nil,
       barrier, Pure.pure, EStateM.pure]

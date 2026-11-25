@@ -1428,6 +1428,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.stageCallbacks
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.stageCustody
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStage.finishFromStage
+#check_axioms Alvoki.Storage.DiskSession.LongKeeperPruning.suffixSync
+#check_axioms Alvoki.Storage.DiskSession.LongKeeperPruning.keepsKeeper
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStageAt.stageCallbacks
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStageAt.stageCustody
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStageAt.finishFromStage
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.renameTargets
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.publishesInode
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.lockAtRename

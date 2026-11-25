@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.ListedDirectoryAuthorization
-import Alvoki.Storage.Disk.LongWalBindingPublication
+import Alvoki.Storage.Disk.HeldLaterWalPrune
 
 namespace Alvoki.Storage.DiskSession
 
@@ -97,10 +97,92 @@ theorem barriers (reported : ListedLongKeeperPrune authorization) :
 
 end ListedLongKeeperPrune
 
+/-- Which reported prune prefix reached the staging callbacks. Existing
+empty-suffix reports retain the same starting image. Nonempty reports
+carry the exact reached image after all approved unlinks. -/
+inductive LongKeeperPruning (authorization : ListedDirectoryAuthorization held) where
+  | empty (reported : ListedLongKeeperPrune authorization)
+  | listed (reported : ListedLaterWalPrune authorization)
+      (longer : layout.keeper.bytes.size < authorization.keeper.metadata.byteSize.toNat)
+      (later : ∀ first ∈ before.image.later.visible, layout.range.through < first)
+
+namespace LongKeeperPruning
+
+def afterAuthorization : LongKeeperPruning authorization → List LockReferenceDrop
+  | .empty reported => reported.afterAuthorization
+  | .listed reported _ _ => reported.afterAuthorization
+
+def afterUnlinks : LongKeeperPruning authorization → FileImage
+  | .empty _ => before.image.syncDirectory
+  | .listed _ _ _ => before.image.unlinkVisibleSuffix
+
+def stageInput (pruning : LongKeeperPruning authorization) : Files :=
+  { acquired before directory operations.slot with image := pruning.afterUnlinks.syncDirectory }
+
+theorem completed (pruning : LongKeeperPruning authorization) : authorization.outcome = .completed :=
+  match pruning with
+  | .empty reported => reported.completed
+  | .listed reported _ _ => reported.authorized
+
+theorem longer (pruning : LongKeeperPruning authorization) :
+    layout.keeper.bytes.size < authorization.keeper.metadata.byteSize.toNat :=
+  match pruning with
+  | .empty reported => reported.longer
+  | .listed _ longer _ => longer
+
+theorem suffixSync (pruning : LongKeeperPruning authorization) :
+    operations.sync operations.cache #[directory.path] pruning.afterUnlinks = .ok () pruning.stageInput.image :=
+  match pruning with
+  | .empty reported => reported.barriers.2.2
+  | .listed reported _ _ => reported.suffixBarrier.2.2.2.2
+
+theorem keepsKeeper (pruning : LongKeeperPruning authorization) : pruning.stageInput.image.keeper = before.image.keeper :=
+  match pruning with
+  | .empty _ => rfl
+  | .listed _ _ _ => (ListedLaterWalPrune.settledImage before.image).2.2.2
+
+private theorem finishAfterPrune (pruning : LongKeeperPruning authorization) :
+    let run := performPaths directory layout.boundedPlan operations.removeFile throw
+      (operations.write operations.cache) (operations.sync operations.cache) operations.renameFile
+    finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
+      operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
+      operations.renameFile before.image =
+    (do
+      run (.replace .writeStaged)
+      run (.replace .syncStaged)
+      run (.replace .renameStaged)
+      run (.replace .syncDirectory)
+      pure () : EStateM IO.Error FileImage Unit) pruning.stageInput.image := by
+  intro run
+  cases pruning with
+  | listed reported longer later => exact reported.finishAfterPrune longer later
+  | empty reported =>
+    have newer : layout.boundedPlan.newer = [] := reported.noLater
+    have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
+    have long : layout.boundedPlan.keeperSize < authorization.keeper.metadata.byteSize.toNat :=
+      size ▸ reported.longer
+    have valid : layout.boundedPlan.valid = true :=
+      (Plan.valid_iff layout.boundedPlan).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, by simp [newer]⟩
+    have suffix := reported.barriers.2.2
+    change operations.sync operations.cache #[directory.path] before.image.syncDirectory =
+      .ok () before.image.syncDirectory at suffix
+    rw [show finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
+        operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
+        operations.renameFile before.image = _ from
+      congrFun (finishBoundedMarkedOpen_long directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
+        operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
+        operations.renameFile valid size long) before.image]
+    simp only [newer, List.map_nil, List.nil_append, List.forM_eq_forM, List.forM_cons, List.forM_nil, performPaths,
+      Publication.performReplacement, Array.push_empty, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+      authorization.settles reported.completed, suffix]
+    rfl
+
+end LongKeeperPruning
+
 /-- The fresh staging schedule writes and flushes the selected prefix.
 Its returned descriptor is inserted into the reached census. Native
 projections identify both callbacks consumed by the bounded finisher. -/
-structure ListedLongKeeperStage (prune : ListedLongKeeperPrune authorization) where
+structure ListedLongKeeperStageAt (pruning : LongKeeperPruning authorization) where
   tryCreate : FilePath → EStateM IO.Error Files (Except IO.Error Handle)
   detachStale : FilePath → EStateM IO.Error Files Unit
   create : FilePath → EStateM IO.Error Files Handle
@@ -111,19 +193,19 @@ structure ListedLongKeeperStage (prune : ListedLongKeeperPrune authorization) wh
   offset : Nat
   beforeStage : List LockReferenceDrop
   atWrite : ∀ old ∈ ((held.listing.afterClose.afterDrops
-    (authorization.afterListing ++ prune.afterAuthorization)).afterDrops beforeStage).slots,
+    (authorization.afterListing ++ pruning.afterAuthorization)).afterDrops beforeStage).slots,
       old.address ≠ slot.address
   fresh : ((held.listing.afterClose.afterDrops
-    (authorization.afterListing ++ prune.afterAuthorization)).afterDrops beforeStage).references slot.description = []
+    (authorization.afterListing ++ pruning.afterAuthorization)).afterDrops beforeStage).references slot.description = []
   captured : inventory =
     ((held.listing.afterClose.afterDrops
-      (authorization.afterListing ++ prune.afterAuthorization)).afterDrops beforeStage).insert slot atWrite
+      (authorization.afterListing ++ pruning.afterAuthorization)).afterDrops beforeStage).insert slot atWrite
   wrote :
-    let atPrune := authorized (acquired before directory operations.slot)
+    let atPrune := pruning.stageInput
     writeFreshStagedWith tryCreate detachStale create write flush (directory.file .stagedWal) layout.keeper.bytes atPrune =
       .ok (inventory, slot, offset) (scratch atPrune layout.keeper.bytes false)
   writeProjection :
-    let atPrune := authorized (acquired before directory operations.slot)
+    let atPrune := pruning.stageInput
     operations.write operations.cache (directory.file .stagedWal) layout.keeper.bytes atPrune.image =
       projectDirectorySync (stageFreshWithCache (directory.file .stagedWal) layout.keeper.bytes
         (writeFreshStagedWith tryCreate detachStale create write flush) (operations.cache, atPrune))
@@ -137,12 +219,12 @@ structure ListedLongKeeperStage (prune : ListedLongKeeperPrune authorization) wh
   lockBound : bindings (directory.file .lock) = some (inventory.inode operations.slot.description)
   effective : Bool
   outcome :
-    let atPrune := authorized (acquired before directory operations.slot)
+    let atPrune := pruning.stageInput
     let written := scratch atPrune layout.keeper.bytes false
     FsyncResult written (scratch atPrune layout.keeper.bytes true) effective
       (authorization.fsync (inventory, slot, offset) written)
   syncProjection : ∀ reached,
-    let atPrune := authorized (acquired before directory operations.slot)
+    let atPrune := pruning.stageInput
     let written := scratch atPrune layout.keeper.bytes false
     let path := directory.file .stagedWal
     stageFreshWithCache path layout.keeper.bytes (writeFreshStagedWith tryCreate detachStale create write flush)
@@ -150,9 +232,14 @@ structure ListedLongKeeperStage (prune : ListedLongKeeperPrune authorization) wh
     operations.sync operations.cache #[path] written.image =
       projectDirectorySync (grouped authorization #[path] (reached, written))
 
-namespace ListedLongKeeperStage
+/-- Empty-suffix staging is the same report specialized to its existing
+authorized starting image. -/
+abbrev ListedLongKeeperStage (prune : ListedLongKeeperPrune authorization) :=
+  ListedLongKeeperStageAt (.empty prune)
 
-variable {prune : ListedLongKeeperPrune authorization}
+namespace ListedLongKeeperStageAt
+
+variable {pruning : LongKeeperPruning authorization}
 
 private theorem stagePath_ne_directory (directory : DiskDirectory) :
     directory.file .stagedWal ≠ directory.path := by
@@ -166,8 +253,8 @@ private theorem stagePath_ne_directory (directory : DiskDirectory) :
 
 /-- The stage callback writes the selected bytes and remembers the exact
 new descriptor. The grouped barrier consumes that entry even on error. -/
-theorem stageCallbacks (reported : ListedLongKeeperStage prune) :
-    let atPrune := authorized (acquired before directory operations.slot)
+theorem stageCallbacks (reported : ListedLongKeeperStageAt pruning) :
+    let atPrune := pruning.stageInput
     let written := scratch atPrune layout.keeper.bytes false
     let durable := scratch atPrune layout.keeper.bytes true
     let path := directory.file .stagedWal
@@ -199,8 +286,8 @@ theorem stageCallbacks (reported : ListedLongKeeperStage prune) :
 
 /-- The staged-file barrier uses a live description of the distinct
 scratch inode. The same observed census also retains the lock issuer. -/
-theorem stageCustody (reported : ListedLongKeeperStage prune) :
-    let written := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes false
+theorem stageCustody (reported : ListedLongKeeperStageAt pruning) :
+    let written := scratch (pruning.stageInput) layout.keeper.bytes false
     let handle : Handle := (reported.inventory, reported.slot, reported.offset)
     reported.bindings (directory.file .lock) = some (operations.descriptors.inode operations.slot.description) ∧
     (∃ refs : HeldLockReferences operations.slot.description,
@@ -208,7 +295,7 @@ theorem stageCustody (reported : ListedLongKeeperStage prune) :
       (refs.afterFileDrops reported.beforeSync directory written).owners.Owns directory operations.slot.description) ∧
     ∃ observed : FsyncObservation (fun handle => handle.2.1.description)
         (fun handle => handle.1.inode handle.2.1.description) handle written
-        (fun _ _ => scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true)
+        (fun _ _ => scratch (pruning.stageInput) layout.keeper.bytes true)
         (authorization.fsync handle written),
       observed.issuer = reported.slot.reference ∧ observed.effective = reported.effective ∧
       reported.bindings (directory.file .stagedWal) = some observed.effectInode ∧
@@ -228,20 +315,20 @@ theorem stageCustody (reported : ListedLongKeeperStage prune) :
   let barrier := FsyncObservation.ofInventory reported.inventory reported.beforeSync
     (fun handle : Handle => handle.2.1.description) (fun handle => handle.1.inode handle.2.1.description)
     handle reported.slot.reference stagingLive rfl written
-    (fun _ _ => scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true)
+    (fun _ _ => scratch (pruning.stageInput) layout.keeper.bytes true)
     reported.outcome
   refine ⟨?_, ⟨refs, rfl, ?_⟩, barrier, rfl, rfl, reported.stageBound, reported.keeperBound, reported.distinctKeeper⟩
   · rw [reported.lockBound, reported.captured]
     rfl
   · rw [refs.afterFileDrops_surviving remains]
-    simp [written, scratch, authorized, acquired, LockOwners.Owns, LockOwners.set]
+    simp [written, scratch, LongKeeperPruning.stageInput, acquired, LockOwners.Owns, LockOwners.set]
 
 /-- The bounded worker reaches the exact staged-file barrier after both
 directory barriers and the fresh write. A reported staged-sync error is
 returned directly. Rename and the final directory barrier run only after
 successful staged sync. -/
-theorem finishFromStage (reported : ListedLongKeeperStage prune) :
-    let written := before.image.syncDirectory.withScratch (some (layout.keeper.bytes, false))
+theorem finishFromStage (reported : ListedLongKeeperStageAt pruning) :
+    let written := pruning.stageInput.image.withScratch (some (layout.keeper.bytes, false))
     let path := directory.file .stagedWal
     let keeper := directory.file (.walSegment layout.keeper.first)
     finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
@@ -254,41 +341,53 @@ theorem finishFromStage (reported : ListedLongKeeperStage prune) :
         operations.sync operations.cache #[directory.path]
         pure () : EStateM IO.Error FileImage Unit) reached := by
   intro written path keeper
-  have newer : layout.boundedPlan.newer = [] := prune.noLater
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have long : layout.boundedPlan.keeperSize < authorization.keeper.metadata.byteSize.toNat :=
-    size ▸ prune.longer
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff layout.boundedPlan).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, by simp [newer]⟩
   have bytes : layout.boundedPlan.keeperBytes.extract 0 layout.boundedPlan.keeperSize = layout.keeper.bytes := by
     rw [← size, ByteArray.extract_zero_size]
     rfl
-  obtain ⟨_, _, pruned⟩ := prune.barriers
-  change operations.sync operations.cache #[directory.path] before.image.syncDirectory =
-    .ok () before.image.syncDirectory at pruned
-  obtain ⟨wrote, _⟩ := reported.stageCallbacks
-  change operations.write operations.cache (directory.file .stagedWal) layout.keeper.bytes before.image.syncDirectory =
-    .ok () written at wrote
-  rw [show finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
-      operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
-      operations.renameFile before.image = _ from
-    congrFun (finishBoundedMarkedOpen_long directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
-      operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
-      operations.renameFile valid size long) before.image]
-  simp only [newer, List.map_nil, List.nil_append, List.forM_eq_forM, List.forM_cons, List.forM_nil,
-    performPaths, Publication.performReplacement, Array.push_empty, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
-    authorization.settles prune.completed, pruned, bytes, wrote]
+  have wrote : operations.write operations.cache (directory.file .stagedWal) layout.keeper.bytes pruning.stageInput.image =
+      .ok () written := reported.stageCallbacks.1
+  rw [pruning.finishAfterPrune]
+  simp only [performPaths, Publication.performReplacement, Array.push_empty, Bind.bind, EStateM.bind, Pure.pure,
+    EStateM.pure, bytes, wrote]
   dsimp only [path, keeper]
   cases operations.sync operations.cache #[directory.file .stagedWal] written with
   | ok value => cases value; rfl
   | error => rfl
 
+end ListedLongKeeperStageAt
+
+namespace ListedLongKeeperStage
+
+variable {prune : ListedLongKeeperPrune authorization}
+
+abbrev stageCallbacks (reported : ListedLongKeeperStage prune) :=
+  ListedLongKeeperStageAt.stageCallbacks reported
+
+abbrev stageCustody (reported : ListedLongKeeperStage prune) :=
+  ListedLongKeeperStageAt.stageCustody reported
+
+theorem finishFromStage (reported : ListedLongKeeperStage prune) :
+    let written := before.image.syncDirectory.withScratch (some (layout.keeper.bytes, false))
+    let path := directory.file .stagedWal
+    let keeper := directory.file (.walSegment layout.keeper.first)
+    finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
+      operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
+      operations.renameFile before.image =
+    match operations.sync operations.cache #[path] written with
+    | .error cause reached => EStateM.Result.error cause reached
+    | .ok () reached => (do
+        operations.renameFile path keeper
+        operations.sync operations.cache #[directory.path]
+        pure () : EStateM IO.Error FileImage Unit) reached :=
+  ListedLongKeeperStageAt.finishFromStage reported
+
 end ListedLongKeeperStage
 
 open WAL.Boundary (WalInodeImage CheckpointRepresentsPrefix)
 
-variable {prune : ListedLongKeeperPrune authorization}
-  {stage : ListedLongKeeperStage prune}
+variable {pruning : LongKeeperPruning authorization}
+  {stage : ListedLongKeeperStageAt pruning}
 
 inductive KeeperRenameOutcome where
   | completed
@@ -309,9 +408,9 @@ private def settleKeeperBinding (files : Files) : Files :=
 source and destination resolve to the staged inode and the original keeper
 in the retained writer's directory. The observation records whether the
 rename changed the binding, including when it returned an error. -/
-structure ListedLongKeeperRename (stage : ListedLongKeeperStage prune) where
+structure ListedLongKeeperRename (stage : ListedLongKeeperStageAt pruning) where
   synced :
-    let atPrune := authorized (acquired before directory operations.slot)
+    let atPrune := pruning.stageInput
     authorization.fsync (stage.inventory, stage.slot, stage.offset) (scratch atPrune layout.keeper.bytes false) =
       .ok () (scratch atPrune layout.keeper.bytes true)
   original : WalInodeImage
@@ -327,7 +426,7 @@ structure ListedLongKeeperRename (stage : ListedLongKeeperStage prune) where
   lockBound : bindings (directory.file .lock) = some (operations.descriptors.inode operations.slot.description)
   outcome : KeeperRenameOutcome
   reported :
-    let atPrune := authorized (acquired before directory operations.slot)
+    let atPrune := pruning.stageInput
     let durable := scratch atPrune layout.keeper.bytes true
     let renamed := afterKeeperRename durable layout.keeper.bytes
     operations.renameFile (directory.file .stagedWal) (directory.file (.walSegment layout.keeper.first)) durable.image =
@@ -360,7 +459,7 @@ theorem renameTargets (rename : ListedLongKeeperRename stage) :
 the staging name. The pathname model's old crash choices come from the same
 observed original inode projection. -/
 theorem publishesInode (rename : ListedLongKeeperRename stage) (effective : rename.outcome.effective = true) :
-    let durable := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true
+    let durable := scratch (pruning.stageInput) layout.keeper.bytes true
     let reached := afterKeeperRename durable layout.keeper.bytes
     let replacement := stage.inventory.inode stage.slot.description
     rename.renamedBindings (directory.file .stagedWal) = none ∧
@@ -378,7 +477,10 @@ theorem publishesInode (rename : ListedLongKeeperRename stage) (effective : rena
   change some (some layout.keeper.bytes :: (rename.original.project before.image.directory).wal.crashImages) =
     some (((rename.original.renameSynced replacement layout.keeper.bytes).project durable.image.directory).wal.crashImages)
     at choices
-  rw [beforeChoices] at choices
+  have keeping : durable.image.keeper.crashImages = before.image.keeper.crashImages := by
+    have equal := congrArg Publication.Image.crashImages pruning.keepsKeeper
+    exact equal
+  rw [beforeChoices, ← keeping] at choices
   have survives := Option.some.inj choices
   simp only [reached, afterKeeperRename, FileImage.withKeeperInodes, FileImage.withScratch,
     WalInodeImage.project, WalInodeImage.renameSynced, ite_true]
@@ -409,7 +511,7 @@ theorem lockAtRename (rename : ListedLongKeeperRename stage) :
 /-- A successful staged-file sync starts the exact rename and final sync
 tail of the bounded worker. -/
 theorem reachesRename (rename : ListedLongKeeperRename stage) :
-    let durable := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true
+    let durable := scratch (pruning.stageInput) layout.keeper.bytes true
     finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
       operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
       operations.renameFile before.image =
@@ -420,14 +522,14 @@ theorem reachesRename (rename : ListedLongKeeperRename stage) :
   intro durable
   have staged := stage.stageCallbacks.2
   rw [rename.synced] at staged
-  simpa only [show before.image.syncDirectory.withScratch (some (layout.keeper.bytes, false)) =
-    (scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes false).image from rfl,
+  simpa only [show pruning.stageInput.image.withScratch (some (layout.keeper.bytes, false)) =
+    (scratch (pruning.stageInput) layout.keeper.bytes false).image from rfl,
     staged] using stage.finishFromStage
 
 /-- An unsuccessful rename returns the exact reached image and skips any
 final directory sync. -/
 theorem finishAfterError (rename : ListedLongKeeperRename stage) (failed : rename.outcome ≠ .completed) :
-    let durable := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true
+    let durable := scratch (pruning.stageInput) layout.keeper.bytes true
     let renamed := afterKeeperRename durable layout.keeper.bytes
     finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
       operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
@@ -469,7 +571,7 @@ structure ListedLongKeeperSettlement (rename : ListedLongKeeperRename stage) whe
   stageAbsent : bindings (directory.file .stagedWal) = rename.renamedBindings (directory.file .stagedWal)
   outcome : DelayedDirectorySyncOutcome
   effect :
-    let durable := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true
+    let durable := scratch (pruning.stageInput) layout.keeper.bytes true
     let renamed := afterKeeperRename durable layout.keeper.bytes
     authorization.fsync (operations.descriptors, held.lifetime.directorySlot, 0) renamed =
       match outcome with
@@ -477,7 +579,7 @@ structure ListedLongKeeperSettlement (rename : ListedLongKeeperRename stage) whe
       | .errorBeforeEffect cause => .error cause renamed
       | .errorAfterEffect cause => .error cause (settleKeeperBinding renamed)
   projected :
-    let durable := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true
+    let durable := scratch (pruning.stageInput) layout.keeper.bytes true
     let renamed := afterKeeperRename durable layout.keeper.bytes
     operations.renameFile (directory.file .stagedWal) (directory.file (.walSegment layout.keeper.first)) durable.image =
       .ok () renamed.image →
@@ -513,7 +615,7 @@ theorem settlementCustody (reported : ListedLongKeeperSettlement rename) :
 /-- When the final sync takes effect, its reached image has exactly the
 crash bytes of the replacement inode now bound to the keeper path. -/
 theorem settledInode (reported : ListedLongKeeperSettlement rename) :
-    let durable := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true
+    let durable := scratch (pruning.stageInput) layout.keeper.bytes true
     let settled := settleKeeperBinding (afterKeeperRename durable layout.keeper.bytes)
     let replacement := stage.inventory.inode stage.slot.description
     reported.bindings (directory.file (.walSegment layout.keeper.first)) = some replacement ∧
@@ -528,7 +630,7 @@ theorem settledInode (reported : ListedLongKeeperSettlement rename) :
 the staging cache entry was consumed. Only an effective final barrier
 settles the already-synced replacement. -/
 theorem syncResult (reported : ListedLongKeeperSettlement rename) :
-    let durable := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true
+    let durable := scratch (pruning.stageInput) layout.keeper.bytes true
     let renamed := afterKeeperRename durable layout.keeper.bytes
     operations.sync operations.cache #[directory.path] renamed.image =
       match reported.outcome with
@@ -554,7 +656,7 @@ theorem syncResult (reported : ListedLongKeeperSettlement rename) :
 /-- After the reported successful rename, the actual bounded finisher
 returns the exact final grouped directory outcome. -/
 theorem finishResult (reported : ListedLongKeeperSettlement rename) :
-    let durable := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true
+    let durable := scratch (pruning.stageInput) layout.keeper.bytes true
     let renamed := afterKeeperRename durable layout.keeper.bytes
     finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
       operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
@@ -594,29 +696,65 @@ private theorem prependHealthy {target : Target} {initial next : FileImage} {hea
     simp only [List.foldlM_cons, effect, Bind.bind, Option.bind] at executed
     exact tail action prior next' ⟨earlier, suffix, ordered, executed⟩ applied
 
+private theorem prependUnlinks {target : Target} {initial : FileImage} {bindings final : FilePath → Option Nat}
+    {names : List Nat} (plans : HeldLaterWalUnlinks held initial bindings names final) (plan : Plan) {rest : List Step}
+    (tail : ∀ action prior next, ReachesAction target (names.foldl FileImage.unlinkLater initial) rest action prior →
+      prior.effect target action = some next →
+      performPaths directory plan operations.removeFile throw (operations.write operations.cache)
+        (operations.sync operations.cache) operations.renameFile action prior = .ok () next) :
+    ∀ action prior next, ReachesAction target initial (names.map Step.unlink ++ rest) action prior →
+      prior.effect target action = some next →
+      performPaths directory plan operations.removeFile throw (operations.write operations.cache)
+        (operations.sync operations.cache) operations.renameFile action prior = .ok () next := by
+  induction plans with
+  | done => simpa using tail
+  | @step first current bindings reached names final head _ ih =>
+    have removed : performPaths directory plan operations.removeFile throw (operations.write operations.cache)
+        (operations.sync operations.cache) operations.renameFile (.unlink first) current =
+          .ok () (current.unlinkLater first) := by
+      simp [performPaths, RunCollection.performPaths, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+        head.returned, head.accepted]
+    exact prependHealthy rfl removed (ih tail)
+
+private theorem prependPruning (pruning : LongKeeperPruning authorization) {rest : List Step}
+    (tail : ∀ action prior next, ReachesAction layout.target pruning.stageInput.image rest action prior →
+      prior.effect layout.target action = some next →
+      performPaths directory layout.plan operations.removeFile throw (operations.write operations.cache)
+        (operations.sync operations.cache) operations.renameFile action prior = .ok () next) :
+    ∀ action prior next,
+      ReachesAction layout.target before.image.syncDirectory
+        (before.image.later.visible.map Step.unlink ++ Step.syncPruned :: rest) action prior →
+      prior.effect layout.target action = some next →
+      performPaths directory layout.plan operations.removeFile throw (operations.write operations.cache)
+        (operations.sync operations.cache) operations.renameFile action prior = .ok () next := by
+  have barrier := prependHealthy (target := layout.target) (initial := pruning.afterUnlinks)
+    (next := pruning.stageInput.image) (head := .syncPruned) (rest := rest) rfl pruning.suffixSync tail
+  cases pruning with
+  | empty reported => simpa [reported.noLater, LongKeeperPruning.afterUnlinks] using barrier
+  | listed reported _ _ => exact prependUnlinks reported.unlinks layout.plan barrier
+
 /-- Per-operation results supply the whole finishing contract on the
-long-keeper route with an empty visible suffix. -/
+long-keeper route, including all reported suffix unlinks. -/
 theorem healthyFinish (reported : ListedLongKeeperSettlement rename)
     (succeeded : reported.outcome = .completed) : operations.HealthyFinish := by
-  let pruned := before.image.syncDirectory
-  let written := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes false
-  let durable := scratch (authorized (acquired before directory operations.slot)) layout.keeper.bytes true
+  let written := scratch (pruning.stageInput) layout.keeper.bytes false
+  let durable := scratch (pruning.stageInput) layout.keeper.bytes true
   let renamed := afterKeeperRename durable layout.keeper.bytes
   have long : layout.plan.keeperSize < layout.plan.keeperBytes.size := calc
     layout.plan.keeperSize = layout.keeper.bytes.size := layout.target.trimmedSize.symm
-    _ < authorization.keeper.metadata.byteSize.toNat := prune.longer
+    _ < authorization.keeper.metadata.byteSize.toNat := pruning.longer
     _ = layout.plan.keeperBytes.size := authorization.keeper.extent
   have declined : layout.plan.alignedWithoutPrune = false := by
     simp [Plan.alignedWithoutPrune, Nat.ne_of_gt long]
-  have noLater : layout.plan.newer = [] := prune.noLater
   have schedule : layout.plan.finishActions =
-      [.syncPruned, .replace .writeStaged, .replace .syncStaged, .replace .renameStaged, .replace .syncDirectory] := by
-    simp [Plan.finishActions, declined, Plan.actions, steps, noLater, long, Publication.steps]
+      before.image.later.visible.map Step.unlink ++
+        [.syncPruned, .replace .writeStaged, .replace .syncStaged, .replace .renameStaged, .replace .syncDirectory] := by
+    simp [Plan.finishActions, declined, Plan.actions, steps, long, Publication.steps]
+    rfl
   have selectedSize : layout.keeper.bytes.size = layout.plan.keeperSize := layout.target.trimmedSize
   have selectedBytes : layout.plan.keeperBytes.extract 0 layout.plan.keeperSize = layout.keeper.bytes := by
     rw [← selectedSize]
     exact ByteArray.extract_append_eq_left rfl
-  have prunedResult := prune.barriers.2.2
   have staged := stage.stageCallbacks.2
   rw [rename.synced] at staged
   have renameResult := rename.reported
@@ -627,7 +765,7 @@ theorem healthyFinish (reported : ListedLongKeeperSettlement rename)
   rw [succeeded] at final
   unfold MarkedRetryChunkOperations.HealthyFinish
   rw [schedule]
-  refine prependHealthy (next := pruned) rfl prunedResult ?_
+  refine prependPruning pruning ?_
   refine prependHealthy (next := written.image) rfl ?_ ?_
   · simp only [performPaths, Publication.performReplacement, selectedBytes]
     exact stage.stageCallbacks.1
@@ -655,7 +793,7 @@ theorem installs {input : FilePath} (reported : ListedLongKeeperSettlement renam
     (ordered : WAL.OrdinalsFrom 1 history) :
     CachedRetryInstalled (before := before) operations.reported operations.descriptors operations.slot operations.bindings
       published operations.liveRefs (operations.runWithAdmission admission) :=
-  authorization.installs metadata prune.completed (reported.healthyFinish succeeded) admission keeperValid laterValid
+  authorization.installs metadata pruning.completed (reported.healthyFinish succeeded) admission keeperValid laterValid
     following accepted ordered
 
 end ListedLongKeeperSettlement
