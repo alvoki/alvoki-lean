@@ -72,6 +72,8 @@ structure MarkedHeapInstallation
   recovered : report.opening.finish.markedWorker report.opening.chronology directory report.opening.admission.cache
     (report.opening.admission.reached, report.opening.admission.held) =
     .ok opened (view.descriptors reached, view.files reached)
+  nativeReturned : report.opening.finish.run report.opening.chronology =
+    .ok state.session (state.census, state.files)
   installed : opened.installed = state.writer.installed
   cacheReferences : files.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef
   cacheDirectory : files.AtDirectory directory.path
@@ -137,12 +139,12 @@ theorem MarkedOpenSuccessReports.installsFromRepairedHeap
         CacheAllocationFrame view seed.directoryRef seed.activeRef seed.pendingRef allocation.afterPhase allocation.afterToken) :
     Nonempty (MarkedHeapInstallation report view init entry seed lock lockIdentity phaseIdentity tokenIdentity
       allocatePhase allocateToken reached) := by
-  obtain ⟨state, final, opened, returnedWorker, installed, returned, files, path, cache, _, _, _, ready⟩ :=
+  obtain ⟨state, final, opened, returnedWorker, installed, returned, reachedState, path, cache, _, _, _, ready⟩ :=
     report.recoversBeforeInstallation
   obtain ⟨exactOpened, exactWorker⟩ := worker
   rw [exactWorker] at returnedWorker
   obtain ⟨rfl, sameFinal⟩ := EStateM.Result.ok.inj returnedWorker
-  have matched := sameFinal.trans files
+  have matched := sameFinal.trans reachedState
   obtain ⟨allocation, phase, token, phaseFrame, tokenFrame⟩ := observe exactOpened exactWorker
   obtain ⟨cacheOpen, makeCache, files, actualCache, cacheSource, allocatedCache, usesCache, atPath, _, _, _, _, _, _, _, _, _, _⟩ := seed.installs
   have constructor := DiskTable.openReferenceAssembly directory lock files
@@ -163,6 +165,7 @@ theorem MarkedOpenSuccessReports.installsFromRepairedHeap
     table := _
     assemble := _
     recovered := exactWorker
+    nativeReturned := returned.trans (congrArg (EStateM.Result.ok state.session) reachedState)
     installed := installed
     cacheReferences := usesCache
     cacheDirectory := atPath
