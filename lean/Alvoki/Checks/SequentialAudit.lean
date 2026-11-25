@@ -221,6 +221,7 @@ import Alvoki.Storage.Disk.NativeOpenChoice
 import Alvoki.Storage.Disk.NativeReadyUncertainWrite
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeExecutionPendingWrite
+import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
@@ -1425,6 +1426,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.selectsReportedSurvivor
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.selectsAtReturn
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.stopsAtUncertainWrite
+#check_axioms Alvoki.Storage.DiskSession.NativePendingClose.binding
+#check_axioms Alvoki.Storage.DiskSession.NativePendingClose.returns
+#check_axioms Alvoki.Storage.DiskSession.NativePendingClose.rejectsReads
+#check_axioms Alvoki.Storage.DiskSession.NativePendingClose.selectsAtReturn
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.reachesBarrier
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.censusPreserved
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.returned
