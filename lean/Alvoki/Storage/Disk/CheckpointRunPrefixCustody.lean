@@ -6,6 +6,17 @@ namespace Alvoki.Storage.CheckpointPublication
 open System DiskSession SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
+/-- An immutable run and the temporary manifest have distinct roles in
+the same directory. -/
+theorem runFile_ne_stagedManifest (directory : DiskDirectory) (generation : UInt64) (index : Nat) :
+    directory.file (.run generation index) ≠ directory.file .stagedManifest := by
+  intro equal
+  have names := (String.append_right_inj (directory.path.toString ++ "/")).mp (congrArg FilePath.toString equal)
+  have samePrefix := congrArg (fun name : String => name.toList.take 4) names
+  change ("run-" ++ generation.toNat.repr ++ "-" ++ index.repr ++ ".v3").toList.take 4 =
+    ("MANIFEST.next" : String).toList.take 4 at samePrefix
+  simp [String.toList_append] at samePrefix
+
 private theorem storedRunExists {indices : List Nat} {read : Nat → Option ByteArray}
     {files : List ByteArray} (stored : indices.mapM read = some files) {index : Nat}
     (named : index ∈ indices) : ∃ bytes, read index = some bytes := by

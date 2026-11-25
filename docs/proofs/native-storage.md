@@ -68,6 +68,15 @@ including a returned error with its reached state. The existing replay builder c
 classified result when its publication evidence and descriptor custody are derived.
 [Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean) · [Raw return projection](../../lean/Alvoki/Storage/Disk/NativeRawWriteProjection.lean)
 
+At a stopped staged-manifest fsync the returned prefix and pending-cache update identify the same
+live descriptor. Its private inode effect leaves the previously selected checkpoint and WAL intact
+in each joint crash map. The temporary manifest may change. The later installer still needs to
+use a file projection that keeps those scratch effects explicit. For a selected run read that
+returns an ordinary error after a short chunk, the shared retry proof carries the selected names
+and bytes through temporary, cache and lock disposal. It starts the aligned open from the reached
+failure heap with the original callbacks.
+[Staged manifest stop](../../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean) · [Selected run read retry](../../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean)
+
 `NativeReachedExecutionPrefix.keyValueRefinement` adds whole-or-none uncertain events, ready replay when
 the ending returns ready, and the existence of an allowed terminal history that agrees with prior reads.
 `Returned.stopsAfterWrites` uses that terminal argument on a finite observed write trace from fresh

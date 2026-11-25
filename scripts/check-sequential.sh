@@ -583,6 +583,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentAppendLayout
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentFirstReplay
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentFirstOpen
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRotationReopen
+lake env leanchecker Alvoki.Storage.Disk.WalSegmentBootstrapIO
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentBootstrapEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentBoundedOpenEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentBoundedOpen
@@ -751,6 +752,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalBoundaryModel
 lake env leanchecker Alvoki.Storage.Disk.WalWritePublicationModel
 lake env leanchecker Alvoki.Storage.Disk.MarkedWalReopenModel
 lake env leanchecker Alvoki.Storage.Disk.ReplacedWalDescriptor
+lake env leanchecker Alvoki.Storage.Publication.CheckpointPublication
 lake env leanchecker Alvoki.Storage.Publication.CheckpointPublicationModel
 lake env leanchecker Alvoki.Storage.Publication.DirectoryPublicationModel
 lake env lean --run Alvoki/Checks/SequentialChecks.lean

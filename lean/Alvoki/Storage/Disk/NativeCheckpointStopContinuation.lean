@@ -36,13 +36,7 @@ private theorem stagedManifestOffSelected (state : NativeReadyState) {path : Fil
       contradiction
     · exact noSegment _
     · exact noSegment segment.first
-  · intro equal
-    have names := basename (renderRunFileName metadata.header.generation index) "MANIFEST.next"
-      (congrArg FilePath.toString equal)
-    have initialChars := congrArg (fun name : String => name.toList.take 4) names
-    change ("run-" ++ metadata.header.generation.toNat.repr ++ "-" ++ index.repr ++ ".v3").toList.take 4 =
-      ("MANIFEST.next" : String).toList.take 4 at initialChars
-    simp [String.toList_append] at initialChars
+  · exact runFile_ne_stagedManifest directory metadata.header.generation index
 
 /-- At a stopped staged-MANIFEST fsync the previous selected checkpoint
 and WAL are still durable. The stop is derived from the whole source call.

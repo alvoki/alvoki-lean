@@ -139,7 +139,7 @@ theorem RawCheckpointRunPrefix.preservesSelectedFiles {stop : Manifest.Integrity
     exact (prior (Nat.le_of_lt inside)).trans kept
 
 /-- A short chunk followed by the read error keeps the exact selected
-objects, including before the temporary handle's scope drop. -/
+objects through the temporary handle's scope drop. -/
 theorem RawCheckpointChunkReadError.preservesSelectedFiles
     {selected : RawSelectedCheckpointRunStat (admitted := admitted) seed fileCalls}
     (seen : RawCheckpointChunkReadError selected) (laws : fileCalls.FileFrames files selectedPath) :
@@ -317,7 +317,7 @@ variable (target : layout.target = current.state.writer.target) (keeper : layout
 include target keeper descriptors offsets prepared constructs effects
 
 /-- A finalized read-only failure and its successor use one native
-program. Only the cache references are allocated per attempt. -/
+program. Each attempt uses its own cache references. -/
 theorem RawQuietRebootEntry.reopensAfterReadOnlyRejection
     (entry : RawQuietRebootEntry crash view names bytes before rebooted beforeCensus)
     (booted : (view.descriptors rebooted, view.files rebooted) = (crash.reboot, crash.retry))

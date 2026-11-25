@@ -220,14 +220,6 @@ private theorem fixedNameNeStage (directory : DiskDirectory) {file : DiskFile}
     have names := (String.append_right_inj (directory.path.toString ++ "/")).mp (congrArg FilePath.toString equal)
     <;> contradiction
 
-private theorem runNeStage (directory : DiskDirectory) (generation : UInt64) (index : Nat) :
-    directory.file (.run generation index) ≠ directory.file .stagedManifest := by
-  intro equal
-  have names := (String.append_right_inj (directory.path.toString ++ "/")).mp (congrArg FilePath.toString equal)
-  have samePrefix := congrArg (fun name : String => name.toList.take 4) names
-  change ("run-" ++ generation.toNat.repr ++ "-" ++ index.repr ++ ".v3").toList.take 4 = "MANIFEST.next".toList.take 4 at samePrefix
-  simp [String.toList_append] at samePrefix
-
 theorem custody (report : NativeCheckpointManifestOpenError (image := image) state cut) (valid : state.Valid) :
     state.directorySlot ∈ (report.settled.runs.descriptors report.after).slots ∧
     state.owner ∈ (report.settled.runs.descriptors report.after).slots ∧
@@ -281,7 +273,7 @@ theorem freshRunBytes (report : NativeCheckpointManifestOpenError (image := imag
     ∃ run inode, cut.checkpoint.table.runs.toArray[index]? = some run ∧
       report.view.Stable (state.session.directory.file (.run cut.checkpoint.prepared.generation index)) inode run.run.bytes := by
   obtain ⟨run, inode, selected, binding, visible, durable⟩ := report.settled.runs.freshRunAtEnd within
-  exact ⟨run, inode, selected, report.keepsOther (runNeStage _ _ _) (report.settled.stableAfter binding visible durable)⟩
+  exact ⟨run, inode, selected, report.keepsOther (runFile_ne_stagedManifest _ _ _) (report.settled.stableAfter binding visible durable)⟩
 
 theorem priorRunBytes (report : NativeCheckpointManifestOpenError (image := image) state cut) (valid : state.Valid)
     {bytes payload : ByteArray} {metadata : Manifest.IntegrityCheckpoint} {index : Nat}
@@ -292,7 +284,7 @@ theorem priorRunBytes (report : NativeCheckpointManifestOpenError (image := imag
     ∃ inode, (report.settled.runs.views 0).Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload ∧
       report.view.Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload := by
   obtain ⟨inode, initial, stable⟩ := report.settled.runs.priorRunAtEnd valid binding decoded within stored
-  exact ⟨inode, initial, report.keepsOther (runNeStage _ _ _)
+  exact ⟨inode, initial, report.keepsOther (runFile_ne_stagedManifest _ _ _)
     (report.settled.stableAfter stable.visibleBinding stable.visibleBytes stable.crashBytes)⟩
 
 theorem selectedCheckpoint (report : NativeCheckpointManifestOpenError (image := image) state cut) (valid : state.Valid) :
