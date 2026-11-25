@@ -1700,18 +1700,28 @@ theorem installsAfterAcquiredRecovery_replays
     {opened : Reopened} {after : CensusOpenState}
     (recovery : reopenWith (prepare directory selection) (stabilize handle) (finish directory) acquired =
       .ok opened (admission.cache, after))
+    {bootstrapFirst writer : Nat}
+    {initial : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession}
+    (start : BootstrapClientStart directory bootstrapFirst initial)
+    (trace : SegmentedClientReadTrace directory bootstrapFirst start.writer allowCollection log reads writer prior)
+    {batch : List WAL.Write}
     {image : WalSegmentImage} {range : MarkedWalRange}
-    {submitted : List WAL.Write} {base : PackedTable} {first : Nat}
-    (selected : WalSegmentRecovery image after.2.image.directory.active range submitted base first
+    {base : PackedTable} {first : Nat}
+    (selected : WalSegmentRecovery image after.2.image.directory.active range (prior.history ++ batch) base first
       opened.installed.table)
-    (pending : PendingClientReplay log reads (submitted.take range.through)) :
+    (whole : (prior.history ++ batch).take range.through = prior.history ∨
+      (prior.history ++ batch).take range.through = prior.history ++ batch)
+    (ordered : WAL.OrdinalsFrom 1 ((prior.history ++ batch).take range.through)) :
     ∃ session,
       calls.runWithMarked (fun resolved cache before =>
         match reopenAcquiredWith (acquire resolved) (prepare resolved) stabilize (finish resolved) (cache, before) with
         | .ok (opened, _, _) (_, reached) => .ok opened reached
         | .error cause (_, reached) => .error cause reached) =
-        .ok session after ∧ InstalledClientReplay log reads (submitted.take range.through) opened.installed session := by
-  obtain ⟨reference, replayed, retained, acknowledged, bounded, priorReads⟩ := pending
+        .ok session after ∧
+      InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take range.through)
+        opened.installed session := by
+  obtain ⟨reference, replayed, retained, acknowledged, bounded, priorReads⟩ :=
+    trace.replaysUncertainSubmission start whole ordered
   have returned := installsAfterAcquiredRecovery calls marker acquire prepare stabilize finish acquisition recovery
   refine ⟨_, returned, reference, replayed, retained, acknowledged, bounded, priorReads, ?_⟩
   apply DiskSession.SegmentedSession.guardedAcquireReads rfl

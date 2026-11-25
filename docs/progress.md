@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The acquired-marker installer derives the replay of earlier client
+responses from the prior client trace and the old-or-whole-batch
+selection. The recovered table and returned guarded reads use that
+same exact prefix of the previous history and attempted batch.
+The remaining composition is to feed the native retry reports into
+the selection and successful reopen premises of this theorem.
+
 The retry ledger theorem now exposes the exact history selected by
 recovery: the prior history or that history with the whole uncertain
 batch appended. This is the input to the shared pending client replay
