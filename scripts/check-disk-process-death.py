@@ -225,28 +225,59 @@ def check_manifest_acquisition(binary, shim, database):
     check_reads(len(accepted))
 
 
-def check_fork_exec_lock(binary, shim, database):
+def check_fork_exec_lock(binary, shim, database, effective, poisoned):
     database.mkdir()
     status, stderr = run_probe(binary, "--write-once", database)
     require(status == 0, f"could not prepare acknowledged write: {stderr}")
+    status, stderr = run_probe(binary, "--checkpoint-once", database)
+    require(status == 0, f"could not prepare checkpoint for close cut: {stderr}")
     lock = database / "LOCK"
     lock_bytes = b"native LOCK sentinel"
     lock.write_bytes(lock_bytes)
     original = lock.stat()
-    with native_process(binary, "--open-once", database, env={
+    keeper = database / "WAL-segment-0"
+    acknowledged = keeper.read_bytes()
+    fixed_files = {
+        path: (path.stat(), path.read_bytes())
+        for path in database.iterdir() if path.is_file() and path != keeper
+    }
+    env = {
         **os.environ,
         "LD_PRELOAD": str(shim),
         "ALVOKI_CHECK_FORK_LOCK": str(lock),
-    }, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as owner:
+        "ALVOKI_CHECK_FORK_UNLOCK_EFFECT": "after" if effective else "before",
+    }
+    operation = "--open-once"
+    if poisoned:
+        operation = "--check-write-outcome"
+        env["ALVOKI_CHECK_SYNC_FAIL"] = str(database / "WAL.commit.next")
+        env["ALVOKI_CHECK_SYNC_FAIL_MODE"] = "before"
+    with native_process(binary, operation, database, env=env,
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE) as owner:
         reply = owner.stdout.fileno()
         child, fd = FORK_NOTICE.unpack(read_pipe(reply, FORK_NOTICE.size))
         require(owner.wait(timeout=TIMEOUT) == 0, "owner failed to exit after fork")
         require(os.getpgid(child) == owner.pid, "lock holder escaped the fixture process group")
         inherited = Path(f"/proc/{child}/fd/{fd}")
         require(os.path.samestat(inherited.stat(), original), "child did not inherit the original LOCK inode")
-        status, stderr = run_probe(binary, "--open-once", database)
-        require(status != 0 and f"database already open: {database}" in stderr,
-                f"inherited lock did not block a cooperating opener: {stderr}")
+        for path, (inode, contents) in fixed_files.items():
+            require(os.path.samestat(path.stat(), inode) and path.read_bytes() == contents,
+                    f"interrupted close changed {path.name}")
+        reached_wal = keeper.read_bytes()
+        if poisoned:
+            staged = database / "WAL.commit.next"
+            require(staged.is_file() and staged.read_bytes() != (database / "WAL.commit").read_bytes(),
+                    "poisoned close fixture did not reach the unpublished marker")
+            require(reached_wal.startswith(acknowledged) and reached_wal != acknowledged,
+                    "poisoned close fixture did not append its second write")
+        else:
+            require(reached_wal == acknowledged, "interrupted ready close changed the WAL")
+        status, stderr = run_probe(binary, "--check-recovered-table", database, "1", "99")
+        if effective:
+            require(status == 0, f"effective unlock did not admit the exact replay while its alias lived: {stderr}")
+        else:
+            require(status != 0 and f"database already open: {database}" in stderr,
+                    f"inherited lock did not block a cooperating opener: {stderr}")
 
         # The forked child consumes E, then cat echoes the next byte.
         require(os.write(owner.stdin.fileno(), b"E!") == 2, "could not release the child to exec")
@@ -657,7 +688,10 @@ if __name__ == "__main__":
         check_flat_wal_before_lock(binary, root / "flat-wal-admission")
         check_marker_length(binary, shim, root / "marker-length")
         check_manifest_acquisition(binary, shim, root / "manifest-acquisition")
-        check_fork_exec_lock(binary, shim, root / "fork-exec")
+        for effective in (False, True):
+            for poisoned in (False, True):
+                database = root / f"close-cut-{int(effective)}-{int(poisoned)}"
+                check_fork_exec_lock(binary, shim, database, effective, poisoned)
         check_batch_append_cut(binary, shim, root / "batch-append-cut")
         for rotated in (False, True):
             for fail_wal in (False, True):
@@ -679,7 +713,7 @@ if __name__ == "__main__":
     print("Rejected a dangling flat WAL before opening LOCK and preserved LOCK bytes across reopen.")
     print("Reopened a marker across short reads and rejected malformed lengths before repair within the read cap.")
     print("Read the manifest in two bounded phases and preserved its exact reopen and rejection outcomes.")
-    print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
+    print("Interrupted ready and poisoned close before or after LOCK_UN; an inherited alias blocked only the no-effect cut.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
     print("Recovered zero and rotated two-slot keepers after short writes, publication and reopen cuts, and failed retries.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")

@@ -100,9 +100,15 @@ structure LiveRetry (physical : report.Physical) where
   walLayout : (physical.publication.segmentedCheckpointView state.writer.wal).ReadLayout state.writer.history
   walValid : (physical.publication.segmentedCheckpointView state.writer.wal).Valid state.writer.history
 
-theorem liveRetry (physical : report.Physical) (valid : state.Valid)
-    (pending : PendingClientReplay log reads state.writer.history) :
-    Nonempty physical.LiveRetry := by
+/-- Every modeled active or surviving pair is supported by the same retained
+WAL and the physically selected run map. This is shared by live and crash retries. -/
+theorem retrySupport (physical : report.Physical) (valid : state.Valid) :
+    let wal := physical.publication.segmentedCheckpointView state.writer.wal
+    wal.ReadLayout state.writer.history ∧ wal.Valid state.writer.history ∧
+    ∀ pair, wal.Selects pair →
+      physical.publication.AcceptsVersioned state.writer.history.length.toUInt64
+        (CheckpointRepresentsPrefix state.writer.history) pair.manifest ∧
+      ∃ range, pair.walRange = some range ∧ range.through = state.writer.history.length := by
   let current := physical.publication
   let wal := current.segmentedCheckpointView state.writer.wal
   obtain ⟨model, reached⟩ := physical.selects valid
@@ -144,17 +150,28 @@ theorem liveRetry (physical : report.Physical) (valid : state.Valid)
     have runs := cut.selectedRunAgreement valid.retained model pair.manifest binding
       (physical.runs report.after).guaranteed reached.newRuns reached.priorRuns
     exact ⟨SelectedRunsAgree.acceptsVersioned (actual := current) runs decoded accepted, range, decoded, through⟩
+  exact ⟨⟨oldLayout.ordered, oldLayout.forward, oldLayout.activeEnd, oldLayout.activeBytes⟩, walValid, inputs⟩
+
+theorem liveRetry (physical : report.Physical) (valid : state.Valid)
+    (pending : PendingClientReplay log reads state.writer.history) :
+    Nonempty physical.LiveRetry := by
+  let current := physical.publication
+  let wal := current.segmentedCheckpointView state.writer.wal
+  obtain ⟨walLayout, walValid, inputs⟩ := physical.retrySupport valid
+  obtain ⟨_, reached⟩ := physical.selects valid
+  obtain ⟨active, _⟩ := physical.directory valid
+  have visible : current.manifest.active = some cut.checkpoint.manifest :=
+    congrArg DirectoryPublication.Bindings.manifest active
   have exactFiles : physical.released.image = wal.checkpointReopenFiles wal.directory state.writer.files.keeper.staged :=
     (physical.fileProjection valid).trans (CheckpointPowerCut.physical_eq current valid.retained)
-  have walLayout : wal.ReadLayout state.writer.history :=
-    ⟨oldLayout.ordered, oldLayout.forward, oldLayout.activeEnd, oldLayout.activeBytes⟩
   obtain ⟨layout, _, keeper, aligned, descriptors, offsets, prepared, _, accepted⟩ :=
     current.checkpointRetryLayout (before := state.writer.wal) walLayout walValid .visible inputs
       (current := physical.released.image) (scratch := state.writer.files.keeper.staged)
       (exactFiles.symm ▸ .before .live)
   have survives : some cut.checkpoint.manifest ∈ current.manifest.crashImages := by
-    rw [candidates, reached.manifestChoices]
-    cases cut.tookEffect <;> simp
+    have choices := (physical.directory valid).2
+    simp only [current, publication, DirectoryPublication.Image.project, choices]
+    cases cut.tookEffect <;> simp [DirectoryPublication.Bindings.replace, DirectoryPublication.Bindings.get]
   have bound : physical.released.image.directory.active.manifest = some cut.checkpoint.manifest := visible
   obtain ⟨_, checkpoint, _, _, selected, generation, _⟩ := reached.replaysPending valid.retained pending survives
   have generationEq : (checkpoint.getD (.empty, 0)).2 = SegmentedCheckpointReport.generation state.writer := by

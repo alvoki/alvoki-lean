@@ -112,7 +112,7 @@ def reached (reports : SegmentedRunCollectionReports directory state before) : R
   match reports.run with
   | .ok _ after | .error _ after => after
 
-private theorem preflight {descriptor : Nat} (ready : state.RetainedReady directory descriptor)
+theorem preflight {descriptor : Nat} (ready : state.RetainedReady directory descriptor)
     (reports : SegmentedRunCollectionReports directory state before) :
     validateIntegrityRunCollectionGeneration state.installed.generation reports.observed =
       .ok (reports.observed.map fun _ => state.installed.generation) := by

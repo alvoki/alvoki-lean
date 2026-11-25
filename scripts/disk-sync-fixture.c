@@ -51,7 +51,7 @@ int open(const char *path, int flags, ...) {
     return real_open(path, flags);
 }
 
-static _Noreturn void exit_with_inherited_lock(int fd) {
+static _Noreturn void exit_with_inherited_lock(int fd, int (*complete_unlock)(int, int)) {
     int flags = fcntl(fd, F_GETFD);
     if (fd <= STDERR_FILENO || flags < 0 || !(flags & FD_CLOEXEC)) _exit(125);
 
@@ -72,6 +72,9 @@ static _Noreturn void exit_with_inherited_lock(int fd) {
         _exit(125);
     }
 
+    // On the after-effect cut, the original issuing description releases
+    // the lock while both slots still refer to it.
+    if (complete_unlock != NULL && complete_unlock(fd, LOCK_UN) != 0) _exit(125);
     int32_t notice[] = {child, fd};
     const char *bytes = (const char *)notice;
     size_t left = sizeof(notice);
@@ -82,7 +85,8 @@ static _Noreturn void exit_with_inherited_lock(int fd) {
         bytes += sent;
         left -= (size_t)sent;
     }
-    // Skip explicit LOCK_UN. Process exit drops only the parent's reference.
+    // The unlock callback never returns. Process exit drops only the
+    // parent's reference, independently of the syscall's lock effect.
     _exit(0);
 }
 
@@ -93,7 +97,10 @@ int flock(int fd, int operation) {
     if (target != NULL && operation == LOCK_UN) {
         struct stat lock, held;
         if (stat(target, &lock) < 0 || fstat(fd, &held) < 0) _exit(125);
-        if (held.st_dev == lock.st_dev && held.st_ino == lock.st_ino) exit_with_inherited_lock(fd);
+        if (held.st_dev == lock.st_dev && held.st_ino == lock.st_ino) {
+            bool effective = same(getenv("ALVOKI_CHECK_FORK_UNLOCK_EFFECT"), "after");
+            exit_with_inherited_lock(fd, effective ? real_flock : NULL);
+        }
     }
     return real_flock(fd, operation);
 }

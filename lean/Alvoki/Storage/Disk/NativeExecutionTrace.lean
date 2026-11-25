@@ -12,6 +12,8 @@ import Alvoki.Storage.Disk.NativeCheckpointErrorReopen
 import Alvoki.Storage.Disk.NativeCheckpointPreflight
 import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeReadyRotation
+import Alvoki.Storage.Disk.NativeCheckpointErrorPowerLoss
+import Alvoki.Storage.Disk.NativeObsoleteRunCollection
 
 namespace Alvoki.Storage.DiskSession
 
@@ -31,9 +33,11 @@ inductive NativeExecutionEvent : Type 1 where
   | checkpoint
   | checkpointRejected (error : IO.Error)
   | checkpointErrorRecovered (input : FilePath) (error : IO.Error)
+  | checkpointCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | collectCoveredWal
   | walCollectionPlan (result : Except IO.Error (List Nat))
   | rotatedWal
+  | collectedObsoleteRuns (held : List UInt64)
   | closedAndReopened (input : FilePath) (result : Except IO.Error Unit)
   | uncertainWriteRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (attempted retained : List WAL.Write)
@@ -185,6 +189,17 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
         let before := (state.session.phase, ⟨(state.cache, files), state.files.owners⟩)
         runObservedRotationWithReset state.session.directory lookup read create sync release before = .ok () before) :
       NativeExecutionStep current .rotatedWal current
+  | recoverCheckpointCrash (current : NativeExecutionPosition) {input : FilePath}
+      (observed : NativeCheckpointCrashObservation current.ready.state input)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeCheckpointCrashContinuation current.ready observed.crash input next) :
+      NativeExecutionStep current (.checkpointCrashRecovered input observed.diagnostic observed.crash.pair.manifest)
+        ⟨current.history, current.submissions, next⟩
+  | collectObsoleteRuns (current : NativeExecutionPosition) (observed : NativeObsoleteRunCollection current.ready.state)
+      (next : NativeReadPosition current.history current.submissions)
+      (returned : NativeObsoleteRunCollectionStep current.ready observed next) :
+      NativeExecutionStep current (.collectedObsoleteRuns observed.reports.held)
+        ⟨current.history, current.submissions, next⟩
 
 /-- Interpret the submitted single or batch write with the reported
 primitive effects and start the next position from its actual result. -/
@@ -247,6 +262,10 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.frame.reads⟩
   case rotateEmpty =>
     simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads]
+  case recoverCheckpointCrash reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case collectObsoleteRuns returned => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.reads⟩
 
 theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep before event after) :
     event.uncertainBatchWhole := by
@@ -307,9 +326,11 @@ inductive NativeExecutionInstruction : Type 1 where
   | restart (input : FilePath)
   | checkpoint
   | checkpointThenCloseAndReopen (input : FilePath)
+  | checkpointThenPowerLossAndReopen (input : FilePath)
   | collectCoveredWal
   | planWalCollection
   | rotateWal
+  | collectObsoleteRuns (held : List UInt64)
   | closeAndReopen (input : FilePath)
   | writeThenCloseAndReopen (request : WriteRequest) (input : FilePath)
   | collectThenCloseAndReopen (input : FilePath)
@@ -327,9 +348,11 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .checkpoint, .checkpoint => True
   | .checkpoint, .checkpointRejected _ => True
   | .checkpointThenCloseAndReopen input, .checkpointErrorRecovered opened _ => opened = input
+  | .checkpointThenPowerLossAndReopen input, .checkpointCrashRecovered opened _ _ => opened = input
   | .collectCoveredWal, .collectCoveredWal => True
   | .planWalCollection, .walCollectionPlan _ => True
   | .rotateWal, .rotatedWal => True
+  | .collectObsoleteRuns held, .collectedObsoleteRuns issued => issued = held
   | .closeAndReopen input, .closedAndReopened opened _ => opened = input
   | .writeThenCloseAndReopen request input, .uncertainWriteRecovered submitted opened _ _ _ =>
     submitted = request ∧ opened = input
@@ -377,6 +400,8 @@ inductive NativeExecutionObservation (state : NativeReadyState) : Type 1 where
   | rotateCreated (reported : NativeReadyCreatedRotation state)
   | rotateExisting (reported : NativeReadyExistingRotation state)
   | rotateEmpty (empty : state.writer.installed.walBytes / WAL.frameSize ≤ state.writer.installed.activeFirst)
+  | checkpointThenPowerLossAndReopen (input : FilePath) (observed : NativeCheckpointCrashObservation state input)
+  | collectObsoleteRuns (observed : NativeObsoleteRunCollection state)
 
 def NativeExecutionObservation.instruction : NativeExecutionObservation state → NativeExecutionInstruction
   | .snapshot sequence request _ _ => .snapshot sequence request
@@ -394,6 +419,8 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation state �
   | .checkpointThenCloseAndReopen input _ => .checkpointThenCloseAndReopen input
   | .planWalCollection _ => .planWalCollection
   | .rotateCreated _ | .rotateExisting _ | .rotateEmpty _ => .rotateWal
+  | .checkpointThenPowerLossAndReopen input _ => .checkpointThenPowerLossAndReopen input
+  | .collectObsoleteRuns observed => .collectObsoleteRuns observed.reports.held
 
 theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     (observed : NativeExecutionObservation current.ready.state) :
@@ -450,6 +477,12 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     dsimp only
     rw [current.ready.readPrefix.refines.1.phase]
     exact runObservedRotationWithReset_empty _ _ _ lookup read create sync release empty
+  | checkpointThenPowerLossAndReopen _ observed =>
+    obtain ⟨next, reopened⟩ := current.ready.recoversCheckpointCrash observed
+    exact ⟨_, _, .recoverCheckpointCrash current observed next reopened, rfl⟩
+  | collectObsoleteRuns observed =>
+    obtain ⟨next, returned⟩ := current.ready.collectsObsoleteRuns observed
+    exact ⟨_, _, .collectObsoleteRuns current observed next returned, rfl⟩
 
 /-- Supply the primitive reports for the next prescribed instruction
 at its reached state. The whole trace and its endpoint are derived from
