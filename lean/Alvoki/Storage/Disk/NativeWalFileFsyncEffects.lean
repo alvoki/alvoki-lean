@@ -479,6 +479,30 @@ private theorem groupedFailureReached {heap : Type} (calls : RawSyncCalls heap)
     cases secondCall : calls.fsync markerHandle consumed <;>
     simp_all [reachedState]
 
+/-- The two issued fsync effects and the intervening pending store on
+the selected literal handles. On a keeper error the local filesystem
+law retains the committed prefix in every reported byte choice. -/
+def RawSyncCalls.GroupedFailureFileEffects {heap image : Type} (calls : RawSyncCalls heap)
+    {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles}
+    (cache : OpenSyncCacheRefs files directory.path) (view : OpenCloseHeapView heap image)
+    (inodes : heap → WalInodeImage) {runs : heap → RunUnlinkImage}
+    (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap))
+    (first : Nat) (appended staged : heap) (keeperHandle markerHandle : IO.FS.Handle)
+    (keeper scratch oldMarker : Nat) (priorBytes : ByteArray) : Prop :=
+  ∃ consumed keeperChoices markerChoices,
+    calls.GroupedFileRoute cache view first appended staged consumed keeperHandle markerHandle keeper scratch ∧
+    calls.FileReachedEffect view inodes observe (directory.file (.walSegment first)) keeperHandle staged keeperChoices ∧
+    calls.FileReachedEffect view inodes observe (directory.file .stagedWalBoundary) markerHandle consumed markerChoices ∧
+    (∀ {err after}, calls.fsync keeperHandle staged = .error err after →
+      keeperChoices ≠ [] ∧ ∀ payload ∈ keeperChoices, ∃ tail, payload = priorBytes ++ tail) ∧
+    oldMarker ≠ keeper ∧ oldMarker ≠ scratch ∧
+    let afterKeeper := reachedState (calls.fsync keeperHandle staged)
+    (observe afterKeeper).storageObservation.Frames
+      (fun path => path = directory.file (.walSegment first) ∨ path = directory.file .walBoundary)
+      (observe consumed).storageObservation ∧
+    (inodes consumed).visible keeper = (inodes afterKeeper).visible keeper ∧
+    (inodes consumed).visible oldMarker = (inodes afterKeeper).visible oldMarker
+
 /-- A failed grouped barrier skips publication. Both file fsyncs still
 affect their issued inodes, and the marker's pending entry is consumed
 at the heap reached by the first fsync. The surviving keeper contents
@@ -521,19 +545,8 @@ theorem RawSyncCalls.groupedFailurePreservesSelection {heap image : Type} (calls
       view.literalCacheAt staged cache.directory cache.active cache.pending =
         (view.literalCacheAt appended cache.directory cache.active cache.pending).remember
           (directory.file .stagedWalBoundary) markerHandle →
-      ∃ consumed keeperChoices markerChoices,
-        calls.GroupedFileRoute cache view first appended staged consumed keeperHandle markerHandle keeper (inode markerHandle) ∧
-        calls.FileReachedEffect view inodes observe (directory.file (.walSegment first)) keeperHandle staged keeperChoices ∧
-        calls.FileReachedEffect view inodes observe (directory.file .stagedWalBoundary) markerHandle consumed markerChoices ∧
-        (∀ {err after}, calls.fsync keeperHandle staged = .error err after →
-          keeperChoices ≠ [] ∧ ∀ payload ∈ keeperChoices, ∃ tail, payload = priorBytes ++ tail) ∧
-        oldMarker ≠ keeper ∧ oldMarker ≠ inode markerHandle ∧
-        let afterKeeper := reachedState (calls.fsync keeperHandle staged)
-        (observe afterKeeper).storageObservation.Frames
-          (fun path => path = directory.file (.walSegment first) ∨ path = directory.file .walBoundary)
-          (observe consumed).storageObservation ∧
-        (inodes consumed).visible keeper = (inodes afterKeeper).visible keeper ∧
-        (inodes consumed).visible oldMarker = (inodes afterKeeper).visible oldMarker) :
+      calls.GroupedFailureFileEffects cache view inodes observe first appended staged keeperHandle markerHandle
+        keeper (inode markerHandle) oldMarker priorBytes) :
     WalSegmentCommit.commitBytesAt directory first bytes count (appender.run cache.active) (stager.run cache.pending)
       (calls.group directory.path cache.directory cache.active cache.pending) rename entry = .error cause reached ∧
     (observe reached).visible (directory.file .walBoundary) = some oldMarker ∧
