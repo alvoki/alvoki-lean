@@ -1827,9 +1827,11 @@ theorem acquireMarkerWithInventory_sharedReader {state : Type}
     rfl
   exact congrArg (fun readMarker => acquireMarkerWithInventoryUsing readMarker reached reads path) same
 
-def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
+def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath)
+    (rewind : Nat → EStateM IO.Error Nat Unit) :
     EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) :=
-  acquireMarkerWithInventoryUsing (fun _ => readMarkerBytesWith (EStateM.pure ())) (fun _ files => files) reads path
+  acquireMarkerWithInventoryUsing (fun description => readMarkerBytesWith (rewind description))
+    (fun _ files => files) reads path
 
 /-- The native acquisition projection retains the opened marker slot
 in the state passed to checkpoint preparation. -/
@@ -2952,6 +2954,8 @@ theorem recoveredRetries_installedReads
     {markerView : DiskSession.DirectoryReadNamespace} {markerRoot : DiskSession.DeviceInode}
     (markerFile : DiskSession.HeldMetadataFile markerReads (directory.file .walBoundary)
       "WAL.commit" markerView markerRoot (marker.visible marker.active))
+    (rewindMarker : Nat → EStateM IO.Error Nat Unit)
+    (rewound : rewindMarker markerFile.calls.slot.description 0 = .ok () 0)
     (markerPrivate : markerFile.calls.metadata.numLinks = 1)
     (atMarkerSync : DiskSession.DescriptorInventory)
     (markerSyncDrops : List DiskSession.LockReferenceDrop)
@@ -3019,7 +3023,7 @@ theorem recoveredRetries_installedReads
     ∃ session final reference opened pin pinned,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
         (do
-          let (opened, _, _) ← reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary))
+          let (opened, _, _) ← reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary) rewindMarker)
             (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory
               (readIntegrityCheckpointSized directory readManifest
                 (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
@@ -3030,7 +3034,7 @@ theorem recoveredRetries_installedReads
             (fun bounded size =>
               WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
           pure opened) openedFrom = .ok session final ∧
-      reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary))
+      reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary) rewindMarker)
           (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory
             (readIntegrityCheckpointSized directory readManifest
               (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
@@ -3298,7 +3302,7 @@ theorem recoveredRetries_installedReads
     rw [boundedPlan, keeperExtent, WalSegmentRepair.finishBoundedMarkedOpen_eq_full
       directory plan preparedPlan.valid removeFile write sync renameFile]
     exact repaired
-  have markerAcquired : acquireMarkerFromReports markerReads (directory.file .walBoundary) openedFrom.image =
+  have markerAcquired : acquireMarkerFromReports markerReads (directory.file .walBoundary) rewindMarker openedFrom.image =
       .ok (markerHandle, selected) openedFrom.image := by
     have held : (⟨markerFile.calls.slot.description,
         markerFile.calls.inventory.inode markerFile.calls.slot.description⟩ : KeeperDescriptorIdentity) =
@@ -3306,8 +3310,7 @@ theorem recoveredRetries_installedReads
       cases markerHandle
       simp only [KeeperDescriptorIdentity.mk.injEq]
       exact ⟨markerDescription, markerDescription ▸ reachedInode⟩
-    rw [acquireMarkerFromReports, acquireMarkerWithInventory_sharedReader]
-    simp [acquireMarkerWithInventory, acquireMarkerWithInventoryUsing, checkPrivateRegularWith, markerFile.calls.stat,
+    simp [acquireMarkerFromReports, acquireMarkerWithInventoryUsing, readMarkerBytesWith, rewound, checkPrivateRegularWith, markerFile.calls.stat,
       markerFile.calls.regular, markerPrivate, markerFile.calls.opened, heldRead,
       show (IO.FS.FileType.file == .file) = true from rfl,
       Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept,
