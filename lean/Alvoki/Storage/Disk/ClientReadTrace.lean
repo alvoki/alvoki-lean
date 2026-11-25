@@ -16,6 +16,7 @@ theorem SegmentedBatchDatabaseTrace.append
   | start => simpa using prior
   | ordinary _ step ih => simpa only [List.append_assoc] using ih.ordinary step
   | cleanReopenObserved _ closed endpoint ih => exact .cleanReopenObserved ih closed endpoint
+  | checkpointManifestStageError _ endpoint ih => exact .checkpointManifestStageError ih endpoint
   | checkpointPowerLossObserved _ cut projected survives failures selected installed ih =>
     exact .checkpointPowerLossObserved ih cut projected survives failures selected installed
   | acknowledgedBatch _ report selected ih => simpa only [List.append_assoc] using ih.acknowledgedBatch report selected
@@ -233,5 +234,76 @@ theorem SegmentedClientReadTrace.keyValueRefinement
   obtain ⟨reference, replayed, retained, acknowledged, submitted, _⟩ := trace.writes.keyValueRefinement bootstrap held
   exact ⟨reference, replayed, retained, acknowledged, submitted,
     trace.responses (bootstrap.writerReady held).toRetained .start replayed⟩
+
+/-- An observed failed checkpoint submits no write group and adds no
+read result. The live reopen is an admitted continuation of the ledger. -/
+theorem SegmentedClientReadTrace.afterManifestStageError {input : System.FilePath}
+    (trace : SegmentedClientReadTrace directory initialDescriptor initial allowCollection log reads writer before)
+    {attempt : SegmentedCheckpointReport directory before} {report : ObservedManifestStageFailure attempt}
+    {manifest runs} {retry : LockedFileState FileImage} {layout : CanonicalKeeperLayout retry.image before.history}
+    {release : SegmentedFailureRelease writer}
+    {opened : CheckpointHeldOpen input directory layout (report.reachedPublication manifest runs)} {session final}
+    (endpoint : ManifestStageFailureReopened (report := report) release opened session final after) :
+    SegmentedClientReadTrace directory initialDescriptor initial allowCollection log reads opened.calls.slot.description after := by
+  simpa only [List.append_nil] using trace.advance (.checkpointManifestStageError .start endpoint)
+
+/-- The exact returned live failure, release and reported bounded retry
+extend the client ledger at the actually installed session. -/
+theorem SegmentedClientReadTrace.reopenAfterManifestStageError {input : System.FilePath}
+    (trace : SegmentedClientReadTrace directory initialDescriptor initial allowCollection log reads writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    {attempt : SegmentedCheckpointReport directory before} {report : ObservedManifestStageFailure attempt}
+    {manifest runs} (bindings : ManifestStageFailureBindings report manifest runs)
+    (release : SegmentedFailureRelease writer) (retry : LockedFileState FileImage) :
+    let publication := report.reachedPublication manifest runs
+    BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
+      ⟨CheckpointPowerCut.physical before publication, before.owners.set (directory.file .lock) none⟩ retry →
+    CheckpointHeldOpen.Reports input directory before retry publication publication →
+    ∃ (layout : CanonicalKeeperLayout retry.image before.history)
+      (opened : CheckpointHeldOpen input directory layout publication)
+      (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState),
+        ManifestStageFailureReopened release opened session final after ∧
+        SegmentedClientReadTrace directory initialDescriptor initial allowCollection log reads opened.calls.slot.description after := by
+  intro publication attempts reports
+  obtain ⟨layout, opened, session, final, after, endpoint⟩ :=
+    bindings.reopens (trace.writes.preservesRetained initialReady).1 release retry attempts reports
+  exact ⟨layout, opened, session, final, after, endpoint, trace.afterManifestStageError endpoint⟩
+
+/-- The same WAL replay explains all earlier recorded responses and
+guarded reads from newly acquired snapshots in the installed session.
+The unchanged log still accounts for acknowledgement and submission. -/
+theorem SegmentedClientReadTrace.manifestStageErrorRefines
+    {first : LockedFileState WalSegmentRotation.State} {input : System.FilePath}
+    (bootstrap : BootstrapReady first.image) (held : first.owners.Owns directory initialDescriptor)
+    (trace : SegmentedClientReadTrace directory initialDescriptor (bootstrap.writerState first.owners)
+      allowCollection log reads writer before)
+    {attempt : SegmentedCheckpointReport directory before} {report : ObservedManifestStageFailure attempt}
+    {manifest runs} {retry : LockedFileState FileImage} {layout : CanonicalKeeperLayout retry.image before.history}
+    {release : SegmentedFailureRelease writer}
+    {opened : CheckpointHeldOpen input directory layout (report.reachedPublication manifest runs)} {session final}
+    (endpoint : ManifestStageFailureReopened (report := report) release opened session final after) :
+    ∃ reference : SnapshotTable UInt64,
+      SnapshotWalReplay .empty after.history reference ∧
+      DatabaseBatchRetention log after.history ∧
+      log.flatMap DatabaseSubmissions.acknowledged <+ after.history ∧
+      after.history <+ log.flatMap DatabaseSubmissions.submitted ∧
+      (∀ read ∈ reads, read.agrees reference) ∧
+      ∀ snapshot, after.installed.table.pins.floor ≤ snapshot → snapshot ≤ after.installed.table.committed →
+        ∃ (issued : Nat × SnapshotPin) (pinned : PackedTable) (acquired : SegmentedSession),
+          SegmentedSession.runAcquireAt snapshot session = .ok (some issued) acquired ∧
+          acquired.phase = .ready { after.installed with table := pinned } ∧
+          issued.1 = acquired.sessionRef ∧ issued.2.sequence = snapshot ∧ issued.2 ∈ pinned.pins.active ∧
+          ∀ sameSession : Bool, sameSession = decide (issued.1 = acquired.sessionRef) →
+            (∀ key, withLocalHandle (m := Except IO.Error) acquired.phase.installed (.ok sameSession) none
+                (fun state => pure (state.table.lookup issued.2.handle key)) =
+              .ok (some (reference.table.lookup key snapshot))) ∧
+            ∀ start stop, withLocalHandle (m := Except IO.Error) acquired.phase.installed (.ok sameSession) none
+                (fun state => pure (state.table.range issued.2.handle start stop)) =
+              .ok (some (reference.table.range start stop snapshot)) := by
+  let continued := trace.afterManifestStageError endpoint
+  obtain ⟨reference, replay, retained, acknowledged, submitted, readsAfter⟩ :=
+    continued.writes.guardedAcquireReads bootstrap held endpoint.phase
+  exact ⟨reference, replay, retained, acknowledged, submitted,
+    continued.responses (bootstrap.writerReady held).toRetained .start replay, readsAfter⟩
 
 end Alvoki.Storage.DiskSession

@@ -1,4 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointManifestStageFailure
+import Alvoki.Storage.Disk.CheckpointHeldOpen
+import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 
 namespace Alvoki.Storage.DiskSession
 
@@ -33,6 +35,38 @@ returned by the same failed checkpoint callbacks. -/
 def ObservedManifestStageFailure.reachedPublication (report : ObservedManifestStageFailure attempt)
     (manifest : State → Publication.Image) (runs : State → RunUnlinkImage) : Image :=
   ⟨manifest report.reached, (runs report.reached).guaranteed⟩
+
+/-- Evidence for one returned checkpoint error, its lock handoff, and
+the exact final admitted reopen from the reached live publication. -/
+structure ManifestStageFailureReopened {writer : Nat} {input : FilePath}
+    {report : ObservedManifestStageFailure attempt}
+    {manifest : State → Publication.Image} {runs : State → RunUnlinkImage}
+    {retry : LockedFileState FileImage} {layout : CanonicalKeeperLayout retry.image before.history}
+    (release : SegmentedFailureRelease writer)
+    (opened : CheckpointHeldOpen input directory layout (report.reachedPublication manifest runs))
+    (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState) : Prop where
+  bindings : ManifestStageFailureBindings report manifest runs
+  attempts : BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
+    ⟨CheckpointPowerCut.physical before (report.reachedPublication manifest runs),
+      before.owners.set (directory.file .lock) none⟩ retry
+  poisoned :
+    runPreparedCheckpoint attempt.prepared report.perform (.ready before.installed, ⟨report.atRun 0, before.owners⟩) =
+      .error report.cause (.poisoned, ⟨report.reached, before.owners⟩)
+  released : release.Observed (directory := directory) (.poisoned, ⟨report.reached, before.owners⟩)
+    ⟨report.reached, before.owners.set (directory.file .lock) none⟩
+  returned : opened.wal.operations.runWithAdmission opened.admission = .ok session final
+  path : session.directory = directory
+  descriptor : session.descriptor = opened.calls.slot.description
+  phase : session.phase = .ready after.installed
+  files : after.files = final.image
+  owners : after.owners = final.owners
+  retained : after.RetainedReady directory opened.calls.slot.description
+  history : after.history = before.history
+  wal : after.wal = { before.wal with directory := after.files.directory }
+  durable : after.published.durable = (report.reachedPublication manifest runs).durable
+  selected : after.target.pair = before.wal.directory.active
+  checkpoint : after.checkpoint = before.checkpoint
+  replay : recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table
 
 namespace ManifestStageFailureBindings
 
@@ -81,17 +115,7 @@ theorem reopens {input : FilePath} {writer : Nat}
     ∃ (layout : CanonicalKeeperLayout retry.image before.history)
       (opened : CheckpointHeldOpen input directory layout publication)
       (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState),
-      runPreparedCheckpoint attempt.prepared report.perform (.ready before.installed, ⟨report.atRun 0, before.owners⟩) =
-        .error report.cause (.poisoned, ⟨report.reached, before.owners⟩) ∧
-      release.Observed (directory := directory) (.poisoned, ⟨report.reached, before.owners⟩)
-        ⟨report.reached, released.owners⟩ ∧
-      opened.wal.operations.runWithAdmission opened.admission = .ok session final ∧
-      session.directory = directory ∧ session.descriptor = opened.calls.slot.description ∧
-      session.phase = .ready after.installed ∧ after.files = final.image ∧ after.owners = final.owners ∧
-      after.RetainedReady directory session.descriptor ∧ after.history = before.history ∧
-      after.published.durable = publication.durable ∧
-      after.target.pair = before.wal.directory.active ∧ after.checkpoint = before.checkpoint ∧
-      recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table := by
+      ManifestStageFailureReopened release opened session final after := by
   intro publication released failures reads
   let wal := publication.segmentedCheckpointView before.wal
   have active : wal.directory.active = before.wal.directory.active := by
@@ -126,7 +150,7 @@ theorem reopens {input : FilePath} {writer : Nat}
   obtain ⟨_, appendReady⟩ := installed.readyForAppend accepted ready.resumed.ordered
   have kept : retry.image.kept = (before.wal.checkpointReopenFiles before.wal.directory none).kept :=
     lineage.keepsSealed
-  obtain ⟨session, final, after, returned, path, descriptor, phase, files, owners, _, target, history, durable, next⟩ :=
+  obtain ⟨session, final, after, returned, path, descriptor, phase, files, owners, reportedWal, target, history, durable, next⟩ :=
     appendReady.writerCheckpointRetained layout valid ready.spans chosen rfl (congrArg WalSegment.first keeper) kept
   have runtime : opened.wal.operations.runWithAdmission opened.admission = .ok session final :=
     (chunks.runWithAdmission_eq opened.admission).trans returned
@@ -149,9 +173,11 @@ theorem reopens {input : FilePath} {writer : Nat}
     exact (SelectedIntegrityCheckpoint.withRunMap chosenCheckpoint bindings.selectedRuns).uniqueResult oldSelected
   rw [exactReplay, sameTable] at replay
   obtain ⟨poisoned, handoff, _⟩ := report.poisonsAndReleases ready.held release
-  exact ⟨keeperLayout, opened, session, final, after, poisoned, handoff, runtime, path,
-    descriptor.trans chunks.inventoryDescription, phase, files, owners, descriptor ▸ next, history, durable,
-    pair, sameCheckpoint, replay⟩
+  refine ⟨keeperLayout, opened, session, final, after, bindings, failures, poisoned, handoff, runtime, path,
+    descriptor.trans chunks.inventoryDescription, phase, files, owners, chunks.inventoryDescription ▸ next, history, ?_,
+    durable, pair, sameCheckpoint, replay⟩
+  rw [files]
+  exact reportedWal
 
 end ManifestStageFailureBindings
 

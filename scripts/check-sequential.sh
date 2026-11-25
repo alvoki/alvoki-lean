@@ -61,6 +61,7 @@ lake env leanchecker Alvoki.Storage.Disk.OptionalFileRead
 lake env leanchecker Alvoki.Storage.Disk.CheckpointFileDispatch
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunWriteCustody
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunPrefixCustody
+lake env leanchecker Alvoki.Storage.Disk.CheckpointRunPrefixReports
 lake env leanchecker Alvoki.Storage.Disk.CheckpointObservedCompletion
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunDirectoryCut
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestRenameCut
@@ -68,6 +69,7 @@ lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestRenameReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointRunBarrierReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestStageCut
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestStageFailure
+lake env leanchecker Alvoki.Storage.Disk.CheckpointHeldOpen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestStageFailureReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestDirectoryCut
 lake env leanchecker Alvoki.Storage.Disk.CheckpointObservedDispatch

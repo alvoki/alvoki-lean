@@ -1,4 +1,9 @@
-import Alvoki.Storage.Disk.CheckpointManifestStageCut
+import Alvoki.Storage.Disk.CheckpointRunPrefixReports
+import Alvoki.Storage.Disk.SegmentedCheckpointStep
+import Alvoki.Storage.Disk.SegmentedFailureRelease
+import Alvoki.Storage.Disk.StagedHandleCustody
+import Alvoki.Storage.Disk.ReplacedWalDescriptor
+import Alvoki.Storage.Disk.DescriptorInventory
 
 namespace Alvoki.Storage.DiskSession
 

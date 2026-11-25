@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.CheckpointManifestStageFailureReopen
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
@@ -88,6 +89,15 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       {admission : OpenAdmissionReports input directory observed.slot}
       (endpoint : AdmittedCleanReopen closed observed admission after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log observed.slot.description after
+  | checkpointManifestStageError {input : System.FilePath}
+      {attempt : SegmentedCheckpointReport directory before}
+      {report : ObservedManifestStageFailure attempt} {manifest runs}
+      {retry : LockedFileState FileImage} {layout : CanonicalKeeperLayout retry.image before.history}
+      {release : SegmentedFailureRelease writer}
+      {opened : CheckpointHeldOpen input directory layout (report.reachedPublication manifest runs)} {session final}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (endpoint : ManifestStageFailureReopened (report := report) release opened session final after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log opened.calls.slot.description after
   | checkpointPowerLossObserved {files : Type}
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (cut : CheckpointPowerCut directory before) {published : CheckpointPublication.Image}
@@ -200,6 +210,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | cleanReopenObserved _ _ endpoint ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨endpoint.writer.retained, retained, endpoint.writer.history.trans history, retention⟩
+  | checkpointManifestStageError _ endpoint ih =>
+    obtain ⟨_, retained, history, retention⟩ := ih
+    exact ⟨endpoint.retained, retained, endpoint.history.trans history, retention⟩
   | checkpointPowerLossObserved _ _ _ _ _ _ installed ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨installed.retained, retained, installed.history.trans history, retention⟩

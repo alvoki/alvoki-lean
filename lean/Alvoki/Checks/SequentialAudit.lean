@@ -79,6 +79,7 @@ import Alvoki.Storage.Disk.CheckpointManifestRenameCut
 import Alvoki.Storage.Disk.CheckpointManifestRenameReopen
 import Alvoki.Storage.Disk.CheckpointRunBarrierReopen
 import Alvoki.Storage.Disk.CheckpointManifestStageCut
+import Alvoki.Storage.Disk.CheckpointHeldOpen
 import Alvoki.Storage.Disk.CheckpointManifestStageFailureReopen
 import Alvoki.Storage.Disk.CheckpointManifestDirectoryCut
 import Alvoki.Storage.Disk.SessionReadGuards
@@ -384,6 +385,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ObservedManifestStageFailure.returns
 #check_axioms Alvoki.Storage.DiskSession.ObservedManifestStageFailure.poisonsAndReleases
 #check_axioms Alvoki.Storage.DiskSession.ManifestStageFailureBindings.reopens
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.checkpointManifestStageError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.afterManifestStageError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterManifestStageError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.manifestStageErrorRefines
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.returns
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.durableRuns
 #check_axioms Alvoki.Storage.CheckpointPublication.SuccessfulCheckpointSteps.manifestSettled
