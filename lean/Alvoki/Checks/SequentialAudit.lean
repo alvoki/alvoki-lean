@@ -2187,3 +2187,5 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.decode_valid
 #check_axioms Alvoki.WAL.TwoSlot.decodedSlots_active
 #check_axioms Alvoki.WAL.TwoSlot.decode_afterAdvance
+#check_axioms Alvoki.WAL.TwoSlot.interruptedBytes_selectBatch
+#check_axioms Alvoki.WAL.TwoSlot.syncedBytes_selectBatch

@@ -492,6 +492,78 @@ theorem decode_afterAdvance {before after : ByteArray} {current next : Selection
       (by simp [alternate, slot, slotIndex, OrderedTwoSlot.Slot.other]) unchanged inside written
       parity aligned counts epoch.symm increases
 
+/-- The native marker decoder and WAL boundary reader agree on the exact
+batch prefix when a crash interrupts an isolated inactive-slot update.
+The WAL barrier supplies the whole encoded batch before the slot write. -/
+theorem interruptedBytes_selectBatch
+    {before after physical : ByteArray} {active : OrderedTwoSlot.Slot} {current next : Selection}
+    {history batch : List WAL.Write}
+    (prior : decode before = .ok current)
+    (activeOffset : current.slot = slotIndex active)
+    (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
+    (size : after.size = containerSize)
+    (unchanged : ∀ position,
+      (position < slotIndex active.other * stride ∨ slotIndex active.other * stride + 40 ≤ position) →
+        after.get! position = before.get! position)
+    (target : decodeSlot after (slotIndex active.other) = decodeSlot before (slotIndex active.other) ∨
+      decodeSlot after (slotIndex active.other) = none ∨
+      decodeSlot after (slotIndex active.other) = some next)
+    (oldCount : current.frontier.toNat = (WAL.encode history).size)
+    (durable : ∃ tail, physical = WAL.encode (history ++ batch) ++ tail) :
+    ∃ chosen events, decode after = .ok chosen ∧
+      (events = history ∨ events = history ++ batch) ∧
+      Boundary.select chosen.frontier physical = .ok (WAL.encode events) := by
+  obtain ⟨tail, rfl⟩ := durable
+  have observed := (decode_valid prior).1
+  rw [activeOffset] at observed
+  obtain ⟨_, epoch, nextCount, increasing, _⟩ := advance_fields advanced
+  rcases decode_interruptedWrite prior size observed unchanged target epoch.symm increasing with old | new
+  · refine ⟨current, history, old, .inl rfl, ?_⟩
+    have fits : (WAL.encode history).size < UInt64.size := by
+      rw [← oldCount]
+      exact current.frontier.toNat_lt
+    have count : current.frontier = (WAL.encode history).size.toUInt64 := by
+      rw [← oldCount]
+      simp
+    rw [count, WAL.encode_append, ByteArray.append_assoc]
+    exact Boundary.select_encoded history _ fits
+  · refine ⟨next, history ++ batch, new, .inr rfl, ?_⟩
+    have fits : (WAL.encode (history ++ batch)).size < UInt64.size := by
+      rw [← nextCount]
+      exact next.frontier.toNat_lt
+    have count : next.frontier = (WAL.encode (history ++ batch)).size.toUInt64 := by
+      rw [← nextCount]
+      simp
+    rw [count]
+    exact Boundary.select_encoded (history ++ batch) tail fits
+
+/-- Successful ordered barriers recover the complete batch from the
+same marker and WAL images. -/
+theorem syncedBytes_selectBatch
+    {before after physical : ByteArray} {current next : Selection}
+    (history batch : List WAL.Write)
+    (prior : decode before = .ok current)
+    (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
+    (size : after.size = containerSize)
+    (unchanged : ∀ position,
+      (position < next.slot * stride ∨ next.slot * stride + 40 ≤ position) →
+        after.get! position = before.get! position)
+    (written : after.extract (next.slot * stride) (next.slot * stride + 40) = next.encode)
+    (durable : ∃ tail, physical = WAL.encode (history ++ batch) ++ tail) :
+    decode after = .ok next ∧
+      Boundary.select next.frontier physical = .ok (WAL.encode (history ++ batch)) := by
+  refine ⟨decode_afterAdvance prior advanced size unchanged written, ?_⟩
+  obtain ⟨tail, rfl⟩ := durable
+  have count := (advance_fields advanced).2.2.1
+  have fits : (WAL.encode (history ++ batch)).size < UInt64.size := by
+    rw [← count]
+    exact next.frontier.toNat_lt
+  have frontier : next.frontier = (WAL.encode (history ++ batch)).size.toUInt64 := by
+    rw [← count]
+    simp
+  rw [frontier]
+  exact Boundary.select_encoded (history ++ batch) tail fits
+
 /-- Schedule used by the native writer. On a reported failure the remaining
 operations are skipped, including the installation of the cached slot. -/
 @[macro_inline] def publish [Monad m] (append syncWal writeSlot syncSlot install : m Unit) :

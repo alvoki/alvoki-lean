@@ -123,7 +123,10 @@ the database directory while its lock is held.
 The codec proof derives the ordered slot survivor from the reported bytes.
 A synced record needs the exact target encoding, and an interrupted write
 needs unchanged bytes outside the inactive record and an old, exact-new or
-invalid decode at that record. The remaining native refinement must justify
+invalid decode at that record. Given the complete encoded WAL prefix from
+the preceding WAL barrier, the native marker decoder and the boundary
+reader jointly select exactly the old history or the whole new history.
+After the marker barrier they select the whole new history. The remaining native refinement must justify
 these reports for the same held file and connect the WAL sync to persistence.
 Derive the projected retry steps from reached native events and connect the
 returned session to the common client ledger. Use the physical reports for
