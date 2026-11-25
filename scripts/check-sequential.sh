@@ -81,7 +81,7 @@ lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestDirectoryFailure
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestDirectoryFailureReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointLiveHeldReopen
 lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestRenameFailure
-lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestDirectoryClientTrace
+lake env leanchecker Alvoki.Storage.Disk.CheckpointManifestErrorClientTrace
 lake env leanchecker Alvoki.Storage.Disk.CheckpointObservedDispatch
 lake env leanchecker Alvoki.Storage.Disk.CheckpointLockHandoff
 lake env leanchecker Alvoki.Storage.Disk.CheckpointCutSession

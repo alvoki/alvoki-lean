@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointManifestStageFailureReopen
 import Alvoki.Storage.Disk.CheckpointManifestDirectoryFailureReopen
+import Alvoki.Storage.Disk.CheckpointManifestRenameFailure
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
@@ -74,6 +75,35 @@ private theorem sameTarget {left right : Target} (pair : left.pair = right.pair)
   cases contents
   rfl
 
+/-- A returned error during manifest publication and an admitted reopen
+from its exact released image. Each branch fixes the returned slot,
+session and final files through its own native reports. -/
+inductive CheckpointManifestErrorReopened {directory : DiskDirectory} {before : SegmentedWriterState}
+    (writer : Nat) : Nat → SegmentedSession → LockedFileState FileImage → SegmentedWriterState → Prop where
+  | rename {input : System.FilePath} {cut : CheckpointPowerCut directory before} {report : ObservedManifestRenameFailure cut}
+      {retry : LockedFileState FileImage} {layout : CanonicalKeeperLayout retry.image before.history}
+      {release : SegmentedFailureRelease writer}
+      {opened : CheckpointHeldOpen input directory layout report.publication} {session final}
+      (endpoint : report.Reopened release opened session final after) :
+      CheckpointManifestErrorReopened writer opened.calls.slot.description session final after
+  | directorySync {input : System.FilePath}
+      {cut : CheckpointPowerCut directory before} {report : ObservedManifestDirectoryFailure cut}
+      {retry : LockedFileState FileImage} {layout : CanonicalKeeperLayout retry.image before.history}
+      {release : SegmentedFailureRelease writer}
+      {opened : CheckpointHeldOpen input directory layout report.publication} {session final}
+      (endpoint : report.Reopened release opened session final after) :
+      CheckpointManifestErrorReopened writer opened.calls.slot.description session final after
+
+/-- The two returned-error paths preserve the acknowledged history and
+retained segments in the concrete writer installed by the retry. -/
+theorem CheckpointManifestErrorReopened.preservesWriter
+    (opened : CheckpointManifestErrorReopened (directory := directory) (before := before) writer descriptor session final after) :
+    after.RetainedReady directory descriptor ∧ after.history = before.history ∧
+      after.wal = { before.wal with directory := after.files.directory } := by
+  cases opened with
+  | rename endpoint => exact ⟨endpoint.ready, endpoint.history, endpoint.wal⟩
+  | directorySync endpoint => exact ⟨endpoint.ready, endpoint.history, endpoint.wal⟩
+
 inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescriptor : Nat)
     (initial : SegmentedWriterState) (allowCollection : Bool) :
     List DatabaseSubmissions → Nat → SegmentedWriterState → Prop where
@@ -99,14 +129,10 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (endpoint : ManifestStageFailureReopened (report := report) release opened session final after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log opened.calls.slot.description after
-  | checkpointManifestDirectoryError {input : System.FilePath}
-      {cut : CheckpointPowerCut directory before} {report : ObservedManifestDirectoryFailure cut}
-      {retry : LockedFileState FileImage} {layout : CanonicalKeeperLayout retry.image before.history}
-      {release : SegmentedFailureRelease writer}
-      {opened : CheckpointHeldOpen input directory layout report.publication} {session final}
+  | checkpointManifestError {session final}
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
-      (endpoint : report.Reopened release opened session final after) :
-      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log opened.calls.slot.description after
+      (endpoint : CheckpointManifestErrorReopened (directory := directory) (before := before) writer descriptor session final after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
   | checkpointPowerLossObserved {files : Type}
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (cut : CheckpointPowerCut directory before) {published : CheckpointPublication.Image}
@@ -222,9 +248,10 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | checkpointManifestStageError _ endpoint ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨endpoint.retained, retained, endpoint.history.trans history, retention⟩
-  | checkpointManifestDirectoryError _ endpoint ih =>
+  | checkpointManifestError _ endpoint ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
-    exact ⟨endpoint.ready, retained, endpoint.history.trans history, retention⟩
+    obtain ⟨ready, unchanged, _⟩ := endpoint.preservesWriter
+    exact ⟨ready, retained, unchanged.trans history, retention⟩
   | checkpointPowerLossObserved _ _ _ _ _ _ installed ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨installed.retained, retained, installed.history.trans history, retention⟩
