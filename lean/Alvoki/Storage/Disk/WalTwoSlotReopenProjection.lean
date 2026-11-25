@@ -602,6 +602,32 @@ theorem prepared_settleMarker {image : FileImage} {target : Target} {plan : Plan
   exact ⟨active.trans prepared.pair, prepared.keeperPrefix, prepared.newer,
     prepared.through, prepared.start, prepared.names, prepared.keeperRead⟩
 
+/-- Stabilizing an already selected slot leaves the canonical replay
+layout intact. The resulting layout is the input to settled repair retries. -/
+theorem canonicalLayout_settleMarker {image : FileImage} {history : List Write}
+    (layout : Storage.DiskSession.CanonicalKeeperLayout image history)
+    (selected : Selection)
+    (bound : image.directory.active.walBoundary = some (Boundary.encode selected.frontier))
+    (prepared : Prepared image layout.target layout.plan) :
+    ∃ authorized : Storage.DiskSession.CanonicalKeeperLayout
+        { image with directory := settleMarker image.directory selected } history,
+      authorized.target = layout.target ∧ authorized.plan = layout.plan ∧
+      authorized.sealed = layout.sealed ∧ authorized.keeper = layout.keeper ∧
+      authorized.first = layout.first ∧
+      Prepared { image with directory := settleMarker image.directory selected }
+        authorized.target authorized.plan := by
+  let settled := { image with directory := settleMarker image.directory selected }
+  have settledPlan := prepared_settleMarker prepared selected bound
+  have sameActive : settled.directory.active = image.directory.active :=
+    settledPlan.pair.trans prepared.pair.symm
+  let authorized : Storage.DiskSession.CanonicalKeeperLayout settled history :=
+    { layout with decoded := sameActive ▸ layout.decoded }
+  have sameTarget : authorized.target = layout.target := by
+    simp [authorized, Storage.DiskSession.CanonicalKeeperLayout.target, sameActive]
+  refine ⟨authorized, sameTarget, rfl, rfl, rfl, rfl, ?_⟩
+  rw [sameTarget]
+  exact settledPlan
+
 /-- A successful two-slot reopen uses the shared keeper repair proof
 before it installs the table and allocates a fresh snapshot identity. -/
 theorem reopenWith_installsAfterRepair
