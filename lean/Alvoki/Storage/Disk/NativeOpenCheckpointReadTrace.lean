@@ -8,7 +8,7 @@ open Sequential (SnapshotPin)
 
 /-- Use the writer already justified by the raw return for the standard
 checkpoint edge and its reached ready position. -/
-private theorem NativeExecutionPosition.checkpointAtWriter (start : NativeExecutionPosition)
+theorem NativeExecutionPosition.checkpointAtWriter (start : NativeExecutionPosition)
     {image : Type} {attempt : SegmentedCheckpointReport start.ready.state.session.directory start.ready.state.writer}
     {reports : CheckpointCompletionReports (CensusDirectoryCache × image) attempt}
     (observed : NativeReadyCheckpoint start.ready.state reports) (writer : SegmentedWriterState)
