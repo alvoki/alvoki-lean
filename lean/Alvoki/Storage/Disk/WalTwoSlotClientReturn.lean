@@ -595,6 +595,36 @@ theorem reopenSync_projectsRepairDirectory
   simp only [projectRepairDirectory, Bind.bind, Except.bind, active, crashes, Pure.pure, Except.pure]
   simp [settleMarker, activeMap]
 
+/-- The repair directory follows from the successful bounded read and sync
+of one held marker descriptor. No separate decode of its full bytes is needed. -/
+theorem reopenSync_projectsAcquiredMarker
+    {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
+    (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      handle marker (fun inode files => files.completeFileSync inode) (.ok () settled))
+    (current : handle.inode = marker.active)
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selected : Selection} {bytes : ByteArray}
+    {read : USize → EStateM IO.Error Nat ByteArray} {reached : Nat}
+    (mismatch : IO.Error)
+    (observes : PrefixChunkObserves (marker.visible handle.inode) read)
+    (available : PrefixChunksAvailableUntilEof (marker.visible handle.inode) read)
+    (fits : acquisitionLimit < USize.size)
+    (returned : readPrefixUntilEofWith mismatch read acquisitionLimit ByteArray.empty 0 =
+      .ok bytes reached)
+    (accepted : decode bytes = .ok selected)
+    (directory : DirectoryPublication.Image)
+    (bound : directory.active.walBoundary.isSome = true)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (enumerated : choices.map Prod.fst = directory.crashImages)
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode) :
+    projectRepairDirectory directory (marker.visible handle.inode) choices = .ok (settleMarker directory selected) := by
+  have physicalSelection :=
+    (decode_of_heldRead mismatch observes available fits returned).symm.trans accepted
+  exact reopenSync_projectsRepairDirectory sync current sameBinding physicalSelection
+    directory bound choices enumerated presence physical
+
 /-- A successful barrier on each held descriptor fixes the bytes used by
 recovery. The marker encoding comes from the reported positional write;
 the WAL prefix comes from the reported append on the selected keeper. -/
