@@ -587,6 +587,16 @@ theorem readMarkerAfterRewind_reports
         pure (marker, bytes)) reached := by
   simp only [readMarkerBytesWith, Bind.bind, EStateM.bind, openedMarker, rewound]
 
+/-- The shared native marker reader returns a failed rewind at the
+reached heap before attempting any chunk read. -/
+theorem readMarkerBytesWith_rewindError {heap : Type}
+    (rewind : EStateM IO.Error heap Unit)
+    (read : USize → EStateM IO.Error heap ByteArray)
+    {before after : heap} {cause : IO.Error}
+    (failed : rewind before = .error cause after) :
+    readMarkerBytesWith rewind read before = .error cause after := by
+  simp only [readMarkerBytesWith, Bind.bind, EStateM.bind, failed]
+
 /-- After a reported rewind to zero, the shared native reader decodes
 the bytes of the inode identified by the held marker open. -/
 theorem readMarkerBytesWith_decodesHeldMarker

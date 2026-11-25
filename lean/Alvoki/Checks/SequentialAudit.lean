@@ -3414,6 +3414,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.reopenAcquiredWith_success
 #check_axioms Alvoki.WAL.TwoSlot.decode_markerFromHeldDirectory
 #check_axioms Alvoki.WAL.TwoSlot.readMarkerAfterRewind_reports
+#check_axioms Alvoki.WAL.TwoSlot.readMarkerBytesWith_rewindError
 #check_axioms Alvoki.WAL.TwoSlot.readMarkerBytesWith_decodesHeldMarker
 #check_axioms Alvoki.WAL.TwoSlot.acquireMarkerInCensus_returns
 #check_axioms Alvoki.WAL.TwoSlot.reopenWith_markerSyncError
