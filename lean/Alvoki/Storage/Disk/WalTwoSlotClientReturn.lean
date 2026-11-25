@@ -2935,16 +2935,16 @@ theorem recoveredRetries_installedReads
     (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
     (acquisition : DiskSession.TryLockObserves openedFrom.owners directory (.ok true))
     {checkpointResult : Option (PackedTable × UInt64)}
-    {durableRuns : CheckpointPublication.RunFiles} {checkpointReports : OpenPathReadReports}
-    (checkpointSelected : SelectedIntegrityCheckpoint durableRuns target.pair.manifest checkpointResult)
+    {published : CheckpointPublication.Image} {checkpointReports : OpenPathReadReports}
+    (checkpointSelected : SelectedIntegrityCheckpoint published.durable target.pair.manifest checkpointResult)
     (sizes : WalSegmentRepair.SizedCheckpointRunReports directory checkpointReports
-      target.pair.manifest durableRuns)
+      target.pair.manifest published.durable)
     (atRun : Nat → FileImage)
     (manifestSeen : readManifest openedFrom.image = .ok target.pair.manifest (atRun 0))
     (runReads : ∀ bytes manifest, target.pair.manifest = some bytes →
       Manifest.IntegrityCheckpoint.decode bytes = .ok manifest →
       ∀ index < manifest.header.runCount.toNat, ∀ payload,
-        durableRuns manifest.header.generation index = some payload →
+        published.durable manifest.header.generation index = some payload →
         readRunPrefix (directory.file (.run manifest.header.generation index)) payload.size (atRun index) =
           .ok payload (atRun (index + 1)))
     (layout : DiskSession.CanonicalKeeperLayout prepared ((history ++ batch).take target.range.through))
@@ -3026,9 +3026,8 @@ theorem recoveredRetries_installedReads
     (collection : WalSegmentCollectionRetry initialWal image)
     (walValid : initialWal.Valid (history ++ batch))
     (walSelected : image.Selects target.pair)
-    {checkpointModel : Sequential.SnapshotTable UInt64}
-    (checkpointRefines : (checkpointResult.getD (.empty, 0)).1.Refines checkpointModel)
-    (checkpointHistory : RepresentsWalHistory ((history ++ batch).take target.range.watermark) checkpointModel)
+    (acceptedCheckpoint : published.AcceptsVersioned history.length.toUInt64
+      (Boundary.CheckpointRepresentsPrefix history) target.pair.manifest)
     (ordinals : WAL.OrdinalsFrom 1 (history ++ batch))
     (layoutBytes : ∀ segment ∈ layout.sealed, prepared.kept segment.first = some segment.bytes)
     :
@@ -3191,6 +3190,12 @@ theorem recoveredRetries_installedReads
   have authorized := prepared_settleMarker preparedPlan selected observed
   obtain ⟨after, repaired, ready, authorizedRepair⟩ :=
     WalSegmentRepair.finishMarkedOpen_completes authorized directory removeFile write sync renameFile settles healthy
+  obtain ⟨_, checkpointRefines, _, checkpointCoveredByHistory, checkpointHistory⟩ :=
+    selectedCheckpoint_represents checkpointSelected acceptedCheckpoint
+  rw [sameWatermark] at checkpointCoveredByHistory checkpointHistory
+  have samePrefix : (history ++ batch).take target.range.watermark = history.take target.range.watermark :=
+    List.take_append_of_le_length checkpointCoveredByHistory
+  rw [← samePrefix] at checkpointHistory
   obtain ⟨first, table, shared⟩ := collection.recoversSelected walValid walSelected
     target.decoded sameWatermark checkpointRefines checkpointHistory ordinals
   have recovery : WalSegmentRecovery image after.directory.active target.range (history ++ batch)

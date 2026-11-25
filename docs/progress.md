@@ -2022,3 +2022,11 @@ tail. It no longer assumes that the collection witness and the
 physical read plan start at the same WAL offset. The remaining inputs
 are the collection retry witness, its initial valid history and selected
 pair, and the selected checkpoint's refinement and history.
+
+The interrupted two-slot reopen derives the loaded checkpoint's table
+refinement and represented history from the selected integrity checkpoint
+and the existing publication contract. The checkpoint watermark lies
+in the acknowledged history, so adding the uncertain batch does not
+change the covered prefix. The remaining WAL-side handoff must supply
+the valid initial WAL, the collection retry and the selected pair for
+the same reached crash image.
