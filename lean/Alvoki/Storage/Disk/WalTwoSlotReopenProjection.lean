@@ -405,6 +405,35 @@ theorem prepareSelected_reported (directory : Storage.DiskDirectory) (selection 
   prepareBoundedMarkedFromReaders_reported directory readCheckpoint _ readWal checkpointRead
     rfl (Boundary.decode_encode selection.frontier) walRead replayed keeperRead
 
+/-- The bounded read vector for the selected marker can omit bytes after
+its keeper. Given the retained replay from the same bytes, preparation
+returns that table and the physical keeper prefix for repair. -/
+theorem prepareSelected_of_retainedReplay
+    (directory : Storage.DiskDirectory) (selection : Selection)
+    (readCheckpoint : Except IO.Error (Option (Storage.PackedTable × UInt64)))
+    (readWal : Nat → UInt64 → Except IO.Error (Storage.WalSegmentMarkerReads × Nat))
+    {checkpoint : Option (Storage.PackedTable × UInt64)} (checkpointRead : readCheckpoint = .ok checkpoint)
+    {reads : Storage.WalSegmentMarkerReads} {fileSize first : Nat}
+    (walRead : readWal (checkpoint.getD (.empty, 0)).1.committed.toNat selection.frontier = .ok (reads, fileSize))
+    {firstBytes : ByteArray} {rest : List (Nat × ByteArray)}
+    (files : reads.files = (first, firstBytes) :: rest)
+    (aligned : selection.frontier.toNat % frameSize = 0)
+    (checked : Storage.checkSelectedWalSegmentSpans (selection.frontier.toNat / frameSize) reads.files = true)
+    {physical tail payload : ByteArray} {table : Storage.PackedTable}
+    (exactBytes : physical = Storage.walSegmentPayloadBytes reads.files ++ tail)
+    (replayed : Boundary.recoverRetainedMarked (checkpoint.getD (.empty, 0)).1
+      first selection.frontier physical = .ok (payload, table))
+    {keeper : Nat} {bytes : ByteArray}
+    (keeperRead : reads.files.getLast? = some (keeper, bytes)) :
+    prepareBoundedMarkedFromReaders directory readCheckpoint
+      (fun _ => pure (some (Boundary.encode selection.frontier))) readWal =
+      .ok (⟨selection.frontier.toNat / frameSize, keeper, reads.newer, bytes⟩,
+        ⟨table, (checkpoint.getD (.empty, 0)).2, selection.frontier, keeper⟩, fileSize) := by
+  refine prepareSelected_reported (payload := payload) directory selection readCheckpoint readWal checkpointRead walRead ?_ keeperRead
+  rw [files] at checked exactBytes ⊢
+  rw [Storage.recoverMarkedWalSegments_eq_retained _ _ _ _ _ tail aligned checked, ← exactBytes]
+  exact replayed
+
 open Storage.DiskSession
 
 /-- The shared installer returns the payload from the reached two-slot
