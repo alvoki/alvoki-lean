@@ -171,6 +171,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedWalExtentsHeap
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedSealHeap
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedMarkedWorker
+lake env leanchecker Alvoki.Storage.Disk.NativeMarkedTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperReadHeap
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedOpenHeap
 lake env leanchecker Alvoki.Storage.Disk.NativePrunedAlignedOpenHeap

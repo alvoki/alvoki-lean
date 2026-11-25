@@ -12,6 +12,20 @@ structure RawOpenAdmissionCallbacks (heap : Type) where
   flock : IO.FS.Handle → EStateM IO.Error heap Bool
   unlock : IO.FS.Handle → EStateM IO.Error heap Unit
 
+/-- Interpret the open prefix and its held continuation with one fixed
+set of primitive callbacks. This is the schedule in `DiskTable.open_admission`. -/
+def RawOpenAdmissionCallbacks.runOpen (calls : RawOpenAdmissionCallbacks heap) (input : FilePath)
+    (init : OpenSyncCacheCallbacks heap)
+    (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
+    (recovery : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α) :
+    EStateM IO.Error heap α :=
+  DiskTable.withOpenAdmission input calls.realPath calls.lookup calls.openAppend fun resolved lock =>
+    openWithLock (calls.flock lock) (fun _ => IO.userError s!"database already open: {resolved.path}")
+      (fun _ => calls.unlock lock) fun _ => do
+        let cache ← openSyncFilesWith (init.openDirectory resolved.path) init.newRef init.newRef init.newRef makeCache
+        recovery resolved lock cache
+
 variable {heap image : Type} {input : FilePath} {directory : DiskDirectory} {initial : DescriptorInventory}
   {files : LockedFileState image}
 
@@ -39,6 +53,28 @@ structure RawOpenAdmissionReport (admission : CensusOpenAdmissionReports input d
 
 variable {admission : CensusOpenAdmissionReports input directory initial files}
   {view : OpenCloseHeapView heap image} {calls : RawOpenAdmissionCallbacks heap} {entry : heap}
+
+/-- Pass a specific cache allocation to the held worker on the exact
+lock and heap reached by this admission. -/
+theorem RawOpenAdmissionReport.startsHeldWorker
+    (seen : RawOpenAdmissionReport admission view calls entry)
+    (init : OpenSyncCacheCallbacks heap)
+    (seed : OpenSyncCacheAllocations admission.opened view init seen.afterFlock)
+    {cache : DiskTable.OpenSyncFiles}
+    {makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles}
+    (initialized : openSyncFilesWith (init.openDirectory directory.path)
+      init.newRef init.newRef init.newRef makeCache seen.afterFlock = .ok cache seed.afterPending)
+    (recovery : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α) :
+    calls.runOpen input init makeCache recovery entry =
+      (tryCatchThe IO.Error (recovery directory seen.lock cache) fun cause => do
+        calls.unlock seen.lock
+        throw cause) seed.afterPending := by
+  unfold RawOpenAdmissionCallbacks.runOpen
+  rw [DiskTable.withOpenAdmission_lockOpen calls.realPath calls.lookup calls.openAppend _
+    seen.resolved seen.flat seen.lockProbe admission.safe, seen.appended]
+  simp only [openWithLock, Bind.bind, EStateM.bind, seen.acquired, ↓reduceIte, initialized,
+    MonadExcept.tryCatch, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch]
 
 /-- Run the shared native admission, then the raw cache initialization
 from the lock acquisition's reached heap. Use the exact opened lock
@@ -74,11 +110,7 @@ theorem RawOpenAdmissionReport.admitsWithCache
   obtain ⟨action, makeCache, cache, isOpen, source, initialized, references, atPath, _, _, _, captured, files, census,
     _, _, _, _⟩ := seed.installs
   refine ⟨cache, makeCache, action, isOpen, source, references, atPath, seen.sameLock.trans seen.appendHandle,
-    seen.lockedFiles, seen.lockedCensus.trans seen.appendCensus, captured, Prod.ext census files, ?_⟩
-  intro α recovery
-  rw [DiskTable.withOpenAdmission_lockOpen calls.realPath calls.lookup calls.openAppend _
-    seen.resolved seen.flat seen.lockProbe admission.safe, seen.appended]
-  simp only [openWithLock, Bind.bind, EStateM.bind, seen.acquired, ↓reduceIte, initialized,
-    MonadExcept.tryCatch, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch]
+    seen.lockedFiles, seen.lockedCensus.trans seen.appendCensus, captured, Prod.ext census files, fun recovery =>
+      seen.startsHeldWorker init seed initialized recovery⟩
 
 end Alvoki.Storage.DiskSession
