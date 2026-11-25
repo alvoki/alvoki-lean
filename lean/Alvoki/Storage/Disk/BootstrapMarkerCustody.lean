@@ -106,12 +106,16 @@ structure BootstrapMarkerStaging (listed : BootstrapCheckedListing captured) whe
         (captured.cache.remember (directory.file .stagedWalBoundary)
           ((listed.scan.afterClose.afterDrops beforeStage).insert slot free, slot, 0), written before.image, inodeState))
 
-/-- Successful publication observes both syncs and the rename of the
-staged inode to the canonical marker name. -/
-structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) extends BootstrapMarkerStaging listed where
-  rename : FilePath → FilePath → EStateM IO.Error Files Unit
+/-- A reported successful grouped barrier consumes the pending entry
+and syncs exactly the staged marker's inode. -/
+structure BootstrapMarkerSynced (listed : BootstrapCheckedListing captured) extends BootstrapMarkerStaging listed where
   fileSynced : fsync ((listed.scan.afterClose.afterDrops beforeStage).insert slot free, slot, 0)
     (written before.image, inodeState) = .ok () (synced before.image, inodeState.completeFileSync inodeState.active)
+
+/-- Successful publication observes the rename and directory barrier for
+the same synced marker inode. -/
+structure BootstrapMarkerCustody (listed : BootstrapCheckedListing captured) extends BootstrapMarkerSynced listed where
+  rename : FilePath → FilePath → EStateM IO.Error Files Unit
   renamedView : DirectoryReadNamespace
   liveChild : RunChildLookup captured.root "WAL.commit" renamedView
   sameChild : liveChild.child = stageChild.child
@@ -195,6 +199,23 @@ theorem syncPending (observed : BootstrapMarkerStaging listed) :
 
 end BootstrapMarkerStaging
 
+namespace BootstrapMarkerSynced
+
+abbrev renamedState (_ : BootstrapMarkerSynced listed) : WalSegmentRotation.State :=
+  renamed before.image
+
+abbrev inodeSynced (observed : BootstrapMarkerSynced listed) : WalInodeImage :=
+  observed.inodeState.completeFileSync observed.inodeState.active
+
+theorem fileCallback (observed : BootstrapMarkerSynced listed) :
+    let path := directory.file .stagedWalBoundary
+    observed.grouped #[path]
+      (captured.cache.remember path observed.toBootstrapMarkerStaging.handle, observed.toBootstrapMarkerStaging.writtenState, observed.inodeState) =
+      .ok () (captured.cache.consume path, observed.toBootstrapMarkerStaging.syncedState, observed.inodeSynced) := by
+  simpa only [observed.fileSynced] using observed.toBootstrapMarkerStaging.syncPending
+
+end BootstrapMarkerSynced
+
 namespace BootstrapMarkerCustody
 
 abbrev publishedState (_ : BootstrapMarkerCustody listed) : WalSegmentRotation.State :=
@@ -220,7 +241,7 @@ theorem callbacks (observed : BootstrapMarkerCustody listed) :
   intro path handle stage grouped consumed durable
   refine ⟨?_, ?_, ?_⟩
   · exact observed.toBootstrapMarkerStaging.staged
-  · simpa only [observed.fileSynced] using observed.toBootstrapMarkerStaging.syncPending
+  · exact observed.toBootstrapMarkerSynced.fileCallback
   · change SyncPathGroup.run (sync directory.path observed.read observed.fsync) #[directory.path]
       (consumed, renamed before.image, durable) = _
     rw [SyncPathGroup.run_single]
