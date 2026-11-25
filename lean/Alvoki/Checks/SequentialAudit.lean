@@ -224,6 +224,7 @@ import Alvoki.Storage.Disk.NativeReadyReadPrefix
 import Alvoki.Storage.Disk.NativeMarkedReadPrefix
 import Alvoki.Storage.Disk.NativeOpenChoice
 import Alvoki.Storage.Disk.NativeOpenEarlyError
+import Alvoki.Storage.Disk.NativeManifestDecodeError
 import Alvoki.Storage.Disk.NativeOpenListingError
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
 import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
@@ -1480,6 +1481,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReaddirFailure.run_error
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingError.stopsAtListing
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingError.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeManifestDecodeError.readsManifest
+#check_axioms Alvoki.Storage.DiskSession.NativeManifestDecodeError.rejects
+#check_axioms Alvoki.Storage.DiskSession.NativeManifestDecodeError.stopsBeforeWal
+#check_axioms Alvoki.Storage.DiskSession.NativeManifestDecodeError.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorDisposal.preserves
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorDisposal.admits
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorDisposal.canRetry_iff

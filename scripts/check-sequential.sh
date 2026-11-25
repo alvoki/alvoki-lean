@@ -135,6 +135,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeReadyReadPrefix
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedReadPrefix
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenChoice
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenEarlyError
+lake env leanchecker Alvoki.Storage.Disk.NativeManifestDecodeError
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenListingError
 lake env leanchecker Alvoki.Storage.Disk.NativeRejectedOpenLineage
 lake env leanchecker Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
