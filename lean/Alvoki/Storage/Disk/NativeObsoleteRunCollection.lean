@@ -8,7 +8,7 @@ open System CheckpointPublication SyncHandleRouting
 
 /-- Interpret the production no-follow probe. Linux ENOENT denotes an
 absent run. Every other lookup error stops the selector. -/
-private def runKindAt (stat : FilePath → Except IO.Error IO.FS.Metadata) (path : FilePath) :
+def runKindAt (stat : FilePath → Except IO.Error IO.FS.Metadata) (path : FilePath) :
     Except IO.Error (Except String IO.FS.FileType) :=
   match stat path with
   | .ok metadata => .ok (.ok metadata.type)

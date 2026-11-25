@@ -356,6 +356,7 @@ import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeOpenedWalPlanning
 import Alvoki.Storage.Disk.NativeOpenRotation
 import Alvoki.Storage.Disk.NativeOpenedWalCollection
+import Alvoki.Storage.Disk.NativeOpenObsoleteRunCollection
 import Alvoki.Storage.Disk.NativeObsoleteRunCollection
 import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
@@ -2114,6 +2115,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.publicationFiles_returns
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rejectsCoveredWalPlan
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.collectsObsoleteRuns
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.returned
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.runs
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.retainsCustody

@@ -8,6 +8,7 @@ import Alvoki.Storage.Disk.NativeOpenRunMaintenance
 import Alvoki.Storage.Disk.NativeOpenExternalPinRead
 import Alvoki.Storage.Disk.NativeOpenedWalPlanning
 import Alvoki.Storage.Disk.NativeOpenedWalCollection
+import Alvoki.Storage.Disk.NativeOpenObsoleteRunCollection
 
 namespace Alvoki.Storage.DiskSession
 
@@ -29,6 +30,7 @@ inductive NativeOpenedInstruction : Type 1 where
   | releaseSupplied (pin : DiskSnapshotPin)
   | acquire
   | planWalCollection
+  | collectObsoleteRuns (held : List UInt64)
   | collectCoveredWal
 
 /-- Per-call observations at the reached position. Indexed operands
@@ -114,6 +116,9 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
   | acquire : NativeOpenedReport start .acquire
   | planWalCollection (observed : NativeWalPlanningObservation start.current.ready.state) :
       NativeOpenedReport start .planWalCollection
+  | collectObsoleteRuns (held : List UInt64)
+      (observed : NativeObsoleteRunCollection start.current.ready.state)
+      (seen : OpenObsoleteRunObservation start held observed) : NativeOpenedReport start (.collectObsoleteRuns held)
   | collectCoveredWal (observed : NativeReadyWalCollection start.current.ready.state)
       (completed : observed.barrier.outcome = .completed) :
       NativeOpenedReport start .collectCoveredWal
@@ -299,6 +304,8 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
       | .ok offsets => .ok offsets next.reached
       | .error cause => .error cause next.reached) ∧
     event = .walCollectionPlan observed.extents.result ∧ next = start
+  | .collectObsoleteRuns held _ seen =>
+    seen.Reached next ∧ event = .collectedObsoleteRuns held
   | .collectCoveredWal observed completed =>
     opened.table.UsesOpenWalCollectionSchedule start.current.ready.state.session.directory opened.files opened.phase ∧
     observed.runOnOpenPhase opened
@@ -553,6 +560,9 @@ theorem reaches (report : NativeOpenedReport start instruction) :
   | planWalCollection observed =>
     obtain ⟨source, raw, step, _, _, _, _, _⟩ := start.plansWalCollection observed
     exact ⟨_, start, step, source, raw, rfl, rfl⟩
+  | collectObsoleteRuns held observed seen =>
+    obtain ⟨next, returned, step⟩ := NativeOpenedPosition.collectsObsoleteRuns seen
+    exact ⟨_, next, step, returned, rfl⟩
   | collectCoveredWal observed completed =>
     obtain ⟨next, source, raw, state, pins, step⟩ := start.collectsCoveredWal observed completed
     exact ⟨_, next, step, source, raw, state, pins, rfl⟩

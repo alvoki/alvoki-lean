@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeOpenedPosition
 import Alvoki.Storage.Disk.NativeOpenClose
+import Alvoki.Storage.Disk.NativeFileEffectProjection
 
 namespace Alvoki.Storage.DiskSession
 
@@ -54,47 +55,7 @@ def OpenRotationCallbacks.run (calls : OpenRotationCallbacks heap) (opened : Nat
     (fun first => WalSegmentRotation.runAt opened.directory first calls.read calls.create calls.sync)
     (calls.setActive active none)
 
-private def rotationResult {files α : Type} (project : heap → files) :
-    EStateM.Result IO.Error heap α → EStateM.Result IO.Error files α
-  | .ok value reached => .ok value (project reached)
-  | .error cause reached => .error cause (project reached)
-
-private def rotationReached {α : Type} : EStateM.Result IO.Error heap α → heap
-  | .ok _ reached | .error _ reached => reached
-
-/-- Each local callback fixes its projected response and file effects
-and frames the original phase, directory handle and lock. -/
-def RotationProjects {files frame α : Type} (project : heap → files) (retain : heap → frame)
-    (raw : EStateM IO.Error heap α) (modeled : EStateM IO.Error files α) : Prop :=
-  ∀ before, rotationResult project (raw before) = modeled (project before) ∧
-    retain (rotationReached (raw before)) = retain before
-
 namespace RotationProjects
-
-private theorem bind {files frame α β : Type} {project : heap → files} {retain : heap → frame}
-    {raw : EStateM IO.Error heap α} {modeled : EStateM IO.Error files α}
-    (step : RotationProjects project retain raw modeled)
-    {rawNext : α → EStateM IO.Error heap β} {modeledNext : α → EStateM IO.Error files β}
-    (next : ∀ value, RotationProjects project retain (rawNext value) (modeledNext value)) :
-    RotationProjects project retain (raw >>= rawNext) (modeled >>= modeledNext) := by
-  intro before
-  obtain ⟨observed, framed⟩ := step before
-  cases result : raw before with
-  | error cause reached =>
-    rw [result] at observed framed
-    exact ⟨by simp only [Bind.bind, EStateM.bind, result, ← observed, rotationResult],
-      by simpa only [Bind.bind, EStateM.bind, result, rotationReached] using framed⟩
-  | ok value reached =>
-    rw [result] at observed framed
-    obtain ⟨after, retained⟩ := next value reached
-    exact ⟨by simpa only [Bind.bind, EStateM.bind, result, ← observed, rotationResult] using after,
-      by simpa only [Bind.bind, EStateM.bind, result] using retained.trans framed⟩
-
-private theorem pure {files frame α : Type} (project : heap → files) (retain : heap → frame) (value : α) :
-    RotationProjects project retain (pure value) (pure value) := fun _ => ⟨rfl, rfl⟩
-
-private theorem failure {files frame α : Type} (project : heap → files) (retain : heap → frame) (cause : IO.Error) :
-    RotationProjects (α := α) project retain (throw cause) (throw cause) := fun _ => ⟨rfl, rfl⟩
 
 /-- Projection composes through the actual successor branch and its
 ordered syncs, so no completed raw publication result is a premise. -/
@@ -103,31 +64,31 @@ theorem rotateFiles {files frame : Type} {project : heap → files} {retain : he
     (directory : DiskDirectory) (first : Nat)
     (read : FilePath → EStateM IO.Error files (Option ByteArray))
     (create sync : FilePath → EStateM IO.Error files Unit)
-    (reads : ∀ path, RotationProjects project retain (calls.read path) (read path))
-    (creates : ∀ path, RotationProjects project retain (calls.create path) (create path))
-    (syncs : ∀ path, RotationProjects project retain (calls.sync path) (sync path)) :
-    RotationProjects project retain (WalSegmentRotation.runAt directory first calls.read calls.create calls.sync)
+    (reads : ∀ path, NativeFileEffectProjection project retain (calls.read path) (read path))
+    (creates : ∀ path, NativeFileEffectProjection project retain (calls.create path) (create path))
+    (syncs : ∀ path, NativeFileEffectProjection project retain (calls.sync path) (sync path)) :
+    NativeFileEffectProjection project retain (WalSegmentRotation.runAt directory first calls.read calls.create calls.sync)
       (WalSegmentRotation.runAt directory first read create sync) := by
   rw [WalSegmentRotation.runAt_fileEffects, WalSegmentRotation.runAt_fileEffects]
-  apply RotationProjects.bind
+  apply NativeFileEffectProjection.bind
   · unfold WalSegmentRotation.observeSuccessorWith
-    apply RotationProjects.bind (reads _)
+    apply NativeFileEffectProjection.bind (reads _)
     intro bytes
     cases bytes with
-    | none => exact RotationProjects.pure _ _ _
+    | none => exact NativeFileEffectProjection.pure _ _ _
     | some bytes =>
       by_cases empty : bytes.size = 0
       · simp only [empty, ↓reduceIte]
-        exact RotationProjects.pure _ _ _
+        exact NativeFileEffectProjection.pure _ _ _
       · simp only [empty, ↓reduceIte]
-        exact RotationProjects.failure _ _ _
+        exact NativeFileEffectProjection.failure _ _ _
   · intro present
     cases present
-    · exact RotationProjects.bind (creates _) fun _ =>
-        RotationProjects.bind (syncs _) fun _ =>
-          RotationProjects.bind (syncs _) fun _ => RotationProjects.pure _ _ _
-    · exact RotationProjects.bind (syncs _) fun _ =>
-        RotationProjects.bind (syncs _) fun _ => RotationProjects.pure _ _ _
+    · exact NativeFileEffectProjection.bind (creates _) fun _ =>
+        NativeFileEffectProjection.bind (syncs _) fun _ =>
+          NativeFileEffectProjection.bind (syncs _) fun _ => NativeFileEffectProjection.pure _ _ _
+    · exact NativeFileEffectProjection.bind (syncs _) fun _ =>
+        NativeFileEffectProjection.bind (syncs _) fun _ => NativeFileEffectProjection.pure _ _ _
 
 end RotationProjects
 
@@ -164,13 +125,13 @@ structure OpenRotationObservation {opened : NativeOpenedHandle heap} (current : 
   initial : view.rotationFiles active pending directory current.reached = entry
   owner : (view.handle current.reached opened.lock).2.1 = current.current.ready.state.owner
   held : (view.files current.reached).owners = current.current.ready.state.files.owners
-  reads : ∀ path, RotationProjects (view.rotationFiles active pending directory)
+  reads : ∀ path, NativeFileEffectProjection (view.rotationFiles active pending directory)
     (fun reached => (opened.contents reached opened.phase, view.rotationCustody directory opened.lock reached))
     (calls.read path) (read path)
-  creates : ∀ path, RotationProjects (view.rotationFiles active pending directory)
+  creates : ∀ path, NativeFileEffectProjection (view.rotationFiles active pending directory)
     (fun reached => (opened.contents reached opened.phase, view.rotationCustody directory opened.lock reached))
     (calls.create path) (create path)
-  syncs : ∀ path, RotationProjects (view.rotationFiles active pending directory)
+  syncs : ∀ path, NativeFileEffectProjection (view.rotationFiles active pending directory)
     (fun reached => (opened.contents reached opened.phase, view.rotationCustody directory opened.lock reached))
     (calls.sync path) (sync path)
   phaseFrame : ∀ {before after} {phase : Phase Installed},
@@ -234,18 +195,18 @@ private theorem OpenRotationObservation.completes {opened : NativeOpenedHandle h
   have fileEntry : project poisoned = entry := (seen.phaseFrame excluded).1.trans seen.initial
   obtain ⟨files, framed⟩ := RotationProjects.rotateFiles seen.calls opened.directory successor read create sync
     seen.reads seen.creates seen.syncs poisoned
-  change rotationResult project
+  change NativeFileEffectProjection.result project
     (WalSegmentRotation.runAt opened.directory successor seen.calls.read seen.calls.create seen.calls.sync poisoned) =
     WalSegmentRotation.runAt opened.directory successor read create sync (project poisoned) at files
   rw [fileEntry, published] at files
   cases resumed : WalSegmentRotation.runAt opened.directory successor seen.calls.read seen.calls.create seen.calls.sync poisoned with
   | error cause reached =>
-    simp only [resumed, rotationResult] at files
+    simp only [resumed, NativeFileEffectProjection.result] at files
     cases files
   | ok result atClear =>
     cases result
     have beforeClear : project atClear = settled := by
-      simpa only [resumed, rotationResult, EStateM.Result.ok.injEq, true_and] using files
+      simpa only [resumed, NativeFileEffectProjection.result, EStateM.Result.ok.injEq, true_and] using files
     have atBarrier := framed
     rw [resumed] at atBarrier
     obtain ⟨cleared, clearedActive, afterClear, stillPoisoned, retained⟩ :=

@@ -14,7 +14,7 @@ def NativeOpenedInstruction.SnapshotOperands (instruction : NativeOpenedInstruct
   | .releaseAt index | .readAt index _ =>
     index < start.pins.length ∧ opened.ptrEq opened.token opened.token start.reached = .ok true start.reached
   | .write _ | .checkpoint | .rotateWal | .rewriteRun _ | .readSupplied _ _ | .releaseSupplied _
-  | .planWalCollection | .collectCoveredWal => False
+  | .planWalCollection | .collectCoveredWal | .collectObsoleteRuns _ => False
 
 theorem NativeOpenedInstruction.observesSnapshot
     (instruction : NativeOpenedInstruction) (start : NativeOpenedPosition opened)
@@ -22,7 +22,7 @@ theorem NativeOpenedInstruction.observesSnapshot
     Nonempty (NativeOpenedReport start instruction) := by
   cases instruction with
   | write | checkpoint | rotateWal | rewriteRun | readSupplied | releaseSupplied
-  | planWalCollection | collectCoveredWal => exact False.elim operands
+  | planWalCollection | collectCoveredWal | collectObsoleteRuns _ => exact False.elim operands
   | acquire => exact ⟨.acquire⟩
   | acquireAt sequence =>
     cases acquired : start.current.ready.state.writer.installed.table.acquireAt sequence with
