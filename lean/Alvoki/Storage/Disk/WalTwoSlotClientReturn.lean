@@ -2858,7 +2858,6 @@ end CapturedPreparation
 fresh snapshot reads on the session installed by the shared open schedule. -/
 theorem recoveredRetries_installedReads
     {initial prepared : FileImage} {target : Target}
-    (beforeBarrier : ReportedMarkerRetries initial prepared)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
     {current : Selection} {next : Selection}
     (accepted : decode before = .ok current)
@@ -2891,6 +2890,8 @@ theorem recoveredRetries_installedReads
     {table : PackedTable} {log : List DatabaseSubmissions}
     {directory : DiskDirectory} {descriptor nextRef : Nat} {unlock : DiskSession.UnlockReport}
     {openedFrom : LockedFileState FileImage}
+    (openRetry : ReportedMarkerRetries initial openedFrom.image)
+    (preparationPreservesFiles : prepared = openedFrom.image)
     (readManifest : EStateM IO.Error FileImage (Option ByteArray))
     (readRunPrefix : System.FilePath → Nat → EStateM IO.Error FileImage ByteArray)
     (list : System.FilePath → EStateM IO.Error FileImage (Array IO.FS.DirEntry))
@@ -3137,7 +3138,9 @@ theorem recoveredRetries_installedReads
       obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes physical
       exact .inr ⟨bytes, interruptedBytes_ofCounts offset advanced transfersFit size
         (fun position changed => (attributed position changed).symm) decoded, projected⟩
-  have ledger := recoveredRetries_retainUncertainBatch beforeBarrier.refines accepted offset advanced
+  have beforeBarrier : UnsettledRetries initial prepared :=
+    preparationPreservesFiles.symm ▸ openRetry.refines
+  have ledger := recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2.1
   obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
