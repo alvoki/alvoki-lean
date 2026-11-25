@@ -167,3 +167,18 @@ durable on the selected inode, and a successful directory sync where
 the shared file-management code publishes or removes names. An error
 or interruption can occur on either side of the modeled persistence
 effect. See the [retry and client-return proofs](../../../../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean).
+
+The native fault fixture exercises a partial write to each slot and
+stops a batch writer immediately after the marker fsync succeeds.
+The post-sync case recovers the entire batch and extends the WAL both
+before and after keeper rotation. A separate differential test compares
+returned batch ordinals, pinned snapshot reads across maintenance, and
+rows after reopen with the rename strategy. These tests exercise
+process death and visibility through the running kernel's page cache.
+The Lean recovery proof takes durable byte and binding observations as
+premises. The remaining native refinement obligation is to connect the
+reboot namespace and bytes on the same held directory and inode inventory
+to those premises, including across failed recovery attempts.
+
+[Native process crash checks](../../../../scripts/check-disk-process-death.py) ·
+[Strategy comparison](../../../../lean/Alvoki/Checks/DiskTableChecks.lean)
