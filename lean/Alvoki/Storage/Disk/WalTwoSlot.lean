@@ -25,7 +25,7 @@ def initialSelection : Selection := ⟨0, 0, 0⟩
 def initial : ByteArray :=
   initialSelection.encode ++ ⟨Array.replicate (containerSize - 40) 0⟩
 
-private def decodeSlot (bytes : ByteArray) (slot : Nat) : Option Selection := do
+def decodeSlot (bytes : ByteArray) (slot : Nat) : Option Selection := do
   let offset := slot * stride
   let epoch := word bytes (offset + 16)
   let frontier := word bytes (offset + 24)

@@ -208,6 +208,44 @@ theorem syncedDescriptors_selectBatch
     syncedInode_survivor markerSync markerCurrent markerSettled markerSurvived]
   exact syncedBytes_selectBatch history batch prior advanced size unchanged written appended
 
+/-- After the successful WAL barrier, any marker bytes surviving an
+interrupted positional write on the live marker can expose only the
+previous history or the whole newly durable batch. The slot isolation
+and decode alternatives apply to the surviving bytes of that inode. -/
+theorem interruptedDescriptors_selectBatch
+    {wal walSynced marker : WalInodeImage}
+    {walHandle markerHandle : KeeperDescriptorIdentity}
+    (walSync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      walHandle wal (fun inode files => files.completeFileSync inode) (.ok () walSynced))
+    (walCurrent : walHandle.inode = wal.active) (markerCurrent : markerHandle.inode = marker.active)
+    (walSettled : wal.crashBindings = [wal.active]) (markerSettled : marker.crashBindings = [marker.active])
+    {walBytes markerBytes before : ByteArray} {active : Slot} {current next : Selection}
+    (walSurvived : ∃ inode ∈ walSynced.crashBindings, walBytes ∈ walSynced.crashBytes inode)
+    (markerSurvived : ∃ inode ∈ marker.crashBindings, markerBytes ∈ marker.crashBytes inode)
+    {history batch : List WAL.Write}
+    (prior : decode before = .ok current)
+    (activeOffset : current.slot = slotIndex active)
+    (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
+    (slotOutcome : ∀ bytes ∈ marker.crashBytes markerHandle.inode,
+      bytes.size = containerSize ∧
+      (∀ position,
+        (position < slotIndex active.other * stride ∨ slotIndex active.other * stride + 40 ≤ position) →
+          bytes.get! position = before.get! position) ∧
+      (decodeSlot bytes (slotIndex active.other) = decodeSlot before (slotIndex active.other) ∨
+        decodeSlot bytes (slotIndex active.other) = none ∨
+        decodeSlot bytes (slotIndex active.other) = some next))
+    (oldCount : current.frontier.toNat = (WAL.encode history).size)
+    (appended : ∃ tail, wal.visible wal.active = WAL.encode (history ++ batch) ++ tail) :
+    ∃ chosen events, decode markerBytes = .ok chosen ∧
+      (events = history ∨ events = history ++ batch) ∧
+      Boundary.select chosen.frontier walBytes = .ok (WAL.encode events) := by
+  obtain ⟨inode, bound, survived⟩ := markerSurvived
+  have live : inode = markerHandle.inode := by
+    simpa [markerSettled, markerCurrent] using bound
+  obtain ⟨size, unchanged, target⟩ := slotOutcome markerBytes (live ▸ survived)
+  rw [syncedInode_survivor walSync walCurrent walSettled walSurvived]
+  exact interruptedBytes_selectBatch prior activeOffset advanced size unchanged target oldCount appended
+
 open DiskSession (DatabaseSubmissions DatabaseBatchRetention)
 
 private theorem recoveredFrontier_count {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}

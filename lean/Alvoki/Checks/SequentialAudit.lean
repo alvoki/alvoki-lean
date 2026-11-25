@@ -2190,3 +2190,4 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.interruptedBytes_selectBatch
 #check_axioms Alvoki.WAL.TwoSlot.syncedBytes_selectBatch
 #check_axioms Alvoki.WAL.TwoSlot.syncedDescriptors_selectBatch
+#check_axioms Alvoki.WAL.TwoSlot.interruptedDescriptors_selectBatch

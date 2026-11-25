@@ -130,6 +130,9 @@ After the marker barrier they select the whole new history. For settled
 file bindings, the descriptor proof derives both surviving byte sequences
 from successful sync reports on the held WAL and marker inodes. The reports
 assume successful file sync persists the visible bytes of the named inode.
+If the slot write is interrupted after the WAL sync, the same descriptor
+model derives the surviving WAL bytes. The live marker inode supplies the
+crash bytes subject to the inactive-slot isolation and decode assumptions.
 The native refinement still has to connect the reached append and positional
 write to those same inodes and account for interrupted and failed effects.
 Derive the projected retry steps from reached native events and connect the
