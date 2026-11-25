@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 import Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
+import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 
 namespace Alvoki.Storage.DiskSession
 
@@ -134,6 +135,7 @@ inductive NativeOpenedSessionAction : Type 1 where
   | quietRestart (input : FilePath)
   | closeAndReopen (input : FilePath)
   | checkpointRenameReboot (input : FilePath)
+  | stoppedCheckpointReboot (input : FilePath)
 
 /-- Same-handle calls and the supported reopen routes compose at
 the exact handle and ready position reached by the preceding segment. -/
@@ -152,6 +154,9 @@ inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
   | checkpointRename {input : FilePath} (seen : NativeOpenedManifestRenameReport before.position input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.checkpointRenameReboot input) [seen.event] next
+  | stoppedCheckpoint {input : FilePath} (seen : NativeOpenedStoppedCheckpointReport before.position input view names bytes)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.stoppedCheckpointReboot input) [seen.event] next
 
 inductive NativeOpenedSessionTrace (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (start : NativeOpenedSessionPoint heap) :
@@ -174,6 +179,7 @@ theorem NativeOpenedSessionTrace.common (trace : NativeOpenedSessionTrace view n
     | quiet _ returned => exact .step prior returned.common
     | close _ returned => exact .step prior returned.common
     | checkpointRename _ returned => exact .step prior returned.common
+    | stoppedCheckpoint _ returned => exact .step prior returned.common
 
 /-- A report for the next prescribed block of calls or reopen. -/
 inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
@@ -187,6 +193,8 @@ inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
       NativeOpenedSessionReport view names bytes before (.closeAndReopen input)
   | checkpointRename (input : FilePath) (report : NativeOpenedManifestRenameReport before.position input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.checkpointRenameReboot input)
+  | stoppedCheckpoint (input : FilePath) (report : NativeOpenedStoppedCheckpointReport before.position input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.stoppedCheckpointReboot input)
 
 theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport view names bytes before action) :
     ∃ events next, NativeOpenedSessionStep view names bytes before action events next := by
@@ -203,6 +211,9 @@ theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport vi
   | checkpointRename input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .checkpointRename seen returned⟩
+  | stoppedCheckpoint input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .stoppedCheckpoint seen returned⟩
 
 /-- Obtain the next local report only at the reached position of this
 prescribed prefix. Each reopen can reach a new handle. Quiet restarts
