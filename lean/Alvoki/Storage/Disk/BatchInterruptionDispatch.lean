@@ -1,0 +1,194 @@
+import Alvoki.Storage.Disk.SegmentedBatchAppendPowerLoss
+import Alvoki.Storage.Disk.SegmentedBatchPowerLoss
+
+namespace Alvoki.Storage.DiskSession
+
+open System WalSegmentCommit WalSegmentRepair WAL.Boundary
+
+private def observeBatchFileCall {stop image α : Type} (classify : IO.Error → DiskWriteError)
+    (operation : ExceptT IO.Error (EStateM stop image) α) :
+    ExceptT DiskWriteError (EStateM stop (Phase Installed × LockedFileState image)) α :=
+  fun (phase, before) => match operation.run before.image with
+    | .ok returned after => .ok (returned.mapError classify) (phase, { before with image := after })
+    | .error stopped after => .error stopped (phase, { before with image := after })
+
+/-- Interpret the production batch schedule with a separate channel for
+interruption. An ordinary error is a returned `Except.error` value. A
+stop exits the reported execution with no native return or error. -/
+def runBatchWriteWithInterruption {stop image : Type} (directory : DiskDirectory)
+    (rows : List (UInt64 × Option UInt64)) (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+    (publish : Installed → List WAL.Write → Nat → ExceptT IO.Error (EStateM stop image) Unit) :
+    EStateM stop (Phase Installed × LockedFileState image) (Except DiskWriteError UInt64) :=
+  (writeBatchSchedule rows
+    (fun state => .ok ((state.1.installed : Except IO.Error Installed).mapError .rejected) state)
+    DiskWriteError.rejected
+    (fun prepared => match prepared with
+      | some value => pure value
+      | none => throw (.rejected (IO.userError "write sequence space exhausted")))
+    (fun installed => observeBatchFileCall .rejected fun image =>
+      .ok (checkActiveSegmentWith directory installed lookup) image)
+    (fun phase => ExceptT.lift (modify fun state => (phase, state.2)))
+    (fun installed events bytes => observeBatchFileCall .commitUnknown (publish installed events bytes))).run
+
+/-- The code reaches the interrupted publication only after the checked
+prepared batch has put the same writer into the poisoned phase. A stop
+prevents the ready-cell update and acknowledgement. -/
+theorem runBatchWriteWithInterruption_stopped {stop image : Type} {directory : DiskDirectory}
+    {rows : List (UInt64 × Option UInt64)} {installed : Installed} {events : List WAL.Write} {table : PackedTable}
+    {lookup : FilePath → Except IO.Error IO.FS.Metadata}
+    (nonempty : rows ≠ []) (prepared : prepareBatch installed.table rows = some (events, table))
+    (fits : installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    (guard : checkActiveSegmentWith directory installed lookup = .ok ())
+    (publish : Installed → List WAL.Write → Nat → ExceptT IO.Error (EStateM stop image) Unit)
+    {before : LockedFileState image} {stopped : stop} {reached : image}
+    (issued : (publish installed events (installed.walBytes + WAL.frameSize * rows.length)).run before.image =
+      .error stopped reached) :
+    runBatchWriteWithInterruption directory rows lookup publish (.ready installed, before) =
+      .error stopped (.poisoned, { before with image := reached }) := by
+  have nonempty' : rows.isEmpty = false := by
+    cases rows with
+    | nil => contradiction
+    | cons => rfl
+  change publish installed events (installed.walBytes + WAL.frameSize * rows.length) before.image = .error stopped reached at issued
+  simp [runBatchWriteWithInterruption, writeBatchSchedule, nonempty', prepared, fits, guard,
+    Phase.installed, Except.mapError, Except.pure, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
+    EStateM.bind, Pure.pure, ExceptT.pure, Functor.map, EStateM.map,
+    EStateM.pure, ExceptT.lift, observeBatchFileCall, publishPreparedWrite, publishPrepared,
+    modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet, issued]
+
+private theorem checkObservedActiveSegment {directory : DiskDirectory} {installed : Installed}
+    {lookup : FilePath → Except IO.Error IO.FS.Metadata}
+    (seen : ∃ metadata, lookup (directory.file (.walSegment installed.activeFirst)) = .ok metadata ∧
+      metadata.type = .file ∧ metadata.numLinks = 1 ∧
+      metadata.byteSize.toNat = installed.walBytes - installed.activeFirst * WAL.frameSize) :
+    checkActiveSegmentWith directory installed lookup = .ok () := by
+  obtain ⟨metadata, found, regular, privateFile, extent⟩ := seen
+  have kind : (IO.FS.FileType.file == .file) = true := rfl
+  simp [checkActiveSegmentWith, checkPrivateRegularWith, found, regular, privateFile, extent, kind, Except.bind,
+    Bind.bind, Except.pure, Pure.pure]
+
+namespace BatchAppendInterruption
+
+variable {directory : DiskDirectory} {before : SegmentedWriterState}
+  {report : BatchAppendInterruption directory before}
+
+/-- The first observed append is issued by the outer batch call with the
+old owner retained and with the poisoned phase already installed. The
+normal write API never returns for this reported interruption. -/
+theorem Valid.stopsBatchSchedule (observed : report.Valid)
+    (stage : FilePath → ByteArray → ExceptT IO.Error (EStateM (FilePath × ByteArray) WriteFiles) Unit)
+    (sync : Array FilePath → ExceptT IO.Error (EStateM (FilePath × ByteArray) WriteFiles) Unit)
+    (rename : FilePath → FilePath → ExceptT IO.Error (EStateM (FilePath × ByteArray) WriteFiles) Unit) :
+    let scratch := before.files.directory.staged .walBoundary
+    runBatchWriteWithInterruption directory report.rows report.activeMetadata
+      (fun installed events bytes => commitBytesAt directory installed.activeFirst (WAL.encodeBatch events) bytes
+        (fun path data _ => .error (path, data) (report.cut.writeFiles before.history scratch))
+        stage sync rename)
+      (.ready before.installed, ⟨WriteFiles.initial before.history scratch, before.owners⟩) =
+    .error report.appendCall (.poisoned, ⟨report.cut.writeFiles before.history scratch, before.owners⟩) := by
+  intro scratch
+  have guard := checkObservedActiveSegment observed.activeGuard
+  apply runBatchWriteWithInterruption_stopped observed.nonempty observed.prepared observed.fits guard
+  rw [observed.invoked]
+  rfl
+
+end BatchAppendInterruption
+
+/-- Returned file errors flow through the ordinary API diagnostic. -/
+private def returnedFile {stop image α : Type} (operation : EStateM IO.Error image α) :
+    ExceptT IO.Error (EStateM stop image) α :=
+  fun before => match operation before with
+  | .ok value after => .ok (.ok value) after
+  | .error cause reached => .ok (.error cause) reached
+
+private def observeMarkerStep (cut : MarkerInterruption) (marker : ByteArray)
+    (perform : Publication.Step → EStateM IO.Error WriteFiles Unit) (step : Publication.Step) :
+    ExceptT IO.Error (EStateM Publication.Step WriteFiles) Unit :=
+  if step = cut.action then
+    fun reached => .error step (cut.interrupt marker reached)
+  else returnedFile (perform step)
+
+private theorem completedMarkerPrefix_stops {cut : MarkerInterruption} {marker : ByteArray}
+    {perform : Publication.Step → EStateM IO.Error WriteFiles Unit}
+    {completed rest : List Publication.Step} (beforeIssue : cut.action ∉ completed)
+    {initial reached : WriteFiles} (ran : (completed.forM perform) initial = .ok () reached) :
+    (((completed ++ cut.action :: rest).forM (observeMarkerStep cut marker perform)).run) initial =
+      .error cut.action (cut.interrupt marker reached) := by
+  induction completed generalizing initial with
+  | nil =>
+    have same : initial = reached := (EStateM.Result.ok.inj ran).2
+    subst reached
+    simp [List.forM_cons, observeMarkerStep, Bind.bind, ExceptT.bind, ExceptT.mk, ExceptT.run,
+      EStateM.bind]
+  | cons step earlier ih =>
+    have notCurrent : step ≠ cut.action := fun same => beforeIssue (same ▸ List.mem_cons_self)
+    have tail : cut.action ∉ earlier := fun member => beforeIssue (List.mem_cons_of_mem _ member)
+    change (perform step >>= fun _ => earlier.forM perform) initial = _ at ran
+    simp only [Bind.bind, EStateM.bind] at ran
+    cases stepResult : perform step initial with
+    | error cause failed => simp [stepResult] at ran
+    | ok value after =>
+      cases value
+      rw [stepResult] at ran
+      change ((observeMarkerStep cut marker perform step >>= fun _ =>
+        (earlier ++ cut.action :: rest).forM (observeMarkerStep cut marker perform)).run) initial = _
+      simp only [Bind.bind, observeMarkerStep, notCurrent, ↓reduceIte,
+        ExceptT.bind, ExceptT.mk, ExceptT.run, EStateM.bind, returnedFile, stepResult, ExceptT.bindCont]
+      exact ih tail ran
+
+namespace SegmentedBatchMarkerPowerLossReport
+
+variable {directory : DiskDirectory} {before : SegmentedWriterState} {writer : Nat}
+
+/-- Execute the actual append and marker callback order, halting at the
+reported issue. The current callback has no return, and the stop carries
+its reported filesystem effect separately from ordinary IO errors. -/
+def publishUntilIssue (report : SegmentedBatchMarkerPowerLossReport directory before writer)
+    (installed : Installed) (batch : List WAL.Write) (bytes : Nat) :
+    ExceptT IO.Error (EStateM Publication.Step WriteFiles) Unit :=
+  commit (returnedFile (report.append (directory.file (.walSegment installed.activeFirst))
+      (WAL.encodeBatch batch)))
+    (Publication.run (observeMarkerStep report.cut (WAL.Boundary.encode bytes.toUInt64)
+      (performMarkerAt directory installed.activeFirst bytes report.stage report.sync report.rename)))
+
+/-- Lift the returned primitive prefix and observed marker issue into the
+full batch schedule, without installing a ready phase or acknowledging it. -/
+theorem Reached.stopsBatchSchedule {report : SegmentedBatchMarkerPowerLossReport directory before writer}
+    (observed : report.Reached) :
+    let scratch := before.wal.directory.staged .walBoundary
+    runBatchWriteWithInterruption directory report.rows report.activeMetadata report.publishUntilIssue
+      (.ready before.installed, ⟨WriteFiles.initial before.history scratch, before.owners⟩) =
+      .error report.cut.action
+        (.poisoned, ⟨report.cut.interrupt (WAL.Boundary.encode report.nextBytes.toUInt64) report.reached,
+          before.owners⟩) := by
+  intro scratch
+  have guard := checkObservedActiveSegment observed.activeGuard
+  apply runBatchWriteWithInterruption_stopped observed.nonempty observed.prepared observed.fits guard
+  let initial := WriteFiles.initial before.history scratch
+  let append := report.append (directory.file (.walSegment before.installed.activeFirst)) (WAL.encodeBatch report.batch)
+  let perform := performMarkerAt directory before.installed.activeFirst report.nextBytes report.stage report.sync report.rename
+  have completed := observed.reachedPrefix
+  change (commit append ((Publication.steps.take report.cut.index).forM perform)) initial = .ok () report.reached at completed
+  simp only [commit, Bind.bind, EStateM.bind] at completed
+  cases appended : append initial with
+  | error cause failed => simp [appended] at completed
+  | ok value after =>
+    cases value
+    rw [appended] at completed
+    have split : Publication.steps = Publication.steps.take report.cut.index ++
+        report.cut.action :: Publication.steps.drop (report.cut.index + 1) := by
+      cases report.cut <;> rfl
+    have notReached : report.cut.action ∉ Publication.steps.take report.cut.index := by
+      cases report.cut <;> simp [MarkerInterruption.action, MarkerInterruption.index, Publication.steps]
+    have stopped := completedMarkerPrefix_stops
+      (rest := Publication.steps.drop (report.cut.index + 1))
+      (marker := WAL.Boundary.encode report.nextBytes.toUInt64) notReached completed
+    rw [← split] at stopped
+    change (commit (returnedFile append)
+      (Publication.run (observeMarkerStep report.cut (WAL.Boundary.encode report.nextBytes.toUInt64) perform))).run initial = _
+    simp only [commit, Bind.bind, ExceptT.bind, ExceptT.mk, ExceptT.run, EStateM.bind, returnedFile, appended,
+      ExceptT.bindCont, Publication.run]
+    exact stopped
+
+end SegmentedBatchMarkerPowerLossReport
+end Alvoki.Storage.DiskSession
