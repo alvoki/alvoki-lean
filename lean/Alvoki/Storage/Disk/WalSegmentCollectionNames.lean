@@ -181,8 +181,8 @@ theorem SegmentedCollectionReport.Installs.singleObservedWalName {directory desc
     (installed : report.Installs after) (ready : before.RetainedReady directory descriptor)
     (complete : report.offsets = before.wal.collectionOffsets)
     (covered : before.wal.active.first ≤ before.target.range.watermark)
-    (positive : ∀ segment ∈ before.wal.sealed, segment.first < segment.last) {tail : ByteArray}
-    (raw : HealthyBoundedWalReports directory after.owners descriptor after.wal after.target.pair
+    (positive : ∀ segment ∈ before.wal.sealed, segment.first < segment.last) {owners readerDescriptor tail}
+    (raw : HealthyBoundedWalReports directory owners readerDescriptor after.wal after.target.pair
       after.target.range.watermark after.published.durable tail) :
     (raw.entries.toList.map (·.fileName)).filterMap parseWalSegmentName = [before.wal.active.first] := by
   have exactNames := raw.canonicalWalNames (installed.preservesRetained ready).layout

@@ -300,7 +300,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.retainedRunPayload
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.collectRetainedRunPayload
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterRetainedRunCollection
-#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.finishedNamedBytes
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.finishedNamedTotal
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.collectRetainedRunNames
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.maintainedNamedPayload
 #check_axioms Alvoki.Storage.PackedTable.restore_rowBounds
 #check_axioms Alvoki.Storage.PackedTable.RowBounds.write
