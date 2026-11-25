@@ -36,6 +36,56 @@ Use native release builds on the same Linux machine and storage. Match input, op
 
 [YCSB](https://github.com/brianfrankcooper/YCSB) · [RocksDB](https://github.com/facebook/rocksdb) · [Fjall](https://github.com/fjall-rs/fjall) · [Benchmark method](high-performance-lean.md#reproduce-before-generalizing) · [Proof and runtime performance requirements](proof-roadmap.md#performance-requirements-for-verified-paths)
 
+### Map the engine before choosing the next optimization
+
+Keep the three release scenarios as controls. The next priority is to measure
+where else Alvoki spends time and I/O. Use the durable-write baseline to locate
+publication costs, then sample read-heavy and read-only workloads, point hits
+and misses, and short and long scans. Include a workload that spans several
+checkpoints and compactions with a held snapshot. Vary working-set size and
+access skew, and record when data fits in cache. Attribute latency to lookup,
+replay, checkpoint, compaction, or reclamation where phase measurements allow.
+
+Rank repeatable gaps by their cost in representative workloads. Record the
+test configuration, performance and resource tradeoffs for each candidate.
+A strategy can be worth keeping as an option when a workload or deployment has
+a measurable advantage and its correctness contract is supported there.
+Use a common offered load where possible and keep the three release scenarios
+comparable across iterations.
+
+### WAL strategies and storage contracts
+
+Maintain a comparison of WAL strategies as evidence becomes available.
+For each strategy, record its on-disk layout, sync order and count, acknowledged
+durability, batch atomicity, treatment of incomplete writes and corruption,
+recovery scan bounds, and performance on the measured storage stack. State
+the assumptions about filesystem sync, directory persistence, write ordering,
+torn writes, failure isolation and corruption detection. A deployment can
+choose among independently validated strategies according to its storage
+contract and measured workload costs.
+
+Study the log formats and recovery paths of LevelDB, RocksDB, Pebble and
+TigerBeetle at pinned revisions. Compare framing, fragmentation, checksums,
+sequence and generation identifiers, sync and recycling, and the handling
+of gaps and damaged tails. Include checkpoint and replication dependencies
+when they change the meaning of a local log write or acknowledgement.
+[LevelDB](https://github.com/google/leveldb/blob/main/doc/log_format.md) ·
+[RocksDB](https://github.com/facebook/rocksdb/wiki/Write-Ahead-Log-File-Format) ·
+[Pebble](https://github.com/cockroachdb/pebble/tree/master/record) ·
+[TigerBeetle](https://github.com/tigerbeetle/tigerbeetle)
+
+One candidate uses a single log with independently validated fixed-size
+frames, starting with 4 KiB as an experimental format size. Give each frame
+a checksum and block ordinal, plus a generation when recycling is in scope.
+Include batch identifiers and fragment boundaries so recovery can tell whether
+the entire batch is present. A later valid frame from the same generation can
+expose a damaged interior frame. At the tail, where there may be no later
+witness, define how recovery distinguishes an allowable incomplete append
+from loss of acknowledged data. Frame size and alignment alone do not establish
+atomic writes or independent physical failure units. A candidate with fewer
+barriers must prove that its exact sync and storage contract still preserves
+every acknowledged batch and admits only complete batches on recovery.
+
 ### Small durable writes
 
 Matched batch sizes 1, 8 and 32 keep a per-commit gap. Alvoki syncs the WAL, staged marker and directory for each batch, while the RocksDB control syncs its WAL once per batch. Keep size 1 as a separate target and distinguish batching gains from reducing the number of barriers for that same submission.
