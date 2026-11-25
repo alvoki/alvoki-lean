@@ -94,6 +94,11 @@ private def SyncFiles.stage (files : SyncFiles) (path : FilePath) (bytes : ByteA
 private def SyncFiles.create (files : SyncFiles) (path : FilePath) : IO Unit := do
   files.remember path (← IO.FS.Handle.mk path .writeNew)
 
+/-- Exclusive creation remembers exactly the description returned by
+the zero-keeper open. The grouped sync consumes it at the file barrier. -/
+theorem syncFilesCreate_schedule (files : SyncFiles) (path : FilePath) :
+    files.create path = (IO.FS.Handle.mk path .writeNew >>= files.remember path) := rfl
+
 private def SyncFiles.append (files : SyncFiles) : FilePath → ByteArray → IO Unit :=
   SyncHandleRouting.appendWithActive files.active.get files.active.set
     (fun path => IO.FS.Handle.mk path .append) IO.FS.Handle.write IO.FS.Handle.flush
@@ -106,6 +111,13 @@ private def SyncFiles.sync (files : SyncFiles) (path : FilePath) : IO Unit :=
 remaining members. Rename is allowed only if the entire barrier succeeds. -/
 private def SyncFiles.syncPaths (files : SyncFiles) (paths : Array FilePath) : IO Unit :=
   SyncPathGroup.run files.sync paths
+
+/-- A bootstrap barrier uses the same cache selector as rotation and
+ordinary publication. -/
+theorem syncFilesSyncPaths_schedule (files : SyncFiles) (paths : Array FilePath) :
+    files.syncPaths paths = SyncPathGroup.run (fun path =>
+      SyncHandleRouting.syncWithHandles files.dir path files.directory.get files.pending.get
+        files.pending.set files.active.get (fun name => IO.FS.Handle.mk name .read) fsyncHandle) paths := rfl
 
 /-- Linux adapter for a sequential caller. The lock excludes a second open
 writer. An I/O failure during publication requires reopening the directory. -/
@@ -383,6 +395,20 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
     (path : FilePath) (metadata : IO.FS.Metadata) : m Unit := do
   unless metadata.type == .file && metadata.numLinks == 1 do
     throw (IO.userError s!"expected a regular database file with one link: '{path}'")
+
+/-- Inspect the zero-keeper candidate through the same absent-or-private
+empty regular file guard used by the native bootstrap and rotation. -/
+@[macro_inline] def WalSegmentRotation.readEmptyWith [Monad m] [MonadExceptOf IO.Error m]
+    (lookup : m (Except IO.Error IO.FS.Metadata)) (path : FilePath) (nonempty : String) :
+    m (Option ByteArray) := do
+  let some metadata ← optionalMetadataWith lookup | return none
+  checkPrivateRegularWith path metadata
+  unless metadata.byteSize == 0 do throw (IO.userError nonempty)
+  return some ByteArray.empty
+
+theorem readEmptyWalSegment_schedule (path : FilePath) (nonempty : String) :
+    readEmptyWalSegment path nonempty =
+      WalSegmentRotation.readEmptyWith (m := IO) path.symlinkMetadata.toBaseIO path nonempty := rfl
 
 /-- A checkpoint run path may already exist after an interrupted attempt.
 Check its private regular binding before opening it for write. Pass the
