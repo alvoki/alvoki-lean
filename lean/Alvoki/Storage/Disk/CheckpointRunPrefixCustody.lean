@@ -92,8 +92,8 @@ theorem RunDirectoryInodeView.Stable.guaranteed {directory : DiskDirectory} {ima
 same inode namespace. For an absent path, the returned inode has no
 entry-visible aliases. A present path is among the counted links. The link
 census includes paths outside the database directory. -/
-structure RunOpenLinkCensus {path : FilePath} {before : WalInodeImage}
-    (lookup : FilePath → EStateM IO.Error WalInodeImage (Except IO.Error IO.FS.Metadata))
+structure RunOpenLinkCensus {state : Type} {path : FilePath} {before : state}
+    (lookup : FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata))
     (entry : FilePath → Option Nat) (inode : Nat) where
   links : List FilePath
   complete : ∀ other, other ∈ links ↔ entry other = some inode
@@ -102,8 +102,8 @@ structure RunOpenLinkCensus {path : FilePath} {before : WalInodeImage}
   counted : ∀ metadata, lookup path before = .ok (.ok metadata) before →
     path ∈ links ∧ links.length = metadata.numLinks.toNat
 
-theorem RunOpenLinkCensus.privateBinding {path : FilePath} {before : WalInodeImage}
-    {lookup : FilePath → EStateM IO.Error WalInodeImage (Except IO.Error IO.FS.Metadata)}
+theorem RunOpenLinkCensus.privateBinding {state : Type} {path : FilePath} {before : state}
+    {lookup : FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata)}
     {entry : FilePath → Option Nat} {inode : Nat} (observed : RunOpenLinkCensus (path := path) (before := before) lookup entry inode)
     (guard : AcceptedRunGuard lookup path before) :
     ∀ other, entry other = some inode → other = path := by

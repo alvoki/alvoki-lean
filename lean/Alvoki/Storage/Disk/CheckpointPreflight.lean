@@ -51,7 +51,7 @@ theorem CheckpointPreflight.preparedFacts {before next : Installed} {manifest : 
   cases preflight with
   | prepared flushed fits encoded => exact ⟨flushed, fits.1, fits.2, encoded⟩
 
-private def liftCheckpointExcept {state α : Type} (result : Except String α) : EStateM IO.Error state α :=
+def liftCheckpointExcept {state α : Type} (result : Except String α) : EStateM IO.Error state α :=
   match result with
   | .ok value => pure value
   | .error message => throw (IO.userError message)
@@ -71,22 +71,33 @@ def runCheckpointWithEffects {image : Type}
     (fun current => Phase.installed (m := EStateM IO.Error _) current.1 current) liftCheckpointExcept
     (fun prepared manifest => runPreparedCheckpoint prepared (perform prepared manifest))
 
-/-- Interpret the actual ordered preflight under arbitrary publication
-callbacks. A rejected phase, flush, bound or manifest leaves the exact
-original state. A prepared result hands the exact manifest and installed
-state to the shared publication runner. -/
+/-- The ordered preparation consumes the supplied reached phase read.
+Only a prepared outcome calls the publication continuation. -/
+theorem CheckpointPreflight.preparesFrom {state : Type} {phase : Phase Installed}
+    {result : Except IO.Error (Installed × ByteArray)} (preflight : CheckpointPreflight phase result)
+    (load : EStateM IO.Error state Installed) {entry : state}
+    (loaded : load entry = (phase.installed : EStateM IO.Error state Installed) entry)
+    (publish : Installed → ByteArray → EStateM IO.Error state Unit) :
+    withPreparedCheckpoint load liftCheckpointExcept publish entry = match result with
+    | .error cause => .error cause entry
+    | .ok (next, manifest) => publish next manifest entry := by
+  cases preflight <;>
+    simp [withPreparedCheckpoint, Phase.installed, Bind.bind, EStateM.bind,
+      Pure.pure, EStateM.pure, flushCheckpoint_lift, liftCheckpointExcept, throw, throwThe,
+      MonadExceptOf.throw, EStateM.throw, -UInt64.ofNat_add, *]
+
+/-- A rejected phase, flush, bound or manifest leaves the exact original
+state. A prepared result hands the exact manifest and writer to the
+shared publication runner. -/
 theorem CheckpointPreflight.effect {image : Type} {phase : Phase Installed}
     {result : Except IO.Error (Installed × ByteArray)} (preflight : CheckpointPreflight phase result)
     (perform : Installed → ByteArray → CheckpointPublication.Step → EStateM IO.Error image Unit)
     (files : LockedFileState image) :
     runCheckpointWithEffects perform (phase, files) = match result with
     | .error cause => .error cause (phase, files)
-    | .ok (next, manifest) => runPreparedCheckpoint next (perform next manifest) (phase, files) := by
-  cases preflight <;> try rfl
-  all_goals
-    simp [runCheckpointWithEffects, withPreparedCheckpoint, Phase.installed, Bind.bind, EStateM.bind,
-      Pure.pure, EStateM.pure, flushCheckpoint_lift, liftCheckpointExcept, throw, throwThe,
-      MonadExceptOf.throw, EStateM.throw, -UInt64.ofNat_add, *]
+    | .ok (next, manifest) => runPreparedCheckpoint next (perform next manifest) (phase, files) :=
+  preflight.preparesFrom (fun current : Phase Installed × LockedFileState image => Phase.installed (m := EStateM IO.Error _) current.1 current)
+    (entry := (phase, files)) rfl (fun next manifest => runPreparedCheckpoint next (perform next manifest))
 
 /-- A rejected preflight returns before poisoning or file dispatch. The
 whole state remains in place, including the phase, lock and cache. -/

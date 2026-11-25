@@ -1,0 +1,415 @@
+import Alvoki.Storage.Disk.NativeMarkedFirstBarrierWork
+import Alvoki.Storage.Disk.HeldLaterWalPrune
+
+namespace Alvoki.Storage.DiskSession
+
+open System Manifest SyncHandleRouting WalSegmentRepair
+open WAL.Boundary (CheckpointRepresentsPrefix)
+
+variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
+  {retry : LockedFileState FileImage} {history : List WAL.Write}
+  {layout : CanonicalKeeperLayout retry.image history} {published : CheckpointPublication.Image}
+  {admission : CensusOpenAdmissionReports input directory inventory retry}
+  {reads : CapturedMarkedReadReports admission layout published}
+
+private abbrev RepairState := CensusDirectoryCache × CensusOpenState
+private abbrev CapturedHandle := DescriptorInventory × DescriptorSlot × Nat
+private abbrev UnlinkState := RepairState × DirectoryReadNamespace × (Nat → Option ByteArray)
+
+private def authorizedFiles (admission : CensusOpenAdmissionReports input directory inventory retry) :
+    LockedFileState FileImage := { admission.held with image := retry.image.syncDirectory }
+
+private def unlinkedFiles (admission : CensusOpenAdmissionReports input directory inventory retry)
+    (first : Nat) (effective : Bool) : LockedFileState FileImage :=
+  { admission.held with image :=
+    if effective then retry.image.syncDirectory.unlinkLater first else retry.image.syncDirectory }
+
+/-- Actual returned first unlink after a successful authorization sync.
+The observed unlink resolves the selected child of the captured root.
+The model covers reported errors before and after deletion, with no
+descriptor changes during unlink itself. -/
+structure NativeMarkedFirstUnlinkError (reads : CapturedMarkedReadReports admission layout published)
+    (keeper : CapturedKeeperOpenReports reads) where
+  first : Nat
+  rest : List Nat
+  order : retry.image.later.visible = first :: rest
+  openRead : FilePath → EStateM IO.Error CensusOpenState CapturedHandle
+  fsync : CapturedHandle → EStateM IO.Error CensusOpenState Unit
+  write : FilePath → ByteArray → EStateM IO.Error RepairState Unit
+  renameFile : FilePath → FilePath → EStateM IO.Error RepairState Unit
+  afterAuthorization : List LockReferenceDrop
+  authorized : fsync (admission.reached, admission.cached, 0) (keeper.afterRead, admission.held) =
+    .ok () (keeper.afterRead.afterDrops afterAuthorization, authorizedFiles admission)
+  ownerLive : admission.owner ∈ (keeper.afterRead.afterDrops afterAuthorization).slots
+  directoryLive : admission.cached ∈ (keeper.afterRead.afterDrops afterAuthorization).slots
+  keeperLive : layout.keeper.bytes.size = reads.wal.keeper.calls.metadata.byteSize.toNat →
+    reads.wal.keeper.calls.slot ∈ (keeper.afterRead.afterDrops afterAuthorization).slots
+  lookup : RunChildLookup admission.root (renderWalSegmentName first) admission.view
+  metadata : IO.FS.Metadata
+  measured : reads.reads.stat (directory.file (.walSegment first)) =
+    .ok (metadata, admission.view.modelObject lookup.child)
+  beforeUnlink : DirectoryReadNamespace
+  resolves : RunChildLookup admission.root (renderWalSegmentName first) beforeUnlink
+  authorizedNames : ∀ name, beforeUnlink.child admission.root name = admission.view.child admission.root name
+  cause : IO.Error
+  propagated : RunCollection.ownedUnlinkResult (.error cause) = .error cause
+  effective : Bool
+  afterUnlink : DirectoryReadNamespace
+  afterBytes : Nat → Option ByteArray
+  unlink : FilePath → EStateM IO.Error UnlinkState (Except IO.Error Unit)
+  failed : unlink (directory.file (.walSegment first))
+    ((NativeMarkedFirstBarrierError.keeperCache (reads := reads),
+      keeper.afterRead.afterDrops afterAuthorization, authorizedFiles admission), beforeUnlink, reads.reads.objectBytes) =
+        .ok (.error cause) ((NativeMarkedFirstBarrierError.keeperCache (reads := reads),
+          keeper.afterRead.afterDrops afterAuthorization, unlinkedFiles admission first effective), afterUnlink, afterBytes)
+  removed : afterUnlink.child admission.root (renderWalSegmentName first) =
+    if effective then none else some resolves.child
+  otherNames : ∀ name ≠ renderWalSegmentName first,
+    afterUnlink.child admission.root name = beforeUnlink.child admission.root name
+  privateObject : ∀ name ≠ renderWalSegmentName first,
+    (admission.view.child admission.root name).map admission.view.modelObject ≠
+      some (admission.view.modelObject lookup.child)
+  otherBytes : ∀ inode ≠ admission.view.modelObject lookup.child, afterBytes inode = reads.reads.objectBytes inode
+
+namespace NativeMarkedFirstUnlinkError
+
+variable {keeper : CapturedKeeperOpenReports reads}
+  (seen : NativeMarkedFirstUnlinkError reads keeper)
+
+def census : DescriptorInventory := keeper.afterRead.afterDrops seen.afterAuthorization
+
+def reachedFiles : LockedFileState FileImage := unlinkedFiles admission seen.first seen.effective
+
+def groupedSync : Array FilePath → EStateM IO.Error RepairState Unit :=
+  SyncPathGroup.run (SyncHandleRouting.sync directory.path seen.openRead seen.fsync)
+
+/-- Project the real unlink including its reported path bindings and
+contents. The detailed raw state belongs to this one reached callback. -/
+def removeFile (path : FilePath) : EStateM IO.Error RepairState (Except IO.Error Unit) :=
+  fun before => match seen.unlink path (before, seen.beforeUnlink, reads.reads.objectBytes) with
+  | .ok value (reached, _) => .ok value reached
+  | .error cause (reached, _) => .error cause reached
+
+theorem unlinkReturns :
+    seen.removeFile (directory.file (.walSegment seen.first))
+      (NativeMarkedFirstBarrierError.keeperCache (reads := reads), seen.census, authorizedFiles admission) =
+    .ok (.error seen.cause) (NativeMarkedFirstBarrierError.keeperCache (reads := reads), seen.census, seen.reachedFiles) := by
+  simp only [removeFile, census, reachedFiles, seen.failed]
+
+theorem authorizes :
+    seen.groupedSync #[directory.path]
+      (NativeMarkedFirstBarrierError.keeperCache (reads := reads), keeper.afterRead, admission.held) =
+    .ok () (NativeMarkedFirstBarrierError.keeperCache (reads := reads), seen.census, authorizedFiles admission) := by
+  unfold groupedSync
+  rw [SyncPathGroup.run_single]
+  have cached : (NativeMarkedFirstBarrierError.keeperCache (reads := reads)).directory =
+      some (admission.reached, admission.cached, 0) := by
+    unfold NativeMarkedFirstBarrierError.keeperCache Cache.captureKeeper
+    split <;> rfl
+  simp [SyncHandleRouting.sync, Cache.resolve, cached, withCache, seen.authorized, census]
+
+private theorem finishFirstUnlink {state : Type} (prepared : Prepared retry.image layout.target layout.plan)
+    {first : Nat} {rest : List Nat} (order : retry.image.later.visible = first :: rest)
+    (removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error state Unit)
+    (sync : Array FilePath → EStateM IO.Error state Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error state Unit)
+    {initial authorized reached : state} {cause : IO.Error}
+    (good : sync #[directory.path] initial = .ok () authorized)
+    (bad : removeFile (directory.file (.walSegment first)) authorized = .ok (.error cause) reached)
+    (propagated : RunCollection.ownedUnlinkResult (.error cause) = .error cause) :
+    finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size removeFile write sync renameFile initial =
+      .error cause reached := by
+  rw [layout.boundedPlan_eq_extract, finishBoundedMarkedOpen_eq_full _ _ prepared.valid]
+  have newer : layout.plan.newer = first :: rest := prepared.names.trans order
+  simp [finishMarkedOpen, Plan.alignedWithoutPrune, newer, runAt, prepared.valid, runRepairPlan, steps,
+    List.forM_eq_forM, List.forM_cons, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, good,
+    performPaths, RunCollection.performPaths, bad, propagated, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+
+/-- Authorization uses the cached directory. Only the first canonical
+later name reaches the reported unlink error. No later deletion,
+suffix sync, keeper sync, trim or installation is reached. -/
+theorem finishes (prepared : Prepared retry.image layout.target layout.plan) :
+    finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size
+      seen.removeFile seen.write seen.groupedSync seen.renameFile
+      (NativeMarkedFirstBarrierError.keeperCache (reads := reads), keeper.afterRead, admission.held) =
+    .error seen.cause (NativeMarkedFirstBarrierError.keeperCache (reads := reads), seen.census, seen.reachedFiles) :=
+  finishFirstUnlink prepared seen.order _ _ _ _ seen.authorizes seen.unlinkReturns seen.propagated
+
+private def charge (run : EStateM IO.Error RepairState α) : EStateM IO.Error (RepairState × Nat) α :=
+  fun (before, calls) => match run before with
+  | .ok value after => .ok value (after, calls + 1)
+  | .error error after => .error error (after, calls + 1)
+
+def countedFinish (plan : Plan) (measure : Nat) : EStateM IO.Error (RepairState × Nat) Unit :=
+  finishBoundedMarkedOpen directory plan measure
+    (fun path => charge (seen.removeFile path)) (fun path bytes => charge (seen.write path bytes))
+    (fun paths => charge (seen.groupedSync paths)) (fun source target => charge (seen.renameFile source target))
+
+/-- The counted schedule charges one grouped request for the singleton
+authorization sync and one request for the actual first unlink. -/
+theorem repairRequests (prepared : Prepared retry.image layout.target layout.plan) :
+    seen.countedFinish layout.boundedPlan layout.plan.keeperBytes.size
+      ((NativeMarkedFirstBarrierError.keeperCache (reads := reads), keeper.afterRead, admission.held), 0) =
+    .error seen.cause
+      ((NativeMarkedFirstBarrierError.keeperCache (reads := reads), seen.census, seen.reachedFiles), 2) := by
+  unfold countedFinish
+  let afterAuthorization := ((NativeMarkedFirstBarrierError.keeperCache (reads := reads),
+    seen.census, authorizedFiles admission), 1)
+  exact finishFirstUnlink prepared seen.order _ _ _ _ (authorized := afterAuthorization)
+    (by simp [charge, seen.authorizes, afterAuthorization])
+    (by simp [charge, seen.unlinkReturns, afterAuthorization]) seen.propagated
+
+/-- The returned unlink belongs to the first regular single-link name
+from the same checked catalog, with the actual unlink resolving its
+measured object under the same captured parent. -/
+theorem inspected :
+    renderWalSegmentName seen.first ∈ reads.catalog.inventory.names ∧
+    reads.catalog.inventory.reports.lstat (directory.file (.walSegment seen.first)) = .ok seen.metadata ∧
+    seen.metadata.type = .file ∧ seen.metadata.numLinks = 1 ∧ seen.resolves.child = seen.lookup.child := by
+  have first : seen.first ∈ retry.image.later.visible := seen.order.symm ▸ List.mem_cons_self ..
+  have accepted : seen.first ∈ reads.catalog.older ++
+      (layout.sealed ++ [layout.keeper]).map WalSegment.first ++ retry.image.later.visible :=
+    List.mem_append_right _ first
+  have oldBound := seen.lookup.binds
+  rw [seen.lookup.atRoot, seen.lookup.atName] at oldBound
+  have same := seen.resolves.child_eq ((seen.authorizedNames _).trans oldBound)
+  obtain ⟨metadata, found, regular, oneLink⟩ := reads.catalog.regular seen.first accepted
+  have measured := (reads.stat (directory.file (.walSegment seen.first))).trans (by rw [seen.measured])
+  obtain rfl := Except.ok.inj (measured.symm.trans found)
+  exact ⟨(reads.catalog.present _).mpr accepted, measured, regular, oneLink, same⟩
+
+theorem unlinkBinding :
+    seen.afterUnlink.child admission.root (renderWalSegmentName seen.first) =
+      (if seen.effective then none else some seen.lookup.child) := by
+  simpa only [seen.inspected.2.2.2.2] using seen.removed
+
+def retains (name : String) (object : DeviceInode) (bytes : ByteArray) : Prop :=
+  seen.afterUnlink.child admission.root name = some object ∧
+    seen.afterBytes (admission.view.modelObject object) = some bytes
+
+private theorem retainsChild {name : String} {object : DeviceInode} {bytes : ByteArray}
+    (different : name ≠ renderWalSegmentName seen.first)
+    (bound : admission.view.child admission.root name = some object)
+    (contents : reads.reads.objectBytes (admission.view.modelObject object) = some bytes) :
+    seen.retains name object bytes := by
+  have apart := seen.privateObject name different
+  rw [bound, Option.map_some, Ne, Option.some.injEq] at apart
+  exact ⟨(seen.otherNames name different).trans ((seen.authorizedNames name).trans bound),
+    (seen.otherBytes _ apart).trans contents⟩
+
+/-- The selected WAL payloads, including the exact physical keeper
+extent, retain their raw child identities and bytes at the unlink return. -/
+theorem retainsWal (prepared : Prepared retry.image layout.target layout.plan)
+    (segment : WalSegment) (selected : segment ∈ layout.sealed ++ [layout.keeper]) :
+    ∃ object, admission.view.child admission.root (renderWalSegmentName segment.first) = some object ∧
+      seen.retains (renderWalSegmentName segment.first) object
+        (if segment.first = layout.keeper.first then layout.keeper.bytes ++ layout.tail else segment.bytes) := by
+  have later : layout.range.through < seen.first :=
+    prepared.newer _ List.mem_cons_self _ (seen.order.symm ▸ List.mem_cons_self ..)
+  have within := layout.through ▸ layout.chain.startsWithin segment selected
+  have different : renderWalSegmentName segment.first ≠ renderWalSegmentName seen.first := by
+    intro names
+    have path : directory.file (.walSegment segment.first) = directory.file (.walSegment seen.first) :=
+      congrArg (fun name : String => (⟨(directory.path.toString ++ "/") ++ name⟩ : FilePath)) names
+    have same := directory.walSegment_path_injective path
+    omega
+  rcases List.mem_append.mp selected with sealed | last
+  · let file := reads.wal.sealedFile segment sealed
+    have apart : segment.first ≠ layout.keeper.first := by
+      have sorted := (List.pairwise_append.mp reads.catalog.ordered).1
+      have selectedOrder := (List.pairwise_append.mp sorted).2.1
+      rw [List.map_append, List.map_singleton] at selectedOrder
+      have less := (List.pairwise_append.mp selectedOrder).2.2 segment.first (List.mem_map_of_mem sealed)
+        layout.keeper.first (List.mem_singleton_self _)
+      exact Nat.ne_of_lt less
+    exact ⟨file.object, file.bound, by simpa only [ite_eq_right apart] using seen.retainsChild different file.bound file.contents⟩
+  · obtain rfl := List.mem_singleton.mp last
+    let file := reads.wal.keeper
+    exact ⟨file.object, file.bound, by simpa only [ite_true] using seen.retainsChild different file.bound file.contents⟩
+
+private theorem runNameNeLater (generation : UInt64) (index : Nat) :
+    renderRunFileName generation index ≠ renderWalSegmentName seen.first := by
+  intro same
+  have paths : directory.file (.run generation index) = directory.file (.walSegment seen.first) :=
+    congrArg (fun name : String => (⟨(directory.path.toString ++ "/") ++ name⟩ : FilePath)) same
+  obtain ⟨_, impossible⟩ := directory.walSegment_exclusive paths
+  cases impossible
+
+theorem retainsRun {bytes payload : ByteArray} {manifest : IntegrityCheckpoint}
+    (present : retry.image.directory.active.manifest = some bytes)
+    (decoded : IntegrityCheckpoint.decode bytes = .ok manifest) {index : Nat}
+    (within : index < manifest.header.runCount.toNat)
+    (stored : published.durable manifest.header.generation index = some payload) :
+    ∃ object, admission.view.child admission.root (renderRunFileName manifest.header.generation index) = some object ∧
+      seen.retains (renderRunFileName manifest.header.generation index) object payload := by
+  obtain ⟨object, bound, contents, _⟩ := reads.runs bytes manifest present decoded index within payload stored
+  exact ⟨object, bound, seen.retainsChild (seen.runNameNeLater _ _) bound contents⟩
+
+theorem retainsManifest {bytes : ByteArray} (present : retry.image.directory.active.manifest = some bytes) :
+    ∃ object, admission.view.child admission.root "MANIFEST" = some object ∧ seen.retains "MANIFEST" object bytes := by
+  obtain ⟨⟨file⟩, _⟩ := reads.metadata.manifestFile bytes present
+  have different : "MANIFEST" ≠ renderWalSegmentName seen.first := by
+    intro same
+    have names := congrArg (fun name : String => name.toList.take 4) same
+    simp [renderWalSegmentName, String.toList_append] at names
+  exact ⟨file.object, file.bound, seen.retainsChild different file.bound file.contents⟩
+
+theorem retainsMarker {bytes : ByteArray} (present : retry.image.directory.active.walBoundary = some bytes) :
+    ∃ object, admission.view.child admission.root "WAL.commit" = some object ∧ seen.retains "WAL.commit" object bytes := by
+  obtain ⟨file, _⟩ := reads.metadata.markerFile bytes present
+  have different : "WAL.commit" ≠ renderWalSegmentName seen.first := by
+    intro same
+    have names := congrArg (fun name : String => name.toList.take 4) same
+    simp [renderWalSegmentName, String.toList_append] at names
+  exact ⟨file.object, file.bound, seen.retainsChild different file.bound file.contents⟩
+
+/-- Only the first later name can have become visibly absent. The
+already authorized directory keeps the durable old sighting until a
+later namespace barrier; the selected metadata and WAL image are fixed. -/
+theorem fileEffects (prepared : Prepared retry.image layout.target layout.plan) :
+    EffectTrace layout.target retry.image seen.reachedFiles.image ∧
+    seen.reachedFiles.image.directory = retry.image.directory.syncDirectory ∧
+    seen.reachedFiles.image.kept = retry.image.kept ∧ seen.reachedFiles.image.keeper = retry.image.keeper ∧
+    seen.reachedFiles.image.later.crashImages =
+      (if seen.effective then
+        [(retry.image.syncDirectory.unlinkLater seen.first).later.visible, retry.image.later.visible]
+      else [retry.image.later.visible]) := by
+  have synced : EffectTrace layout.target retry.image retry.image.syncDirectory := .authorized
+  have later : layout.range.through < seen.first :=
+    prepared.newer _ List.mem_cons_self _ (seen.order.symm ▸ List.mem_cons_self ..)
+  cases effect : seen.effective <;> simp only [reachedFiles, unlinkedFiles, effect, Bool.false_eq_true, ite_false, ite_true]
+  · exact ⟨synced, rfl, rfl, rfl, rfl⟩
+  · exact ⟨synced.unlink later, rfl, rfl, rfl, rfl⟩
+
+theorem keepsSelection (prepared : Prepared retry.image layout.target layout.plan)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) :
+    SelectedIntegrityCheckpoint published.durable seen.reachedFiles.image.directory.active.manifest checkpoint := by
+  rw [(seen.fileEffects prepared).2.1]
+  exact selected
+
+/-- The captured lock, directory and any pending keeper are still live
+at the failed unlink's return. The pending handle names the exact
+physical keeper observed before the successful authorization. -/
+theorem custody :
+    admission.owner ∈ seen.census.slots ∧ admission.cached ∈ seen.census.slots ∧
+    (layout.keeper.bytes.size = reads.wal.keeper.calls.metadata.byteSize.toNat →
+      reads.wal.keeper.calls.slot ∈ seen.census.slots) ∧
+    seen.census.inode reads.wal.keeper.calls.slot.description =
+      admission.view.modelObject reads.wal.keeper.object :=
+  ⟨seen.ownerLive, seen.directoryLive, seen.keeperLive, keeper.openedKeeper.2.2.2.1⟩
+
+/-- The same chronological keeper read reaches the real authorized
+prune path and returns with the reported census and file image. -/
+theorem stopsRecovery
+    (chronology : CapturedMarkedReadCensus reads keeper)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (prepared : Prepared retry.image layout.target layout.plan)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    let prepare := reads.prepareFromCensus chronology.metadataRelease chronology.runs.released
+      chronology.sealRelease keeper.readKeeperAt
+    finishPreparedWithCensus prepare (fun plan measure =>
+      finishBoundedMarkedOpen directory plan measure seen.removeFile seen.write seen.groupedSync seen.renameFile)
+      admission.cache (admission.reached, admission.held) = .error seen.cause (seen.census, seen.reachedFiles) := by
+  dsimp only
+  have extent : reads.wal.keeper.calls.metadata.byteSize.toNat = (layout.keeper.bytes ++ layout.tail).size :=
+    reads.wal.keeper.observesFile.extent
+  have fits : layout.keeper.bytes.size ≤ reads.wal.keeper.calls.metadata.byteSize.toNat := by rw [extent]; simp
+  obtain ⟨opened, reached, _⟩ := reads.preparesFromCensus chronology.manifest chronology.runs selected
+    chronology.marker chronology.beforeListing keeper chronology.seals chronology.offsets chronology.retained
+    following prepared.newer accepted ordered keeper.readKeeperAt (keeper.reads fits)
+  unfold finishPreparedWithCensus
+  rw [reached]
+  dsimp only
+  have failed := seen.finishes prepared
+  simp only [NativeMarkedFirstBarrierError.keeperCache] at failed
+  rw [failed]
+
+def afterUnlock (unlock : Except IO.Error Unit) : LockedFileState FileImage :=
+  match unlock with
+  | .ok () => { seen.reachedFiles with owners := seen.reachedFiles.owners.set (directory.file .lock) none }
+  | .error _ => seen.reachedFiles
+
+def diagnostic (unlock : Except IO.Error Unit) : IO.Error :=
+  match unlock with
+  | .ok () => seen.cause
+  | .error cause => cause
+
+def run (chronology : CapturedMarkedReadCensus reads keeper)
+    (bootstrap : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened)
+    (install : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Reopened →
+      EStateM IO.Error CensusOpenState SegmentedSession) :
+    EStateM.Result IO.Error CensusOpenState SegmentedSession :=
+  admission.run fun path owner cache =>
+    admission.recoverWithMarked path
+      (finishPreparedWithCensus (reads.prepareFromCensus chronology.metadataRelease chronology.runs.released
+        chronology.sealRelease keeper.readKeeperAt) (fun plan measure =>
+          finishBoundedMarkedOpen path plan measure seen.removeFile seen.write seen.groupedSync seen.renameFile) cache)
+      (bootstrap path cache) >>= install path owner cache
+
+/-- The native returned open error cleans up the still-owned lock in the
+census produced by the successful authorization and failed unlink. The
+cleanup leaves the exact pre- or post-unlink file image in either case. -/
+theorem returns
+    (chronology : CapturedMarkedReadCensus reads keeper)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (prepared : Prepared retry.image layout.target layout.plan)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    (flat : optionalMetadataWith (admission.lookup (directory.file .wal)) (admission.reached, admission.held) =
+      .ok none (admission.reached, admission.held))
+    {marker : IO.FS.Metadata}
+    (found : optionalMetadataWith (admission.lookup (directory.file .walBoundary))
+      (admission.reached, admission.held) = .ok (some marker) (admission.reached, admission.held))
+    (unlock : Except IO.Error Unit)
+    (unlocked : admission.unlock admission.owner () (seen.census, seen.reachedFiles) = match unlock with
+      | .ok () => .ok () (seen.census, seen.afterUnlock unlock)
+      | .error cause => .error cause (seen.census, seen.afterUnlock unlock))
+    (bootstrap : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened)
+    (install : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Reopened →
+      EStateM IO.Error CensusOpenState SegmentedSession) :
+    seen.run chronology bootstrap install = .error (seen.diagnostic unlock) (seen.census, seen.afterUnlock unlock) ∧
+    (seen.afterUnlock unlock).image = seen.reachedFiles.image ∧
+    admission.owner ∈ seen.census.slots ∧ admission.cached ∈ seen.census.slots ∧
+    (TryLockObserves (seen.afterUnlock unlock).owners directory (.ok true) ↔ unlock = .ok ()) ∧
+    reads.metadataReadRequests + reads.payloadReadRequests ≤
+      (retry.image.directory.active.manifest.map ByteArray.size).getD 0 + WAL.Boundary.acquisitionLimit +
+        (((checkpoint.getD (.empty, 0)).1.runs.map (·.run.bytes.size)).sum +
+          (layout.range.through - layout.first) * WAL.frameSize) ∧
+    reads.directoryWork.opendirCalls + reads.directoryWork.readdirCalls + reads.directoryWork.closedirCalls =
+      reads.listing.scan.names.length + 3 ∧
+    seen.countedFinish layout.boundedPlan layout.plan.keeperBytes.size
+      ((NativeMarkedFirstBarrierError.keeperCache (reads := reads), keeper.afterRead, admission.held), 0) =
+    .error seen.cause ((NativeMarkedFirstBarrierError.keeperCache (reads := reads), seen.census, seen.reachedFiles), 2) := by
+  have stopped := seen.stopsRecovery chronology selected prepared following accepted ordered
+  have returned : seen.run chronology bootstrap install =
+      .error (seen.diagnostic unlock) (seen.census, seen.afterUnlock unlock) := by
+    unfold run
+    rw [admission.run_reachesRecovery]
+    simp only [Bind.bind, EStateM.bind, admission.recoverWithMarked_selects flat found, Option.isSome_some,
+      ↓reduceIte, stopped, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, EStateM.Backtrackable.restore,
+      EStateM.dummyRestore, unlocked]
+    cases unlock with
+    | ok result => cases result; rfl
+    | error cause => rfl
+  obtain ⟨opened, read, closed, _⟩ := reads.directoryWork_exact
+  refine ⟨returned, ?_, seen.ownerLive, seen.directoryLive, ?_,
+    Nat.add_le_add reads.metadataReadRequests_le (reads.payloadReadRequests_le selected prepared following),
+    by omega, seen.repairRequests prepared⟩
+  · cases unlock <;> rfl
+  · cases unlock <;>
+      simp [afterUnlock, reachedFiles, unlinkedFiles, TryLockObserves, LockOwners.set, CensusOpenAdmissionReports.held]
+
+
+end NativeMarkedFirstUnlinkError
+end Alvoki.Storage.DiskSession

@@ -123,6 +123,16 @@ private theorem SegmentedWriterState.RetainedReady.hasSingleSequence {directory 
   have space : 2 ≤ UInt64.size := by decide
   omega
 
+/-- In a retained-ready writer, the singleton's first sequence guard can
+prepare its write even when its later WAL byte-count guard rejects. -/
+theorem SegmentedWriterState.RetainedReady.preparesSingleWrite {directory descriptor} {writer : SegmentedWriterState}
+    (ready : writer.RetainedReady directory descriptor) (key : UInt64) (value : Option UInt64) :
+    ∃ next, prepareWrite writer.installed.table key value = some (⟨next.committed, key, value⟩, next) := by
+  have sequence : (writer.installed.table.write key value).isSome = true :=
+    (PackedTable.write_iff _ _ _).mpr ready.hasSingleSequence
+  obtain ⟨next, written⟩ := Option.isSome_iff_exists.mp sequence
+  exact ⟨next, by simp [prepareWrite, written]⟩
+
 /-- Single and one-row batch writes from a retained-ready writer have
 identical outcomes under the same native append, stage, sync and rename
 callbacks. Sequence allocation cannot mask byte-count exhaustion even
@@ -138,12 +148,9 @@ theorem runSingleWrite_eq_runBatchWrite_singleton {image : Type} {directory : Di
       (fun state event count => commitAt directory state.activeFirst event count append stage sync rename)
       (.ready writer.installed, before) =
     runBatchWrite directory [(key, value)] lookup append stage sync rename (.ready writer.installed, before) := by
-  have sequence : (writer.installed.table.write key value).isSome = true :=
-    (PackedTable.write_iff _ _ _).mpr ready.hasSingleSequence
-  obtain ⟨next, written⟩ := Option.isSome_iff_exists.mp sequence
+  obtain ⟨next, single⟩ := ready.preparesSingleWrite key value
   let event : WAL.Write := ⟨next.committed, key, value⟩
-  have single : prepareWrite writer.installed.table key value = some (event, next) := by
-    simp [prepareWrite, written, event]
+  change prepareWrite writer.installed.table key value = some (event, next) at single
   have batch : prepareBatch writer.installed.table [(key, value)] = some ([event], next) := by
     simp [prepareBatch_singleton, single]
   by_cases fits : writer.installed.walBytes + WAL.frameSize < UInt64.size
@@ -422,16 +429,14 @@ theorem ObservedBatchWrite.acknowledges {handle : Type} {directory before}
     subst written
     exact ⟨cacheAfter, runBatchWrite_acknowledges observed.guard report.nonempty report.prepared report.fits committed⟩
 
-/-- The reached batch publication error keeps the original diagnostic and
-poisons the phase. The cache and failed file cut come from that same
-callback run under the original owner. -/
-theorem ObservedBatchFailure.commitUnknown {handle : Type} {directory before}
+/-- Project the same reached cached publication error and file state
+before interpreting the phase assignments around it. -/
+theorem ObservedBatchFailure.cachedCommitError {handle : Type} {directory before}
     {failure : SegmentedBatchFailure directory before} (observed : ObservedBatchFailure failure handle) :
-    ∃ cacheAfter, runBatchWrite directory failure.rows observed.guard.lookup observed.append
-      observed.stage observed.sync observed.rename
-      (.ready before.installed, ⟨(observed.cache, WriteFiles.initial before.history
-        (before.wal.directory.staged .walBoundary)), before.owners⟩) =
-      .error (.commitUnknown failure.cause) (.poisoned, ⟨(cacheAfter, failure.failed), before.owners⟩) := by
+    ∃ cacheAfter, commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch failure.batch)
+      failure.proposed.walBytes observed.append observed.stage observed.sync observed.rename
+      (observed.cache, WriteFiles.initial before.history (before.wal.directory.staged .walBoundary)) =
+      .error failure.cause (cacheAfter, failure.failed) := by
   have projected := observed.toObservedBatchPublication.publisherProjects
   have ran : commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch failure.batch)
       failure.proposed.walBytes failure.append failure.stage failure.sync failure.rename
@@ -448,7 +453,20 @@ theorem ObservedBatchFailure.commitUnknown {handle : Type} {directory before}
     have same : cause = failure.cause ∧ files = failure.failed := by
       simpa [failed, withoutWriteGroupCache] using projected
     obtain ⟨rfl, rfl⟩ := same
-    exact ⟨cacheAfter, runBatchWrite_commitUnknown observed.guard failure.nonempty failure.prepared failure.fits failed⟩
+    exact ⟨cacheAfter, rfl⟩
+
+/-- The reached batch publication error keeps the original diagnostic and
+poisons the phase. The cache and failed file cut come from that same
+callback run under the original owner. -/
+theorem ObservedBatchFailure.commitUnknown {handle : Type} {directory before}
+    {failure : SegmentedBatchFailure directory before} (observed : ObservedBatchFailure failure handle) :
+    ∃ cacheAfter, runBatchWrite directory failure.rows observed.guard.lookup observed.append
+      observed.stage observed.sync observed.rename
+      (.ready before.installed, ⟨(observed.cache, WriteFiles.initial before.history
+        (before.wal.directory.staged .walBoundary)), before.owners⟩) =
+      .error (.commitUnknown failure.cause) (.poisoned, ⟨(cacheAfter, failure.failed), before.owners⟩) := by
+  obtain ⟨cacheAfter, failed⟩ := observed.cachedCommitError
+  exact ⟨cacheAfter, runBatchWrite_commitUnknown observed.guard failure.nonempty failure.prepared failure.fits failed⟩
 
 /-- The publication tail acknowledges the last ordinal after installing
 the prepared table under the same owner. -/

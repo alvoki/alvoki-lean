@@ -28,6 +28,30 @@ structure CompletedCheckpointTemporaryFile {image : Type}
   close : drop = handle.2.1.closeEvent
   afterClose : descriptors after = (descriptors flushed).afterDrops [drop]
 
+/-- Allocating a free descriptor address and closing that exact slot
+restores the original descriptor inventory. -/
+theorem checkpointTemporaryClose (inventory : DescriptorInventory) (slot : DescriptorSlot)
+    (free : ∀ old ∈ inventory.slots, old.address ≠ slot.address) :
+    (inventory.insert slot free).afterDrops [slot.closeEvent] = inventory := by
+  have removed := DescriptorInventory.insert_thenClose inventory slot free []
+  simp only [List.nil_append] at removed
+  have survives : ∀ old ∈ inventory.slots, (!slot.closeEvent.removes old.reference) = true := by
+    intro old live
+    cases removed : slot.closeEvent.removes old.reference with
+    | false => rfl
+    | true =>
+      exfalso
+      apply free old live
+      simpa [DescriptorSlot.address, DescriptorSlot.closeEvent, LockReferenceDrop.removes,
+        Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq] using removed
+  have entry : inventory.afterDrops [slot.closeEvent] = inventory := by
+    cases inventory with
+    | mk slots distinct inode =>
+      simp only [DescriptorInventory.afterDrops, List.all_cons, List.all_nil, Bool.and_true,
+        DescriptorInventory.mk.injEq, and_true]
+      exact List.filter_eq_self.mpr survives
+  exact removed.trans entry
+
 namespace CompletedCheckpointTemporaryFile
 
 variable {image : Type} {descriptors : image → DescriptorInventory}
@@ -39,24 +63,7 @@ sync. No slot from the entry inventory is removed by that release. -/
 theorem keepsCensus (seen : CompletedCheckpointTemporaryFile descriptors calls write path bytes before after) :
     descriptors after = descriptors before ∧ seen.handle.2.1 ∈ (descriptors seen.flushed).slots ∧
     (descriptors after).references seen.handle.2.1.description = [] := by
-  have removed := DescriptorInventory.insert_thenClose (descriptors before) seen.handle.2.1 seen.free []
-  simp only [List.nil_append] at removed
-  have survives : ∀ slot ∈ (descriptors before).slots, (!seen.handle.2.1.closeEvent.removes slot.reference) = true := by
-    intro slot live
-    cases removed : seen.handle.2.1.closeEvent.removes slot.reference with
-    | false => rfl
-    | true =>
-      exfalso
-      apply seen.free slot live
-      simpa [DescriptorSlot.address, DescriptorSlot.closeEvent, LockReferenceDrop.removes,
-        Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq] using removed
-  have entry : (descriptors before).afterDrops [seen.handle.2.1.closeEvent] = descriptors before := by
-    cases known : descriptors before with
-    | mk slots distinct inode =>
-      simp only [DescriptorInventory.afterDrops, List.all_cons, List.all_nil, Bool.and_true,
-        DescriptorInventory.mk.injEq, and_true]
-      exact List.filter_eq_self.mpr (by simpa only [known] using survives)
-  have after := seen.afterClose.trans (by rw [seen.atFileSync, seen.close, seen.allocated, removed, entry])
+  have after := seen.afterClose.trans (by rw [seen.atFileSync, seen.close, seen.allocated, checkpointTemporaryClose])
   have live : seen.handle.2.1 ∈ (descriptors seen.flushed).slots := by
     rw [seen.atFileSync, seen.allocated]
     exact List.mem_cons_self

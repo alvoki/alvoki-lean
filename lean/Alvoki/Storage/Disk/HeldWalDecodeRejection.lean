@@ -318,7 +318,9 @@ theorem runWithAdmission_error (report : HeldWalDecodeReads directory before) {i
       before report.attempt.unlock (openFiles directory report.owner) lookup (fun _ => report.attempt.recover)
       (bootstrap directory) _ captured flatName flatMessage flatAbsent (some marker) checked
     unfold runWithAdmission runAdmittedCachedOpen
-    rw [admission.admits, acquired, branch, ← report.acquiredOwner]
+    rw [admission.admits]
+    unfold runAdmittedCachedOpenAt
+    rw [acquired, branch, ← report.acquiredOwner]
     exact rejection.run_error
   · cases cleanup : report.attempt.unlock <;>
       simp [rejection, CachedOpenRejection.error, CachedOpenRejection.after, CachedOpenAttempt.cleanupError,

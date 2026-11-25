@@ -396,6 +396,36 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
         DiskSession.installReady opened.installed (fun phase => IO.mkRef phase) (fun _ => IO.mkRef ())
           fun phase session => pure ⟨dir, lock, files, phase, session⟩) := rfl
 
+/-- Abstract name for the synchronization record already held by the
+native opener. Its constructor and fields remain private. -/
+abbrev DiskTable.OpenSyncFiles := SyncFiles
+
+/-- The pure constructor at the end of the native open schedule, with
+the same reached synchronization record enclosed in the callback. -/
+def DiskTable.OpenReferenceAssembly (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (files : DiskTable.OpenSyncFiles) (assemble : IO.Ref Phase → IO.Ref Unit → DiskTable) : Prop :=
+  assemble = fun phase session => ⟨directory, lock, files, phase, session⟩
+
+/-- This is the constructor passed to the shared installation in
+`DiskTable.open_fileTargets`. -/
+theorem DiskTable.openReferenceAssembly (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (files : DiskTable.OpenSyncFiles) :
+    DiskTable.OpenReferenceAssembly directory lock files
+      (fun phase session => ⟨directory, lock, files, phase, session⟩) := rfl
+
+/-- Proof-only access to the exact fields of the returned table. The
+implementation keeps their projection functions private. -/
+def DiskTable.UsesOpenReferences (db : DiskTable) (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (files : DiskTable.OpenSyncFiles) (phase : IO.Ref Phase) (session : IO.Ref Unit) : Prop :=
+  db.dir = directory ∧ db.lock = lock ∧ db.files = files ∧ db.phase = phase ∧ db.session = session
+
+theorem DiskTable.OpenReferenceAssembly.usesReferences {directory lock files assemble}
+    (constructor : DiskTable.OpenReferenceAssembly directory lock files assemble)
+    (phase : IO.Ref Phase) (session : IO.Ref Unit) :
+    (assemble phase session).UsesOpenReferences directory lock files phase session := by
+  rw [constructor]
+  exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+
 @[macro_inline] def checkPrivateRegularWith [Monad m] [MonadExceptOf IO.Error m]
     (path : FilePath) (metadata : IO.FS.Metadata) : m Unit := do
   unless metadata.type == .file && metadata.numLinks == 1 do
@@ -476,6 +506,47 @@ def DiskTable.close (db : DiskTable) : IO Unit := do
 theorem DiskTable.close_schedule (db : DiskTable) :
     db.close = DiskSession.closeSchedule db.phase.get (fun _ => db.lock.unlock)
       (db.files.active.set none) (db.files.pending.set []) (db.files.directory.set none) (db.phase.set .closed) := rfl
+
+/-- The three cache cells belonging to the synchronization record
+captured by the opener. -/
+def DiskTable.OpenSyncFiles.UsesCacheReferences (files : DiskTable.OpenSyncFiles)
+    (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (directory : IO.Ref (Option IO.FS.Handle)) : Prop :=
+  files.active = active ∧ files.pending = pending ∧ files.directory = directory
+
+/-- The path used for directory dispatch in the synchronization record. -/
+def DiskTable.OpenSyncFiles.AtDirectory (files : DiskTable.OpenSyncFiles) (path : FilePath) : Prop :=
+  files.dir = path
+
+/-- The actual initialization action for the synchronization record
+allocated on the resolved path by `DiskTable.open`. -/
+def DiskTable.OpenSyncFiles.IsOpenAction (path : FilePath) (action : IO DiskTable.OpenSyncFiles) : Prop :=
+  action = SyncFiles.open path
+
+theorem DiskTable.openSyncCacheReferences (path : FilePath) :
+    ∃ (action : IO DiskTable.OpenSyncFiles)
+      (assemble : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+        IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles),
+      DiskTable.OpenSyncFiles.IsOpenAction path action ∧
+      action = DiskSession.openSyncFilesWith (m := IO) (IO.FS.Handle.mk path .read)
+        (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
+        (fun value => liftM (IO.mkRef value)) assemble ∧
+      ∀ directory active pending, (assemble directory active pending).UsesCacheReferences active pending directory ∧
+        (assemble directory active pending).AtDirectory path := by
+  exact ⟨SyncFiles.open path, SyncFiles.mk path, rfl, syncFilesOpen_schedule path, fun _ _ _ => ⟨⟨rfl, rfl, rfl⟩, rfl⟩⟩
+
+/-- Close reads and writes exactly the phase, lock and cache
+references of the opened table. -/
+theorem DiskTable.UsesOpenReferences.close {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) :
+    ∃ (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+      (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cachedDirectory : IO.Ref (Option IO.FS.Handle)),
+      files.UsesCacheReferences active pending cachedDirectory ∧
+      db.close = DiskSession.closeSchedule phase.get (fun _ => lock.unlock)
+        (active.set none) (pending.set []) (cachedDirectory.set none) (phase.set .closed) := by
+  obtain ⟨_, sameLock, sameFiles, samePhase, _⟩ := uses
+  exact ⟨files.active, files.pending, files.directory, ⟨rfl, rfl, rfl⟩,
+    by rw [DiskTable.close_schedule, sameLock, sameFiles, samePhase]⟩
 
 private def DiskTable.installed (db : DiskTable) : IO Installed := do
   (← db.phase.get).installed
@@ -757,6 +828,34 @@ theorem DiskTable.writeBatchWithOutcome_fileEffects (db : DiskTable)
       db.phase.set (.ready { state with table, walBytes })
       return table.committed) := rfl
 
+/-- The public write schedules use the phase cell and the synchronization
+record that the native opener stored in this table. -/
+def DiskTable.UsesOpenWriteSchedules (db : DiskTable) (directory : DiskDirectory)
+    (files : DiskTable.OpenSyncFiles) (phase : IO.Ref Phase) : Prop :=
+  (∀ key value, db.writeWithOutcome key value =
+    DiskSession.withPreparedSingleWrite key value
+      ((do (← phase.get).installed : IO Installed).adapt DiskWriteError.rejected) DiskWriteError.rejected
+      (fun result => (fromOption result "write sequence space exhausted").adapt DiskWriteError.rejected)
+      (fun state => (checkActiveSegmentWith directory state FilePath.symlinkMetadata).adapt DiskWriteError.rejected)
+      (fun state event table walBytes =>
+        DiskSession.publishPreparedWrite { state with table, walBytes } event.sequence phase.set
+          ((WalSegmentCommit.commitAt directory state.activeFirst event walBytes
+            files.append files.stage files.syncPaths IO.FS.rename).adapt DiskWriteError.commitUnknown))) ∧
+  (∀ rows, db.writeBatchWithOutcome rows =
+    DiskSession.writeBatchSchedule (m := EIO DiskWriteError) rows
+      ((do (← phase.get).installed : IO Installed).adapt DiskWriteError.rejected) DiskWriteError.rejected
+      (fun result => (fromOption result "write sequence space exhausted").adapt DiskWriteError.rejected)
+      (fun state => (checkActiveSegmentWith directory state FilePath.symlinkMetadata).adapt DiskWriteError.rejected)
+      phase.set
+      (fun state events bytes => (WalSegmentCommit.commitBytesAt directory state.activeFirst (WAL.encodeBatch events)
+        bytes files.append files.stage files.syncPaths IO.FS.rename).adapt DiskWriteError.commitUnknown))
+
+theorem DiskTable.UsesOpenReferences.writeSchedules {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) : db.UsesOpenWriteSchedules directory files phase := by
+  obtain ⟨path, _, cache, cell, _⟩ := uses
+  constructor <;> intros <;>
+    simp only [DiskTable.writeWithOutcome_schedule, DiskTable.writeBatchWithOutcome_schedule, DiskTable.installed, path, cache, cell]
+
 private theorem adaptWriteBind (mapError : ε → ε')
     (action : EIO ε α) (next : α → EIO ε β) :
     (action >>= next).adapt mapError = action.adapt mapError >>= fun value => (next value).adapt mapError := by
@@ -825,6 +924,24 @@ theorem DiskTable.acquireAt_schedule (db : DiskTable) (snapshot : UInt64) :
     db.acquireAt snapshot = DiskSession.acquireSnapshotWith (m := IO) db.installed db.phase.set
       (fun pin => ⟨⟨db.session, pin.handle⟩, pin.sequence⟩) snapshot := rfl
 
+/-- The returned pin carries the exact token of its issuing table
+and the local handle and sequence produced by the pure pin allocator. -/
+def DiskSnapshotPin.UsesOpenToken (pin : DiskSnapshotPin) (token : IO.Ref Unit)
+    (issued : Alvoki.Sequential.SnapshotPin) : Prop :=
+  pin.handle.session = token ∧ pin.handle.localHandle = issued.handle ∧ pin.sequence = issued.sequence
+
+/-- On the handle returned by open, the actual public acquisition uses
+the reported phase cell for both its read and its possible update. -/
+theorem DiskTable.UsesOpenReferences.acquireAt {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) (snapshot : UInt64) :
+    ∃ issue : Alvoki.Sequential.SnapshotPin → DiskSnapshotPin,
+      (∀ pin, (issue pin).UsesOpenToken token pin) ∧
+      db.acquireAt snapshot = DiskSession.acquireSnapshotWith (m := IO)
+        (do (← phase.get).installed) phase.set issue snapshot := by
+  obtain ⟨_, _, _, cell, identity⟩ := uses
+  refine ⟨fun pin => ⟨⟨token, pin.handle⟩, pin.sequence⟩, fun _ => ⟨rfl, rfl, rfl⟩, ?_⟩
+  simp only [DiskTable.acquireAt_schedule, DiskTable.installed, cell, identity]
+
 def DiskTable.acquire (db : DiskTable) : IO DiskSnapshotPin := do
   let state ← db.installed
   fromOption (← db.acquireAt state.table.committed) "cannot acquire the latest snapshot"
@@ -859,6 +976,17 @@ theorem DiskTable.release_schedule (db : DiskTable) (handle : DiskSnapshotHandle
     db.release handle = DiskSession.releaseSnapshotWith (m := IO) db.installed
       (handle.session.ptrEq db.session) db.phase.set handle.localHandle := rfl
 
+/-- Release compares the presented pin's token and updates the phase
+cell belonging to this opened table. -/
+theorem DiskTable.UsesOpenReferences.releasePin {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) {pin : DiskSnapshotPin}
+    {issuer : IO.Ref Unit} {issued : Alvoki.Sequential.SnapshotPin} (owns : pin.UsesOpenToken issuer issued) :
+    db.release pin.handle = DiskSession.releaseSnapshotWith (m := IO) (do (← phase.get).installed)
+      (issuer.ptrEq token) phase.set issued.handle := by
+  obtain ⟨_, _, _, cell, session⟩ := uses
+  obtain ⟨tokenOfPin, handle, _⟩ := owns
+  simp only [DiskTable.release_schedule, DiskTable.installed, cell, session, tokenOfPin, handle]
+
 def DiskTable.lookup (db : DiskTable) (handle : DiskSnapshotHandle) (key : UInt64) :
     IO (Option (Option UInt64)) :=
   DiskSession.withLocalHandle db.installed (handle.session.ptrEq db.session) none fun state =>
@@ -883,6 +1011,29 @@ theorem DiskTable.range_schedule (db : DiskTable) (handle : DiskSnapshotHandle) 
     db.range handle lo hi = DiskSession.readSnapshotWith (m := IO) db.installed
       (handle.session.ptrEq db.session) (fun table => table.range handle.localHandle lo hi) := rfl
 
+/-- The actual lookup uses the same cell and compares the table's
+token to itself when given a pin issued by that table. -/
+theorem DiskTable.UsesOpenReferences.lookupPin {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token)
+    {pin : DiskSnapshotPin} {issued : Alvoki.Sequential.SnapshotPin} (owns : pin.UsesOpenToken token issued)
+    (key : UInt64) :
+    db.lookup pin.handle key = DiskSession.readSnapshotWith (m := IO) (do (← phase.get).installed)
+      (token.ptrEq token) (fun table => table.lookup issued.handle key) := by
+  obtain ⟨_, _, _, cell, session⟩ := uses
+  obtain ⟨tokenOfPin, handle, _⟩ := owns
+  simp only [DiskTable.lookup_schedule, DiskTable.installed, cell, session, tokenOfPin, handle]
+
+/-- The public range follows the same phase-cell and token guard. -/
+theorem DiskTable.UsesOpenReferences.rangePin {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token)
+    {pin : DiskSnapshotPin} {issued : Alvoki.Sequential.SnapshotPin} (owns : pin.UsesOpenToken token issued)
+    (lo hi : UInt64) :
+    db.range pin.handle lo hi = DiskSession.readSnapshotWith (m := IO) (do (← phase.get).installed)
+      (token.ptrEq token) (fun table => table.range issued.handle lo hi) := by
+  obtain ⟨_, _, _, cell, session⟩ := uses
+  obtain ⟨tokenOfPin, handle, _⟩ := owns
+  simp only [DiskTable.range_schedule, DiskTable.installed, cell, session, tokenOfPin, handle]
+
 def DiskTable.advanceFloor (db : DiskTable) (floor : UInt64) : IO Bool := do
   let state ← db.installed
   let some table := state.table.advanceFloor floor | return false
@@ -900,6 +1051,15 @@ def DiskTable.advanceFloor (db : DiskTable) (floor : UInt64) : IO Bool := do
 
 theorem DiskTable.advanceFloor_schedule (db : DiskTable) (floor : UInt64) :
     db.advanceFloor floor = DiskSession.advanceFloorWith (m := IO) db.installed db.phase.set floor := rfl
+
+/-- The floor guard uses the reached phase and any update writes back
+through the same opened phase cell. -/
+theorem DiskTable.UsesOpenReferences.advanceFloor {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) (floor : UInt64) :
+    db.advanceFloor floor = DiskSession.advanceFloorWith (m := IO)
+      (do (← phase.get).installed) phase.set floor := by
+  obtain ⟨_, _, _, cell, _⟩ := uses
+  simp only [DiskTable.advanceFloor_schedule, DiskTable.installed, cell]
 
 /-- Commit an in-memory run rewrite only when the reached table accepts it. -/
 @[macro_inline] def DiskSession.rewriteRunWith [Monad m]
@@ -1036,6 +1196,26 @@ theorem DiskTable.checkpoint_schedule (db : DiskTable) :
   rw [db.checkpoint_fileEffects]
   rfl
 
+/-- The public checkpoint uses the opened phase cell for its read and
+both setters, and passes the opened synchronization record to every
+run and manifest callback. -/
+def DiskTable.UsesOpenCheckpointSchedule (db : DiskTable) (directory : DiskDirectory)
+    (files : DiskTable.OpenSyncFiles) (phase : IO.Ref Phase) : Prop :=
+    db.checkpoint = DiskSession.withPreparedCheckpoint (do (← phase.get).installed) IO.ofExcept
+      (fun next manifest => DiskSession.publishPrepared phase.set
+        (CheckpointPublication.run next.table.runs.length
+          (performCheckpointFileStep directory next.generation next.table.runs.toArray (directory.file .stagedManifest)
+            manifest (fromOption · "checkpoint run index is out of bounds")
+            (writeRunFlushed files) files.stage files.syncPaths IO.FS.rename))
+        (phase.set (.ready next)))
+
+theorem DiskTable.UsesOpenReferences.checkpoint {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) :
+    db.UsesOpenCheckpointSchedule directory files phase := by
+  obtain ⟨path, _, cache, cell, _⟩ := uses
+  simp only [DiskTable.UsesOpenCheckpointSchedule, DiskTable.checkpoint_schedule, path, cache, cell,
+    DiskSession.publishPrepared]
+
 /-- Inspect the final component without following symlinks. A missing entry
 in the owned parent is ineligible. Other lookup errors stop the pass. -/
 private def runCollectionKindAt (path : FilePath) : IO (Except String IO.FS.FileType) := do
@@ -1128,6 +1308,24 @@ theorem readKeeperPrefix_fileEffects (files : SyncFiles) (path : FilePath) (coun
         (fun file size => readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
           file.read size ByteArray.empty)
         files.remember path count fileSize := rfl
+
+/-- The aligned keeper and its barriers use the same cells assembled by
+the cache initializer. Remembering the read handle modifies the pending
+cell that the keeper sync later reads and clears. -/
+theorem DiskTable.OpenSyncFiles.keeperCacheSchedules {files : DiskTable.OpenSyncFiles}
+    {dir : FilePath} {active pending directory}
+    (uses : files.UsesCacheReferences active pending directory) (atDirectory : files.AtDirectory dir)
+    (path : FilePath) (count fileSize : Nat) (paths : Array FilePath) :
+    readKeeperPrefix files path count fileSize =
+      SyncHandleRouting.readKeeperWith (fun name => IO.FS.Handle.mk name .read)
+        (fun file size => readExactPrefixWith (IO.userError "short or oversized WAL keeper read") file.read size ByteArray.empty)
+        (fun name file => pending.modify (SyncHandleRouting.pushPending name file)) path count fileSize ∧
+    files.syncPaths paths = SyncPathGroup.run (fun name =>
+      SyncHandleRouting.syncWithHandles dir name directory.get pending.get pending.set active.get
+        (fun file => IO.FS.Handle.mk file .read) fsyncHandle) paths := by
+  obtain ⟨rfl, rfl, rfl⟩ := uses
+  cases atDirectory
+  exact ⟨rfl, rfl⟩
 
 /-- A successful stage remembers the descriptor returned by the native
 fresh write and flush. -/

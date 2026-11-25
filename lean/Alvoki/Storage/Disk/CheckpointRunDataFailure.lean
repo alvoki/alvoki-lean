@@ -4,16 +4,13 @@ import Alvoki.Storage.Disk.StagedHandleCustody
 namespace Alvoki.Storage.CheckpointPublication
 
 open System SyncHandleRouting
-open WAL.Boundary (WalInodeImage)
-
-private abbrev RunIO := EStateM IO.Error WalInodeImage
 
 /-- A returned file-data error occurs either in a write, or in the
 flush reached after that same handle's write succeeds. The precise
 intermediate physical state and the partial target effects are reported. -/
-inductive RunDataWriteFailure {handle : Type} (write : handle → ByteArray → RunIO Unit)
-    (flush : handle → RunIO Unit) (descriptor : handle) (bytes : ByteArray)
-    (opened : WalInodeImage) (cause : IO.Error) : WalInodeImage → Prop where
+inductive RunDataWriteFailure {handle state : Type} (write : handle → ByteArray → EStateM IO.Error state Unit)
+    (flush : handle → EStateM IO.Error state Unit) (descriptor : handle) (bytes : ByteArray)
+    (opened : state) (cause : IO.Error) : state → Prop where
   | writeError (failed : write descriptor bytes opened = .error cause reached) :
     RunDataWriteFailure write flush descriptor bytes opened cause reached
   | flushError (written : write descriptor bytes opened = .ok () buffered)
@@ -23,23 +20,24 @@ inductive RunDataWriteFailure {handle : Type} (write : handle → ByteArray → 
 /-- The error branch drops the unretained handle. In the pinned runtime
 its finalizer calls `fclose`; the finalizer's status does not override
 the earlier callback error. Retain its reported reached file effects. -/
-abbrev runDataDropImage {handle : Type} (drop : handle → RunIO Unit) (descriptor : handle)
-    (reached : WalInodeImage) : WalInodeImage := dataErrorDropState drop descriptor reached
+abbrev runDataDropImage {handle state : Type} (drop : handle → EStateM IO.Error state Unit) (descriptor : handle)
+    (reached : state) : state := dataErrorDropState drop descriptor reached
 
-abbrev dropHandleOnDataError {handle : Type} (drop : handle → RunIO Unit)
-    (descriptor : handle) (action : RunIO Unit) : RunIO Unit := withDataErrorDrop drop descriptor action
+abbrev dropHandleOnDataError {handle state : Type} (drop : handle → EStateM IO.Error state Unit)
+    (descriptor : handle) (action : EStateM IO.Error state Unit) : EStateM IO.Error state Unit :=
+  withDataErrorDrop drop descriptor action
 
 /-- Project the reached primitive error and the error branch's local
 handle drop onto the actual checked write/flush/retain schedule. -/
-theorem RunDataWriteFailure.returns {handle : Type}
-    {lookup : FilePath → RunIO (Except IO.Error IO.FS.Metadata)} {path : FilePath} {before opened : WalInodeImage}
+theorem RunDataWriteFailure.returns {handle state : Type}
+    {lookup : FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata)} {path : FilePath} {before opened : state}
     (guard : AcceptedRunGuard lookup path before)
-    {openWrite : FilePath → RunIO handle} {descriptor : handle}
+    {openWrite : FilePath → EStateM IO.Error state handle} {descriptor : handle}
     (openedFile : openWrite path before = .ok descriptor opened)
-    {write : handle → ByteArray → RunIO Unit} {flush : handle → RunIO Unit}
-    {bytes : ByteArray} {cause : IO.Error} {reached : WalInodeImage}
+    {write : handle → ByteArray → EStateM IO.Error state Unit} {flush : handle → EStateM IO.Error state Unit}
+    {bytes : ByteArray} {cause : IO.Error} {reached : state}
     (failure : RunDataWriteFailure write flush descriptor bytes opened cause reached)
-    (drop : handle → RunIO Unit) :
+    (drop : handle → EStateM IO.Error state Unit) :
     writeCheckpointRunWith lookup openWrite
       (fun h payload => dropHandleOnDataError drop h (write h payload))
       (fun h => dropHandleOnDataError drop h (flush h)) path bytes pure before =

@@ -168,7 +168,9 @@ theorem continuesAfterError {input : FilePath} {source : LockedFileState FileIma
   obtain ⟨_, ownerLive, directoryLive, _, object, _⟩ := observed.captured.captures
   refine ⟨?_, .cachedPrefixFailed prior failed rfl, rfl, rfl, ownerLive, directoryLive, object, ?_⟩
   · unfold runWithAdmission runAdmittedCachedOpen
-    rw [admission.admits, observed.acquired, dispatch_eq_prefix]
+    rw [admission.admits]
+    unfold runAdmittedCachedOpenAt
+    rw [observed.acquired, dispatch_eq_prefix]
     exact observed.nativeFailure.run_error _
   · exact failed.cleanupOutcome
 

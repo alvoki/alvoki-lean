@@ -8,11 +8,11 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting WalSegmentRepair
 open WAL.Boundary (WalInodeImage)
 
-/-- The first checkpoint directory barrier follows the completed run
-pairs, without requiring any successful manifest operation. Each raw
-run's inode frame concerns the same handle as its write, sync and close. -/
-structure NativeCheckpointRunDirectoryError {image : Type} (state : NativeReadyState)
-    (cut : CheckpointPowerCut state.session.directory state.writer) where
+/-- The reported successful run pairs before the chosen checkpoint
+operation. Their physical frames and temporary lifetimes concern the same
+callbacks used by checkpoint publication. -/
+structure NativeCheckpointRunObservations {image : Type} (state : NativeReadyState)
+    (cut : CheckpointPowerCut state.session.directory state.writer) (count : Nat) where
   primitives : CheckpointPrimitiveCalls CheckpointOpenHandle image
   descriptors : image → DescriptorInventory
   atRun : Nat → image
@@ -25,7 +25,7 @@ structure NativeCheckpointRunDirectoryError {image : Type} (state : NativeReadyS
   runs : image → RunUnlinkImage
   views : ∀ index, RunDirectoryInodeView state.session.directory (inodes (atRun index)) (runs (atRun index))
   selectedEntry : CheckpointRunPrefix.EntrySelection state.writer (views 0)
-  runReports : ∀ index < cut.checkpoint.table.runs.length,
+  runReports : ∀ index < count,
     ∃ run : Compaction.CheckedRun, cut.checkpoint.table.runs.toArray[index]? = some run ∧
       ∃ observed : CompletedCheckpointTemporaryFile descriptors primitives.cached primitives.cached.writeRun
         (state.session.directory.file (.run cut.checkpoint.prepared.generation index)) run.run.bytes
@@ -37,6 +37,20 @@ structure NativeCheckpointRunDirectoryError {image : Type} (state : NativeReadyS
       (inodes observed.flushed).visible inode = run.run.bytes ∧
       (∀ other, (views index).visible other = some inode → other = path) ∧
       RunWriteInodeFrame path inode (inodes observed.flushed) (views index) (views (index + 1))
+  files : image → FileImage
+  manifestAtEntry :
+    match state.files.image.directory.active.manifest with
+    | none => (views 0).visible (state.session.directory.file .manifest) = none
+    | some bytes => ∃ inode, (views 0).Stable (state.session.directory.file .manifest) inode bytes
+  initialFiles : files (atRun 0) = state.files.image
+  runFileFrame : ∀ index < count, files (atRun (index + 1)) = files (atRun index)
+
+/-- The first checkpoint directory barrier follows the completed run
+pairs, without requiring any successful manifest operation. Each raw
+run's inode frame concerns the same handle as its write, sync and close. -/
+structure NativeCheckpointRunDirectoryError {image : Type} (state : NativeReadyState)
+    (cut : CheckpointPowerCut state.session.directory state.writer)
+    extends NativeCheckpointRunObservations (image := image) state cut cut.checkpoint.table.runs.length where
   completed : cut.completed = runSteps cut.checkpoint.table.runs.length
   directoryBound : (views cut.checkpoint.table.runs.length).visible state.session.directory.path =
     some (state.census.inode state.directorySlot.description)
@@ -51,16 +65,205 @@ structure NativeCheckpointRunDirectoryError {image : Type} (state : NativeReadyS
   inodeBytes : inodes after = inodes (atRun cut.checkpoint.table.runs.length)
   runsAfter : runs after = if cut.tookEffect then (runs (atRun cut.checkpoint.table.runs.length)).syncDirectory
     else runs (atRun cut.checkpoint.table.runs.length)
-  files : image → FileImage
-  manifestAtEntry :
-    match state.files.image.directory.active.manifest with
-    | none => (views 0).visible (state.session.directory.file .manifest) = none
-    | some bytes => ∃ inode, (views 0).Stable (state.session.directory.file .manifest) inode bytes
-  initialFiles : files (atRun 0) = state.files.image
-  runFileFrame : ∀ index < cut.checkpoint.table.runs.length, files (atRun (index + 1)) = files (atRun index)
   directoryEffect : (files after).directory = if cut.tookEffect then
     (files (atRun cut.checkpoint.table.runs.length)).directory.syncDirectory else (files (atRun cut.checkpoint.table.runs.length)).directory
   walFrame : CheckpointWalView.ofFiles (files after) = CheckpointWalView.ofFiles (files (atRun cut.checkpoint.table.runs.length))
+
+namespace NativeCheckpointRunObservations
+
+variable {image : Type} {state : NativeReadyState} {cut : CheckpointPowerCut state.session.directory state.writer} {count : Nat}
+
+def entry (report : NativeCheckpointRunObservations (image := image) state cut count) :
+    LockedFileState (CensusDirectoryCache × image) :=
+  ⟨(state.cache, report.atRun 0), state.files.owners⟩
+
+noncomputable def perform (report : NativeCheckpointRunObservations (image := image) state cut count) :=
+  report.primitives.cached.perform state.session.directory
+
+theorem runPrefix (report : NativeCheckpointRunObservations (image := image) state cut count) :
+    ((runSteps count).forM (report.perform cut.checkpoint.prepared cut.checkpoint.manifest)) report.entry.image =
+      .ok () (state.cache, report.atRun count) := by
+  exact runSteps_returned _ _ (fun index => (state.cache, report.atRun index)) (fun index within => by
+    obtain ⟨run, found, observed, _⟩ := report.runReports index within
+    exact observed.runReturns report.primitives state.session.directory cut.checkpoint.prepared cut.checkpoint.manifest found
+      state.cache report.pending)
+
+theorem prefixCensus (report : NativeCheckpointRunObservations (image := image) state cut count)
+    (index : Nat) (within : index ≤ count) :
+    report.descriptors (report.atRun index) = state.census := by
+  induction index with
+  | zero => exact report.initialCensus
+  | succ index prior =>
+    obtain ⟨_, _, observed, _⟩ := report.runReports index within
+    exact observed.keepsCensus.1.trans (prior (Nat.le_of_lt within))
+
+theorem stablePath (report : NativeCheckpointRunObservations (image := image) state cut count)
+    {path : FilePath} {inode : Nat} {bytes : ByteArray} (entry : (report.views 0).Stable path inode bytes)
+    (different : ∀ index < count,
+      path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation index))
+    (through : Nat) (bounded : through ≤ count) :
+    (report.views through).Stable path inode bytes := by
+  induction through with
+  | zero => exact entry
+  | succ prior earlier =>
+    obtain ⟨_, _, _, synced, _, _, privateBinding, frame⟩ := report.runReports prior bounded
+    exact frame.keepsStable synced privateBinding (different prior bounded) (earlier (Nat.le_of_lt bounded))
+
+theorem manifestNeRun (generation : UInt64) (index : Nat) :
+    state.session.directory.file .manifest ≠ state.session.directory.file (.run generation index) := by
+  intro equal
+  have names := congrArg FilePath.toString equal
+  have raw : "MANIFEST" = renderRunFileName generation index :=
+    (String.append_right_inj (state.session.directory.path.toString ++ "/")).mp names
+  have differentPrefix := congrArg (fun name : String => name.toList.take 4) raw
+  change "MANIFEST".toList.take 4 = ("run-" ++ generation.toNat.repr ++ "-" ++ index.repr ++ ".v3").toList.take 4 at differentPrefix
+  simp [String.toList_append] at differentPrefix
+
+/-- The run writes target a fresh generation. Every earlier selected
+canonical inode and durable payload is stable at the end of the prefix. -/
+theorem priorRunAtEnd (report : NativeCheckpointRunObservations (image := image) state cut count) (valid : state.Valid)
+    {bytes payload : ByteArray} {metadata : Manifest.IntegrityCheckpoint} {index : Nat}
+    (binding : state.writer.wal.directory.active.manifest = some bytes)
+    (decoded : Manifest.IntegrityCheckpoint.decode bytes = .ok metadata)
+    (within : index < metadata.header.runCount.toNat)
+    (stored : state.writer.published.durable metadata.header.generation index = some payload) :
+    ∃ inode, (report.views 0).Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload ∧
+      (report.views count).Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload := by
+  let path := state.session.directory.file (.run metadata.header.generation index)
+  have different := (cut.priorSelectedGeneration valid.retained binding decoded).2
+  obtain ⟨inode, entry⟩ := report.selectedEntry bytes metadata binding decoded index within payload stored
+  have apart (other : Nat) (_ : other < count) :
+      path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation other) :=
+    runPath_ne state.session.directory (fun equal => different (congrArg Prod.fst equal))
+  exact ⟨inode, entry, report.stablePath entry apart _ (Nat.le_refl _)⟩
+
+/-- Each completed run remains on the inode that its successful file
+barrier synced, through all later writes to distinct run paths. -/
+theorem freshRunAtEnd (report : NativeCheckpointRunObservations (image := image) state cut count)
+    {index : Nat} (within : index < count) :
+    ∃ (run : Compaction.CheckedRun) (inode : Nat), cut.checkpoint.table.runs.toArray[index]? = some run ∧
+      (report.views count).visible (state.session.directory.file (.run cut.checkpoint.prepared.generation index)) = some inode ∧
+      (report.inodes (report.atRun count)).visible inode = run.run.bytes ∧
+      (report.inodes (report.atRun count)).crashBytes inode = [run.run.bytes] := by
+  let generation := cut.checkpoint.prepared.generation
+  have reached (through : Nat) (bounded : through ≤ count) : ∀ index < through,
+      ∃ (run : Compaction.CheckedRun) (inode : Nat), cut.checkpoint.table.runs.toArray[index]? = some run ∧
+        (report.views through).visible (state.session.directory.file (.run generation index)) = some inode ∧
+        (report.inodes (report.atRun through)).visible inode = run.run.bytes ∧
+        (report.inodes (report.atRun through)).crashBytes inode = [run.run.bytes] := by
+    induction through with
+    | zero => intro index inside; omega
+    | succ prior earlier =>
+      intro index inside
+      obtain ⟨run, selected, observed, synced, bound, bytes, privateBinding, frame⟩ := report.runReports prior bounded
+      by_cases same : index = prior
+      · subst index
+        refine ⟨run, _, selected, bound, synced.symm ▸ bytes, ?_⟩
+        rw [synced]
+        simp [WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, bytes]
+      · obtain ⟨earlierRun, inode, selected, bound, bytes, crash⟩ := earlier (Nat.le_of_lt bounded) index (by omega)
+        have apart : state.session.directory.file (.run generation index) ≠ state.session.directory.file (.run generation prior) :=
+          runPath_ne state.session.directory (fun equal => same (congrArg Prod.snd equal))
+        obtain ⟨different, named, visible⟩ := frame.keepsVisible synced privateBinding apart bound bytes
+        refine ⟨earlierRun, inode, selected, named, visible, ?_⟩
+        rw [synced]
+        simp [WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, different, frame.crashBytes _ different, crash]
+  exact reached _ (Nat.le_refl _) index within
+
+theorem filesAtRun (report : NativeCheckpointRunObservations (image := image) state cut count) (index : Nat)
+    (within : index ≤ count) : report.files (report.atRun index) = state.files.image := by
+  induction index with
+  | zero => exact report.initialFiles
+  | succ index prior => exact (report.runFileFrame index within).trans (prior (Nat.le_of_lt within))
+
+theorem manifestAtEnd (report : NativeCheckpointRunObservations (image := image) state cut count) :
+    match state.files.image.directory.active.manifest with
+    | none => (report.views count).visible (state.session.directory.file .manifest) = none
+    | some bytes => ∃ inode, (report.views 0).Stable (state.session.directory.file .manifest) inode bytes ∧
+        (report.views count).Stable (state.session.directory.file .manifest) inode bytes := by
+  have entry := report.manifestAtEntry
+  cases manifest : state.files.image.directory.active.manifest with
+  | none =>
+    rw [manifest] at entry
+    have absent (through : Nat) (bounded : through ≤ count) :
+        (report.views through).visible (state.session.directory.file .manifest) = none := by
+      induction through with
+      | zero => exact entry
+      | succ prior earlier =>
+        obtain ⟨_, _, _, _, _, _, _, frame⟩ := report.runReports prior bounded
+        exact (frame.visibleNames _ (manifestNeRun cut.checkpoint.prepared.generation prior)).trans
+          (earlier (Nat.le_of_lt bounded))
+    exact absent _ (Nat.le_refl _)
+  | some bytes =>
+    rw [manifest] at entry
+    obtain ⟨inode, stable⟩ := entry
+    exact ⟨inode, stable, report.stablePath stable
+      (fun index _ => manifestNeRun cut.checkpoint.prepared.generation index) _ (Nat.le_refl _)⟩
+
+/-- Any effect local to the next run leaves the prior selected run
+at the same inode, with its original visible and surviving bytes. -/
+theorem priorRunAfter (report : NativeCheckpointRunObservations (image := image) state cut count)
+    {after : image} {view : RunDirectoryInodeView state.session.directory (report.inodes after) (report.runs after)}
+    (valid : state.Valid)
+    (keep : ∀ {path inode bytes}, path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation count) →
+      (report.views count).Stable path inode bytes → view.Stable path inode bytes)
+    {bytes payload : ByteArray} {metadata : Manifest.IntegrityCheckpoint} {index : Nat}
+    (binding : state.writer.wal.directory.active.manifest = some bytes)
+    (decoded : Manifest.IntegrityCheckpoint.decode bytes = .ok metadata) (within : index < metadata.header.runCount.toNat)
+    (stored : state.writer.published.durable metadata.header.generation index = some payload) :
+    ∃ inode, (report.views 0).Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload ∧
+      view.Stable (state.session.directory.file (.run metadata.header.generation index)) inode payload := by
+  obtain ⟨inode, entry, stable⟩ := report.priorRunAtEnd valid binding decoded within stored
+  have generation := (cut.priorSelectedGeneration valid.retained binding decoded).2
+  exact ⟨inode, entry, keep (runPath_ne _ (fun equal => generation (congrArg Prod.fst equal))) stable⟩
+
+/-- Before any manifest staging, both absence and stable selected
+contents of the canonical manifest are preserved by a local run effect. -/
+theorem manifestAfter (report : NativeCheckpointRunObservations (image := image) state cut count)
+    {after : image} {view : RunDirectoryInodeView state.session.directory (report.inodes after) (report.runs after)}
+    (visible : ∀ path, path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation count) →
+      view.visible path = (report.views count).visible path)
+    (keep : ∀ {path inode bytes}, path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation count) →
+      (report.views count).Stable path inode bytes → view.Stable path inode bytes) :
+    match state.files.image.directory.active.manifest with
+    | none => view.visible (state.session.directory.file .manifest) = none
+    | some bytes => ∃ inode, (report.views 0).Stable (state.session.directory.file .manifest) inode bytes ∧
+        view.Stable (state.session.directory.file .manifest) inode bytes := by
+  have manifest := report.manifestAtEnd
+  have separate := manifestNeRun (state := state) cut.checkpoint.prepared.generation count
+  cases prior : state.files.image.directory.active.manifest with
+  | none =>
+    rw [prior] at manifest
+    exact (visible _ separate).trans manifest
+  | some bytes =>
+    rw [prior] at manifest
+    obtain ⟨inode, entry, stable⟩ := manifest
+    exact ⟨inode, entry, keep separate stable⟩
+
+/-- Select the same exact checkpoint from the guaranteed run map
+at the reached file image, using only local inode frames. -/
+theorem selectedAfter (report : NativeCheckpointRunObservations (image := image) state cut count)
+    {after : image} {view : RunDirectoryInodeView state.session.directory (report.inodes after) (report.runs after)}
+    (valid : state.Valid)
+    (keep : ∀ {path inode bytes}, path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation count) →
+      (report.views count).Stable path inode bytes → view.Stable path inode bytes)
+    (files : report.files after = state.files.image) :
+    SelectedIntegrityCheckpoint (report.runs after).guaranteed (report.files after).directory.active.manifest
+      state.writer.checkpoint := by
+  let ready := valid.retained
+  have extra : SelectedRunsAgree state.writer.wal.directory.active.manifest (report.runs after).guaranteed
+      state.writer.published.durable := by
+    intro bytes metadata binding decoded index within
+    have selected := ready.resumed.selected
+    rw [← ready.walPair] at selected
+    obtain ⟨payload, stored⟩ := selected.runExists binding decoded within
+    obtain ⟨_, _, stable⟩ := report.priorRunAfter valid keep binding decoded within stored
+    exact stable.guaranteed.trans stored.symm
+  have pair : state.files.image.directory.active = state.writer.target.pair := ready.resumed.ready.selected
+  rw [files, pair, ← ready.walPair]
+  exact SelectedIntegrityCheckpoint.withRunMap (ready.walPair.symm ▸ ready.resumed.selected) extra.symm
+
+end NativeCheckpointRunObservations
 
 namespace NativeCheckpointRunDirectoryError
 
@@ -71,13 +274,6 @@ abbrev atBarrier (report : NativeCheckpointRunDirectoryError (image := image) st
 
 def handle (report : NativeCheckpointRunDirectoryError (image := image) state cut) : CheckpointOpenHandle :=
   (report.captured, state.directorySlot, 0)
-
-def entry (report : NativeCheckpointRunDirectoryError (image := image) state cut) :
-    LockedFileState (CensusDirectoryCache × image) :=
-  ⟨(state.cache, report.atRun 0), state.files.owners⟩
-
-noncomputable def perform (report : NativeCheckpointRunDirectoryError (image := image) state cut) :=
-  report.primitives.cached.perform state.session.directory
 
 def error (report : NativeCheckpointRunDirectoryError (image := image) state cut) : IO.Error :=
   IO.userError s!"sync failed for '{state.session.directory.path}': {report.cause}"
@@ -91,19 +287,7 @@ theorem runPrefix (report : NativeCheckpointRunDirectoryError (image := image) s
     (cut.completed.forM (report.perform cut.checkpoint.prepared cut.checkpoint.manifest)) report.entry.image =
       .ok () (state.cache, report.atBarrier) := by
   rw [report.completed]
-  exact runSteps_returned _ _ (fun index => (state.cache, report.atRun index)) (fun index within => by
-    obtain ⟨run, found, observed, _⟩ := report.runReports index within
-    exact observed.runReturns report.primitives state.session.directory cut.checkpoint.prepared cut.checkpoint.manifest found
-      state.cache report.pending)
-
-theorem prefixCensus (report : NativeCheckpointRunDirectoryError (image := image) state cut)
-    (index : Nat) (within : index ≤ cut.checkpoint.table.runs.length) :
-    report.descriptors (report.atRun index) = state.census := by
-  induction index with
-  | zero => exact report.initialCensus
-  | succ index prior =>
-    obtain ⟨_, _, observed, _⟩ := report.runReports index within
-    exact observed.keepsCensus.1.trans (prior (Nat.le_of_lt within))
+  exact report.toNativeCheckpointRunObservations.runPrefix
 
 /-- The real checkpoint preflight reaches this first directory barrier
 with the original lock owner and the exact complete run prefix. -/
@@ -131,7 +315,7 @@ theorem returns (report : NativeCheckpointRunDirectoryError (image := image) sta
       .error report.error (.poisoned, ⟨(state.cache, report.after), state.files.owners⟩) := by
   obtain ⟨remaining, _, continued⟩ := (report.issues valid).continuation
   rw [continued, List.forM_eq_forM, List.forM_cons]
-  simp only [Bind.bind, EStateM.bind, report.callbackFails, entry]
+  simp only [Bind.bind, EStateM.bind, report.callbackFails, NativeCheckpointRunObservations.entry]
 
 /-- The cached directory and lock still identify the original live
 slots after the reported failure. The run-slot releases happened before
@@ -147,30 +331,6 @@ theorem custody (report : NativeCheckpointRunDirectoryError (image := image) sta
   exact ⟨census, census.symm ▸ valid.directoryLive, census.symm ▸ valid.ownerLive,
     report.directoryBound.trans (congrArg some report.capturedInode.symm), report.lockBound⟩
 
-private theorem stablePath (report : NativeCheckpointRunDirectoryError (image := image) state cut)
-    {path : FilePath} {inode : Nat} {bytes : ByteArray} (entry : (report.views 0).Stable path inode bytes)
-    (different : ∀ index < cut.checkpoint.table.runs.length,
-      path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation index))
-    (through : Nat) (bounded : through ≤ cut.checkpoint.table.runs.length) :
-    (report.views through).Stable path inode bytes := by
-  induction through with
-  | zero => exact entry
-  | succ prior earlier =>
-    obtain ⟨_, _, _, synced, _, _, privateBinding, frame⟩ := report.runReports prior bounded
-    exact frame.keepsStable synced privateBinding (different prior bounded) (earlier (Nat.le_of_lt bounded))
-
-private theorem manifestNeRun (generation : UInt64) (index : Nat) :
-    state.session.directory.file .manifest ≠ state.session.directory.file (.run generation index) := by
-  intro equal
-  have names := congrArg FilePath.toString equal
-  have raw : "MANIFEST" = renderRunFileName generation index :=
-    (String.append_right_inj (state.session.directory.path.toString ++ "/")).mp names
-  have differentPrefix := congrArg (fun name : String => name.toList.take 4) raw
-  change "MANIFEST".toList.take 4 = ("run-" ++ generation.toNat.repr ++ "-" ++ index.repr ++ ".v3").toList.take 4 at differentPrefix
-  simp [String.toList_append] at differentPrefix
-
-/-- The run writes target a fresh generation. Every earlier selected
-canonical inode and durable payload is stable at the issued barrier. -/
 theorem priorRunAtBarrier (report : NativeCheckpointRunDirectoryError (image := image) state cut) (valid : state.Valid)
     {bytes payload : ByteArray} {metadata : Manifest.IntegrityCheckpoint} {index : Nat}
     (binding : state.writer.wal.directory.active.manifest = some bytes)
@@ -178,14 +338,8 @@ theorem priorRunAtBarrier (report : NativeCheckpointRunDirectoryError (image := 
     (within : index < metadata.header.runCount.toNat)
     (stored : state.writer.published.durable metadata.header.generation index = some payload) :
     ∃ inode, (report.views cut.checkpoint.table.runs.length).Stable
-      (state.session.directory.file (.run metadata.header.generation index)) inode payload := by
-  let path := state.session.directory.file (.run metadata.header.generation index)
-  have different := (cut.priorSelectedGeneration valid.retained binding decoded).2
-  obtain ⟨inode, entry⟩ := report.selectedEntry bytes metadata binding decoded index within payload stored
-  have apart (other : Nat) (_ : other < cut.checkpoint.table.runs.length) :
-      path ≠ state.session.directory.file (.run cut.checkpoint.prepared.generation other) :=
-    runPath_ne state.session.directory (fun equal => different (congrArg Prod.fst equal))
-  exact ⟨inode, report.stablePath entry apart _ (Nat.le_refl _)⟩
+      (state.session.directory.file (.run metadata.header.generation index)) inode payload :=
+  (report.priorRunAtEnd valid binding decoded within stored).imp fun _ => And.right
 
 /-- The same selected run is still bound to that inode and has the same
 raw bytes at error return, regardless of the directory-sync effect. -/
@@ -209,23 +363,7 @@ theorem freshRunBytes (report : NativeCheckpointRunDirectoryError (image := imag
     (cut.tookEffect = true →
       (report.runs report.after).guaranteed cut.checkpoint.prepared.generation index = cut.checkpoint.plan.files[index]?) := by
   let generation := cut.checkpoint.prepared.generation
-  have reached (through : Nat) (bounded : through ≤ cut.checkpoint.table.runs.length) : ∀ index < through,
-      ∃ (run : Compaction.CheckedRun) (inode : Nat), cut.checkpoint.table.runs.toArray[index]? = some run ∧
-        (report.views through).visible (state.session.directory.file (.run generation index)) = some inode ∧
-        (report.inodes (report.atRun through)).visible inode = run.run.bytes := by
-    induction through with
-    | zero => intro index inside; omega
-    | succ prior earlier =>
-      intro index inside
-      obtain ⟨run, selected, observed, synced, bound, bytes, privateBinding, frame⟩ := report.runReports prior bounded
-      by_cases same : index = prior
-      · subst index
-        exact ⟨run, _, selected, bound, synced.symm ▸ bytes⟩
-      · obtain ⟨earlierRun, inode, selected, bound, bytes⟩ := earlier (Nat.le_of_lt bounded) index (by omega)
-        have apart : state.session.directory.file (.run generation index) ≠ state.session.directory.file (.run generation prior) :=
-          runPath_ne state.session.directory (fun equal => same (congrArg Prod.snd equal))
-        exact ⟨earlierRun, inode, selected, (frame.keepsVisible synced privateBinding apart bound bytes).2⟩
-  obtain ⟨run, inode, selected, bound, bytes⟩ := reached _ (Nat.le_refl _) index within
+  obtain ⟨run, inode, selected, bound, bytes, _⟩ := report.freshRunAtEnd within
   have visible : (report.runs report.atBarrier).visible generation index = cut.checkpoint.plan.files[index]? := by
     rw [(report.views cut.checkpoint.table.runs.length).visibleProjects _ _ _ bound, bytes]
     change some run.run.bytes = (cut.checkpoint.table.runs.map (·.run.bytes))[index]?
@@ -259,10 +397,9 @@ theorem priorRuns (report : NativeCheckpointRunDirectoryError (image := image) s
     rw [same, (report.views cut.checkpoint.table.runs.length).visibleProjects _ _ _ stable.visibleBinding, stable.visibleBytes, stored]
 
 theorem filesAtBarrier (report : NativeCheckpointRunDirectoryError (image := image) state cut) (index : Nat)
-    (within : index ≤ cut.checkpoint.table.runs.length) : report.files (report.atRun index) = state.files.image := by
-  induction index with
-  | zero => exact report.initialFiles
-  | succ index prior => exact (report.runFileFrame index within).trans (prior (Nat.le_of_lt within))
+    (within : index ≤ cut.checkpoint.table.runs.length) :
+    report.files (report.atRun index) = state.files.image :=
+  report.filesAtRun index within
 
 /-- No manifest write has run. Neither of the two reported sync effects
 can change the only selected pair and its existing WAL. -/
@@ -272,7 +409,7 @@ theorem filesAtReturn (report : NativeCheckpointRunDirectoryError (image := imag
     CheckpointWalView.ofFiles (report.files report.after) = CheckpointWalView.ofFiles state.files.image := by
   have pair : state.files.image.directory.active = state.writer.target.pair := valid.retained.resumed.ready.selected
   have prior : state.files.image.directory.crashImages = [state.writer.target.pair] := valid.retained.resumed.ready.settled
-  have atBarrier := report.filesAtBarrier _ (Nat.le_refl _)
+  have atBarrier := report.filesAtRun _ (Nat.le_refl _)
   refine ⟨?_, ?_, report.walFrame.trans (congrArg CheckpointWalView.ofFiles atBarrier)⟩
   all_goals rw [report.directoryEffect, atBarrier]
   all_goals cases cut.tookEffect <;> simp only [Bool.false_eq_true, ite_false, ite_true, DirectoryPublication.Image.syncDirectory, pair, prior]
@@ -286,25 +423,15 @@ theorem manifestAtReturn (report : NativeCheckpointRunDirectoryError (image := i
         (report.inodes report.after).visible inode = bytes ∧ (report.inodes report.after).crashBytes inode = [bytes] := by
   have entry : state.files.image.directory.active = state.writer.target.pair := valid.retained.resumed.ready.selected
   rw [(report.filesAtReturn valid).1, ← entry]
-  have existed := report.manifestAtEntry
+  have existed := report.manifestAtEnd
   rw [report.visibleNames]
   cases manifest : state.files.image.directory.active.manifest with
   | none =>
     rw [manifest] at existed
-    have absent (through : Nat) (bounded : through ≤ cut.checkpoint.table.runs.length) :
-        (report.views through).visible (state.session.directory.file .manifest) = none := by
-      induction through with
-      | zero => exact existed
-      | succ prior earlier =>
-        obtain ⟨_, _, _, _, _, _, _, frame⟩ := report.runReports prior bounded
-        exact (frame.visibleNames _ (manifestNeRun cut.checkpoint.prepared.generation prior)).trans
-          (earlier (Nat.le_of_lt bounded))
-    exact absent _ (Nat.le_refl _)
+    exact existed
   | some bytes =>
     rw [manifest] at existed
-    obtain ⟨inode, stable⟩ := existed
-    have same := report.stablePath stable (fun index _ => manifestNeRun cut.checkpoint.prepared.generation index)
-      _ (Nat.le_refl cut.checkpoint.table.runs.length)
+    obtain ⟨inode, _, same⟩ := existed
     exact ⟨inode, same.visibleBinding, report.inodeBytes.symm ▸ same.visibleBytes, report.inodeBytes.symm ▸ same.crashBytes⟩
 
 theorem selectedCheckpoint (report : NativeCheckpointRunDirectoryError (image := image) state cut) (valid : state.Valid) :

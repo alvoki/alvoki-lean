@@ -1,6 +1,8 @@
 import Alvoki.Storage.Disk.NativeExecutionTrace
+import Alvoki.Storage.Disk.NativeOpenReferences
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
+import Alvoki.Storage.Disk.NativeInactiveSessionCalls
 import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 import Alvoki.Storage.Disk.NativePendingRotation
 import Alvoki.Storage.Disk.NativePendingCheckpoint
@@ -14,8 +16,15 @@ import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 import Alvoki.Storage.Disk.NativeGroupedMarkerSyncError
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkStop
+import Alvoki.Storage.Disk.NativeCoveredWalDirectoryStop
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
 import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryError
+import Alvoki.Storage.Disk.NativeCheckpointRunFileError
+import Alvoki.Storage.Disk.NativeCheckpointRunDataError
+import Alvoki.Storage.Disk.NativeCheckpointManifestSyncError
+import Alvoki.Storage.Disk.NativeCheckpointManifestOpenError
+import Alvoki.Storage.Disk.NativeCheckpointManifestDataError
+import Alvoki.Storage.Disk.NativeCheckpointManifestRenameError
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 
@@ -23,10 +32,13 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
 
-inductive NativeExecutionEndInstruction where
+inductive NativeExecutionEndInstruction : Type 1 where
   | ready
   | write (request : WriteRequest)
   | writeThenClose (request : WriteRequest)
+  | writeThenInactiveCalls (request : WriteRequest) (calls : List NativeInactiveRequest)
+  | writeThenCloseThenInactiveCalls (request : WriteRequest) (calls : List NativeInactiveRequest)
+  | closeThenInactiveCalls (calls : List NativeInactiveRequest)
   | close
   | closeThenOpenAttempts (inputs : List FilePath)
   | checkpoint
@@ -54,6 +66,11 @@ The reached files and ownership remain available at each endpoint. -/
 inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
   | ready
   | uncertainWrite (pending : NativePendingWrite current.ready)
+  | callsAfterUncertainWrite (pending : NativePendingWrite current.ready) (calls : List NativeInactiveRequest)
+  | callsAfterPoisonedClose (pending : NativePendingWrite current.ready) (reported : NativePendingClose pending)
+      (unlocked : reported.report.result = .ok ()) (calls : List NativeInactiveRequest)
+  | callsAfterReadyClose (reported : NativeReadyClose current.ready.state) (unlocked : reported.report.result = .ok ())
+      (calls : List NativeInactiveRequest)
   | interruptedFirstAppend {prepared : NativeReadyWritePreparation current.ready.state}
       (stop : NativeFirstAppendStop prepared)
   | interruptedKeeperSync {prepared : NativeReadyWritePreparation current.ready.state}
@@ -86,12 +103,31 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
   | checkpointRunDirectoryError {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointRunDirectoryError (image := image) current.ready.state cut)
+  | checkpointManifestSyncError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestSyncError (image := image) current.ready.state cut)
+  | checkpointManifestOpenError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestOpenError (image := image) current.ready.state cut)
+  | checkpointManifestDataError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestDataError (image := image) current.ready.state cut)
+  | checkpointManifestRenameError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestRenameError (image := image) current.ready.state cut)
+  | checkpointRunDataError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointRunDataError (image := image) current.ready.state cut)
+  | checkpointRunFileError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointRunFileError (image := image) current.ready.state cut)
   | interruptedCheckpoint {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (stop : NativeCheckpointDirectoryStop (image := image) current.ready.state cut)
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause)
   | coveredWalUnlinkError (reported : NativeCoveredWalUnlinkError current.ready.state)
   | interruptedCoveredWalUnlink (stop : NativeCoveredWalUnlinkStop current.ready.state)
+  | interruptedCoveredWalDirectory (stop : NativeCoveredWalDirectoryStop current.ready.state)
   | interruptedObsoleteRunUnlink (cut : NativeObsoleteRunUnlinkCut current.ready.state)
       (stop : NativeObsoleteRunUnlinkStop cut)
   | interruptedRotation (stop : NativeRotationDirectoryStop current.ready.state)
@@ -102,6 +138,9 @@ namespace NativeExecutionEnd
 def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .ready => .ready
   | .uncertainWrite pending => .write pending.write.request
+  | .callsAfterUncertainWrite pending calls => .writeThenInactiveCalls pending.write.request calls
+  | .callsAfterPoisonedClose pending _ _ calls => .writeThenCloseThenInactiveCalls pending.write.request calls
+  | .callsAfterReadyClose _ _ calls => .closeThenInactiveCalls calls
   | .interruptedFirstAppend stop => .write stop.request
   | .interruptedKeeperSync stop => .write stop.request
   | .groupedKeeperSyncError seen => .write seen.request
@@ -115,16 +154,19 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .rejectedOpensAfterClose sequence => .closeThenOpenAttempts sequence.inputs
   | .interruptedClose _ _ => .close
   | .interruptedCloseAfterUncertainWrite pending _ _ => .writeThenClose pending.write.request
-  | .checkpointError _ _ | .checkpointRunDirectoryError _ => .checkpoint
+  | .checkpointError _ _ | .checkpointRunDirectoryError _ | .checkpointRunFileError _
+  | .checkpointRunDataError _ | .checkpointManifestSyncError _
+  | .checkpointManifestOpenError _ | .checkpointManifestDataError _ | .checkpointManifestRenameError _ => .checkpoint
   | .interruptedCheckpoint _ => .checkpoint
   | .collectionError _ _ _ => .collectCoveredWal
-  | .interruptedCoveredWalUnlink _ | .coveredWalUnlinkError _ => .collectCoveredWal
+  | .interruptedCoveredWalUnlink _ | .interruptedCoveredWalDirectory _ | .coveredWalUnlinkError _ => .collectCoveredWal
   | .interruptedObsoleteRunUnlink cut _ => .collectObsoleteRuns cut.plan.reports.held
   | .interruptedRotation _ => .rotateWal
   | .rotationError _ _ => .rotateWal
 
 def uncertainBatch : NativeExecutionEnd current → Option (List WAL.Write)
-  | .uncertainWrite pending | .closeAfterUncertainWrite pending _ => some pending.write.failure.batch
+  | .uncertainWrite pending | .closeAfterUncertainWrite pending _ | .callsAfterUncertainWrite pending _
+  | .callsAfterPoisonedClose pending _ _ _ => some pending.write.failure.batch
   | .interruptedFirstAppend (prepared := prepared) _ | .interruptedKeeperSync (prepared := prepared) _
   | .groupedKeeperSyncError (prepared := prepared) _ | .interruptedMarkerRename (prepared := prepared) _
   | .groupedMarkerSyncError (prepared := prepared) _
@@ -145,6 +187,15 @@ def Reached : NativeExecutionEnd current → Prop
   | .ready => current.ready.opened =
       .ok current.ready.initial.session (current.ready.initial.census, current.ready.initial.files)
   | .uncertainWrite pending => pending.write.returnedAt pending.cache
+  | .callsAfterUncertainWrite pending calls =>
+      pending.write.returnedAt pending.cache ∧
+      NativeInactiveTrace pending.inactive calls (calls.map (NativeInactiveRequest.response .poisoned))
+  | .callsAfterPoisonedClose pending reported unlocked calls =>
+      pending.write.returnedAt pending.cache ∧ reported.report.run = .ok () reported.report.finished ∧
+      NativeInactiveTrace (reported.inactive unlocked) calls (calls.map (NativeInactiveRequest.response .closed))
+  | .callsAfterReadyClose reported unlocked calls =>
+      reported.report.run = .ok () reported.report.finished ∧
+      NativeInactiveTrace (reported.inactive unlocked) calls (calls.map (NativeInactiveRequest.response .closed))
   | .interruptedFirstAppend stop => NativePendingFirstAppend current.ready stop
   | .interruptedKeeperSync stop => NativePendingKeeperSync current.ready stop
   | .groupedKeeperSyncError seen => NativeReturnedGroupedKeeperError current.ready seen
@@ -195,6 +246,12 @@ def Reached : NativeExecutionEnd current → Prop
         pair.walBoundary = current.ready.state.writer.wal.directory.active.walBoundary ∧
         cut.PendingReplay (physical.runs reported.after) pair.manifest current.submissions current.ready.reads
   | .checkpointRunDirectoryError reported => NativeReturnedCheckpointRunDirectoryError current.ready reported
+  | .checkpointRunFileError reported => NativeReturnedCheckpointRunFileError current.ready reported
+  | .checkpointRunDataError reported => NativeReturnedCheckpointRunDataError current.ready reported
+  | .checkpointManifestSyncError reported => NativeReturnedCheckpointManifestSyncError current.ready reported
+  | .checkpointManifestOpenError reported => NativeReturnedCheckpointManifestOpenError current.ready reported
+  | .checkpointManifestDataError reported => NativeReturnedCheckpointManifestDataError current.ready reported
+  | .checkpointManifestRenameError reported => NativeReturnedCheckpointManifestRenameError current.ready reported
   | .interruptedCheckpoint stop => NativePendingCheckpoint current.ready stop
   | .collectionError reported cause _ =>
       reported.run = .error (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}")
@@ -202,6 +259,7 @@ def Reached : NativeExecutionEnd current → Prop
       ∀ sealed ∈ reported.pending.image.crashSealed,
         Nonempty (CoveredWalRetrySelection current.ready.state.writer { reported.pending.image.visible with sealed })
   | .coveredWalUnlinkError reported => NativeReturnedCoveredWalUnlinkError current.ready reported
+  | .interruptedCoveredWalDirectory stop => NativeCoveredWalDirectoryStopped current.ready stop
   | .interruptedCoveredWalUnlink stop =>
       (∀ barrier, stop.run barrier = .error stop.path
         (.poisoned, ⟨(current.ready.state.cache, stop.census, stop.after), current.ready.state.files.owners⟩)) ∧
@@ -228,6 +286,13 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   cases ending with
   | ready => exact current.ready.readPrefix.frames.1
   | uncertainWrite pending => exact pending.returned
+  | callsAfterUncertainWrite pending calls => exact ⟨pending.returned, (pending.rejectsCalls calls).2.1⟩
+  | callsAfterPoisonedClose _ reported unlocked calls =>
+    obtain ⟨pending, closed, rejected, _⟩ := reported.rejectsCalls unlocked calls
+    exact ⟨pending, closed, rejected⟩
+  | callsAfterReadyClose reported unlocked calls =>
+    obtain ⟨closed, rejected, _⟩ := current.ready.rejectsCallsAfterClose reported unlocked calls
+    exact ⟨closed, rejected⟩
   | interruptedFirstAppend stop => exact current.ready.stopsAtFirstAppend stop
   | interruptedKeeperSync stop => exact current.ready.stopsAtKeeperSync stop
   | groupedKeeperSyncError seen => exact current.ready.returnsGroupedKeeperError seen
@@ -264,12 +329,19 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
     exact ⟨stopped, phase, files, inventory, bound⟩
   | checkpointError reported physical => exact current.ready.readPrefix.checkpointDirectoryError reported physical
   | checkpointRunDirectoryError reported => exact current.ready.checkpointRunDirectoryError reported
+  | checkpointRunFileError reported => exact current.ready.checkpointRunFileError reported
+  | checkpointRunDataError reported => exact current.ready.checkpointRunDataError reported
+  | checkpointManifestSyncError reported => exact current.ready.checkpointManifestSyncError reported
+  | checkpointManifestOpenError reported => exact current.ready.checkpointManifestOpenError reported
+  | checkpointManifestDataError reported => exact current.ready.checkpointManifestDataError reported
+  | checkpointManifestRenameError reported => exact current.ready.checkpointManifestRenameError reported
   | interruptedCheckpoint stop => exact current.ready.stopsDuringCheckpoint stop
   | collectionError reported _ failed =>
     obtain ⟨returned, _, _, _, _, _, _, _, _, _, _, _, _, survivors, _⟩ :=
       current.ready.readPrefix.collectionBarrierFailed reported failed
     exact ⟨returned, survivors⟩
   | coveredWalUnlinkError reported => exact current.ready.returnsCoveredWalUnlinkError reported
+  | interruptedCoveredWalDirectory stop => exact current.ready.stopsAtCoveredWalDirectory stop
   | interruptedCoveredWalUnlink stop =>
     have valid := current.ready.readPrefix.refines.1
     have custody := stop.retainsCustody valid
@@ -307,6 +379,12 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
   | uncertainWrite pending =>
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
+  | callsAfterUncertainWrite pending =>
+    obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
+    exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
+  | callsAfterPoisonedClose _ reported =>
+    obtain ⟨chosen, allowed, _, replay, bounded⟩ := reported.selectsAtReturn
+    exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
   | interruptedFirstAppend stop =>
     have reached := current.ready.stopsAtFirstAppend stop
     exact ⟨current.history, .inl rfl, reached.replay, reached.bounded⟩
@@ -341,9 +419,11 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
   | interruptedCloseAfterUncertainWrite pending =>
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
-  | ready | close | rejectedOpensAfterClose | interruptedClose | checkpointError | interruptedCheckpoint
-  | checkpointRunDirectoryError | collectionError | coveredWalUnlinkError | interruptedCoveredWalUnlink
-  | interruptedObsoleteRunUnlink | interruptedRotation | rotationError =>
+  | ready | close | callsAfterReadyClose | rejectedOpensAfterClose | interruptedClose | checkpointError | interruptedCheckpoint
+  | checkpointRunDirectoryError | checkpointRunFileError | checkpointRunDataError
+  | checkpointManifestSyncError | checkpointManifestOpenError | checkpointManifestDataError | checkpointManifestRenameError
+  | collectionError | coveredWalUnlinkError | interruptedCoveredWalUnlink
+  | interruptedCoveredWalDirectory | interruptedObsoleteRunUnlink | interruptedRotation | rotationError =>
     refine ⟨current.history, .inl rfl, ?_, current.ready.readPrefix.readsBounded⟩
     all_goals simpa [submissions, uncertainBatch] using current.ready.readPrefix.refines.2.2
 
@@ -358,6 +438,18 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
   | uncertainWrite (write : NativeReadyWriteFailure current.ready.state)
       (inspect : ∀ cache, write.returnedAt cache → Nonempty (NativePendingWriteCensus current.ready.state cache)) :
       NativeExecutionEndObservation current (.write write.request)
+  | callsAfterUncertainWrite (failedWrite : NativeReadyWriteFailure current.ready.state)
+      (calls : List NativeInactiveRequest)
+      (inspect : ∀ cache, failedWrite.returnedAt cache → Nonempty (NativePendingWriteCensus current.ready.state cache)) :
+      NativeExecutionEndObservation current (.writeThenInactiveCalls failedWrite.request calls)
+  | callsAfterPoisonedClose (failedWrite : NativeReadyWriteFailure current.ready.state)
+      (calls : List NativeInactiveRequest)
+      (inspect : ∀ cache, failedWrite.returnedAt cache → Nonempty (NativePendingWriteCensus current.ready.state cache))
+      (close : ∀ pending : NativePendingWrite current.ready, pending.write = failedWrite →
+        ∃ reported : NativePendingClose pending, reported.report.result = .ok ()) :
+      NativeExecutionEndObservation current (.writeThenCloseThenInactiveCalls failedWrite.request calls)
+  | callsAfterReadyClose (reported : NativeReadyClose current.ready.state) (unlocked : reported.report.result = .ok ())
+      (calls : List NativeInactiveRequest) : NativeExecutionEndObservation current (.closeThenInactiveCalls calls)
   | interruptedFirstAppend {prepared : NativeReadyWritePreparation current.ready.state}
       (stop : NativeFirstAppendStop prepared) : NativeExecutionEndObservation current (.write stop.request)
   | interruptedKeeperSync {prepared : NativeReadyWritePreparation current.ready.state}
@@ -397,6 +489,24 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
   | checkpointRunDirectoryError {image : Type}
       {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (reported : NativeCheckpointRunDirectoryError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
+  | checkpointManifestSyncError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestSyncError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
+  | checkpointManifestOpenError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestOpenError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
+  | checkpointManifestDataError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestDataError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
+  | checkpointManifestRenameError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointManifestRenameError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
+  | checkpointRunDataError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointRunDataError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
+  | checkpointRunFileError {image : Type}
+      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+      (reported : NativeCheckpointRunFileError (image := image) current.ready.state cut) : NativeExecutionEndObservation current .checkpoint
   | interruptedCheckpoint {image : Type} {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
       (stop : NativeCheckpointDirectoryStop (image := image) current.ready.state cut) :
       NativeExecutionEndObservation current .checkpoint
@@ -405,6 +515,8 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
       NativeExecutionEndObservation current .collectCoveredWal
   | coveredWalUnlinkError (reported : NativeCoveredWalUnlinkError current.ready.state) : NativeExecutionEndObservation current .collectCoveredWal
   | interruptedCoveredWalUnlink (stop : NativeCoveredWalUnlinkStop current.ready.state) :
+      NativeExecutionEndObservation current .collectCoveredWal
+  | interruptedCoveredWalDirectory (stop : NativeCoveredWalDirectoryStop current.ready.state) :
       NativeExecutionEndObservation current .collectCoveredWal
   | interruptedObsoleteRunUnlink (cut : NativeObsoleteRunUnlinkCut current.ready.state)
       (stop : NativeObsoleteRunUnlinkStop cut) : NativeExecutionEndObservation current (.collectObsoleteRuns cut.plan.reports.held)
@@ -422,6 +534,19 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
     refine ⟨.uncertainWrite pending, ?_, pending.returned⟩
     change NativeExecutionEndInstruction.write pending.write.request = .write write.request
     rw [same]
+  | callsAfterUncertainWrite failedWrite calls inspect =>
+    obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite failedWrite inspect
+    refine ⟨.callsAfterUncertainWrite pending calls, ?_, NativeExecutionEnd.reached _⟩
+    change NativeExecutionEndInstruction.writeThenInactiveCalls pending.write.request calls = _
+    rw [same]
+  | callsAfterPoisonedClose failedWrite calls inspect close =>
+    obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite failedWrite inspect
+    obtain ⟨reported, unlocked⟩ := close pending same
+    refine ⟨.callsAfterPoisonedClose pending reported unlocked calls, ?_, NativeExecutionEnd.reached _⟩
+    change NativeExecutionEndInstruction.writeThenCloseThenInactiveCalls pending.write.request calls = _
+    rw [same]
+  | callsAfterReadyClose reported unlocked calls =>
+    exact ⟨.callsAfterReadyClose reported unlocked calls, rfl, NativeExecutionEnd.reached _⟩
   | interruptedFirstAppend stop => exact ⟨.interruptedFirstAppend stop, rfl, NativeExecutionEnd.reached _⟩
   | interruptedKeeperSync stop => exact ⟨.interruptedKeeperSync stop, rfl, NativeExecutionEnd.reached _⟩
   | groupedKeeperSyncError seen => exact ⟨.groupedKeeperSyncError seen, rfl, NativeExecutionEnd.reached _⟩
@@ -447,13 +572,128 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
     rw [same]
   | checkpointError reported physical => exact ⟨.checkpointError reported physical, rfl, NativeExecutionEnd.reached _⟩
   | checkpointRunDirectoryError reported => exact ⟨.checkpointRunDirectoryError reported, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointRunFileError reported => exact ⟨.checkpointRunFileError reported, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointRunDataError reported => exact ⟨.checkpointRunDataError reported, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointManifestSyncError reported => exact ⟨.checkpointManifestSyncError reported, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointManifestOpenError reported => exact ⟨.checkpointManifestOpenError reported, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointManifestDataError reported => exact ⟨.checkpointManifestDataError reported, rfl, NativeExecutionEnd.reached _⟩
+  | checkpointManifestRenameError reported => exact ⟨.checkpointManifestRenameError reported, rfl, NativeExecutionEnd.reached _⟩
   | interruptedCheckpoint stop => exact ⟨.interruptedCheckpoint stop, rfl, NativeExecutionEnd.reached _⟩
   | collectionError reported cause failed => exact ⟨.collectionError reported cause failed, rfl, NativeExecutionEnd.reached _⟩
   | coveredWalUnlinkError reported => exact ⟨.coveredWalUnlinkError reported, rfl, NativeExecutionEnd.reached _⟩
   | interruptedCoveredWalUnlink stop => exact ⟨.interruptedCoveredWalUnlink stop, rfl, NativeExecutionEnd.reached _⟩
+  | interruptedCoveredWalDirectory stop => exact ⟨.interruptedCoveredWalDirectory stop, rfl, NativeExecutionEnd.reached _⟩
   | interruptedObsoleteRunUnlink cut stop => exact ⟨.interruptedObsoleteRunUnlink cut stop, rfl, NativeExecutionEnd.reached _⟩
   | interruptedRotation stop => exact ⟨.interruptedRotation stop, rfl, NativeExecutionEnd.reached _⟩
   | rotationError cause failure => exact ⟨.rotationError cause failure, rfl, NativeExecutionEnd.reached _⟩
+
+/-- The ending belongs to the last state of the executed instruction
+prefix, so it can use that state even when its last call cannot return. -/
+structure NativeReachedExecutionPrefix (start : NativeExecutionPosition)
+    (instructions : List NativeExecutionInstruction) (requested : NativeExecutionEndInstruction) where
+  events : List NativeExecutionEvent
+  last : NativeExecutionPosition
+  ending : NativeExecutionEnd last
+  ordered : NativeExecutionInstructions instructions events
+  trace : NativeExecutionTrace start events last
+  requestedEnd : ending.instruction = requested
+  reached : ending.Reached
+
+/-- One replay explains the reads at the last ready position. An ending
+that returns ready preserves that refinement, and an interrupted ending
+has a permitted selection that still explains the earlier responses. -/
+theorem NativeReachedExecutionPrefix.keyValueRefinement
+    (run : NativeReachedExecutionPrefix start instructions requested) :
+    (∀ event ∈ run.events, event.uncertainBatchWhole) ∧
+    InstalledClientReplay run.last.submissions run.last.ready.reads run.last.history
+      run.last.ready.state.writer.installed run.last.ready.state.session ∧
+    run.ending.ReadyReplay ∧
+    ∃ chosen, run.ending.allows chosen ∧ PendingClientReplay run.ending.submissions run.last.ready.reads chosen ∧
+      ∀ read ∈ run.last.ready.reads, read.BoundedBy chosen.length :=
+  ⟨run.trace.uncertainBatchesWhole, run.trace.keyValueRefinement.2.2.2,
+    run.ending.guarded, run.ending.selectsAtEnd⟩
+
+theorem NativeExecutionTrace.reachesPrefix (start : NativeExecutionPosition)
+    (instructions : List NativeExecutionInstruction) (requested : NativeExecutionEndInstruction)
+    (reports : NativeExecutionTrace.Reports start instructions)
+    (terminal : ∀ events last, NativeExecutionInstructions instructions events → NativeExecutionTrace start events last →
+      Nonempty (NativeExecutionEndObservation last requested)) :
+    Nonempty (NativeReachedExecutionPrefix start instructions requested) := by
+  obtain ⟨events, last, ordered, trace, _⟩ := NativeExecutionTrace.executes start instructions reports
+  obtain ⟨observed⟩ := terminal events last ordered trace
+  obtain ⟨ending, request, reached⟩ := observed.reaches
+  exact ⟨⟨events, last, ending, ordered, trace, request, reached⟩⟩
+
+/-- The exact returned bootstrap or marked recovery can seed the same
+execution. The marked route starts with the ledger justified by its
+checkpoint and WAL. Future reports and the ending use the reached state
+of that execution. -/
+theorem NativeOpenSuccessReports.reachesExecutionPrefix
+    {input : FilePath} {directory : DiskDirectory} {history : List WAL.Write}
+    {log : List DatabaseSubmissions} {recorded : List RecordedSnapshotRead}
+    (opened : NativeOpenSuccessReports input directory history log recorded) :
+    opened.markerRead = .ok opened.marker ∧ opened.Selects ∧
+    ∃ (start : NativeExecutionPosition) (files : opened.Image),
+      opened.run = .ok start.ready.state.session files ∧ start.ready.state.session.directory = directory ∧
+      opened.UsesReachedState start.ready.state files ∧
+      start.history = history ∧ start.submissions = log ∧ start.ready.reads = recorded ∧
+      ∀ instructions requested, NativeExecutionTrace.Reports start instructions →
+        (∀ events last, NativeExecutionInstructions instructions events → NativeExecutionTrace start events last →
+          Nonempty (NativeExecutionEndObservation last requested)) →
+        Nonempty (NativeReachedExecutionPrefix start instructions requested) := by
+  obtain ⟨marker, selected, state, files, returned, path, reached, _, _, ready⟩ := opened.returnsReady
+  let start : NativeExecutionPosition :=
+    ⟨history, log, ⟨.ok state.session (state.census, state.files), state, state, recorded, ready⟩⟩
+  exact ⟨marker, selected, start, files, returned, path, reached, rfl, rfl, rfl,
+    NativeExecutionTrace.reachesPrefix start⟩
+
+/-- The ready position of the common execution uses the same installed
+state, lock and reference identities as the reported native installation
+suffix. The heap and primitive allocation effects at that suffix remain
+part of the report. -/
+theorem NativeOpenSuccessReports.reachesExecutionPrefixWithReferences
+    {heap : Type} {input : FilePath} {directory : DiskDirectory} {history : List WAL.Write}
+    {log : List DatabaseSubmissions} {recorded : List RecordedSnapshotRead}
+    (opened : NativeOpenSuccessReports input directory history log recorded)
+    {lock : IO.FS.Handle} {syncFiles : DiskTable.OpenSyncFiles}
+    {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+    (constructor : DiskTable.OpenReferenceAssembly directory lock syncFiles assemble)
+    (lockIdentity : IO.FS.Handle → Nat) (phaseIdentity : IO.Ref (Phase Installed) → Nat)
+    (tokenIdentity : IO.Ref Unit → Nat)
+    (allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed)))
+    (allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit))
+    (phaseContents : heap → IO.Ref (Phase Installed) → Option (Phase Installed))
+    (heapAtInstall : heap)
+    (observe : ∀ (session : SegmentedSession) (files : opened.Image) (installed : Installed),
+      opened.run = .ok session files → session.phase = .ready installed →
+      ∃ allocation : OpenReferenceAllocations allocatePhase allocateToken phaseContents installed heapAtInstall,
+        lockIdentity lock = session.descriptor ∧ phaseIdentity allocation.phase = session.phaseRef ∧
+        tokenIdentity allocation.token = session.sessionRef) :
+    opened.markerRead = .ok opened.marker ∧ opened.Selects ∧
+    ∃ (start : NativeExecutionPosition) (files : opened.Image)
+      (allocation : OpenReferenceAllocations allocatePhase allocateToken phaseContents
+        start.ready.state.writer.installed heapAtInstall) (db : DiskTable),
+      opened.run = .ok start.ready.state.session files ∧ start.ready.state.session.directory = directory ∧
+      opened.UsesReachedState start.ready.state files ∧
+      installReady start.ready.state.writer.installed allocatePhase allocateToken (fun phase token => pure (assemble phase token))
+        heapAtInstall = .ok db allocation.afterToken ∧
+      db.UsesOpenReferences directory lock syncFiles allocation.phase allocation.token ∧
+      phaseContents allocation.afterToken allocation.phase = some start.ready.state.session.phase ∧
+      lockIdentity lock = start.ready.state.session.descriptor ∧ phaseIdentity allocation.phase = start.ready.state.session.phaseRef ∧
+      tokenIdentity allocation.token = start.ready.state.session.sessionRef ∧
+      start.history = history ∧ start.submissions = log ∧ start.ready.reads = recorded ∧
+      ∀ instructions requested, NativeExecutionTrace.Reports start instructions →
+        (∀ events last, NativeExecutionInstructions instructions events → NativeExecutionTrace start events last →
+          Nonempty (NativeExecutionEndObservation last requested)) →
+        Nonempty (NativeReachedExecutionPrefix start instructions requested) := by
+  obtain ⟨marker, selected, state, files, allocation, db, returned, path, reached, ready, installed,
+    references, contents, sameLock, samePhase, sameToken⟩ :=
+    opened.returnsReadyWithReferences constructor lockIdentity phaseIdentity tokenIdentity allocatePhase allocateToken
+      phaseContents heapAtInstall observe
+  let start : NativeExecutionPosition :=
+    ⟨history, log, ⟨.ok state.session (state.census, state.files), state, state, recorded, ready⟩⟩
+  exact ⟨marker, selected, start, files, allocation, db, returned, path, reached, installed, references, contents,
+    sameLock, samePhase, sameToken, rfl, rfl, rfl, NativeExecutionTrace.reachesPrefix start⟩
 
 /-- The exact empty bootstrap starts one native execution. Completed
 instructions retain their ordered replay. The final report retains
@@ -484,13 +724,19 @@ theorem BootstrapKeeperMarkerHandoff.executesPrefixFromEmpty
           ending.instruction = requested ∧ ending.Reached ∧ ending.ReadyReplay ∧
           ∃ chosen, ending.allows chosen ∧ PendingClientReplay ending.submissions last.ready.reads chosen ∧
             ∀ read ∈ last.ready.reads, read.BoundedBy chosen.length := by
-  obtain ⟨boot, start, opened, session, writer, census, executes⟩ := bootstrap.executesFromEmpty admission empty effects
-  refine ⟨boot, start, opened, session, writer, census, ?_⟩
+  obtain ⟨boot, returned, _, _, _, _, _, _, _, _, ready⟩ :=
+    bootstrap.startsNativeReadPrefixFromEmpty admission empty effects
+  let state : NativeReadyState :=
+    ⟨boot.session, boot.writer, effects.reached, captured.cache, calls.slot, captured.cached⟩
+  let start : NativeExecutionPosition :=
+    ⟨[], [], ⟨.ok state.session (state.census, state.files), state, state, [], ready⟩⟩
+  refine ⟨boot, start, returned, rfl, rfl, rfl, ?_⟩
   intro instructions requested reports terminal
-  obtain ⟨events, last, matched, trace, writes, submissions, reads, whole, _⟩ := executes instructions reports
-  obtain ⟨observed⟩ := terminal events last matched trace
-  obtain ⟨ending, request, reached⟩ := observed.reaches
-  exact ⟨events, last, ending, matched, trace, writes, submissions, reads, whole, request, reached,
-    ending.guarded, ending.selectsAtEnd⟩
+  obtain ⟨run⟩ := NativeExecutionTrace.reachesPrefix start instructions requested reports terminal
+  obtain ⟨writes, submissions, reads⟩ := run.trace.ledgers
+  obtain ⟨whole, _, guarded, selection⟩ := run.keyValueRefinement
+  exact ⟨run.events, run.last, run.ending, run.ordered, run.trace,
+    by simpa [start] using writes, by simpa [start] using submissions, by simpa [start] using reads,
+    whole, run.requestedEnd, run.reached, guarded, selection⟩
 
 end Alvoki.Storage.DiskSession

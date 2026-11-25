@@ -437,6 +437,35 @@ theorem runWithMarked_ready (calls : CapturedAlignedCallbacks admission)
     admission.recoverWithMarked_selects calls.flat route, Option.isSome_some, ↓reduceIte, recovered]
   rfl
 
+/-- The successful marked installation consumes the result of the
+same held repair at its reached census and file image. The allocator
+and constructor merely transfer that recovered value to the phase. -/
+theorem runWithMarked_reachedRepair (calls : CapturedAlignedCallbacks admission)
+    (marked : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened)
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    {session : SegmentedSession} {final : CensusOpenState}
+    (returned : calls.runWithMarked marked = .ok session final) :
+    ∃ opened, marked directory admission.cache (admission.reached, admission.held) = .ok opened final ∧
+      session = ⟨directory, admission.owner.description, .ready opened.installed, calls.nextRef, calls.nextRef + 1⟩ := by
+  have route : optionalMetadataWith (admission.lookup (directory.file .walBoundary))
+      (admission.reached, admission.held) = .ok (some metadata) (admission.reached, admission.held) := by
+    simp only [optionalMetadataWith, Bind.bind, EStateM.bind, marker, Pure.pure, EStateM.pure]
+  simp only [runWithMarked, admission.run_reachesRecovery, installAfterRecovery,
+    tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, Bind.bind, EStateM.bind,
+    admission.recoverWithMarked_selects calls.flat route, Option.isSome_some, ↓reduceIte] at returned
+  cases repaired : marked directory admission.cache (admission.reached, admission.held) with
+  | error cause reached =>
+    simp only [repaired, EStateM.Backtrackable.restore, EStateM.dummyRestore,
+      throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+    cases released : admission.unlock admission.owner () reached <;> simp only [released, reduceCtorEq] at returned
+  | ok opened reached =>
+    rw [repaired] at returned
+    have exactReturn := EStateM.Result.ok.inj returned
+    obtain ⟨rfl, rfl⟩ := exactReturn
+    exact ⟨opened, rfl, rfl⟩
+
 /-- Use the shared marked recovery and allocate the ready session after the
 reached repair callback returns. -/
 def runWithFinish (calls : CapturedAlignedCallbacks admission)
@@ -538,13 +567,17 @@ def run (finish : CapturedAlignedFinish calls report vacant selected) :
 
 /-- Use the cache and inventory returned by the chronological reader.
 The same keeper handle remains pending until its reached file barrier. -/
+def recoverFromCensus (finish : CapturedAlignedFinish calls report vacant selected)
+    (metadataRelease runRelease sealRelease : FilePath → List LockReferenceDrop) :
+    DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened :=
+  fun resolved cache => finishPreparedWithCensus
+    (report.prepareFromCensus metadataRelease runRelease sealRelease finish.readCustody.readKeeperAt)
+    (finish.actions resolved) cache
+
 def runFromCensus (finish : CapturedAlignedFinish calls report vacant selected)
     (metadataRelease runRelease sealRelease : FilePath → List LockReferenceDrop) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
-  calls.runWithMarked fun resolved cache =>
-    finishPreparedWithCensus
-      (report.prepareFromCensus metadataRelease runRelease sealRelease finish.readCustody.readKeeperAt)
-      (finish.actions resolved) cache
+  calls.runWithMarked (finish.recoverFromCensus metadataRelease runRelease sealRelease)
 
 /-- The aligned repair starts at the reported vacant admission. Its
 captured directory and keeper barriers preserve the admitted pair. -/
@@ -617,7 +650,7 @@ theorem installsFromCensus (finish : CapturedAlignedFinish calls report vacant s
     finish.readCustody seals offsets retained following laterValid accepted ordered finish.readCustody.readKeeperAt
     (finish.readCustody.readsAligned finish.keeperAligned)
   have same : finish.runFromCensus metadataRelease runs.released released = finish.run := by
-    unfold runFromCensus run
+    unfold runFromCensus recoverFromCensus run
     apply calls.runWithMarked_eq report _ finish.finishAt marker
     simp only [finishPreparedWithCensus, reached, finish.actions_returns, Bind.bind, EStateM.bind, projected,
       finish.finishAt_returns]
