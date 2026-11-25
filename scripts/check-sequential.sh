@@ -216,6 +216,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeInitialMarkerFlushError
 lake env leanchecker Alvoki.Storage.Disk.NativeInitialMarkerFlushSessions
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerDirectoryStop
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectReboot
+lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerDirectoryReboot
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerRebootTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerStopSessions
