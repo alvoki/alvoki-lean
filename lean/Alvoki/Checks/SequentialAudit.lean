@@ -1447,6 +1447,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RotationRawCreateEffect.keepsLock
 #check_axioms Alvoki.Storage.DiskSession.RotationRawCreateEffect.keepsKeeperMarker
 #check_axioms Alvoki.Storage.DiskSession.RotationRawCreateEffect.survivor
+#check_axioms Alvoki.Storage.DiskSession.RotationRawCreateEffect.selectedKeeperPayload
 #check_axioms Alvoki.Storage.DiskSession.RotationRawCreateStop.reaches
 #check_axioms Alvoki.Storage.DiskSession.RotationRawCreateStop.refinesReopenPrefix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterRotationWithAdmission

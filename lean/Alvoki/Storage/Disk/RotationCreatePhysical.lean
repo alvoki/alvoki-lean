@@ -242,6 +242,27 @@ theorem survivor (effect : RotationRawCreateEffect parent reached) {name : Optio
       rw [same, created.inode] at contained
       exact created.emptySurvivors bytes contained
 
+/-- The crash observation supplies bytes for the inode that becomes the
+keeper. If the successor name is absent, the old durable keeper supplies
+those bytes. A named successor supplies the empty payload of the new inode. -/
+theorem selectedKeeperPayload (effect : RotationRawCreateEffect parent reached) {name : Option DeviceInode}
+    (survived : name ∈ reached.2.crashNames (successorName before)) {payload : ByteArray}
+    (bytes : payload ∈ reached.2.inodes.crashBytes (reached.2.view.modelObject (name.getD parent.keeper.child))) :
+    (cut.survivingWal before.wal.directory.active name.isSome).active.bytes = payload ∧
+    payload = match name with
+      | none => before.wal.active.bytes
+      | some _ => ByteArray.empty := by
+  cases name with
+  | none =>
+    obtain ⟨objects, _, _, _, _, _, keeperCrash, _, _⟩ := effect.keepsKeeperMarker
+    change payload ∈ reached.2.inodes.crashBytes (reached.2.view.modelObject parent.keeper.child) at bytes
+    rw [objects, keeperCrash] at bytes
+    have old := List.mem_singleton.mp bytes
+    exact ⟨old.symm, old⟩
+  | some child =>
+    have empty := (effect.survivor survived).2 child rfl payload bytes
+    exact ⟨empty.symm, empty⟩
+
 end RotationRawCreateEffect
 
 /-- The exact raw observation supplies the modeled cut in the same
@@ -260,9 +281,9 @@ theorem RotationRawCreateStop.reaches {directory : DiskDirectory} {before : Segm
     congrArg Prod.snd (EStateM.Result.error.inj (observed.stopped.symm.trans raw)).2
   exact ⟨same, by rw [← same]; exact observed.stopsSchedule sync⟩
 
-/-- The physical successor choice (possibly absent) determines the fixed
-keeper used by the reported retry prefix. The old durable marker chooses
-the pre-rotation WAL before any later open succeeds. -/
+/-- The reported surviving name and its payload determine the fixed
+keeper used by the retry prefix. The old durable marker chooses the
+pre-rotation WAL before any later open succeeds. -/
 theorem RotationRawCreateStop.refinesReopenPrefix {directory : DiskDirectory} {before : SegmentedWriterState}
     {cut : RotationInFlightCut directory before} {handle : Type}
     {observed : ObservedRotationCreateStop cut handle} {inventory : DescriptorInventory}
@@ -270,6 +291,8 @@ theorem RotationRawCreateStop.refinesReopenPrefix {directory : DiskDirectory} {b
     (report : RotationRawCreateStop parent reached) (ready : before.RetainedReady directory parent.owner.description)
     (barrier : FilePath → ExceptT IO.Error (EStateM FilePath (Cache handle × State)) Unit)
     {name : Option DeviceInode} (survived : name ∈ reached.2.crashNames (successorName before))
+    {payload : ByteArray}
+    (bytes : payload ∈ reached.2.inodes.crashBytes (reached.2.view.modelObject (name.getD parent.keeper.child)))
     {retry : LockedFileState FileImage}
     (reported : ReportedReopenPrefix directory
       (cut.survivingWal before.wal.directory.active name.isSome).active.first
@@ -278,12 +301,16 @@ theorem RotationRawCreateStop.refinesReopenPrefix {directory : DiskDirectory} {b
     BoundedReopenTrace directory (CheckpointRetryTarget before.history keeper.first)
       (cut.crashedFiles before.wal.directory.active name.isSome) retry ∧
     retry.image.directory.active = before.target.pair ∧
+    payload = (match name with | none => before.wal.active.bytes | some _ => ByteArray.empty) ∧
     ∃ layout : CanonicalKeeperLayout retry.image before.history,
-      layout.keeper = keeper ∧ Prepared retry.image layout.target layout.plan := by
+      layout.keeper = keeper ∧ layout.keeper.bytes = payload ∧ Prepared retry.image layout.target layout.plan := by
   have metadata : before.wal.directory.active ∈ (parent.project reached.2).metadata.crashImages := by
     change before.wal.directory.active ∈ before.wal.directory.crashImages
     simp [ready.walDirectorySettled]
-  exact observed.refinesReopenPrefix ready barrier (report.reaches barrier).2 metadata
-    (report.effect.survivor survived).1 reported
+  obtain ⟨trace, pair, layout, selected, prepared⟩ := observed.refinesReopenPrefix ready barrier
+    (report.reaches barrier).2 metadata (report.effect.survivor survived).1 reported
+  obtain ⟨keeperBytes, payloadBytes⟩ := report.effect.selectedKeeperPayload survived bytes
+  refine ⟨trace, pair, ?_, layout, selected, (congrArg WalSegment.bytes selected).trans keeperBytes, prepared⟩
+  cases name <;> exact payloadBytes
 
 end Alvoki.Storage.DiskSession
