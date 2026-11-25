@@ -257,23 +257,34 @@ theorem markerSyncErrorAfter_selectsSuccessor
     (effective : sync.effective = true)
     (current : handle.inode = marker.active)
     (binding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
-    {before bytes : ByteArray} {previous next : Selection} {frontier : Nat}
-    (prior : decode before = .ok previous) (advanced : advance previous frontier = .ok next)
+    {before bytes : ByteArray} {previous next : Selection}
+    (history batch : List WAL.Write)
+    (prior : decode before = .ok previous) (advanced : advance previous (WAL.encode (history ++ batch)).size = .ok next)
     (size : (marker.visible marker.active).size = containerSize)
     (unchanged : ∀ position,
       (position < next.slot * stride ∨ next.slot * stride + 40 ≤ position) →
         (marker.visible marker.active).get! position = before.get! position)
     (written : (marker.visible marker.active).extract (next.slot * stride) (next.slot * stride + 40) =
       next.encode)
-    (survived : ∃ inode ∈ reached.crashBindings, bytes ∈ reached.crashBytes inode) :
-    decode bytes = .ok next := by
+    (survived : ∃ inode ∈ reached.crashBindings, bytes ∈ reached.crashBytes inode)
+    {wal durable : WalInodeImage} {walHandle : KeeperDescriptorIdentity}
+    (walSync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      walHandle wal (fun inode files => files.completeFileSync inode) (.ok () durable))
+    (walCurrent : walHandle.inode = wal.active)
+    (walBinding : ∀ inode ∈ wal.crashBindings, inode = wal.active)
+    {walBytes : ByteArray}
+    (walSurvived : ∃ inode ∈ durable.crashBindings, walBytes ∈ durable.crashBytes inode)
+    (appended : ∃ tail, wal.visible wal.active = WAL.encode (history ++ batch) ++ tail) :
+    decode bytes = .ok next ∧
+      Boundary.select next.frontier walBytes = .ok (WAL.encode (history ++ batch)) := by
   have effect := sync.effect
   rw [effective, sync.sameInode, current] at effect
   have state : reached = marker.completeFileSync marker.active := by
     cases effect
     rfl
-  rw [completeFileSync_survivor state binding survived]
-  exact decode_afterAdvance prior advanced size unchanged written
+  rw [completeFileSync_survivor state binding survived,
+    syncedInode_survivor walSync walCurrent walBinding walSurvived]
+  exact syncedBytes_selectBatch history batch prior advanced size unchanged written appended
 
 /-- The successful reopen barrier persists the same marker that the
 bounded read observed. WAL repair may rely on this frontier for every
