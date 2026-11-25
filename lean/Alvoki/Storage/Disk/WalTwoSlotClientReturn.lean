@@ -988,6 +988,26 @@ theorem SlotWriteTransfers.interruptedBytes
   · have inside := (transferred.inactiveRecord offset advanced).2 position (attributed position same)
     omega
 
+/-- Convert reported partial-write counts and surviving bytes into the
+inactive-slot recovery contract used by both reopen proofs. -/
+private theorem interruptedBytes_ofCounts
+    {current next : Selection} {frontier : Nat} {active : Slot}
+    (offset : current.slot = slotIndex active) (advanced : advance current frontier = .ok next)
+    {completedCounts : List Nat} {inFlightCount : Nat}
+    (fits : completedCounts.sum + inFlightCount ≤ 40)
+    {before bytes : ByteArray} (size : bytes.size = containerSize)
+    (attributed : ∀ position, bytes.get! position ≠ before.get! position →
+      next.slot * stride ≤ position ∧ position < next.slot * stride + (completedCounts.sum + inFlightCount))
+    (decoded : decodeSlot bytes (slotIndex active.other) = decodeSlot before (slotIndex active.other) ∨
+      decodeSlot bytes (slotIndex active.other) = none ∨ decodeSlot bytes (slotIndex active.other) = some next) :
+    InterruptedSlotBytes before bytes active next := by
+  obtain ⟨addresses, transferred⟩ := SlotWriteTransfers.ofCounts (next.slot * stride) 0
+    (completedCounts ++ [inFlightCount]) (by simpa using fits)
+  simp only [Nat.zero_add, List.sum_append, List.sum_cons, List.sum_nil, Nat.add_zero] at transferred
+  apply transferred.interruptedBytes offset advanced size _ decoded
+  intro position changed
+  exact (transferred.coversPrefix position).mpr (by simpa using attributed position changed)
+
 /-- After the successful WAL barrier, any marker bytes surviving an
 interrupted positional write on the live marker can expose only the
 previous history or the whole newly durable batch. The slot isolation
@@ -2563,9 +2583,6 @@ theorem installsAfterAcquiredRecovery_replays
         (.ready prior.installed, ⟨(prior.files, writeCut.initialMarker), prior.owners⟩) =
         .error writeCut.stopped (.poisoned, ⟨(interrupted, interruptedMarker), prior.owners⟩) := by
   intro opened prepare stabilize
-  obtain ⟨transferredAddresses, transfers⟩ := SlotWriteTransfers.ofCounts (next.slot * stride) 0
-    (completedCounts ++ [inFlightCount]) (by simpa using transfersFit)
-  simp only [Nat.zero_add, List.sum_append, List.sum_cons, List.sum_nil, Nat.add_zero] at transfers
   have beforeBarrier : UnsettledRetries interrupted firstPrepared := by
     rcases reportedBeforeBarrier with direct | ⟨_, _, _, metadata, keeperBytes, laterNames, retries⟩
     · exact direct.refines
@@ -2622,13 +2639,7 @@ theorem installsAfterAcquiredRecovery_replays
     | none => exact .inl (Except.ok.inj projection).symm
     | some bytes =>
       obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes (source bytes rfl)
-      have reported : ∀ position, bytes.get! position ≠
-          (writeCut.initialMarker.visible writeCut.initialMarker.active).get! position →
-          position ∈ transferredAddresses := by
-        intro position changed
-        apply (transfers.coversPrefix position).mpr
-        simpa only [Nat.add_zero] using attributed position changed
-      exact .inr ⟨bytes, transfers.interruptedBytes offset advanced size reported decoded, projection⟩
+      exact .inr ⟨bytes, interruptedBytes_ofCounts offset advanced transfersFit size attributed decoded, projection⟩
   have choicesBefore := interruptedMarker_retryChoices accepted offset newer observations
   have choice := (beforeBarrier.selectsOldOrNew checkpoint current.frontier next.frontier choicesBefore observedFirst).2
   have bytes := choice.imp (fun old => old ▸ oldSize) (fun all => all ▸ newSize)
@@ -3056,9 +3067,6 @@ theorem recoveredRetries_installedReads
   have recovery : WalSegmentRecovery image after.directory.active target.range (history ++ batch)
       base layout.first table := ready.selected.symm ▸ selectedRecovery
   have retries : SettledRetries target after after := .start
-  obtain ⟨addresses, transferred⟩ := SlotWriteTransfers.ofCounts (next.slot * stride) 0
-    (completedCounts ++ [inFlightCount]) (by simpa using transfersFit)
-  simp only [Nat.zero_add, List.sum_append, List.sum_cons, List.sum_nil, Nat.add_zero] at transferred
   have observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
       pair = ⟨checkpoint, none⟩ ∨
       ∃ bytes, InterruptedSlotBytes before bytes active next ∧
@@ -3074,12 +3082,8 @@ theorem recoveredRetries_installedReads
     | none => exact .inl (Except.ok.inj projected).symm
     | some bytes =>
       obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes present
-      have changedAddresses : ∀ position, bytes.get! position ≠ before.get! position → position ∈ addresses := by
-        intro position changed
-        apply (transferred.coversPrefix position).mpr
-        have span := attributed position changed
-        omega
-      exact .inr ⟨bytes, transferred.interruptedBytes offset advanced size changedAddresses decoded, projected⟩
+      exact .inr ⟨bytes, interruptedBytes_ofCounts offset advanced transfersFit size
+        (fun position changed => (attributed position changed).symm) decoded, projected⟩
   have ledger := recoveredRetries_retainUncertainBatch beforeBarrier.refines accepted offset advanced
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2.1
