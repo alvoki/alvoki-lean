@@ -144,6 +144,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeUncertainExecution
 lake env leanchecker Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionPendingWrite
 lake env leanchecker Alvoki.Storage.Disk.NativePendingFirstAppend
+lake env leanchecker Alvoki.Storage.Disk.NativeFirstAppendExitReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionPendingClose
 lake env leanchecker Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 lake env leanchecker Alvoki.Storage.Disk.NativeInterruptedCloseReopen
