@@ -1128,4 +1128,6 @@ Finalized read-only open errors now compose from one caller-visible heap to the 
 
 The original single or batch write's reported `commitUnknown` return now connects through one reported reboot to the exact raw table returned by a healthy aligned marked open with no later names to prune. The original diagnostic and poisoned state match the fixed callbacks. The same survivor supplies the reopened objects and bytes. The common execution keeps all earlier reads and admits either the full attempted batch or none of it according to the selected marker. [Exact uncertain write and reopen](../lean/Alvoki/Storage/Disk/NativeUncertainWriteTableOpen.lean)
 
+A reported failure of the checked marked listing with an absent manifest now directly supplies the next step of the finalized retry sequence. Its exact marker and stream operations derive the worker error and the stable inode map. The two reported scope drops carry the same attempt to its caller-visible result. [Finalized listing retry](../lean/Alvoki/Storage/Disk/NativeFinalizedListingRetry.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
