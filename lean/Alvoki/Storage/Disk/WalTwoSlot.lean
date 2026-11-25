@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.ReadRecoveryPrefix
 import Alvoki.Storage.Disk.WalBoundary
 import Alvoki.Storage.Disk.WalOrderedTwoSlot
 
@@ -181,6 +182,13 @@ theorem decode_valid {bytes : ByteArray} {selected : Selection} (accepted : deco
 
 /-- Read one byte beyond the fixed container to witness oversized files. -/
 abbrev acquisitionLimit : Nat := containerSize + 1
+
+/-- Read the bounded marker container from the beginning of the held handle. -/
+@[macro_inline] def readMarkerBytesWith [Monad m] [MonadExceptOf IO.Error m]
+    (rewind : m Unit) (read : USize → m ByteArray) : m ByteArray := do
+  rewind
+  Storage.readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+    read acquisitionLimit ByteArray.empty
 
 theorem decode_acquisitionPrefix (bytes : ByteArray) :
     decode (bytes.extract 0 (min acquisitionLimit bytes.size)) = decode bytes := by

@@ -1347,9 +1347,7 @@ private opaque writeSlot : @& IO.FS.Handle → UInt64 → @& ByteArray → IO Un
 private def stagedName : String := "WAL.commit.slots.next"
 
 private def readSelection (file : IO.FS.Handle) : IO WAL.TwoSlot.Selection := do
-  file.rewind
-  let bytes ← readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length") file.read
-    WAL.TwoSlot.acquisitionLimit ByteArray.empty
+  let bytes ← WAL.TwoSlot.readMarkerBytesWith file.rewind file.read
   IO.ofExcept (WAL.TwoSlot.decode bytes)
 
 private def openMarker (dir : DiskDirectory) : IO (IO.FS.Handle × WAL.TwoSlot.Selection) := do
@@ -1451,9 +1449,7 @@ theorem openMarker_fileEffects (directory : DiskDirectory) :
       checkPrivateRegular path (← path.symlinkMetadata)
       let marker ← IO.FS.Handle.mk path .readWrite
       let selection ← (do
-        marker.rewind
-        let bytes ← readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length") marker.read
-          WAL.TwoSlot.acquisitionLimit ByteArray.empty
+        let bytes ← WAL.TwoSlot.readMarkerBytesWith marker.rewind marker.read
         IO.ofExcept (WAL.TwoSlot.decode bytes))
       pure (marker, selection)) := rfl
 

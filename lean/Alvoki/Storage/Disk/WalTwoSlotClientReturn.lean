@@ -579,15 +579,13 @@ theorem readMarkerAfterRewind_reports
     (rewound : rewind marker opened = .ok () reached) :
     (do
       let marker ← openReadWrite
-      rewind marker
-      let bytes ← readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
-        (readChunk marker) acquisitionLimit ByteArray.empty
+      let bytes ← readMarkerBytesWith (rewind marker) (readChunk marker)
       pure (marker, bytes)) entry =
       (do
         let bytes ← readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
           (readChunk marker) acquisitionLimit ByteArray.empty
         pure (marker, bytes)) reached := by
-  simp only [Bind.bind, EStateM.bind, openedMarker, rewound]
+  simp only [readMarkerBytesWith, Bind.bind, EStateM.bind, openedMarker, rewound]
 
 /-- The successful reopen barrier persists the same marker that the
 bounded read observed. WAL repair may rely on this frontier for every
