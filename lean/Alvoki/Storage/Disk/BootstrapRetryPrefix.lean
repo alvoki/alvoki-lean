@@ -7,6 +7,7 @@ import Alvoki.Storage.Disk.BootstrapMarkerFlushError
 import Alvoki.Storage.Disk.BootstrapMarkerOpenError
 import Alvoki.Storage.Disk.BootstrapMarkerRenameError
 import Alvoki.Storage.Disk.BootstrapMarkerSyncError
+import Alvoki.Storage.Disk.BootstrapScratchRetry
 
 namespace Alvoki.Storage.DiskSession
 
@@ -92,6 +93,14 @@ inductive BootstrapRetryPrefix (directory : DiskDirectory) (initial : BootstrapS
       (prior : BootstrapRetryPrefix directory initial before) (selected : pair ∈ before.image.metadata.crashImages)
       (keeper : before.image.successor.MaySurvive keeperSurvives) :
       BootstrapRetryPrefix directory initial (bootstrapPowerLoss directory before pair keeperSurvives)
+  | survivingMarkerFlush {input : FilePath} {before : BootstrapState}
+      (prior : BootstrapRetryPrefix directory initial before)
+      {calls : BootstrapOpenCalls (Cache Handle) directory before}
+      {captured : BootstrapCacheOpen calls.toBootstrapAdmissionCalls} {listed : BootstrapCheckedListing captured}
+      {keeper : BootstrapZeroKeeperRoute listed} {source : BootstrapMarkerFlushError keeper}
+      (survivor : BootstrapMarkerFlushSurvivor source) (admission : OpenAdmissionReports input directory calls.slot)
+      (localUnlock : calls.unlock.LocalFlock) :
+      BootstrapRetryPrefix directory initial survivor.state
 
 theorem BootstrapRetryPrefix.preservesValid {directory : DiskDirectory} {initial after : BootstrapState}
     (attempts : BootstrapRetryPrefix directory initial after) (valid : BootstrapValid initial.image) :
@@ -103,6 +112,8 @@ theorem BootstrapRetryPrefix.preservesValid {directory : DiskDirectory} {initial
     exact validAfter
   | dropped _ _ _ _ healthy => exact healthy
   | powerLoss _ selected keeper healthy => exact healthy.crash selected keeper
+  | survivingMarkerFlush _ survivor admission localUnlock healthy =>
+    exact (survivor.afterError admission healthy localUnlock).2.1
 
 /-- A fresh managed image establishes the retry invariant even if the
 prefix ends before a writer has ever been installed. -/
