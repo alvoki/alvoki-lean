@@ -192,13 +192,8 @@ remain usable after failed staging. The reached scratch can be discarded
 by the next retry. -/
 theorem preservesRepair (failure : ListedStagedWriteFailure pruning) :
     EffectTrace layout.target before.image failure.reached.image := by
-  have pruned : EffectTrace layout.target before.image pruning.stageInput.image := by
-    cases pruning with
-    | empty _ => exact .syncPruned .authorized
-    | listed _ _ later =>
-      exact .syncPruned (EffectTrace.unlinks .authorized before.image.later.visible later)
   rw [failure.failed.onlyScratch.2]
-  exact .scratch pruned
+  exact .scratch pruning.stageInputEffects.1
 
 end ListedStagedWriteFailure
 

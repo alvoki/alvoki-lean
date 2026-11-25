@@ -141,6 +141,19 @@ theorem keepsKeeper (pruning : LongKeeperPruning authorization) : pruning.stageI
   | .empty _ => rfl
   | .listed _ _ _ => (ListedLaterWalPrune.settledImage before.image).2.2.2
 
+/-- The reached staging input follows the complete approved suffix pass
+and its barrier. The suffix is durably absent before replacement. -/
+theorem stageInputEffects (pruning : LongKeeperPruning authorization) :
+    EffectTrace layout.target before.image pruning.stageInput.image ∧ pruning.stageInput.image.later.DurablyEmpty := by
+  cases pruning with
+  | empty reported =>
+    refine ⟨.syncPruned .authorized, ?_⟩
+    simp [stageInput, afterUnlinks, acquired, FileImage.syncDirectory, LaterNames.syncDirectory,
+      LaterNames.DurablyEmpty, LaterNames.settled, reported.noLater]
+  | listed _ _ later =>
+    exact ⟨.syncPruned ((EffectTrace.authorized (target := layout.target) (initial := before.image)).unlinks
+      before.image.later.visible later), (ListedLaterWalPrune.settledImage before.image).1⟩
+
 /-- Both approved pruning routes reach the same staged-replacement
 schedule at their exact settled file image. -/
 theorem finishAfterPrune (pruning : LongKeeperPruning authorization) :
