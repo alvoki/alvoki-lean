@@ -136,6 +136,7 @@ import Alvoki.Storage.Disk.FirstMarkedSession
 import Alvoki.Storage.Disk.WalSegmentCheckpointPublication
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetryLayout
 import Alvoki.Storage.Disk.WalSegmentSerialReplay
+import Alvoki.Storage.Disk.WalReplayWork
 import Alvoki.Storage.Disk.CheckpointCutSession
 import Alvoki.Storage.Disk.CheckpointSuccessSession
 import Alvoki.Storage.Disk.SegmentedCheckpointStep
@@ -1363,6 +1364,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRecovery.recoversReadBytes
 #check_axioms Alvoki.Storage.checkWalSegmentSpans_iff
 #check_axioms Alvoki.Storage.recoverMarkedWalSegments_eq_extract
+#check_axioms Alvoki.Storage.replayWithWork_spec
+#check_axioms Alvoki.Storage.replayWithWork_errorAfterPrefix
+#check_axioms Alvoki.Storage.recoverRetainedFromWithReplayWork_spec
+#check_axioms Alvoki.Storage.recoverMarkedWalSegmentsWithReplayWork_spec
 #check_axioms Alvoki.Storage.WalSegment.Chain.checkReadSpans
 #check_axioms Alvoki.Storage.planWalSegmentRepair_beforeStart
 #check_axioms Alvoki.Storage.WalSegment.Chain.plansRepair
