@@ -1385,6 +1385,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.BootstrapFreshZeroKeeper.settledKeeper
 #check_axioms Alvoki.Storage.DiskSession.BootstrapFreshZeroKeeper.rotationHealthy
 #check_axioms Alvoki.Storage.DiskSession.BootstrapFreshZeroKeeper.installs
+#check_axioms Alvoki.Storage.DiskSession.BootstrapReusedZeroKeeper.readEmpty
+#check_axioms Alvoki.Storage.DiskSession.BootstrapReusedZeroKeeper.callbacks
+#check_axioms Alvoki.Storage.DiskSession.BootstrapReusedZeroKeeper.settledKeeper
+#check_axioms Alvoki.Storage.DiskSession.BootstrapReusedZeroKeeper.rotationHealthy
+#check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.reachesMarker
+#check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.settledEmpty
+#check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.rotationHealthy
+#check_axioms Alvoki.Storage.DiskSession.BootstrapZeroKeeperRoute.installs
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.entries
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.canonicalLock
 #check_axioms Alvoki.Storage.DiskSession.BootstrapCheckedListing.retained
