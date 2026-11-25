@@ -867,6 +867,14 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The held directory report now records which descriptor inventory was
+used to start the recovery reads. The cached directory handle is still
+indexed by the original admission inventory. The report ties both
+inventories to the same inode map and derives the listing, selected
+checkpoint reads and directory barrier from the reached inventory.
+The longer-keeper and suffix-prune repair reports still need to consume
+this generalized report. [Held directory report](../lean/Alvoki/Storage/Disk/HeldDirectoryReadObservations.lean)
+
 The first repair directory barrier can now use the census returned by
 the keeper read. The cached handle still comes from admission. Lean
 derives the live issuing reference and the directory inode from the

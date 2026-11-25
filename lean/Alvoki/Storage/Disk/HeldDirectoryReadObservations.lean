@@ -244,8 +244,10 @@ structure HeldDirectoryMarkedRetryReports {directory : DiskDirectory}
     {before : LockedFileState FileImage} {history : List WAL.Write}
     {layout : CanonicalKeeperLayout before.image history}
     (operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout)
-    (published : CheckpointPublication.Image) where
-  lifetime : HeldDirectoryReadLifetime operations.descriptors operations.slot
+    (published : CheckpointPublication.Image)
+    (readStart : DescriptorInventory := operations.descriptors) where
+  objectMap : readStart.inode = operations.descriptors.inode := by rfl
+  lifetime : HeldDirectoryReadLifetime readStart operations.slot
   captured : operations.cache = ⟨some (operations.descriptors, lifetime.directorySlot, 0), none, []⟩
   listing : HeldDirectoryScan lifetime
   listed : operations.reported.list directory.path =
@@ -265,18 +267,18 @@ namespace HeldDirectoryMarkedRetryReports
 variable {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout before.image history}
   {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
-  {published : CheckpointPublication.Image}
+  {published : CheckpointPublication.Image} {readStart : DescriptorInventory}
 
-theorem capturedDirectory (report : HeldDirectoryMarkedRetryReports operations published) :
+theorem capturedDirectory (report : HeldDirectoryMarkedRetryReports operations published readStart) :
     operations.cache.directory = some (operations.descriptors, report.lifetime.directorySlot, 0) := by
   rw [report.captured]
 
-theorem initializedCache (report : HeldDirectoryMarkedRetryReports operations published) :
+theorem initializedCache (report : HeldDirectoryMarkedRetryReports operations published readStart) :
     operations.openFiles before.image =
       .ok ⟨some (operations.descriptors, report.lifetime.directorySlot, 0), none, []⟩ before.image := by
   rw [operations.initialized, report.captured]
 
-theorem checkedListing (report : HeldDirectoryMarkedRetryReports operations published) :
+theorem checkedListing (report : HeldDirectoryMarkedRetryReports operations published readStart) :
     operations.reported.entries = report.listing.scan.entries directory.path ∧
     operations.reported.inventory.names.Perm (report.lifetime.namespaceView.names report.lifetime.root) := by
   obtain ⟨listed, names⟩ := CheckedDirectoryReadReport.scan_complete directory.path
@@ -287,19 +289,19 @@ theorem checkedListing (report : HeldDirectoryMarkedRetryReports operations publ
   rw [← operations.reported.names, entries]
   simpa only [report.listing.sameRoot] using names
 
-theorem lockedEntry (report : HeldDirectoryMarkedRetryReports operations published) :
+theorem lockedEntry (report : HeldDirectoryMarkedRetryReports operations published readStart) :
     ∃ object, report.lifetime.namespaceView.child report.lifetime.root "LOCK" = some object ∧
       operations.bindings (directory.file .lock) = some (report.lifetime.namespaceView.modelObject object) := by
   refine ⟨report.lifetime.lock, report.lifetime.lockEntry, ?_⟩
-  rw [report.lifetime.identifiesLock, operations.lockObject]
+  rw [report.lifetime.identifiesLock, report.objectMap, operations.lockObject]
 
-theorem chunkReads (report : HeldDirectoryMarkedRetryReports operations published) :
+theorem chunkReads (report : HeldDirectoryMarkedRetryReports operations published readStart) :
     operations.reads.ObservesSelected directory before.image.directory.active.manifest published.durable := by
   intro bytes manifest visible decoded index within payload stored
   obtain ⟨object, bound, contents⟩ := report.publishedBytes bytes manifest visible decoded index within payload stored
   exact ⟨(report.runs bytes manifest visible decoded index within).observesFile bound contents⟩
 
-def toChunkReports (report : HeldDirectoryMarkedRetryReports operations published)
+def toChunkReports (report : HeldDirectoryMarkedRetryReports operations published readStart)
     (settles : operations.sync operations.cache #[directory.path] before.image = .ok () before.image.syncDirectory)
     (metadataReads : operations.MarkedMetadata) (healthy : operations.HealthyFinish) :
     MarkedRetryChunkReports (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout published where
@@ -311,7 +313,7 @@ def toChunkReports (report : HeldDirectoryMarkedRetryReports operations publishe
 
 /-- The selected checkpoint files occur in the exact WAL listing from the
 same directory. The later listing corroborates the earlier run resolutions. -/
-theorem selectedRunListed (report : HeldDirectoryMarkedRetryReports operations published)
+theorem selectedRunListed (report : HeldDirectoryMarkedRetryReports operations published readStart)
     {bytes manifest index payload} (visible : before.image.directory.active.manifest = some bytes)
     (decoded : IntegrityCheckpoint.decode bytes = .ok manifest) (within : index < manifest.header.runCount.toNat)
     (stored : published.durable manifest.header.generation index = some payload) :
@@ -322,13 +324,13 @@ theorem selectedRunListed (report : HeldDirectoryMarkedRetryReports operations p
 /-- Continue the same descriptor history past closedir to the first
 directory barrier. A local observation still supplies the effect-time
 binding of the canonical path and the returned syscall effect. -/
-def directoryBarrier (report : HeldDirectoryMarkedRetryReports operations published)
+def directoryBarrier (report : HeldDirectoryMarkedRetryReports operations published readStart)
     (afterListing : List LockReferenceDrop)
     (retained : report.lifetime.directorySlot ∈ (report.listing.afterClose.afterDrops afterListing).slots)
     (bindings : FilePath → Option Nat)
     (bound : bindings directory.path = some (report.lifetime.namespaceView.modelObject report.lifetime.root))
     (outcome : DelayedDirectorySyncOutcome) : DelayedDirectorySync directory :=
-  operations.descriptors.delayedDirectorySync (report.lifetime.drops ++ afterListing) directory
+  readStart.delayedDirectorySync (report.lifetime.drops ++ afterListing) directory
     report.lifetime.directorySlot.description report.lifetime.directorySlot.reference
     (by
       rw [← DescriptorInventory.afterDrops_append, ← report.listing.afterClose_eq]
@@ -338,7 +340,7 @@ def directoryBarrier (report : HeldDirectoryMarkedRetryReports operations publis
 /-- The keeper read may add a pending handle, but the shared sync selector
 still sends the captured directory handle to the first barrier. A reported
 failure carries the cache and the reached directory effect. -/
-theorem keeperRead_syncListedDirectory (report : HeldDirectoryMarkedRetryReports operations published)
+theorem keeperRead_syncListedDirectory (report : HeldDirectoryMarkedRetryReports operations published readStart)
     (seen : operations.reads.ObservesFile (directory.file (.walSegment layout.keeper.first))
       (layout.keeper.bytes ++ layout.tail)) (fits : layout.keeper.bytes.size < USize.size)
     (afterListing : List LockReferenceDrop)

@@ -58,7 +58,7 @@ theorem flat (calls : CapturedAlignedCallbacks admission) :
 /-- Assign the operation packet its owner, census and cache directly from
 the actual admission. The checked reader supplies every payload callback. -/
 private def projectedCalls (calls : CapturedAlignedCallbacks admission)
-    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     (vacant : TryLockObserves retry.owners directory (.ok true)) :
     MarkedRetryChunkCalls CensusDirectoryCache directory retry where
   descriptors := admission.reached
@@ -94,7 +94,7 @@ private def projectedCalls (calls : CapturedAlignedCallbacks admission)
   sync := calls.sync
   renameFile := calls.renameFile
 
-def wal (calls : CapturedAlignedCallbacks admission) {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+def wal (calls : CapturedAlignedCallbacks admission) {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     (vacant : TryLockObserves retry.owners directory (.ok true)) :
     HeldWalInstallReads layout (calls.projectedCalls report vacant) where
   inventory := report.inventoryWithOwner
@@ -107,7 +107,7 @@ def wal (calls : CapturedAlignedCallbacks admission) {renameMarker : Bool} (repo
   keeperProjection := rfl
 
 abbrev operations (calls : CapturedAlignedCallbacks admission)
-    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     (vacant : TryLockObserves retry.owners directory (.ok true)) :=
   (calls.wal report vacant).operations
 
@@ -141,11 +141,12 @@ private theorem storedAt {durable : CheckpointPublication.RunFiles} {binding che
 /-- The held report is assembled from the actual listing and reads, with
 the lock and directory lifetime indexed by the admitted cache capture. -/
 noncomputable def heldReport (calls : CapturedAlignedCallbacks admission)
-    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     (vacant : TryLockObserves retry.owners directory (.ok true))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) :
-    HeldDirectoryMarkedRetryReports (calls.operations report vacant) published where
+    HeldDirectoryMarkedRetryReports (calls.operations report vacant) published readStart where
+  objectMap := report.objectMap
   lifetime := report.lifetime
   captured := rfl
   listing := report.listing
