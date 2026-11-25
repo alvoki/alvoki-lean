@@ -146,6 +146,74 @@ theorem decode_agrees_with_protocol {bytes : ByteArray} {chosen : Selection}
   · exact select_agrees_with_protocol h
   · contradiction
 
+private def slotIndex : OrderedTwoSlot.Slot → Nat
+  | .first => 0
+  | .second => 1
+
+def decodedSlots (bytes : ByteArray) : OrderedTwoSlot.Slots UInt64 :=
+  fun slot => (decodeSlot bytes (slotIndex slot)).map Selection.toRecord
+
+private theorem decodedSlots_eq_writeTarget {before after : ByteArray}
+    (active : OrderedTwoSlot.Slot)
+    (unchanged : ∀ position,
+      (position < slotIndex active.other * stride ∨ slotIndex active.other * stride + 40 ≤ position) →
+        after.get! position = before.get! position) :
+    OrderedTwoSlot.writeTarget (decodedSlots before) active
+      (decodedSlots after active.other) = decodedSlots after := by
+  have preserved : decodedSlots after active = decodedSlots before active := by
+    have bounded : slotIndex active < 2 := by cases active <;> decide
+    have offset : slotIndex active.other = 1 - slotIndex active := by cases active <;> rfl
+    rw [offset] at unchanged
+    exact congrArg (Option.map Selection.toRecord) (decodeSlot_unchanged bounded unchanged)
+  funext slot
+  have choices : slot = active ∨ slot = active.other := by cases active <;> cases slot <;> decide
+  rcases choices with rfl | rfl
+  · rw [OrderedTwoSlot.writeTarget_keepsActive, preserved]
+  · exact OrderedTwoSlot.writeTarget_updatesOther ..
+
+/-- Project a raw inactive-slot update to the crash protocol. The storage
+premises are byte isolation outside the target and an old, invalid, or
+exact-new decode at the target. -/
+theorem uncertainSurvivor_of_bytes {before after : ByteArray}
+    (active : OrderedTwoSlot.Slot) (next : Selection)
+    (unchanged : ∀ position,
+      (position < slotIndex active.other * stride ∨ slotIndex active.other * stride + 40 ≤ position) →
+        after.get! position = before.get! position)
+    (target : decodedSlots after active.other = decodedSlots before active.other ∨
+      decodedSlots after active.other = none ∨ decodedSlots after active.other = some next.toRecord) :
+    OrderedTwoSlot.Survivor (decodedSlots before) active next.toRecord .slotWriteUncertain
+      (decodedSlots after) := by
+  rw [← decodedSlots_eq_writeTarget active unchanged]
+  rcases target with old | invalid | exactNew
+  · rw [old]
+    exact .uncertainOld
+  · rw [invalid]
+    exact .uncertainInvalid
+  · rw [exactNew]
+    exact .uncertainNew
+
+/-- A successful slot sync supplies the exact target bytes in the admitted
+crash image. Decode them using the ordinary codec roundtrip. -/
+theorem syncedSurvivor_of_bytes {before after : ByteArray}
+    (active : OrderedTwoSlot.Slot) (next : Selection)
+    (targetSlot : next.slot = slotIndex active.other)
+    (unchanged : ∀ position,
+      (position < next.slot * stride ∨ next.slot * stride + 40 ≤ position) →
+        after.get! position = before.get! position)
+    (inside : next.slot * stride + 40 ≤ after.size)
+    (written : after.extract (next.slot * stride) (next.slot * stride + 40) = next.encode)
+    (parity : next.epoch.toNat % 2 = next.slot)
+    (aligned : next.frontier.toNat % frameSize = 0)
+    (counts : next.epoch.toNat ≤ next.frontier.toNat / frameSize) :
+    OrderedTwoSlot.Survivor (decodedSlots before) active next.toRecord .slotSynced
+      (decodedSlots after) := by
+  have complete := decodeSlot_exact next inside written parity aligned counts
+  have target : decodedSlots after active.other = some next.toRecord := by
+    simp [decodedSlots, ← targetSlot, complete]
+  rw [targetSlot] at unchanged
+  rw [← decodedSlots_eq_writeTarget active unchanged, target]
+  exact .synced
+
 def advance (before : Selection) (frontier : Nat) : Except String Selection := do
   unless before.epoch.toNat + 1 < UInt64.size do throw "two-slot WAL marker epoch exhausted"
   unless before.frontier.toNat < frontier && frontier < UInt64.size && frontier % frameSize == 0 do
