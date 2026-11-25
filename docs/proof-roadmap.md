@@ -166,6 +166,8 @@ responses and the new session's supported snapshot reads. Extend this transition
 and carry one descriptor and file state across the operation families below.
 [Uncertain write through the aligned open](../lean/Alvoki/Storage/Disk/PendingAlignedReopen.lean)
 
+The first native ready-session prefix starts at the session returned by a chronological long-keeper reopen. It carries the exact file image, cache, owner and descriptor census into an arbitrary prefix of local snapshot acquisitions and point or range reads. The same WAL replay accounts for each appended response and the earlier client log. Connect a further interruption and restart to this reached state, then extend the prefix to the other native operations. [Ready read prefix](../lean/Alvoki/Storage/Disk/NativeReadyReadPrefix.lean)
+
 Close the induction by operation family. Each row is complete when every reached branch under the stated contract constructs its successor from the same returned state and observations.
 
 | Entry points | Coverage to connect |

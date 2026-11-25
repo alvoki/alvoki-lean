@@ -209,6 +209,7 @@ import Alvoki.Storage.Disk.ReturnedWriteRecovery
 import Alvoki.Storage.Disk.PendingClientReplay
 import Alvoki.Storage.Disk.PendingAlignedReopen
 import Alvoki.Storage.Disk.PendingFirstAppendReopen
+import Alvoki.Storage.Disk.NativeReadyReadPrefix
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
 import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
@@ -1360,6 +1361,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensInterruptedMarkerAligned
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperFinish.installsFromCensus
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensInterruptedFirstAppend
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.Valid.acquirePreserves
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.frames
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.refines
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.guardedReplay
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readAt
+#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.startsNativeReadPrefix
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.replaysClient
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysClientAtManifestDirectory
 #check_axioms Alvoki.Storage.CheckpointPublication.successfulFrame
