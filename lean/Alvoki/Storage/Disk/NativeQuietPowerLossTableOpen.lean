@@ -94,12 +94,11 @@ def NativeReadyRestartReads.markedReport (seen : NativeReadyRestartReads crash i
   pending := pending
   bounded := bounded
 
-/-- Feed the report assembled from the exact chosen reader to the
-shared post-selection installer. -/
-theorem RawQuietRestartEffects.installsAlignedAt
-    {beforeCensus : DescriptorInventory}
-    (seen : RawQuietRestartEffects reader view calls init names bytes before after phaseIdentity tokenIdentity
-      allocatePhase allocateToken stream beforeCensus)
+/-- Install the exact selected reader at the reached admission, which
+may follow read-only failed attempts after the original reboot. -/
+theorem RawAlignedCheckpointReopenEffects.installsQuietSelectionAt
+    (seen : RawAlignedCheckpointReopenEffects reader.opening reader.capturedChronology view calls init after
+      phaseIdentity tokenIdentity allocatePhase allocateToken stream)
     (valid : state.Valid) (sameHistory : state.writer.history = history)
     (target : layout.target = state.writer.target) (keeper : layout.keeper = state.writer.wal.active)
     (descriptors : layout.sealed ++ [layout.keeper] = state.writer.wal.readDescriptors layout.range.watermark)
@@ -120,14 +119,14 @@ theorem RawQuietRestartEffects.installsAlignedAt
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (effects : OpenPhaseCellEffects view.phase get set)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
-    Nonempty (seen.toRawAlignedCheckpointReopenEffects.ReturnedAt next remove write rename bootstrap assemble get set ptrEq) := by
+    Nonempty (seen.ReturnedAt next remove write rename bootstrap assemble get set ptrEq) := by
   have pending : PendingClientReplay log next.reads state.writer.history :=
     sameHistory.symm ▸ next.readPrefix.refines.2.2
   have bounded : ∀ read ∈ next.reads, read.BoundedBy state.writer.history.length :=
     sameHistory.symm ▸ next.readPrefix.readsBounded
   let report := reader.markedReport valid.retained target keeper descriptors offsets prepared pending bounded
   obtain ⟨readyPrefix, _, owner, slot, cache, _⟩ := reached
-  exact seen.toRawAlignedCheckpointReopenEffects.installsAtReportedPosition (report := report)
+  exact seen.installsAtReportedPosition (report := report)
     next remove write rename bootstrap assemble ptrEq sameHistory sameReturn
     (sameReturn.symm.trans readyPrefix.frames.1) cache owner slot constructs effects
 
@@ -175,8 +174,8 @@ theorem RawQuietRestartEffects.installsAligned
       view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
       view.cacheAt start.reached seen.admission.seed.directoryRef seen.admission.seed.activeRef
         seen.admission.seed.pendingRef = next.state.cache := by
-  obtain ⟨returned⟩ := seen.installsAlignedAt valid sameHistory target keeper descriptors offsets prepared next
-    sameReturn reached remove write rename bootstrap assemble constructs effects ptrEq
+  obtain ⟨returned⟩ := seen.toRawAlignedCheckpointReopenEffects.installsQuietSelectionAt valid sameHistory target keeper
+    descriptors offsets prepared next sameReturn reached remove write rename bootstrap assemble constructs effects ptrEq
   exact ⟨returned.cacheOpen, returned.makeCache, returned.handle, returned.start, returned.cacheAction,
     returned.cacheSource, returned.rawOpen, returned.position, returned.lock, returned.references,
     returned.directory, returned.contents, returned.readsPhase, returned.writesPhase,
@@ -265,7 +264,7 @@ theorem NativeOpenedTrace.restartsThenOpensAligned
 
 end
 
-namespace RawQuietRestartEffects
+section
 
 variable {heap stream : Type} {history : List WAL.Write} {log : List DatabaseSubmissions}
   (current : NativeReadPosition history log) {input : FilePath}
@@ -280,6 +279,40 @@ variable {heap stream : Type} {history : List WAL.Write} {log : List DatabaseSub
   {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
   {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
   {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+
+/-- The chosen reader and installer are independent of the operations
+that reached this entry, provided they still select the same files. -/
+theorem RawAlignedCheckpointReopenEffects.reopensQuietSelection
+    (raw : RawAlignedCheckpointReopenEffects reader.opening reader.capturedChronology view calls init after
+      phaseIdentity tokenIdentity allocatePhase allocateToken stream)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles →
+      IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+    (target : layout.target = current.state.writer.target) (keeper : layout.keeper = current.state.writer.wal.active)
+    (descriptors : layout.sealed ++ [layout.keeper] = current.state.writer.wal.readDescriptors layout.range.watermark)
+    (offsets : selectWalSegmentReads (current.state.writer.wal.segments.map WalSegment.first) layout.range.watermark =
+      some (layout.first, (current.state.writer.wal.readDescriptors layout.range.watermark).map WalSegment.first))
+    (prepared : Prepared crash.retry.image layout.target layout.plan)
+    (constructs : ∀ resolved lock files, DiskTable.OpenReferenceAssembly resolved lock files (assemble resolved lock files))
+    (effects : OpenPhaseCellEffects view.phase get set) :
+    ∃ next : NativeReadPosition history log, next.reads = current.reads ∧ next.opened = reader.run ∧
+      reader.ReachedSession next.state history log current.reads ∧
+      Nonempty (raw.ReturnedAt next remove write rename bootstrap assemble get set ptrEq) := by
+  obtain ⟨valid, history, pending⟩ := current.readPrefix.refines
+  obtain ⟨_, installed, reached⟩ := crash.restartsAt valid history pending current.readPrefix.readsBounded
+    layout target keeper descriptors offsets prepared selected reader
+  let next : NativeReadPosition _ _ := ⟨reader.run, installed, installed, current.reads, reached.1⟩
+  exact ⟨next, rfl, rfl, reached,
+    raw.installsQuietSelectionAt valid history target keeper descriptors offsets prepared next rfl reached
+      remove write rename bootstrap assemble constructs effects ptrEq⟩
+
+namespace RawQuietRestartEffects
 
 variable
     (raw : RawQuietRestartEffects reader view calls init names bytes before after phaseIdentity tokenIdentity
@@ -323,14 +356,11 @@ theorem reopensSelected
     (constructs : ∀ resolved lock files, DiskTable.OpenReferenceAssembly resolved lock files (assemble resolved lock files))
     (effects : OpenPhaseCellEffects view.phase get set) :
     Nonempty (ReopenedSelected current raw remove write rename bootstrap assemble get set ptrEq) := by
-  obtain ⟨valid, history, pending⟩ := current.readPrefix.refines
-  obtain ⟨_, installed, reached⟩ := crash.restartsAt valid history pending current.readPrefix.readsBounded
-    layout target keeper descriptors offsets prepared selected reader
-  let next : NativeReadPosition _ _ := ⟨reader.run, installed, installed, current.reads, reached.1⟩
-  obtain ⟨returned⟩ := raw.installsAlignedAt valid history target keeper descriptors offsets prepared next rfl reached
-    remove write rename bootstrap assemble constructs effects ptrEq
+  obtain ⟨next, sameReads, sameReader, reached, ⟨returned⟩⟩ :=
+    raw.toRawAlignedCheckpointReopenEffects.reopensQuietSelection current remove write rename bootstrap assemble ptrEq
+      target keeper descriptors offsets prepared constructs effects
   refine ⟨⟨Prod.ext raw.admission.raw.entryCensus raw.admission.raw.entryFiles,
-    ?_, ?_, next, rfl, rfl, reached, returned⟩⟩
+    ?_, ?_, next, sameReads, sameReader, reached, returned⟩⟩
   · rw [raw.admission.raw.entryCensus]
     rfl
   · intro path payload isSelected observed
@@ -342,5 +372,7 @@ theorem reopensSelected
     exact ⟨read, (live.trans (survived.symm.trans restarted.symm)).trans bound, bound, durable⟩
 
 end RawQuietRestartEffects
+
+end
 
 end Alvoki.Storage.DiskSession
