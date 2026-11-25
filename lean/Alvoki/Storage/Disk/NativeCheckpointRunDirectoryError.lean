@@ -316,6 +316,11 @@ theorem priorRuns (report : NativeCheckpointRunDirectoryError (image := image) s
       congrArg Image.durable (RunUnlinkImage.project_settled (report.runs report.atBarrier).visible (.settled none))
     rw [same, (report.views cut.checkpoint.table.runs.length).visibleProjects _ _ _ stable.visibleBinding, stable.visibleBytes, stored]
 
+theorem filesAtBarrier (report : NativeCheckpointRunDirectoryError (image := image) state cut) (index : Nat)
+    (within : index ≤ cut.checkpoint.table.runs.length) :
+    report.files (report.atRun index) = state.files.image :=
+  report.filesAtRun index within
+
 /-- No manifest write has run. Neither of the two reported sync effects
 can change the only selected pair and its existing WAL. -/
 theorem filesAtReturn (report : NativeCheckpointRunDirectoryError (image := image) state cut) (valid : state.Valid) :
