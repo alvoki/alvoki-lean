@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The marked-open client proof derives the checkpoint clock, table
+refinement, row bounds and covered history from the accepted manifest
+and exact durable run bytes. The loaded pin registry is accounted for
+by the existing checkpoint refinement. Native repair and retry reports
+still need to be composed at the client boundary.
+
 The chronological marked-open theorem now constructs the installed
 table's replay refinement from the selected checkpoint and WAL replay.
 It no longer takes an independent canonical recovery witness for the

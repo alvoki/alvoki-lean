@@ -1680,6 +1680,36 @@ theorem installsAfterAcquiredRecovery
   apply calls.runWithMarked_ready _ marker
   simp only [reopenAcquiredWith_reports, acquisition, recovery]
 
+private theorem selectedCheckpoint_represents
+    {published : CheckpointPublication.Image} {binding : Option ByteArray}
+    {loaded : Option (PackedTable × UInt64)} {history : List WAL.Write}
+    (selected : SelectedIntegrityCheckpoint published.durable binding loaded)
+    (accepted : published.AcceptsVersioned history.length.toUInt64
+      (Boundary.CheckpointRepresentsPrefix history) binding) :
+    ∃ model, (loaded.getD (.empty, 0)).1.Refines model ∧ (loaded.getD (.empty, 0)).1.RowBounds ∧
+      RepresentsWalHistory (history.take (loaded.getD (.empty, 0)).1.committed.toNat) model := by
+  cases selected with
+  | absent => exact ⟨.empty, PackedTable.empty_refines, PackedTable.empty_rowBounds, RepresentsWalHistory.empty⟩
+  | @present bytes manifest files table decoded stored loaded =>
+    obtain ⟨acceptedFiles, durable, spec, _, _⟩ :=
+      published.acceptsVersioned_runs accepted (Manifest.VersionedCheckpoint.decode_integrity decoded)
+    have sameFiles : acceptedFiles = files := Option.some.inj (durable.symm.trans stored)
+    subst acceptedFiles
+    obtain ⟨checkpoint, model, written, refined, historyPrefix⟩ := spec
+    obtain ⟨base, interpreted, same⟩ := written.loads
+    have structural := (loadIntegrityRunSet_iff.mp loaded).2
+    have sameBase := Except.ok.inj (interpreted.symm.trans structural)
+    subst base
+    have fresh := loadRunSet_clearsPins structural
+    obtain ⟨rebound, baseRefines, sameTable, sameClock, sameFloor⟩ :=
+      same.refines_rebindPins refined (by simp [fresh])
+    have bounds := same.rowBounds written.rowBounds
+    refine ⟨rebound, baseRefines, bounds, ?_⟩
+    change RepresentsWalHistory (history.take table.committed.toNat) rebound
+    rw [same.committed]
+    exact historyPrefix.preserve sameClock (UInt64.le_of_eq sameFloor.symm)
+      (baseRefines.rowsBounded bounds) (fun _ _ _ => by rw [sameTable])
+
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
 theorem installsAfterAcquiredRecovery_replays
@@ -1749,11 +1779,8 @@ theorem installsAfterAcquiredRecovery_replays
     (start : BootstrapClientStart directory bootstrapFirst initial)
     (trace : SegmentedClientReadTrace directory bootstrapFirst start.writer allowCollection log reads writer prior)
     {batch : List WAL.Write}
-    {checkpointModel : Sequential.SnapshotTable UInt64}
-    (baseClock : (loaded.getD (.empty, 0)).1.committed.toNat = layout.range.watermark)
-    (baseRefines : (loaded.getD (.empty, 0)).1.Refines checkpointModel)
-    (baseBounds : (loaded.getD (.empty, 0)).1.RowBounds)
-    (baseHistory : RepresentsWalHistory (history.take layout.range.watermark) checkpointModel)
+    (acceptedCheckpoint : published.AcceptsVersioned history.length.toUInt64
+      (Boundary.CheckpointRepresentsPrefix history) retry.image.directory.active.manifest)
     {interrupted firstRepair : FileImage}
     (beforeBarrier : UnsettledRetries interrupted retry.image)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
@@ -1821,6 +1848,11 @@ theorem installsAfterAcquiredRecovery_replays
   let covered := history.take layout.range.watermark
   let suffix := history.drop layout.range.watermark
   have split : covered ++ suffix = history := List.take_append_drop ..
+  have baseClock := Option.some.inj (checkpointSelected.watermark.symm.trans
+    (DirectoryPublication.Bindings.walRange_accounting layout.decoded).1)
+  obtain ⟨_, baseRefines, baseBounds, baseHistory⟩ :=
+    selectedCheckpoint_represents checkpointSelected acceptedCheckpoint
+  rw [baseClock] at baseHistory
   have coveredLength : covered.length = (loaded.getD (.empty, 0)).1.committed.toNat := by
     have watermark := (DirectoryPublication.Bindings.walRange_accounting layout.decoded).2.1
     simp [covered, baseClock, ← layout.through, Nat.min_eq_left watermark]
