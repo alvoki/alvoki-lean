@@ -2569,6 +2569,37 @@ theorem InterruptedBatchMarkerPublication.survivingKeeperOfMarkerChange
     rw [walPersists synced] at membership
     exact ⟨appended, durable, wrote, synced, by simpa [FileImage.syncKeeper] using membership⟩
 
+/-- A reported successful append and WAL barrier fix the concrete keeper
+prefix that recovery can use when the interrupted marker changed. -/
+theorem InterruptedBatchMarkerPublication.survivingEncodedKeeper
+    {directory : DiskDirectory} {prior : SegmentedWriterState} {batch : List WAL.Write}
+    {next : Selection} {reached : FileImage × WalInodeImage}
+    (report : InterruptedBatchMarkerPublication directory prior batch next reached)
+    (layout : prior.wal.ReadLayout prior.history)
+    (appendBytes : ∀ {appended},
+      (report.append (directory.file (.walSegment prior.installed.activeFirst)) (WAL.encode batch)).run
+        (prior.files, report.initialMarker) = .ok (.ok ()) appended →
+      appended.1.keeper.active = some (prior.wal.active.bytes ++ WAL.encode batch))
+    (writeKeepsKeeper : ∀ before (result : EStateM.Result report.Stop
+        (FileImage × WalInodeImage) (Except IO.Error Unit)),
+      (report.writeSlot report.markerHandle (next.slot * stride).toUInt64 next.encode).run before = result →
+      (match result with | .ok _ after | .error _ after => after.1.keeper) = before.1.keeper)
+    (syncKeepsKeeper : ∀ before,
+      (report.syncSlot report.markerHandle).run before = .error report.stopped reached →
+      reached.1.keeper = before.1.keeper)
+    (walPersists : ∀ {appended durable},
+      (report.syncWal (directory.file (.walSegment prior.installed.activeFirst))).run appended =
+        .ok (.ok ()) durable → durable.1.keeper = appended.1.syncKeeper.keeper)
+    (changed : reached.2 ≠ report.initialMarker)
+    {bytes : Option ByteArray} (survives : bytes ∈ reached.1.keeper.crashImages) :
+    bytes = some (WAL.encode ((prior.history ++ batch).drop prior.wal.active.first)) := by
+  obtain ⟨_, _, wrote, _, exactBytes⟩ :=
+    report.survivingKeeperOfMarkerChange writeKeepsKeeper syncKeepsKeeper walPersists changed survives
+  have starts : prior.wal.active.first ≤ prior.history.length := by
+    rw [← layout.activeEnd]
+    exact layout.forward _ (List.mem_append_right _ (by simp))
+  rw [exactBytes, appendBytes wrote, List.drop_append_of_le_length starts, WAL.encode_append, layout.activeBytes]
+
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
 theorem installsAfterAcquiredRecovery_replays

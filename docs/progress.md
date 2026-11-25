@@ -2061,3 +2061,10 @@ two-slot strategy, the old-or-new frontier and the surviving keeper
 prefix imply the canonical layout for the same selected batch history.
 The installed-read theorem still needs the native reports to supply
 that keeper prefix and the matching checkpoint and read inventory.
+
+For an interrupted marker publication that changed the marker image,
+the reported append and effective WAL sync now identify the exact
+canonical active segment bytes in each keeper crash choice. This uses
+the existing marker-only keeper preservation and the append report's
+byte effect. The crash-to-install composition still has to connect
+the selected marker to this branch or the old-prefix branch.
