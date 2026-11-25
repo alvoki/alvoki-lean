@@ -253,6 +253,20 @@ theorem RawQuietRebootEntry.readsAfterOpenFrame
   obtain ⟨sameObject, sameBytes⟩ := frame path selectedPath
   exact ⟨read, sameObject.trans object, (List.cons.inj (sameBytes read.object object)).1.trans contents⟩
 
+/-- A child's local name at the later admission identifies the same
+survivor inode at the reboot, even if unrelated names have changed. -/
+theorem RawQuietRebootEntry.childAfterOpenFrame
+    (entry : RawQuietRebootEntry crash view names bytes before rebooted beforeCensus)
+    {reached : heap}
+    (frame : (observedFiles names bytes rebooted).Frames
+      (checkpointSurvivorPath state.session.directory state.writer state.writer.target.pair.manifest)
+      (observedFiles names bytes reached))
+    {path : FilePath} {name : String}
+    (selectedPath : checkpointSurvivorPath state.session.directory state.writer state.writer.target.pair.manifest path)
+    (child : CheckpointCrashChild (names reached) admission path name) :
+    CheckpointCrashChild crash.names admission path name :=
+  child.trans ((frame path selectedPath).1.trans (entry.survivorNames path (.inr (.inr selectedPath))))
+
 /-- The failed marked manifest stat leaves the selected reader's
 exact survivor paths at the heap that the next open will use. -/
 theorem RawQuietRebootEntry.readsAfterManifestRejection
@@ -315,6 +329,42 @@ variable (target : layout.target = current.state.writer.target) (keeper : layout
     (effects : OpenPhaseCellEffects view.phase get set)
 
 include target keeper descriptors offsets prepared constructs effects
+
+/-- Carry one reboot's selected names and payloads across the reported
+read-only failures to the supplied aligned attempt. Each held failure
+uses the worker in its report. Scratch paths stay outside the frame. -/
+theorem RawQuietRebootEntry.reopensAfterReadOnlyAttempts
+    (entry : RawQuietRebootEntry crash view names bytes before rebooted beforeCensus)
+    (booted : (view.descriptors rebooted, view.files rebooted) = (crash.reboot, crash.retry))
+    {errors : List (FilePath × IO.Error)}
+    (attempts : RawFinalizedOpenAttempts view current.state.session.directory calls init release rebooted errors retryHeap)
+    (beforeFlock : ∀ input entry (refused : RawBeforeFlockRejection view calls input entry),
+      (observedFiles names bytes entry).Frames current.state.crashPath (observedFiles names bytes refused.reached))
+    (flockError : ∀ input entry (refused : RawFlockRejection view calls current.state.session.directory release input entry),
+      (observedFiles names bytes entry).Frames current.state.crashPath (observedFiles names bytes refused.reached))
+    (held : ∀ input entry (failed : RawFinalizedOpenAttempt view current.state.session.directory calls init release input entry),
+      (observedFiles names bytes entry).Frames current.state.crashPath (observedFiles names bytes failed.reached))
+    (raw : RawAlignedCheckpointReopenEffects reader.opening reader.capturedChronology view calls init retryHeap
+      phaseIdentity tokenIdentity allocatePhase allocateToken stream) :
+    (view.descriptors retryHeap, view.files retryHeap) = (view.descriptors rebooted, view.files rebooted) ∧
+    (∀ path, current.state.crashPath path → names retryHeap path = crash.names path) ∧
+    (∀ path payload,
+      checkpointSurvivorPath current.state.session.directory current.state.writer current.state.writer.target.pair.manifest path →
+      reader.ReadsSurvivor path payload →
+      ∃ read : reader.opening.reads.reads.ObservesFile path payload,
+        names retryHeap path = some read.object ∧ bytes retryHeap read.object = payload) ∧
+    (∃ next : NativeReadPosition history log, next.reads = current.reads ∧ next.opened = reader.run ∧
+      reader.ReachedSession next.state history log current.reads ∧
+      Nonempty (raw.ReturnedAt next remove write rename bootstrap assemble get set ptrEq)) := by
+  have frame := attempts.frames (frame := fun first last =>
+    (observedFiles names bytes first).Frames current.state.crashPath (observedFiles names bytes last))
+    (fun _ _ _ => ⟨rfl, fun _ _ => rfl⟩) CheckpointSurvivingFiles.Frames.trans beforeFlock flockError held
+  refine ⟨(Prod.ext raw.raw.entryCensus raw.raw.entryFiles).trans booted.symm,
+    fun path selected => (frame path selected).1.trans (entry.survivorNames path selected), ?_,
+    raw.reopensQuietSelection current remove write rename bootstrap assemble ptrEq target keeper
+      descriptors offsets prepared constructs effects⟩
+  intro path payload selectedPath observed
+  exact entry.readsAfterOpenFrame (fun path selected => frame path (.inr (.inr selected))) selectedPath observed
 
 /-- A finalized read-only failure and its successor use one native
 program. Each attempt uses its own cache references. -/
@@ -411,7 +461,7 @@ theorem RawQuietRebootEntry.reopensAfterRunChunkRejection
       (checkpointSurvivorPath current.state.session.directory current.state.writer current.state.writer.target.pair.manifest))
     (readLaws : raw.fileCalls.FileFrames (observedFiles names bytes)
       (checkpointSurvivorPath current.state.session.directory current.state.writer current.state.writer.target.pair.manifest))
-    (child : CheckpointCrashChild crash.names admission
+    (child : CheckpointCrashChild (names seed.afterPending) admission
       (current.state.session.directory.file (.run run.reads.manifest.header.generation run.index))
       (renderRunFileName run.reads.manifest.header.generation run.index))
     (issuedBytes : bytes seen.opened ((view.handle seen.opened seen.handle).1.inode
@@ -424,6 +474,7 @@ theorem RawQuietRebootEntry.reopensAfterRunChunkRejection
     let inode := (view.handle seen.opened seen.handle).1.inode (view.handle seen.opened seen.handle).2.1.description
     let path := current.state.session.directory.file (.run run.reads.manifest.header.generation run.index)
     (view.descriptors retryHeap).references seen.slot.description = [] ∧
+    crash.names path = some inode ∧ crash.contents inode = seen.bytes ∧
     names retryHeap path = some inode ∧ bytes retryHeap inode = seen.bytes ∧
     disposal.Finalized failed.recover failed.cause finalized ∧
     (view.descriptors retryHeap, view.files retryHeap) = (view.descriptors rebooted, view.files rebooted) ∧
@@ -447,9 +498,10 @@ theorem RawQuietRebootEntry.reopensAfterRunChunkRejection
   have parentBinding := run.child.binds
   rw [run.child.atRoot, run.child.atName] at parentBinding
   have binding : crash.names path = some inode := by
-    unfold CheckpointCrashChild at child
-    rw [parentBinding, Option.map_some] at child
-    exact child.symm.trans (congrArg some seen.releasesSelected.inode.symm)
+    have sameChild := entry.childAfterOpenFrame frames.reachesWorker selectedPath child
+    unfold CheckpointCrashChild at sameChild
+    rw [parentBinding, Option.map_some] at sameChild
+    exact sameChild.symm.trans (congrArg some seen.releasesSelected.inode.symm)
   have survived : names rebooted path = some inode :=
     (entry.survivorNames path (.inr (.inr selectedPath))).trans binding
   have earlier := frames.reachesWorker.trans (run.reads.preservesSelectedFiles readLaws (Nat.le_refl run.index))
@@ -464,7 +516,8 @@ theorem RawQuietRebootEntry.reopensAfterRunChunkRejection
     rw [finalized.census, disposal.returnedCensus, disposal.census, DescriptorInventory.afterDrops_append,
       DescriptorInventory.references_afterDrops, seen.releasesSelected.retired]
     rfl
-  refine ⟨?_, ?_, ?_, entry.reopensAfterReadOnlyRejection current remove write rename bootstrap assemble ptrEq target keeper descriptors offsets prepared constructs effects
+  have durable := (entry.survivorBytes path selectedPath inode binding).symm.trans bytesAtReboot
+  refine ⟨?_, binding, durable, ?_, ?_, entry.reopensAfterReadOnlyRejection current remove write rename bootstrap assemble ptrEq target keeper descriptors offsets prepared constructs effects
     booted raw failed sameHeap frame rfl⟩
   · simpa only [sameHeap] using closed
   · rw [sameHeap]

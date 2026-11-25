@@ -6,19 +6,60 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting WalSegmentRepair
 open WAL.Boundary (WalInodeImage)
 
-private theorem skipUnparsedWalName [Monad m] [LawfulMonad m] [MonadExceptOf IO.Error m]
+private theorem stagedManifestUnparsed (directory : DiskDirectory) :
+    parseWalSegmentName "MANIFEST.next" = none := by
+  cases parsed : parseWalSegmentName "MANIFEST.next" with
+  | none => rfl
+  | some first =>
+    have collision : directory.file .stagedManifest = directory.file (.walSegment first) :=
+      (directory.walSegment_path_of_parsed parsed).symm
+    obtain ⟨_, impossible⟩ := DiskDirectory.walSegment_exclusive collision
+    cases impossible
+
+private theorem extentsIgnoreUnparsedNames [Monad m] [LawfulMonad m] [MonadExceptOf IO.Error m]
     (directory : DiskDirectory) (lstat : FilePath → m (Except IO.Error IO.FS.Metadata))
-    (earlier later : List String) {name : String} (unparsed : parseWalSegmentName name = none) :
-    readWalSegmentExtentsWith directory lstat (earlier ++ name :: later) =
-      readWalSegmentExtentsWith directory lstat (earlier ++ later) := by
-  have skipped : readWalSegmentExtentWith directory lstat name = pure none := by
-    simp [readWalSegmentExtentWith, unparsed]
+    (names : List String) :
+    readWalSegmentExtentsWith directory lstat names =
+      readWalSegmentExtentsWith directory lstat (names.filter (fun name => (parseWalSegmentName name).isSome)) := by
   let measure := readWalSegmentExtentWith directory lstat
-  have inventory : (earlier ++ name :: later).filterMapM measure = (earlier ++ later).filterMapM measure := by
-    induction earlier with
-    | nil => simp [measure, skipped]
-    | cons first rest ih => simp only [List.cons_append, List.filterMapM_cons, ih]
+  have inventory : names.filterMapM measure =
+      (names.filter (fun name => (parseWalSegmentName name).isSome)).filterMapM measure := by
+    induction names with
+    | nil => rfl
+    | cons name rest prior =>
+      cases parsed : parseWalSegmentName name with
+      | none =>
+        have skipped : measure name = pure none := by simp [measure, readWalSegmentExtentWith, parsed]
+        simp [List.filterMapM_cons, parsed, skipped, prior]
+      | some first => simp [List.filterMapM_cons, parsed, prior]
   simp only [readWalSegmentExtentsWith, ← show measure = readWalSegmentExtentWith directory lstat from rfl, inventory]
+
+/-- The actual marked reader may project the returned directory listing
+to parsed WAL names. It still executes that same listing once, and every
+subsequent callback runs on the same reached heap. -/
+theorem readSelectedWithCachedExtents_projectsWalNames {heap : Type}
+    (directory : DiskDirectory) (watermark : Nat) (length : UInt64)
+    (list : FilePath → EStateM IO.Error heap (Array IO.FS.DirEntry))
+    (lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    (readSeal : FilePath → Nat → EStateM IO.Error heap ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray) (before : heap) :
+    readSelectedWithCachedExtents directory watermark length
+      (fun path => do
+        let entries ← list path
+        pure (entries.filter (fun entry => (parseWalSegmentName entry.fileName).isSome)))
+      lstat readSeal readKeeper before =
+    readSelectedWithCachedExtents directory watermark length list lstat readSeal readKeeper before := by
+  by_cases checked : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize
+  · cases listed : list directory.path before with
+    | error => simp [readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checked, listed]
+    | ok entries reached =>
+      have names : (entries.toList.filter (fun entry => (parseWalSegmentName entry.fileName).isSome)).map
+          (·.fileName) = (entries.toList.map (·.fileName)).filter (fun name => (parseWalSegmentName name).isSome) := by
+        simp [List.filter_map, Function.comp_def]
+      simp [readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checked, listed, Pure.pure, EStateM.pure,
+        names, ← extentsIgnoreUnparsedNames]
+  · simp [readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checked, throw, throwThe,
+      MonadExceptOf.throw, EStateM.throw]
 
 /-- The marked WAL selector ignores MANIFEST.next at any listing position.
 Both successful listing observations use the same reached heap. All
@@ -40,15 +81,9 @@ theorem readSelectedWithCachedExtents_ignoresStagedManifest {heap : Type}
       readSelectedWithCachedExtents directory watermark length list lstat readSeal readKeeper before := by
   have inventory : readWalSegmentExtentsWith directory lstat (entriesWithScratch.toList.map (·.fileName)) =
       readWalSegmentExtentsWith directory lstat (entries.toList.map (·.fileName)) := by
-    rw [namesWithScratch, names]
-    apply skipUnparsedWalName directory lstat earlier later
-    cases parsed : parseWalSegmentName "MANIFEST.next" with
-    | none => rfl
-    | some first =>
-      have collision : directory.file .stagedManifest = directory.file (.walSegment first) :=
-        (directory.walSegment_path_of_parsed parsed).symm
-      obtain ⟨_, impossible⟩ := DiskDirectory.walSegment_exclusive collision
-      cases impossible
+    rw [extentsIgnoreUnparsedNames directory lstat (entriesWithScratch.toList.map (·.fileName)),
+      extentsIgnoreUnparsedNames directory lstat (entries.toList.map (·.fileName)), namesWithScratch, names]
+    simp [List.filter_append, stagedManifestUnparsed directory]
   simp [readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checked, listed, listedWithScratch, inventory, Pure.pure]
 
 /-- The reboot image used by marked recovery projects the selected files.

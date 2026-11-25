@@ -226,6 +226,23 @@ inductive RawFinalizedOpenAttempts (view : OpenCloseHeapView heap FileImage) (di
       (input : FilePath) (seen : RawFinalizedOpenAttempt view directory calls init release input entry) :
       RawFinalizedOpenAttempts view directory calls init release start (earlier ++ [(input, seen.diagnostic)]) seen.reached
 
+/-- Compose a frame at the caller-visible endpoints of the failed
+opens. Each local frame belongs to the reached heap of its own attempt. -/
+theorem RawFinalizedOpenAttempts.frames {start reached : heap} {returns : List (FilePath × IO.Error)}
+    (seen : RawFinalizedOpenAttempts view directory calls init release start returns reached)
+    {frame : heap → heap → Prop} (empty : ∀ atHeap, frame atHeap atHeap)
+    (compose : ∀ {a b c}, frame a b → frame b c → frame a c)
+    (beforeFlock : ∀ input entry (refused : RawBeforeFlockRejection view calls input entry), frame entry refused.reached)
+    (flockError : ∀ input entry (refused : RawFlockRejection view calls directory release input entry), frame entry refused.reached)
+    (attempt : ∀ input entry (failed : RawFinalizedOpenAttempt view directory calls init release input entry),
+      frame entry failed.reached) :
+    frame start reached := by
+  induction seen with
+  | empty => exact empty _
+  | beforeFlock _ input refused prior => exact compose prior (beforeFlock input _ refused)
+  | flockError _ input refused prior => exact compose prior (flockError input _ refused)
+  | attempt _ _ input failed prior => exact compose prior (attempt input _ failed)
+
 /-- Every recorded error belongs to its own executed attempt. A sequence
 of these read-only failures leaves the original file image and inode
 map at the actual heap for the next opening. -/
@@ -233,17 +250,14 @@ theorem RawFinalizedOpenAttempts.preserves {start reached : heap} {returns : Lis
     (seen : RawFinalizedOpenAttempts view directory calls init release start returns reached) :
     (view.descriptors reached).inode = (view.descriptors start).inode ∧
     (view.files reached).image = (view.files start).image := by
-  induction seen with
-  | empty => exact ⟨rfl, rfl⟩
-  | beforeFlock _ _ refused earlier =>
-    exact ⟨(congrArg DescriptorInventory.inode refused.census).trans earlier.1,
-      (congrArg LockedFileState.image refused.files).trans earlier.2⟩
-  | flockError _ _ refused earlier =>
-    obtain ⟨sameCensus, sameFiles⟩ := refused.preserves
-    exact ⟨(congrArg DescriptorInventory.inode sameCensus).trans earlier.1,
-      (congrArg LockedFileState.image sameFiles).trans earlier.2⟩
-  | attempt _ _ _ attempt earlier =>
-    obtain ⟨_, _, _, _, _, sameInodes, sameFiles, _⟩ := attempt.returns
-    exact ⟨sameInodes.trans earlier.1, sameFiles.trans earlier.2⟩
+  refine seen.frames (frame := fun first last => (view.descriptors last).inode = (view.descriptors first).inode ∧
+      (view.files last).image = (view.files first).image)
+    (fun _ => ⟨rfl, rfl⟩) (fun first later => ⟨later.1.trans first.1, later.2.trans first.2⟩)
+    (fun _ _ refused => ⟨congrArg DescriptorInventory.inode refused.census, congrArg LockedFileState.image refused.files⟩)
+    (fun _ _ refused => ?_) (fun _ _ attempt => ?_)
+  · obtain ⟨sameCensus, sameFiles⟩ := refused.preserves
+    exact ⟨congrArg DescriptorInventory.inode sameCensus, congrArg LockedFileState.image sameFiles⟩
+  · obtain ⟨_, _, _, _, _, sameInodes, sameFiles, _⟩ := attempt.returns
+    exact ⟨sameInodes, sameFiles⟩
 
 end Alvoki.Storage.DiskSession
