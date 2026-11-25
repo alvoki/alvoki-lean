@@ -170,6 +170,8 @@ and carry one descriptor and file state across the operation families below.
 
 The first native ready-session prefix starts at the session returned by a chronological long-keeper reopen. The trace fixes that initial state and carries its exact file image, cache, owner and descriptor census into an arbitrary prefix of local snapshot acquisitions and point or range reads. The same WAL replay accounts for each appended response and the earlier client log. Connect a further interruption and restart to this reached state, then extend the prefix to the other native operations. [Ready read prefix](../lean/Alvoki/Storage/Disk/NativeReadyReadPrefix.lean)
 
+Explicit close starts with that same returned session after its read prefix. Successful unlock clears the cache in schedule order, preserves the selected files and permits the next open even if old descriptors still reference the former owner. A returned unlock error leaves the phase, files, cache and descriptor inventory at the ready state. The chronological slot reports then make the original lock vacant exactly when its final reference drops. Both paths reach the shared admission callback on the selected files and the original lock and directory objects. They carry the earlier read replay through admission, which takes the next primitive open reports and the stable object bindings as premises. [Close after native reads](../lean/Alvoki/Storage/Disk/NativeReadyClose.lean)
+
 Close the induction by operation family. Each row is complete when every reached branch under the stated contract constructs its successor from the same returned state and observations.
 
 | Entry points | Coverage to connect |
