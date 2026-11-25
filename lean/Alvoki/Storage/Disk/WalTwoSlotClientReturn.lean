@@ -1314,7 +1314,8 @@ theorem recoveredRetries_installedReads
     {checkedState : FileImage} {checkpointResult : Option (PackedTable × UInt64)}
     (checkpointRead : readCheckpoint openedFrom.image = .ok checkpointResult checkedState)
     (checkpointBase : (checkpointResult.getD (.empty, 0)).1 = base)
-    (watermark : base.committed.toNat ≤ selected.frontier.toNat / frameSize)
+    {durableRuns : CheckpointPublication.RunFiles}
+    (checkpointSelected : SelectedIntegrityCheckpoint durableRuns target.pair.manifest checkpointResult)
     {entries : Array IO.FS.DirEntry} {listedState scannedState : FileImage}
     (listed : list directory.path checkedState = .ok entries listedState)
     {extents required : List (Nat × IO.FS.Metadata)} {newer : List Nat}
@@ -1374,7 +1375,7 @@ theorem recoveredRetries_installedReads
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
   have markerRead : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
-  obtain ⟨_, _, marker, length, binding, decoded, absolute⟩ :=
+  obtain ⟨manifestWatermark, checkpointCovered, marker, length, binding, decoded, absolute⟩ :=
     DirectoryPublication.Bindings.walRange_accounting target.decoded
   have sameMarker := Option.some.inj (binding.symm.trans markerRead)
   have sameLength := Except.ok.inj ((sameMarker ▸ decoded).symm.trans (Boundary.decode_encode _))
@@ -1382,6 +1383,13 @@ theorem recoveredRetries_installedReads
     rw [← sameLength, absolute, Nat.mul_mod_left]
   have through : selected.frontier.toNat / frameSize = target.range.through := by
     rw [← sameLength, absolute, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
+  have sameWatermark : base.committed.toNat = target.range.watermark := by
+    have selectedWatermark := checkpointSelected.watermark
+    rw [checkpointBase] at selectedWatermark
+    exact Option.some.inj (selectedWatermark.symm.trans manifestWatermark)
+  have watermark : base.committed.toNat ≤ selected.frontier.toNat / frameSize := by
+    rw [sameWatermark, through]
+    exact checkpointCovered
   have keeperSize : target.trimmed.size =
       (selected.frontier.toNat / frameSize - target.first) * frameSize := by
     rw [through]
