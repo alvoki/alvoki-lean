@@ -184,6 +184,7 @@ import Alvoki.Storage.Disk.HeldDirectoryReadObservations
 import Alvoki.Storage.Disk.ListedDirectoryAuthorization
 import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
 import Alvoki.Storage.Disk.HeldMetadataReadObservations
+import Alvoki.Storage.Disk.WalInventoryWork
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
@@ -1362,6 +1363,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.manifestListed
 #check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.markerListed
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryMarkedRetryReports.metadataReads
+#check_axioms Alvoki.Storage.mergeSortWithComparisonWork_spec
+#check_axioms Alvoki.Storage.readWalSegmentExtentsWithWork_spec
+#check_axioms Alvoki.Storage.readWalSegmentExtentsWithWork_bound
+#check_axioms Alvoki.Storage.OpenedDirectoryScan.walNameWork_bound
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofDirectoryReadError
 #check_axioms Alvoki.Storage.readExactPrefixWith_requestBound
 #check_axioms Alvoki.Storage.readPrefixUntilEofWith_requestBound
