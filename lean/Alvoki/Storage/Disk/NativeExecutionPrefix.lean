@@ -7,6 +7,7 @@ import Alvoki.Storage.Disk.NativePendingCheckpoint
 import Alvoki.Storage.Disk.NativePendingFirstAppend
 import Alvoki.Storage.Disk.NativePendingMarkerSync
 import Alvoki.Storage.Disk.NativePendingMarkerRename
+import Alvoki.Storage.Disk.NativePendingMarkerDirectory
 import Alvoki.Storage.Disk.NativeGroupedKeeperSyncError
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
@@ -55,6 +56,8 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
       (seen : NativeGroupedKeeperSyncError prepared)
   | interruptedMarkerRename {prepared : NativeReadyWritePreparation current.ready.state}
       (stop : NativeWriteMarkerRenameStop prepared)
+  | interruptedMarkerDirectory {prepared : NativeReadyWritePreparation current.ready.state}
+      (stop : NativeWriteMarkerDirectoryStop prepared)
   | closeAfterUncertainWrite (pending : NativePendingWrite current.ready) (close : NativePendingClose pending)
   | close (reported : NativeReadyClose current.ready.state)
   | rejectedOpensAfterClose (sequence : NativeRejectedOpenSequence current)
@@ -86,6 +89,7 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .interruptedKeeperSync stop => .write stop.request
   | .groupedKeeperSyncError seen => .write seen.request
   | .interruptedMarkerRename stop => .write stop.request
+  | .interruptedMarkerDirectory stop => .write stop.request
   | .closeAfterUncertainWrite pending _ => .writeThenClose pending.write.request
   | .close _ => .close
   | .rejectedOpensAfterClose sequence => .closeThenOpenAttempts sequence.inputs
@@ -101,7 +105,8 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
 def uncertainBatch : NativeExecutionEnd current → Option (List WAL.Write)
   | .uncertainWrite pending | .closeAfterUncertainWrite pending _ => some pending.write.failure.batch
   | .interruptedFirstAppend (prepared := prepared) _ | .interruptedKeeperSync (prepared := prepared) _
-  | .groupedKeeperSyncError (prepared := prepared) _ | .interruptedMarkerRename (prepared := prepared) _ =>
+  | .groupedKeeperSyncError (prepared := prepared) _ | .interruptedMarkerRename (prepared := prepared) _
+  | .interruptedMarkerDirectory (prepared := prepared) _ =>
     some prepared.batch
   | .interruptedCloseAfterUncertainWrite pending _ _ => some pending.write.failure.batch
   | _ => none
@@ -120,6 +125,7 @@ def Reached : NativeExecutionEnd current → Prop
   | .interruptedKeeperSync stop => NativePendingKeeperSync current.ready stop
   | .groupedKeeperSyncError seen => NativeReturnedGroupedKeeperError current.ready seen
   | .interruptedMarkerRename stop => NativePendingMarkerRename current.ready stop
+  | .interruptedMarkerDirectory stop => NativePendingMarkerDirectory current.ready stop
   | .closeAfterUncertainWrite pending closed =>
       pending.write.returnedAt pending.cache ∧
       closed.report.run = match closed.report.result with
@@ -189,6 +195,7 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   | interruptedKeeperSync stop => exact current.ready.stopsAtKeeperSync stop
   | groupedKeeperSyncError seen => exact current.ready.returnsGroupedKeeperError seen
   | interruptedMarkerRename stop => exact current.ready.stopsAtMarkerRename stop
+  | interruptedMarkerDirectory stop => exact current.ready.stopsAtMarkerDirectory stop
   | closeAfterUncertainWrite pending close =>
     refine ⟨pending.returned, ?_⟩
     have result := close.returns
@@ -270,6 +277,9 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
     rcases allowed with rfl | rfl
     · exact .inl (List.append_nil _)
     · exact .inr ⟨_, rfl, rfl⟩
+  | interruptedMarkerDirectory stop =>
+    have reached := current.ready.stopsAtMarkerDirectory stop
+    exact ⟨_, .inr ⟨_, rfl, rfl⟩, reached.liveReplay, reached.liveBounds⟩
   | closeAfterUncertainWrite pending close =>
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := close.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
@@ -300,6 +310,8 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
       (seen : NativeGroupedKeeperSyncError prepared) : NativeExecutionEndObservation current (.write seen.request)
   | interruptedMarkerRename {prepared : NativeReadyWritePreparation current.ready.state}
       (stop : NativeWriteMarkerRenameStop prepared) : NativeExecutionEndObservation current (.write stop.request)
+  | interruptedMarkerDirectory {prepared : NativeReadyWritePreparation current.ready.state}
+      (stop : NativeWriteMarkerDirectoryStop prepared) : NativeExecutionEndObservation current (.write stop.request)
   | closeAfterUncertainWrite (write : NativeReadyWriteFailure current.ready.state)
       (inspect : ∀ cache, write.returnedAt cache → Nonempty (NativePendingWriteCensus current.ready.state cache))
       (close : ∀ pending : NativePendingWrite current.ready, pending.write = write → Nonempty (NativePendingClose pending)) :
@@ -346,6 +358,7 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
   | interruptedKeeperSync stop => exact ⟨.interruptedKeeperSync stop, rfl, NativeExecutionEnd.reached _⟩
   | groupedKeeperSyncError seen => exact ⟨.groupedKeeperSyncError seen, rfl, NativeExecutionEnd.reached _⟩
   | interruptedMarkerRename stop => exact ⟨.interruptedMarkerRename stop, rfl, NativeExecutionEnd.reached _⟩
+  | interruptedMarkerDirectory stop => exact ⟨.interruptedMarkerDirectory stop, rfl, NativeExecutionEnd.reached _⟩
   | closeAfterUncertainWrite write inspect close =>
     obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite write inspect
     obtain ⟨closed⟩ := close pending same
