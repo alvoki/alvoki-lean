@@ -42,6 +42,25 @@ Matched batch sizes 1, 8 and 32 keep a per-commit gap. Alvoki syncs the WAL, sta
 
 Evaluate in-segment commit records as a candidate protocol. It could append the batch and its boundary together and sync the active file once, with directory barriers on segment creation or rotation. First specify crash cuts, including a visible commit record with missing or torn payload, incomplete final records, interrupted rotation and retries. Derive that every acknowledged batch survives, no strictly partial batch becomes visible, and previous acknowledged data survives rejected tails. Specify exact decoder and corruption assumptions. Compare a proof-backed candidate on the same small-batch cells and run the native fault suite before adoption. [Sampled sync counts](performance-baseline.md#durable-batch-experiment)
 
+### Striped reusable WAL experiment
+
+Prototype a markerless WAL that assigns each commit ordinal to one of a fixed
+set of reusable segments, starting with eight and a single writer. Give each
+record a generation, ordinal, batch boundary and checksum. Reopen would merge
+the validated segment streams from the checkpoint and select the longest
+contiguous sequence of complete batches. Neighboring segments can expose a
+hole or stale generation. Establish what recovery may infer at the global
+tail, where no later record may witness a missing write.
+
+Compare one ordered sync per commit in this prototype against the two-slot
+marker path. Before adoption, model interrupted overwrite, rotation, and
+recycling, and prove that the recoverable prefix includes every acknowledged
+batch and excludes partial batches. Recycling must preserve the only copy of
+each required record until the durable checkpoint covers it. Define the
+failure isolation and checksum assumptions. Measure steady-state writes,
+sync and physical write counts, and reopen work over different stripe counts,
+batch sizes, and checkpoint distances.
+
 ### Workload coverage and toolchain experiments
 
 Use the baseline as the starting point for a performance map of Alvoki. Keep the three core scenarios stable for release comparisons. Add representative points as a use case or bottleneck calls for them. Vary read/write mix, uniform versus Zipfian access, working-set size, key and value size, batch size, snapshot lifetime, cache state and maintenance pressure. When diagnosing a difference, vary one dimension at a time. Retain an established-engine control where semantics match, and keep Alvoki's absolute timings and resource use for cases with a different contract.
