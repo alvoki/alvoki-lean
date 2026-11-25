@@ -36,21 +36,25 @@ theorem prepared_write_reports {α σ : Type}
   simp only [DiskSession.publishPreparedWrite, DiskSession.publishPrepared, setPhase,
     commitReports, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, result]
 
-/-- If the positional marker write fails after the WAL barrier, the
+/-- If the slot write or marker barrier fails after the WAL barrier, the
 client receives commit-unknown with exactly the reached file state.
-Neither the marker barrier nor installation runs. -/
-theorem prepared_write_slotError {α σ : Type}
+The marker barrier runs only after a successful slot write. Installation
+is skipped in either case. -/
+theorem prepared_write_markerError {α σ : Type}
     (next : α) (sequence : UInt64) (prior : DiskSession.Phase α)
     (append syncWal writeSlot syncSlot install : EStateM IO.Error σ Unit)
     {files appended durable reached : σ} {cause : IO.Error}
     (wrote : append files = .ok () appended)
     (walBarrier : syncWal appended = .ok () durable)
-    (failed : writeSlot durable = .error cause reached) :
+    (failed : writeSlot durable = .error cause reached ∨
+      ∃ written, writeSlot durable = .ok () written ∧ syncSlot written = .error cause reached) :
     DiskSession.publishPreparedWrite next sequence setPhase
       (commitReports (publish append syncWal writeSlot syncSlot install)) (prior, files) =
         .error (.commitUnknown cause) (.poisoned, reached) := by
   rw [prepared_write_reports, publish_reports]
-  simp only [wrote, walBarrier, failed]
+  rcases failed with writeError | ⟨written, slotWritten, syncError⟩
+  · simp only [wrote, walBarrier, writeError]
+  · simp only [wrote, walBarrier, slotWritten, syncError]
 
 /-- A client acknowledgement supplies successful reports for all four
 file operations in execution order, including the marker barrier. -/
@@ -493,16 +497,17 @@ theorem interruptedDescriptors_selectBatch
   rw [syncedInode_survivor walSync walCurrent (by simp [walSettled]) walSurvived]
   exact interruptedBytes_selectBatch prior activeOffset advanced size unchanged target oldCount appended
 
-/-- A returned slot-write failure leaves the poisoned session and the
+/-- A returned slot-write or marker-sync failure leaves the poisoned session and the
 exact crash candidates from the reached files. The previous successful
 WAL barrier suffices for either complete marker outcome. -/
-theorem slotError_selectBatch {α : Type}
+theorem markerError_selectBatch {α : Type}
     (nextTable : α) (sequence : UInt64) (phase : DiskSession.Phase α)
     (append syncWal writeSlot syncSlot install : EStateM IO.Error (WalInodeImage × WalInodeImage) Unit)
     {initial appended durable reached : WalInodeImage × WalInodeImage} {cause : IO.Error}
     (wrote : append initial = .ok () appended)
     (walBarrier : syncWal appended = .ok () durable)
-    (failed : writeSlot durable = .error cause reached)
+    (failed : writeSlot durable = .error cause reached ∨
+      ∃ written, writeSlot durable = .ok () written ∧ syncSlot written = .error cause reached)
     (walUnchanged : reached.1 = durable.1)
     {walHandle markerHandle : KeeperDescriptorIdentity}
     (walSync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
@@ -528,7 +533,7 @@ theorem slotError_selectBatch {α : Type}
     ∃ chosen events, decode markerBytes = .ok chosen ∧
       (events = history ∨ events = history ++ batch) ∧
       Boundary.select chosen.frontier walBytes = .ok (WAL.encode events) := by
-  refine ⟨prepared_write_slotError nextTable sequence phase append syncWal writeSlot syncSlot install
+  refine ⟨prepared_write_markerError nextTable sequence phase append syncWal writeSlot syncSlot install
     wrote walBarrier failed, ?_⟩
   rw [walUnchanged] at walSurvived
   exact interruptedDescriptors_selectBatch walSync walCurrent markerCurrent walSettled markerSettled
