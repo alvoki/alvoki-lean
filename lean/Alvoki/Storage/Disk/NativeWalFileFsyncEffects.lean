@@ -235,6 +235,169 @@ theorem RawSyncCalls.groupedStorageFromStaging {heap image : Type} (calls : RawS
     keeperSelected markerSelected (keptByStage.trans appendBytes) (keptByConsume.2.trans (sameBytes.trans payload))
     keeperEffect markerEffect distinct consumeFrame unrelated
 
+/-- Local effects of the callbacks issued by the keeper append. A hit
+must already be clean. The open, write, flush and active-reference store
+are separate from either of the later file barriers. -/
+structure RawWalAppendCalls.KeeperEffects {heap image : Type} (calls : RawWalAppendCalls heap)
+    (view : OpenCloseHeapView heap image) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (path : FilePath) (bytes : ByteArray) (entry reached : heap)
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray) (keeper : Nat) : Prop where
+  loaded : calls.getActive active entry = .ok (view.active entry active) entry
+  cleanCached : ∀ handle, view.active entry active = some (path, handle) →
+    inode handle = keeper ∧ buffered entry handle = ByteArray.empty
+  openedExisting : ∀ {handle opened}, calls.openAppend path entry = .ok handle opened →
+    inode handle = keeper ∧ names opened path = some keeper ∧ visible opened keeper = visible entry keeper ∧
+    buffered opened handle = ByteArray.empty
+  write : ∀ {handle before after}, calls.write handle bytes before = .ok () after →
+    names after path = names before path ∧
+    visible after (inode handle) ++ buffered after handle =
+      (visible before (inode handle) ++ buffered before handle) ++ bytes
+  flush : ∀ {handle before after}, calls.flush handle before = .ok () after →
+    names after path = names before path ∧ visible after (inode handle) = visible before (inode handle) ++ buffered before handle ∧
+    buffered after handle = ByteArray.empty
+  store : ∀ {handle before}, calls.setActive active (some (path, handle)) before = .ok () reached →
+    view.active reached active = some (path, handle) ∧ names reached path = names before path ∧
+    visible reached (inode handle) = visible before (inode handle) ∧ buffered reached handle = buffered before handle
+
+/-- The marker's exclusive create starts empty. The cache and the
+keeper's live bytes are framed along the separate staging callbacks. -/
+structure RawWalStageCalls.MarkerEffects {heap image : Type} (calls : RawWalStageCalls heap)
+    {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles} (cache : OpenSyncCacheRefs files directory.path)
+    (view : OpenCloseHeapView heap image) (bytes : ByteArray) (entry reached : heap)
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray) (keeper : Nat) : Prop where
+  first : ∀ {file opened}, calls.tryCreate (directory.file .stagedWalBoundary) entry = .ok (.ok file) opened →
+    names opened (directory.file .stagedWalBoundary) = some (inode file) ∧
+    visible opened (inode file) = ByteArray.empty ∧ buffered opened file = ByteArray.empty
+  retry : ∀ {file before opened}, calls.create (directory.file .stagedWalBoundary) before = .ok file opened →
+    names opened (directory.file .stagedWalBoundary) = some (inode file) ∧
+    visible opened (inode file) = ByteArray.empty ∧ buffered opened file = ByteArray.empty
+  acquired : ∀ {file opened}, calls.acquire (directory.file .stagedWalBoundary) entry = .ok file opened →
+    view.literalCacheAt opened cache.directory cache.active cache.pending =
+      view.literalCacheAt entry cache.directory cache.active cache.pending ∧ visible opened keeper = visible entry keeper
+  write : ∀ {file before after}, calls.write file bytes before = .ok () after →
+    view.literalCacheAt after cache.directory cache.active cache.pending =
+      view.literalCacheAt before cache.directory cache.active cache.pending ∧ visible after keeper = visible before keeper ∧
+    names after (directory.file .stagedWalBoundary) = names before (directory.file .stagedWalBoundary) ∧
+    visible after (inode file) ++ buffered after file = (visible before (inode file) ++ buffered before file) ++ bytes
+  flush : ∀ {file before after}, calls.flush file before = .ok () after →
+    view.literalCacheAt after cache.directory cache.active cache.pending =
+      view.literalCacheAt before cache.directory cache.active cache.pending ∧ visible after keeper = visible before keeper ∧
+    names after (directory.file .stagedWalBoundary) = names before (directory.file .stagedWalBoundary) ∧
+    visible after (inode file) = visible before (inode file) ++ buffered before file
+  store : ∀ {file before}, calls.remember cache.pending (pushPending (directory.file .stagedWalBoundary) file) before =
+      .ok () reached →
+    view.literalCacheAt reached cache.directory cache.active cache.pending =
+      (view.literalCacheAt before cache.directory cache.active cache.pending).remember
+        (directory.file .stagedWalBoundary) file ∧ visible reached keeper = visible before keeper ∧
+    names reached (directory.file .stagedWalBoundary) = names before (directory.file .stagedWalBoundary) ∧
+    visible reached (inode file) = visible before (inode file)
+
+/-- Primitive observations at the literal handles chosen by the two
+file barriers. Consuming the pending reference has a separate frame
+because releasing entries can change the reached heap. -/
+structure RawSyncCalls.GroupedFileEffects {heap image : Type} (calls : RawSyncCalls heap)
+    {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles} (cache : OpenSyncCacheRefs files directory.path)
+    (view : OpenCloseHeapView heap image) (inodes : heap → WalInodeImage) {runs : heap → RunUnlinkImage}
+    (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap)) (first : Nat)
+    (appended staged consumed reached : heap) (keeperHandle markerHandle : IO.FS.Handle)
+    (keeper marker : Nat) : Prop where
+  keeperMiss : (view.pending appended cache.pending).find? (fun entry => entry.1 == directory.file (.walSegment first)) = none
+  loadedKeeper : calls.readPending cache.pending staged = .ok (view.pending staged cache.pending) staged
+  loadedActive : calls.readActive cache.active staged = .ok (view.active staged cache.active) staged
+  loadedMarker : let afterKeeper := reachedState (calls.fsync keeperHandle staged)
+    calls.readPending cache.pending afterKeeper = .ok (view.pending staged cache.pending) afterKeeper
+  removed : calls.setPending cache.pending
+    ((view.pending staged cache.pending).filter (fun entry => entry.1 != directory.file .stagedWalBoundary))
+    (reachedState (calls.fsync keeperHandle staged)) = .ok () consumed
+  keeperTarget : RawFsyncTarget view appended staged keeperHandle
+  markerTarget : RawFsyncTarget view staged consumed markerHandle
+  keeperSelected : (view.handle appended keeperHandle).1.inode (view.handle appended keeperHandle).2.1.description = keeper
+  markerSelected : (view.handle staged markerHandle).1.inode (view.handle staged markerHandle).2.1.description = marker
+  distinct : keeper ≠ marker
+  keeperEffect : ∀ after, calls.FileReturnEffect view inodes observe (directory.file (.walSegment first)) keeperHandle staged after
+  markerEffect : calls.FileReturnEffect view inodes observe (directory.file .stagedWalBoundary) markerHandle consumed reached
+  consumeKeeper : let afterKeeper := reachedState (calls.fsync keeperHandle staged)
+    (observe afterKeeper).storageObservation.Frames (· = directory.file (.walSegment first)) (observe consumed).storageObservation ∧
+      (inodes consumed).visible keeper = (inodes afterKeeper).visible keeper
+  consumeMarker : let afterKeeper := reachedState (calls.fsync keeperHandle staged)
+    (observe consumed).visible (directory.file .stagedWalBoundary) = (observe afterKeeper).visible (directory.file .stagedWalBoundary) ∧
+      (inodes consumed).visible marker = (inodes afterKeeper).visible marker
+
+/-- Derive the durable payloads from the actual append, staging and
+grouped file-sync returns. The live keeper at the group return uses
+its own byte frame and remains available for the next append. -/
+theorem RawSyncCalls.groupedStorageFromPublication {heap image : Type} (calls : RawSyncCalls heap)
+    {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles}
+    (cache : OpenSyncCacheRefs files directory.path) (view : OpenCloseHeapView heap image)
+    (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap)
+    (inodes : heap → WalInodeImage) {runs : heap → RunUnlinkImage}
+    (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap))
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    {first count keeper : Nat} {entry appended staged reached : heap} {priorBytes bytes : ByteArray}
+    (priorBinding : (observe entry).visible (directory.file (.walSegment first)) = some keeper)
+    (priorVisible : (inodes entry).visible keeper = priorBytes)
+    (wrote : appender.run cache.active (directory.file (.walSegment first)) bytes entry = .ok () appended)
+    (stagedMarker : stager.run cache.pending (directory.file .stagedWalBoundary)
+      (WAL.Boundary.encode count.toUInt64) appended = .ok () staged)
+    (grouped : calls.group directory.path cache.directory cache.active cache.pending
+      #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .ok () reached)
+    (appendEffects : appender.KeeperEffects view cache.active (directory.file (.walSegment first)) bytes entry appended
+      (fun heap => (observe heap).visible) (fun heap => (inodes heap).visible) inode buffered keeper)
+    (stageEffects : (observe appended).visible (directory.file (.walSegment first)) = some keeper →
+      stager.MarkerEffects cache view (WAL.Boundary.encode count.toUInt64) appended staged
+        (fun heap => (observe heap).visible) (fun heap => (inodes heap).visible) inode buffered keeper)
+    (barrierEffects : ∀ {keeperHandle markerHandle},
+      (observe appended).visible (directory.file (.walSegment first)) = some keeper →
+      inode keeperHandle = keeper →
+      view.active appended cache.active = some (directory.file (.walSegment first), keeperHandle) →
+      view.literalCacheAt staged cache.directory cache.active cache.pending =
+        (view.literalCacheAt appended cache.directory cache.active cache.pending).remember
+          (directory.file .stagedWalBoundary) markerHandle →
+      ∃ consumed, calls.GroupedFileEffects cache view inodes observe first appended staged consumed reached
+        keeperHandle markerHandle keeper (inode markerHandle)) :
+    (observe reached).storageObservation.files.Stored (directory.file (.walSegment first)) (priorBytes ++ bytes) ∧
+    (observe reached).storageObservation.files.Stored (directory.file .stagedWalBoundary)
+      (WAL.Boundary.encode count.toUInt64) ∧
+    (observe reached).visible (directory.file (.walSegment first)) = some keeper ∧
+    (inodes reached).visible keeper = priorBytes ++ bytes := by
+  let names := fun heap => (observe heap).visible
+  let visible := fun heap => (inodes heap).visible
+  obtain ⟨keeperHandle, active, keeperIdentity, keeperNamed, appendBytes, _⟩ := appender.appendsVisible view names inode visible buffered
+    priorBinding appendEffects.loaded wrote appendEffects.cleanCached appendEffects.openedExisting
+    appendEffects.write appendEffects.flush appendEffects.store
+  change (inodes appended).visible keeper = (inodes entry).visible keeper ++ bytes at appendBytes
+  rw [priorVisible] at appendBytes
+  have stageEffects := stageEffects keeperNamed
+  obtain ⟨markerHandle, remembered, keptByStage, _⟩ := stager.retainsStaged view
+    (fun heap => visible heap keeper) names inode stagedMarker
+    (fun opened => ⟨(stageEffects.acquired opened).1, (stageEffects.acquired opened).2,
+      stager.acquireBinds _ names inode opened (fun created => (stageEffects.first created).1)
+        (fun created => (stageEffects.retry created).1)⟩)
+    (fun wrote => ⟨(stageEffects.write wrote).1, (stageEffects.write wrote).2.1, (stageEffects.write wrote).2.2.1⟩)
+    (fun flushed => ⟨(stageEffects.flush flushed).1, (stageEffects.flush flushed).2.1, (stageEffects.flush flushed).2.2.1⟩)
+    (fun saved => ⟨(stageEffects.store saved).1, (stageEffects.store saved).2.1, (stageEffects.store saved).2.2.1⟩)
+  have stagedBytes := stager.stagesVisible names inode visible buffered stagedMarker stageEffects.first stageEffects.retry
+    (fun wrote => (stageEffects.write wrote).2.2) (fun flushed => (stageEffects.flush flushed).2.2)
+    (fun saved => (stageEffects.store saved).2.2)
+  obtain ⟨consumed, effects⟩ := barrierEffects keeperNamed keeperIdentity active remembered
+  obtain ⟨keeperStored, markerStored, _⟩ := calls.groupedStorageFromStaging cache view active effects.keeperMiss remembered
+    effects.loadedKeeper effects.loadedActive effects.loadedMarker effects.removed grouped inodes runs observe
+    effects.keeperTarget effects.markerTarget effects.keeperSelected effects.markerSelected appendBytes keptByStage stagedBytes
+    effects.consumeMarker effects.keeperEffect effects.markerEffect effects.distinct (footprint := fun _ => False)
+    (effects.consumeKeeper.1.weaken fun _ selected => selected.elim id False.elim)
+    (fun _ impossible => False.elim impossible)
+  obtain ⟨keeperRoute, markerRoute, _⟩ := calls.groupedFromStaging cache view active effects.keeperMiss remembered
+    effects.loadedKeeper effects.loadedActive effects.loadedMarker effects.removed
+  have keeperInode := effects.keeperTarget.inode.trans effects.keeperSelected
+  have consumedKeeps := effects.consumeKeeper.2
+  rw [← keeperInode] at consumedKeeps
+  obtain ⟨named, liveBytes⟩ := calls.groupedKeeperVisible cache view keeperRoute markerRoute grouped inodes runs observe
+    effects.keeperEffect effects.markerEffect ⟨(effects.consumeKeeper.1.visible _ rfl).1, consumedKeeps⟩
+  rw [keeperInode] at named liveBytes
+  exact ⟨keeperStored, markerStored, named, liveBytes.trans (keptByStage.trans appendBytes)⟩
+
 /-- Move the synced staged inode to the canonical marker, then use the
 same directory handle selected by the publication. Every selectable
 crash map has the live keeper and marker bindings and no staged name. -/
