@@ -21,9 +21,10 @@ structure RotationCreateFiles where
 /-- The absent successor was checked in the same held parent as the old
 WAL keeper and marker. The probe report belongs to the issued no-follow
 lookup on the canonical successor path. -/
-structure RotationCreateParent {directory : DiskDirectory} {before : SegmentedWriterState}
-    {cut : RotationInFlightCut directory before} {handle : Type}
-    (observed : ObservedRotationCreateStop cut handle) (inventory : DescriptorInventory) where
+structure RotationCreateParent (directory : DiskDirectory) (before : SegmentedWriterState)
+    (lookup : FilePath → Except IO.Error IO.FS.Metadata) (inventory : DescriptorInventory) where
+  nonempty : before.installed.activeFirst < successor before
+  absent : ∃ path message, lookup (successorPath directory before) = .error (.noFileOrDirectory path 2 message)
   root : DeviceInode
   files : RotationCreateFiles
   owner : DescriptorSlot
@@ -33,7 +34,7 @@ structure RotationCreateParent {directory : DiskDirectory} {before : SegmentedWr
   lockObject : files.view.modelObject lock.child = inventory.inode owner.description
   probe : FilePath → DeviceInode × String × Except IO.Error IO.FS.Metadata
   issuedProbe : probe (successorPath directory before) =
-    (root, successorName before, observed.lookup (successorPath directory before))
+    (root, successorName before, lookup (successorPath directory before))
   missing : files.view.child root (successorName before) = none
   absentAfterCrash : files.crashNames (successorName before) = [none]
   keeper : RunChildLookup root (keeperName before) files.view
@@ -47,13 +48,12 @@ structure RotationCreateParent {directory : DiskDirectory} {before : SegmentedWr
   markerNameCrash : files.crashNames "WAL.commit" = [some marker.child]
 
 theorem RotationCreateParent.probeAbsent {directory : DiskDirectory} {before : SegmentedWriterState}
-    {cut : RotationInFlightCut directory before} {handle : Type}
-    {observed : ObservedRotationCreateStop cut handle} {inventory : DescriptorInventory}
-    (parent : RotationCreateParent observed inventory) :
+    {lookup : FilePath → Except IO.Error IO.FS.Metadata} {inventory : DescriptorInventory}
+    (parent : RotationCreateParent directory before lookup inventory) :
     ∃ path message, parent.probe (successorPath directory before) =
       (parent.root, successorName before, .error (.noFileOrDirectory path 2 message)) ∧
       parent.files.view.child parent.root (successorName before) = none := by
-  obtain ⟨path, message, absent⟩ := observed.absent
+  obtain ⟨path, message, absent⟩ := parent.absent
   exact ⟨path, message, parent.issuedProbe.trans (by rw [absent]), parent.missing⟩
 
 private abbrev CreateState := DescriptorInventory × RotationCreateFiles
@@ -62,9 +62,8 @@ private abbrev CreateState := DescriptorInventory × RotationCreateFiles
 inode in the checked parent. At this cut the runtime can still be wrapping
 the descriptor. Object life and crash survivors are primitive reports. -/
 structure RotationRawSuccessor {directory : DiskDirectory} {before : SegmentedWriterState}
-    {cut : RotationInFlightCut directory before} {handle : Type}
-    {observed : ObservedRotationCreateStop cut handle} {inventory : DescriptorInventory}
-    (parent : RotationCreateParent observed inventory) where
+    {lookup : FilePath → Except IO.Error IO.FS.Metadata} {inventory : DescriptorInventory}
+    (parent : RotationCreateParent directory before lookup inventory) where
   raw : DescriptorSlot
   free : ∀ old ∈ inventory.slots, old.address ≠ raw.address
   fresh : inventory.references raw.description = []
@@ -86,24 +85,23 @@ structure RotationRawSuccessor {directory : DiskDirectory} {before : SegmentedWr
     files.inodes.crashBytes inode = parent.files.inodes.crashBytes inode
 
 def RotationCreateParent.project {directory : DiskDirectory} {before : SegmentedWriterState}
-    {cut : RotationInFlightCut directory before} {handle : Type} {observed : ObservedRotationCreateStop cut handle}
-    {inventory : DescriptorInventory} (parent : RotationCreateParent observed inventory) (files : RotationCreateFiles) :
+    {lookup : FilePath → Except IO.Error IO.FS.Metadata} {inventory : DescriptorInventory}
+    (parent : RotationCreateParent directory before lookup inventory) (files : RotationCreateFiles) :
     State :=
   ⟨before.wal.directory, if (files.view.child parent.root (successorName before)).isSome then .created else .absent⟩
 
 /-- The two observations bracket the raw exclusive open, with no
 returned Lean handle in either branch. -/
 inductive RotationRawCreateEffect {directory : DiskDirectory} {before : SegmentedWriterState}
-    {cut : RotationInFlightCut directory before} {handle : Type}
-    {observed : ObservedRotationCreateStop cut handle} {inventory : DescriptorInventory}
-    (parent : RotationCreateParent observed inventory) : CreateState → Prop where
+    {lookup : FilePath → Except IO.Error IO.FS.Metadata} {inventory : DescriptorInventory}
+    (parent : RotationCreateParent directory before lookup inventory) : CreateState → Prop where
   | beforeEffect : RotationRawCreateEffect parent (inventory, parent.files)
   | afterOpen (created : RotationRawSuccessor parent) :
     RotationRawCreateEffect parent (inventory.insert created.raw created.free, created.files)
 
 private def projectRawOpen {directory : DiskDirectory} {before : SegmentedWriterState}
     {cut : RotationInFlightCut directory before} {handle : Type} {observed : ObservedRotationCreateStop cut handle}
-    {inventory : DescriptorInventory} (parent : RotationCreateParent observed inventory)
+    {inventory : DescriptorInventory} (parent : RotationCreateParent directory before observed.lookup inventory)
     (openExclusive : FilePath → ExceptT IO.Error (EStateM FilePath CreateState) handle) :
     EStateM.Result FilePath (Cache handle × State) (Except IO.Error handle) :=
   match (openExclusive (successorPath directory before)).run (inventory, parent.files) with
@@ -114,7 +112,7 @@ private def projectRawOpen {directory : DiskDirectory} {before : SegmentedWriter
 invocation used by rotation, before the pending-cache callback. -/
 structure RotationRawCreateStop {directory : DiskDirectory} {before : SegmentedWriterState}
     {cut : RotationInFlightCut directory before} {handle : Type} {observed : ObservedRotationCreateStop cut handle}
-    {inventory : DescriptorInventory} (parent : RotationCreateParent observed inventory) (reached : CreateState) where
+    {inventory : DescriptorInventory} (parent : RotationCreateParent directory before observed.lookup inventory) (reached : CreateState) where
   openExclusive : FilePath → ExceptT IO.Error (EStateM FilePath CreateState) handle
   stopped : (openExclusive (successorPath directory before)).run (inventory, parent.files) =
     .error (successorPath directory before) reached
@@ -125,8 +123,8 @@ structure RotationRawCreateStop {directory : DiskDirectory} {before : SegmentedW
 namespace RotationRawCreateEffect
 
 variable {directory : DiskDirectory} {before : SegmentedWriterState} {cut : RotationInFlightCut directory before}
-  {handle : Type} {observed : ObservedRotationCreateStop cut handle} {inventory : DescriptorInventory}
-  {parent : RotationCreateParent observed inventory} {reached : CreateState}
+  {lookup : FilePath → Except IO.Error IO.FS.Metadata} {inventory : DescriptorInventory}
+  {parent : RotationCreateParent directory before lookup inventory} {reached : CreateState}
 
 private theorem onName {view root name} (child : RunChildLookup root name view) :
     view.child root name = some child.child := by
@@ -204,7 +202,7 @@ theorem keepsKeeperMarker (effect : RotationRawCreateEffect parent reached) :
   | afterOpen created =>
     have distinctKeeper : keeperName before ≠ successorName before := by
       intro same
-      exact (Nat.ne_of_lt cut.nonempty)
+      exact (Nat.ne_of_lt parent.nonempty)
         (by simpa only [parseWalSegmentName_render, Option.some.injEq] using congrArg parseWalSegmentName same)
     have distinctMarker : "WAL.commit" ≠ successorName before := by
       intro same
@@ -270,8 +268,8 @@ nonreturning public rotation schedule, with the original owner and cache. -/
 theorem RotationRawCreateStop.reaches {directory : DiskDirectory} {before : SegmentedWriterState}
     {cut : RotationInFlightCut directory before} {handle : Type}
     {observed : ObservedRotationCreateStop cut handle} {inventory : DescriptorInventory}
-    {parent : RotationCreateParent observed inventory} {reached : CreateState}
-    (report : RotationRawCreateStop parent reached) (sync) :
+    {parent : RotationCreateParent directory before observed.lookup inventory} {reached : CreateState}
+    (report : RotationRawCreateStop (observed := observed) parent reached) (sync) :
     cut.image = parent.project reached.2 ∧
     observed.runUntilCreate sync = .error (successorPath directory before)
       (.poisoned, ⟨(observed.cache, parent.project reached.2), before.owners⟩) := by
@@ -287,8 +285,8 @@ pre-rotation WAL before any later open succeeds. -/
 theorem RotationRawCreateStop.refinesReopenPrefix {directory : DiskDirectory} {before : SegmentedWriterState}
     {cut : RotationInFlightCut directory before} {handle : Type}
     {observed : ObservedRotationCreateStop cut handle} {inventory : DescriptorInventory}
-    {parent : RotationCreateParent observed inventory} {reached : CreateState}
-    (report : RotationRawCreateStop parent reached) (ready : before.RetainedReady directory parent.owner.description)
+    {parent : RotationCreateParent directory before observed.lookup inventory} {reached : CreateState}
+    (report : RotationRawCreateStop (observed := observed) parent reached) (ready : before.RetainedReady directory parent.owner.description)
     (barrier : FilePath → ExceptT IO.Error (EStateM FilePath (Cache handle × State)) Unit)
     {name : Option DeviceInode} (survived : name ∈ reached.2.crashNames (successorName before))
     {payload : ByteArray}

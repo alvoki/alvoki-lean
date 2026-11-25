@@ -608,4 +608,6 @@ directory objects reads the exact manifest and selected runs from that checkpoin
 for both client ledgers. Primitive reports supply the original file projection, process-exit slot census, and the
 later recovery effects and acquisition. [Process exit after checkpoint](../lean/Alvoki/Storage/Disk/Checkpoint/ProcessExit.lean)
 
+After successful exclusive creation of the rotation successor, the singleton file barrier consumes the pending entry and issues fsync on the same live description that opened the empty inode. The reached owner and file slot come from the reported descriptor census. A stop leaves the old writer poisoned. An observed file effect settles only the new inode's payload and keeps the reported choices for its unsettled name. The old keeper and marker retain their bytes. The surviving name and payload select the exact keeper for the usual recovery prefix with the original WAL history. [Rotation successor fsync](../lean/Alvoki/Storage/Disk/RotationSuccessorFsyncStop.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

@@ -177,6 +177,7 @@ import Alvoki.Storage.Disk.SegmentedRotationStep
 import Alvoki.Storage.Disk.ObservedRotationSchedule
 import Alvoki.Storage.Disk.RotationCreateInterruption
 import Alvoki.Storage.Disk.RotationCreatePhysical
+import Alvoki.Storage.Disk.RotationSuccessorFsyncStop
 import Alvoki.Storage.Disk.RotationReopenAdmission
 import Alvoki.Storage.Disk.BootstrapAdmissionEffects
 import Alvoki.Storage.Disk.FirstMarkedSession
@@ -1457,6 +1458,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RotationRawCreateEffect.selectedKeeperPayload
 #check_axioms Alvoki.Storage.DiskSession.RotationRawCreateStop.reaches
 #check_axioms Alvoki.Storage.DiskSession.RotationRawCreateStop.refinesReopenPrefix
+#check_axioms Alvoki.Storage.DiskSession.RotationInFlightCut.refinesReportedReopenPrefix
+#check_axioms Alvoki.Storage.DiskSession.RotationSuccessorFsyncStop.resolves
+#check_axioms Alvoki.Storage.DiskSession.RotationSuccessorFsyncStop.custody
+#check_axioms Alvoki.Storage.DiskSession.RotationSuccessorFsyncStop.groupStops
+#check_axioms Alvoki.Storage.DiskSession.RotationSuccessorFsyncStop.stopsSchedule
+#check_axioms Alvoki.Storage.DiskSession.RotationSuccessorFsyncStop.fileEffect
+#check_axioms Alvoki.Storage.DiskSession.RotationSuccessorFsyncStop.reachedEffect
+#check_axioms Alvoki.Storage.DiskSession.RotationSuccessorFsyncStop.refinesReopenPrefix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterRotationWithAdmission
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetainedCached
