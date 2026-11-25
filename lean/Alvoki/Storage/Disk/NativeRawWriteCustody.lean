@@ -1,5 +1,4 @@
 import Alvoki.Storage.Disk.NativeCheckpointSourceCrash
-import Alvoki.Storage.Disk.NativeFileEffectProjection
 
 namespace Alvoki.Storage.DiskSession
 
@@ -22,42 +21,40 @@ def OpenCloseHeapView.writeAuthorityAt {heap image : Type} (view : OpenCloseHeap
     state.directorySlot ∈ census.slots, census.inode state.owner.description,
     census.inode state.directorySlot.description⟩
 
-/-- Preserve the authority observation across the actual append-first
-commit. The callback laws cover the reached heap on errors as well as
-successes, so a failure requires no report of a later callback. -/
-theorem commitBytesAt_keepsAuthority {heap footprint : Type} (observe : heap → footprint)
+/-- Compose an independent frame across the original WAL commit. An
+ordinary callback error preserves the frame at its own reached heap. -/
+theorem commitBytesAt_frames {heap : Type} (frames : heap → heap → Prop)
+    (identity : ∀ heap, frames heap heap) (compose : ∀ {a b c}, frames a b → frames b c → frames a c)
     (directory : DiskDirectory) (first : Nat) (bytes : ByteArray) (count : Nat)
     (append stage : FilePath → ByteArray → EStateM IO.Error heap Unit)
     (sync : Array FilePath → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (appendKeeps : ∀ before, observe (reachedState (append (directory.file (.walSegment first)) bytes before)) =
-      observe before)
-    (stageKeeps : ∀ before, observe (reachedState
-      (stage (directory.file .stagedWalBoundary) (WAL.Boundary.encode count.toUInt64) before)) = observe before)
-    (pairedSyncKeeps : ∀ before, observe (reachedState
-      (sync #[directory.file (.walSegment first), directory.file .stagedWalBoundary] before)) = observe before)
-    (renameKeeps : ∀ before, observe (reachedState
-      (rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) before)) = observe before)
-    (rootSyncKeeps : ∀ before, observe (reachedState (sync #[directory.path] before)) = observe before)
+    (appended : ∀ before, frames before (reachedState (append (directory.file (.walSegment first)) bytes before)))
+    (staged : ∀ before, frames before (reachedState (stage (directory.file .stagedWalBoundary)
+      (WAL.Boundary.encode count.toUInt64) before)))
+    (grouped : ∀ before, frames before (reachedState (sync
+      #[directory.file (.walSegment first), directory.file .stagedWalBoundary] before)))
+    (renamed : ∀ before, frames before (reachedState (rename (directory.file .stagedWalBoundary)
+      (directory.file .walBoundary) before)))
+    (settled : ∀ before, frames before (reachedState (sync #[directory.path] before)))
     (before : heap) :
-    observe (reachedState (commitBytesAt directory first bytes count append stage sync rename before)) = observe before := by
-  have sameReached (result : EStateM.Result IO.Error heap Unit) :
-      NativeFileEffectProjection.reached result = reachedState result := by cases result <;> rfl
-  have framed (action : EStateM IO.Error heap Unit)
-      (keeps : ∀ atHeap, observe (reachedState (action atHeap)) = observe atHeap) :
-      NativeFileEffectProjection id observe action action := by
-    intro atHeap
-    refine ⟨?_, ?_⟩
-    · change NativeFileEffectProjection.result id (action atHeap) = action atHeap
-      cases action atHeap <;> rfl
-    · simpa only [sameReached] using keeps atHeap
+    frames before (reachedState (commitBytesAt directory first bytes count append stage sync rename before)) := by
+  have bind {α β : Type} {run : EStateM IO.Error heap α} {next : α → EStateM IO.Error heap β}
+      (prefixFrame : ∀ start, frames start (reachedState (run start)))
+      (suffixFrame : ∀ value start, frames start (reachedState (next value start))) :
+      ∀ start, frames start (reachedState ((run >>= next) start)) := by
+    intro start
+    cases returned : run start with
+    | error cause reached =>
+      simpa only [Bind.bind, EStateM.bind, returned, reachedState] using prefixFrame start
+    | ok value reached =>
+      have first := prefixFrame start
+      rw [returned, reachedState] at first
+      simpa only [Bind.bind, EStateM.bind, returned] using compose first (suffixFrame value reached)
+  have pureFrame : ∀ atHeap, frames atHeap (reachedState ((pure () : EStateM IO.Error heap Unit) atHeap)) := identity
   rw [commitBytesAt_fileEffects, WAL.Boundary.commit]
-  have commits := (framed _ appendKeeps).bind fun _ =>
-    (framed _ stageKeeps).bind fun _ =>
-      (framed _ pairedSyncKeeps).bind fun _ =>
-        (framed _ renameKeeps).bind fun _ =>
-          (framed _ rootSyncKeeps).bind fun _ => NativeFileEffectProjection.pure id observe ()
-  simpa only [sameReached] using (commits before).2
+  exact (bind appended fun _ => bind staged fun _ => bind grouped fun _ =>
+    bind renamed fun _ => bind settled fun _ => pureFrame) before
 
 /-- Recover the existing pending-write census from the raw returned
 heap. The original literal directory cell supplies the capture. Its

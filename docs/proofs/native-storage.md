@@ -8,6 +8,12 @@ Verus search have separate entry points and proof inventories. [Software archite
 
 ## Current system guarantees
 
+The fresh marked bootstrap establishes ready storage once the exact returned phase reference,
+token and heap from `opensFromAdmission` identify the allocation endpoint. The observed keeper and marker barriers fix the empty
+keeper and zero marker. The selected manifest is absent and the original directory and lock
+have the captured identities. This uses the exact path and byte observations at the barrier,
+including durability of the directory's own name in its parent. [Fresh opened storage](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+
 ### Client history
 
 The claim is that every acknowledged write or batch is present in order and every recovered mutation comes
@@ -77,12 +83,14 @@ On the successful raw path, the prepared batch and published keeper and marker b
 to construct the next retained writer. The same retained proof serves the reported path. The
 original guard, commit and phase update frame the lock and cached directory independently of the
 WAL descriptors. Their reached heap supplies the exact inventory and cache for the returned
-opened position, with earlier reads and pins preserved. This path consumes the settled payloads
-and frames at the raw commit return directly, without an intermediate normalized publication
-report. The grouped and final barrier proofs also preserve the separate visible keeper payload on
-the same inode for a later append. The remaining composition must derive all of the raw commit
-storage facts from the reached primitive laws and connect independent failures and recovery to
-the same execution induction.
+opened position, with earlier reads and pins preserved. The commit return identifies the
+append and stage results, the grouped sync, the canonical rename and the final fsync on the
+original cached directory. A single frame proof follows the callbacks for both the authority
+and protected footprint. The final rename and directory effects establish durable names in
+one joint selection. This proof takes the exact payloads at the grouped file-sync return and
+local callback laws. The grouped and final barrier proofs separately preserve the live keeper
+for another append. The remaining composition must derive the grouped payload observation
+and connect independent failures and recovery to the same execution induction.
 [Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean) · [Raw return projection](../../lean/Alvoki/Storage/Disk/NativeRawWriteProjection.lean)
 
 At a stopped staged-manifest fsync the returned prefix and pending-cache update identify the same

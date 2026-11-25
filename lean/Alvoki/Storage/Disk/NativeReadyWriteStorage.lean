@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeRawWriteCustody
 import Alvoki.Storage.Disk.NativeOpenedPosition
+import Alvoki.Storage.Disk.NativeWalFileFsyncEffects
 
 namespace Alvoki.Storage.DiskSession
 
@@ -66,14 +67,28 @@ theorem NativeReadyStorage.afterPublishedWrite {before : NativeReadyState} {writ
         before.session.directory.file (.walSegment first)) sameKeeper)))
     · exact .inr (.inr ((paths path).mp kept))
 
+/-- A WAL primitive may change its own files and descriptors. Its
+authority and other selected file observations have independent frames. -/
+def OpenCloseHeapView.framesWrite {heap image : Type} (view : OpenCloseHeapView heap image) (state : NativeReadyState)
+    (directoryRef : IO.Ref (Option IO.FS.Handle)) (storage : heap → CheckpointStorageObservation)
+    (first last : heap) : Prop :=
+  view.writeAuthorityAt state directoryRef last = view.writeAuthorityAt state directoryRef first ∧
+    (storage first).Frames state.writeFramePath (storage last)
+
 section RawWrite
 
 variable {heap image : Type} {opened : NativeOpenedHandle heap}
   (current : NativeOpenedPosition opened)
+  (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+  (view : OpenCloseHeapView heap image)
+  (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
 
 local notation "before" => current.current.ready.state
 local notation "dir" => current.current.ready.state.session.directory
 local notation "oldInstalled" => current.current.ready.state.writer.installed
+local notation "append" => appender.run cache.active
+local notation "stage" => stager.run cache.pending
+local notation "sync" => syncer.group current.current.ready.state.session.directory.path cache.directory cache.active cache.pending
 
 /-- One acknowledged raw call supplies the next retained writer and its
 prior read ledger. The committed storage is observed at the last
@@ -83,8 +98,6 @@ payloads enter the logical writer proof. -/
 theorem NativeOpenedPosition.acknowledgesPublishedWrite
     (request : WriteRequest)
     (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
-    (append stage : FilePath → ByteArray → EStateM IO.Error heap Unit)
-    (sync : Array FilePath → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     {batch : List WAL.Write} {table : PackedTable} {sequence : UInt64} {reached : heap}
     (nonempty : request.rows ≠ [])
@@ -92,7 +105,6 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     (fits : (oldInstalled).walBytes + WAL.frameSize * request.rows.length < UInt64.size)
     (returned : request.runOnRawOpenPhase dir lookup append stage sync rename
       opened.phase opened.get opened.set current.reached = .ok sequence reached)
-    (view : OpenCloseHeapView heap image) (cache : OpenSyncCacheRefs opened.files (dir).path)
     (entryCensus : view.descriptors current.reached = (before).census)
     (entryCache : view.cacheAt current.reached cache.directory cache.active cache.pending = (before).cache)
     (storage : heap → CheckpointStorageObservation) (old : NativeReadyStorage before (storage current.reached))
@@ -105,30 +117,51 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     (phaseEffect : ∀ {value entry after}, opened.set opened.phase value entry = .ok () after →
       opened.contents after opened.phase = some value ∧ (storage entry).Frames (before).crashPath (storage after) ∧
         view.writeAuthorityAt before cache.directory after = view.writeAuthorityAt before cache.directory entry)
-    (appendAuthority : let authority := view.writeAuthorityAt before cache.directory
-      ∀ entry, authority (reachedState (append ((dir).file (.walSegment (oldInstalled).activeFirst))
-        (WAL.encodeBatch batch) entry)) = authority entry)
-    (stageAuthority : let authority := view.writeAuthorityAt before cache.directory
-      ∀ entry, authority (reachedState (stage ((dir).file .stagedWalBoundary)
-        (WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64) entry)) = authority entry)
-    (groupAuthority : let authority := view.writeAuthorityAt before cache.directory
-      ∀ entry, authority (reachedState (sync
-        #[(dir).file (.walSegment (oldInstalled).activeFirst), (dir).file .stagedWalBoundary] entry)) = authority entry)
-    (renameAuthority : let authority := view.writeAuthorityAt before cache.directory
-      ∀ entry, authority (reachedState (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry)) = authority entry)
-    (rootAuthority : let authority := view.writeAuthorityAt before cache.directory
-      ∀ entry, authority (reachedState (sync #[(dir).path] entry)) = authority entry)
-    (published : ∀ {entry after}, commitBytesAt dir (oldInstalled).activeFirst (WAL.encodeBatch batch)
-      ((oldInstalled).walBytes + WAL.frameSize * request.rows.length) append stage sync rename entry = .ok () after →
-      (storage entry).Frames (before).writeFramePath (storage after) ∧
-      (storage after).files.Stored ((dir).file (.walSegment (before).writer.wal.active.first))
-        ((before).writer.wal.active.bytes ++ WAL.encodeBatch batch) ∧
-      (storage after).files.Stored ((dir).file .walBoundary)
-        (WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64) ∧
-      ∀ names ∈ (storage after).crashNames,
-        names ((dir).file (.walSegment (before).writer.wal.active.first)) =
-          (storage after).files.names ((dir).file (.walSegment (before).writer.wal.active.first)) ∧
-        names ((dir).file .walBoundary) = (storage after).files.names ((dir).file .walBoundary)) :
+    (appendFrame : let frame := view.framesWrite before cache.directory storage
+      ∀ entry, frame entry (reachedState (append ((dir).file (.walSegment (oldInstalled).activeFirst))
+        (WAL.encodeBatch batch) entry)))
+    (stageFrame : let frame := view.framesWrite before cache.directory storage
+      ∀ entry, frame entry (reachedState (stage ((dir).file .stagedWalBoundary)
+        (WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64) entry)))
+    (groupFrame : let frame := view.framesWrite before cache.directory storage
+      ∀ entry, frame entry (reachedState (sync
+        #[(dir).file (.walSegment (oldInstalled).activeFirst), (dir).file .stagedWalBoundary] entry)))
+    (renameFrame : let frame := view.framesWrite before cache.directory storage
+      ∀ entry, frame entry (reachedState (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry)))
+    (rootFrame : let frame := view.framesWrite before cache.directory storage
+      ∀ entry, frame entry (reachedState (sync #[(dir).path] entry)))
+    (groupPayloads : let first := (oldInstalled).activeFirst
+      let bytes := WAL.encodeBatch batch
+      let mark := WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64
+      ∀ {entry appended staged grouped},
+        append ((dir).file (.walSegment first)) bytes entry = .ok () appended →
+        stage ((dir).file .stagedWalBoundary) mark appended = .ok () staged →
+        sync #[ (dir).file (.walSegment first), (dir).file .stagedWalBoundary ] staged = .ok () grouped →
+        (storage grouped).files.Stored ((dir).file (.walSegment first)) ((before).writer.wal.active.bytes ++ bytes) ∧
+        (storage grouped).files.Stored ((dir).file .stagedWalBoundary) mark)
+    (renameEffect : ∀ {entry after}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry = .ok () after →
+      ∀ inode, (storage entry).files.names ((dir).file .stagedWalBoundary) = some inode →
+        (storage after).files.names ((dir).file .walBoundary) = some inode ∧
+        (storage after).files.names ((dir).file .stagedWalBoundary) = none ∧
+        (storage after).files.bytes inode = (storage entry).files.bytes inode)
+    (stagedPrivate : ∀ {entry after}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry = .ok () after →
+      ∀ inode, (storage entry).files.names ((dir).file .stagedWalBoundary) = some inode →
+        (storage entry).files.names ((dir).file .walBoundary) ≠ some inode)
+    (renameFiles : ∀ {entry after}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry = .ok () after →
+      (storage entry).files.Frames (fun path => path ≠ (dir).file .stagedWalBoundary ∧ path ≠ (dir).file .walBoundary)
+        (storage after).files)
+    (loadEffect : ∀ {entry after handle}, syncer.readDirectory cache.directory entry = .ok (some handle) after →
+      RawFsyncTarget view entry after handle ∧
+      (storage entry).files.names (dir).path = some ((view.handle entry handle).1.inode
+        (view.handle entry handle).2.1.description) ∧
+      (storage entry).files.Frames (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
+        (storage after).files)
+    (syncEffect : ∀ {issued after handle}, syncer.fsync handle issued = .ok () after →
+      (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
+      (storage issued).files.names (dir).path = some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
+      (storage issued).files.Frames (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
+        (storage after).files ∧ (storage after).crashNames ≠ [] ∧
+      ∀ names ∈ (storage after).crashNames, ∀ file, names ((dir).file file) = (storage after).files.names ((dir).file file)) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧ sequence = table.committed ∧
     ∃ next : NativeOpenedPosition opened,
       next.reached = reached ∧ next.pins = current.pins ∧
@@ -147,15 +180,31 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
   obtain ⟨_, excludeFrame, excludeAuthority⟩ := phaseEffect excluded
   obtain ⟨stored, restored, restoreAuthority⟩ := phaseEffect installed
   let count := (oldInstalled).walBytes + WAL.frameSize * request.rows.length
-  have commitAuthority := commitBytesAt_keepsAuthority (view.writeAuthorityAt before cache.directory) dir
+  have frameId (entry : heap) : view.framesWrite before cache.directory storage entry entry :=
+    ⟨rfl, .refl _ _⟩
+  have frameTrans {entry mid after : heap}
+      (first : view.framesWrite before cache.directory storage entry mid)
+      (last : view.framesWrite before cache.directory storage mid after) :
+      view.framesWrite before cache.directory storage entry after :=
+    ⟨last.1.trans first.1, first.2.trans last.2⟩
+  have committedFrame := commitBytesAt_frames (view.framesWrite before cache.directory storage) frameId frameTrans dir
     (oldInstalled).activeFirst (WAL.encodeBatch batch) count append stage sync rename
-    appendAuthority stageAuthority groupAuthority renameAuthority rootAuthority poisoned
-  rw [committed] at commitAuthority
-  have authority := restoreAuthority.trans (commitAuthority.trans (excludeAuthority.trans guardAuthority))
+    appendFrame stageFrame groupFrame renameFrame rootFrame poisoned
+  rw [committed] at committedFrame
+  have authority := restoreAuthority.trans (committedFrame.1.trans (excludeAuthority.trans guardAuthority))
   have startFrame := (guardFrame.trans excludeFrame).weaken
     (scope := (before).writeFramePath) fun _ kept => NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept))
-  obtain ⟨frame, keeper, marker, settledNames⟩ := published committed
-  have commitFrame := startFrame.trans frame
+  obtain ⟨appended, staged, grouped, renamed, issued, directoryHandle, wrote, stagedMarker, filesSynced, moved,
+    loadedRoot, syncedRoot⟩ := syncer.publicationReturned cache appender stager rename committed
+  obtain ⟨keeperGrouped, markerGrouped⟩ := groupPayloads wrote stagedMarker filesSynced
+  obtain ⟨target, rootBound, loadedFiles⟩ := loadEffect loadedRoot
+  obtain ⟨keeper, marker, _, settledNames⟩ := syncer.publishedStorage cache view rename storage moved loadedRoot syncedRoot
+    target rootBound keeperGrouped markerGrouped (stagedPrivate moved)
+    (fun renamed inode named _ => renameEffect renamed inode named) renameFiles (fun _ => loadedFiles) syncEffect
+  have first : (oldInstalled).activeFirst = (before).writer.wal.active.first :=
+    valid.retained.resumed.keeper.trans valid.retained.active
+  rw [first] at keeper settledNames
+  have commitFrame := startFrame.trans committedFrame.2
   let custody := NativePendingWriteCensus.ofRawAuthority view cache valid entryCensus entryCache authority
     old.toNativeReadyProtectedStorage root (commitFrame.trans
       (restored.weaken fun _ kept => NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept)))).visible
@@ -184,7 +233,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
       exact keeper
     · rw [← retained.resumed.bytes]
       exact marker
-    · exact settledNames
+    · exact fun names member => ⟨(settledNames names member).1, (settledNames names member).2.1⟩
   exact ⟨current.uses.writeSchedules, number, next, rfl, rfl, rfl, rfl, rfl, rfl, rfl, afterStorage⟩
 
 end RawWrite

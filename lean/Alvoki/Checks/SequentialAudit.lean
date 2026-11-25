@@ -2460,6 +2460,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.writeInstructions
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesTrace
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.stopsAfterWrites
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.survivorValid
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrash.kept
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrash.survivingRun
@@ -3814,7 +3815,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.frame
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.frame
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseHeapView.writeAuthorityAt
-#check_axioms Alvoki.Storage.DiskSession.commitBytesAt_keepsAuthority
+#check_axioms Alvoki.Storage.DiskSession.commitBytesAt_frames
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWriteCensus.ofRawAuthority
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.afterPublishedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.afterAcknowledgedWrite

@@ -1,5 +1,18 @@
 # Current handoff
 
+The fresh marked bootstrap establishes ready storage on the exact returned heap. The observed
+keeper and marker barriers give the empty keeper and zero marker. Exact child observations
+preserve the lock binding and manifest absence. The phase and token allocations carry the
+same selected files. The directory's own settled parent binding remains explicit.
+[Fresh opened storage](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+
+A successful raw write derives all five publication callbacks from its actual commit return.
+The same traversal frames both descriptor authority and the protected files. The reached
+rename and cached directory barrier then establish the canonical marker and keeper in each
+allowed joint crash map. The proof consumes the grouped sync's exact payloads. Those payload
+facts still need to be derived in this path from the literal append, staging and file fsyncs.
+[Raw acknowledged successor](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean)
+
 One successful raw write now yields its next opened position from the prepared batch and the
 published keeper and marker. The former classified-storage adapters are replaced by a local
 protected-file frame and a shared retained-writer proof. The reported write path uses the same

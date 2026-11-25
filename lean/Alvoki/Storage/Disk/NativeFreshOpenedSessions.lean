@@ -101,8 +101,16 @@ theorem readyStorage {input : FilePath} {directory : DiskDirectory}
       ∀ names ∈ stored.crashNames, names path ∈ (report.handoff.afterMarkerNames name).map (Option.map object))
     (inodeBytes : (observe raw.markerDirectory.reached).files.bytes =
       (seen.keeperPhysical.inodes raw.markerDirectory.reached).crashBytes)
-    (allocated : (observe raw.markerDirectory.reached).Frames opened.start.current.ready.state.crashPath
-      (observe opened.start.reached)) :
+    {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+    {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+    (allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase
+      (⟨.empty, 0, 0, 0⟩ : WalSegmentRepair.Reopened).installed raw.markerDirectory.reached)
+    (returnedAt : (opened.handle.phase, opened.handle.token, opened.start.reached) =
+      (allocation.phase, allocation.token, allocation.afterToken))
+    (phaseFrame : (observe raw.markerDirectory.reached).Frames opened.start.current.ready.state.crashPath
+      (observe allocation.afterPhase))
+    (tokenFrame : (observe allocation.afterPhase).Frames opened.start.current.ready.state.crashPath
+      (observe allocation.afterToken)) :
     NativeReadyStorage opened.start.current.ready.state (observe opened.start.reached) := by
   let state := opened.start.current.ready.state
   let stored := observe raw.markerDirectory.reached
@@ -167,7 +175,9 @@ theorem readyStorage {input : FilePath} {directory : DiskDirectory}
     obtain ⟨visible, surviving⟩ := children name wanted
     rw [visible]
     simpa only [report.handoff.markerSettlement name, List.map_singleton, List.mem_singleton] using surviving names allowed
-  apply NativeReadyStorage.frame _ allocated
+  have reached : opened.start.reached = allocation.afterToken := congrArg (fun result => result.2.2) returnedAt
+  rw [reached]
+  apply NativeReadyStorage.frame _ (phaseFrame.trans tokenFrame)
   refine ⟨⟨?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_⟩
   · rw [directoryEq]
     exact directoryBound
