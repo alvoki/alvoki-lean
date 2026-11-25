@@ -35,6 +35,14 @@ def atOpen (captured : CapturedKeeperOpenReports report) : DescriptorInventory :
 def afterRead (captured : CapturedKeeperOpenReports report) : DescriptorInventory :=
   report.wal.keeper.calls.inventory.afterDrops captured.duringRead
 
+/-- The keeper allocation and all reported drops preserve the object map
+used by the earlier marker open. -/
+theorem afterRead_inode (captured : CapturedKeeperOpenReports report) :
+    captured.afterRead.inode = admission.reached.inode := by
+  unfold afterRead
+  rw [captured.opened]
+  rfl
+
 /-- Interpret `readKeeperPrefix_fileEffects` with the same open and exact
 prefix loop as the held read. In the successful projection the open adds
 its reported slot, and the prefix applies the reported slot drops. -/

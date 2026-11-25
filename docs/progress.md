@@ -968,3 +968,11 @@ prefix, physical extent and reached keeper cache and census in one
 theorem. The same read reports establish that the held marker slot
 remains live in that census. The client composition can use this
 census for the marker barrier.
+
+The client theorem takes the descriptor census at the marker sync.
+It proves liveness and inode routing using that census, which can
+include the keeper descriptor allocated during preparation. The keeper
+read proves that its reached census preserves the admitted object map.
+The enclosing chronological witness still needs to join that census to
+the marker acquisition and feed the sync and repair effects back into
+the installed session.

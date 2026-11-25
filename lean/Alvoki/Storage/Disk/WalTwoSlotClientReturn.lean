@@ -1421,16 +1421,15 @@ theorem recoveredRetries_installedReads
     (markerFile : DiskSession.HeldMetadataFile markerReads (directory.file .walBoundary)
       "WAL.commit" markerView markerRoot (marker.visible marker.active))
     (markerPrivate : markerFile.calls.metadata.numLinks = 1)
-    (markerInventory : DiskSession.DescriptorInventory)
-    (markerDrops : List DiskSession.LockReferenceDrop)
-    (markerFree : ∀ slot ∈ markerInventory.slots, slot.address ≠ markerFile.calls.slot.address)
-    (markerAllocated : markerFile.calls.inventory = markerInventory.insert markerFile.calls.slot markerFree)
-    (markerRetained : markerFile.calls.slot ∈ (markerFile.calls.inventory.afterDrops markerDrops).slots)
+    (atMarkerSync : DiskSession.DescriptorInventory)
+    (markerSyncDrops : List DiskSession.LockReferenceDrop)
+    (markerRetained : markerFile.calls.slot ∈ (atMarkerSync.afterDrops markerSyncDrops).slots)
+    (sameObjects : atMarkerSync.inode = markerFile.calls.inventory.inode)
     (markerHandle : KeeperDescriptorIdentity)
     (markerIdentity : markerHandle = ⟨markerFile.calls.slot.description,
       markerFile.calls.inventory.inode markerFile.calls.slot.description⟩)
     (markerEffect : Storage.SyncHandleRouting.FsyncResult marker
-      (marker.completeFileSync (markerInventory.inode markerHandle.description)) true (.ok () settledMarker))
+      (marker.completeFileSync (atMarkerSync.inode markerHandle.description)) true (.ok () settledMarker))
     (markerCurrent : markerHandle.inode = marker.active)
     (markerBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
     (markerAvailable : PrefixChunksAvailableUntilEof (marker.visible markerHandle.inode)
@@ -1518,17 +1517,14 @@ theorem recoveredRetries_installedReads
     (congrArg KeeperDescriptorIdentity.description markerIdentity).symm
   have reachedInode : markerFile.calls.inventory.inode markerHandle.description = markerHandle.inode := by
     rw [markerIdentity]
-  have markerInode : markerInventory.inode markerHandle.description = markerHandle.inode := by
-    rw [markerAllocated] at reachedInode
-    exact reachedInode
   have markerLive : markerFile.calls.slot.reference ∈
-      (markerFile.calls.inventory.afterDrops markerDrops).references markerHandle.description :=
-    ((markerFile.calls.inventory.afterDrops markerDrops).mem_references).mpr
+      (atMarkerSync.afterDrops markerSyncDrops).references markerHandle.description :=
+    ((atMarkerSync.afterDrops markerSyncDrops).mem_references).mpr
       ⟨markerFile.calls.slot, markerRetained, rfl, markerDescription⟩
-  let markerSync := FsyncObservation.ofInventory markerFile.calls.inventory markerDrops
+  let markerSync := FsyncObservation.ofInventory atMarkerSync markerSyncDrops
     KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode markerHandle
-    markerFile.calls.slot.reference markerLive reachedInode marker
-    (fun inode (files : WalInodeImage) => files.completeFileSync inode) (by rwa [markerAllocated])
+    markerFile.calls.slot.reference markerLive (sameObjects.symm ▸ reachedInode) marker
+    (fun inode (files : WalInodeImage) => files.completeFileSync inode) markerEffect
   obtain ⟨manifestWatermark, checkpointCovered, logicalMarkerBytes, length, binding, decoded, absolute⟩ :=
     DirectoryPublication.Bindings.walRange_accounting target.decoded
   have sameMarker := Option.some.inj (binding.symm.trans logicalMarker)

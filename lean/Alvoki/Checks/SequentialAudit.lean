@@ -2311,6 +2311,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.preservesSlot
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.preservesSlotAtOpen
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.preservesSlotAfterRead
+#check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.afterRead_inode
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanWal_closed
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanWal_fromEntry
 #check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.readPrefix
