@@ -215,6 +215,8 @@ The native checkpoint reads the session phase, flushes pending rows in memory, c
 
 A successful checkpoint now joins its exact prepared writer and manifest bytes to the reported file operations and the final ready phase of the same session. The final physical manifest and its selected run bytes are the ones in the mixed trace. The checkpoint leaves the submission and read ledgers intact, and one WAL replay accounts for the acknowledged writes, recorded responses, and guarded reads in the returned session. The proof uses truthful reached callback and binding reports. [Successful checkpoint client trace](../lean/Alvoki/Storage/Disk/CheckpointCompletionClientTrace.lean)
 
+The successful checkpoint now feeds its exact returned phase, cache and physical file image into explicit close. The reported unlock and cache clears leave the checkpoint bytes intact. A healthy held reopen uses the same reported directory object and reads that manifest and the physical run bytes at its decoded indices. It installs the recovered writer through the same reported callbacks. The submission and read logs carry across both sessions, and one WAL replay explains acknowledged writes, successful recorded responses and guarded reads after reopen. The recorded guards explain denied reads. The handoff assumes stable names and unchanged selected file contents between unlock and reacquisition, and truthful primitive reports. [Checkpoint, close and held reopen](../lean/Alvoki/Storage/Disk/CheckpointCompletionHeldReopen.lean)
+
 ### Garbage collection contract
 
 The engine must eventually reclaim obsolete run generations, covered WAL data, and versions that no supported snapshot can observe. The proof covers the executable collector, including interruption and retry.
