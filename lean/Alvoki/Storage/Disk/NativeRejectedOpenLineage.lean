@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeOpenListingError
+import Alvoki.Storage.Disk.NativeManifestDecodeError
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeReadyClose
 
@@ -110,15 +111,17 @@ theorem captures (attempt : NativeEarlyOpenRejection input directory before)
 
 end NativeEarlyOpenRejection
 
-/-- A held open can stop at the marker route check or at the marked
-worker's checked listing. The listing uses the reached census after
-checkpoint and marker reads. Its namespace report preserves object
-identities through those read-only operations. -/
+/-- A held open can stop at the marker route check, at manifest decoding
+or at the marked worker's checked listing. Each branch retains the
+reached census through its temporary reads and uses local cleanup. -/
 inductive NativeOpenRejectionRoute {input : FilePath} {directory : DiskDirectory}
     {inventory : DescriptorInventory} {retry : LockedFileState FileImage}
     (admission : CensusOpenAdmissionReports input directory inventory retry) where
   | marker (seen : NativeMarkerRouteError admission)
       (marked : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened)
+  | manifest (seen : NativeManifestDecodeError admission) (cleanup : NativeOpenErrorUnlock admission seen.afterRead)
+      (readSize : FilePath → EStateM IO.Error CensusOpenState Nat)
+      (readPrefix : FilePath → Nat → EStateM IO.Error CensusOpenState ByteArray) (tail : RejectedMarkerTail)
   | listing (seen : NativeMarkedListingError admission) (rest : NativeMarkedListingError.Remainder)
       (inodes : seen.atListing.inode = admission.reached.inode)
 
@@ -128,24 +131,29 @@ variable {admission : CensusOpenAdmissionReports input directory inventory retry
 
 def census : NativeOpenRejectionRoute admission → DescriptorInventory
   | .marker _ _ => admission.reached
+  | .manifest seen _ _ _ _ => seen.afterRead
   | .listing seen _ _ => seen.atListing
 
 def cleanup (route : NativeOpenRejectionRoute admission) : NativeOpenErrorUnlock admission route.census :=
   match route with
   | .marker seen _ => seen.cleanup
+  | .manifest _ cleanup _ _ _ => cleanup
   | .listing seen _ _ => seen.cleanup
 
 def cause : NativeOpenRejectionRoute admission → IO.Error
   | .marker seen _ => seen.cause
+  | .manifest seen _ _ _ _ => IO.userError seen.cause
   | .listing seen _ _ => seen.listing.cause
 
 def lock : NativeOpenRejectionRoute admission → DeviceInode
   | .marker seen _ => seen.lock
+  | .manifest seen _ _ _ _ => seen.lock
   | .listing seen _ _ => seen.lock
 
 theorem censusInodes (route : NativeOpenRejectionRoute admission) : route.census.inode = inventory.inode := by
   cases route with
   | marker => rfl
+  | manifest => rfl
   | listing _ _ inodes => exact inodes
 
 theorem captures (route : NativeOpenRejectionRoute admission) :
@@ -154,6 +162,8 @@ theorem captures (route : NativeOpenRejectionRoute admission) :
     route.census.inode admission.cached.description = admission.view.modelObject admission.root := by
   cases route with
   | marker seen _ => exact ⟨seen.lockEntry, seen.lockInode.symm, admission.opened.captures.2.2.2.2.1.symm⟩
+  | manifest seen _ _ _ _ =>
+    exact ⟨seen.lockEntry, seen.lockObject.symm, admission.opened.captures.2.2.2.2.1.symm⟩
   | listing seen _ _ => exact ⟨seen.lockEntry, seen.lockObject, seen.rootObject⟩
 
 end NativeOpenRejectionRoute
@@ -178,6 +188,8 @@ def run (attempt : NativeRejectedOpenAttempt input directory before) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
   match attempt.route with
   | .marker seen marked => seen.run marked attempt.bootstrap attempt.install
+  | .manifest seen _ readSize readPrefix tail =>
+      attempt.admission.run (seen.recover readSize readPrefix tail attempt.bootstrap attempt.install)
   | .listing seen rest _ => attempt.admission.run (seen.recover rest attempt.bootstrap attempt.install)
 
 theorem returns (attempt : NativeRejectedOpenAttempt input directory before) :
@@ -185,6 +197,8 @@ theorem returns (attempt : NativeRejectedOpenAttempt input directory before) :
   rcases attempt with ⟨admission, route, bootstrap, install⟩
   cases route with
   | marker seen marked => exact (seen.returns marked bootstrap install).1
+  | manifest seen cleanup readSize readPrefix tail =>
+    exact (seen.returns cleanup readSize readPrefix tail bootstrap install).1
   | listing seen rest _ => exact (seen.returns rest bootstrap install).1
 
 def sameObjects (attempt : NativeRejectedOpenAttempt input directory before) (lock root : Nat) : Prop :=
@@ -206,8 +220,8 @@ def NativeEarlyOpenRejection.attempt (seen : NativeEarlyOpenRejection input dire
 
 /-- Every next admitted attempt starts at the preceding error's reached
 files and census, after any reported disposal. The two lists keep the
-requested paths and actual returned errors in the same order. Marker
-route errors and checked listing errors can occur in any order. -/
+requested paths and actual returned errors in the same order. Each
+failed route must be supported by that attempt's reached image. -/
 inductive NativeRejectedOpenLineage (directory : DiskDirectory) (lock root : Nat) (first : CensusOpenState) :
     List FilePath → List IO.Error → CensusOpenState → Bool → Prop where
   | start (vacant : TryLockObserves first.2.owners directory (.ok true)) :
