@@ -303,6 +303,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 lake env leanchecker Alvoki.Storage.Disk.SelectedRecoveryChunkWork
 lake env leanchecker Alvoki.Storage.Disk.CheckpointHeldOpenWork
 lake env leanchecker Alvoki.Storage.Disk.MaintainedRecoveryWork
+lake env leanchecker Alvoki.Storage.Disk.MaintainedDirectoryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionSpace
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionNames
 lake env leanchecker Alvoki.Storage.Disk.WalSealedSpans

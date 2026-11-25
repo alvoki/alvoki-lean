@@ -236,6 +236,7 @@ import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 import Alvoki.Storage.Disk.SelectedRecoveryChunkWork
 import Alvoki.Storage.Disk.MaintainedRecoveryWork
+import Alvoki.Storage.Disk.MaintainedDirectoryWork
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
 import Alvoki.Storage.Disk.WalSegmentCollectionNames
 import Alvoki.Storage.Disk.ReachableWalSeals
@@ -1463,6 +1464,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.retainedSealedNames
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.retainedWalNameCount
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.retainedWalNames_keeperCovered
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.retainedWalNames_keeperOnly
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.retainedWalNameCount_fromListing
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.singleObservedWalName
 #check_axioms Alvoki.Storage.WalSegmentRepair.BootstrapReady.positiveSeals_writer
@@ -1651,9 +1653,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadInventory.scanSelected
 #check_axioms Alvoki.Storage.DiskSession.CheckpointHeldOpen.preparationRequests_le
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeWithAdmissionFromReports
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeWithHeldEvidence
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeWithHeldReports
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeWithHeldRequestBound
 #check_axioms Alvoki.Storage.DiskSession.MaintainedRecoveryBounds.closeAndReopen
+#check_axioms Alvoki.Storage.DiskSession.CheckpointHeldOpen.maintainedDirectoryWork
+#check_axioms Alvoki.Storage.DiskSession.MaintainedRecoveryBounds.closeAndReopenDirectoryWork
 #check_axioms Alvoki.Storage.readPrefixUntilEofWith_requestBound
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_reported
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_reported

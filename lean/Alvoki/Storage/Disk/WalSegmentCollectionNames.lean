@@ -174,6 +174,22 @@ theorem SegmentedCollectionReport.Installs.retainedWalNameCount_fromListing {dir
   rw [sameActive] at absolute
   exact exactCount ▸ Nat.le_min.mpr ⟨absolute, installed.retainedWalNameCount ready complete⟩
 
+/-- With positive sealed spans, a checkpoint covering the keeper's start
+lets a complete pass remove every sealed name. -/
+theorem SegmentedCollectionReport.Installs.retainedWalNames_keeperOnly {directory descriptor}
+    {before after : SegmentedWriterState} {report : SegmentedCollectionReport directory before}
+    (installed : report.Installs after) (ready : before.RetainedReady directory descriptor)
+    (complete : report.offsets = before.wal.collectionOffsets)
+    (covered : before.wal.active.first ≤ before.target.range.watermark)
+    (positive : ∀ segment ∈ before.wal.sealed, segment.first < segment.last) :
+    after.wal.segments = [before.wal.active] := by
+  have noEmpty : (before.wal.sealed.filter fun segment => decide (segment.first = segment.last)) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro segment member
+    simp [Nat.ne_of_lt (positive segment member)]
+  rw [installed.retainedWalNames_keeperCovered ready complete covered, noEmpty]
+  rfl
+
 /-- With positive sealed spans and a checkpoint reaching the keeper,
 the next complete checked listing has only the keeper's canonical name. -/
 theorem SegmentedCollectionReport.Installs.singleObservedWalName {directory descriptor}
@@ -186,12 +202,7 @@ theorem SegmentedCollectionReport.Installs.singleObservedWalName {directory desc
       after.target.range.watermark after.published.durable tail) :
     (raw.entries.toList.map (·.fileName)).filterMap parseWalSegmentName = [before.wal.active.first] := by
   have exactNames := raw.canonicalWalNames (installed.preservesRetained ready).layout
-  have noEmpty : (before.wal.sealed.filter fun segment => decide (segment.first = segment.last)) = [] := by
-    apply List.filter_eq_nil_iff.mpr
-    intro segment member
-    simp [Nat.ne_of_lt (positive segment member)]
-  rw [installed.retainedWalNames_keeperCovered ready complete covered, noEmpty, List.nil_append, List.map_cons,
-    List.map_nil] at exactNames
+  rw [installed.retainedWalNames_keeperOnly ready complete covered positive, List.map_cons, List.map_nil] at exactNames
   exact exactNames.eq_singleton
 
 end DiskSession

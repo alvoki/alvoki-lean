@@ -12,13 +12,40 @@ open Compaction.Model (retentionRowBound)
 canonical lock object. The caller supplies stable files and healthy
 primitive reports between the unlock and reacquisition. -/
 abbrev CleanUnlockReports.HeldReopenObservations {directory descriptor} {before : SegmentedWriterState}
-    (closed : CleanUnlockReports directory descriptor) (input : FilePath) : Prop :=
+    (closed : CleanUnlockReports directory descriptor) (input : FilePath)
+    (evidence : ∀ {layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image
+      before.history}, CheckpointHeldOpen input directory layout before.published → Prop := fun _ => True) : Prop :=
   ∀ layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history,
     layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
     layout.sealed ++ [layout.keeper] = before.wal.readDescriptors layout.range.watermark →
     ∃ opened : CheckpointHeldOpen input directory layout before.published,
       opened.calls.bindings (directory.file .lock) = closed.bindings (directory.file .lock) ∧
-      opened.calls.slot.description ≠ descriptor
+      opened.calls.slot.description ≠ descriptor ∧ evidence opened
+
+/-- Carry additional observations on the same held packet across the
+exact unlock and admitted clean reopen. -/
+theorem SegmentedWriterState.RetainedReady.closeWithHeldEvidence {directory descriptor input}
+    {before : SegmentedWriterState} (ready : before.RetainedReady directory descriptor)
+    (closed : CleanUnlockReports directory descriptor)
+    (evidence : ∀ {layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image
+      before.history}, CheckpointHeldOpen input directory layout before.published → Prop)
+    (observed : closed.HeldReopenObservations (before := before) input evidence) :
+    ∃ (layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history)
+      (opened : CheckpointHeldOpen input directory layout before.published) (after : SegmentedWriterState),
+      AdmittedCleanReopen closed opened.chunkReports opened.admission after ∧ evidence opened := by
+  let witness {layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history}
+      (report : MarkedRetryChunkReports (SyncHandleRouting.Cache CheckpointOpenHandle) directory layout before.published)
+      (admission : OpenAdmissionReports input directory report.slot) : Prop :=
+    ∃ opened : CheckpointHeldOpen input directory layout before.published,
+      opened.chunkReports = report ∧ HEq opened.admission admission ∧ evidence opened
+  obtain ⟨layout, report, admission, after, endpoint, opened, sameReport, sameAdmission, observedEvidence⟩ :=
+    ready.closeWithAdmissionFromReports closed witness (by
+      intro layout keeper tail seals
+      obtain ⟨opened, lock, fresh, reported⟩ := observed layout keeper tail seals
+      exact ⟨opened.chunkReports, opened.admission, lock, fresh, opened, rfl, HEq.rfl, reported⟩)
+  subst report
+  cases sameAdmission
+  exact ⟨layout, opened, after, endpoint, observedEvidence⟩
 
 /-- Preserve the actual held packet and its admission through the shared
 clean-reopen proof. -/
@@ -28,18 +55,7 @@ theorem SegmentedWriterState.RetainedReady.closeWithHeldReports {directory descr
     ∃ (layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history)
       (opened : CheckpointHeldOpen input directory layout before.published) (after : SegmentedWriterState),
       AdmittedCleanReopen closed opened.chunkReports opened.admission after := by
-  let witness {layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history}
-      (report : MarkedRetryChunkReports (SyncHandleRouting.Cache CheckpointOpenHandle) directory layout before.published)
-      (admission : OpenAdmissionReports input directory report.slot) : Prop :=
-    ∃ opened : CheckpointHeldOpen input directory layout before.published,
-      opened.chunkReports = report ∧ HEq opened.admission admission
-  obtain ⟨layout, report, admission, after, endpoint, opened, sameReport, sameAdmission⟩ :=
-    ready.closeWithAdmissionFromReports closed witness (by
-      intro layout keeper tail seals
-      obtain ⟨opened, lock, fresh⟩ := observed layout keeper tail seals
-      exact ⟨opened.chunkReports, opened.admission, lock, fresh, opened, rfl, HEq.rfl⟩)
-  subst report
-  cases sameAdmission
+  obtain ⟨layout, opened, after, endpoint, _⟩ := ready.closeWithHeldEvidence closed (fun _ => True) observed
   exact ⟨layout, opened, after, endpoint⟩
 
 /-- Following a fully covering checkpoint, the admitted held open still

@@ -205,6 +205,7 @@ can select. Extra surviving run names do not enter this selection. -/
 structure MaintainedRecoveryBounds (before after : SegmentedWriterState) : Prop where
   fullCheckpoint : after.target.range.watermark = after.history.length
   keeper : after.wal.active = before.wal.active
+  singleSegment : before.wal.PositiveSeals → after.wal.segments = [after.wal.active]
   selectedRuns : ((after.checkpoint.getD (.empty, 0)).1.runs.map (·.run.bytes.size)).sum ≤
     16 * before.installed.table.runs.length +
       32 * (before.installed.table.runs.map (fun run =>
@@ -331,8 +332,12 @@ theorem SegmentedCheckpointReport.Installs.maintainedNamedPayload {directory des
     change after.published.durable.namedRunTotal (fun _ => 1) catalog = _
     rw [runMap]
     exact runCount
+  have retainedPositive (positive : before.wal.PositiveSeals) : postRun.wal.PositiveSeals := by
+    change published.wal.PositiveSeals
+    rw [installed.wal]
+    exact positive
   have checkpointed : MaintainedRecoveryBounds before after := by
-    refine ⟨?_, ?_, ?_⟩
+    refine ⟨?_, ?_, ?_, ?_⟩
     · calc
         after.target.range.watermark = postRun.target.range.watermark := congrArg (·.range.watermark) sameTarget
         _ = postRun.target.range.through := full.symm
@@ -342,6 +347,8 @@ theorem SegmentedCheckpointReport.Installs.maintainedNamedPayload {directory des
       change published.wal.active = before.wal.active
       rw [installed.wal]
       rfl
+    · intro positive
+      rw [walInstalled.retainedWalNames_keeperOnly collectedReady walComplete keeperCovered (retainedPositive positive), sameKeeper]
     · have unchanged : after.checkpoint = published.checkpoint := sameCheckpoint
       have sameTable : attempt.table = table := by
         have flushed := observed.flushed
@@ -365,11 +372,7 @@ theorem SegmentedCheckpointReport.Installs.maintainedNamedPayload {directory des
         simpa only [files, List.map_map, Function.comp_def] using boundedRuns) extraLimit
     exact Nat.add_le_add bytes (namedWal cap width)
   · intro owners readerDescriptor tail raw positive walNames
-    have retainedPositive : postRun.wal.PositiveSeals := by
-      change published.wal.PositiveSeals
-      rw [installed.wal]
-      exact positive
-    have exactNames := walInstalled.singleObservedWalName collectedReady walComplete keeperCovered retainedPositive raw
+    have exactNames := walInstalled.singleObservedWalName collectedReady walComplete keeperCovered (retainedPositive positive) raw
     have keeperName : walNames = 1 := by
       simpa [walNames, listedWalNames, raw.listing] using congrArg List.length exactNames
     refine ⟨keeperName, fun budget bounded => ?_⟩
