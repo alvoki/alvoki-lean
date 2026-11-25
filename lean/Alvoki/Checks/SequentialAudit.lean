@@ -718,6 +718,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.preparedFacts
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.effect
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.rejected
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.publicationError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.preflight
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.preflight
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.checkpointRejected
 #check_axioms Alvoki.Storage.writeRunFlushed_schedule
 #check_axioms Alvoki.Manifest.VersionedCheckpoint.decoded_case
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.acceptsVersioned_legacy_iff
@@ -1214,6 +1218,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.guardedReplay
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.HeldReopen.refinesClient
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.reopensClient
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquireAt_ready
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquire_of_acquireAt
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.runAcquireAt_unsupported

@@ -33,16 +33,15 @@ structure CheckpointManifestDirectoryCalls where
   fsync : CheckpointManifestHandle → EStateM IO.Error WalInodeImage Unit
   rename : FilePath → FilePath → EStateM IO.Error CheckpointManifestState Unit
 
+noncomputable def CheckpointManifestDirectoryCalls.callbacks (calls : CheckpointManifestDirectoryCalls)
+    (directory : DiskDirectory) : CheckpointFileCallbacks CheckpointManifestState :=
+  ⟨calls.writeRun, fun path bytes => stageFreshWithCache path bytes calls.stage,
+    SyncPathGroup.run (sync directory.path calls.openRead calls.fsync), calls.rename⟩
+
 noncomputable def CheckpointManifestDirectoryCalls.perform {directory : DiskDirectory} {before : SegmentedWriterState}
     (calls : CheckpointManifestDirectoryCalls) (cut : CheckpointPowerCut directory before) :
     Step → EStateM IO.Error CheckpointManifestState Unit :=
-  performCheckpointFileStep directory (SegmentedCheckpointReport.generation before) cut.checkpoint.table.runs.toArray
-    (directory.file .stagedManifest) cut.checkpoint.manifest
-    (fun found => match found with
-      | some run => pure run
-      | none => throw (IO.userError "checkpoint run index is out of bounds"))
-    calls.writeRun (fun path bytes => stageFreshWithCache path bytes calls.stage)
-    (SyncPathGroup.run (sync directory.path calls.openRead calls.fsync)) calls.rename
+  (calls.callbacks directory).perform directory cut.checkpoint.prepared cut.checkpoint.manifest
 
 /-- The returned run directory sync, staged manifest write and staged
 file sync leave this exact prefix at the issued manifest rename. -/

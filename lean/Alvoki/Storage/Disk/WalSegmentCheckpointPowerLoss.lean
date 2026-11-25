@@ -33,6 +33,10 @@ namespace CheckpointPowerCut
 
 variable {directory : DiskDirectory} {before : SegmentedWriterState}
 
+theorem preflight (cut : CheckpointPowerCut directory before) :
+    CheckpointPreflight (.ready before.installed) (.ok (cut.checkpoint.prepared, cut.checkpoint.manifest)) :=
+  cut.checkpoint.preflight cut.flushed cut.generationFits cut.runCountFits cut.encoded
+
 /-- Only the current, already-issued primitive can add to the returned prefix. -/
 theorem reachedCount (cut : CheckpointPowerCut directory before) :
     cut.checkpoint.cut = cut.completed.length + (if cut.tookEffect then 1 else 0) ∧

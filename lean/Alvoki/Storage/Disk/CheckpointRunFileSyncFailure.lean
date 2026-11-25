@@ -58,16 +58,10 @@ private abbrev State := Cache Handle × WalInodeImage
 private abbrev Write := FilePath → ByteArray → EStateM IO.Error State Unit
 private abbrev Rename := FilePath → FilePath → EStateM IO.Error State Unit
 
-private def dispatch {directory : DiskDirectory} {before : SegmentedWriterState}
-    (attempt : SegmentedCheckpointReport directory before) (writeRun writeStage : Write) (rename : Rename)
+private def runFileCallbacks (directory : DiskDirectory) (writeRun writeStage : Write) (rename : Rename)
     (openRead : FilePath → EStateM IO.Error WalInodeImage Handle)
-    (fsync : Handle → EStateM IO.Error WalInodeImage Unit) : Step → EStateM IO.Error State Unit :=
-  performCheckpointFileStep directory (SegmentedCheckpointReport.generation before)
-    attempt.table.runs.toArray (directory.file .stagedManifest) attempt.manifest
-    (fun found => match found with
-      | some run => pure run
-      | none => throw (IO.userError "checkpoint run index is out of bounds"))
-    writeRun writeStage (SyncPathGroup.run (sync directory.path openRead fsync)) rename
+    (fsync : Handle → EStateM IO.Error WalInodeImage Unit) : CheckpointFileCallbacks State :=
+  ⟨writeRun, writeStage, SyncPathGroup.run (sync directory.path openRead fsync), rename⟩
 
 /-- The exact successful run pairs preceding a selected run callback. -/
 structure ObservedCheckpointRunPrefix {directory : DiskDirectory} {before : SegmentedWriterState}
@@ -89,7 +83,8 @@ structure ObservedCheckpointRunPrefix {directory : DiskDirectory} {before : Segm
   runs : State → RunUnlinkImage
   view : ∀ i, RunDirectoryInodeView directory (atRun i).2 (runs (atRun i))
   prefixPairs : ∀ i < index, Nonempty (CheckpointRunPairCustody directory (SegmentedCheckpointReport.generation before)
-    attempt.table (dispatch attempt writeRun writeStage rename openRead fsync) (atRun i) (atRun (i + 1))
+    attempt.table ((runFileCallbacks directory writeRun writeStage rename openRead fsync).perform directory
+      attempt.prepared attempt.manifest) (atRun i) (atRun (i + 1))
     (view i) (view (i + 1)) i)
 /-- This reported run completed the guarded open, write and flush. Its
 own file sync returns an error after the preceding private run pairs.
@@ -135,8 +130,11 @@ variable {directory : DiskDirectory} {before : SegmentedWriterState}
 abbrev path (report : ObservedCheckpointRunPrefix attempt) : FilePath :=
   directory.file (.run (SegmentedCheckpointReport.generation before) report.index)
 
+def callbacks (report : ObservedCheckpointRunPrefix attempt) : CheckpointFileCallbacks State :=
+  runFileCallbacks directory report.writeRun report.writeStage report.rename report.openRead report.fsync
+
 abbrev perform (report : ObservedCheckpointRunPrefix attempt) : Step → EStateM IO.Error State Unit :=
-  dispatch attempt report.writeRun report.writeStage report.rename report.openRead report.fsync
+  report.callbacks.perform directory attempt.prepared attempt.manifest
 
 /-- A returned error at the selected pair stops the real ordered schedule
 after the previously completed pairs. -/
@@ -232,7 +230,7 @@ def error (report : ObservedCheckpointRunSyncFailure attempt) : IO.Error :=
   IO.userError s!"sync failed for '{report.path}': {report.cause}"
 
 abbrev perform (report : ObservedCheckpointRunSyncFailure attempt) : Step → EStateM IO.Error State Unit :=
-  dispatch attempt report.writeRun report.writeStage report.rename report.openRead report.fsync
+  report.toObservedCheckpointRunPrefix.perform
 
 /-- The failed file barrier uses the live issuing description, and
 the same cached run pair reports the wrapped error and reached image. -/

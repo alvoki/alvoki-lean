@@ -17,7 +17,7 @@ structure Reopened (report : ObservedManifestDirectoryFailure cut) {writer : Nat
     (released : SegmentedFailureRelease writer) (opened : CheckpointHeldOpen input directory layout report.publication)
     (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState) : Prop extends
       CheckpointLiveHeldReopened opened session final after where
-  poisoned : runPreparedCheckpoint cut.checkpoint.prepared (report.calls.perform cut)
+  poisoned : runCheckpointWithEffects ((report.calls.callbacks directory).perform directory)
       (.ready before.installed, ⟨report.atRun 0, before.owners⟩) =
     .error report.error (.poisoned, ⟨report.after, before.owners⟩)
   handoff : released.Observed (directory := directory) (.poisoned, ⟨report.after, before.owners⟩)
@@ -63,7 +63,9 @@ theorem reopens (report : ObservedManifestDirectoryFailure cut) {writer : Nat} {
   obtain ⟨layout, opened, session, final, after, endpoint⟩ := cut.reopensFromLive ready logical publication observed.executed
     (report.liveManifest.trans observed.liveManifest.symm) observed.admitted agrees retry attempts reads
   obtain ⟨poisoned, handoff, _⟩ := report.poisonsAndReleases ready release
-  exact ⟨layout, opened, session, final, after, endpoint, poisoned, handoff, attempts, choice _ endpoint.selectedManifest⟩
+  exact ⟨layout, opened, session, final, after, endpoint,
+    cut.preflight.publicationError (report.calls.callbacks directory) directory poisoned,
+    handoff, attempts, choice _ endpoint.selectedManifest⟩
 
 end ObservedManifestDirectoryFailure
 

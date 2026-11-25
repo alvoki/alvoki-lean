@@ -63,7 +63,8 @@ structure Reopened (reported : CheckpointRunError runs cause reached) {writer : 
       PriorCheckpointReopened opened session final after where
   entry : CheckpointRunPrefix.EntrySelection before (runs.view 0)
   frames : RunPrefixManifestFrames runs reached manifest
-  poisoned : runPreparedCheckpoint attempt.prepared runs.perform (.ready before.installed, ⟨runs.atRun 0, before.owners⟩) =
+  poisoned : runCheckpointWithEffects (runs.callbacks.perform directory)
+      (.ready before.installed, ⟨runs.atRun 0, before.owners⟩) =
     .error cause (.poisoned, ⟨reached, before.owners⟩)
   handoff : release.Observed (directory := directory) (.poisoned, ⟨reached, before.owners⟩)
     ⟨reached, before.owners.set (directory.file .lock) none⟩
@@ -87,7 +88,9 @@ theorem reopens (reported : CheckpointRunError runs cause reached) {writer : Nat
   intro publication released attempts reads
   obtain ⟨layout, opened, session, final, after, poisoned, handoff, installed⟩ :=
     runs.reopensPrior reported.returns ready frames (reported.priorRuns ready entry) release retry attempts reads
-  exact ⟨layout, opened, session, final, after, installed, entry, frames, poisoned, handoff, attempts⟩
+  have preflight := attempt.preflight runs.flushedTable runs.generationFits runs.runCountFits runs.encoded
+  exact ⟨layout, opened, session, final, after, installed, entry, frames,
+    preflight.publicationError runs.callbacks directory poisoned, handoff, attempts⟩
 
 end CheckpointRunError
 

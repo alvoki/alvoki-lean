@@ -189,7 +189,7 @@ structure Reopened (report : ObservedManifestRenameFailure cut) {writer : Nat} {
     (release : SegmentedFailureRelease writer) (opened : CheckpointHeldOpen input directory layout report.publication)
     (session : SegmentedSession) (final : LockedFileState WalSegmentRepair.FileImage) (after : SegmentedWriterState) : Prop extends
       CheckpointLiveHeldReopened opened session final after where
-  poisoned : runPreparedCheckpoint cut.checkpoint.prepared (report.calls.perform cut)
+  poisoned : runCheckpointWithEffects ((report.calls.callbacks directory).perform directory)
       (.ready before.installed, ⟨report.atRun 0, before.owners⟩) =
     .error report.cause (.poisoned, ⟨report.after, before.owners⟩)
   handoff : release.Observed (directory := directory) (.poisoned, ⟨report.after, before.owners⟩)
@@ -238,7 +238,9 @@ theorem reopens (report : ObservedManifestRenameFailure cut) {writer : Nat} {inp
   obtain ⟨layout, opened, session, final, after, endpoint⟩ := cut.reopensFromLive ready logical publication executed
     (report.liveManifest.trans live.symm) choices agrees retry attempts reads
   obtain ⟨poisoned, handoff, _⟩ := report.poisonsAndReleases ready release
-  exact ⟨layout, opened, session, final, after, endpoint, poisoned, handoff, attempts, report.selection _ endpoint.selectedManifest⟩
+  exact ⟨layout, opened, session, final, after, endpoint,
+    cut.preflight.publicationError (report.calls.callbacks directory) directory poisoned,
+    handoff, attempts, report.selection _ endpoint.selectedManifest⟩
 
 end ObservedManifestRenameFailure
 

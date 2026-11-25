@@ -174,7 +174,8 @@ theorem reopensAfterCachedClose (report : ObservedCheckpointRunDirectoryFailure 
     (fun opened => Nonempty (CloseReopenCensus close opened)) .empty reads
   obtain ⟨poisoned, released, _⟩ := report.poisonsAndReleases ready (.closed : SegmentedFailureRelease writer)
   obtain ⟨closed, _, _, _, projected⟩ := report.closes close ready unlocked
-  exact ⟨closed, projected, layout, opened, session, final, after, ⟨installed, poisoned, released, .empty⟩, census⟩
+  exact ⟨closed, projected, layout, opened, session, final, after,
+    ⟨installed, cut.preflight.publicationError (report.calls.callbacks directory) directory poisoned, released, .empty⟩, census⟩
 
 /-- After any finite list of observed failed closes, the successful
 close starts from the checkpoint error's exact cache, files, phase and

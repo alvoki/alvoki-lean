@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointSuccessSession
 import Alvoki.Storage.Disk.RetainedWriterState
+import Alvoki.Storage.Disk.CheckpointPreflight
 
 namespace Alvoki.Storage.DiskSession
 
@@ -30,14 +31,18 @@ def plan (attempt : SegmentedCheckpointReport directory before) : VersionedRunSe
 def prepared (attempt : SegmentedCheckpointReport directory before) : Installed :=
   { before.installed with table := attempt.table, generation := generation before }
 
+theorem preflight (attempt : SegmentedCheckpointReport directory before)
+    (flushed : (flushForCheckpoint before.installed.table id : Except String PackedTable) = .ok attempt.table)
+    (generationFits : before.installed.generation.toNat + 1 < UInt64.size)
+    (runCountFits : attempt.table.runs.length < UInt64.size)
+    (encoded : encodeCheckpointIntegrityManifest attempt.table (generation before) = .ok attempt.manifest) :
+    CheckpointPreflight (.ready before.installed) (.ok (attempt.prepared, attempt.manifest)) :=
+  .prepared flushed ⟨generationFits, runCountFits⟩ encoded
+
 def perform (attempt : SegmentedCheckpointReport directory before) :
     CheckpointPublication.Step → EStateM IO.Error Nat Unit :=
-  performCheckpointFileStep directory (generation before) attempt.table.runs.toArray
-    (directory.file .stagedManifest) attempt.manifest
-    (fun found => match found with
-      | some run => pure run
-      | none => throw (IO.userError "checkpoint run index is out of bounds"))
-    attempt.writeRun attempt.writeStage attempt.sync attempt.renameFile
+  let callbacks : CheckpointFileCallbacks Nat := ⟨attempt.writeRun, attempt.writeStage, attempt.sync, attempt.renameFile⟩
+  callbacks.perform directory attempt.prepared attempt.manifest
 
 /-- The native preparation guards and successful execution of the reported
 file calls, with an observation for every reached step. -/

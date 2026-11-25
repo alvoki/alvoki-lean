@@ -48,7 +48,8 @@ structure ManifestStageFailureReopened {writer : Nat} {input : FilePath}
     ⟨CheckpointPowerCut.physical before (report.reachedPublication manifest runs),
       before.owners.set (directory.file .lock) none⟩ retry
   poisoned :
-    runPreparedCheckpoint attempt.prepared report.perform (.ready before.installed, ⟨report.atRun 0, before.owners⟩) =
+    runCheckpointWithEffects (report.callbacks.perform directory)
+      (.ready before.installed, ⟨report.atRun 0, before.owners⟩) =
       .error report.cause (.poisoned, ⟨report.reached, before.owners⟩)
   released : release.Observed (directory := directory) (.poisoned, ⟨report.reached, before.owners⟩)
     ⟨report.reached, before.owners.set (directory.file .lock) none⟩
@@ -101,7 +102,9 @@ theorem reopens {input : FilePath} {writer : Nat}
   obtain ⟨layout, opened, session, final, after, reached⟩ :=
     ready.reopensPriorCheckpointLive publication bindings.active bindings.choices bindings.selectedRuns retry failures reads
   obtain ⟨poisoned, handoff, _⟩ := report.poisonsAndReleases ready.held release
-  exact ⟨layout, opened, session, final, after, bindings, failures, poisoned, handoff, reached.returned, reached.path,
+  have preflight := attempt.preflight report.flushed report.generationFits report.runCountFits report.encoded
+  exact ⟨layout, opened, session, final, after, bindings, failures,
+    preflight.publicationError report.callbacks directory poisoned, handoff, reached.returned, reached.path,
     reached.descriptor, reached.phase, reached.files, reached.owners, reached.retained, reached.history, reached.wal,
     reached.durable, reached.selected, reached.checkpoint, reached.replay⟩
 

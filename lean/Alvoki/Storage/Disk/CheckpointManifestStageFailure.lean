@@ -81,14 +81,12 @@ namespace ObservedManifestStageFailure
 variable {directory : DiskDirectory} {before : SegmentedWriterState}
   {attempt : SegmentedCheckpointReport directory before}
 
+noncomputable def callbacks (report : ObservedManifestStageFailure attempt) : CheckpointFileCallbacks State :=
+  ⟨report.writeRun, fun path bytes => stageFreshWithCache path bytes report.stage,
+    SyncPathGroup.run (sync directory.path report.openRead report.fsync), report.rename⟩
+
 noncomputable def perform (report : ObservedManifestStageFailure attempt) : Step → EStateM IO.Error State Unit :=
-  performCheckpointFileStep directory (SegmentedCheckpointReport.generation before)
-    attempt.table.runs.toArray (directory.file .stagedManifest) attempt.manifest
-    (fun found => match found with
-      | some run => pure run
-      | none => throw (IO.userError "checkpoint run index is out of bounds"))
-    report.writeRun (fun path bytes => stageFreshWithCache path bytes report.stage)
-    (SyncPathGroup.run (sync directory.path report.openRead report.fsync)) report.rename
+  report.callbacks.perform directory attempt.prepared attempt.manifest
 
 /-- The ordered run pairs and retained directory sync reach the stage
 write. Once a manifest callback fails, neither rename nor final

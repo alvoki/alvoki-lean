@@ -30,7 +30,8 @@ private theorem SegmentedCheckpointReport.Valid.reachedRunWrite
     | none => simp [found] at atIndex
     | some run =>
       have bytes := Option.some.inj (by simpa only [found, Option.map_some] using atIndex)
-      simp [SegmentedCheckpointReport.perform, performCheckpointFileStep, List.getElem?_toArray, found, bytes, pure_bind]
+      simp [SegmentedCheckpointReport.perform, CheckpointFileCallbacks.perform, SegmentedCheckpointReport.prepared,
+        performCheckpointFileStep, List.getElem?_toArray, found, bytes, pure_bind]
   obtain ⟨done, todo, order⟩ := List.append_of_mem member
   have returned := observed.succeeded
   rw [CheckpointPublication.run, order, List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM] at returned

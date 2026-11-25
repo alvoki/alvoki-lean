@@ -186,7 +186,7 @@ structure Reopened (report : ObservedCheckpointRunDirectoryFailure cut) {writer 
     (release : SegmentedFailureRelease writer) (opened : CheckpointHeldOpen input directory layout report.publication)
     (session : SegmentedSession) (final : LockedFileState WalSegmentRepair.FileImage) (after : SegmentedWriterState) : Prop extends
       PriorCheckpointReopened opened session final after where
-  poisoned : runPreparedCheckpoint cut.checkpoint.prepared (report.calls.perform cut)
+  poisoned : runCheckpointWithEffects ((report.calls.callbacks directory).perform directory)
       (.ready before.installed, ⟨report.atRun 0, before.owners⟩) =
     .error report.error (.poisoned, ⟨report.after, before.owners⟩)
   handoff : release.Observed (directory := directory) (.poisoned, ⟨report.after, before.owners⟩)
@@ -219,7 +219,8 @@ theorem reopens (report : ObservedCheckpointRunDirectoryFailure cut) {writer : N
   obtain ⟨layout, opened, session, final, after, endpoint⟩ :=
     ready.reopensPriorCheckpointLive publication active choices (report.priorRuns ready) retry attempts reads
   obtain ⟨poisoned, handoff, _⟩ := report.poisonsAndReleases ready release
-  exact ⟨layout, opened, session, final, after, endpoint, poisoned, handoff, attempts⟩
+  exact ⟨layout, opened, session, final, after, endpoint,
+    cut.preflight.publicationError (report.calls.callbacks directory) directory poisoned, handoff, attempts⟩
 
 end ObservedCheckpointRunDirectoryFailure
 

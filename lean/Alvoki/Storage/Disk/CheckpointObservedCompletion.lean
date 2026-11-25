@@ -220,23 +220,6 @@ namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication
 
-/-- The four file callbacks dispatched after checkpoint preparation. -/
-structure CheckpointFileCallbacks (state : Type) where
-  writeRun : FilePath → ByteArray → EStateM IO.Error state Unit
-  writeStaged : FilePath → ByteArray → EStateM IO.Error state Unit
-  sync : Array FilePath → EStateM IO.Error state Unit
-  rename : FilePath → FilePath → EStateM IO.Error state Unit
-
-/-- The file dispatch from `DiskTable.checkpoint_schedule`, indexed by the
-exact installed state and manifest produced by its preparation. -/
-def CheckpointFileCallbacks.perform {state : Type} (callbacks : CheckpointFileCallbacks state)
-    (directory : DiskDirectory) (next : Installed) (manifest : ByteArray) : Step → EStateM IO.Error state Unit :=
-  performCheckpointFileStep directory next.generation next.table.runs.toArray (directory.file .stagedManifest)
-    manifest (fun found => match found with
-      | some run => pure run
-      | none => throw (IO.userError "checkpoint run index is out of bounds"))
-    callbacks.writeRun callbacks.writeStaged callbacks.sync callbacks.rename
-
 /-- The preflight and reached file reports for one successful checkpoint.
 The returned state and durable bindings are derived from these reports. -/
 structure CheckpointCompletionReports (state : Type) {directory : DiskDirectory} {before : SegmentedWriterState}

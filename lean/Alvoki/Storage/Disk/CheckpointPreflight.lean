@@ -2,6 +2,8 @@ import Alvoki.Storage.Disk.CheckpointLockHandoff
 
 namespace Alvoki.Storage.DiskSession
 
+open System CheckpointPublication
+
 /-- The ordered checks reached by the native checkpoint before any
 phase update or file effect. A later failure requires all earlier checks
 to have succeeded. -/
@@ -94,5 +96,34 @@ theorem CheckpointPreflight.rejected {image : Type} {phase : Phase Installed} {c
     (files : LockedFileState image) :
     runCheckpointWithEffects perform (phase, files) = .error cause (phase, files) :=
   preflight.effect perform files
+
+/-- The native file dispatch uses the exact generation, run bytes and
+manifest produced by preparation, even when a publication callback fails. -/
+structure CheckpointFileCallbacks (state : Type) where
+  writeRun : FilePath → ByteArray → EStateM IO.Error state Unit
+  writeStaged : FilePath → ByteArray → EStateM IO.Error state Unit
+  sync : Array FilePath → EStateM IO.Error state Unit
+  rename : FilePath → FilePath → EStateM IO.Error state Unit
+
+def CheckpointFileCallbacks.perform {state : Type} (callbacks : CheckpointFileCallbacks state)
+    (directory : DiskDirectory) (next : Installed) (manifest : ByteArray) : Step → EStateM IO.Error state Unit :=
+  performCheckpointFileStep directory next.generation next.table.runs.toArray (directory.file .stagedManifest)
+    manifest (fun found => match found with
+      | some run => pure run
+      | none => throw (IO.userError "checkpoint run index is out of bounds"))
+    callbacks.writeRun callbacks.writeStaged callbacks.sync callbacks.rename
+
+/-- A reported publication error follows successful preflight. The
+native-shaped runner returns the same error and reached state. -/
+theorem CheckpointPreflight.publicationError {image : Type} {before next : Installed} {manifest : ByteArray}
+    (preflight : CheckpointPreflight (.ready before) (.ok (next, manifest)))
+    (callbacks : CheckpointFileCallbacks image) (directory : DiskDirectory)
+    {files reached : LockedFileState image} {cause : IO.Error}
+    (failed : runPreparedCheckpoint next (callbacks.perform directory next manifest) (.ready before, files) =
+      .error cause (.poisoned, reached)) :
+    runCheckpointWithEffects (callbacks.perform directory) (.ready before, files) =
+      .error cause (.poisoned, reached) := by
+  rw [preflight.effect]
+  exact failed
 
 end Alvoki.Storage.DiskSession

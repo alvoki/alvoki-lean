@@ -4,6 +4,22 @@ import Alvoki.Storage.Disk.ClientReadTrace
 namespace Alvoki.Storage.DiskSession
 open WalSegmentRepair
 
+/-- Preflight rejection leaves the same ready writer available to the
+existing client ledger. Its file callbacks have no effect and all
+supported reads on that session still use the same replay. -/
+theorem SegmentedClientReadTrace.checkpointRejected {state : Type}
+    {first : LockedFileState WalSegmentRotation.State} (bootstrap : BootstrapReady first.image)
+    (held : first.owners.Owns directory initialDescriptor)
+    (trace : SegmentedClientReadTrace directory initialDescriptor (bootstrap.writerState first.owners)
+      allowCollection log reads writer before)
+    (session : SegmentedSession) (phase : session.phase = .ready before.installed)
+    {cause : IO.Error} (preflight : CheckpointPreflight session.phase (.error cause))
+    (callbacks : CheckpointFileCallbacks state) (files : state) :
+    runCheckpointWithEffects (callbacks.perform directory) (session.phase, ⟨files, before.owners⟩) =
+      .error cause (session.phase, ⟨files, before.owners⟩) ∧
+    GuardedClientReplay log reads before session :=
+  ⟨preflight.rejected (callbacks.perform directory) _, trace.guardedReplay bootstrap held phase⟩
+
 /-- A successful native checkpoint keeps the existing session and both
 client ledgers. The installed phase, settled checkpoint and supported
 reads belong to the same returned writer. -/
