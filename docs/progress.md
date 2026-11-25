@@ -1,5 +1,7 @@
 # Current handoff
 
+Both early checkpoint stops now share the proof that follows the selected reboot files through the exact opened table. The quiet restart and returned manifest-rename error use the same raw aligned opener and allocation proof once their readers are fixed. The two early stops prove that the prior manifest survives. The rename branch still proves its own selected old or new manifest and watermark. Both source paths preserve the actual cache, heap and replay consumed by the next session. The run-file stop reaches the returned table and still needs an edge in the finite opened-session trace. [Shared aligned installation](../lean/Alvoki/Storage/Disk/NativeAlignedCheckpointReopenEffects.lean) · [Shared early-cut recovery](../lean/Alvoki/Storage/Disk/NativeQuietPowerLossTableOpen.lean)
+
 The proof-engineering guidance now tests composition early on two distinct executions,
 explains when to reuse a shared invariant, and specifies the caller-visible obligations
 for recovery errors, retries and the order of uncertain batches. [Proof-engineering guidance](proof-index.md#how-to-structure-a-proof)
