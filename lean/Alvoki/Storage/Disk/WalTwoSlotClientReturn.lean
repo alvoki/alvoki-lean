@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
+import Alvoki.Storage.Disk.WalTwoSlotReopenProjection
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -130,5 +131,48 @@ theorem recoveredAcknowledgedBatch_retains {image : WalSegmentImage} {pair : Dir
     omega
   refine ⟨DatabaseBatchRetention.append (entry := .acknowledgedBatch batch) prior rfl, ?_⟩
   simpa only [count, List.take_length] using recovery.refines
+
+/-- A reached slot survivor determines the history retained by the
+segmented recovery of that same decoded marker. Only a synced slot can
+account for an acknowledged batch. -/
+theorem recoveredSlot_retains {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
+    {range : MarkedWalRange} {history batch : List Write} {base table : PackedTable} {first : Nat}
+    {log : List DatabaseSubmissions} (prior : DatabaseBatchRetention log history)
+    (recovery : WalSegmentRecovery image pair range (history ++ batch) base first table)
+    {before after : ByteArray} {active : OrderedTwoSlot.Slot}
+    {old next : OrderedTwoSlot.Record UInt64} {phase : OrderedTwoSlot.Phase} {decoded : Selection}
+    (report : OrderedTwoSlot.Survivor (decodedSlots before) active next phase (decodedSlots after))
+    (present : decodedSlots before active = some old)
+    (older : ∀ stale, decodedSlots before active.other = some stale → stale.epoch < old.epoch)
+    (newer : old.epoch < next.epoch)
+    (oldSize : old.frontier.toNat = (WAL.encode history).size)
+    (nextSize : next.frontier.toNat = (WAL.encode (history ++ batch)).size)
+    (accepted : decode after = .ok decoded)
+    (selected : pair.walBoundary = some (Boundary.encode decoded.frontier))
+    (acknowledged : Bool) (afterSync : acknowledged = true → phase = .slotSynced) :
+    if acknowledged then
+      DatabaseBatchRetention (log ++ [.acknowledgedBatch batch]) (history ++ batch) ∧
+      ∃ model, table.Refines model ∧ RepresentsWalHistory (history ++ batch) model
+    else
+      DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
+      ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
+  have frontier := decodedMarker_of_survivor report present older newer accepted
+  cases acknowledged with
+  | false =>
+    simp only [Bool.false_eq_true, ↓reduceIte]
+    cases phase with
+    | beforeWalSync | beforeSlotWrite =>
+      exact recoveredBatch_retains prior recovery selected (.inl (frontier ▸ oldSize))
+    | slotWriteUncertain =>
+      change decoded.frontier = old.frontier ∨ decoded.frontier = next.frontier at frontier
+      rcases frontier with oldFrontier | nextFrontier
+      · exact recoveredBatch_retains prior recovery selected (.inl (oldFrontier ▸ oldSize))
+      · exact recoveredBatch_retains prior recovery selected (.inr (nextFrontier ▸ nextSize))
+    | slotSynced =>
+      exact recoveredBatch_retains prior recovery selected (.inr (frontier ▸ nextSize))
+  | true =>
+    have synced := afterSync rfl
+    subst phase
+    exact recoveredAcknowledgedBatch_retains prior recovery selected (frontier ▸ nextSize)
 
 end Alvoki.WAL.TwoSlot
