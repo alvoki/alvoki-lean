@@ -131,6 +131,43 @@ theorem RawSyncCalls.groupedReturnedStorage {heap image : Type} (calls : RawSync
   rw [markerSelected, markerPayload] at markerEffect
   exact keeperEffect.2.pairedStored markerEffect.2 keeperEffect.1 markerEffect.1 distinct consumeFrame unrelated
 
+/-- The keeper handle used by the successful grouped barrier supplies
+the same live inode and bytes at its return. The two file fsyncs preserve
+visible bytes. Consuming the pending cell needs its own local frame. -/
+theorem RawSyncCalls.groupedKeeperVisible {heap image : Type} (calls : RawSyncCalls heap)
+    {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles}
+    (cache : OpenSyncCacheRefs files directory.path) (view : OpenCloseHeapView heap image) {first : Nat}
+    {staged consumed reached : heap} {keeperHandle markerHandle : IO.FS.Handle}
+    (keeperRoute : calls.syncPath directory.path (directory.file (.walSegment first))
+      cache.directory cache.active cache.pending staged = calls.fsync keeperHandle staged)
+    (markerRoute : calls.syncPath directory.path (directory.file .stagedWalBoundary)
+      cache.directory cache.active cache.pending (reachedState (calls.fsync keeperHandle staged)) =
+        calls.fsync markerHandle consumed)
+    (grouped : calls.group directory.path cache.directory cache.active cache.pending
+      #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .ok () reached)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap))
+    (keeperEffect : ∀ after, calls.FileReturnEffect view inodes observe (directory.file (.walSegment first))
+      keeperHandle staged after)
+    (markerEffect : calls.FileReturnEffect view inodes observe (directory.file .stagedWalBoundary)
+      markerHandle consumed reached)
+    (consumeKeeps : let inode := (view.descriptors staged).inode (view.handle staged keeperHandle).2.1.description
+      let before := reachedState (calls.fsync keeperHandle staged)
+      (observe consumed).visible (directory.file (.walSegment first)) =
+        (observe before).visible (directory.file (.walSegment first)) ∧
+      (inodes consumed).visible inode = (inodes before).visible inode) :
+    let inode := (view.descriptors staged).inode (view.handle staged keeperHandle).2.1.description
+    (observe reached).visible (directory.file (.walSegment first)) = some inode ∧
+    (inodes reached).visible inode = (inodes staged).visible inode := by
+  intro inode
+  obtain ⟨keeperReturned, markerReturned⟩ := calls.groupedFileReturns cache keeperRoute markerRoute grouped
+  obtain ⟨keeperNamed, keeperSynced, keeperNames, _⟩ := keeperEffect _ keeperReturned
+  obtain ⟨_, markerSynced, markerNames, _⟩ := markerEffect markerReturned
+  have keeperVisible := congrArg (fun image => image.visible inode) keeperSynced
+  have markerVisible := congrArg (fun image => image.visible inode) markerSynced
+  exact ⟨(congrFun markerNames _).trans (consumeKeeps.1.trans ((congrFun keeperNames _).trans keeperNamed)),
+    markerVisible.trans (consumeKeeps.2.trans keeperVisible)⟩
+
 /-- Use the actual cached routes after append and stage. The keeper
 payload is carried from the append return. The staged marker's payload
 passes through the first fsync and the reached pending-cell removal. -/
@@ -265,5 +302,42 @@ theorem RawSyncCalls.publishedStorage {heap image : Type} (calls : RawSyncCalls 
   exact ⟨keeperFinal, markerFinal, nonempty, fun names allowed =>
     ⟨settled names allowed (.walSegment first), settled names allowed .walBoundary,
       (settled names allowed .stagedWalBoundary).trans scratchGone⟩⟩
+
+/-- Carry the live keeper through the publication tail and the actual
+ready phase store. These local frames concern the named inode's visible
+bytes, in addition to the separate durable publication guarantees. -/
+theorem RawSyncCalls.publishedKeeperVisible {heap : Type} (calls : RawSyncCalls heap)
+    {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles}
+    (cache : OpenSyncCacheRefs files directory.path) {first inode : Nat} {payload : ByteArray}
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    {phase : IO.Ref (Phase Installed)} {next : Installed} {grouped renamed issued synced ready : heap}
+    {root : IO.FS.Handle}
+    (bound : names grouped (directory.file (.walSegment first)) = some inode)
+    (bytes : visible grouped inode = payload)
+    (moved : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) grouped = .ok () renamed)
+    (loaded : calls.readDirectory cache.directory renamed = .ok (some root) issued)
+    (returned : calls.fsync root issued = .ok () synced)
+    (installed : set phase (.ready next) synced = .ok () ready)
+    (renameKeeps : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) grouped = .ok () renamed →
+      names renamed (directory.file (.walSegment first)) = names grouped (directory.file (.walSegment first)) ∧
+      visible renamed inode = visible grouped inode)
+    (loadKeeps : calls.readDirectory cache.directory renamed = .ok (some root) issued →
+      names issued (directory.file (.walSegment first)) = names renamed (directory.file (.walSegment first)) ∧
+      visible issued inode = visible renamed inode)
+    (syncKeeps : calls.fsync root issued = .ok () synced →
+      names synced (directory.file (.walSegment first)) = names issued (directory.file (.walSegment first)) ∧
+      visible synced inode = visible issued inode)
+    (installKeeps : set phase (.ready next) synced = .ok () ready →
+      names ready (directory.file (.walSegment first)) = names synced (directory.file (.walSegment first)) ∧
+      visible ready inode = visible synced inode) :
+    names ready (directory.file (.walSegment first)) = some inode ∧ visible ready inode = payload := by
+  obtain ⟨renameName, renameBytes⟩ := renameKeeps moved
+  obtain ⟨loadName, loadBytes⟩ := loadKeeps loaded
+  obtain ⟨syncName, syncBytes⟩ := syncKeeps returned
+  obtain ⟨installName, installBytes⟩ := installKeeps installed
+  exact ⟨installName.trans (syncName.trans (loadName.trans (renameName.trans bound))),
+    installBytes.trans (syncBytes.trans (loadBytes.trans (renameBytes.trans bytes)))⟩
 
 end Alvoki.Storage.DiskSession
