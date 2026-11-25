@@ -63,6 +63,12 @@ variable {current : NativeOpenedPosition opened} {request : WriteRequest}
   {inputs : List FilePath} {input : FilePath} {view : OpenCloseHeapView heap FileImage}
   {names : heap → FilePath → Option Nat} {bytes : heap → Nat → ByteArray}
 
+/-- The stopped write has one submission and the failed opens retain
+their ordered path and diagnostic pairs. -/
+def NativeStoppedAppendFinalizedRetry.event
+    (seen : NativeStoppedAppendFinalizedRetry current request inputs input view names bytes) : NativeExecutionEvent :=
+  .interruptedAppendRetriesRecovered request seen.returns input seen.prepared.batch
+
 /-- Ordered rejected opens keep the live checkpoint and WAL selection.
 The exact returned table continues the prior reads and records one
 uncertain submission for the interrupted write. -/
@@ -108,6 +114,7 @@ structure NativeStoppedAppendFinalizedRetry.Returned
     seen.physical.openTable seen.bootstrap seen.assemble makeCache = .ok handle.table start.reached
   reader : seen.reader.finish.run seen.reader.chronology =
     .ok start.current.ready.state.session (start.current.ready.state.census, start.current.ready.state.files)
+  common : NativeExecutionStep current.current seen.event start.current
   lock : handle.lock = seen.physical.raw.lock
   cache : handle.files.UsesCacheReferences seen.physical.seed.activeRef seen.physical.seed.pendingRef seen.physical.seed.directoryRef
   cacheDirectory : handle.files.AtDirectory current.current.ready.state.session.directory.path
@@ -145,15 +152,27 @@ theorem NativeStoppedAppendFinalizedRetry.reaches
     marked.opensHealthyFromAdmission seen.physical.raw seen.physical.seed seen.physical.checkpoint seen.physical.listing
       seen.physical.extents seen.physical.seals seen.physical.keeper seen.physical.sameLookup seen.physical.flat
       seen.physical.marked seen.bootstrap seen.assemble seen.constructs seen.physical.allocations
-  obtain ⟨handle, start, table, _, lock, files, _, token, contents, get, set, compare, reached, sameState,
-    sameHistory, submissions, reads, pins⟩ := installed.fromOpen seen.get seen.set seen.phaseEffects seen.ptrEq
+  let next : NativeReadPosition current.current.history (current.current.submissions ++ [.uncertainBatch seen.prepared.batch]) :=
+    ⟨seen.reader.finish.run seen.reader.chronology, installed.state, installed.state, current.current.ready.reads,
+      .installed installed.nativeReturned installed.ready.refines.1 (installed.ready.refines.2.1.trans history)
+        pending.replay pending.bounded⟩
+  obtain ⟨handle, start, position, table, lock, files, contents, get, set, compare, token,
+    reached, pins, sameFiles, sameCensus, sameCache⟩ :=
+    installed.startsAtCheckpointReopen history next rfl installed.nativeReturned installed.cacheCaptured installed.ownerCaptured
+      installed.directoryCaptured seen.phaseEffects seen.ptrEq
+  have keeper : seen.reader.reads.wal.keeper.object = seen.stop.keeper.child := by
+    have first : seen.plan.layout.keeper.first = current.current.ready.state.writer.installed.activeFirst :=
+      seen.plan.recovery.first.trans (valid.retained.active.symm.trans valid.retained.resumed.keeper.symm)
+    have path : seen.reader.admission.view.child seen.reader.admission.root (renderWalSegmentName seen.plan.layout.keeper.first) =
+        seen.stop.view.child seen.stop.root seen.prepared.keeperName := by
+      rw [seen.originalView, seen.originalRoot, first]
+    exact (seen.stop.keeper.child_eq (path.symm.trans seen.reader.reads.wal.keeper.bound)).symm
   refine ⟨handle, start, current.uses.writeSchedules, seen.requestMatches, samePoisoned ▸ stopped,
     seen.rawExit.stopsAppend, seen.rawExit.departed, released,
     seen.attempts, seen.ordered, image.trans (congrArg LockedFileState.image released.files),
-    inodes.trans (congrArg DescriptorInventory.inode released.census), measured, ?_, ?_, ?_, ?_,
-    ⟨cacheOpen, makeCache, cacheAction, cacheSource, ?_⟩, ?_, lock, files.symm ▸ installed.cacheReferences,
-    files.symm ▸ installed.cacheDirectory, contents, get, set, compare, ?_, pins, ?_, ?_, ?_,
-    sameHistory.trans history, submissions, reads, ?_⟩
+    inodes.trans (congrArg DescriptorInventory.inode released.census), measured, ?_, ?_, keeper, ?_,
+    ⟨cacheOpen, makeCache, cacheAction, cacheSource, ?_⟩, ?_, ?_, lock, files.symm ▸ installed.cacheReferences,
+    files.symm ▸ installed.cacheDirectory, contents, get, set, compare, ?_, pins, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · have canonical := seen.reader.reads.canonicalDirectory
     rw [seen.originalView, seen.originalRoot] at canonical
     exact (seen.stableNames _ (.inl rfl)).trans ((seen.liveNames _ (.inl rfl)).trans canonical)
@@ -162,12 +181,6 @@ theorem NativeStoppedAppendFinalizedRetry.reaches
     rw [seen.originalView, seen.originalRoot] at bound
     rw [seen.originalView, ← seen.stop.lock.child_eq bound] at canonical
     exact (seen.stableNames _ (.inr (.inl rfl))).trans ((seen.liveNames _ (.inr (.inl rfl))).trans canonical)
-  · have first : seen.plan.layout.keeper.first = current.current.ready.state.writer.installed.activeFirst :=
-      seen.plan.recovery.first.trans (valid.retained.active.symm.trans valid.retained.resumed.keeper.symm)
-    have path : seen.reader.admission.view.child seen.reader.admission.root (renderWalSegmentName seen.plan.layout.keeper.first) =
-        seen.stop.view.child seen.stop.root seen.prepared.keeperName := by
-      rw [seen.originalView, seen.originalRoot, first]
-    exact (seen.stop.keeper.child_eq (path.symm.trans seen.reader.reads.wal.keeper.bound)).symm
   · intro path payload selected file
     obtain ⟨bound, original⟩ := seen.observedRead path payload selected file
     have named := (seen.liveNames path selected).trans bound
@@ -175,17 +188,24 @@ theorem NativeStoppedAppendFinalizedRetry.reaches
       (seen.stableBytes path file.object selected named).trans original⟩
   · rw [table, reached]
     exact ran
-  · rw [sameState]
+  · rw [position]
     exact installed.nativeReturned
-  · rw [token, sameState]
-    exact installed.tokenRef
-  · rw [reached, sameState]
-    exact installed.filesPreserved
-  · rw [reached, sameState]
-    exact installed.censusPreserved
-  · rw [reached, sameState]
-    exact installed.cachePreserved
-  · rw [← submissions, ← reads, ← (sameHistory.trans history)]
-    exact start.current.ready.readPrefix.guardedReplay
+  · have stepped := NativeExecutionStep.recoverInterruptedAppendAfterRetries current.current seen.stop seen.exit pending
+      released.files released.census seen.attempts seen.plan seen.reader seen.originalView seen.originalRoot keeper next rfl rfl
+    rw [position]
+    simpa only [NativeStoppedAppendFinalizedRetry.event, seen.requestMatches] using stepped
+  · rw [position]
+    exact token
+  · rw [position]
+    exact sameFiles
+  · rw [position]
+    exact sameCensus
+  · rw [position]
+    exact sameCache
+  · rw [position]
+  · rw [position]
+  · rw [position]
+  · rw [position]
+    exact next.readPrefix.guardedReplay
 
 end Alvoki.Storage.DiskSession

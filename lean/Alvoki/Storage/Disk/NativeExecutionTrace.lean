@@ -114,6 +114,8 @@ inductive NativeExecutionEvent : Type 1 where
   | uncertainWriteClientCallsRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (calls : List NativePendingClientEvent) (attempted retained : List WAL.Write)
   | interruptedAppendRecovered (request : WriteRequest) (input : FilePath) (attempted : List WAL.Write)
+  | interruptedAppendRetriesRecovered (request : WriteRequest) (errors : List (FilePath × IO.Error))
+      (input : FilePath) (attempted : List WAL.Write)
   | interruptedAppendCrashRecovered (request : WriteRequest) (input : FilePath) (attempted : List WAL.Write)
   | interruptedMarkerRecovered (request : WriteRequest) (input : FilePath) (attempted retained : List WAL.Write)
   | collectionErrorRecovered (input : FilePath) (error : IO.Error)
@@ -139,6 +141,7 @@ def submissions : NativeExecutionEvent → List DatabaseSubmissions
   | .uncertainWriteRecovered _ _ _ attempted _ | .uncertainWriteCrashRecovered _ _ _ attempted _
   | .uncertainWriteInterruptedCloseRecovered _ _ _ attempted _ | .interruptedAppendRecovered _ _ attempted
   | .interruptedMarkerRecovered _ _ attempted _ | .interruptedAppendCrashRecovered _ _ attempted
+  | .interruptedAppendRetriesRecovered _ _ _ attempted
   | .uncertainWriteStageRetryRecovered _ _ _ _ _ attempted
   | .uncertainWriteCloseRetriesRecovered _ _ _ _ _ attempted _
   | .uncertainWriteClientCallsRecovered _ _ _ _ attempted _
@@ -559,6 +562,26 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (reopened : NativeFirstAppendExitContinuation current.ready stop exited input next) :
       NativeExecutionStep current (.interruptedAppendRecovered stop.request input prepared.batch)
         ⟨current.history, current.submissions ++ [.uncertainBatch prepared.batch], next⟩
+  | recoverInterruptedAppendAfterRetries (current : NativeExecutionPosition) {heap : Type} {input : FilePath}
+      {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
+      {init : OpenSyncCacheCallbacks heap} {release : IO.FS.Handle → heap → heap}
+      {first after : heap} {errors : List (FilePath × IO.Error)}
+      {prepared : NativeReadyWritePreparation current.ready.state} (stop : NativeFirstAppendStop prepared)
+      (exited : NativeFirstAppendExit stop) (pending : NativePendingFirstAppend current.ready stop)
+      (initialFiles : view.files first = exited.retry) (initialCensus : view.descriptors first = exited.census)
+      (attempts : RawFinalizedOpenAttempts view current.ready.state.session.directory calls init release first errors after)
+      (plan : exited.Plan)
+      {vacant : TryLockObserves (view.files after).owners current.ready.state.session.directory (.ok true)}
+      (opening : MarkedReadyOpenObservations input current.ready.state.session.directory
+        (view.descriptors after) ⟨exited.retry.image, (view.files after).owners⟩ plan.layout
+        current.ready.state.writer.published vacant plan.selected)
+      (sameView : opening.admission.view = stop.view) (sameRoot : opening.admission.root = stop.root)
+      (sameKeeper : opening.reads.wal.keeper.object = stop.keeper.child)
+      (next : NativeReadPosition current.history (current.submissions ++ [.uncertainBatch prepared.batch]))
+      (returned : opening.finish.run opening.chronology = next.opened)
+      (keepsReads : next.reads = current.ready.reads) :
+      NativeExecutionStep current (.interruptedAppendRetriesRecovered stop.request errors input prepared.batch)
+        ⟨current.history, current.submissions ++ [.uncertainBatch prepared.batch], next⟩
   | collectsObsoleteRunsAfterRetries (current : NativeExecutionPosition) {held errors initial before}
       {retryAt : NativeReadPosition current.history current.submissions}
       (prior : NativeObsoleteRunUnlinkRetries current.ready initial held retryAt before errors)
@@ -719,6 +742,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
     exact ⟨by simp [NativeExecutionEvent.writes], rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverInterruptedAppend reopened =>
     exact ⟨by simp [NativeExecutionEvent.writes], rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverInterruptedAppendAfterRetries keepsReads =>
+    exact ⟨by simp [NativeExecutionEvent.writes], rfl, by simpa [NativeExecutionEvent.reads] using keepsReads⟩
   case collectsObsoleteRunsAfterRetries prior _ _ _ _ returned =>
     obtain ⟨_, _, _, _, _, _, _, _, _, reads⟩ := prior.frames
     exact ⟨by simp [NativeExecutionEvent.writes], by simp [NativeExecutionEvent.submissions],
