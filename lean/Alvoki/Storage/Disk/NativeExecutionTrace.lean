@@ -112,8 +112,8 @@ inductive NativeExecutionEvent : Type 1 where
   | checkpointCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | checkpointManifestRenameCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | interruptedCheckpointRecovered (input : FilePath) (manifest : Option ByteArray)
-  | interruptedCheckpointRunFileRecovered (input : FilePath) (index : Nat) (effective : Bool) (manifest : Option ByteArray)
-  | interruptedCheckpointRunDirectoryRecovered (input : FilePath) (effective : Bool) (manifest : Option ByteArray)
+  | interruptedEarlyCheckpointRecovered (input : FilePath) (stage : CheckpointPublication.Step)
+      (effective : Bool) (manifest : Option ByteArray)
   | collectCoveredWal
   | coveredWalCollectionRejected (error : IO.Error)
   | interruptedCoveredWalUnlinkRecovered (input : FilePath)
@@ -169,11 +169,7 @@ inductive NativeExecutionEvent : Type 1 where
 ordinary return from the interrupted checkpoint. -/
 def NativeEarlyCheckpointReboot.event (seen : NativeEarlyCheckpointReboot state) (input : FilePath) :
     NativeExecutionEvent :=
-  match seen with
-  | .file (stop := stop) _ =>
-    .interruptedCheckpointRunFileRecovered input stop.effect.index seen.tookEffect state.writer.target.pair.manifest
-  | .directory _ =>
-    .interruptedCheckpointRunDirectoryRecovered input seen.tookEffect state.writer.target.pair.manifest
+  .interruptedEarlyCheckpointRecovered input seen.stage seen.tookEffect state.writer.target.pair.manifest
 
 namespace NativeExecutionEvent
 
@@ -222,12 +218,6 @@ def appendRetryRecovery (request : WriteRequest) (errors : List (FilePath × IO.
   | some busy => .interruptedAppendContendedRetriesRecovered request busy errors input attempted
 
 end NativeExecutionEvent
-
-private theorem NativeEarlyCheckpointReboot.eventLedgers (seen : NativeEarlyCheckpointReboot state)
-    (input : FilePath) :
-    (seen.event input).writes = [] ∧ (seen.event input).submissions = [] ∧
-      (seen.event input).reads = [] ∧ (seen.event input).uncertainBatchWhole := by
-  cases seen <;> exact ⟨rfl, rfl, rfl, trivial⟩
 
 /-- The observed checkpoint and close start from the successful
 rewrite's exact table and published run binding. -/
@@ -746,7 +736,8 @@ theorem NativeExecutionStep.recoverInterruptedCheckpointRunDirectory
     (next : NativeReadPosition current.history current.submissions)
     (reopened : NativeCheckpointRunDirectoryReopened current.ready reboot reader next) :
     NativeExecutionStep current
-      (.interruptedCheckpointRunDirectoryRecovered input cut.tookEffect current.ready.state.writer.target.pair.manifest)
+      (.interruptedEarlyCheckpointRecovered input .syncRunsDirectory cut.tookEffect
+        current.ready.state.writer.target.pair.manifest)
       ⟨current.history, current.submissions, next⟩ :=
   .recoverInterruptedEarlyCheckpoint current (.directory reboot) (valid := valid) reader next
     reopened.returned.1 reopened.returned.2 reopened.reads
@@ -824,9 +815,10 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverInterruptedCheckpoint reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
-  case recoverInterruptedEarlyCheckpoint input recovery _ _ _ _ _ _ _ sameReads =>
-    obtain ⟨writes, submissions, reads, _⟩ := recovery.eventLedgers input
-    exact ⟨by simp [writes], by simp [submissions], by simpa [reads] using sameReads⟩
+  case recoverInterruptedEarlyCheckpoint sameReads =>
+    exact ⟨by simp [NativeEarlyCheckpointReboot.event, NativeExecutionEvent.writes],
+      by simp [NativeEarlyCheckpointReboot.event, NativeExecutionEvent.submissions],
+      by simpa [NativeEarlyCheckpointReboot.event, NativeExecutionEvent.reads] using sameReads⟩
   case recoverUncertainWriteCrash reopened =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWriteStageRetry reopened =>
@@ -874,8 +866,6 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
 theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep before event after) :
     event.uncertainBatchWhole := by
   cases step <;> try trivial
-  case recoverInterruptedEarlyCheckpoint recovery _ _ _ _ _ _ _ _ =>
-    exact (recovery.eventLedgers _).2.2.2
   case recoverUncertainWrite recovered => exact recovered.wholeOrNone
   case recoverUncertainWriteCrash recovered => exact recovered.wholeOrNone
   case recoverUncertainWriteInterruptedClose recovered => exact recovered.wholeOrNone
@@ -1033,7 +1023,8 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .readyExitThenReopen input, .readyExitRecovered opened _ => opened = input
   | .interruptedCloseThenReopen input, .interruptedCloseRecovered opened _ => opened = input
   | .interruptedCheckpointThenReopen input, .interruptedCheckpointRecovered opened _ => opened = input
-  | .interruptedCheckpointRunDirectoryThenReopen input, .interruptedCheckpointRunDirectoryRecovered opened _ _ => opened = input
+  | .interruptedCheckpointRunDirectoryThenReopen input, .interruptedEarlyCheckpointRecovered opened .syncRunsDirectory _ _ =>
+    opened = input
   | .writeThenCloseAndReopen request input, .uncertainWriteRecovered submitted opened _ _ _ =>
     submitted = request ∧ opened = input
   | .writeThenPowerLossAndReopen request input, .uncertainWriteCrashRecovered submitted opened _ _ _ =>
