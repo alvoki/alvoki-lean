@@ -2101,3 +2101,8 @@ cut supplies the prior-prefix guarantee at its own filesystem boundary.
 A completed WAL sync still derives the old prefix from the durable
 append. The native composition must connect these early-cut premises
 to the append and sync observations and pass the layout to installation.
+
+The interrupted append branch now obtains the prior keeper prefix
+from the shared physical append image and the selected crash survivor.
+It needs the callback report to identify that image. The interrupted
+WAL sync branch still needs its corresponding physical observation.

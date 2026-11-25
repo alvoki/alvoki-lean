@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
 import Alvoki.Storage.Disk.WalBatchCommitEffects
 import Alvoki.Storage.Disk.PendingClientReplay
 import Alvoki.Storage.Disk.WalSegmentCachedRetryReads
@@ -2631,10 +2632,10 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
     (counted : selected.frontier.toNat = through * frameSize)
     (decoded : retry.directory.active.walRange = some ⟨watermark, through⟩)
     (survives : retry.keeper.active ∈ reached.1.keeper.crashImages)
-    (appendCutPrefix : let active := directory.file (.walSegment prior.installed.activeFirst)
+    (appendCutImage : let active := directory.file (.walSegment prior.installed.activeFirst)
       (report.append active (WAL.encode batch)).run (prior.files, report.initialMarker) =
         .error report.stopped reached →
-      ∃ tail, retry.keeper.active = some (prior.wal.active.bytes ++ tail))
+      ∃ cut : FirstAppendCut, reached.1.keeper = (cut.physical prior).keeper)
     (syncCutPrefix : ∀ appended,
       let active := directory.file (.walSegment prior.installed.activeFirst)
       (report.append active (WAL.encode batch)).run (prior.files, report.initialMarker) =
@@ -2662,7 +2663,8 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
       rw [throughOld, List.take_append_of_le_length (Nat.le_refl _), List.take_length, ← layout.activeBytes]
       rcases report.cut with ⟨appendCut, _⟩ |
         ⟨appended, wrote, ⟨syncCut, _⟩ | ⟨durable, synced, cut⟩⟩
-      · exact appendCutPrefix appendCut
+      · obtain ⟨cut, projection⟩ := appendCutImage appendCut
+        exact cut.survivorKeepsPrefix layout (projection ▸ survives)
       · exact syncCutPrefix appended wrote syncCut
       · have keeper : reached.1.keeper = durable.1.keeper := by
           rcases cut with writeCut | ⟨written, writeReturned, syncCut | ⟨_, _, _, keepsKeeper⟩⟩

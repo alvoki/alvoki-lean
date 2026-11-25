@@ -69,6 +69,16 @@ private theorem keeperSurvivors (cut : FirstAppendCut) (before : SegmentedWriter
     (cut.physical before).keeper.crashImages = (ByteArray.empty :: cut.crashTails).map
       (fun tail => some (WAL.encode (before.history.drop before.wal.active.first) ++ tail)) := rfl
 
+/-- Every keeper outcome reported during the append preserves the
+previously durable prefix. -/
+theorem survivorKeepsPrefix (cut : FirstAppendCut) {before : SegmentedWriterState}
+    (layout : before.wal.ReadLayout before.history) {bytes : Option ByteArray}
+    (survives : bytes ∈ (cut.physical before).keeper.crashImages) :
+    ∃ tail, bytes = some (before.wal.active.bytes ++ tail) := by
+  rw [cut.keeperSurvivors] at survives
+  obtain ⟨tail, _, rfl⟩ := List.mem_map.mp survives
+  exact ⟨tail, by rw [layout.activeBytes]⟩
+
 /-- Power loss during the append starts a retry at the old marker and
 the observed surviving keeper bytes. -/
 theorem powersOff (cut : FirstAppendCut) {directory descriptor before}
