@@ -249,6 +249,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeInterruptedCloseReopen
 lake env leanchecker Alvoki.Storage.Disk.NativePoisonedCloseReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWalCollection
 lake env leanchecker Alvoki.Storage.Disk.NativeWalPlanningQuery
+lake env leanchecker Alvoki.Storage.Disk.NativeOpenedWalPlanning
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunCollection
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut

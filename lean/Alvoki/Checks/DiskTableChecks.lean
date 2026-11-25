@@ -851,6 +851,10 @@ private def checkWalCollectionPlan (root : FilePath) : IO Unit := do
     let pin ← db.acquire
     let malformed := dir.file (.walSegment 10)
     IO.FS.createDir malformed
+    rejects db.planWalCollection "planning accepted a nonregular canonical segment"
+    check (decide ((← paths.mapM IO.FS.readBinFile) = before) &&
+      (← db.lookup pin.handle 4) == some (some 4))
+      "a rejected plan changed files or invalidated the writer"
     rejects db.collectCoveredWal "collection accepted a nonregular canonical segment"
     check (decide ((← paths.mapM IO.FS.readBinFile) = before) &&
       (← db.lookup pin.handle 4) == some (some 4))

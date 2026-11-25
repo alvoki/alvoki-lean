@@ -5,6 +5,7 @@ import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 import Alvoki.Storage.Disk.NativeOpenRunMaintenance
 import Alvoki.Storage.Disk.NativeOpenExternalPinRead
+import Alvoki.Storage.Disk.NativeOpenedWalPlanning
 
 namespace Alvoki.Storage.DiskSession
 
@@ -24,6 +25,7 @@ inductive NativeOpenedInstruction : Type 1 where
   | readSupplied (pin : DiskSnapshotPin) (request : SnapshotReadRequest α)
   | releaseSupplied (pin : DiskSnapshotPin)
   | acquire
+  | planWalCollection
 
 /-- Per-call observations at the reached position. Indexed operands
 select tracked pins. A supplied pin retains its original issuer, and
@@ -97,6 +99,8 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
         .ok (decide (tokenIdentity issuer = tokenIdentity opened.token)) start.reached) :
       NativeOpenedReport start (.releaseSupplied pin)
   | acquire : NativeOpenedReport start .acquire
+  | planWalCollection (observed : NativeWalPlanningObservation start.current.ready.state) :
+      NativeOpenedReport start .planWalCollection
 
 namespace NativeOpenedReport
 
@@ -257,6 +261,12 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
       event = .snapshotControl .acquire (.ok (before.session.sessionRef, returned.localPin)) ∧
       next.pins = start.pins ++ [returned] ∧ next.current.history = start.current.history ∧
       next.current.submissions = start.current.submissions ∧ next.current.ready.reads = start.current.ready.reads
+  | .planWalCollection observed =>
+    opened.table.UsesOpenWalPlanningSchedule start.current.ready.state.session.directory opened.phase ∧
+    observed.calls.runOnOpenPhase opened start.reached = (match observed.extents.result with
+      | .ok offsets => .ok offsets next.reached
+      | .error cause => .error cause next.reached) ∧
+    event = .walCollectionPlan observed.extents.result ∧ next = start
 
 structure Reached (report : NativeOpenedReport start instruction) (event : NativeExecutionEvent)
     (next : NativeOpenedPosition opened) : Prop where
@@ -486,6 +496,9 @@ theorem reaches (report : NativeOpenedReport start instruction) :
     change opened.set opened.phase next.state.session.phase start.reached = .ok () reached
     rw [state]
     exact wrote
+  | planWalCollection observed =>
+    obtain ⟨source, raw, step, _, _, _, _, _⟩ := start.plansWalCollection observed
+    exact ⟨_, start, step, source, raw, rfl, rfl⟩
 
 end NativeOpenedReport
 

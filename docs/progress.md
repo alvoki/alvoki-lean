@@ -1,5 +1,7 @@
 # Current handoff
 
+The public WAL planner now reads the same original phase cell as other calls in the opened-table trace. Its reported metadata and listing operations return the covered sealed offsets in order or the observed extent error. Both outcomes keep the same table, heap, issued pins and prior client ledgers. [WAL planning on an opened table](../lean/Alvoki/Storage/Disk/NativeOpenedWalPlanning.lean)
+
 After a write stops at the WAL marker rename, one reported reboot now supplies the exact next `DiskTable.open` result. Its raw admission and repair use the same surviving objects and bytes as replay. The new marker keeps the whole batch and uses the aligned keeper. The old marker keeps the prior history and uses the measured longer-keeper replacement. In either case one uncertain submission enters the common trace, the write has no response, and the exact returned table preserves earlier reads. [Returned table after a stopped marker rename](../lean/Alvoki/Storage/Disk/NativeStoppedMarkerRenameTableOpen.lean)
 
 A focused Linux process-exit reproduction exercised both sides of the actual WAL marker rename. Both file syncs preceded the exit. Reopen recovered the prior history before rename and the whole pending batch after rename, from the same checkpoint files. An append after either reopen succeeded. [WAL publication proof and reproduction](proof-roadmap.md#completion-checklist-for-native-key-value-refinement)

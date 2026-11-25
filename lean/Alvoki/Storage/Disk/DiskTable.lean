@@ -565,6 +565,22 @@ theorem DiskTable.planWalCollection_fileEffects (db : DiskTable) :
       planWalCollectionWith db.dir state.generation state.walBytes state.activeFirst
         readOptionalFile readDirectoryChecked inspectWalSegment) := rfl
 
+/-- The public WAL planner uses the native file callbacks and reads the
+phase reference of the original opened table. -/
+def DiskTable.UsesOpenWalPlanningSchedule (db : DiskTable) (directory : DiskDirectory)
+    (phase : IO.Ref Phase) : Prop :=
+  db.planWalCollection = (do
+    let state ← (← phase.get).installed
+    planWalCollectionWith directory state.generation state.walBytes state.activeFirst
+      readOptionalFile readDirectoryChecked inspectWalSegment)
+
+theorem DiskTable.UsesOpenReferences.planWalCollection {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) :
+    db.UsesOpenWalPlanningSchedule directory phase := by
+  obtain ⟨sameDirectory, _, _, samePhase, _⟩ := uses
+  unfold DiskTable.UsesOpenWalPlanningSchedule
+  rw [db.planWalCollection_fileEffects, sameDirectory, samePhase]
+
 /-- Reclaim sealed WAL segments covered by the current durable checkpoint.
 A failed preflight leaves the writer ready. An unlink or directory sync
 error requires close and reopen before further use. The directory is
