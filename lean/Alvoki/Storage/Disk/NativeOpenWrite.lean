@@ -741,6 +741,51 @@ theorem WriteRequest.runOnRawOpenPhase_commitUnknown
             (.ready { installed with table, walBytes := installed.walBytes + WAL.frameSize * request.rows.length }) settled <;>
           simp [guard, exclude, committed, installedResult] at returned
 
+/-- A nonempty write that is not rejected passed its own pure
+preparation and byte-count checks. The resulting events and table can
+be used to inspect the exact commit without a separate preparation report. -/
+theorem WriteRequest.runOnRawOpenPhase_prepared
+    {installed : Installed} {entry : heap}
+    (loaded : get phase entry = .ok (.ready installed) entry)
+    (nonempty : request.rows ≠ [])
+    (accepted : match request.runOnRawOpenPhase directory lookup append stage sync rename phase get set entry with
+      | .error (.rejected _) _ => False
+      | _ => True) :
+    ∃ batch table, prepareBatch installed.table request.rows = some (batch, table) ∧
+      installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size := by
+  have reads : rawWriteLoad phase get entry = .ok installed entry := by
+    simp [rawWriteLoad, rawEffect, loaded, writeResult, Phase.installed, Bind.bind, EStateM.bind, liftExcept,
+      Pure.pure, EStateM.pure, Except.mapError, Except.pure]
+  cases request with
+  | single key value =>
+    cases prepared : prepareWrite installed.table key value with
+    | none =>
+      simp [runOnRawOpenPhase, WriteRequest.runWithPublication, withPreparedSingleWrite, reads,
+        prepared, requireWritePreparation, Bind.bind, EStateM.bind, throw, throwThe,
+        MonadExceptOf.throw, EStateM.throw] at accepted
+    | some plan =>
+      obtain ⟨event, table⟩ := plan
+      by_cases fits : installed.walBytes + WAL.frameSize < UInt64.size
+      · refine ⟨[event], table, ?_, ?_⟩
+        · simp [WriteRequest.rows, prepareBatch_singleton, prepared]
+        · simpa [WriteRequest.rows] using fits
+      · simp [runOnRawOpenPhase, WriteRequest.runWithPublication, withPreparedSingleWrite, reads,
+          prepared, requireWritePreparation, fits, Pure.pure, EStateM.pure, Bind.bind, EStateM.bind,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw] at accepted
+  | batch rows =>
+    have present : rows.isEmpty = false := List.isEmpty_eq_false_iff.mpr nonempty
+    by_cases fits : installed.walBytes + WAL.frameSize * rows.length < UInt64.size
+    · cases prepared : prepareBatch installed.table rows with
+      | none =>
+        simp [runOnRawOpenPhase, WriteRequest.runWithPublication, writeBatchSchedule, reads,
+          present, fits, prepared, requireWritePreparation, Bind.bind, EStateM.bind,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw] at accepted
+      | some plan =>
+        obtain ⟨batch, table⟩ := plan
+        exact ⟨batch, table, prepared, fits⟩
+    · simp [runOnRawOpenPhase, WriteRequest.runWithPublication, writeBatchSchedule, reads, present,
+        fits, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at accepted
+
 end RawWrite
 
 end Alvoki.Storage.DiskSession

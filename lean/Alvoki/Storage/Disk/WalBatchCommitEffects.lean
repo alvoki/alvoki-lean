@@ -145,6 +145,32 @@ private theorem selectRetained_encoded (history : List WAL.Write) (first : Nat) 
   rw [UInt64.toNat_ofNat_of_lt' fits, ite_eq_right (Nat.not_lt.mpr covers), dropped]
   exact select_encoded (history.drop first) tail localFits
 
+/-- Interpret one selected marker and keeper together. An old marker permits
+any suffix after its retained bytes. The new marker requires the whole encoded
+batch to have reached the same keeper. -/
+theorem selectSegment_atBatchBoundary {before batch : List WAL.Write} {first : Nat}
+    (starts : first ≤ before.length) (fits : (WAL.encode (before ++ batch)).size < UInt64.size)
+    {marker bytes : ByteArray}
+    (selected :
+      (marker = WAL.Boundary.encode (WAL.encode before).size.toUInt64 ∧
+        ∃ tail, bytes = WAL.encode (before.drop first) ++ tail) ∨
+      (marker = WAL.Boundary.encode (WAL.encode (before ++ batch)).size.toUInt64 ∧
+        bytes = WAL.encode (before.drop first) ++ WAL.encode batch)) :
+    ∃ history, (history = before ∨ history = before ++ batch) ∧
+      marker = WAL.Boundary.encode (WAL.encode history).size.toUInt64 ∧
+      selectRetained first (WAL.encode history).size.toUInt64 bytes = .ok (WAL.encode (history.drop first)) := by
+  rcases selected with ⟨markerIsOld, tail, rfl⟩ | ⟨markerIsNew, complete⟩
+  · exact ⟨before, .inl rfl, markerIsOld, selectRetained_encoded before first tail starts (batchOldFits fits)⟩
+  · have extended : bytes = WAL.encode ((before ++ batch).drop first) := by
+      rw [complete, List.drop_append_of_le_length starts, WAL.encode_append]
+    have startsNew : first ≤ (before ++ batch).length := by
+      rw [List.length_append]
+      exact Nat.le_trans starts (Nat.le_add_right ..)
+    refine ⟨before ++ batch, .inr rfl, markerIsNew, ?_⟩
+    rw [extended]
+    simpa only [ByteArray.append_empty] using
+      selectRetained_encoded (before ++ batch) first ByteArray.empty startsNew fits
+
 /-- At any reported cut, every selectable marker and every admitted active
 segment image yield precisely the old acknowledged history or that history
 plus the entire batch. Selection is absolute even when older WAL segments
@@ -170,31 +196,23 @@ theorem selectSegment_atReportedBatchCut {before batch : List WAL.Write} {first 
   have sameManifest := files.reopenImage_manifest_eq (before.drop first) manifest pairChosen
   obtain ⟨tail, tailChosen, exactBytes⟩ := files.candidate_from_tail (before.drop first) manifest bytesChosen
   have bytesEq := Option.some.inj exactBytes
-  have oldFits := batchOldFits fits
-  have oldCase :
-      selectRetained first (WAL.encode before).size.toUInt64 bytes = .ok (WAL.encode (before.drop first)) := by
-    rw [bytesEq]
-    exact selectRetained_encoded before first tail starts oldFits
-  rcases runBatchEffects_cut before batch effects scratch with ⟨visible, survives⟩ | ⟨visible, survives, published⟩
-  · have old := binding.elim (·.trans visible) (survives _)
-    exact ⟨before, .inl rfl, sameManifest, old, oldCase⟩
-  · let allowed := fun marker => marker = some (batchMarker before) ∨ marker = some (batchMarker (before ++ batch))
-    have valid : files.marker.Valid allowed := Publication.retry_preserves
-      (fun _ next _ replacement => Or.inr (congrArg some replacement))
-      (Publication.Image.settled_valid (Or.inl rfl)) published
-    rcases binding.elim (fun same => same.symm ▸ valid.activeValid) (valid.crashValid _) with old | whole
-    · exact ⟨before, .inl rfl, sameManifest, old, oldCase⟩
-    · have complete : tail = WAL.encode batch :=
-        (List.mem_cons.mp tailChosen).elim (·.trans visible) (fun member => List.mem_singleton.mp (survives ▸ member))
-      have extended : bytes = WAL.encode ((before ++ batch).drop first) := by
-        rw [bytesEq, complete, List.drop_append_of_le_length starts, WAL.encode_append]
-      have startsNew : first ≤ (before ++ batch).length := by
-        rw [List.length_append]
-        exact Nat.le_trans starts (Nat.le_add_right ..)
-      refine ⟨before ++ batch, .inr rfl, sameManifest, whole, ?_⟩
-      rw [extended]
-      simpa only [ByteArray.append_empty] using
-        selectRetained_encoded (before ++ batch) first ByteArray.empty startsNew fits
+  have payload : ∃ marker, pair.walBoundary = some marker ∧
+      ((marker = batchMarker before ∧ ∃ tail, bytes = WAL.encode (before.drop first) ++ tail) ∨
+       (marker = batchMarker (before ++ batch) ∧ bytes = WAL.encode (before.drop first) ++ WAL.encode batch)) := by
+    rcases runBatchEffects_cut before batch effects scratch with ⟨visible, survives⟩ | ⟨visible, survives, published⟩
+    · exact ⟨_, binding.elim (·.trans visible) (survives _), .inl ⟨rfl, tail, bytesEq⟩⟩
+    · let allowed := fun marker => marker = some (batchMarker before) ∨ marker = some (batchMarker (before ++ batch))
+      have valid : files.marker.Valid allowed := Publication.retry_preserves
+        (fun _ next _ replacement => Or.inr (congrArg some replacement))
+        (Publication.Image.settled_valid (Or.inl rfl)) published
+      rcases binding.elim (fun same => same.symm ▸ valid.activeValid) (valid.crashValid _) with old | whole
+      · exact ⟨_, old, .inl ⟨rfl, tail, bytesEq⟩⟩
+      · have complete : tail = WAL.encode batch :=
+          (List.mem_cons.mp tailChosen).elim (·.trans visible) (fun member => List.mem_singleton.mp (survives ▸ member))
+        exact ⟨_, whole, .inr ⟨rfl, bytesEq.trans (congrArg _ complete)⟩⟩
+  obtain ⟨marker, marked, observed⟩ := payload
+  obtain ⟨history, allowed, markerSize, selected⟩ := selectSegment_atBatchBoundary starts fits observed
+  exact ⟨history, allowed, sameManifest, marked.trans (congrArg some markerSize), selected⟩
 
 /-- A reported success leaves one durable marker and exactly the complete
 batch appended to the segment. -/
@@ -256,6 +274,30 @@ theorem BatchRetryTarget.unique {before batch : List WAL.Write} {first : Nat} {l
   cases sameBytes
   rfl
 
+/-- A selected marker and keeper determine the physical repair target.
+The decoded checkpoint supplies the watermark independently of the WAL. -/
+theorem BatchRetryTarget.ofSelected {before batch history : List WAL.Write} {first watermark : Nat}
+    {pair : DirectoryPublication.Bindings} {bytes : ByteArray}
+    (starts : first ≤ before.length) (covered : watermark ≤ before.length)
+    (fits : (WAL.encode (before ++ batch)).size < UInt64.size)
+    (checkpoint : selectedCheckpointWatermark pair.manifest = some watermark)
+    (allowed : history = before ∨ history = before ++ batch)
+    (marker : pair.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
+    (selected : selectRetained first (WAL.encode history).size.toUInt64 bytes = .ok (WAL.encode (history.drop first))) :
+    ∃ target, BatchRetryTarget before batch first target ∧ target.pair = pair ∧
+      target.range = ⟨watermark, history.length⟩ ∧ target.first = first ∧
+      target.trimmed = WAL.encode (history.drop first) ∧ target.Accepts (some bytes) := by
+  have lengthMonotone := batchLengthMonotone allowed
+  have count : (WAL.encode history).size.toUInt64.toNat = history.length * WAL.frameSize := by
+    rw [UInt64.toNat_ofNat_of_lt' (batchHistoryFits allowed fits), WAL.encode_size, Nat.mul_comm]
+  have decoded : pair.walRange = some ⟨watermark, history.length⟩ :=
+    DirectoryPublication.Bindings.walRange_of_counts checkpoint marker (decode_encode _) count
+      (Nat.le_trans covered lengthMonotone)
+  let target : Target :=
+    ⟨pair, ⟨watermark, history.length⟩, decoded, first, Nat.le_trans starts lengthMonotone,
+      WAL.encode (history.drop first), by rw [WAL.encode_size, List.length_drop, Nat.mul_comm]⟩
+  exact ⟨target, ⟨rfl, history, allowed, marker, rfl, rfl⟩, rfl, rfl, rfl, rfl, Target.accepts_of_selected selected⟩
+
 /-- One observed batch marker determines the unique repair cutoff for every
 compatible keeper candidate. Sealed reads and lock ownership are checked
 separately by the bounded reopen caller. -/
@@ -277,18 +319,13 @@ theorem prepareAfterBatchCut {before batch : List WAL.Write} {first watermark : 
   intro cut chosen observed
   have active := observed image.keeper.active (List.mem_cons_self ..)
   rw [readKeeper] at active
-  obtain ⟨history, allowed, sameManifest, rawMarker, _⟩ :=
+  obtain ⟨history, allowed, sameManifest, rawMarker, selected⟩ :=
     selectSegment_atReportedBatchCut starts fits effects manifest scratch
       image.directory.active keeperBytes chosen active
-  have lengthMonotone := batchLengthMonotone allowed
-  have count : (WAL.encode history).size.toUInt64.toNat = history.length * WAL.frameSize := by
-    rw [UInt64.toNat_ofNat_of_lt' (batchHistoryFits allowed fits), WAL.encode_size, Nat.mul_comm]
-  have covers : watermark ≤ history.length := Nat.le_trans covered lengthMonotone
-  have decoded : image.directory.active.walRange = some ⟨watermark, history.length⟩ :=
-    DirectoryPublication.Bindings.walRange_of_counts (sameManifest ▸ checkpoint) rawMarker (decode_encode _) count covers
-  let target : Target :=
-    ⟨image.directory.active, ⟨watermark, history.length⟩, decoded, first, Nat.le_trans starts lengthMonotone,
-      WAL.encode (history.drop first), by rw [WAL.encode_size, List.length_drop, Nat.mul_comm]⟩
+  obtain ⟨target, allowedTarget, samePair, range, sameFirst, targetBytes, _⟩ :=
+    BatchRetryTarget.ofSelected starts covered fits (sameManifest ▸ checkpoint) allowed rawMarker selected
+  have decoded := target.decoded
+  rw [samePair, range] at decoded
   have accepted (binding : Option ByteArray) (member : binding ∈ image.keeper.active :: image.keeper.crashImages) :
       target.Accepts binding := by
     have survived := observed binding member
@@ -304,16 +341,17 @@ theorem prepareAfterBatchCut {before batch : List WAL.Write} {first watermark : 
     have sameLength : other.length = history.length :=
       congrArg MarkedWalRange.through (Option.some.inj (otherDecoded.symm.trans decoded))
     rw [batchHistory_eq_of_length allowedOther allowed sameLength] at selected
-    exact Target.accepts_of_selected selected
+    apply Target.accepts_of_selected (count := (WAL.encode history).size.toUInt64)
+    simpa only [sameFirst, targetBytes] using selected
   have later : image.later.Beyond target.range.through := by
     intro names appears
     rw [noLater.1, noLater.2] at appears
     obtain rfl : names = [] := by simpa using appears
     simp
-  exact ⟨target, ⟨rfl, history, allowed, rawMarker, rfl, rfl⟩, sameManifest,
-    ⟨rfl, ⟨keeperCrash, accepted _ (List.mem_cons_self ..),
+  exact ⟨target, allowedTarget, (congrArg DirectoryPublication.Bindings.manifest samePair).trans sameManifest,
+    ⟨samePair.symm, ⟨keeperCrash, accepted _ (List.mem_cons_self ..),
       fun binding h => accepted binding (List.mem_cons_of_mem _ h)⟩,
-      later, rfl, rfl, noLater.1.symm, readKeeper⟩⟩
+      later, rfl, sameFirst.symm, noLater.1.symm, readKeeper⟩⟩
 
 /-- Compare the reached files with the batch interpreter's visible and
 crash choices. The reached staging files are carried by the retry trace. -/
