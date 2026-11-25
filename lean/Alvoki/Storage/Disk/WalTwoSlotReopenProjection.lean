@@ -1,3 +1,5 @@
+import Alvoki.Storage.Disk.WalSegmentBoundedOpenEffects
+import Alvoki.Storage.Disk.WalSegmentOpenFastEffects
 import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.WalSegmentReplayStability
 import Alvoki.Storage.Disk.SegmentedSessionInstall
@@ -529,6 +531,47 @@ theorem reopenWith_installsPrepared {image : Type} {directory : Storage.DiskDire
   obtain ⟨session, final, success, _, _, phase, files, _, owner, _, _, freshSession⟩ :=
     runOpenWithInstallation_ready (unlock := unlock) liveRefs fresh acquisition report
   exact ⟨session, final, success, phase, files, owner, freshSession⟩
+
+/-- A successful two-slot reopen uses the shared keeper repair proof
+before it installs the table and allocates a fresh snapshot identity. -/
+theorem reopenWith_installsAfterRepair
+    {directory : Storage.DiskDirectory} {descriptor nextRef : Nat} {unlock : UnlockReport}
+    {before : LockedFileState FileImage} {prepared settled : FileImage}
+    {prepare : EStateM IO.Error FileImage (Plan × Reopened × Nat)}
+    {stabilize : EStateM IO.Error FileImage Unit}
+    {full : Plan} {opened : Reopened} {target : Target}
+    (removeFile : System.FilePath → EStateM IO.Error FileImage (Except IO.Error Unit))
+    (write : System.FilePath → ByteArray → EStateM IO.Error FileImage Unit)
+    (sync : Array System.FilePath → EStateM IO.Error FileImage Unit)
+    (renameFile : System.FilePath → System.FilePath → EStateM IO.Error FileImage Unit)
+    (liveRefs : List Nat) (fresh : ∀ ref ∈ liveRefs, ref < nextRef)
+    (acquisition : TryLockObserves before.owners directory (.ok true))
+    (read : prepare before.image =
+      .ok ({ full with keeperBytes := full.keeperBytes.extract 0 full.keeperSize },
+        opened, full.keeperBytes.size) prepared)
+    (barrier : stabilize prepared = .ok () settled)
+    (plan : Prepared settled target full)
+    (settles : sync #[directory.path] settled = .ok () settled.syncDirectory)
+    (healthy : ∀ action state next, ReachesAction target settled.syncDirectory full.finishActions action state →
+      state.effect target action = some next →
+      performPaths directory full removeFile throw write sync renameFile action state = .ok () next) :
+    ∃ session final,
+      runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+        (reopenWith prepare stabilize (fun bounded size =>
+          finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)) before =
+        .ok session final ∧
+      session.phase = .ready opened.installed ∧
+      final.image.Ready target ∧ EffectTrace target settled final.image ∧
+      final.owners.Owns directory descriptor ∧ session.sessionRef ∉ liveRefs := by
+  obtain ⟨after, repaired, ready, trace⟩ :=
+    finishMarkedOpen_completes plan directory removeFile write sync renameFile settles healthy
+  have bounded := finishBoundedMarkedOpen_eq_full directory full plan.valid removeFile write sync renameFile
+  obtain ⟨session, final, success, phase, image, owner, newRef⟩ :=
+    reopenWith_installsPrepared (descriptor := descriptor) (unlock := unlock)
+      (finish := fun boundedPlan size =>
+        finishBoundedMarkedOpen directory boundedPlan size removeFile write sync renameFile)
+      liveRefs fresh acquisition read barrier (by rw [bounded]; exact repaired)
+  exact ⟨session, final, success, phase, image.symm ▸ ready, image.symm ▸ trace, owner, newRef⟩
 
 /-- An open that fails while reading or validating the selected WAL never
 stabilizes a marker or repairs a keeper. Lock cleanup sees exactly the
