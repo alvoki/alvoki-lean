@@ -128,33 +128,48 @@ private def fileSyncReturn (after : Files) : Except IO.Error Unit → EStateM.Re
 variable {directory : DiskDirectory} {before : SegmentedWriterState}
   {opened : RotationExistingSuccessorOpen directory before}
 
-/-- Report the returned successor fsync and the reference drops through its
-return. A reported effect makes the already inspected empty inode durable,
-without changing any names. A failed return may still have that effect. -/
+/-- Report the successor fsync and the drops through release of the
+uncached read handle on either return. Only the inspected empty inode's
+byte durability can change. A failed return may still have that effect. -/
 structure RotationExistingSuccessorFileSync (opened : RotationExistingSuccessorOpen directory before) where
   fsync : Handle → EStateM IO.Error Files Unit
   outcome : Except IO.Error Unit
   effective : Bool
   complete : outcome = .ok () → effective = true
   afterSync : List LockReferenceDrop
-  ownerRetained : opened.owner ∈ (opened.atSync.1.afterDrops afterSync).slots
+  ownerRetained : opened.owner ∈ (opened.atSync.1.afterDrops (afterSync ++ [opened.slot.closeEvent])).slots
   returned : fsync opened.handle opened.atSync =
     let synced := if effective then
       opened.files.inodes.completeFileSync (opened.inventory.inode opened.slot.description)
       else opened.files.inodes
-    let after := (opened.atSync.1.afterDrops afterSync, { opened.files with inodes := synced })
+    let after := (opened.atSync.1.afterDrops (afterSync ++ [opened.slot.closeEvent]), { opened.files with inodes := synced })
     fileSyncReturn after outcome
 
 namespace RotationExistingSuccessorFileSync
 
 abbrev after (report : RotationExistingSuccessorFileSync opened) : Files :=
-  (opened.atSync.1.afterDrops report.afterSync, { opened.files with
+  (opened.atSync.1.afterDrops (report.afterSync ++ [opened.slot.closeEvent]), { opened.files with
     inodes := if report.effective then
       opened.files.inodes.completeFileSync (opened.inventory.inode opened.slot.description)
       else opened.files.inodes })
 
 def group (report : RotationExistingSuccessorFileSync opened) (path : FilePath) :=
   SyncPathGroup.run (sync directory.path opened.openRead report.fsync) #[path]
+
+/-- Neither the successful nor the failed group keeps the unretained
+read description. The returned census carries the other reported drops
+and still contains the original owner. -/
+theorem closesReadSlot (report : RotationExistingSuccessorFileSync opened) :
+    report.after.1 =
+      opened.inventory.afterDrops (opened.beforeSync ++ report.afterSync ++ [opened.slot.closeEvent]) ∧
+    report.after.1.references opened.slot.description = [] ∧ opened.owner ∈ report.after.1.slots := by
+  have closed : report.after.1 =
+      opened.inventory.afterDrops (opened.beforeSync ++ report.afterSync ++ [opened.slot.closeEvent]) := by
+    change ((opened.inventory.insert opened.slot opened.free).afterDrops opened.beforeSync).afterDrops
+      (report.afterSync ++ [opened.slot.closeEvent]) = _
+    rw [DescriptorInventory.afterDrops_append, ← List.append_assoc]
+    exact DescriptorInventory.insert_thenClose _ _ _ _
+  exact ⟨closed, by rw [closed, DescriptorInventory.references_afterDrops, opened.fresh]; rfl, report.ownerRetained⟩
 
 /-- The physical post-fsync image frames all names and the other inodes.
 In the effective case, a crash on the selected inode can retain only its

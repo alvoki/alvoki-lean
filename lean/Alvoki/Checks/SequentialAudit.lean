@@ -1466,6 +1466,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorOpen.resolves
 #check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorOpen.custody
 #check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorOpen.lockCustody
+#check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorFileSync.closesReadSlot
 #check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorFileSync.effects
 #check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorFileSync.fileGroup
 #check_axioms Alvoki.Storage.DiskSession.RotationExistingSuccessorFileSync.returnsFileError
