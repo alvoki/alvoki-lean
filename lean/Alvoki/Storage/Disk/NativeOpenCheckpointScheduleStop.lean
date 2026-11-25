@@ -106,6 +106,9 @@ structure NativeCheckpointSourceStop (current : NativeOpenedPosition opened)
     fsync next manifest)).run (current.current.ready.state.cache, poisoned) = .ok (.ok ()) atIssue
   stoppedStep : (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
     fsync next manifest stage).run atIssue = .error reason reached
+  stoppedCall : (runCheckpointOnOpenPhaseUntilSyncStop current.current.ready.state.session.directory
+    opened.phase opened.get opened.set primitives fsync).run
+      (current.current.ready.state.cache, current.reached) = .error (stage, reason) reached
 
 /-- Derive the stop directly from the interpreted whole call starting at
 the original opened position, using each successful prefix once. -/
@@ -116,6 +119,7 @@ theorem NativeOpenedPosition.checkpointStopsFromWhole (current : NativeOpenedPos
       opened.phase opened.get opened.set primitives fsync).run
         (current.current.ready.state.cache, current.reached) = .error (step, reason) reached) :
     Nonempty (NativeCheckpointSourceStop current primitives fsync step reason reached) := by
+  have wholeCall := stopped
   let state := current.current.ready.state
   let directory := state.session.directory
   have loaded := opened.phaseEffects.reads current.reached opened.phase state.session.phase current.stored
@@ -151,7 +155,7 @@ theorem NativeOpenedPosition.checkpointStopsFromWhole (current : NativeOpenedPos
       obtain ⟨rfl, rfl⟩ := EStateM.Result.error.inj stopped
       obtain ⟨done, remaining, atIssue, ordered, completedRun, issued⟩ := run_firstStop ran
       exact ⟨⟨next, manifest, phase, done, remaining, atIssue, current.uses.checkpoint, preflight, wrote,
-        stored, ordered, completedRun, issued⟩⟩
+        stored, ordered, completedRun, issued, wholeCall⟩⟩
     | ok returned after =>
       simp only [ran] at stopped
       cases returned with
