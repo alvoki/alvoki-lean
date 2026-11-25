@@ -36,11 +36,18 @@ reads and acknowledged writes was 144.08 and 144.33 ms with slots, versus
 14.71 and 14.96 ms for RocksDB. Slots drained 3,724 operations/s while
 RocksDB kept up with arrivals. The closed-loop service latency above
 therefore overstates how close the engines are under load.
+At 3,000 operations/s both kept up. Slots measured 7.87 ms for reads
+and 8.20 ms for writes, versus 3.96 and 4.29 ms for RocksDB. One of three
+paired trials exceeded twice RocksDB's p99 for both reads and writes.
+The separate 2,000 operations/s run did not meet the p99 target.
+
 
 The reopen fixture checkpoints 1,024 writes, acknowledges another 16,
 then kills the writer. Reopen medians were 0.924 ms for rename and 1.245 ms
 for slots. With a synthetic torn tail they were 1.488 and 1.933 ms,
-respectively. The sample is small. Both paths rejected a missing acknowledged
+respectively. The sample is small. An aligned comparison with RocksDB
+at 16, 128 and 512 suffix entries yielded 1.04–1.28 ms medians for slots
+and 6.02–6.94 ms for RocksDB. Their checkpoint and WAL formats differ. Both paths rejected a missing acknowledged
 frame without modifying the WAL or marker. Synthesized slot images tested
 selection of a complete newer slot and recovery from an invalid target slot.
 
