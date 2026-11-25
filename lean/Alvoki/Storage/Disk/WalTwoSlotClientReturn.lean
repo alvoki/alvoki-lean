@@ -1326,16 +1326,19 @@ private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × By
         (ih head.2 (fun file found => leftBytes file (List.mem_cons_of_mem _ found))
           (fun file found => rightBytes file (List.mem_cons_of_mem _ found)))
 
-/-- Project the marked acquisition onto the file image. The open callback
-supplies the rewound description; the bounded read only advances its cursor. -/
-def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
-    EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) := do
+/-- The open records its reached inventory before the bounded read. The
+read advances the reported cursor on that same description. -/
+def acquireMarkerWithInventory {state : Type}
+    (reached : DiskSession.DescriptorInventory → state → state)
+    (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
+    EStateM IO.Error state (KeeperDescriptorIdentity × Selection) := do
   let (metadata, _) ← liftExcept (reads.stat path)
   checkPrivateRegularWith path metadata
   fun files =>
     match reads.openRead path with
     | .error cause => .error cause files
     | .ok (inventory, slot, cursor) =>
+      let files := reached inventory files
       let handle : KeeperDescriptorIdentity := ⟨slot.description, inventory.inode slot.description⟩
       match readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
           (reads.readChunk handle.description) acquisitionLimit ByteArray.empty cursor with
@@ -1344,6 +1347,36 @@ def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) 
         match decode bytes with
         | .error cause => .error (IO.userError cause) files
         | .ok selected => .ok (handle, selected) files
+
+def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
+    EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) :=
+  acquireMarkerWithInventory (fun _ files => files) reads path
+
+/-- The native acquisition projection retains the opened marker slot
+in the state passed to checkpoint preparation. -/
+def acquireMarkerInCensus (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
+    EStateM IO.Error (DiskSession.CensusDirectoryCache × DiskSession.CensusOpenState)
+      (KeeperDescriptorIdentity × Selection) :=
+  acquireMarkerWithInventory (fun inventory (cache, _, files) => (cache, inventory, files)) reads path
+
+theorem acquireMarkerInCensus_returns
+    {reads : WalSegmentRepair.CheckpointRunChunkReads} {directory : DiskDirectory}
+    {view : DiskSession.DirectoryReadNamespace} {root : DiskSession.DeviceInode}
+    {payload : ByteArray}
+    (file : DiskSession.HeldMetadataFile reads (directory.file .walBoundary) "WAL.commit" view root payload)
+    (privateFile : file.calls.metadata.numLinks = 1)
+    (available : PrefixChunksAvailableUntilEof payload (reads.readChunk file.calls.slot.description))
+    {selected : Selection} (decoded : decode payload = .ok selected)
+    (before : DiskSession.CensusDirectoryCache × DiskSession.CensusOpenState) :
+    acquireMarkerInCensus reads (directory.file .walBoundary) before =
+      .ok (⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩, selected)
+        (before.1, file.calls.inventory, before.2.2) := by
+  obtain ⟨bytes, returned, agrees⟩ := decode_markerFromHeldDirectory file available
+  cases before
+  simp [acquireMarkerInCensus, acquireMarkerWithInventory, checkPrivateRegularWith, file.calls.stat,
+    file.calls.regular, privateFile, file.calls.opened, returned,
+    show (IO.FS.FileType.file == .file) = true from rfl,
+    Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept, agrees.trans decoded]
 
 section CapturedPreparation
 
@@ -2021,7 +2054,7 @@ theorem recoveredRetries_installedReads
       cases markerHandle
       simp only [KeeperDescriptorIdentity.mk.injEq]
       exact ⟨markerDescription, markerDescription ▸ reachedInode⟩
-    simp [acquireMarkerFromReports, checkPrivateRegularWith, markerFile.calls.stat,
+    simp [acquireMarkerFromReports, acquireMarkerWithInventory, checkPrivateRegularWith, markerFile.calls.stat,
       markerFile.calls.regular, markerPrivate, markerFile.calls.opened, markerRead,
       show (IO.FS.FileType.file == .file) = true from rfl,
       Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept,

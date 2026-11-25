@@ -1048,3 +1048,9 @@ directory sync authorizes the unlinks. The suffix directory sync
 feeds the pending keeper's file sync and the observed final census.
 The three successful repair cases can now be composed with one native
 admission, marker acquisition and installation observation.
+
+The marker acquisition projection now has a stateful form. It returns
+the exact raw-open descriptor census along with the decoded selection
+while preserving the held files and cache. The full composition still
+needs to use that post-acquisition census as the initial census of the
+checkpoint reader, distinct from the earlier lock-and-cache admission.
