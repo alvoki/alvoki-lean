@@ -114,6 +114,22 @@ theorem appendThenSync_sameInode {handle state : Type}
   exact ⟨synced, resolved, same, resolvedOwned, by
     simp only [Bind.bind, EStateM.bind, appendResult, SyncHandleRouting.sync, lookup]⟩
 
+/-- A returned error before marker publication keeps the exact file
+state reached by the append or WAL barrier and poisons the writer. -/
+theorem prepared_write_walError {α σ : Type}
+    (next : α) (sequence : UInt64) (prior : DiskSession.Phase α)
+    (append syncWal writeSlot syncSlot install : EStateM IO.Error σ Unit)
+    {files reached : σ} {cause : IO.Error}
+    (failed : append files = .error cause reached ∨
+      ∃ appended, append files = .ok () appended ∧ syncWal appended = .error cause reached) :
+    DiskSession.publishPreparedWrite next sequence setPhase
+      (commitReports (publish append syncWal writeSlot syncSlot install)) (prior, files) =
+        .error (.commitUnknown cause) (.poisoned, reached) := by
+  rw [prepared_write_reports, publish_reports]
+  rcases failed with appendError | ⟨appended, wrote, syncError⟩
+  · simp only [appendError]
+  · simp only [wrote, syncError]
+
 /-- If the slot write or marker barrier fails after the WAL barrier, the
 client receives commit-unknown with exactly the reached file state.
 The marker barrier runs only after a successful slot write. Installation
@@ -724,6 +740,38 @@ theorem beforeSlotWrite_selectHistory
     simp
   rw [count]
   exact Boundary.select_encoded history tail fits
+
+/-- A returned append or WAL-sync error preserves the old frontier.
+The reached WAL can contain extra durable bytes, but the marker still
+selects only the prior history. -/
+theorem walError_selectHistory {α : Type}
+    (nextTable : α) (sequence : UInt64) (phase : DiskSession.Phase α)
+    (append syncWal writeSlot syncSlot install : EStateM IO.Error (WalInodeImage × WalInodeImage) Unit)
+    {initial reached : WalInodeImage × WalInodeImage} {cause : IO.Error}
+    (failed : append initial = .error cause reached ∨
+      ∃ appended, append initial = .ok () appended ∧ syncWal appended = .error cause reached)
+    (markerUnchanged : reached.2 = initial.2)
+    {markerHandle walHandle : KeeperDescriptorIdentity}
+    (markerCurrent : markerHandle.inode = initial.2.active) (walCurrent : walHandle.inode = reached.1.active)
+    (markerSettled : initial.2.crashBindings = [initial.2.active])
+    (walSettled : reached.1.crashBindings = [reached.1.active])
+    {before markerBytes walBytes : ByteArray} {current : Selection} (history : List WAL.Write)
+    (prior : decode before = .ok current)
+    (oldCount : current.frontier.toNat = (WAL.encode history).size)
+    (markerBytesBefore : initial.2.crashBytes markerHandle.inode = [before])
+    (walPrefix : ∀ bytes ∈ reached.1.crashBytes walHandle.inode,
+      ∃ tail, bytes = WAL.encode history ++ tail)
+    (markerSurvived : ∃ inode ∈ reached.2.crashBindings, markerBytes ∈ reached.2.crashBytes inode)
+    (walSurvived : ∃ inode ∈ reached.1.crashBindings, walBytes ∈ reached.1.crashBytes inode) :
+    DiskSession.publishPreparedWrite nextTable sequence setPhase
+      (commitReports (publish append syncWal writeSlot syncSlot install)) (phase, initial) =
+        .error (.commitUnknown cause) (.poisoned, reached) ∧
+    decode markerBytes = .ok current ∧
+    Boundary.select current.frontier walBytes = .ok (WAL.encode history) := by
+  refine ⟨prepared_write_walError nextTable sequence phase append syncWal writeSlot syncSlot install failed, ?_⟩
+  rw [markerUnchanged] at markerSurvived
+  exact beforeSlotWrite_selectHistory markerCurrent walCurrent markerSettled walSettled
+    history prior oldCount markerBytesBefore walPrefix markerSurvived walSurvived
 
 open DiskSession (DatabaseSubmissions DatabaseBatchRetention)
 
