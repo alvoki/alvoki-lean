@@ -118,4 +118,114 @@ theorem recoverMarkedWalSegments_eq_extract (base : PackedTable) (length : UInt6
         ((walSegmentPayloadBytes ((first, bytes) :: rest)).extract 0 (length.toNat - first * frameSize)) := by
   simp only [recoverMarkedWalSegments, checked, ↓reduceIte, walSegmentPrefixBytes_eq]
 
+/-- Calls to the prefix copy primitive and the sum of the clipped source-slice lengths.
+The count excludes destination allocation and any copying inside the runtime. -/
+structure WalPrefixCopyWork where
+  calls : Nat
+  sourceBytes : Nat
+
+private noncomputable def copyWalSegmentPrefixWithWork (buffer : ByteArray) (remaining : Nat) :
+    List (Nat × ByteArray) → ByteArray × WalPrefixCopyWork
+  | [] => (buffer, ⟨0, 0⟩)
+  | (_, bytes) :: rest =>
+    if remaining = 0 then (buffer, ⟨0, 0⟩)
+    else
+      let reached := copyWalSegmentPrefixWithWork (bytes.copySlice 0 buffer buffer.size remaining)
+        (remaining - bytes.size) rest
+      (reached.1, ⟨reached.2.calls + 1, reached.2.sourceBytes + min remaining bytes.size⟩)
+
+private theorem copyWalSegmentPrefixWithWork_spec
+    (buffer : ByteArray) (remaining : Nat) (files : List (Nat × ByteArray)) :
+    let reached := copyWalSegmentPrefixWithWork buffer remaining files
+    reached.1 = copyWalSegmentPrefix buffer remaining files ∧ reached.2.calls ≤ files.length ∧
+    reached.2.sourceBytes = min remaining (walSegmentPayloadBytes files).size := by
+  induction files generalizing buffer remaining with
+  | nil => simp [copyWalSegmentPrefixWithWork, copyWalSegmentPrefix, walSegmentPayloadBytes]
+  | cons file rest ih =>
+    obtain ⟨offset, bytes⟩ := file
+    by_cases empty : remaining = 0
+    · simp [copyWalSegmentPrefixWithWork, copyWalSegmentPrefix, empty]
+    · have tail := ih (bytes.copySlice 0 buffer buffer.size remaining) (remaining - bytes.size)
+      simp only [copyWalSegmentPrefixWithWork, copyWalSegmentPrefix, empty, ↓reduceIte] at ⊢
+      refine ⟨tail.1, by simpa using Nat.add_le_add_right tail.2.1 1, ?_⟩
+      rw [tail.2.2]
+      change min (remaining - bytes.size) (walSegmentPayloadBytes rest).size + min remaining bytes.size =
+        min remaining (bytes ++ walSegmentPayloadBytes rest).size
+      rw [ByteArray.size_append]
+      omega
+
+/-- The same assembly uses a sole exact-sized file directly and otherwise
+charges only the source portions copied into the requested prefix. -/
+private noncomputable def walSegmentPrefixWithWork (count : Nat) (files : List (Nat × ByteArray)) :
+    ByteArray × WalPrefixCopyWork :=
+  match files with
+  | [(_, bytes)] =>
+    if count = bytes.size then (bytes, ⟨0, 0⟩)
+    else (bytes.extract 0 count, ⟨1, min count bytes.size⟩)
+  | _ => copyWalSegmentPrefixWithWork (ByteArray.emptyWithCapacity count) count files
+
+private theorem walSegmentPrefixWithWork_spec (count : Nat) (files : List (Nat × ByteArray)) :
+    let reached := walSegmentPrefixWithWork count files
+    reached.1 = walSegmentPrefixBytes count files ∧ reached.2.calls ≤ files.length ∧ reached.2.sourceBytes ≤ count := by
+  cases files with
+  | nil => simp [walSegmentPrefixWithWork, walSegmentPrefixBytes, copyWalSegmentPrefixWithWork, copyWalSegmentPrefix]
+  | cons file rest =>
+    obtain ⟨offset, bytes⟩ := file
+    cases rest with
+    | nil =>
+      by_cases exactSize : count = bytes.size
+      · simp [walSegmentPrefixWithWork, walSegmentPrefixBytes, exactSize]
+      · simp [walSegmentPrefixWithWork, walSegmentPrefixBytes, exactSize, Nat.min_le_left]
+    | cons next rest =>
+      have work := copyWalSegmentPrefixWithWork_spec (ByteArray.emptyWithCapacity count) count
+        ((offset, bytes) :: next :: rest)
+      exact ⟨work.1, work.2.1, work.2.2 ▸ Nat.min_le_left _ _⟩
+
+/-- The counted interpreter runs the same span guard and prefix assembly,
+then passes the exact assembled bytes to the ordinary recovery decoder. -/
+noncomputable def recoverMarkedWalSegmentsWithCopyWork (base : PackedTable) (length : UInt64)
+    (files : List (Nat × ByteArray)) : Except String (ByteArray × PackedTable) × WalPrefixCopyWork :=
+  match files with
+  | [] => (recoverMarkedWalSegments base length files, ⟨0, 0⟩)
+  | (first, _) :: _ =>
+    if checkSelectedWalSegmentSpans (length.toNat / frameSize) files then
+      let reached := walSegmentPrefixWithWork (length.toNat - first * frameSize) files
+      (WAL.Boundary.recoverRetainedMarked base first length reached.1, reached.2)
+    else (recoverMarkedWalSegments base length files, ⟨0, 0⟩)
+
+/-- Successful span selection charges at most one prefix copy per selected
+file, within the marker-limited source byte budget. Bad spans copy nothing. -/
+theorem recoverMarkedWalSegmentsWithCopyWork_spec (base : PackedTable) (length : UInt64)
+    (files : List (Nat × ByteArray)) :
+    let reached := recoverMarkedWalSegmentsWithCopyWork base length files
+    reached.1 = recoverMarkedWalSegments base length files ∧ reached.2.calls ≤ files.length ∧
+    reached.2.sourceBytes ≤ length.toNat - (files.head?.map Prod.fst).getD 0 * frameSize := by
+  cases files with
+  | nil => simp [recoverMarkedWalSegmentsWithCopyWork]
+  | cons file rest =>
+    obtain ⟨first, bytes⟩ := file
+    by_cases checked : checkSelectedWalSegmentSpans (length.toNat / frameSize) ((first, bytes) :: rest) = true
+    · obtain ⟨sameBuffer, calls, sourceBytes⟩ :=
+        walSegmentPrefixWithWork_spec (length.toNat - first * frameSize) ((first, bytes) :: rest)
+      have callsBound : (walSegmentPrefixWithWork (length.toNat - first * frameSize)
+          ((first, bytes) :: rest)).2.calls ≤ rest.length + 1 := by
+        simpa only [List.length_cons] using calls
+      simp [recoverMarkedWalSegmentsWithCopyWork, recoverMarkedWalSegments, checked, sameBuffer, callsBound, sourceBytes]
+    · simp [recoverMarkedWalSegmentsWithCopyWork, checked]
+
+theorem recoverMarkedWalSegmentsWithCopyWork_rejectedSpans (base : PackedTable) (length : UInt64)
+    (files : List (Nat × ByteArray))
+    (invalid : checkSelectedWalSegmentSpans (length.toNat / frameSize) files = false) :
+    let work := (recoverMarkedWalSegmentsWithCopyWork base length files).2
+    work.calls = 0 ∧ work.sourceBytes = 0 := by
+  cases files <;> simp [recoverMarkedWalSegmentsWithCopyWork, invalid]
+
+/-- The exact-sized single-segment fast path makes no assembly copies. -/
+theorem recoverMarkedWalSegmentsWithCopyWork_singleExact (base : PackedTable) (length : UInt64)
+    (first : Nat) (bytes : ByteArray) (exactSize : length.toNat - first * frameSize = bytes.size) :
+    let work := (recoverMarkedWalSegmentsWithCopyWork base length [(first, bytes)]).2
+    work.calls = 0 ∧ work.sourceBytes = 0 := by
+  by_cases checked : checkSelectedWalSegmentSpans (length.toNat / frameSize) [(first, bytes)] = true <;>
+    simp [recoverMarkedWalSegmentsWithCopyWork, walSegmentPrefixWithWork, exactSize, checked]
+
 end Alvoki.Storage
