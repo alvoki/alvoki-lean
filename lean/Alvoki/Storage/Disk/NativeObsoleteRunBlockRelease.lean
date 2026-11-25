@@ -14,7 +14,10 @@ to the chosen callback at a reached prefix of this same checked pass. -/
 structure NativeObsoleteRunInodeReport (seen : NativeObsoleteRunCollection state) (name : RunAddress) where
   lookup : RunChildLookup seen.lifetime.root (renderRunFileName name.1 name.2) seen.lifetime.namespaceView
   metadata : IO.FS.Metadata
-  stat : seen.stat (state.session.directory.file (.run name.1 name.2)) = .ok metadata
+  rawStat : FilePath → Except IO.Error (IO.FS.Metadata × DeviceInode)
+  identified : rawStat (state.session.directory.file (.run name.1 name.2)) = .ok (metadata, lookup.child)
+  statProjection : seen.stat (state.session.directory.file (.run name.1 name.2)) =
+    (rawStat (state.session.directory.file (.run name.1 name.2))).map Prod.fst
   entry : seen.pathObject (state.census, seen.initial) (state.session.directory.file (.run name.1 name.2)) = some lookup.child
   member : seen.initial.visible name.1 name.2 ≠ none
   older : name.1 < state.writer.installed.generation
@@ -118,11 +121,16 @@ abbrev path (_observed : NativeObsoleteRunInodeReport seen name) : FilePath :=
 def inode (observed : NativeObsoleteRunInodeReport seen name) : Nat :=
   seen.lifetime.namespaceView.modelObject observed.lookup.child
 
+theorem stat (observed : NativeObsoleteRunInodeReport seen name) : seen.stat observed.path = .ok observed.metadata := by
+  rw [observed.statProjection, observed.identified]
+  rfl
+
 /-- The reported detach at the reached position of the checked program. -/
 def DetachesOriginal (observed : NativeObsoleteRunInodeReport seen name) : Prop :=
     ∃ (done remaining : List RunAddress) (issue after : RunUnlinkImage),
       seen.reports.selected = done ++ name :: remaining ∧
       ((done.map RunCollection.Step.unlink).forM seen.reports.perform) seen.initial = .ok () issue ∧
+      observed.rawStat observed.path = .ok (observed.metadata, observed.lookup.child) ∧
       seen.stat observed.path = .ok observed.metadata ∧ observed.metadata.type = .file ∧
       seen.pathObject (state.census, issue) state.session.directory.path = some seen.lifetime.root ∧
       seen.pathObject (state.census, issue) (state.session.directory.file .lock) = some seen.lifetime.lock ∧
@@ -154,7 +162,7 @@ theorem detachesOriginal (observed : NativeObsoleteRunInodeReport seen name) (va
       exact False.elim (Option.some_ne_none _ (bound.symm.trans (observed.missing issue after source message raw)))
   rw [success] at raw
   obtain ⟨root, lock⟩ := observed.issueCustody done remaining issue order prefixRan
-  exact ⟨done, remaining, issue, after, order, prefixRan, observed.stat, file, root, lock, bound, raw,
+  exact ⟨done, remaining, issue, after, order, prefixRan, observed.identified, observed.stat, file, root, lock, bound, raw,
     observed.detaches issue after raw⟩
 
 /-- Complete global link observations for this inode, including aliases
