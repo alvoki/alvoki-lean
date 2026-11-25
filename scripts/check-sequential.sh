@@ -170,6 +170,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeInactiveOpenedPublication
 lake env leanchecker Alvoki.Storage.Disk.NativeInactiveOpenedMaintenance
 lake env leanchecker Alvoki.Storage.Disk.NativeRawOpenPhaseFrame
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedOpenPhaseFrame
+lake env leanchecker Alvoki.Storage.Disk.NativeSelectedReadPhaseFrame
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedPosition
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
