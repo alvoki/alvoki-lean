@@ -513,6 +513,22 @@ def DiskTable.OpenSyncFiles.UsesCacheReferences (files : DiskTable.OpenSyncFiles
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (directory : IO.Ref (Option IO.FS.Handle)) : Prop :=
   files.active = active ∧ files.pending = pending ∧ files.directory = directory
 
+/-- The actual initialization action for the synchronization record
+allocated on the resolved path by `DiskTable.open`. -/
+def DiskTable.OpenSyncFiles.IsOpenAction (path : FilePath) (action : IO DiskTable.OpenSyncFiles) : Prop :=
+  action = SyncFiles.open path
+
+theorem DiskTable.openSyncCacheReferences (path : FilePath) :
+    ∃ (action : IO DiskTable.OpenSyncFiles)
+      (assemble : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+        IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles),
+      DiskTable.OpenSyncFiles.IsOpenAction path action ∧
+      action = DiskSession.openSyncFilesWith (m := IO) (IO.FS.Handle.mk path .read)
+        (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
+        (fun value => liftM (IO.mkRef value)) assemble ∧
+      ∀ directory active pending, (assemble directory active pending).UsesCacheReferences active pending directory := by
+  exact ⟨SyncFiles.open path, SyncFiles.mk path, rfl, syncFilesOpen_schedule path, fun _ _ _ => ⟨rfl, rfl, rfl⟩⟩
+
 /-- Close reads and writes exactly the phase, lock and cache
 references of the opened table. -/
 theorem DiskTable.UsesOpenReferences.close {db : DiskTable} {directory lock files phase token}

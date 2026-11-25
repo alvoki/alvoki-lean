@@ -18,14 +18,19 @@ structure OpenCloseHeapView (heap image : Type) where
   files : heap → LockedFileState image
   descriptors : heap → DescriptorInventory
 
+def OpenCloseHeapView.cacheAt (view : OpenCloseHeapView heap image) (reached : heap)
+    (directory : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : Cache CheckpointOpenHandle :=
+  let entry := fun (value : FilePath × IO.FS.Handle) => (value.1, view.handle reached value.2)
+  ⟨(view.directory reached directory).map (view.handle reached),
+    (view.active reached active).map entry, (view.pending reached pending).map entry⟩
+
 def OpenCloseHeapView.Matches (view : OpenCloseHeapView heap image)
     (phase : IO.Ref (Phase Installed)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (directory : IO.Ref (Option IO.FS.Handle))
     (reached : heap) (state : CloseState image) : Prop :=
-  let entry := fun (value : FilePath × IO.FS.Handle) => (value.1, view.handle reached value.2)
   view.phase reached phase = some state.phase ∧
-  Cache.mk ((view.directory reached directory).map (view.handle reached))
-    ((view.active reached active).map entry) ((view.pending reached pending).map entry) = state.files.image.1 ∧
+  view.cacheAt reached directory active pending = state.files.image.1 ∧
   view.files reached = ⟨state.files.image.2, state.files.owners⟩ ∧ view.descriptors reached = state.descriptors
 
 structure OpenCloseCallbacks (heap : Type) where
@@ -70,7 +75,7 @@ theorem OpenCloseClears.emptyCache {report : CachedCloseReports directory writer
       view.pending seen.afterPhase pending = [] ∧ view.directory seen.afterPhase cachedDirectory = none := by
   have cleared := seen.closedView.2.1
   rw [show report.finished.files.image.1 = ⟨none, none, []⟩ from rfl] at cleared
-  simp only [Cache.mk.injEq, Option.map_eq_none_iff, List.map_eq_nil_iff] at cleared
+  simp only [OpenCloseHeapView.cacheAt, Cache.mk.injEq, Option.map_eq_none_iff, List.map_eq_nil_iff] at cleared
   exact ⟨seen.closedView.1, cleared.2.1, cleared.2.2, cleared.1⟩
 
 /-- The raw phase read and unlock, with the slot and three cache
