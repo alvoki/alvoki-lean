@@ -125,6 +125,7 @@ lake env leanchecker Alvoki.Storage.Disk.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.PendingAlignedReopen
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
+lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
 lake env leanchecker Alvoki.Storage.Disk.BatchGroupedWriteError
 lake env leanchecker Alvoki.Storage.Disk.ClientSnapshotTransitions
 lake env leanchecker Alvoki.Storage.Disk.ClientRunMaintenance
@@ -187,6 +188,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalCollectionFirstEffect
 lake env leanchecker Alvoki.Storage.Disk.WalCollectionOrderedPrefix
 lake env leanchecker Alvoki.Storage.Disk.WalCollectionDirectoryFsync
 lake env leanchecker Alvoki.Storage.Disk.WalCollectionCompletePlan
+lake env leanchecker Alvoki.Storage.Disk.WalCollectionStorageRelease
 lake env leanchecker Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
 lake env leanchecker Alvoki.Storage.Disk.WalSealedInodeLifetime
 lake env leanchecker Alvoki.Storage.Disk.WalHiddenSealRetry
@@ -215,6 +217,7 @@ lake env leanchecker Alvoki.Storage.Disk.ObservedRotationSchedule
 lake env leanchecker Alvoki.Storage.Disk.RotationCreateInterruption
 lake env leanchecker Alvoki.Storage.Disk.RotationCreatePhysical
 lake env leanchecker Alvoki.Storage.Disk.RotationSuccessorFsyncStop
+lake env leanchecker Alvoki.Storage.Disk.RotationDirectoryFsyncStop
 lake env leanchecker Alvoki.Storage.Disk.RotationReopenAdmission
 lake env leanchecker Alvoki.Storage.Disk.BootstrapAdmissionEffects
 lake env leanchecker Alvoki.Storage.Disk.FirstMarkedSession

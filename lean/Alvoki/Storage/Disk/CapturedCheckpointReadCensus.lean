@@ -97,7 +97,7 @@ structure CapturedRunReadCensus (report : CapturedMarkedReadReports admission la
               (released (directory.file (.run manifest.header.generation index))),
             events index = custody.beforeOpen ++ released (directory.file (.run manifest.header.generation index))
 
-private def readCapturedCheckpoint (report : CapturedMarkedReadReports admission layout published)
+def CapturedMarkedReadReports.readCheckpointFromCensus (report : CapturedMarkedReadReports admission layout published)
     (metadataRelease runRelease : FilePath → List LockReferenceDrop) :
     EStateM IO.Error ReadState (Option (PackedTable × UInt64)) :=
   readIntegrityCheckpointSized directory
@@ -113,7 +113,7 @@ theorem CapturedRunReadCensus.reads {report : CapturedMarkedReadReports admissio
     (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) :
-    readCapturedCheckpoint report metadataRelease runs.released (admission.cache, admission.reached, admission.held) =
+    report.readCheckpointFromCensus metadataRelease runs.released (admission.cache, admission.reached, admission.held) =
       .ok checkpoint (admission.cache,
         (admission.reached.afterDrops manifestDrops).afterDrops
           (runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest)), admission.held) := by
@@ -121,7 +121,7 @@ theorem CapturedRunReadCensus.reads {report : CapturedMarkedReadReports admissio
   let atIndex : Nat → ReadState := fun index =>
     (admission.cache, initial.afterDrops (runReadDrops runs.events index), admission.held)
   let sizes := SizedCheckpointRunReports.ofChunkReads selected report.reads report.stat report.chunkReads
-  unfold readCapturedCheckpoint
+  unfold CapturedMarkedReadReports.readCheckpointFromCensus
   apply sizes.readExactWithState selected _ _ _ atIndex
   · have start : initial.afterDrops [] = initial := by
       cases initial with
@@ -184,7 +184,7 @@ theorem CapturedMarkedReadReports.beforeWalScan (report : CapturedMarkedReadRepo
       .ok (report.listing.scan.entries directory.path) (admission.cache, report.listing.afterClose, admission.held) ∧
     (checkpoint.getD (.empty, 0)).1.committed.toNat = layout.range.watermark ∧
     (∃ length, WAL.Boundary.decode marker.bytes = .ok length ∧ length.toNat = layout.range.through * WAL.frameSize) ∧
-    prepareBoundedMarkedFromReaders directory (readCapturedCheckpoint report metadataRelease runs.released)
+    prepareBoundedMarkedFromReaders directory (report.readCheckpointFromCensus metadataRelease runs.released)
       (readTemporaryMetadata report.reads directory metadataRelease) readWal
       (admission.cache, admission.reached, admission.held) =
     prepareBoundedMarkedFromReaders directory (pure checkpoint) (fun _ => pure (some marker.bytes)) readWal
@@ -205,5 +205,80 @@ theorem CapturedMarkedReadReports.beforeWalScan (report : CapturedMarkedReadRepo
     simp only [atScan, chronology, DescriptorInventory.afterDrops_append]
   simp only [prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, runs.reads manifest selected, marker.reads,
     capture, Pure.pure, EStateM.pure]
+
+/-- The admitted marked preparation carries one census through the
+manifest, exact selected runs and marker, checked directory stream and
+temporary seal reads. It reaches the keeper with its actual path, extent
+and selected length. The continuation still checks the keeper result and
+performs the original replay and plan construction. -/
+theorem CapturedMarkedReadReports.beforeKeeper (report : CapturedMarkedReadReports admission layout published)
+    {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
+    (manifest : CapturedManifestCensus report metadataRelease manifestDrops)
+    (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (marker : CapturedMarkerCensus report ((admission.reached.afterDrops manifestDrops).afterDrops
+      (runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest))) metadataRelease)
+    (chronology : report.listing.beforeOpen = manifestDrops ++
+      runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest) ++
+      (marker.custody.beforeOpen ++ metadataRelease (directory.file .walBoundary)))
+    (captured : CapturedKeeperOpenReports report) {released : FilePath → List LockReferenceDrop}
+    {required : List (Nat × IO.FS.Metadata)}
+    (seals : CapturedSealReadChain report released required report.listing.afterClose captured.beforeOpen)
+    (offsets : required.map Prod.fst = (layout.sealed ++ [layout.keeper]).map WalSegment.first)
+    (retained : ∀ event ∈ captured.beforeOpen,
+      event.removes admission.owner.reference = false ∧ event.removes admission.cached.reference = false)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (later : ∀ start ∈ retry.image.later.visible, layout.range.through < start)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error ReadState ByteArray) :
+    let walRead := fun watermark length => readSelectedWithCachedExtents directory watermark length report.scanWal
+      report.inspectWal
+      (readTemporarySeal report.reads released) readKeeper
+    admission.owner ∈ captured.atOpen.slots ∧ admission.cached ∈ captured.atOpen.slots ∧
+    report.listing.opened.inode report.listing.stream.description = admission.reached.inode admission.cached.description ∧
+    ∃ length earlier,
+      WAL.Boundary.decode marker.bytes = .ok length ∧ length.toNat = layout.range.through * WAL.frameSize ∧
+      earlier.map Prod.fst = layout.sealed.map WalSegment.first ∧
+      prepareBoundedMarkedFromReaders directory (report.readCheckpointFromCensus metadataRelease runs.released)
+        (readTemporaryMetadata report.reads directory metadataRelease) walRead
+        (admission.cache, admission.reached, admission.held) =
+      prepareBoundedMarkedFromReaders (m := EStateM IO.Error ReadState) directory
+        (pure checkpoint) (fun _ => pure (some marker.bytes))
+        (fun _ _ => do
+          let (last, extent) ← readCachedWalPayloads directory (length.toNat / WAL.frameSize)
+            (readTemporarySeal report.reads released) readKeeper [(layout.keeper.first, report.wal.keeper.calls.metadata)]
+          pure (⟨earlier ++ last, retry.image.later.visible⟩, extent))
+        (admission.cache, captured.atOpen, admission.held) := by
+  intro walRead
+  obtain ⟨_, _, _, watermark, ⟨length, decoded, count⟩, entered⟩ :=
+    report.beforeWalScan manifest runs selected marker chronology walRead
+  obtain ⟨extents, chosen, scanned, selection, ordered, _⟩ := report.catalog.scanSelected following later count
+  have listed := (CheckedDirectoryReadReport.scan_complete directory.path report.listing.eof report.listing.closed
+    report.listing.complete).1
+  have entries := Except.ok.inj (report.catalog.listed.symm.trans (report.listed.trans listed))
+  rw [entries] at scanned
+  have reportedStat (entry) (member : entry ∈ chosen) :=
+    OpenPathReadReports.walSegmentExtents_metadata scanned (selectWalExtentsThrough_required_subset selection member)
+  have same := seals.matchesExtents (offsets.trans ordered.symm) reportedStat
+  rw [← same] at selection
+  have aligned : length.toNat % WAL.frameSize = 0 := by rw [count, Nat.mul_mod_left]
+  have through : length.toNat / WAL.frameSize = layout.range.through := by
+    rw [count, Nat.mul_div_cancel _ (by decide : 0 < WAL.frameSize)]
+  have covers : layout.range.watermark ≤ length.toNat / WAL.frameSize :=
+    through.symm ▸ (DirectoryPublication.Bindings.walRange_accounting layout.decoded).2.1
+  obtain ⟨owner, directoryLive, earlier, prior, reached⟩ :=
+    report.selectedWalReachesKeeper captured aligned covers scanned selection seals retained readKeeper
+  have earlierOffsets : earlier.map Prod.fst = layout.sealed.map WalSegment.first := by
+    simpa only [List.map_dropLast, offsets, List.map_append, List.map_cons, List.map_nil, List.dropLast_append_cons,
+      List.dropLast_singleton, List.append_nil] using prior
+  refine ⟨owner, directoryLive, report.listing.sameDirectoryObject, length, earlier, decoded, count, earlierOffsets, ?_⟩
+  have markerDecoded : (liftExcept ((WAL.Boundary.decode marker.bytes).mapError IO.userError) : EStateM IO.Error ReadState UInt64) =
+      pure length := by rw [decoded]; rfl
+  rw [entered]
+  simp only [prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, markerDecoded, watermark]
+  dsimp only [walRead]
+  rw [reached]
+  rfl
 
 end Alvoki.Storage.DiskSession

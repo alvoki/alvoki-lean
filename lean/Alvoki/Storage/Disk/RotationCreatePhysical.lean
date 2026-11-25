@@ -90,8 +90,8 @@ def RotationCreateParent.project {directory : DiskDirectory} {before : Segmented
     State :=
   ⟨before.wal.directory, if (files.view.child parent.root (successorName before)).isSome then .created else .absent⟩
 
-/-- The two observations bracket the raw exclusive open, with no
-returned Lean handle in either branch. -/
+/-- The physical effects before or after raw exclusive allocation. The
+caller separately supplies the runtime return or interruption. -/
 inductive RotationRawCreateEffect {directory : DiskDirectory} {before : SegmentedWriterState}
     {lookup : FilePath → Except IO.Error IO.FS.Metadata} {inventory : DescriptorInventory}
     (parent : RotationCreateParent directory before lookup inventory) : CreateState → Prop where

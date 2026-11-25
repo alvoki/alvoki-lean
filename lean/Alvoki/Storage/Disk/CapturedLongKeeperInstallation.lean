@@ -14,18 +14,8 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
   {vacant : TryLockObserves retry.owners directory (.ok true)} {checkpoint : Option (PackedTable × UInt64)}
   {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
 
-private abbrev ReplacementState := CensusDirectoryCache × LockedFileState FileImage
-
-private def keeperClose (slot : DescriptorSlot) : LockReferenceDrop :=
-  .closed slot.reference.process slot.reference.fd
-
-private theorem insert_thenClose (before : DescriptorInventory) (slot : DescriptorSlot)
-    (free : ∀ current ∈ before.slots, current.address ≠ slot.address) (drops : List LockReferenceDrop) :
-    (before.insert slot free).afterDrops (drops ++ [keeperClose slot]) = before.afterDrops (drops ++ [keeperClose slot]) := by
-  cases before with
-  | mk slots distinct inode =>
-    simp [DescriptorInventory.insert, DescriptorInventory.afterDrops, keeperClose, LockReferenceDrop.removes,
-      List.all_append]
+private abbrev ReplacementSyncState := CensusOpenState × List (List LockReferenceDrop)
+private abbrev ReplacementState := CensusDirectoryCache × ReplacementSyncState
 
 /-- The long keeper is read without a pending capture. Its observed close
 precedes the authorization barrier. The empty later-name route still
@@ -38,7 +28,7 @@ structure CapturedLongKeeperFinish (calls : CapturedAlignedCallbacks admission)
   reader : CapturedKeeperOpenReports report
   authorization : ListedDirectoryAuthorization (calls.heldReport report vacant selected)
   readClosed : authorization.afterListing = reader.beforeOpen ++
-    (reader.duringRead ++ [keeperClose report.wal.keeper.calls.slot])
+    (reader.duringRead ++ [report.wal.keeper.calls.slot.closeEvent])
   prune : ListedLongKeeperPrune authorization
   stage : ListedLongKeeperStage prune
   rename : ListedLongKeeperRename stage
@@ -66,12 +56,26 @@ barrier. The other reported drop effects are preserved. -/
 theorem readAndClose (finish : CapturedLongKeeperFinish calls report vacant selected) :
     finish.reader.readKeeper (admission.cache, finish.reader.atOpen, admission.held) =
       .ok layout.keeper.bytes (admission.cache, finish.reader.afterRead, admission.held) ∧
-    finish.reader.afterRead.afterDrops [keeperClose report.wal.keeper.calls.slot] =
+    finish.reader.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent] =
       report.listing.afterClose.afterDrops finish.authorization.afterListing := by
   refine ⟨finish.reader.readsLong finish.longer, ?_⟩
   rw [CapturedKeeperOpenReports.afterRead, finish.reader.opened, finish.readClosed,
     ← DescriptorInventory.afterDrops_append, DescriptorInventory.afterDrops_append]
-  exact insert_thenClose _ _ finish.reader.free _
+  exact DescriptorInventory.insert_thenClose _ _ finish.reader.free _
+
+/-- The staged allocation starts from the inventory reached by the
+temporary keeper close and the measured drops before staging. -/
+theorem stagedAllocation (finish : CapturedLongKeeperFinish calls report vacant selected) :
+    let entered := finish.reader.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent]
+    let beforeStage := (entered.afterDrops finish.prune.afterAuthorization).afterDrops finish.stage.beforeStage
+    ∃ free : ∀ slot ∈ beforeStage.slots, slot.address ≠ finish.stage.slot.address,
+      finish.stage.inventory = beforeStage.insert finish.stage.slot free := by
+  dsimp only
+  simp only [finish.readAndClose.2, DescriptorInventory.afterDrops_append, List.append_assoc]
+  have available := finish.stage.atWrite
+  have opened := finish.stage.captured
+  simp only [DescriptorInventory.afterDrops_append, List.append_assoc] at available opened
+  exact ⟨available, opened⟩
 
 noncomputable def census (finish : CapturedLongKeeperFinish calls report vacant selected) : DescriptorInventory :=
   finish.settlement.inventory.afterDrops finish.afterSettlement
@@ -105,41 +109,71 @@ theorem replacementInodes (finish : CapturedLongKeeperFinish calls report vacant
   rw [projected]
   simp [WalInodeImage.settleBinding, WalInodeImage.renameSynced, different]
 
-private def fileAction {result : Type} (action : EStateM IO.Error FileImage result) :
-    EStateM IO.Error ReplacementState result := fun (cache, before) =>
+/-- Subsequent events belong to the successful syscall that was reached.
+The empty suffix still calls its directory sync, which has no extra drops. -/
+private noncomputable def syncDrops (finish : CapturedLongKeeperFinish calls report vacant selected) :
+    List (List LockReferenceDrop) :=
+  [finish.prune.afterAuthorization, [], finish.rename.afterStageSync, finish.afterSettlement]
+
+private def fileAction {result : Type} (action : EStateM IO.Error FileImage result)
+    (drops : List LockReferenceDrop := []) :
+    EStateM IO.Error ReplacementState result := fun (cache, (census, before), remaining) =>
   match action before.image with
-  | .ok value after => .ok value (cache, { before with image := after })
-  | .error cause after => .error cause (cache, { before with image := after })
+  | .ok value after => .ok value (cache, (census.afterDrops drops, { before with image := after }), remaining)
+  | .error cause after => .error cause (cache, (census, { before with image := after }), remaining)
 
 private noncomputable def stageAt (finish : CapturedLongKeeperFinish calls report vacant selected)
     (path : FilePath) (bytes : ByteArray) : EStateM IO.Error ReplacementState Unit :=
-  stageFreshWithCache path bytes
-    (writeFreshStagedWith finish.stage.tryCreate finish.stage.detachStale finish.stage.create
-      finish.stage.write finish.stage.flush)
+  stageFreshWithCache path bytes fun name payload ((census, before), remaining) =>
+    match writeFreshStagedWith finish.stage.tryCreate finish.stage.detachStale finish.stage.create
+        finish.stage.write finish.stage.flush name payload before with
+    | .ok handle after => .ok handle ((handle.1.afterDrops finish.stage.beforeSync, after), remaining)
+    | .error cause after => .error cause ((census, after), remaining)
 
-private def syncAt (finish : CapturedLongKeeperFinish calls report vacant selected) (resolved : DiskDirectory) :=
-  SyncPathGroup.run (sync resolved.path finish.authorization.openRead finish.authorization.fsync)
+private def openForSync (finish : CapturedLongKeeperFinish calls report vacant selected) (path : FilePath) :
+    EStateM IO.Error ReplacementSyncState (DescriptorInventory × DescriptorSlot × Nat) :=
+  fun ((census, before), remaining) =>
+  match finish.authorization.openRead path before with
+  | .ok handle after => .ok handle ((census, after), remaining)
+  | .error cause after => .error cause ((census, after), remaining)
+
+private def fsyncWithCensus (finish : CapturedLongKeeperFinish calls report vacant selected)
+    (handle : DescriptorInventory × DescriptorSlot × Nat) : EStateM IO.Error ReplacementSyncState Unit :=
+  fun ((census, before), remaining) =>
+  match finish.authorization.fsync handle before with
+  | .ok () after => .ok () ((census.afterDrops (remaining.headD []), after), remaining.tail)
+  | .error cause after => .error cause ((census, after), remaining)
+
+private noncomputable def syncAt (finish : CapturedLongKeeperFinish calls report vacant selected)
+    (resolved : DiskDirectory) :=
+  SyncPathGroup.run (sync resolved.path finish.openForSync finish.fsyncWithCensus)
 
 private noncomputable def repairAt (finish : CapturedLongKeeperFinish calls report vacant selected)
     (resolved : DiskDirectory) (plan : Plan) (size : Nat) :
     EStateM IO.Error ReplacementState Unit :=
   finishBoundedMarkedOpen resolved plan size (fun path => fileAction (calls.removeFile path))
-    finish.stageAt (finish.syncAt resolved) (fun source target => fileAction (calls.renameFile source target))
+    finish.stageAt (finish.syncAt resolved)
+    (fun source target => fileAction (calls.renameFile source target) finish.settlement.afterRename)
 
 private theorem syncDirectory (finish : CapturedLongKeeperFinish calls report vacant selected)
     {cache : CensusDirectoryCache} {before after : LockedFileState FileImage}
+    {entered : DescriptorInventory} {drops : List LockReferenceDrop} {remaining : List (List LockReferenceDrop)}
     (directoryCached : cache.directory = some (admission.reached, admission.cached, 0))
     (returned : finish.authorization.fsync (admission.reached, admission.cached, 0) before = .ok () after) :
-    finish.syncAt directory #[directory.path] (cache, before) = .ok () (cache, after) := by
-  simp [syncAt, SyncPathGroup.run_single, sync, Cache.resolve, directoryCached, returned, withCache]
+    finish.syncAt directory #[directory.path] (cache, (entered, before), drops :: remaining) =
+      .ok () (cache, (entered.afterDrops drops, after), remaining) := by
+  simp [syncAt, SyncPathGroup.run_single, sync, Cache.resolve, directoryCached, fsyncWithCensus, returned, withCache]
 
 /-- The bounded worker follows its shared long-repair schedule. The
 reported staged write inserts exactly the handle consumed by the staged
 fsync. Rename follows that sync, and the last directory sync uses the
 original directory handle and the cache with the staged entry removed. -/
 theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant selected) :
-    finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size (admission.cache, admission.held) =
-      .ok () (admission.cache, finish.settled) := by
+    finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size
+      (admission.cache, (finish.reader.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent], admission.held),
+        finish.syncDrops) = .ok () (admission.cache, (finish.census, finish.settled), []) := by
+  let entered := finish.reader.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent]
+  let beforeStage := entered.afterDrops finish.prune.afterAuthorization
   let authorized : LockedFileState FileImage := { admission.held with image := retry.image.syncDirectory }
   let atStage := (LongKeeperPruning.empty finish.prune).stageInput
   let stagePath := directory.file .stagedWal
@@ -149,28 +183,52 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
     { atStage with image := atStage.image.withScratch (some (layout.keeper.bytes, true)) }
   let handle := (finish.stage.inventory, finish.stage.slot, finish.stage.offset)
   let remembered := admission.cache.remember stagePath handle
+  obtain ⟨free, allocated⟩ := finish.stagedAllocation
+  let beforeSync := ((beforeStage.afterDrops finish.stage.beforeStage).insert finish.stage.slot free).afterDrops
+    finish.stage.beforeSync
+  have openedCensus : beforeSync = finish.stage.inventory.afterDrops finish.stage.beforeSync :=
+    congrArg (fun inventory => inventory.afterDrops finish.stage.beforeSync) allocated.symm
+  let afterSync := beforeSync.afterDrops finish.rename.afterStageSync
+  let movedCensus := afterSync.afterDrops finish.settlement.afterRename
   have firstEffect := finish.authorization.effect
   rw [finish.prune.completed] at firstEffect
-  have first : finish.syncAt directory #[directory.path] (admission.cache, admission.held) =
-      .ok () (admission.cache, authorized) := finish.syncDirectory rfl firstEffect
-  have second : finish.syncAt directory #[directory.path] (admission.cache, authorized) =
-      .ok () (admission.cache, atStage) := finish.syncDirectory rfl finish.prune.synced
-  have stage : finish.stageAt stagePath layout.keeper.bytes (admission.cache, atStage) =
-      .ok () (remembered, written) := by
+  have first : finish.syncAt directory #[directory.path] (admission.cache, (entered, admission.held), finish.syncDrops) =
+      .ok () (admission.cache, (beforeStage, authorized), [[], finish.rename.afterStageSync, finish.afterSettlement]) :=
+    finish.syncDirectory rfl firstEffect
+  have second : finish.syncAt directory #[directory.path]
+      (admission.cache, (beforeStage, authorized), [[], finish.rename.afterStageSync, finish.afterSettlement]) =
+      .ok () (admission.cache, (beforeStage, atStage), [finish.rename.afterStageSync, finish.afterSettlement]) := by
+    have returned := finish.syncDirectory (entered := beforeStage) (drops := []) (cache := admission.cache)
+      (remaining := [finish.rename.afterStageSync, finish.afterSettlement]) rfl finish.prune.synced
+    have unchanged : beforeStage.afterDrops [] = beforeStage := by
+      cases beforeStage
+      simp only [DescriptorInventory.afterDrops, List.all_nil,
+        List.filter_eq_self.mpr (fun _ _ => rfl)]
+    rw [unchanged] at returned
+    exact returned
+  have stage : finish.stageAt stagePath layout.keeper.bytes
+      (admission.cache, (beforeStage, atStage), [finish.rename.afterStageSync, finish.afterSettlement]) =
+      .ok () (remembered, (beforeSync, written), [finish.rename.afterStageSync, finish.afterSettlement]) := by
     have wrote : writeFreshStagedWith finish.stage.tryCreate finish.stage.detachStale finish.stage.create
         finish.stage.write finish.stage.flush stagePath layout.keeper.bytes atStage = .ok handle written :=
       finish.stage.wrote
-    simp only [stageAt, stageFreshWithCache, remembered, wrote]
+    simp only [stageAt, stageFreshWithCache, remembered, wrote, openedCensus]
+    rfl
   have consume : admission.cache.consume stagePath = admission.cache := rfl
-  have persisted : finish.syncAt directory #[stagePath] (remembered, written) =
-      .ok () (admission.cache, durable) := by
+  have persisted : finish.syncAt directory #[stagePath]
+      (remembered, (beforeSync, written), [finish.rename.afterStageSync, finish.afterSettlement]) =
+      .ok () (admission.cache, (afterSync, durable), [finish.afterSettlement]) := by
     have synced : finish.authorization.fsync handle written = .ok () durable := finish.rename.synced
     dsimp only [syncAt, remembered]
     rw [SyncPathGroup.run_single,
-      syncRemembered (file_ne_directory directory .stagedWal) handle finish.authorization.openRead
-        finish.authorization.fsync written, consume, synced]
+      syncRemembered (file_ne_directory directory .stagedWal) handle finish.openForSync
+        finish.fsyncWithCensus ((beforeSync, written), [finish.rename.afterStageSync, finish.afterSettlement]),
+      consume]
+    simp only [fsyncWithCensus, synced, List.headD_cons, List.tail_cons]
+    rfl
   have moved : fileAction (calls.renameFile stagePath (directory.file (.walSegment layout.keeper.first)))
-      (admission.cache, durable) = .ok () (admission.cache, finish.settlement.files) := by
+      finish.settlement.afterRename (admission.cache, (afterSync, durable), [finish.afterSettlement]) =
+      .ok () (admission.cache, (movedCensus, finish.settlement.files), [finish.afterSettlement]) := by
     have returned := finish.rename.reported
     dsimp only at returned
     rw [finish.settlement.completed] at returned
@@ -178,11 +236,15 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
       .ok () finish.settlement.files.image at returned
     simp only [fileAction, returned]
     rfl
-  have settled : finish.syncAt directory #[directory.path] (admission.cache, finish.settlement.files) =
-      .ok () (admission.cache, finish.settled) := by
+  have settled : finish.syncAt directory #[directory.path]
+      (admission.cache, (movedCensus, finish.settlement.files), [finish.afterSettlement]) =
+      .ok () (admission.cache, (finish.census, finish.settled), []) := by
     have effect := finish.settlement.effect
     rw [finish.completed] at effect
-    exact finish.syncDirectory rfl effect
+    have output := finish.syncDirectory (entered := movedCensus) (drops := finish.afterSettlement)
+      (remaining := []) (cache := admission.cache) rfl effect
+    simpa only [movedCensus, openedCensus, afterSync, DescriptorInventory.afterDrops_append, census,
+      ListedLongKeeperDirectoryIssue.inventory, settled, List.append_assoc] using output
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have later : layout.boundedPlan.newer = [] := finish.prune.noLater
   have valid : layout.boundedPlan.valid = true :=
@@ -196,20 +258,42 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
     rw [← size, ← measured]
     exact finish.longer
   have keeper : layout.boundedPlan.keeper = layout.keeper.first := rfl
-  change finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size (admission.cache, admission.held) = _
+  change finish.repairAt directory layout.boundedPlan layout.plan.keeperBytes.size
+    (admission.cache, (entered, admission.held), finish.syncDrops) = _
   unfold repairAt
   rw [finishBoundedMarkedOpen_long _ _ _ _ _ _ _ valid size long]
   simp only [later, List.map_nil, List.nil_append, List.forM_eq_forM, List.forM_cons, List.forM_nil,
     performPaths, Publication.performReplacement, bytes, keeper, Array.push_empty, Bind.bind, EStateM.bind,
     Pure.pure, EStateM.pure, first, second, stage, persisted, moved, settled, stagePath]
 
+private noncomputable def repairAfterRead (finish : CapturedLongKeeperFinish calls report vacant selected)
+    (resolved : DiskDirectory) (plan : Plan) (size : Nat) :
+    EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit := fun (cache, reached, before) =>
+  let closed := reached.afterDrops [report.wal.keeper.calls.slot.closeEvent]
+  match finish.repairAt resolved plan size (cache, (closed, before), finish.syncDrops) with
+  | .ok () (cache, reached, _) => .ok () (cache, reached)
+  | .error cause (cache, reached, _) => .error cause (cache, reached)
+
+private noncomputable def readRepair (finish : CapturedLongKeeperFinish calls report vacant selected) :
+    EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit := do
+  let _ ← finish.reader.readKeeper
+  finish.repairAfterRead directory layout.boundedPlan layout.plan.keeperBytes.size
+
+/-- Read and close the long keeper, then enter the shared replacement with
+the resulting census. The last grouped sync returns the census of the
+staged allocation and subsequent observed events. -/
+theorem readRepair_returns (finish : CapturedLongKeeperFinish calls report vacant selected) :
+    finish.readRepair (admission.cache, finish.reader.atOpen, admission.held) =
+      .ok () (admission.cache, finish.census, finish.settled) := by
+  simp only [readRepair, Bind.bind, EStateM.bind, finish.readAndClose.1, repairAfterRead, finish.repairAt_returns]
+
 private noncomputable def finishAt (finish : CapturedLongKeeperFinish calls report vacant selected)
     (resolved : DiskDirectory) (_owner : DescriptorSlot) (cache : CensusDirectoryCache) (prepared : Plan × Reopened × Nat) :
-    EStateM IO.Error CensusOpenState Reopened := fun (entered, before) =>
+    EStateM IO.Error CensusOpenState Reopened := fun (_, before) =>
   let (plan, opened, size) := prepared
-  match finish.repairAt resolved plan size (cache, before) with
-  | .ok () (_, reached) => .ok opened (finish.census, reached)
-  | .error cause (_, reached) => .error cause (entered, reached)
+  match finish.repairAfterRead resolved plan size (cache, finish.reader.afterRead, before) with
+  | .ok () (_, reached) => .ok opened reached
+  | .error cause (_, reached) => .error cause reached
 
 /-- The native-shaped open with the reached long replacement callbacks.
 Ready state and the two fresh reference identities are allocated only
@@ -244,7 +328,7 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
     report.bindings (directory.file .lock) = some (initial.inode description) ∧
     finish.reader.readKeeper (admission.cache, finish.reader.atOpen, admission.held) =
       .ok layout.keeper.bytes (admission.cache, finish.reader.afterRead, admission.held) ∧
-    finish.reader.afterRead.afterDrops [keeperClose report.wal.keeper.calls.slot] =
+    finish.reader.afterRead.afterDrops [report.wal.keeper.calls.slot.closeEvent] =
       report.listing.afterClose.afterDrops finish.authorization.afterListing ∧
     admission.owner ∈ finish.census.slots ∧ admission.cached ∈ finish.census.slots ∧
     finish.census.inode = admission.reached.inode ∧
@@ -267,7 +351,9 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
   have reached (opened : Reopened) : finish.finishAt directory admission.owner admission.cache
       (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) =
       .ok opened (finish.census, { admission.held with image := finish.settled.image }) := by
-    rw [finishAt, finish.repairAt_returns]
+    have repaired := finish.readRepair_returns
+    simp only [readRepair, Bind.bind, EStateM.bind, finish.readAndClose.1] at repaired
+    rw [finishAt, repaired]
     rfl
   obtain ⟨prefixReached, vacant, _, _, _, oldObject, _, _⟩ :=
     trace.capturesAfterAdmission earlier last admission distinct distinctCached lockObject (calls.recoverWithFinish report finish.finishAt)
