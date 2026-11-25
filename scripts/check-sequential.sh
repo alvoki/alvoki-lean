@@ -426,6 +426,7 @@ lake env leanchecker Alvoki.Storage.Disk.CheckpointHeldOpenWork
 lake env leanchecker Alvoki.Storage.Disk.MetadataRecoveryChunkWork
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.NativeRejectedOpenWork
+lake env leanchecker Alvoki.Storage.Disk.NativeMarkedListingWork
 lake env leanchecker Alvoki.Storage.Disk.MaintainedRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.MaintainedDirectoryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionSpace

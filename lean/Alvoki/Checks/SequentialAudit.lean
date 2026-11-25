@@ -372,6 +372,7 @@ import Alvoki.Storage.Disk.SelectedRecoveryChunkWork
 import Alvoki.Storage.Disk.MetadataRecoveryChunkWork
 import Alvoki.Storage.Disk.NativeMarkedRecoveryWork
 import Alvoki.Storage.Disk.NativeRejectedOpenWork
+import Alvoki.Storage.Disk.NativeMarkedListingWork
 import Alvoki.Storage.Disk.MaintainedRecoveryWork
 import Alvoki.Storage.Disk.MaintainedDirectoryWork
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
@@ -2647,6 +2648,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeRejectedOpenWorkTrace.lineage
 #check_axioms Alvoki.Storage.DiskSession.NativeRejectedOpenWorkTrace.chunkRequests_le
 #check_axioms Alvoki.Storage.DiskSession.NativeRejectedOpenWorkTrace.finishesWithWork
+#check_axioms Alvoki.Storage.DiskSession.NativeReaddirFailure.counted_projects
+#check_axioms Alvoki.Storage.DiskSession.NativeReaddirFailure.counted_error
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingWork.countedCheckpoint_projects
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingWork.countedMarked_error
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingWork.countedMarked_projects
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingWork.chunkRequests_le
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingWork.directoryRequests_exact
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeWithAdmissionFromReports
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeWithHeldEvidence
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.closeWithHeldReports
