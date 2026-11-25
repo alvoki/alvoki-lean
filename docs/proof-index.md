@@ -5,10 +5,18 @@ For guarantees and assumptions, see [verification status](verification-status.md
 ## How to structure a proof
 
 Start with a claim about an executable entry point and the behavior its caller can observe. For crash
-recovery, the claim must explain reads on the actual table returned by `DiskTable.open` after the
-production schedule runs against each observed filesystem outcome admitted by the contract. Include acknowledged writes in order
-and account for each uncertain write or batch as absent or applied in full. Write down that target and trace
-its premises back to the filesystem contract before extending the list of cases.
+recovery, specify when the contract requires a successful open and when it allows an error. On
+success, explain reads on the actual table returned by `DiskTable.open`. On error, account for any
+effects and identify the reached state from which a retry starts. Preserve acknowledged writes in
+order. An uncertain batch is absent or applied in full, subject to the allowed history order. For
+example, when recovery selects a prefix, later batches cannot survive a gap.
+
+Compose a representative end-to-end case in Lean early. Keep each unfinished connection as an
+explicit premise and identify the filesystem assumption or preceding lemma that will supply it.
+Then try a second case whose reached state differs in a way that could affect the next step.
+Use both cases to decide which facts belong in the shared invariant before expanding the case
+list. The milestone is complete when the composed theorem covers the promised outcomes and
+derives its intermediate premises from the execution.
 
 Prove one refinement at each boundary. Join the results by identifying the state or value that one
 boundary produces and the next one consumes.
@@ -61,6 +69,10 @@ or rejection appears. [Shared production schedule](../lean/Alvoki/Storage/Public
   argument that disappears or an existing invariant that a new case can reuse directly. Keep
   differences that affect callers or recovery. For example, an identical EIO before or after a
   directory sync can admit different crash images. [Obsolete-run barrier errors](../lean/Alvoki/Storage/Disk/NativeObsoleteRunBarrierError.lean)
+- When a new case repeats a downstream proof, check whether the existing lemma can consume
+  the invariant established by both cases. Keep differences local to the step that needs them.
+  Judge each new local lemma by the premise it discharges, the public outcome it adds, or the
+  duplicated reasoning it removes.
 - Track safety and progress independently. The safety theorem ranges over all admitted executions
   and crash outcomes, including returned errors and interruptions. Recovery completion can assume
   that required I/O succeeds and resources are available. Eventual reclamation can assume eligible

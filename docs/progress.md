@@ -1,5 +1,9 @@
 # Current handoff
 
+The proof-engineering guidance now tests composition early on two distinct executions,
+explains when to reuse a shared invariant, and specifies the caller-visible obligations
+for recovery errors, retries and the order of uncertain batches. [Proof-engineering guidance](proof-index.md#how-to-structure-a-proof)
+
 The proof review identified repeated recovery and installation arguments across different checkpoint cuts. The proof-engineering guidance now starts from the executable guarantee, uses local refinements over the same reached state, and reviews progress by public outcome and discharged premises. The checkpoint consolidation pilot is the next application of this approach. [Proof-engineering guidance](proof-index.md#how-to-structure-a-proof)
 
 The common finite execution now identifies the first completed obsolete-run collector with a supplied hold list. If the target generation stays older at those calls and is outside that hold list, the reached collector makes the canonical name absent from its live namespace and every crash choice. The same returned writer starts the rest of the trace and retains the collector's proof of protected bytes, descriptor custody and client replay. The application supplies the scheduling premise through the trace. [Scheduled run reclamation](../lean/Alvoki/Storage/Disk/NativeScheduledRunReclamation.lean)
