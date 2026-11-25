@@ -80,6 +80,33 @@ structure NativeRejectedOpenAlignedResult (current : NativeReadPosition history 
     NativeCloseSelectedReads seen
   replay : InstalledClientReplay log current.reads history next.state.writer.installed next.state.session
 
+/-- The exact final reader supplies a ready position after rejected
+opens. Its initial files and inode map must frame the closed writer. -/
+theorem NativeReadPosition.reopensAfterRejectedOpensAt
+    (current : NativeReadPosition history log) (after : CensusOpenState)
+    (released : after.2 = current.state.releasedFiles)
+    (inventoryObjects : after.1.inode = current.state.census.inode)
+    (files : NativeCloseFiles current.state) {input : FilePath}
+    (plan : ClosedReadyReopenLayout current.state.writer current.state.releasedFiles)
+    (selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+      current.state.releasedFiles.image.directory.active.manifest current.state.writer.checkpoint)
+    (seen : NativeCloseAlignedReads files input after.1 plan.layout selected) :
+    ∃ next, NativeRejectedOpenAlignedResult current after files input next ∧
+      seen.run = next.opened ∧ next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
+      next.state.owner = seen.opening.admission.owner ∧ next.state.directorySlot = seen.opening.admission.cached ∧
+      next.state.cache = seen.opening.admission.cache := by
+  obtain ⟨valid, rows, prior⟩ := current.readPrefix.refines
+  obtain ⟨state, continued, directory, owner, directorySlot, cache, census, sessionFresh,
+    phaseFresh, lockInode, directoryInode, pair, kept, target, checkpoint, durable, manifestMissing, manifest,
+    runs, marker, wal, replay⟩ := files.reopensReleasedAlignedAt valid.retained rows prior
+      current.readPrefix.readsBounded plan selected seen
+  let next : NativeReadPosition history log := ⟨seen.run, state, state, current.reads, continued⟩
+  exact ⟨next, ⟨released, inventoryObjects, rfl,
+    ⟨directory, directoryInode, lockInode, target, checkpoint, durable⟩, sessionFresh,
+    phaseFresh, pair, kept, ⟨plan, selected, seen, continued.frames.1, rfl, rfl, owner, directorySlot, cache, census,
+      ⟨manifestMissing, manifest, runs, marker, wal⟩⟩, replay⟩,
+    rfl, continued.frames.1, owner, directorySlot, cache⟩
+
 /-- Compose the actual close, the ordered returned early errors, and a
 healthy aligned reopen. The final primitive observations use the exact
 reached census. The prior history determines the selection before

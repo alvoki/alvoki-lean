@@ -58,8 +58,8 @@ theorem readsSelected (seen : RawManifestDecodeRead (admitted := admitted) fault
       .ok (.ok fault.manifest.calls.metadata) seed.afterPending := by
     simp only [seen.sameLookup, seen.stat, fault.manifest.calls.stat, Except.map]
   exact ⟨fileCalls.readOptionalManifest directory stat fault.manifest.calls.regular (by
-      simp only [MarkedTemporaryReadCalls.readWith, Bind.bind, EStateM.bind, seen.openedRaw, seen.readRaw,
-        seen.releasedRaw, Pure.pure, EStateM.pure]), opened,
+      simp only [MarkedTemporaryReadCalls.readWith, seen.openedRaw, seen.readRaw, SyncHandleRouting.dataErrorDropState,
+        seen.releasedRaw]), opened,
     seen.sameSlot.trans (congrArg (fun handle : CheckpointOpenHandle => handle.2.1) opened),
     opened.symm ▸ fault.readsManifest.2.2.1, census, census.symm ▸ fault.readsManifest.2.2.2.2⟩
 

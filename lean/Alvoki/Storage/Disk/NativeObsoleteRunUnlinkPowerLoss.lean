@@ -125,6 +125,34 @@ structure NativeObsoleteRunUnlinkCrashReopen (current next : NativeReadPosition 
       seen.ReadsSurvivor (current.state.session.directory.file (.walSegment segment.first)) segment.bytes)
   replay : InstalledClientReplay log current.reads history next.state.writer.installed next.state.session
 
+/-- One specified reader is enough to attach the physical survivor
+and previous ledger to its exact returned ready position. -/
+theorem NativeObsoleteRunUnlinkCrashReopen.fromReader (current : NativeReadPosition history log)
+    {cut : NativeObsoleteRunUnlinkCut current.state} (stop : NativeObsoleteRunUnlinkStop cut)
+    (crash : NativeObsoleteRunUnlinkCrash cut) {input : FilePath}
+    {layout : CanonicalKeeperLayout crash.observed.retry.image current.state.writer.history}
+    {selected : SelectedIntegrityCheckpoint crash.runs
+      crash.observed.retry.image.directory.active.manifest current.state.writer.checkpoint}
+    (reader : NativeReadyRestartReads crash.observed input layout selected) {next : NativeReadyState}
+    (reached : reader.ReachedSession next history log current.reads)
+    (lost : BoundedReopenTrace current.state.session.directory (· = current.state.writer.target)
+      current.state.files crash.observed.retry) :
+    NativeObsoleteRunUnlinkCrashReopen current
+      ⟨reader.run, next, next, current.reads, reached.1⟩ stop crash input := by
+  obtain ⟨stopped, _, survivors, _, _, _⟩ := current.stopsDuringObsoleteRunUnlink cut stop
+  obtain ⟨continuation, _, owner, directorySlot, cache, census, sessionFresh, phaseFresh, lock, directory,
+    pair, target, checkpoint, durable, absent, manifest, runs, marker, keeper, seals, _⟩ := reached
+  have keptLock : next.census.inode next.owner.description = current.state.census.inode current.state.owner.description :=
+    lock.trans (congrArg (fun census : DescriptorInventory => census.inode current.state.owner.description) cut.census.2)
+  have keptDirectory : next.census.inode next.directorySlot.description =
+      current.state.census.inode current.state.directorySlot.description :=
+    directory.trans (congrArg (fun census : DescriptorInventory => census.inode current.state.directorySlot.description) cut.census.2)
+  exact ⟨stopped, survivors _ crash.survived, crash.kept current.readPrefix.refines.1,
+    fun _ retained => crash.usesReachedBindings retained, fun _ _ _ stored => crash.survivingRun stored,
+    lost, rfl, sessionFresh, phaseFresh, keptLock, keptDirectory, pair, target, checkpoint, durable,
+    ⟨layout, selected, reader, rfl, continuation.frames.1, cache, census, owner, directorySlot, absent, manifest, runs,
+      marker, keeper, seals⟩, continuation.guardedReplay⟩
+
 theorem NativeReadPosition.recoversInterruptedRunUnlink (current : NativeReadPosition history log)
     {cut : NativeObsoleteRunUnlinkCut current.state} (stop : NativeObsoleteRunUnlinkStop cut)
     (crash : NativeObsoleteRunUnlinkCrash cut) {input : FilePath}
@@ -134,21 +162,9 @@ theorem NativeReadPosition.recoversInterruptedRunUnlink (current : NativeReadPos
         crash.observed.retry.image.directory.active.manifest current.state.writer.checkpoint,
       Nonempty (NativeReadyRestartReads crash.observed input layout selected)) :
     ∃ next, NativeObsoleteRunUnlinkCrashReopen current next stop crash input := by
-  obtain ⟨valid, sameHistory, _⟩ := current.readPrefix.refines
-  obtain ⟨stopped, held, survivors, _, pending, bounded⟩ := current.stopsDuringObsoleteRunUnlink cut stop
-  obtain ⟨loss, _, layout, selected, seen, next, continuation, path, owner, directorySlot, cache, census,
-    sessionFresh, phaseFresh, lock, directory, pair, target, checkpoint, durable, absent, manifest, runs, marker,
-    keeper, seals, _⟩ := crash.observed.restarts (cut.survivorValid valid crash.survived) sameHistory pending bounded observe
-  let position : NativeReadPosition history log := ⟨seen.run, next, next, current.reads, continuation⟩
-  have lock : next.census.inode next.owner.description = current.state.census.inode current.state.owner.description :=
-    lock.trans (congrArg (fun census : DescriptorInventory => census.inode current.state.owner.description) cut.census.2)
-  have directory : next.census.inode next.directorySlot.description =
-      current.state.census.inode current.state.directorySlot.description :=
-    directory.trans (congrArg (fun census : DescriptorInventory => census.inode current.state.directorySlot.description) cut.census.2)
-  exact ⟨position, stopped, survivors _ crash.survived, crash.kept valid, fun _ retained => crash.usesReachedBindings retained,
-    fun _ _ _ stored => crash.survivingRun stored, loss, rfl, sessionFresh, phaseFresh, lock,
-    directory, pair, target, checkpoint, durable,
-    ⟨layout, selected, seen, rfl, continuation.frames.1, cache, census, owner, directorySlot, absent, manifest, runs, marker, keeper, seals⟩,
-    continuation.guardedReplay⟩
+  obtain ⟨valid, sameHistory, pending⟩ := current.readPrefix.refines
+  obtain ⟨lost, _, layout, selected, reader, next, reached⟩ :=
+    crash.observed.restarts (cut.survivorValid valid crash.survived) sameHistory pending current.readPrefix.readsBounded observe
+  exact ⟨_, NativeObsoleteRunUnlinkCrashReopen.fromReader current stop crash reader reached lost⟩
 
 end Alvoki.Storage.DiskSession

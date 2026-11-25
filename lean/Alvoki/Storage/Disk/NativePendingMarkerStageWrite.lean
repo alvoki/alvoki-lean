@@ -9,26 +9,74 @@ private abbrev StageFiles := DescriptorInventory × WriteFiles
 private abbrev StageState := CensusDirectoryCache × StageFiles
 private abbrev StageM := ExceptT IO.Error (EStateM StageCall StageState)
 
-private def emptyStage {before : NativeReadyState} (prepared : NativeReadyWritePreparation before) : WriteFiles :=
-  { prepared.appended with marker := { prepared.appended.marker with staged := some (ByteArray.empty, false) } }
+private def stageContents {before : NativeReadyState} (prepared : NativeReadyWritePreparation before)
+    (contents : Option (ByteArray × Bool)) : WriteFiles :=
+  { prepared.appended with marker := { prepared.appended.marker with staged := contents } }
 
-/-- The first exclusive-create succeeds on the absent staging path. Its
-same temporary descriptor sees the issued marker write, which can stop
-with an observed visible byte prefix. -/
+/-- The callbacks up to the marker payload write, in the stage file
+and descriptor projection. The no-follow report includes the child
+identity consumed by the regular-file check before retrying. -/
+structure MarkerStageOpenCalls where
+  tryCreate : FilePath → EStateM IO.Error StageFiles (Except IO.Error CheckpointOpenHandle)
+  statNoFollow : FilePath → EStateM IO.Error StageFiles (Except IO.Error (IO.FS.Metadata × DeviceInode))
+  unlink : FilePath → EStateM IO.Error StageFiles (Except IO.Error Unit)
+  create : FilePath → EStateM IO.Error StageFiles CheckpointOpenHandle
+
+namespace MarkerStageOpenCalls
+
+def metadata (calls : MarkerStageOpenCalls) (path : FilePath) :
+    EStateM IO.Error StageFiles (Except IO.Error IO.FS.Metadata) :=
+  (calls.statNoFollow path).map (Except.map Prod.fst)
+
+end MarkerStageOpenCalls
+
+/-- The first exclusive create found a stale regular scratch name.
+The checked unlink removes only that binding and the next exclusive
+create supplies the slot for the pending payload write. -/
+structure MarkerStageStaleRetry {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
+    (allocated : NativeReadyWriteStageAllocation prepared) (calls : MarkerStageOpenCalls) where
+  stale : RunChildLookup allocated.root "WAL.commit.next" allocated.view
+  fileName : String
+  details : String
+  conflict : calls.tryCreate prepared.stagedPath (allocated.afterSelect, prepared.appended) =
+    .ok (.error (.alreadyExists fileName 17 details)) (allocated.afterSelect, prepared.appended)
+  metadata : IO.FS.Metadata
+  checked : calls.statNoFollow prepared.stagedPath (allocated.afterSelect, prepared.appended) =
+    .ok (.ok (metadata, stale.child)) (allocated.afterSelect, prepared.appended)
+  regular : metadata.type = .file
+  detached : calls.unlink prepared.stagedPath (allocated.afterSelect, prepared.appended) =
+    .ok (.ok ()) (allocated.afterSelect, stageContents prepared none)
+  detachedView : DirectoryReadNamespace
+  objects : detachedView.modelObject = allocated.view.modelObject
+  unbound : detachedView.child allocated.root "WAL.commit.next" = none
+  otherNames : ∀ name, name ≠ "WAL.commit.next" → detachedView.child allocated.root name = allocated.view.child allocated.root name
+  opened : calls.create prepared.stagedPath (allocated.afterSelect, stageContents prepared none) =
+    .ok allocated.stageHandle (allocated.afterMarkerOpen, stageContents prepared (some (ByteArray.empty, false)))
+
+/-- A direct create or a checked stale retry reaches the same payload
+write schedule, with the handle supplied by the successful create. -/
+inductive MarkerStageAcquisition {before : NativeReadyState} {prepared : NativeReadyWritePreparation before}
+    (allocated : NativeReadyWriteStageAllocation prepared) (calls : MarkerStageOpenCalls) where
+  | first (absent : allocated.view.child allocated.root "WAL.commit.next" = none)
+      (opened : calls.tryCreate prepared.stagedPath (allocated.afterSelect, prepared.appended) =
+        .ok (.ok allocated.stageHandle) (allocated.afterMarkerOpen, stageContents prepared (some (ByteArray.empty, false))))
+  | retry (seen : MarkerStageStaleRetry allocated calls)
+
+/-- The actual exclusive create supplies the temporary descriptor for
+the issued marker data write. The stop reports a visible byte prefix. -/
 structure NativeMarkerStageWriteStop {before : NativeReadyState} (prepared : NativeReadyWritePreparation before) where
   request : WriteRequest
   rows : request.rows = prepared.rows
   allocated : NativeReadyWriteStageAllocation prepared
   oldMarker : RunChildLookup allocated.root "WAL.commit" allocated.view
-  absent : allocated.view.child allocated.root "WAL.commit.next" = none
   distinct : allocated.stageView.modelObject allocated.openedMarker.child ≠ allocated.view.modelObject oldMarker.child
-  tryCreate : FilePath → EStateM IO.Error StageFiles (Except IO.Error CheckpointOpenHandle)
-  opened : tryCreate prepared.stagedPath (allocated.afterSelect, prepared.appended) =
-    .ok (.ok allocated.stageHandle) (allocated.afterMarkerOpen, emptyStage prepared)
+  calls : MarkerStageOpenCalls
+  acquisition : MarkerStageAcquisition allocated calls
   write : CheckpointOpenHandle → ByteArray → EStateM StageCall StageFiles (Except IO.Error Unit)
   visiblePrefix : ByteArray
   isPrefix : ∃ suffix, visiblePrefix ++ suffix = prepared.marker
-  stopped : write allocated.stageHandle prepared.marker (allocated.afterMarkerOpen, emptyStage prepared) =
+  stopped : write allocated.stageHandle prepared.marker
+      (allocated.afterMarkerOpen, stageContents prepared (some (ByteArray.empty, false))) =
     .error (prepared.stagedPath, prepared.marker) (allocated.afterMarkerOpen,
       (MarkerInterruption.stage (.unsynced (some visiblePrefix))).interrupt prepared.marker prepared.appended)
 
@@ -44,9 +92,8 @@ def reached (stop : NativeMarkerStageWriteStop prepared) : StageFiles :=
 def session (_stop : NativeMarkerStageWriteStop prepared) : SegmentedSession :=
   { before.session with phase := .poisoned }
 
-private def tryOpen (stop : NativeMarkerStageWriteStop prepared) (path : FilePath) :
-    StageM (Except IO.Error CheckpointOpenHandle) :=
-  fun (cache, files) => match stop.tryCreate path files with
+private def stageCall (call : EStateM IO.Error StageFiles α) : StageM α :=
+  fun (cache, files) => match call files with
   | .ok value reached => .ok (.ok value) (cache, reached)
   | .error cause reached => .ok (.error cause) (cache, reached)
 
@@ -56,53 +103,84 @@ private def writeStage (stop : NativeMarkerStageWriteStop prepared) (file : Chec
   | .ok value reached => .ok value (cache, reached)
   | .error tag reached => .error tag (cache, reached)
 
+private noncomputable def detachStale (calls : MarkerStageOpenCalls) (path : FilePath) : StageM Unit :=
+  removeStaleStagingWith (fun name => stageCall (calls.metadata name)) (fun name => stageCall (calls.unlink name)) path
+
+/-- The no-follow metadata for the observed child controls the actual
+cleanup helper. It returns with exactly the scratch projection cleared. -/
+theorem staleDetachReturns {allocated : NativeReadyWriteStageAllocation prepared} {calls : MarkerStageOpenCalls}
+    (seen : MarkerStageStaleRetry allocated calls) (cache : CensusDirectoryCache) :
+    (detachStale calls prepared.stagedPath).run (cache, allocated.afterSelect, prepared.appended) =
+      .ok (.ok ()) (cache, allocated.afterSelect, stageContents prepared none) ∧
+    allocated.view.child allocated.root "WAL.commit.next" = some seen.stale.child ∧
+    seen.detachedView.child allocated.root "WAL.commit.next" = none ∧
+    seen.detachedView.modelObject = allocated.stageView.modelObject ∧
+    (∀ name, name ≠ "WAL.commit.next" → allocated.stageView.child allocated.root name =
+      seen.detachedView.child allocated.root name) := by
+  have bound := seen.stale.binds
+  rw [seen.stale.atRoot, seen.stale.atName] at bound
+  refine ⟨?_, bound, seen.unbound, seen.objects.trans allocated.stageObjects.symm,
+    fun name other => (allocated.stageNames name other).trans (seen.otherNames name other).symm⟩
+  have regular : (seen.metadata.type == .file) = true := by rw [seen.regular]; rfl
+  simp [detachStale, removeStaleStagingWith, MarkerStageOpenCalls.metadata, stageCall, EStateM.map, Except.map,
+    Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind, Pure.pure, ExceptT.pure,
+    EStateM.pure, seen.checked, regular, seen.detached, RunCollection.ownedUnlinkResult]
+
 /-- Run the real exclusive-create, retry, write and flush schedule. Only
 a return of that schedule can remember the staging handle in cache. -/
-noncomputable def stage (stop : NativeMarkerStageWriteStop prepared) (detach : FilePath → StageM Unit)
-    (create : FilePath → StageM CheckpointOpenHandle) (flush : CheckpointOpenHandle → StageM Unit)
+noncomputable def stage (stop : NativeMarkerStageWriteStop prepared) (flush : CheckpointOpenHandle → StageM Unit)
     (path : FilePath) (bytes : ByteArray) : StageM Unit := do
-  let file ← writeFreshStagedWith stop.tryOpen detach create stop.writeStage flush path bytes
+  let file ← writeFreshStagedWith (fun name => stageCall (stop.calls.tryCreate name)) (detachStale stop.calls)
+    (fun name => stageCall (stop.calls.create name)) stop.writeStage flush path bytes
   fun (cache, files) => .ok (.ok ()) (cache.remember path file, files)
 
-theorem stopsStage (stop : NativeMarkerStageWriteStop prepared) (detach create flush) :
-    (stop.stage detach create flush prepared.stagedPath prepared.marker).run
+theorem stopsStage (stop : NativeMarkerStageWriteStop prepared) (flush) :
+    (stop.stage flush prepared.stagedPath prepared.marker).run
       (stop.allocated.appendCache, stop.allocated.afterSelect, prepared.appended) =
     .error (prepared.stagedPath, prepared.marker) (stop.allocated.appendCache, stop.reached) := by
-  simp [stage, writeFreshStagedWith, withFreshStaging, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
-    EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure, tryOpen, stop.opened, writeStage, stop.stopped, cut, reached]
+  cases stop.acquisition with
+  | first absent opened =>
+    simp [stage, writeFreshStagedWith, withFreshStaging, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
+      EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure, stageCall, opened, writeStage, stop.stopped, cut, reached]
+  | retry seen =>
+    have detached := (staleDetachReturns seen stop.allocated.appendCache).1
+    change detachStale stop.calls prepared.stagedPath (stop.allocated.appendCache, stop.allocated.afterSelect, prepared.appended) =
+      _ at detached
+    simp [stage, writeFreshStagedWith, withFreshStaging, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
+      EStateM.bind, Pure.pure, ExceptT.pure, stageCall, seen.conflict, detached, seen.opened,
+      writeStage, stop.stopped, cut, reached]
 
-noncomputable def publication (stop : NativeMarkerStageWriteStop prepared) (detach : FilePath → StageM Unit)
-    (create : FilePath → StageM CheckpointOpenHandle) (flush : CheckpointOpenHandle → StageM Unit)
+noncomputable def publication (stop : NativeMarkerStageWriteStop prepared) (flush : CheckpointOpenHandle → StageM Unit)
     (sync : Array FilePath → StageM Unit) (rename : FilePath → FilePath → StageM Unit)
     (installed : Installed) (events : List WAL.Write) (bytes : Nat) : StageM Unit :=
   let seen := stop.allocated
   commitBytesAt before.session.directory installed.activeFirst (WAL.encodeBatch events) bytes
     (fun path payload => observeReturnedWriteCall seen.afterSelect (seen.append path payload))
-    (stop.stage detach create flush) sync rename
+    (stop.stage flush) sync rename
 
-theorem stopsPublication (stop : NativeMarkerStageWriteStop prepared) (detach create flush sync rename) :
-    (stop.publication detach create flush sync rename before.writer.installed prepared.batch prepared.count).run
+theorem stopsPublication (stop : NativeMarkerStageWriteStop prepared) (flush sync rename) :
+    (stop.publication flush sync rename before.writer.installed prepared.batch prepared.count).run
       (before.cache, before.census, prepared.initial) =
     .error (prepared.stagedPath, prepared.marker) (stop.allocated.appendCache, stop.reached) := by
-  have stage := stop.stopsStage detach create flush
-  change stop.stage detach create flush prepared.stagedPath prepared.marker
+  have stage := stop.stopsStage flush
+  change stop.stage flush prepared.stagedPath prepared.marker
       (stop.allocated.appendCache, stop.allocated.afterSelect, prepared.appended) = _ at stage
   rw [publication, commitBytesAt_fileEffects]
   simp only [WAL.Boundary.commit, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind,
     observeReturnedWriteCall, stop.allocated.appendReturns, show WAL.Boundary.encode prepared.count.toUInt64 = prepared.marker from rfl, stage]
 
-noncomputable def run (stop : NativeMarkerStageWriteStop prepared) (detach create flush sync rename) :=
+noncomputable def run (stop : NativeMarkerStageWriteStop prepared) (flush sync rename) :=
   stop.request.runWithInterruption before.session.directory stop.allocated.activeGuard.lookup
-    (stop.publication detach create flush sync rename)
+    (stop.publication flush sync rename)
     (before.session.phase, ⟨(before.cache, before.census, prepared.initial), before.files.owners⟩)
 
-theorem stopsWrite (stop : NativeMarkerStageWriteStop prepared) (valid : before.Valid) (detach create flush sync rename) :
-    stop.run detach create flush sync rename = .error (prepared.stagedPath, prepared.marker)
+theorem stopsWrite (stop : NativeMarkerStageWriteStop prepared) (valid : before.Valid) (flush sync rename) :
+    stop.run flush sync rename = .error (prepared.stagedPath, prepared.marker)
       (.poisoned, ⟨(stop.allocated.appendCache, stop.reached), before.files.owners⟩) := by
   unfold run
   rw [valid.phase]
   exact stop.request.stopsPublication stop.rows prepared.nonempty prepared.prepared prepared.fits
-    stop.allocated.activeGuard (stop.publication detach create flush sync rename) (stop.stopsPublication detach create flush sync rename)
+    stop.allocated.activeGuard (stop.publication flush sync rename) (stop.stopsPublication flush sync rename)
 
 def files (stop : NativeMarkerStageWriteStop prepared) : FileImage :=
   resumedAppendFiles before.files.image before.writer.history before.writer.wal.active.first stop.reached.2
@@ -139,7 +217,7 @@ staging description is live at the raw call and still absent from the
 pending cache, and the original held lock survives. -/
 structure NativePendingMarkerStageWrite (current : NativeReadPosition history log)
     {prepared : NativeReadyWritePreparation current.state} (stop : NativeMarkerStageWriteStop prepared) : Prop where
-  stopped : ∀ detach create flush sync rename, stop.run detach create flush sync rename =
+  stopped : ∀ flush sync rename, stop.run flush sync rename =
     .error (prepared.stagedPath, prepared.marker) (.poisoned,
       ⟨(stop.allocated.appendCache, stop.reached), current.state.files.owners⟩)
   phase : stop.session.phase = .poisoned

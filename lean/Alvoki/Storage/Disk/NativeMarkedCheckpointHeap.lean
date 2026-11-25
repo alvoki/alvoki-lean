@@ -1,8 +1,9 @@
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
+import Alvoki.Storage.Disk.StagedHandleCustody
 
 namespace Alvoki.Storage.DiskSession
 
-open System Manifest WalSegmentRepair
+open System Manifest WalSegmentRepair SyncHandleRouting
 
 structure MarkedTemporaryReadCalls (heap : Type) where
   stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)
@@ -10,14 +11,26 @@ structure MarkedTemporaryReadCalls (heap : Type) where
   readChunk : IO.FS.Handle → USize → EStateM IO.Error heap ByteArray
   release : IO.FS.Handle → EStateM IO.Error heap Unit
 
-/-- Successful read scope with the observed release of its temporary
-handle. The native adapter releases this handle when its scope exits. -/
+/-- The returned read drops the unretained handle on either outcome.
+The pinned runtime ignores the finalizer status. No handle was acquired
+when the open itself fails. -/
 def MarkedTemporaryReadCalls.readWith (calls : MarkedTemporaryReadCalls heap) (path : FilePath)
-    (read : IO.FS.Handle → EStateM IO.Error heap ByteArray) : EStateM IO.Error heap ByteArray := do
-  let file ← calls.openRead path
-  let bytes ← read file
-  calls.release file
-  pure bytes
+    (read : IO.FS.Handle → EStateM IO.Error heap ByteArray) : EStateM IO.Error heap ByteArray := fun before =>
+  match calls.openRead path before with
+  | .error cause reached => .error cause reached
+  | .ok file opened =>
+    match read file opened with
+    | .ok bytes reached => .ok bytes (dataErrorDropState calls.release file reached)
+    | .error cause reached => .error cause (dataErrorDropState calls.release file reached)
+
+theorem MarkedTemporaryReadCalls.readWith_error (calls : MarkedTemporaryReadCalls heap)
+    (path : FilePath) (read : IO.FS.Handle → EStateM IO.Error heap ByteArray)
+    {before opened failed : heap} {file : IO.FS.Handle} {cause : IO.Error}
+    (openedRaw : calls.openRead path before = .ok file opened)
+    (readRaw : read file opened = .error cause failed) :
+    calls.readWith path read before =
+      .error cause (dataErrorDropState calls.release file failed) := by
+  simp only [readWith, openedRaw, readRaw]
 
 private def MarkedTemporaryReadCalls.readMetadata (calls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
     (path : FilePath) (metadata : IO.FS.Metadata) (file : IO.FS.Handle) : EStateM IO.Error heap ByteArray :=
@@ -33,6 +46,22 @@ def MarkedTemporaryReadCalls.readOptional (calls : MarkedTemporaryReadCalls heap
     (fun metadata => calls.readWith path (calls.readMetadata directory path metadata))
     (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
 
+/-- Project either result of acquisition on the admitted manifest. -/
+theorem MarkedTemporaryReadCalls.readOptionalManifest_effects (calls : MarkedTemporaryReadCalls heap)
+    (directory : DiskDirectory) {before : heap} {metadata : IO.FS.Metadata}
+    (stat : calls.stat (directory.file .manifest) before = .ok (.ok metadata) before)
+    (regular : metadata.type = .file) :
+    calls.readOptional directory (directory.file .manifest) before =
+      ((calls.readWith (directory.file .manifest) fun file =>
+        readIntegrityManifestPrefixWith (calls.readChunk file) metadata.byteSize.toNat) >>= fun bytes => pure (some bytes))
+        before := by
+  have schedule : calls.readMetadata directory (directory.file .manifest) metadata =
+      fun file => readIntegrityManifestPrefixWith (calls.readChunk file) metadata.byteSize.toNat := by
+    funext file
+    simp [MarkedTemporaryReadCalls.readMetadata, manifestPath_ne_boundary]
+  simp [readOptional, schedule, readOptionalDatabaseFileWithMetadata, stat, regular,
+    show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
 theorem MarkedTemporaryReadCalls.readOptionalManifest (calls : MarkedTemporaryReadCalls heap)
     (directory : DiskDirectory) {before after : heap} {metadata : IO.FS.Metadata} {bytes : ByteArray}
     (stat : calls.stat (directory.file .manifest) before = .ok (.ok metadata) before)
@@ -40,18 +69,31 @@ theorem MarkedTemporaryReadCalls.readOptionalManifest (calls : MarkedTemporaryRe
     (read : calls.readWith (directory.file .manifest)
       (fun file => readIntegrityManifestPrefixWith (calls.readChunk file) metadata.byteSize.toNat) before = .ok bytes after) :
     calls.readOptional directory (directory.file .manifest) before = .ok (some bytes) after := by
-  have schedule : calls.readMetadata directory (directory.file .manifest) metadata =
-      fun file => readIntegrityManifestPrefixWith (calls.readChunk file) metadata.byteSize.toNat := by
-    funext file
-    simp [MarkedTemporaryReadCalls.readMetadata, manifestPath_ne_boundary]
-  simp [readOptional, schedule, readOptionalDatabaseFileWithMetadata, stat, regular,
-    read, show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  rw [calls.readOptionalManifest_effects directory stat regular]
+  simp only [Bind.bind, EStateM.bind, read, Pure.pure, EStateM.pure]
 
 theorem MarkedTemporaryReadCalls.readOptionalMissing (calls : MarkedTemporaryReadCalls heap)
     (directory : DiskDirectory) (path : FilePath) {before : heap} {name message : String}
     (stat : calls.stat path before = .ok (.error (.noFileOrDirectory name 2 message)) before) :
     calls.readOptional directory path before = .ok none before := by
   simp [readOptional, readOptionalDatabaseFileWithMetadata, stat, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
+/-- Project either result of the bounded read on the admitted marker. -/
+theorem MarkedTemporaryReadCalls.readOptionalMarker_effects (calls : MarkedTemporaryReadCalls heap)
+    (directory : DiskDirectory) {before : heap} {metadata : IO.FS.Metadata}
+    (stat : calls.stat (directory.file .walBoundary) before = .ok (.ok metadata) before)
+    (regular : metadata.type = .file) :
+    calls.readOptional directory (directory.file .walBoundary) before =
+      ((calls.readWith (directory.file .walBoundary) fun file =>
+        readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
+          WAL.Boundary.acquisitionLimit ByteArray.empty) >>= fun bytes => pure (some bytes)) before := by
+  have schedule : calls.readMetadata directory (directory.file .walBoundary) metadata =
+      fun file => readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
+        WAL.Boundary.acquisitionLimit ByteArray.empty := by
+    funext file
+    simp [MarkedTemporaryReadCalls.readMetadata]
+  simp [readOptional, schedule, readOptionalDatabaseFileWithMetadata, stat, regular,
+    show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
 
 theorem MarkedTemporaryReadCalls.readOptionalMarker (calls : MarkedTemporaryReadCalls heap)
     (directory : DiskDirectory) {before after : heap} {metadata : IO.FS.Metadata} {bytes : ByteArray}
@@ -61,13 +103,8 @@ theorem MarkedTemporaryReadCalls.readOptionalMarker (calls : MarkedTemporaryRead
       (fun file => readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
         WAL.Boundary.acquisitionLimit ByteArray.empty) before = .ok bytes after) :
     calls.readOptional directory (directory.file .walBoundary) before = .ok (some bytes) after := by
-  have schedule : calls.readMetadata directory (directory.file .walBoundary) metadata =
-      fun file => readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
-        WAL.Boundary.acquisitionLimit ByteArray.empty := by
-    funext file
-    simp [MarkedTemporaryReadCalls.readMetadata]
-  simp [readOptional, schedule, readOptionalDatabaseFileWithMetadata, stat, regular,
-    read, show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  rw [calls.readOptionalMarker_effects directory stat regular]
+  simp only [Bind.bind, EStateM.bind, read, Pure.pure, EStateM.pure]
 
 def MarkedTemporaryReadCalls.runSize (calls : MarkedTemporaryReadCalls heap) (path : FilePath) :
     EStateM IO.Error heap Nat := do
@@ -75,6 +112,14 @@ def MarkedTemporaryReadCalls.runSize (calls : MarkedTemporaryReadCalls heap) (pa
   unless metadata.type == .file do
     throw (IO.userError s!"expected a regular database file: '{path}'")
   pure metadata.byteSize.toNat
+
+theorem MarkedTemporaryReadCalls.measuresRun (calls : MarkedTemporaryReadCalls heap)
+    {path : FilePath} {before : heap} {metadata : IO.FS.Metadata} {bytes : ByteArray}
+    (stat : calls.stat path before = .ok (.ok metadata) before)
+    (regular : metadata.type = .file) (extent : metadata.byteSize.toNat = bytes.size) :
+    calls.runSize path before = .ok bytes.size before := by
+  simp [runSize, stat, regular, extent, liftExcept, show (IO.FS.FileType.file == .file) = true from rfl,
+    Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
 
 private def MarkedTemporaryReadCalls.runRead (calls : MarkedTemporaryReadCalls heap) (count : Nat)
     (file : IO.FS.Handle) : EStateM IO.Error heap ByteArray :=
@@ -122,14 +167,15 @@ theorem MarkedReadCacheFrame.keepsInitialCache (frame : MarkedReadCacheFrame see
 /-- The raw open, bounded read and release all use the selected temporary
 handle. The release report connects its reached heap to the same census
 as the chronological descriptor model. -/
-structure MarkedTemporaryReadReport (seed : OpenSyncCacheAllocations admission.opened view init entry)
+structure RawTemporaryReadReport (observations : CheckpointRunChunkReads)
+    (seed : OpenSyncCacheAllocations admission.opened view init entry)
     (calls : MarkedTemporaryReadCalls heap) (path : FilePath) (drops : List LockReferenceDrop)
     (read : IO.FS.Handle → EStateM IO.Error heap ByteArray) (bytes : ByteArray) (before after : heap) where
   file : IO.FS.Handle
   opened : heap
   finished : heap
   openedRaw : calls.openRead path before = .ok file opened
-  sameOpened : reads.reads.openRead path = .ok (view.handle opened file)
+  sameOpened : observations.openRead path = .ok (view.handle opened file)
   readRaw : read file opened = .ok bytes finished
   sameSlot : (view.handle finished file).2.1 = (view.handle opened file).2.1
   releasedRaw : calls.release file finished = .ok () after
@@ -138,19 +184,18 @@ structure MarkedTemporaryReadReport (seed : OpenSyncCacheAllocations admission.o
   readFrame : MarkedReadCacheFrame seed opened finished
   releaseFrame : MarkedReadCacheFrame seed finished after
 
-theorem MarkedTemporaryReadReport.returns {calls : MarkedTemporaryReadCalls heap}
+theorem RawTemporaryReadReport.returns {observations : CheckpointRunChunkReads} {calls : MarkedTemporaryReadCalls heap}
     {read : IO.FS.Handle → EStateM IO.Error heap ByteArray}
-    (report : MarkedTemporaryReadReport (reads := reads) seed calls path drops read bytes before after) :
+    (report : RawTemporaryReadReport observations seed calls path drops read bytes before after) :
     calls.readWith path read before = .ok bytes after ∧ MarkedReadCacheFrame seed before after := by
   refine ⟨?_, (report.openFrame.trans report.readFrame).trans report.releaseFrame⟩
-  simp [MarkedTemporaryReadCalls.readWith, Bind.bind, EStateM.bind, report.openedRaw, report.readRaw,
-    report.releasedRaw, Pure.pure, EStateM.pure]
+  simp only [MarkedTemporaryReadCalls.readWith, report.openedRaw, report.readRaw, dataErrorDropState, report.releasedRaw]
 
-theorem MarkedTemporaryReadReport.censusAfter {calls : MarkedTemporaryReadCalls heap}
+theorem RawTemporaryReadReport.censusAfter {observations : CheckpointRunChunkReads} {calls : MarkedTemporaryReadCalls heap}
     {read : IO.FS.Handle → EStateM IO.Error heap ByteArray}
-    {name : String} {file : RunChunkPathReport reads.reads path name admission.root admission.view}
+    {name : String} {file : RunChunkPathReport observations path name admission.root admission.view}
     {initial : DescriptorInventory} (custody : TemporaryPrefixCustody file initial drops)
-    (raw : MarkedTemporaryReadReport (reads := reads) seed calls path drops read bytes before after) :
+    (raw : RawTemporaryReadReport observations seed calls path drops read bytes before after) :
     view.descriptors after = initial.afterDrops (custody.beforeOpen ++ drops) ∧
     (view.descriptors after).references file.slot.description = [] ∧
     (view.handle raw.finished raw.file).2.1 = file.slot := by
@@ -159,6 +204,11 @@ theorem MarkedTemporaryReadReport.censusAfter {calls : MarkedTemporaryReadCalls 
   rw [raw.census, same]
   exact ⟨(custody.closes (released := fun _ => drops)).1,
     (custody.closes (released := fun _ => drops)).2, releaseSlot⟩
+
+abbrev MarkedTemporaryReadReport (seed : OpenSyncCacheAllocations admission.opened view init entry)
+    (calls : MarkedTemporaryReadCalls heap) (path : FilePath) (drops : List LockReferenceDrop)
+    (read : IO.FS.Handle → EStateM IO.Error heap ByteArray) (bytes : ByteArray) (before after : heap) :=
+  RawTemporaryReadReport reads.reads seed calls path drops read bytes before after
 
 private theorem MarkedTemporaryReadReport.readsOptional {calls : MarkedTemporaryReadCalls heap}
     {name : String} {file : RunChunkPathReport reads.reads path name admission.root admission.view}
@@ -261,9 +311,7 @@ private theorem readsRun (report : NativeMarkedCheckpointReadHeap seed chronolog
   · have stat := report.runStat bytes manifest bound decoded index within
     change calls.stat path (report.atRun index) = .ok ((reads.reads.stat path).map Prod.fst) (report.atRun index) at stat
     rw [file.stat] at stat
-    simp [MarkedTemporaryReadCalls.runSize, stat, file.regular, Except.map, liftExcept,
-      show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
-    exact measured
+    exact calls.measuresRun (by simpa only [Except.map] using stat) file.regular measured
   · rw [runReadDrops, events, ← DescriptorInventory.afterDrops_append]
     exact (raw.censusAfter custody).1
 

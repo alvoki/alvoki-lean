@@ -24,8 +24,6 @@ structure BootstrapMarkerPublicationHeap.Physical
     (inodes : heap → WalInodeImage)
     {marker : BootstrapMarkerCustody listed} (handoff : BootstrapKeeperMarkerHandoff keeper marker)
     (effects : BootstrapKeeperMarkerHandoff.ReturnedCensus marker) where
-  openedFresh : marker.tryCreate (directory.file .stagedWalBoundary)
-    (marker.toBootstrapMarkerStaging.inputState, marker.initial) = .ok (.ok (stagedMarkerHandle marker)) marker.afterOpen
   staged : BootstrapFileProjection.result view inodes view.handle
       (calls.stage (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0) markerEntry) =
     marker.toBootstrapMarkerStaging.stage (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0)
@@ -83,15 +81,10 @@ theorem settles (seen : chronology.Physical inodes handoff effects)
   have stageInput : BootstrapFileProjection.atHeap view inodes markerEntry =
       (marker.toBootstrapMarkerStaging.inputState, marker.initial) :=
     Prod.ext keeperReady (keeperInodes.trans handoff.stageInput.symm)
-  have stageWrites : marker.toBootstrapMarkerStaging.stage (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0)
-      (marker.toBootstrapMarkerStaging.inputState, marker.initial) =
-      .ok (stagedMarkerHandle marker) (marker.toBootstrapMarkerStaging.writtenState, marker.inodeState) := by
-    unfold BootstrapMarkerStaging.stage writeFreshStagedWith withFreshStaging
-    simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, seen.openedFresh, marker.writeReturned, marker.flushReturned]
   have staged := seen.staged
   have rawStage : calls.stage (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0) markerEntry =
       .ok raw.handle raw.produced := raw.returnedHandle
-  rw [rawStage, stageInput, stageWrites] at staged
+  rw [rawStage, stageInput, marker.toBootstrapMarkerStaging.stageReturns] at staged
   obtain ⟨stagedHandle, stagedFiles⟩ := EStateM.Result.ok.inj staged
   have markerHandle : view.handle raw.consumed raw.handle = stagedMarkerHandle marker :=
     raw.sameIssuing.trans (raw.sameProduced.symm.trans stagedHandle)

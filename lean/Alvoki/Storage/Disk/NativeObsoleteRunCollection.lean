@@ -8,7 +8,7 @@ open System CheckpointPublication SyncHandleRouting
 
 /-- Interpret the production no-follow probe. Linux ENOENT denotes an
 absent run. Every other lookup error stops the selector. -/
-private def runKindAt (stat : FilePath → Except IO.Error IO.FS.Metadata) (path : FilePath) :
+def runKindAt (stat : FilePath → Except IO.Error IO.FS.Metadata) (path : FilePath) :
     Except IO.Error (Except String IO.FS.FileType) :=
   match stat path with
   | .ok metadata => .ok (.ok metadata.type)
@@ -248,6 +248,15 @@ abbrev run (seen : NativeObsoleteRunPass state) := seen.toNativeObsoleteRunPlan.
 
 def after (seen : NativeObsoleteRunPass state) : RunUnlinkImage :=
   directoryImage seen.atBarrier seen.outcome
+
+/-- The status reported by the issued directory fsync, before the
+singleton group's diagnostic wrapping. -/
+abbrev fsyncResult (seen : NativeObsoleteRunPass state) (reached : α) : EStateM.Result IO.Error α Unit :=
+  syncResult seen.outcome reached
+
+/-- The public collector reports the directory pathname on sync errors. -/
+abbrev collectorResult (seen : NativeObsoleteRunPass state) (reached : α) : EStateM.Result IO.Error α Unit :=
+  groupedResult state.session.directory seen.outcome reached
 
 theorem after_eq (seen : NativeObsoleteRunPass state) :
     seen.after = if seen.outcome.effective then seen.atBarrier.syncDirectory else seen.atBarrier := rfl

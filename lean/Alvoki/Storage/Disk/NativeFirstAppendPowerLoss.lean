@@ -33,6 +33,22 @@ theorem vacant (crash : NativeFirstAppendCrash stop) :
     TryLockObserves crash.retry.owners state.session.directory (.ok true) := by
   simp [retry, origin, BatchAppendInterruption.Stop.origin, FirstAppendCut.crashed, TryLockObserves, LockOwners.set]
 
+/-- The unchanged marker determines the original checkpoint and exact
+keeper read layout, independent of the admitted excess tail bytes. -/
+structure Plan (crash : NativeFirstAppendCrash stop) where
+  loss : BoundedReopenTrace state.session.directory (· = state.writer.target)
+    ⟨stop.files, state.files.owners⟩ crash.retry
+  pair : crash.retry.image.directory.active = state.writer.target.pair
+  layout : CanonicalKeeperLayout crash.retry.image state.writer.history
+  recovery : BatchAppendInterruption.PreparedRetry state.writer layout
+  selected : SelectedIntegrityCheckpoint state.writer.published.durable crash.retry.image.directory.active.manifest
+    state.writer.checkpoint
+
+theorem plans (crash : NativeFirstAppendCrash stop) (valid : state.Valid) : Nonempty crash.Plan := by
+  obtain ⟨_, loss, pair, layout, recovery⟩ := crash.origin.refinesReopenPrefix valid.retained .start
+  have manifest := congrArg DirectoryPublication.Bindings.manifest pair
+  exact ⟨⟨loss, pair, layout, recovery, manifest.symm ▸ valid.retained.resumed.selected⟩⟩
+
 end NativeFirstAppendCrash
 
 /-- The reported reopened read prefix observes the original physical
@@ -92,23 +108,21 @@ structure NativeFirstAppendCrashContinuation (current : NativeReadPosition histo
       seen.toNativeWriteCrashReads.ReadsSurvivor prepared.keeperPath
         (current.state.writer.wal.active.bytes ++ crash.tail)
 
-theorem NativeReadPosition.recoversFirstAppendPowerLoss (current : NativeReadPosition history log)
+/-- Keep the same captured reader available to the raw opener. The
+pending batch is excluded from the replay before any keeper repair. -/
+theorem NativeReadPosition.recoversFirstAppendPowerLossFrom (current : NativeReadPosition history log)
     {prepared : NativeReadyWritePreparation current.state} {stop : NativeFirstAppendStop prepared}
-    (crash : NativeFirstAppendCrash stop) {input : FilePath}
-    (observe : ∀ layout : CanonicalKeeperLayout crash.retry.image current.state.writer.history,
-      BatchAppendInterruption.PreparedRetry current.state.writer layout →
-      ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
-        crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
-      Nonempty (NativeFirstAppendCrashReads crash input layout selected)) :
-    ∃ next, NativeFirstAppendCrashContinuation current crash input next := by
+    (crash : NativeFirstAppendCrash stop) {input : FilePath} (plan : crash.Plan)
+    (seen : NativeFirstAppendCrashReads crash input plan.layout plan.selected) :
+    ∃ next, NativeFirstAppendCrashContinuation current crash input next ∧
+      next.opened = seen.opening.finish.run seen.opening.chronology ∧
+      next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
+      next.state.cache = seen.opening.admission.cache ∧ next.state.owner = seen.opening.admission.owner ∧
+      next.state.directorySlot = seen.opening.admission.cached := by
   obtain ⟨valid, earlierHistory, _⟩ := current.readPrefix.refines
   let stopped := current.stopsAtFirstAppend stop
-  obtain ⟨_, loss, pair, layout, selectedLayout⟩ := crash.origin.refinesReopenPrefix valid.retained .start
+  obtain ⟨loss, pair, layout, selectedLayout, selected⟩ := plan
   have manifest := congrArg DirectoryPublication.Bindings.manifest pair
-  let selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
-      crash.retry.image.directory.active.manifest current.state.writer.checkpoint :=
-    manifest.symm ▸ valid.retained.resumed.selected
-  obtain ⟨seen⟩ := observe layout selectedLayout selected
   let ready := valid.retained
   have accepted := manifest.symm ▸ ready.resumed.accepted
   have pending : PendingClientReplay (log ++ [.uncertainBatch prepared.batch])
@@ -141,10 +155,25 @@ theorem NativeReadPosition.recoversFirstAppendPowerLoss (current : NativeReadPos
     congrArg (fun offset => current.state.session.directory.file (.walSegment offset))
       ((congrArg Target.first selectedLayout.target).trans ready.resumed.keeper.symm)
   rw [keeperPath, keeperBytes] at keeperRead
-  exact ⟨next, stopped, loss, rfl, fun same => phaseFresh (same.symm ▸ seen.previousTokens.1),
+  exact ⟨next, ⟨stopped, loss, rfl, fun same => phaseFresh (same.symm ▸ seen.previousTokens.1),
     fun same => sessionFresh (same.symm ▸ seen.previousTokens.2), checkpoint, durable, continued.guardedReplay,
     ⟨layout, selected, seen, rfl, seed.frames.1, rfl, path, cache, census, owner, directorySlot,
       seen.directory.trans (crash.root.trans (congrArg some stop.directoryIdentity)),
-      seen.lock.trans (crash.lock.trans (congrArg some stop.lockIdentity)), markerRead, keeperRead⟩⟩
+      seen.lock.trans (crash.lock.trans (congrArg some stop.lockIdentity)), markerRead, keeperRead⟩⟩,
+    rfl, seed.frames.1, cache, owner, directorySlot⟩
+
+theorem NativeReadPosition.recoversFirstAppendPowerLoss (current : NativeReadPosition history log)
+    {prepared : NativeReadyWritePreparation current.state} {stop : NativeFirstAppendStop prepared}
+    (crash : NativeFirstAppendCrash stop) {input : FilePath}
+    (observe : ∀ layout : CanonicalKeeperLayout crash.retry.image current.state.writer.history,
+      BatchAppendInterruption.PreparedRetry current.state.writer layout →
+      ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+        crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
+      Nonempty (NativeFirstAppendCrashReads crash input layout selected)) :
+    ∃ next, NativeFirstAppendCrashContinuation current crash input next := by
+  obtain ⟨plan⟩ := crash.plans current.readPrefix.refines.1
+  obtain ⟨seen⟩ := observe plan.layout plan.recovery plan.selected
+  obtain ⟨next, reopened, _⟩ := current.recoversFirstAppendPowerLossFrom crash plan seen
+  exact ⟨next, reopened⟩
 
 end Alvoki.Storage.DiskSession

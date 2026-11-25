@@ -1,7 +1,17 @@
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 import Alvoki.Storage.Disk.NativeOpenedAlignedCloseReport
+import Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
+import Alvoki.Storage.Disk.NativeOpenedFinalizedRetryReport
 import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
+import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
+import Alvoki.Storage.Disk.NativeUncertainWriteExitTableOpen
+import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
+import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
+import Alvoki.Storage.Disk.NativeStoppedFirstAppendExitTableOpen
+import Alvoki.Storage.Disk.NativeRawContendedAliasOpen
+import Alvoki.Storage.Disk.NativeOpenedStoppedObsoleteRunReport
+import Alvoki.Storage.Disk.NativeOpenedProcessExitReport
 
 namespace Alvoki.Storage.DiskSession
 
@@ -133,9 +143,19 @@ theorem NativeQuietRestartReport.reaches (seen : NativeQuietRestartReport before
 inductive NativeOpenedSessionAction : Type 1 where
   | calls (instructions : List NativeOpenedInstruction)
   | quietRestart (input : FilePath)
+  | processExitAndReopen (input : FilePath)
   | closeAndReopen (input : FilePath)
+  | closeRetriesAndReopen (inputs : List FilePath) (input : FilePath)
   | checkpointRenameReboot (input : FilePath)
   | stoppedCheckpointReboot (input : FilePath)
+  | uncertainWriteReboot (request : WriteRequest) (input : FilePath)
+  | uncertainWriteExitAndReopen (request : WriteRequest) (input : FilePath)
+  | stoppedWalWriteReboot (request : WriteRequest) (input : FilePath)
+  | stoppedFirstAppendExit (request : WriteRequest) (input : FilePath)
+  | stoppedFirstAppendExitRetries (request : WriteRequest) (inputs : List FilePath) (input : FilePath)
+  | stoppedFirstAppendContendedRetries (request : WriteRequest) (contended : FilePath)
+      (inputs : List FilePath) (input : FilePath)
+  | stoppedObsoleteRunUnlink (held : List UInt64) (input : FilePath)
 
 /-- Same-handle calls and the supported reopen routes compose at
 the exact handle and ready position reached by the preceding segment. -/
@@ -148,15 +168,66 @@ inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
   | quiet {input : FilePath} (seen : NativeQuietRestartReport before input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next) :
       NativeOpenedSessionStep view names bytes before (.quietRestart input) [.readOrRestart (.restart input)] next
+  | processExit {input : FilePath} (seen : NativeOpenedProcessExitReport before.position input view names bytes)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.processExitAndReopen input)
+        [.readyExitRecovered input before.position.current.ready.state.owner.reference.process] next
   | close {input : FilePath} (seen : NativeOpenedAlignedCloseReport before.position input view)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.closeAndReopen input) [.closedAndReopened input (.ok ())] next
+  | closeAfterFailedUnlock {input : FilePath} (seen : NativeOpenedFailedCloseReport before.position input view)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.closeAndReopen input) [.closedAndReopened input (.error seen.cause)] next
+  | closeRetries {inputs : List FilePath} {input : FilePath}
+      (seen : NativeOpenedFinalizedRetryReport before.position inputs input view)
+      {errors : List (FilePath × IO.Error)} {next : NativeOpenedSessionPoint heap}
+      (returned : seen.Returned next.position errors) :
+      NativeOpenedSessionStep view names bytes before (.closeRetriesAndReopen inputs input)
+        [.rejectedOpenSequenceRecovered inputs input (errors.map Prod.snd)] next
   | checkpointRename {input : FilePath} (seen : NativeOpenedManifestRenameReport before.position input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.checkpointRenameReboot input) [seen.event] next
   | stoppedCheckpoint {input : FilePath} (seen : NativeOpenedStoppedCheckpointReport before.position input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.stoppedCheckpointReboot input) [seen.event] next
+  | uncertainWrite {request : WriteRequest} {input : FilePath}
+      (seen : NativeOpenedUncertainWriteReport before.position request input view names bytes)
+      {retained : List WAL.Write} {next : NativeOpenedSessionPoint heap} (returned : seen.Returned retained next.position) :
+      NativeOpenedSessionStep view names bytes before (.uncertainWriteReboot request input) [seen.event retained] next
+  | uncertainWriteExit {request : WriteRequest} {input : FilePath}
+      (seen : NativeUncertainWriteExitTableOpen before.position request input view names bytes)
+      {retained : List WAL.Write} {next : NativeOpenedSessionPoint heap} (returned : seen.Returned retained next.position) :
+      NativeOpenedSessionStep view names bytes before (.uncertainWriteExitAndReopen request input) [seen.event retained] next
+  | stoppedWalWrite {request : WriteRequest} {input : FilePath}
+      (seen : NativeOpenedStoppedMarkerReport before.position request input view names bytes)
+      {retained : List WAL.Write} {next : NativeOpenedSessionPoint heap} (returned : seen.Returned retained next.position) :
+      NativeOpenedSessionStep view names bytes before (.stoppedWalWriteReboot request input) [seen.event retained] next
+  | stoppedFirstAppend {request : WriteRequest} {input : FilePath}
+      (seen : NativeOpenedFirstAppendReport before.position request input view names bytes)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.stoppedWalWriteReboot request input) [seen.event] next
+  | stoppedFirstAppendExit {request : WriteRequest} {input : FilePath}
+      (seen : NativeStoppedFirstAppendExitTableOpen before.position request input view names bytes)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.stoppedFirstAppendExit request input)
+        [.interruptedAppendRecovered request input seen.prepared.batch] next
+  | stoppedFirstAppendExitRetries {request : WriteRequest} {inputs : List FilePath} {input : FilePath}
+      (seen : NativeStoppedAppendFinalizedRetry before.position request inputs input view names bytes)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.stoppedFirstAppendExitRetries request inputs input) [seen.event] next
+  | stoppedFirstAppendContendedRetries {request : WriteRequest} {inputs : List FilePath} {input contended : FilePath}
+      (seen : NativeStoppedAppendFinalizedRetry before.position request inputs input view names bytes)
+      (attempt : RawContendedAliasOpen view seen.calls seen.release before.position.current.ready.state.session.directory
+        before.position.current.ready.state.session.descriptor seen.stop.view seen.stop.root contended seen.rawExit.afterExit)
+      (busy : seen.rawExit.ContendedReturn attempt)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position (some (contended, attempt.diagnostic))) :
+      NativeOpenedSessionStep view names bytes before (.stoppedFirstAppendContendedRetries request contended inputs input)
+        [seen.event (some (contended, attempt.diagnostic))] next
+  | stoppedObsoleteRunUnlink {held : List UInt64} {input : FilePath}
+      (seen : NativeOpenedStoppedObsoleteRunReport before.position held input view names bytes)
+      {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
+      NativeOpenedSessionStep view names bytes before (.stoppedObsoleteRunUnlink held input)
+        [.interruptedRunUnlinkRecovered held input] next
 
 inductive NativeOpenedSessionTrace (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (start : NativeOpenedSessionPoint heap) :
@@ -177,9 +248,20 @@ theorem NativeOpenedSessionTrace.common (trace : NativeOpenedSessionTrace view n
     cases next with
     | calls ran => exact prior.append ran.common
     | quiet _ returned => exact .step prior returned.common
+    | processExit _ returned => exact .step prior returned.common
     | close _ returned => exact .step prior returned.common
+    | closeAfterFailedUnlock _ returned => exact .step prior returned.common
+    | closeRetries _ returned => exact .step prior returned.common
     | checkpointRename _ returned => exact .step prior returned.common
     | stoppedCheckpoint _ returned => exact .step prior returned.common
+    | uncertainWrite _ returned => exact .step prior returned.common
+    | uncertainWriteExit _ returned => exact .step prior returned.common
+    | stoppedWalWrite _ returned => exact .step prior returned.common
+    | stoppedFirstAppend _ returned => exact .step prior returned.common
+    | stoppedFirstAppendExit _ returned => exact .step prior returned.common
+    | stoppedFirstAppendExitRetries _ returned => exact .step prior returned.common
+    | stoppedFirstAppendContendedRetries _ _ _ returned => exact .step prior returned.common
+    | stoppedObsoleteRunUnlink _ returned => exact .step prior returned.common
 
 /-- A report for the next prescribed block of calls or reopen. -/
 inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
@@ -189,12 +271,45 @@ inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
       NativeOpenedSessionReport view names bytes before (.calls instructions)
   | quiet (input : FilePath) (report : NativeQuietRestartReport before input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.quietRestart input)
+  | processExit (input : FilePath) (report : NativeOpenedProcessExitReport before.position input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.processExitAndReopen input)
   | close (input : FilePath) (report : NativeOpenedAlignedCloseReport before.position input view) :
       NativeOpenedSessionReport view names bytes before (.closeAndReopen input)
+  | closeAfterFailedUnlock (input : FilePath) (report : NativeOpenedFailedCloseReport before.position input view) :
+      NativeOpenedSessionReport view names bytes before (.closeAndReopen input)
+  | closeRetries (inputs : List FilePath) (input : FilePath)
+      (report : NativeOpenedFinalizedRetryReport before.position inputs input view) :
+      NativeOpenedSessionReport view names bytes before (.closeRetriesAndReopen inputs input)
   | checkpointRename (input : FilePath) (report : NativeOpenedManifestRenameReport before.position input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.checkpointRenameReboot input)
   | stoppedCheckpoint (input : FilePath) (report : NativeOpenedStoppedCheckpointReport before.position input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.stoppedCheckpointReboot input)
+  | uncertainWrite (request : WriteRequest) (input : FilePath)
+      (report : NativeOpenedUncertainWriteReport before.position request input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.uncertainWriteReboot request input)
+  | uncertainWriteExit (request : WriteRequest) (input : FilePath)
+      (report : NativeUncertainWriteExitTableOpen before.position request input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.uncertainWriteExitAndReopen request input)
+  | stoppedWalWrite (request : WriteRequest) (input : FilePath)
+      (report : NativeOpenedStoppedMarkerReport before.position request input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.stoppedWalWriteReboot request input)
+  | stoppedFirstAppend (request : WriteRequest) (input : FilePath)
+      (report : NativeOpenedFirstAppendReport before.position request input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.stoppedWalWriteReboot request input)
+  | stoppedFirstAppendExit (request : WriteRequest) (input : FilePath)
+      (report : NativeStoppedFirstAppendExitTableOpen before.position request input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.stoppedFirstAppendExit request input)
+  | stoppedFirstAppendExitRetries (request : WriteRequest) (inputs : List FilePath) (input : FilePath)
+      (report : NativeStoppedAppendFinalizedRetry before.position request inputs input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.stoppedFirstAppendExitRetries request inputs input)
+  | stoppedFirstAppendContendedRetries (request : WriteRequest) (contended : FilePath) (inputs : List FilePath) (input : FilePath)
+      (report : NativeStoppedAppendFinalizedRetry before.position request inputs input view names bytes)
+      (attempt : RawContendedAliasOpen view report.calls report.release before.position.current.ready.state.session.directory
+        before.position.current.ready.state.session.descriptor report.stop.view report.stop.root contended report.rawExit.afterExit) :
+      NativeOpenedSessionReport view names bytes before (.stoppedFirstAppendContendedRetries request contended inputs input)
+  | stoppedObsoleteRunUnlink (held : List UInt64) (input : FilePath)
+      (report : NativeOpenedStoppedObsoleteRunReport before.position held input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.stoppedObsoleteRunUnlink held input)
 
 theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport view names bytes before action) :
     ∃ events next, NativeOpenedSessionStep view names bytes before action events next := by
@@ -205,19 +320,52 @@ theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport vi
   | quiet input seen =>
     obtain ⟨next, returned⟩ := seen.reaches
     exact ⟨_, next, .quiet seen returned⟩
+  | processExit input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .processExit seen returned⟩
   | close input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .close seen returned⟩
+  | closeAfterFailedUnlock input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .closeAfterFailedUnlock seen returned⟩
+  | closeRetries _ _ seen =>
+    obtain ⟨handle, start, _, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .closeRetries seen returned⟩
   | checkpointRename input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .checkpointRename seen returned⟩
   | stoppedCheckpoint input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .stoppedCheckpoint seen returned⟩
+  | uncertainWrite request input seen =>
+    obtain ⟨_, handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .uncertainWrite seen returned⟩
+  | uncertainWriteExit request input seen =>
+    obtain ⟨_, handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .uncertainWriteExit seen returned⟩
+  | stoppedWalWrite request input seen =>
+    obtain ⟨_, handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .stoppedWalWrite seen returned⟩
+  | stoppedFirstAppend request input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .stoppedFirstAppend seen returned⟩
+  | stoppedFirstAppendExit request input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .stoppedFirstAppendExit seen returned⟩
+  | stoppedFirstAppendExitRetries request inputs input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .stoppedFirstAppendExitRetries seen returned⟩
+  | stoppedFirstAppendContendedRetries _ _ _ _ seen attempt =>
+    obtain ⟨busy, handle, start, returned⟩ := seen.recordsContendedRetry attempt
+    exact ⟨_, ⟨handle, start⟩, .stoppedFirstAppendContendedRetries seen attempt busy returned⟩
+  | stoppedObsoleteRunUnlink held input seen =>
+    obtain ⟨handle, start, returned⟩ := seen.reaches
+    exact ⟨_, ⟨handle, start⟩, .stoppedObsoleteRunUnlink seen returned⟩
 
 /-- Obtain the next local report only at the reached position of this
 prescribed prefix. Each reopen can reach a new handle. Quiet restarts
-share the same filesystem view. -/
+and process exits use the same filesystem view. -/
 def NativeOpenedSessionTrace.Reports (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray)
     (start : NativeOpenedSessionPoint heap) (actions : List NativeOpenedSessionAction) : Prop :=

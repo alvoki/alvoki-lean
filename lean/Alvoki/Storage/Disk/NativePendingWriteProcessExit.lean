@@ -101,6 +101,37 @@ structure NativePendingWriteExitReopened {current : NativeReadPosition history l
       report.reads.reads.ObservesSelected current.state.session.directory
         pending.write.failure.released.image.directory.active.manifest current.state.writer.published.durable
 
+/-- Use the exact selected reader in the process-exit continuation.
+The same reached session seeds any following raw table proof. -/
+theorem NativePendingWrite.recoversAfterProcessExitFrom {current : NativeReadPosition history log}
+    (pending : NativePendingWrite current) {input : FilePath} (seen : NativePendingWriteProcessExit pending)
+    {chosen : List WAL.Write} {layout : CanonicalKeeperLayout pending.write.failure.released.image chosen}
+    {selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+      pending.write.failure.released.image.directory.active.manifest current.state.writer.checkpoint}
+    {vacant : TryLockObserves pending.write.failure.released.owners current.state.session.directory (.ok true)}
+    (report : MarkedReadyOpenObservations input current.state.session.directory seen.census
+      pending.write.failure.released layout current.state.writer.published vacant selected)
+    {state : NativeReadyState} (recovered : pending.write.ReleasedReadResult history log current.reads report state) :
+    ∃ (retained : List WAL.Write) (next : NativeReadPosition (history ++ retained) pending.submissions),
+      NativePendingWriteExitReopened seen input retained next ∧ chosen = history ++ retained ∧
+      next.opened = report.finish.run report.chronology ∧ next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
+      next.state.cache = report.admission.cache ∧ next.state.owner = report.admission.owner ∧
+      next.state.directorySlot = report.admission.cached := by
+  obtain ⟨allowed, marker, opened, path, phaseFresh, sessionFresh, cache, census, owner, directorySlot,
+    pair, checkpoint, durable, lock, root, reads, seed⟩ := recovered
+  obtain ⟨retained, branch, rfl⟩ : ∃ retained : List WAL.Write,
+      (retained = [] ∨ retained = pending.write.failure.batch) ∧ chosen = history ++ retained := by
+    rcases allowed with old | whole
+    · exact ⟨[], .inl rfl, by simpa only [List.append_nil] using old⟩
+    · exact ⟨pending.write.failure.batch, .inr rfl, whole⟩
+  let next : NativeReadPosition (history ++ retained) pending.submissions :=
+    ⟨report.finish.run report.chronology, state, state, current.reads, seed⟩
+  exact ⟨retained, next, ⟨seen.releases, branch, rfl, path, phaseFresh, sessionFresh,
+    checkpoint, durable, (congrArg DirectoryPublication.Bindings.walBoundary pair).trans marker,
+    layout, selected, vacant, report, rfl, opened, rfl, cache, census, owner, directorySlot,
+    lock.trans pending.custody.2.2.2.1.symm, root.trans pending.custody.2.2.2.2.symm, reads⟩,
+    rfl, rfl, opened, cache, owner, directorySlot⟩
+
 /-- The marked opener takes the exact census after the reported exit
 and later drops. Its live marker chooses the old history or the full
 uncertain group, and the earlier read responses stay in the ledger. -/
@@ -109,19 +140,9 @@ theorem NativePendingWrite.recoversAfterProcessExit {current : NativeReadPositio
     (observe : pending.write.ReleasedMarkedReports input seen.census
       (pending.observed.bindings (current.state.session.directory.file .lock))) :
     ∃ retained next, NativePendingWriteExitReopened seen input retained next := by
-  obtain ⟨chosen, layout, selected, vacant, report, state, allowed, marker, opened, path, phaseFresh, sessionFresh,
-    cache, census, owner, directorySlot, pair, checkpoint, durable, lock, root, reads, seed⟩ :=
+  obtain ⟨_, _, _, _, report, state, recovered⟩ :=
     current.readPrefix.reopensReleasedUncertainWrite pending.write pending.custody.2.2.2.1 observe
-  obtain ⟨retained, branch, rfl⟩ : ∃ retained : List WAL.Write,
-      (retained = [] ∨ retained = pending.write.failure.batch) ∧ chosen = history ++ retained := by
-    rcases allowed with old | whole
-    · exact ⟨[], .inl rfl, by simpa only [List.append_nil] using old⟩
-    · exact ⟨pending.write.failure.batch, .inr rfl, whole⟩
-  let next : NativeReadPosition (history ++ retained) pending.submissions :=
-    ⟨report.finish.run report.chronology, state, state, current.reads, seed⟩
-  exact ⟨retained, next, seen.releases, branch, rfl, path, phaseFresh, sessionFresh,
-    checkpoint, durable, (congrArg DirectoryPublication.Bindings.walBoundary pair).trans marker,
-    layout, selected, vacant, report, rfl, opened, rfl, cache, census, owner, directorySlot,
-    lock.trans pending.custody.2.2.2.1.symm, root.trans pending.custody.2.2.2.2.symm, reads⟩
+  obtain ⟨retained, next, reopened, _⟩ := pending.recoversAfterProcessExitFrom seen report (state := state) recovered
+  exact ⟨retained, next, reopened⟩
 
 end Alvoki.Storage.DiskSession

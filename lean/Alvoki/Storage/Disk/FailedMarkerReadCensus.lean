@@ -5,21 +5,6 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
-private theorem readPrefixUntilEofWith_shortThenError {state : Type}
-    (mismatch : IO.Error) (read : USize → EStateM IO.Error state ByteArray)
-    {remaining : Nat} {bytes chunk : ByteArray} {before next after : state} {cause : IO.Error}
-    (positive : 0 < chunk.size) (short : chunk.size < remaining)
-    (first : read remaining.toUSize before = .ok chunk next)
-    (second : read (remaining - chunk.size).toUSize next = .error cause after) :
-    readPrefixUntilEofWith mismatch read remaining bytes before = .error cause after := by
-  have pending : remaining ≠ 0 := by omega
-  have notEOF : chunk.size ≠ 0 := by omega
-  have more : remaining - chunk.size ≠ 0 := by omega
-  rw [readPrefixUntilEofWith]
-  simp only [pending, ↓reduceIte, Bind.bind, EStateM.bind, first, notEOF, Nat.le_of_lt short, ↓reduceDIte]
-  rw [readPrefixUntilEofWith]
-  simp only [more, ↓reduceIte, Bind.bind, EStateM.bind, second]
-
 private abbrev MarkerCursor := Option DescriptorInventory × Nat
 
 private def rawMetadataOpen (reads : CheckpointRunChunkReads) (path : FilePath) :

@@ -1,10 +1,14 @@
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
+import Alvoki.Storage.Disk.NativeOpenRotation
 import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
 import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 import Alvoki.Storage.Disk.NativeOpenRunMaintenance
 import Alvoki.Storage.Disk.NativeOpenExternalPinRead
+import Alvoki.Storage.Disk.NativeOpenedWalPlanning
+import Alvoki.Storage.Disk.NativeOpenedWalCollection
+import Alvoki.Storage.Disk.NativeOpenObsoleteRunCollection
 
 namespace Alvoki.Storage.DiskSession
 
@@ -16,12 +20,18 @@ variable {heap : Type} {opened : NativeOpenedHandle heap}
 inductive NativeOpenedInstruction : Type 1 where
   | write (request : WriteRequest)
   | checkpoint
+  | rotateWal
   | rewriteRun (request : RunMaintenance)
   | acquireAt (sequence : UInt64)
   | releaseAt (index : Nat)
   | advanceFloor (floor : UInt64)
   | readAt (index : Nat) (request : SnapshotReadRequest α)
   | readSupplied (pin : DiskSnapshotPin) (request : SnapshotReadRequest α)
+  | releaseSupplied (pin : DiskSnapshotPin)
+  | acquire
+  | planWalCollection
+  | collectObsoleteRuns (held : List UInt64)
+  | collectCoveredWal
 
 /-- Per-call observations at the reached position. Indexed operands
 select tracked pins. A supplied pin retains its original issuer, and
@@ -60,6 +70,15 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
           .error cause (reached, after))
       (stillReady : opened.contents reached opened.phase = some start.current.ready.state.session.phase) :
       NativeOpenedReport start .checkpoint
+  | rotateCreated (report : NativeReadyCreatedRotation start.current.ready.state)
+      (seen : OpenRotationObservation.Created start report) : NativeOpenedReport start .rotateWal
+  | rotateExisting (report : NativeReadyExistingRotation start.current.ready.state)
+      (seen : OpenRotationObservation.Existing start report) : NativeOpenedReport start .rotateWal
+  | rotateEmpty (calls : OpenRotationCallbacks heap) (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+      {active pending directory} (references : opened.files.UsesCacheReferences active pending directory)
+      (cachePath : opened.files.AtDirectory opened.directory.path)
+      (empty : start.current.ready.state.writer.installed.walBytes / WAL.frameSize ≤
+        start.current.ready.state.writer.installed.activeFirst) : NativeOpenedReport start .rotateWal
   | rewriteRun (request : RunMaintenance) :
       NativeOpenedReport start (.rewriteRun request)
   | acquireAt (sequence : UInt64) {pin : SnapshotPin} {table : PackedTable}
@@ -86,6 +105,30 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
       (compared : opened.ptrEq issuer opened.token start.reached =
         .ok (decide (tokenIdentity issuer = tokenIdentity opened.token)) start.reached) :
       NativeOpenedReport start (.readSupplied pin request)
+  | releaseSupplied (pin : DiskSnapshotPin)
+      {issuer : IO.Ref Unit} {issued : SnapshotPin} (owns : pin.UsesOpenToken issuer issued)
+      (tokenIdentity : IO.Ref Unit → Nat)
+      (currentToken : tokenIdentity opened.token = start.current.ready.state.session.sessionRef)
+      (identifies : tokenIdentity issuer = tokenIdentity opened.token ↔ issuer = opened.token)
+      (compared : opened.ptrEq issuer opened.token start.reached =
+        .ok (decide (tokenIdentity issuer = tokenIdentity opened.token)) start.reached) :
+      NativeOpenedReport start (.releaseSupplied pin)
+  | acquire : NativeOpenedReport start .acquire
+  | planWalCollection (observed : NativeWalPlanningObservation start.current.ready.state) :
+      NativeOpenedReport start .planWalCollection
+  | collectObsoleteRuns (held : List UInt64)
+      (observed : NativeObsoleteRunCollection start.current.ready.state)
+      (seen : OpenObsoleteRunObservation start held observed.toNativeObsoleteRunPass) :
+      NativeOpenedReport start (.collectObsoleteRuns held)
+  | obsoleteRunBarrierError (held : List UInt64) (failed : NativeObsoleteRunBarrierError start.current.ready.state)
+      (seen : OpenObsoleteRunObservation start held failed.toNativeObsoleteRunPass) :
+      NativeOpenedReport start (.collectObsoleteRuns held)
+  | collectCoveredWal (observed : NativeReadyWalCollection start.current.ready.state)
+      (completed : observed.barrier.outcome = .completed) :
+      NativeOpenedReport start .collectCoveredWal
+  | rejectsCoveredWalPlan (observed : NativeWalPlanningObservation start.current.ready.state)
+      (cause : IO.Error) (rejected : observed.extents.result = .error cause) :
+      NativeOpenedReport start .collectCoveredWal
 
 namespace NativeOpenedReport
 
@@ -132,6 +175,19 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
         .error cause (next.reached, state.cache, atEntry) ∧
     CheckpointPreflight (.ready state.writer.installed) (.error cause) ∧
     event = .checkpointRejected cause ∧ next = start
+  | .rotateCreated report seen =>
+    seen.Reached report.lookup next ∧ event = .rotatedWal ∧
+      ∃ returned : NativeReadPosition start.current.history start.current.submissions,
+        NativeCreatedRotationContinuation start.current.ready returned report ∧
+        next.current = ⟨start.current.history, start.current.submissions, returned⟩
+  | .rotateExisting report seen =>
+    seen.Reached report.opened.lookup next ∧ event = .rotatedWal ∧
+      ∃ returned : NativeReadPosition start.current.history start.current.submissions,
+        NativeExistingRotationContinuation start.current.ready returned report ∧
+        next.current = ⟨start.current.history, start.current.submissions, returned⟩
+  | .rotateEmpty calls lookup (active := active) (pending := pending) (directory := directory) _ _ _ =>
+    UsesRotationSchedule opened.table opened.directory opened.phase active pending directory ∧
+      calls.run opened lookup active start.reached = .ok () next.reached ∧ event = .rotatedWal ∧ next = start
   | .rewriteRun request =>
     request.publicCall opened.table = rewriteRunWith (m := IO) (do (← opened.phase.get).installed)
       opened.phase.set request.update ∧
@@ -209,6 +265,68 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
       event = .snapshotHandleRead (tokenIdentity issuer) issued.handle request response recorded ∧
       next.current.ready.state = start.current.ready.state ∧ next.reached = start.reached ∧ next.pins = start.pins ∧
       next.current.ready.reads = start.current.ready.reads ++ [recorded]
+  | .releaseSupplied pin (issuer := issuer) (issued := issued) _ tokenIdentity _ _ _ =>
+    let before := start.current.ready.state
+    let after := next.current.ready.state
+    opened.table.release pin.handle = releaseSnapshotWith (m := IO)
+      (do (← opened.phase.get).installed) (issuer.ptrEq opened.token) opened.phase.set issued.handle ∧
+    releaseSnapshotWith (m := EStateM IO.Error heap) (do (← opened.get opened.phase).installed)
+      (opened.ptrEq issuer opened.token) (opened.set opened.phase) issued.handle start.reached = .ok () next.reached ∧
+    (issuer ≠ opened.token → next.reached = start.reached ∧ after = before) ∧
+    (issuer = opened.token →
+      after = before.withTable (before.writer.installed.table.release issued.handle) ∧
+      opened.set opened.phase after.session.phase start.reached = .ok () next.reached ∧
+      after.writer.installed.table.pins.find issued.handle = none ∧
+      (∀ pin, pin ∈ after.writer.installed.table.pins.active ↔
+        pin ∈ before.writer.installed.table.pins.active ∧ pin.handle ≠ issued.handle)) ∧
+    event = .snapshotControl (.release (tokenIdentity issuer) issued.handle) (.ok ()) ∧
+    after.files = before.files ∧ after.cache = before.cache ∧ after.census = before.census ∧ after.owner = before.owner ∧
+    next.pins = start.pins ∧ next.current.history = start.current.history ∧
+    next.current.submissions = start.current.submissions ∧ next.current.ready.reads = start.current.ready.reads
+  | .acquire =>
+    let before := start.current.ready.state
+    let after := next.current.ready.state
+    let load : EStateM IO.Error heap Installed := do (← opened.get opened.phase).installed
+    ∃ (issue : SnapshotPin → DiskSnapshotPin) (returned : NativeOpenedPin opened) (table : PackedTable),
+      opened.table.acquire = acquireLatestWith (m := IO) (do (← opened.phase.get).installed)
+        (acquireSnapshotWith (do (← opened.phase.get).installed) opened.phase.set issue) ∧
+      load start.reached = .ok before.writer.installed start.reached ∧
+      acquireSnapshotWith load (opened.set opened.phase) issue before.writer.installed.table.committed start.reached =
+        .ok (some returned.raw) next.reached ∧
+      acquireLatestWith load (acquireSnapshotWith load (opened.set opened.phase) issue) start.reached =
+        .ok returned.raw next.reached ∧
+      opened.set opened.phase after.session.phase start.reached = .ok () next.reached ∧
+      before.writer.installed.table.acquireAt before.writer.installed.table.committed = some (returned.localPin, table) ∧
+      after = before.withTable table ∧ returned.raw = issue returned.localPin ∧
+      returned.raw.sequence = before.writer.installed.table.committed ∧ returned.localPin ∈ table.pins.active ∧
+      event = .snapshotControl .acquire (.ok (before.session.sessionRef, returned.localPin)) ∧
+      next.pins = start.pins ++ [returned] ∧ next.current.history = start.current.history ∧
+      next.current.submissions = start.current.submissions ∧ next.current.ready.reads = start.current.ready.reads
+  | .planWalCollection observed =>
+    opened.table.UsesOpenWalPlanningSchedule start.current.ready.state.session.directory opened.phase ∧
+    observed.calls.runOnOpenPhase opened start.reached = (match observed.extents.result with
+      | .ok offsets => .ok offsets next.reached
+      | .error cause => .error cause next.reached) ∧
+    event = .walCollectionPlan observed.extents.result ∧ next = start
+  | .collectObsoleteRuns held _ seen =>
+    seen.Reached next ∧ seen.calls.run opened held seen.directory seen.active seen.pending start.reached =
+      .ok () next.reached ∧ event = .collectedObsoleteRuns held
+  | .obsoleteRunBarrierError held failed seen =>
+    seen.Reached next ∧ seen.calls.run opened held seen.directory seen.active seen.pending start.reached =
+      .error failed.diagnostic next.reached ∧ event = .obsoleteRunCollectionError held failed.diagnostic
+  | .collectCoveredWal observed completed =>
+    opened.table.UsesOpenWalCollectionSchedule start.current.ready.state.session.directory opened.files opened.phase ∧
+    observed.runOnOpenPhase opened
+      (start.reached, start.current.ready.state.cache, .start start.current.ready.state.writer.wal) =
+      .ok () (next.reached, next.current.ready.state.cache, observed.barrier.after) ∧
+    next.current.ready.state = observed.next completed ∧ next.pins = start.pins ∧
+    event = .collectCoveredWal
+  | .rejectsCoveredWalPlan observed cause _ =>
+    opened.table.UsesOpenWalCollectionSchedule start.current.ready.state.session.directory opened.files opened.phase ∧
+    (∀ publication,
+      let entry := (start.reached, start.current.ready.state.cache, WalSealedUnlinkImage.start start.current.ready.state.writer.wal)
+      observed.calls.collectOnOpenPhase opened publication entry = .error cause entry) ∧
+    event = .coveredWalCollectionRejected cause ∧ next = start
 
 structure Reached (report : NativeOpenedReport start instruction) (event : NativeExecutionEvent)
     (next : NativeOpenedPosition opened) : Prop where
@@ -265,6 +383,15 @@ theorem reaches (report : NativeOpenedReport start instruction) :
     obtain ⟨source, reached, after, preflight, _, step⟩ :=
       start.rejectsCheckpointFromReturn calls atEntry returned stillReady
     exact ⟨_, start, step, source, by simpa only [reached, after] using returned, preflight, rfl, rfl⟩
+  | rotateCreated report seen =>
+    obtain ⟨next, position, physical, common, same, returned⟩ := start.rotatesCreatedOnOpenPhase report seen
+    exact ⟨_, position, common, returned, rfl, next, physical, same⟩
+  | rotateExisting report seen =>
+    obtain ⟨next, position, physical, common, same, returned⟩ := start.rotatesExistingOnOpenPhase report seen
+    exact ⟨_, position, common, returned, rfl, next, physical, same⟩
+  | rotateEmpty calls lookup references cachePath empty =>
+    obtain ⟨source, returned, common⟩ := start.rotatesEmptyOnOpenPhase calls lookup references cachePath empty
+    exact ⟨_, start, common, source, returned, rfl, rfl⟩
   | rewriteRun request =>
     obtain ⟨source, result, next, reached, returned, raw, stored, directory, refused, setter⟩ :=
       start.rewritesRunViaOpenReferences request
@@ -339,6 +466,110 @@ theorem reaches (report : NativeOpenedReport start instruction) :
     refine ⟨_, next, step, source, response, recorded, ?_, denied, rfl, state, heap, pins, reads⟩
     rw [heap]
     exact raw
+  | @releaseSupplied _ issuer issued owns tokenIdentity currentToken identifies compared =>
+    let before := start.current.ready.state
+    let sameToken := tokenIdentity issuer = before.session.sessionRef
+    have currentId : tokenIdentity opened.token = before.session.sessionRef := currentToken
+    have same : sameToken ↔ issuer = opened.token := by
+      simpa only [currentId] using identifies
+    have comparison : opened.ptrEq issuer opened.token start.reached = .ok (decide sameToken) start.reached := by
+      simpa only [sameToken, currentId] using compared
+    obtain ⟨source, next, reached, transition, returned, raw, stored, keepsHeap, setter⟩ :=
+      start.current.ready.releasesViaOpenReferences opened.table start.uses owns
+        opened.phaseEffects start.stored opened.ptrEq (tokenIdentity issuer) (decide sameToken) rfl comparison
+    obtain ⟨step, directory⟩ := reachesSnapshotControl transition returned
+    let position : NativeOpenedPosition opened :=
+      ⟨⟨start.current.history, start.current.submissions, next⟩, reached, directory.trans start.directory,
+        stored, start.pins⟩
+    have ready := start.current.ready.readPrefix.refines.1.phase
+    refine ⟨_, position, step, source, raw, ?_, ?_, rfl, transition.files, transition.cache, transition.census,
+      transition.owner, rfl, rfl, rfl, transition.reads⟩
+    · intro foreign
+      have distinct : tokenIdentity issuer ≠ start.current.ready.state.session.sessionRef :=
+        fun equal => foreign (same.mp equal)
+      refine ⟨keepsHeap (decide_eq_false distinct), ?_⟩
+      simpa only [NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome, ready, distinct, ite_false]
+        using transition.reached
+    · intro localToken
+      have localId : tokenIdentity issuer = start.current.ready.state.session.sessionRef := same.mpr localToken
+      have updated : next.state = before.withTable (before.writer.installed.table.release issued.handle) := by
+        simpa only [NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome, ready, localId, ite_true]
+          using transition.reached
+      refine ⟨updated, setter (decide_eq_true localId), ?_⟩
+      change next.state.writer.installed.table.pins.find issued.handle = none ∧
+        (∀ pin, pin ∈ next.state.writer.installed.table.pins.active ↔
+          pin ∈ before.writer.installed.table.pins.active ∧ pin.handle ≠ issued.handle)
+      rw [updated]
+      exact ⟨before.writer.installed.table.pins.find_released issued.handle,
+        before.writer.installed.table.pins.mem_release issued.handle⟩
+  | acquire =>
+    let before := start.current.ready.state
+    let data := before.writer.installed.table
+    have valid := start.current.ready.readPrefix.refines.1
+    obtain ⟨reference, refined, _⟩ := valid.retained.resumed.canonical
+    have supported : data.pins.floor ≤ data.committed := by
+      change before.writer.installed.table.pins.floor ≤ before.writer.installed.table.committed
+      rw [refined.pins, refined.committed]
+      exact reference.floor_committed
+    have available : (data.acquireAt data.committed).isSome = true := by
+      rw [PackedTable.acquireAt, Option.isSome_map, Sequential.SnapshotPins.acquire_iff]
+      exact ⟨supported, UInt64.le_refl _⟩
+    obtain ⟨⟨pin, table⟩, acquired⟩ := Option.isSome_iff_exists.mp available
+    change before.writer.installed.table.acquireAt before.writer.installed.table.committed = some (pin, table) at acquired
+    have selected : start.current.ready.state.writer.installed.table.acquireAt
+        start.current.ready.state.writer.installed.table.committed = some (pin, table) := acquired
+    obtain ⟨issue, issued, _, source⟩ := start.uses.snapshotAcquisitions
+    obtain ⟨next, transition⟩ := start.current.ready.updatesSnapshot (.acquire)
+    have ready : before.session.phase = .ready before.writer.installed := valid.phase
+    have returned : before.session.runAcquire = .ok (before.session.sessionRef, pin) next.state.session := by
+      simpa only [NativeSnapshotUpdateObservation.run, NativeSnapshotUpdateObservation.update,
+        SnapshotUpdate.outcome, valid.phase, selected] using transition.returned
+    have state : next.state = before.withTable table := by
+      simpa only [NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome, valid.phase, selected]
+        using transition.reached
+    have loaded := opened.phaseEffects.reads start.reached opened.phase before.session.phase start.stored
+    let installed := Phase.ready { before.writer.installed with table }
+    obtain ⟨reached, wrote, kept⟩ := opened.phaseEffects.writes start.reached opened.phase before.session.phase
+      installed start.stored
+    let load : EStateM IO.Error heap Installed := do (← opened.get opened.phase).installed
+    have atEntry : load start.reached = .ok before.writer.installed start.reached := by
+      simp only [load, Bind.bind, EStateM.bind, loaded, ready, Phase.installed, Pure.pure, EStateM.pure]
+    have inner : acquireSnapshotWith load (opened.set opened.phase) issue data.committed start.reached =
+        .ok (some (issue pin)) reached := by
+      simp only [acquireSnapshotWith, Bind.bind, EStateM.bind, atEntry, acquired, wrote, installed, data,
+        Pure.pure, EStateM.pure]
+    have raw : acquireLatestWith load (acquireSnapshotWith load (opened.set opened.phase) issue) start.reached =
+        .ok (issue pin) reached := by
+      simp only [acquireLatestWith, Bind.bind, EStateM.bind, atEntry, inner, data, Pure.pure, EStateM.pure]
+    obtain ⟨step, directory⟩ := reachesSnapshotControl transition returned
+    let actualPin : NativeOpenedPin opened := ⟨issue pin, pin, issued pin⟩
+    let position : NativeOpenedPosition opened :=
+      ⟨⟨start.current.history, start.current.submissions, next⟩, reached, directory.trans start.directory,
+        by rw [state]; exact kept, start.pins ++ [actualPin]⟩
+    have pinSpec := PackedTable.acquireAt_spec acquired
+    refine ⟨_, position, step, issue, actualPin, table, source, atEntry, inner, raw, ?_, acquired, state, rfl,
+      (issued pin).2.2.trans pinSpec.sequence, pinSpec.active, rfl, rfl, rfl, rfl, transition.reads⟩
+    change opened.set opened.phase next.state.session.phase start.reached = .ok () reached
+    rw [state]
+    exact wrote
+  | planWalCollection observed =>
+    obtain ⟨source, raw, step, _, _, _, _, _⟩ := start.plansWalCollection observed
+    exact ⟨_, start, step, source, raw, rfl, rfl⟩
+  | collectObsoleteRuns held observed seen =>
+    obtain ⟨next, returned, step⟩ := NativeOpenedPosition.collectsObsoleteRuns observed seen
+    have actual := returned.returned
+    unfold NativeObsoleteRunPass.collectorResult at actual
+    rw [observed.completed] at actual
+    exact ⟨_, next, step, returned, actual, rfl⟩
+  | obsoleteRunBarrierError held failed seen =>
+    obtain ⟨next, returned, diagnostic, step⟩ := NativeOpenedPosition.reachesObsoleteRunBarrierError failed seen
+    exact ⟨_, next, step, returned, diagnostic, rfl⟩
+  | collectCoveredWal observed completed =>
+    obtain ⟨next, source, raw, state, pins, step⟩ := start.collectsCoveredWal observed completed
+    exact ⟨_, next, step, source, raw, state, pins, rfl⟩
+  | rejectsCoveredWalPlan observed _ rejected =>
+    obtain ⟨source, raw, step⟩ := start.rejectsCoveredWalPlan observed rejected
+    exact ⟨_, start, step, source, raw, rfl, rfl⟩
 
 end NativeOpenedReport
 

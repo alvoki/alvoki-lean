@@ -89,6 +89,21 @@ theorem reaches (seen : NativeFirstAppendExit stop) (valid : state.Valid) :
       exact .drops (.start held survivor) seen.later
     exact rest.reopenTrace .start
 
+/-- Select the live original marker's layout after the reported slots
+have released the issuing writer. No reboot or new table enters the plan. -/
+structure Plan (seen : NativeFirstAppendExit stop) where
+  pair : seen.retry.image.directory.active = state.writer.target.pair
+  layout : CanonicalKeeperLayout seen.retry.image state.writer.history
+  recovery : BatchAppendInterruption.PreparedRetry state.writer layout
+  selected : SelectedIntegrityCheckpoint state.writer.published.durable
+    seen.retry.image.directory.active.manifest state.writer.checkpoint
+
+theorem plans (seen : NativeFirstAppendExit stop) (valid : state.Valid) : Nonempty seen.Plan := by
+  obtain ⟨first, _, reported⟩ := seen.reaches valid
+  obtain ⟨_, _, pair, layout, recovery⟩ := first.refinesReopenPrefix valid.retained reported
+  have manifest := congrArg DirectoryPublication.Bindings.manifest pair
+  exact ⟨⟨pair, layout, recovery, manifest.symm ▸ valid.retained.resumed.selected⟩⟩
+
 end NativeFirstAppendExit
 
 /-- The next healthy opener reports its reads and repair on the exact
@@ -176,27 +191,22 @@ structure NativeFirstAppendExitContinuation {history : List WAL.Write} {log : Li
       opened.opening.reads.reads.ObservesSelected current.state.session.directory
         seen.retry.image.directory.active.manifest current.state.writer.published.durable
 
-/-- The exact stopped write supplies the live files before process exit.
-Use the observed release to select their old marked WAL, then run and
-install the reported chronological native opener from that census. -/
-theorem NativeReadPosition.recoversFirstAppendAfterExit (current : NativeReadPosition history log)
-    {prepared : NativeReadyWritePreparation current.state} (stop : NativeFirstAppendStop prepared)
-    (seen : NativeFirstAppendExit stop) (input : FilePath)
-    (observe : ∀ layout : CanonicalKeeperLayout seen.retry.image current.state.writer.history,
-      BatchAppendInterruption.PreparedRetry current.state.writer layout →
-      ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
-        seen.retry.image.directory.active.manifest current.state.writer.checkpoint,
-      Nonempty (NativeFirstAppendExitReads seen input layout selected)) :
-    ∃ next, NativeFirstAppendExitContinuation current stop seen input next := by
+/-- Use one selected reader for both the exact session continuation
+and the later raw returned table. -/
+theorem NativeReadPosition.recoversFirstAppendAfterExitFrom (current : NativeReadPosition history log)
+    {prepared : NativeReadyWritePreparation current.state} {stop : NativeFirstAppendStop prepared}
+    (seen : NativeFirstAppendExit stop) {input : FilePath} (plan : seen.Plan)
+    (opened : NativeFirstAppendExitReads seen input plan.layout plan.selected) :
+    ∃ next, NativeFirstAppendExitContinuation current stop seen input next ∧
+      next.opened = opened.opening.finish.run opened.opening.chronology ∧
+      next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
+      next.state.cache = opened.opening.admission.cache ∧ next.state.owner = opened.opening.admission.owner ∧
+      next.state.directorySlot = opened.opening.admission.cached := by
   let stopped := current.stopsAtFirstAppend stop
   obtain ⟨valid, oldHistory, _⟩ := current.readPrefix.refines
-  obtain ⟨first, released, reported⟩ := seen.reaches valid
-  obtain ⟨_, _, pair, layout, chosen⟩ := first.refinesReopenPrefix valid.retained reported
+  obtain ⟨_, released, _⟩ := seen.reaches valid
+  obtain ⟨pair, layout, chosen, selected⟩ := plan
   have manifest := congrArg DirectoryPublication.Bindings.manifest pair
-  let selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
-      seen.retry.image.directory.active.manifest current.state.writer.checkpoint :=
-    manifest.symm ▸ valid.retained.resumed.selected
-  obtain ⟨opened⟩ := observe layout chosen selected
   let openReport := opened.opening
   have accepted := manifest.symm ▸ valid.retained.resumed.accepted
   have replay : PendingClientReplay (log ++ [.uncertainBatch prepared.batch])
@@ -221,12 +231,30 @@ theorem NativeReadPosition.recoversFirstAppendAfterExit (current : NativeReadPos
   obtain ⟨directory, lock⟩ := opened.rootAndLock
   have issuerLockRetired : seen.issuerLock ∉ seen.census.slots := fun live =>
     seen.noIssuerSlots seen.issuerLock live seen.issuerProcess
-  exact ⟨next, stopped, released, seen.noIssuerSlots, issuerLockRetired, rfl, path,
+  exact ⟨next, ⟨stopped, released, seen.noIssuerSlots, issuerLockRetired, rfl, path,
     fun same => phaseFresh (same.symm ▸ opened.earlierRefs.1),
     fun same => sessionFresh (same.symm ▸ opened.earlierRefs.2), target.trans chosen.target, checkpoint, durable,
     (congrArg DirectoryPublication.Bindings.walBoundary active).trans stopped.marker,
     kept.trans chosen.kept, layout, selected, opened, rfl, seed.frames.1, rfl, cache, census, owner, directorySlot,
     directory.trans bindings.1.symm, lock.trans bindings.2.1.symm,
-    opened.sameKeeper valid chosen, keeper, openReport.reads.chunkReads⟩
+    opened.sameKeeper valid chosen, keeper, openReport.reads.chunkReads⟩,
+    rfl, seed.frames.1, cache, owner, directorySlot⟩
+
+/-- The exact stopped write supplies the live files before process exit.
+Use the observed release to select their old marked WAL, then run and
+install the reported chronological native opener from that census. -/
+theorem NativeReadPosition.recoversFirstAppendAfterExit (current : NativeReadPosition history log)
+    {prepared : NativeReadyWritePreparation current.state} (stop : NativeFirstAppendStop prepared)
+    (seen : NativeFirstAppendExit stop) (input : FilePath)
+    (observe : ∀ layout : CanonicalKeeperLayout seen.retry.image current.state.writer.history,
+      BatchAppendInterruption.PreparedRetry current.state.writer layout →
+      ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+        seen.retry.image.directory.active.manifest current.state.writer.checkpoint,
+      Nonempty (NativeFirstAppendExitReads seen input layout selected)) :
+    ∃ next, NativeFirstAppendExitContinuation current stop seen input next := by
+  obtain ⟨plan⟩ := seen.plans current.readPrefix.refines.1
+  obtain ⟨opened⟩ := observe plan.layout plan.recovery plan.selected
+  obtain ⟨next, recovered, _⟩ := current.recoversFirstAppendAfterExitFrom seen plan opened
+  exact ⟨next, recovered⟩
 
 end Alvoki.Storage.DiskSession

@@ -10,17 +10,20 @@ guards, result and next state. -/
 def NativeOpenedInstruction.SnapshotOperands (instruction : NativeOpenedInstruction)
     (start : NativeOpenedPosition opened) : Prop :=
   match instruction with
-  | .acquireAt _ | .advanceFloor _ => True
+  | .acquire | .acquireAt _ | .advanceFloor _ => True
   | .releaseAt index | .readAt index _ =>
     index < start.pins.length ∧ opened.ptrEq opened.token opened.token start.reached = .ok true start.reached
-  | .write _ | .checkpoint | .rewriteRun _ | .readSupplied _ _ => False
+  | .write _ | .checkpoint | .rotateWal | .rewriteRun _ | .readSupplied _ _ | .releaseSupplied _
+  | .planWalCollection | .collectCoveredWal | .collectObsoleteRuns _ => False
 
 theorem NativeOpenedInstruction.observesSnapshot
     (instruction : NativeOpenedInstruction) (start : NativeOpenedPosition opened)
     (operands : instruction.SnapshotOperands start) :
     Nonempty (NativeOpenedReport start instruction) := by
   cases instruction with
-  | write | checkpoint | rewriteRun | readSupplied => exact False.elim operands
+  | write | checkpoint | rotateWal | rewriteRun | readSupplied | releaseSupplied
+  | planWalCollection | collectCoveredWal | collectObsoleteRuns _ => exact False.elim operands
+  | acquire => exact ⟨.acquire⟩
   | acquireAt sequence =>
     cases acquired : start.current.ready.state.writer.installed.table.acquireAt sequence with
     | none => exact ⟨.acquireAtUnavailable sequence acquired⟩

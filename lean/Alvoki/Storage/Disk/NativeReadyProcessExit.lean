@@ -103,18 +103,36 @@ structure NativeReadyProcessExitReopened (current : NativeReadPosition history l
     NativeCloseSelectedReads observed
   replay : InstalledClientReplay log current.reads history next.state.writer.installed next.state.session
 
+/-- Use the same chosen reader for the process-exit continuation and
+its exact returned session, cache and custody. -/
+theorem NativeReadPosition.reopensAfterProcessExitAt (current : NativeReadPosition history log) {input : FilePath}
+    (seen : NativeReadyProcessExitObservation current.state input)
+    {plan : ClosedReadyReopenLayout current.state.writer current.state.releasedFiles}
+    {selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+      current.state.releasedFiles.image.directory.active.manifest current.state.writer.checkpoint}
+    (reader : NativeCloseAlignedReads seen.files input seen.exit.census plan.layout selected)
+    (recovered : reader.SelectedResult history log current.reads) :
+    ∃ next, NativeReadyProcessExitReopened current seen next ∧ reader.run = next.opened ∧
+      next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
+      next.state.owner = reader.opening.admission.owner ∧ next.state.directorySlot = reader.opening.admission.cached ∧
+      next.state.cache = reader.opening.admission.cache ∧ NativeCloseSelectedReads reader := by
+  have released := seen.exit.releases current.readPrefix.refines.1.owner
+  obtain ⟨state, continued, directory, owner, directorySlot, cache, census, sessionFresh,
+    phaseFresh, lockInode, directoryInode, pair, kept, target, checkpoint, durable, manifestMissing, manifest,
+    runs, marker, wal, replay⟩ := recovered
+  let next : NativeReadPosition history log := ⟨reader.run, state, state, current.reads, continued⟩
+  let reads : NativeCloseSelectedReads reader := ⟨manifestMissing, manifest, runs, marker, wal⟩
+  exact ⟨next, ⟨released, released.exactFiles, rfl, ⟨directory, directoryInode, lockInode, target, checkpoint, durable⟩,
+    sessionFresh, phaseFresh, pair, kept, ⟨plan, selected, reader, continued.frames.1, rfl, rfl, owner, directorySlot,
+      cache, census, reads⟩, replay⟩, rfl, continued.frames.1, owner, directorySlot, cache, reads⟩
+
 /-- The reported writer exit and alias drops lead directly to a healthy
 marked open of the original checkpoint and committed replay. -/
 theorem NativeReadPosition.reopensAfterProcessExit (current : NativeReadPosition history log) {input : FilePath}
     (seen : NativeReadyProcessExitObservation current.state input) :
     ∃ next, NativeReadyProcessExitReopened current seen next := by
-  have released := seen.exit.releases current.readPrefix.refines.1.owner
-  obtain ⟨plan, selected, observed, state, continued, directory, owner, directorySlot, cache, census, sessionFresh,
-    phaseFresh, lockInode, directoryInode, pair, kept, target, checkpoint, durable, manifestMissing, manifest,
-    runs, marker, wal, replay⟩ := current.readPrefix.reopensReleasedAligned seen.files seen.observe
-  let next : NativeReadPosition history log := ⟨observed.run, state, state, current.reads, continued⟩
-  exact ⟨next, released, released.exactFiles, rfl, ⟨directory, directoryInode, lockInode, target, checkpoint, durable⟩,
-    sessionFresh, phaseFresh, pair, kept, ⟨plan, selected, observed, continued.frames.1, rfl, rfl, owner, directorySlot,
-      cache, census, ⟨manifestMissing, manifest, runs, marker, wal⟩⟩, replay⟩
+  obtain ⟨plan, selected, reader, recovered⟩ := current.readPrefix.reopensReleasedAligned seen.files seen.observe
+  obtain ⟨next, reopened, _⟩ := current.reopensAfterProcessExitAt seen (plan := plan) (selected := selected) reader recovered
+  exact ⟨next, reopened⟩
 
 end Alvoki.Storage.DiskSession

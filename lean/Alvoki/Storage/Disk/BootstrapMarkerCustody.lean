@@ -185,16 +185,20 @@ noncomputable abbrev stage (observed : BootstrapMarkerStaging listed) :=
 abbrev grouped (observed : BootstrapMarkerStaging listed) :=
   SyncPathGroup.run (sync directory.path observed.read observed.fsync)
 
+theorem stageReturns (observed : BootstrapMarkerStaging listed) :
+    observed.stage (directory.file .stagedWalBoundary) markerBytes (observed.inputState, observed.initial) =
+      .ok observed.handle (observed.writtenState, observed.inodeState) := by
+  unfold stage writeFreshStagedWith
+  rw [observed.opening.uses]
+  simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, observed.writeReturned, observed.flushReturned]
+
 theorem staged (observed : BootstrapMarkerStaging listed) :
     let path := directory.file .stagedWalBoundary
     stageFreshWithCache path markerBytes observed.stage (captured.cache, observed.inputState, observed.initial) =
       .ok () (captured.cache.remember path observed.handle, observed.writtenState, observed.inodeState) := by
   intro path
-  have wrote : observed.stage path markerBytes (markerInput before.image, observed.initial) =
-      .ok observed.handle (written before.image, observed.inodeState) := by
-    unfold stage writeFreshStagedWith
-    rw [observed.opening.uses]
-    simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, observed.writeReturned, observed.flushReturned]
+  have wrote : observed.stage path markerBytes (observed.inputState, observed.initial) =
+      .ok observed.handle (observed.writtenState, observed.inodeState) := observed.stageReturns
   simp [stageFreshWithCache, wrote]
 
 theorem writeProjected (observed : BootstrapMarkerStaging listed) :

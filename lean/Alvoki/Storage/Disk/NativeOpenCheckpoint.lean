@@ -92,6 +92,20 @@ def runCheckpointOnOpenPhase {image : Type}
       (CheckpointPublication.run next.table.runs.length (fun step => fileEffect (perform next manifest step)))
       (phaseEffect (set phase (.ready next))))
 
+/-- A failed installed guard returns on the original phase and file
+heap before checkpoint preparation or either phase store. -/
+theorem runCheckpointOnOpenPhase_rejectsPhase {image : Type}
+    (perform : Installed → ByteArray → Step → EStateM IO.Error image Unit)
+    (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    {before : heap} {atPhase : Phase Installed} {cause : IO.Error}
+    (loaded : get phase before = .ok atPhase before)
+    (rejected : (atPhase.installed : EStateM IO.Error (heap × image) Installed) =
+      (fun state => .error cause state)) (files : image) :
+    runCheckpointOnOpenPhase perform phase get set (before, files) = .error cause (before, files) := by
+  simp [runCheckpointOnOpenPhase, withPreparedCheckpoint, phaseEffect, Bind.bind, EStateM.bind, loaded, rejected]
+
 /-- Pair the actual phase-heap return with its normalized file and phase
 return, retaining the branch evidence from the same fixed callbacks. -/
 inductive OpenCheckpointReturn {image : Type}

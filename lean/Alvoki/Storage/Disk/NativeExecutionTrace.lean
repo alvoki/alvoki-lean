@@ -50,6 +50,9 @@ import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
 import Alvoki.Storage.Disk.NativeRotationErrorReopen
 import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
 
+import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
+import Alvoki.Storage.Disk.NativeContendedAliasAdmission
+
 namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
@@ -75,6 +78,7 @@ inductive NativeExecutionEvent : Type 1 where
   | checkpointManifestRenameCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | interruptedCheckpointRecovered (input : FilePath) (manifest : Option ByteArray)
   | collectCoveredWal
+  | coveredWalCollectionRejected (error : IO.Error)
   | interruptedCoveredWalUnlinkRecovered (input : FilePath)
   | coveredWalUnlinkErrorCrashRecovered (input : FilePath) (error : IO.Error)
   | interruptedCoveredWalDirectoryRecovered (input : FilePath) (syncEffective : Bool)
@@ -111,6 +115,10 @@ inductive NativeExecutionEvent : Type 1 where
   | uncertainWriteClientCallsRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (calls : List NativePendingClientEvent) (attempted retained : List WAL.Write)
   | interruptedAppendRecovered (request : WriteRequest) (input : FilePath) (attempted : List WAL.Write)
+  | interruptedAppendRetriesRecovered (request : WriteRequest) (errors : List (FilePath × IO.Error))
+      (input : FilePath) (attempted : List WAL.Write)
+  | interruptedAppendContendedRetriesRecovered (request : WriteRequest) (busy : FilePath × IO.Error)
+      (errors : List (FilePath × IO.Error)) (input : FilePath) (attempted : List WAL.Write)
   | interruptedAppendCrashRecovered (request : WriteRequest) (input : FilePath) (attempted : List WAL.Write)
   | interruptedMarkerRecovered (request : WriteRequest) (input : FilePath) (attempted retained : List WAL.Write)
   | collectionErrorRecovered (input : FilePath) (error : IO.Error)
@@ -136,6 +144,8 @@ def submissions : NativeExecutionEvent → List DatabaseSubmissions
   | .uncertainWriteRecovered _ _ _ attempted _ | .uncertainWriteCrashRecovered _ _ _ attempted _
   | .uncertainWriteInterruptedCloseRecovered _ _ _ attempted _ | .interruptedAppendRecovered _ _ attempted
   | .interruptedMarkerRecovered _ _ attempted _ | .interruptedAppendCrashRecovered _ _ attempted
+  | .interruptedAppendRetriesRecovered _ _ _ attempted
+  | .interruptedAppendContendedRetriesRecovered _ _ _ _ attempted
   | .uncertainWriteStageRetryRecovered _ _ _ _ _ attempted
   | .uncertainWriteCloseRetriesRecovered _ _ _ _ _ attempted _
   | .uncertainWriteClientCallsRecovered _ _ _ _ attempted _
@@ -156,6 +166,13 @@ def uncertainBatchWhole : NativeExecutionEvent → Prop
   | .uncertainWriteExitRecovered _ _ _ _ _ attempted retained =>
     retained = [] ∨ retained = attempted
   | _ => True
+
+/-- Select the receipt for the same interrupted write and admitted
+retry sequence, keeping an earlier contended diagnostic when present. -/
+def appendRetryRecovery (request : WriteRequest) (errors : List (FilePath × IO.Error)) (input : FilePath)
+    (attempted : List WAL.Write) : Option (FilePath × IO.Error) → NativeExecutionEvent
+  | none => .interruptedAppendRetriesRecovered request errors input attempted
+  | some busy => .interruptedAppendContendedRetriesRecovered request busy errors input attempted
 
 end NativeExecutionEvent
 
@@ -181,7 +198,7 @@ private def snapshotControlResult : SnapshotUpdate.Outcome α → Except IO.Erro
 
 /-- A successful maintenance operation continues the same committed
 history and read ledger from its exact reached ready state. -/
-private def NativeReadPosition.afterMaintenance (current : NativeReadPosition history log) (next : NativeReadyState)
+def NativeReadPosition.afterMaintenance (current : NativeReadPosition history log) (next : NativeReadyState)
     (valid : next.Valid) (historyEq : next.writer.history = history) : NativeReadPosition history log :=
   ⟨.ok next.session (next.census, next.files), next, next, current.reads,
     .installed rfl valid historyEq current.readPrefix.refines.2.2 current.readPrefix.readsBounded⟩
@@ -204,6 +221,27 @@ structure NativeCloseMarkedBarrierObservation (state : NativeReadyState) (inputs
     ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
       state.releasedFiles.image.directory.active.manifest state.writer.checkpoint,
       Nonempty (NativeCloseAlignedReads files input after.1 plan.layout selected)
+
+/-- The files released by the stopped append enter the same diagnostic
+lineage and selected healthy open for direct or contended access. -/
+structure NativeFirstAppendRetryRecovery (current : NativeExecutionPosition) {heap : Type}
+    {prepared : NativeReadyWritePreparation current.ready.state} (stop : NativeFirstAppendStop prepared)
+    (exited : NativeFirstAppendExit stop) (view : OpenCloseHeapView heap FileImage)
+    (calls : RawOpenAdmissionCallbacks heap) (init : OpenSyncCacheCallbacks heap)
+    (release : IO.FS.Handle → heap → heap) (first : heap) (errors : List (FilePath × IO.Error)) (input : FilePath)
+    (next : NativeReadPosition current.history (current.submissions ++ [.uncertainBatch prepared.batch])) : Prop where
+  pending : NativePendingFirstAppend current.ready stop
+  initialFiles : view.files first = exited.retry
+  initialCensus : view.descriptors first = exited.census
+  opens : ∃ (after : heap) (plan : exited.Plan)
+      (vacant : TryLockObserves (view.files after).owners current.ready.state.session.directory (.ok true))
+      (opening : MarkedReadyOpenObservations input current.ready.state.session.directory
+        (view.descriptors after) ⟨exited.retry.image, (view.files after).owners⟩ plan.layout
+        current.ready.state.writer.published vacant plan.selected),
+    RawFinalizedOpenAttempts view current.ready.state.session.directory calls init release first errors after ∧
+    opening.admission.view = stop.view ∧ opening.admission.root = stop.root ∧
+    opening.reads.wal.keeper.object = stop.keeper.child ∧ opening.finish.run opening.chronology = next.opened
+  keepsReads : next.reads = current.ready.reads
 
 /-- Each operation starts at the exact preceding ready position. A
 reported reopen uses the reached files and descriptor inventory.
@@ -246,6 +284,14 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       NativeExecutionStep current .collectCoveredWal
         ⟨current.history, current.submissions,
           current.ready.afterMaintenance (observed.next completed) returned.valid returned.historyEq⟩
+  | rejectsCoveredWalPlan (current : NativeExecutionPosition)
+      (observed : NativeWalPlanningObservation current.ready.state) (cause : IO.Error)
+      (rejected : observed.extents.result = .error cause)
+      (returned :
+        let state := current.ready.state
+        let reached := (state.session.phase, ⟨(state.cache, state.files.image), state.files.owners⟩)
+        observed.calls.runPlan state.session.directory reached = .error cause reached) :
+      NativeExecutionStep current (.coveredWalCollectionRejected cause) current
   | closeAndReopen (current : NativeExecutionPosition) {input : FilePath}
       (observed : NativeCloseReopenObservation current.ready.state input)
       (next : NativeReadPosition current.history current.submissions)
@@ -383,6 +429,20 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (errorCount : observed.errors.length = inputs.length)
       (reopened : NativeRejectedOpenAlignedResult current.ready observed.after observed.files input next) :
       NativeExecutionStep current (.rejectedOpenSequenceRecovered inputs input observed.errors)
+        ⟨current.history, current.submissions, next⟩
+  | recoverFinalizedOpenSequence (current : NativeExecutionPosition) {heap : Type} {input : FilePath}
+      {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
+      {init : OpenSyncCacheCallbacks heap} {release : IO.FS.Handle → heap → heap}
+      {first after : heap} {errors : List (FilePath × IO.Error)}
+      (close : NativeReadyClose current.ready.state)
+      (closed : close.report.run = .ok () close.report.finished)
+      (initialFiles : view.files first = current.ready.state.releasedFiles)
+      (initialCensus : view.descriptors first = close.report.finished.descriptors)
+      (attempts : RawFinalizedOpenAttempts view current.ready.state.session.directory calls init release first errors after)
+      (files : NativeCloseFiles current.ready.state)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeRejectedOpenAlignedResult current.ready (view.descriptors after, view.files after) files input next) :
+      NativeExecutionStep current (.rejectedOpenSequenceRecovered (errors.map Prod.fst) input (errors.map Prod.snd))
         ⟨current.history, current.submissions, next⟩
   | recoverReadyExit (current : NativeExecutionPosition) {input : FilePath}
       (seen : NativeReadyProcessExitObservation current.ready.state input)
@@ -534,6 +594,27 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (reopened : NativeFirstAppendExitContinuation current.ready stop exited input next) :
       NativeExecutionStep current (.interruptedAppendRecovered stop.request input prepared.batch)
         ⟨current.history, current.submissions ++ [.uncertainBatch prepared.batch], next⟩
+  | recoverInterruptedAppendAfterRetries (current : NativeExecutionPosition) {heap : Type} {input : FilePath}
+      {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
+      {init : OpenSyncCacheCallbacks heap} {release : IO.FS.Handle → heap → heap}
+      {first : heap} {errors : List (FilePath × IO.Error)}
+      {prepared : NativeReadyWritePreparation current.ready.state} (stop : NativeFirstAppendStop prepared)
+      (exited : NativeFirstAppendExit stop)
+      (next : NativeReadPosition current.history (current.submissions ++ [.uncertainBatch prepared.batch]))
+      (reopened : NativeFirstAppendRetryRecovery current stop exited view calls init release first errors input next) :
+      NativeExecutionStep current (.interruptedAppendRetriesRecovered stop.request errors input prepared.batch)
+        ⟨current.history, current.submissions ++ [.uncertainBatch prepared.batch], next⟩
+  | recoverInterruptedAppendAfterContention (current : NativeExecutionPosition) {heap : Type} {input : FilePath}
+      {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
+      {init : OpenSyncCacheCallbacks heap} {release : IO.FS.Handle → heap → heap}
+      {first : heap} {errors : List (FilePath × IO.Error)} {busy : FilePath × IO.Error}
+      {prepared : NativeReadyWritePreparation current.ready.state} (stop : NativeFirstAppendStop prepared)
+      (exited : NativeFirstAppendExit stop)
+      (access : NativeFirstAppendRetryAccess exited view calls release first (some busy))
+      (next : NativeReadPosition current.history (current.submissions ++ [.uncertainBatch prepared.batch]))
+      (reopened : NativeFirstAppendRetryRecovery current stop exited view calls init release first errors input next) :
+      NativeExecutionStep current (.interruptedAppendContendedRetriesRecovered stop.request busy errors input prepared.batch)
+        ⟨current.history, current.submissions ++ [.uncertainBatch prepared.batch], next⟩
   | collectsObsoleteRunsAfterRetries (current : NativeExecutionPosition) {held errors initial before}
       {retryAt : NativeReadPosition current.history current.submissions}
       (prior : NativeObsoleteRunUnlinkRetries current.ready initial held retryAt before errors)
@@ -605,6 +686,7 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       NativeReadPosition.afterMaintenance]
   case collectCoveredWal => simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions,
       NativeExecutionEvent.reads, NativeReadPosition.afterMaintenance]
+  case rejectsCoveredWalPlan => simp [NativeExecutionEvent.writes, NativeExecutionEvent.submissions, NativeExecutionEvent.reads]
   case closeAndReopen reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWrite recovered =>
@@ -647,6 +729,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
   case recoverMarkedBarrierRetries reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverRejectedOpenSequence reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverFinalizedOpenSequence reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverReadyExit reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
@@ -691,6 +775,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
     exact ⟨by simp [NativeExecutionEvent.writes], rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverInterruptedAppend reopened =>
     exact ⟨by simp [NativeExecutionEvent.writes], rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverInterruptedAppendAfterRetries reopened | recoverInterruptedAppendAfterContention reopened =>
+    exact ⟨by simp [NativeExecutionEvent.writes], rfl, by simpa [NativeExecutionEvent.reads] using reopened.keepsReads⟩
   case collectsObsoleteRunsAfterRetries prior _ _ _ _ returned =>
     obtain ⟨_, _, _, _, _, _, _, _, _, reads⟩ := prior.frames
     exact ⟨by simp [NativeExecutionEvent.writes], by simp [NativeExecutionEvent.submissions],
@@ -832,7 +918,7 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .checkpointThenPowerLossAndReopen input, .checkpointCrashRecovered opened _ _ => opened = input
   | .checkpointManifestRenameErrorThenPowerLossAndReopen input, .checkpointManifestRenameCrashRecovered opened _ _ =>
     opened = input
-  | .collectCoveredWal, .collectCoveredWal => True
+  | .collectCoveredWal, .collectCoveredWal | .collectCoveredWal, .coveredWalCollectionRejected _ => True
   | .interruptedCoveredWalUnlinkThenReopen input, .interruptedCoveredWalUnlinkRecovered opened => opened = input
   | .coveredWalUnlinkErrorThenPowerLossAndReopen input, .coveredWalUnlinkErrorCrashRecovered opened _ => opened = input
   | .interruptedCoveredWalDirectoryThenReopen input, .interruptedCoveredWalDirectoryRecovered opened _ => opened = input
@@ -916,6 +1002,8 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
       (observed : NativeReadyCheckpoint current.state reports)
   | collectCoveredWal (observed : NativeReadyWalCollection current.state)
       (completed : observed.barrier.outcome = .completed)
+  | rejectsCoveredWalPlan (observed : NativeWalPlanningObservation current.state) (cause : IO.Error)
+      (rejected : observed.extents.result = .error cause)
   | coveredWalUnlinkErrorThenPowerLossAndReopen (input : FilePath) (error : NativeCoveredWalUnlinkError current.state)
       (crash : NativeCoveredWalUnlinkErrorCrash error) (observe : crash.ReopenReports input)
   | interruptedCoveredWalDirectoryThenReopen (input : FilePath) {stop : NativeCoveredWalDirectoryStop current.state}
@@ -1052,7 +1140,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .write _ _ request _ => .write request
   | .restart _ input _ => .restart input
   | .checkpoint _ => .checkpoint
-  | .collectCoveredWal _ _ => .collectCoveredWal
+  | .collectCoveredWal _ _ | .rejectsCoveredWalPlan _ _ _ => .collectCoveredWal
   | .interruptedCoveredWalUnlinkThenReopen input _ _ => .interruptedCoveredWalUnlinkThenReopen input
   | .interruptedCoveredWalDirectoryThenReopen input _ _ => .interruptedCoveredWalDirectoryThenReopen input
   | .coveredWalUnlinkErrorThenPowerLossAndReopen input _ _ _ => .coveredWalUnlinkErrorThenPowerLossAndReopen input
@@ -1124,6 +1212,10 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | collectCoveredWal observed completed =>
     obtain ⟨_, step⟩ := current.collectsCoveredWal observed completed
     exact ⟨_, _, step, trivial⟩
+  | rejectsCoveredWalPlan observed cause rejected =>
+    have planned := (current.ready.plansWalCollection observed).1
+    simp only [rejected] at planned
+    exact ⟨_, current, .rejectsCoveredWalPlan current observed cause rejected planned, trivial⟩
   | coveredWalUnlinkErrorThenPowerLossAndReopen _ error crash observe =>
     have recovery := current.ready.recoversCoveredWalUnlinkErrorPowerLoss error crash observe
     obtain ⟨_, _, _, _, seen, state, reached⟩ := recovery.reopened
