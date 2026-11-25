@@ -786,6 +786,34 @@ theorem DiskTable.writeBatchWithOutcome_fileEffects (db : DiskTable)
       db.phase.set (.ready { state with table, walBytes })
       return table.committed) := rfl
 
+/-- The public write schedules use the phase cell and the synchronization
+record that the native opener stored in this table. -/
+def DiskTable.UsesOpenWriteSchedules (db : DiskTable) (directory : DiskDirectory)
+    (files : DiskTable.OpenSyncFiles) (phase : IO.Ref Phase) : Prop :=
+  (∀ key value, db.writeWithOutcome key value =
+    DiskSession.withPreparedSingleWrite key value
+      ((do (← phase.get).installed : IO Installed).adapt DiskWriteError.rejected) DiskWriteError.rejected
+      (fun result => (fromOption result "write sequence space exhausted").adapt DiskWriteError.rejected)
+      (fun state => (checkActiveSegmentWith directory state FilePath.symlinkMetadata).adapt DiskWriteError.rejected)
+      (fun state event table walBytes =>
+        DiskSession.publishPreparedWrite { state with table, walBytes } event.sequence phase.set
+          ((WalSegmentCommit.commitAt directory state.activeFirst event walBytes
+            files.append files.stage files.syncPaths IO.FS.rename).adapt DiskWriteError.commitUnknown))) ∧
+  (∀ rows, db.writeBatchWithOutcome rows =
+    DiskSession.writeBatchSchedule (m := EIO DiskWriteError) rows
+      ((do (← phase.get).installed : IO Installed).adapt DiskWriteError.rejected) DiskWriteError.rejected
+      (fun result => (fromOption result "write sequence space exhausted").adapt DiskWriteError.rejected)
+      (fun state => (checkActiveSegmentWith directory state FilePath.symlinkMetadata).adapt DiskWriteError.rejected)
+      phase.set
+      (fun state events bytes => (WalSegmentCommit.commitBytesAt directory state.activeFirst (WAL.encodeBatch events)
+        bytes files.append files.stage files.syncPaths IO.FS.rename).adapt DiskWriteError.commitUnknown))
+
+theorem DiskTable.UsesOpenReferences.writeSchedules {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) : db.UsesOpenWriteSchedules directory files phase := by
+  obtain ⟨path, _, cache, cell, _⟩ := uses
+  constructor <;> intros <;>
+    simp only [DiskTable.writeWithOutcome_schedule, DiskTable.writeBatchWithOutcome_schedule, DiskTable.installed, path, cache, cell]
+
 private theorem adaptWriteBind (mapError : ε → ε')
     (action : EIO ε α) (next : α → EIO ε β) :
     (action >>= next).adapt mapError = action.adapt mapError >>= fun value => (next value).adapt mapError := by
