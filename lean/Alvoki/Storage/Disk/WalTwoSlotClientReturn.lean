@@ -1560,16 +1560,12 @@ theorem reopensAfterCapturedPreparation
     {cache : CensusDirectoryCache} {opened : Reopened} {size : Nat}
     (prepare : EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Plan × Reopened × Nat))
     (prepared : prepare before = .ok (layout.boundedPlan, opened, size) (cache, captured.afterRead, admission.held))
-    (removeFile : System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Except IO.Error Unit))
-    (write : System.FilePath → ByteArray → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
-    (sync : Array System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
-    (renameFile : System.FilePath → System.FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
-    (finished : finishBoundedMarkedOpen directory layout.boundedPlan size removeFile write sync renameFile
+    (finish : Plan → Nat → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (finished : finish layout.boundedPlan size
       (cache, captured.afterRead,
         { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) =
       .ok () after) :
-    reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices)
-        (fun plan extent => finishBoundedMarkedOpen directory plan extent removeFile write sync renameFile) before =
+    reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices) finish before =
       .ok opened after := by
   have projected := stabilizesAfterKeeperRead report captured live current effect sameBinding decoded
     bound choices enumerated presence physical
@@ -1706,23 +1702,14 @@ theorem reopensLongAfterCapturedPreparation
     reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices)
       (finish.repairAfterRead directory) before =
         .ok opened (admission.cache, finish.census, finish.settled) := by
-  have projected := stabilizesAfterKeeperRead report finish.reader live current effect sameBinding decoded
-    bound choices enumerated presence physical
-  have barrier : stabilizeCapturedMarker (marker.visible marker.active) choices
-      (admission.cache, finish.reader.afterRead, admission.held) =
-      .ok () (admission.cache, finish.reader.afterRead,
-        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) := by
-    change (match projectRepairDirectory retry.image.directory (marker.visible marker.active) choices with
-      | .error cause => _
-      | .ok settled => _) = _
-    rw [projected]
-    rfl
+  apply reopensAfterCapturedPreparation report finish.reader live current effect sameBinding decoded
+    bound choices enumerated presence physical prepare prepared
   have authorized : finish.authorization.fsync (admission.reached, admission.cached, 0)
       { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
       .ok () { admission.held with image := retry.image.syncDirectory } := by
     simpa only [CapturedKeeperOpenReports.directoryBarrierAfterDrops, DescriptorInventory.delayedDirectorySync,
       DelayedDirectorySync.run, syncDirectory_afterSelectedMarker _ _ frontier] using directorySync
-  simp only [reopenWith_reports, prepared, barrier, finish.repairAfterRead_returns_from _ authorized]
+  exact finish.repairAfterRead_returns_from _ authorized
 
 /-- An aligned keeper with later segments uses the same ordered suffix
 repair after the marker barrier reaches the common authorized image. -/
@@ -1763,31 +1750,15 @@ theorem reopensPrunedAfterCapturedPreparation
     reopenWith prepare (stabilizeCapturedMarker (marker.visible marker.active) choices)
       (finish.repairActions directory) before =
         .ok opened (admission.cache, finish.census, finish.settled) := by
-  have projected := stabilizesAfterKeeperRead report finish.reader live current effect sameBinding decoded
-    bound choices enumerated presence physical
-  let remembered := admission.cache.remember (directory.file (.walSegment layout.keeper.first))
-    (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
-  have barrier : stabilizeCapturedMarker (marker.visible marker.active) choices
-      (remembered, finish.reader.afterRead, admission.held) =
-      .ok () (remembered, finish.reader.afterRead,
-        { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) := by
-    change (match projectRepairDirectory retry.image.directory (marker.visible marker.active) choices with
-      | .error cause => _
-      | .ok settled => _) = _
-    rw [projected]
-    rfl
+  apply reopensAfterCapturedPreparation report finish.reader live current effect sameBinding decoded
+    bound choices enumerated presence physical prepare prepared
   have authorized : finish.authorization.fsync (admission.reached, admission.cached, 0)
       { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } } =
       .ok () { admission.held with image := retry.image.syncDirectory } := by
     simpa only [CapturedKeeperOpenReports.directoryBarrier, CapturedKeeperOpenReports.directoryBarrierAfterDrops,
       DescriptorInventory.delayedDirectorySync,
       DelayedDirectorySync.run, syncDirectory_afterSelectedMarker _ _ frontier] using directorySync
-  have repaired := finish.repairActions_returns_from _ authorized later
-  change finish.repairActions directory layout.boundedPlan layout.plan.keeperBytes.size
-    (remembered, finish.reader.afterRead, _) = _ at repaired
-  change prepare before = .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size)
-    (remembered, finish.reader.afterRead, admission.held) at prepared
-  simp only [reopenWith_reports, prepared, barrier, repaired]
+  exact finish.repairActions_returns_from _ authorized later
 
 end CapturedPreparation
 
