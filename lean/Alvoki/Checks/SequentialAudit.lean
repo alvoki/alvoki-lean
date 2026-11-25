@@ -2144,3 +2144,5 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.decodeSlot_unchanged
 #check_axioms Alvoki.WAL.TwoSlot.decodeSlot_exact
 #check_axioms Alvoki.WAL.TwoSlot.advance_valid
+#check_axioms Alvoki.WAL.TwoSlot.SettledRetries.preserves
+#check_axioms Alvoki.WAL.TwoSlot.SettledRetries.preservesSelectedMarker

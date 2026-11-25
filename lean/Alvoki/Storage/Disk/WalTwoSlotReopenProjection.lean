@@ -70,4 +70,58 @@ theorem repair_preserves_settledMarker (initial : FileImage) (selected : Selecti
   rw [same, ← pair]
   simp [settleMarker, bound]
 
+/-- Physical image changes admitted after the first successful directory
+barrier. A failed validation, lock handoff or other step without file effects
+leaves the projected image unchanged. -/
+inductive SettledRetries (target : Target) (initial : FileImage) : FileImage → Prop where
+  | start : SettledRetries target initial initial
+  | repair (prior : SettledRetries target initial before) (effects : EffectTrace target before after) :
+      SettledRetries target initial after
+  | crash (prior : SettledRetries target initial before)
+      (metadata : pair ∈ before.directory.crashImages)
+      (keeper : bytes ∈ before.keeper.crashImages) (later : names ∈ before.later.crashImages) :
+      SettledRetries target initial (before.crash pair bytes names)
+
+/-- An arbitrary number of admitted attempts preserves the exact selected
+manifest and marker, sealed bytes and all required keeper data. -/
+theorem SettledRetries.preserves {target : Target} {initial after : FileImage}
+    (retries : SettledRetries target initial after) (valid : initial.Valid target) :
+    after.Valid target ∧ after.kept = initial.kept := by
+  induction retries with
+  | start => exact ⟨valid, rfl⟩
+  | repair _ effects ih =>
+    exact ⟨effects.valid ih.1.selected ih.1.keeper ih.1.later, effects.keepsSealed.trans ih.2⟩
+  | @crash before pair bytes names _ metadata keeper later ih =>
+    have same := List.mem_singleton.mp (ih.1.settled ▸ metadata)
+    exact ⟨⟨same, congrArg (fun pair => [pair]) same,
+      Alvoki.Storage.Publication.Image.settled_valid (ih.1.keeper.crashValid _ keeper),
+      (fun visible chosen => by
+        have eq : visible = names := by simpa [FileImage.crash, LaterNames.settled] using chosen
+        subst visible
+        exact ih.1.later _ (List.mem_cons_of_mem _ later))⟩, ih.2⟩
+
+/-- Compose the first authorized repair prefix with later attempts. Every
+surviving binding still selects the same frontier, even if none of the
+attempts has returned a ready writer. -/
+theorem SettledRetries.preservesSelectedMarker
+    (initial : FileImage) (selected : Selection)
+    {target : Target} {first after : FileImage} {bytes : ByteArray}
+    (bound : initial.directory.active.walBoundary = some bytes)
+    (firstRepair : EffectTrace target
+      { initial with directory := settleMarker initial.directory selected } first)
+    (pair : (settleMarker initial.directory selected).active = target.pair)
+    (keeper : initial.keeper.Valid target.Accepts)
+    (later : initial.later.Beyond target.range.through)
+    (retries : SettledRetries target first after)
+    {survivor : Bindings} (chosen : survivor ∈ after.directory.active :: after.directory.crashImages) :
+    survivor.walBoundary = some (Boundary.encode selected.frontier) ∧
+      after.kept = initial.kept := by
+  have initialValid := firstRepair.valid pair keeper later
+  have ⟨finalValid, sameSeals⟩ := retries.preserves initialValid
+  have same : survivor = target.pair := by
+    simpa [finalValid.selected, finalValid.settled] using chosen
+  refine ⟨?_, sameSeals.trans firstRepair.keepsSealed⟩
+  rw [same, ← pair]
+  simp [settleMarker, bound]
+
 end Alvoki.WAL.TwoSlot
