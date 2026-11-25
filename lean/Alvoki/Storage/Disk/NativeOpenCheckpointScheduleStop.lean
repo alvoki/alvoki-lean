@@ -421,6 +421,7 @@ its cache slot. The next barrier issues on that exact descriptor. -/
 theorem NativeCheckpointSourceStop.runsDirectoryUsesCachedHandle
     (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached) :
     ∃ handle, current.current.ready.state.cache.directory = some handle ∧
+      stop.atIssue.1.directory = some handle ∧
       reached.1 = stop.atIssue.1 ∧ fsync handle stop.atIssue.2 = .error reason reached.2 := by
   let directory := current.current.ready.state.session.directory
   have issued := stop.runsDirectoryIssue
@@ -447,6 +448,7 @@ theorem NativeCheckpointSourceStop.runsDirectoryUsesCachedHandle
   | some original =>
     rw [cached] at resolved
     obtain ⟨rfl, same⟩ := EStateM.Result.ok.inj resolved
-    exact ⟨original, kept.symm.trans cached, (congrArg Prod.fst same).symm, (congrArg Prod.snd same).symm ▸ effect⟩
+    exact ⟨original, kept.symm.trans cached, rfl, (congrArg Prod.fst same).symm,
+      (congrArg Prod.snd same).symm ▸ effect⟩
 
 end Alvoki.Storage.DiskSession
