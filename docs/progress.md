@@ -904,3 +904,10 @@ every reported open and close. A temporary seal finalizer preserves a
 retained slot by its observed free-address allocation. Other drops
 carry explicit lifetime reports at the corresponding read. The chain
 derives slot membership at the keeper entry from those per-read reports.
+
+The checkpoint-run read census now derives retained-slot membership
+after all selected runs. It uses each run's raw open, bounded-read
+custody and release report. Together with the seal-chain result this
+provides lifetime proofs for both loops in the two-slot preparation
+schedule. The enclosing opener still supplies the manifest, scan and
+keeper transitions that join those loops to the marker fsync.

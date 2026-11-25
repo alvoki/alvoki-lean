@@ -97,6 +97,43 @@ structure CapturedRunReadCensus (report : CapturedMarkedReadReports admission la
               (released (directory.file (.run manifest.header.generation index))),
             events index = custody.beforeOpen ++ released (directory.file (.run manifest.header.generation index))
 
+/-- A retained descriptor remains live through every selected run read.
+Each report accounts for the ambient drops. Free-address allocation
+accounts for the temporary descriptor's own finalizer. -/
+theorem CapturedRunReadCensus.preservesSlot
+    {report : CapturedMarkedReadReports admission layout published}
+    {initial : DescriptorInventory} (runs : CapturedRunReadCensus report initial)
+    {slot : DescriptorSlot} (present : slot ∈ initial.slots)
+    {bytes : ByteArray} {manifest : IntegrityCheckpoint}
+    (bound : retry.image.directory.active.manifest = some bytes)
+    (decoded : IntegrityCheckpoint.decode bytes = .ok manifest)
+    (durable : ∀ index < manifest.header.runCount.toNat,
+      ∃ payload, published.durable manifest.header.generation index = some payload)
+    (ambient : ∀ index < manifest.header.runCount.toNat,
+      ∀ (file : RunChunkPathReport report.reads (directory.file (.run manifest.header.generation index))
+        (renderRunFileName manifest.header.generation index) admission.root admission.view)
+      (custody : TemporaryPrefixCustody file (initial.afterDrops (runReadDrops runs.events index))
+        (runs.released (directory.file (.run manifest.header.generation index)))),
+      runs.events index = custody.beforeOpen ++ runs.released (directory.file (.run manifest.header.generation index)) →
+      ∀ event ∈ custody.beforeOpen ++ custody.beforeClose, event.removes slot.reference = false) :
+    slot ∈ (initial.afterDrops (runReadDrops runs.events manifest.header.runCount.toNat)).slots := by
+  suffices kept : ∀ count ≤ manifest.header.runCount.toNat,
+      slot ∈ (initial.afterDrops (runReadDrops runs.events count)).slots from
+    kept _ (Nat.le_refl _)
+  intro count within
+  induction count with
+  | zero => simpa [runReadDrops, DescriptorInventory.afterDrops] using present
+  | succ index ih =>
+    have valid : index < manifest.header.runCount.toNat := within
+    obtain ⟨payload, stored⟩ := durable index valid
+    obtain ⟨_, _, _, file, custody, ordered⟩ := runs.runs bytes manifest bound decoded index valid payload stored
+    have drops := ambient index valid file custody ordered
+    have retained := custody.preservesSlot (ih (Nat.le_of_lt valid))
+      (fun event found => drops event (List.mem_append_left _ found))
+      (fun event found => drops event (List.mem_append_right _ found))
+    rw [custody.closes.1] at retained
+    simpa only [runReadDrops, ← DescriptorInventory.afterDrops_append, ordered] using retained
+
 def CapturedMarkedReadReports.readCheckpointFromCensus (report : CapturedMarkedReadReports admission layout published)
     (metadataRelease runRelease : FilePath → List LockReferenceDrop) :
     EStateM IO.Error ReadState (Option (PackedTable × UInt64)) :=
