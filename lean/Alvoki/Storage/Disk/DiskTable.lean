@@ -395,30 +395,35 @@ theorem DiskTable.open_fileTargets (path : FilePath) : DiskTable.open path = (do
         DiskSession.installReady opened.installed (fun phase => IO.mkRef phase) (fun _ => IO.mkRef ())
           fun phase session => pure ⟨dir, lock, files, phase, session⟩) := rfl
 
+/-- Abstract name for the synchronization record already held by the
+native opener. Its constructor and fields remain private. -/
+abbrev DiskTable.OpenSyncFiles := SyncFiles
+
 /-- The pure constructor at the end of the native open schedule, with
-the previously acquired synchronization fields enclosed in the callback. -/
+the same reached synchronization record enclosed in the callback. -/
 def DiskTable.OpenReferenceAssembly (directory : DiskDirectory) (lock : IO.FS.Handle)
-    (assemble : IO.Ref Phase → IO.Ref Unit → DiskTable) : Prop :=
-  ∃ files : SyncFiles, assemble = fun phase session => ⟨directory, lock, files, phase, session⟩
+    (files : DiskTable.OpenSyncFiles) (assemble : IO.Ref Phase → IO.Ref Unit → DiskTable) : Prop :=
+  assemble = fun phase session => ⟨directory, lock, files, phase, session⟩
 
 /-- This is the constructor passed to the shared installation in
 `DiskTable.open_fileTargets`. -/
-theorem DiskTable.openReferenceAssembly (directory : DiskDirectory) (lock : IO.FS.Handle) (files : SyncFiles) :
-    DiskTable.OpenReferenceAssembly directory lock
-      (fun phase session => ⟨directory, lock, files, phase, session⟩) := ⟨files, rfl⟩
+theorem DiskTable.openReferenceAssembly (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (files : DiskTable.OpenSyncFiles) :
+    DiskTable.OpenReferenceAssembly directory lock files
+      (fun phase session => ⟨directory, lock, files, phase, session⟩) := rfl
 
 /-- Proof-only access to the exact fields of the returned table. The
 implementation keeps their projection functions private. -/
 def DiskTable.UsesOpenReferences (db : DiskTable) (directory : DiskDirectory) (lock : IO.FS.Handle)
-    (phase : IO.Ref Phase) (session : IO.Ref Unit) : Prop :=
-  db.dir = directory ∧ db.lock = lock ∧ db.phase = phase ∧ db.session = session
+    (files : DiskTable.OpenSyncFiles) (phase : IO.Ref Phase) (session : IO.Ref Unit) : Prop :=
+  db.dir = directory ∧ db.lock = lock ∧ db.files = files ∧ db.phase = phase ∧ db.session = session
 
-theorem DiskTable.OpenReferenceAssembly.usesReferences {directory lock assemble}
-    (constructor : DiskTable.OpenReferenceAssembly directory lock assemble)
+theorem DiskTable.OpenReferenceAssembly.usesReferences {directory lock files assemble}
+    (constructor : DiskTable.OpenReferenceAssembly directory lock files assemble)
     (phase : IO.Ref Phase) (session : IO.Ref Unit) :
-    (assemble phase session).UsesOpenReferences directory lock phase session := by
-  obtain ⟨_, rfl⟩ := constructor
-  exact ⟨rfl, rfl, rfl, rfl⟩
+    (assemble phase session).UsesOpenReferences directory lock files phase session := by
+  rw [constructor]
+  exact ⟨rfl, rfl, rfl, rfl, rfl⟩
 
 @[macro_inline] def checkPrivateRegularWith [Monad m] [MonadExceptOf IO.Error m]
     (path : FilePath) (metadata : IO.FS.Metadata) : m Unit := do

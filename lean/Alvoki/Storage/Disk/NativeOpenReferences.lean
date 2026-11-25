@@ -35,11 +35,12 @@ returns. Its result stores those exact cells and the ready phase
 still contains the data passed to the first allocation. -/
 theorem installs
     (observed : OpenReferenceAllocations allocatePhase allocateToken phaseContents installed before)
-    {directory : DiskDirectory} {lock : IO.FS.Handle} {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
-    (constructor : DiskTable.OpenReferenceAssembly directory lock assemble) :
+    {directory : DiskDirectory} {lock : IO.FS.Handle} {syncFiles : DiskTable.OpenSyncFiles}
+    {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+    (constructor : DiskTable.OpenReferenceAssembly directory lock syncFiles assemble) :
     installReady installed allocatePhase allocateToken (fun phase token => pure (assemble phase token)) before =
       .ok (assemble observed.phase observed.token) observed.afterToken ∧
-    (assemble observed.phase observed.token).UsesOpenReferences directory lock observed.phase observed.token ∧
+    (assemble observed.phase observed.token).UsesOpenReferences directory lock syncFiles observed.phase observed.token ∧
     phaseContents observed.afterToken observed.phase = some (.ready installed) := by
   refine ⟨?_, constructor.usesReferences observed.phase observed.token, observed.keepsPhase.trans observed.initialized⟩
   simp only [installReady, Bind.bind, EStateM.bind, observed.phaseAllocated, observed.tokenAllocated, Pure.pure, EStateM.pure]
@@ -53,11 +54,13 @@ variable {input : FilePath} {directory : DiskDirectory} {history : List WAL.Writ
 callbacks place the exact recovered writer in the phase cell of the
 returned DiskTable. The live cells and held handle use the identities
 of the same ready read prefix. The premise reports just the two
-allocation effects and the identities of their returned references. -/
+allocation effects at the reported installer suffix. Reference identity
+projections apply within that reported process heap. -/
 theorem NativeOpenSuccessReports.returnsReadyWithReferences
     (report : NativeOpenSuccessReports input directory history log recorded)
-    {lock : IO.FS.Handle} {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
-    (constructor : DiskTable.OpenReferenceAssembly directory lock assemble)
+    {lock : IO.FS.Handle} {syncFiles : DiskTable.OpenSyncFiles}
+    {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+    (constructor : DiskTable.OpenReferenceAssembly directory lock syncFiles assemble)
     (lockIdentity : IO.FS.Handle → Nat) (phaseIdentity : IO.Ref (Phase Installed) → Nat)
     (tokenIdentity : IO.Ref Unit → Nat)
     (allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed)))
@@ -77,7 +80,7 @@ theorem NativeOpenSuccessReports.returnsReadyWithReferences
       NativeReadyReadPrefix (.ok state.session (state.census, state.files)) state history log recorded state ∧
       installReady state.writer.installed allocatePhase allocateToken (fun phase token => pure (assemble phase token))
         heapAtInstall = .ok db allocation.afterToken ∧
-      db.UsesOpenReferences directory lock allocation.phase allocation.token ∧
+      db.UsesOpenReferences directory lock syncFiles allocation.phase allocation.token ∧
       phaseContents allocation.afterToken allocation.phase = some state.session.phase ∧
       lockIdentity lock = state.session.descriptor ∧ phaseIdentity allocation.phase = state.session.phaseRef ∧
       tokenIdentity allocation.token = state.session.sessionRef := by
