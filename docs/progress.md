@@ -1068,6 +1068,8 @@ The held marker sync now returns the physical inode image and the
 logical recovery state from one callback. The client theorem projects
 the latter from that exact return before repair. The former is the
 same settled image used to check the fsync effect and survivor bytes.
+A failed sync now uses the same projection to pass the exact reached
+file image into cleanup and the next retry.
 
 The full sequential suite passed at `265f4e8b`, including the
 axiom audit, differential checks, native disk and process-death tests,

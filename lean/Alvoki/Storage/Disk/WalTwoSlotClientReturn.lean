@@ -1488,6 +1488,19 @@ theorem reopenSyncInterrupted_preservesRetry {stop : Type}
       EStateM.bind, read, cut]
   · exact .powerLoss (.markerInterrupted prior selected observed effect) metadata keeper later
 
+/-- Run the marker sync with its physical image and the reached recovery
+state together. The continuation uses the recovery state returned by
+that very call, on either success or error. -/
+def projectMarkerSync {state : Type}
+    (sync : KeeperDescriptorIdentity →
+      EStateM IO.Error (WalInodeImage × state) Unit)
+    (marker : WalInodeImage) (handle : KeeperDescriptorIdentity) :
+    EStateM IO.Error state Unit :=
+  fun reached =>
+    match sync handle (marker, reached) with
+    | .ok () (_, after) => .ok () after
+    | .error cause (_, after) => .error cause after
+
 /-- The descriptor's error report determines which retry image is
 reachable. A reported error after persistence settles only the marker. -/
 theorem reopenSyncError_preservesRetry
@@ -1496,12 +1509,12 @@ theorem reopenSyncError_preservesRetry
     (prior : ReportedMarkerRetries initial prepared) (selection : Selection)
     (observed : prepared.directory.active.walBoundary = some (Boundary.encode selection.frontier))
     {prepare : EStateM IO.Error FileImage (WalSegmentRepair.Plan × WalSegmentRepair.Reopened × Nat)}
-    {stabilize : EStateM IO.Error FileImage Unit}
+    {syncMarker : KeeperDescriptorIdentity → EStateM IO.Error (WalInodeImage × FileImage) Unit}
     {finish : WalSegmentRepair.Plan → Nat → EStateM IO.Error FileImage Unit}
     {plan : WalSegmentRepair.Plan} {opened : WalSegmentRepair.Reopened} {size : Nat} {cause : IO.Error}
     (read : prepare before.image = .ok (plan, opened, size) prepared)
-    (barrier : stabilize prepared = .error cause reached)
     {physical after : WalInodeImage} {handle : KeeperDescriptorIdentity}
+    (barrier : syncMarker handle (physical, prepared) = .error cause (after, reached))
     (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
       handle physical (fun inode files => files.completeFileSync inode) (.error cause after))
     (project : WalInodeImage → FileImage)
@@ -1511,7 +1524,7 @@ theorem reopenSyncError_preservesRetry
       { prepared with directory := settleMarker prepared.directory selection }) :
     ∃ error final,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
-        (reopenWith prepare stabilize finish) before = .error error final ∧
+        (reopenWith prepare (projectMarkerSync syncMarker physical handle) finish) before = .error error final ∧
       ReportedMarkerRetries initial final.image ∧ final.image.keeper = prepared.keeper := by
   have retry : ReportedMarkerRetries initial reached := by
     rw [← reachedImage]
@@ -1523,8 +1536,10 @@ theorem reopenSyncError_preservesRetry
     cases effect with
     | errorBefore => exact congrArg FileImage.keeper (reachedImage.symm.trans priorImage)
     | errorAfter => rw [← reachedImage, syncImage]
+  have projectedFailure : projectMarkerSync syncMarker physical handle prepared = .error cause reached := by
+    simp only [projectMarkerSync, barrier]
   have returned := reopenWith_markerSyncError (directory := directory) (descriptor := descriptor)
-    (nextRef := nextRef) (finish := finish) unlock read barrier
+    (nextRef := nextRef) (finish := finish) unlock read projectedFailure
   cases unlock <;> exact ⟨_, _, returned, retry, keeper⟩
 
 /-- Derive the initial retry alternatives from the physical marker
@@ -2308,19 +2323,6 @@ theorem InterruptedBatchMarkerPublication.survivingKeeperOfMarkerChange
   · have membership : bytes ∈ durable.1.keeper.crashImages := keeper ▸ survives
     rw [walPersists synced] at membership
     exact ⟨appended, durable, wrote, synced, by simpa [FileImage.syncKeeper] using membership⟩
-
-/-- Run the marker sync with its physical image and the reached recovery
-state together. The continuation uses the recovery state returned by
-that very call, on either success or error. -/
-def projectMarkerSync
-    (sync : KeeperDescriptorIdentity →
-      EStateM IO.Error (WalInodeImage × (CensusDirectoryCache × CensusOpenState)) Unit)
-    (marker : WalInodeImage) (handle : KeeperDescriptorIdentity) :
-    EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit :=
-  fun reached =>
-    match sync handle (marker, reached) with
-    | .ok () (_, after) => .ok () after
-    | .error cause (_, after) => .error cause after
 
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
