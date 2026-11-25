@@ -172,4 +172,35 @@ theorem publish_reports {ε σ : Type}
   split <;> simp_all
   split <;> simp_all
 
+/-- An observed marker must be settled before any destructive finish,
+after the selected WAL and checkpoint have been validated. -/
+@[macro_inline] def reopenWith [Monad m] (prepare : m (α × β × Nat))
+    (stabilize : m Unit) (finish : α → Nat → m Unit) : m β := do
+  let (plan, opened, size) ← prepare
+  stabilize
+  finish plan size
+  return opened
+
+theorem reopenWith_reports {ε σ α β : Type} (prepare : EStateM ε σ (α × β × Nat))
+    (stabilize : EStateM ε σ Unit) (finish : α → Nat → EStateM ε σ Unit) (initial : σ) :
+    reopenWith prepare stabilize finish initial =
+      match prepare initial with
+      | .error cause after => .error cause after
+      | .ok (plan, opened, size) prepared =>
+        match stabilize prepared with
+        | .error cause after => .error cause after
+        | .ok _ settled =>
+          match finish plan size settled with
+          | .error cause after => .error cause after
+          | .ok _ after => .ok opened after := by
+  cases first : prepare initial with
+  | error => simp [reopenWith, Bind.bind, EStateM.bind, first]
+  | ok result prepared =>
+    obtain ⟨plan, opened, size⟩ := result
+    cases second : stabilize prepared with
+    | error => simp [reopenWith, Bind.bind, EStateM.bind, first, second]
+    | ok _ settled =>
+      cases last : finish plan size settled <;>
+        simp [reopenWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, first, second, last]
+
 end Alvoki.WAL.TwoSlot

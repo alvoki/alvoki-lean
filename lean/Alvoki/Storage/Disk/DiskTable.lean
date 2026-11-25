@@ -1154,19 +1154,19 @@ private def bootstrap (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentR
   return ⟨.empty, 0, 0, 0⟩
 
 private def reopen (dir : DiskDirectory) (files : SyncFiles) (marker : IO.FS.Handle)
-    (selection : WAL.TwoSlot.Selection) : IO WalSegmentRepair.Reopened := do
-  let (plan, opened, size) ← WalSegmentRepair.prepareBoundedMarkedFromReaders dir
-    (readIntegrityCheckpointSized dir (readOptionalCachedOpenFile dir (dir.file .manifest))
-      readCheckpointRunSize readCheckpointRunPrefix)
-    (fun _ => pure (some (WAL.Boundary.encode selection.frontier)))
-    (fun watermark frontier => WalSegmentRepair.readSelectedWithCachedExtents dir watermark frontier
-      readDirectoryChecked inspectWalSegment readSealedWalPrefix (readKeeperPrefix files))
-  -- A visible complete but uncertain slot must become durable before the
-  -- next writer can overwrite the previous witness or reclaim covered WAL.
-  fsyncHandle marker
-  WalSegmentRepair.finishBoundedMarkedOpen dir plan size
-    (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
-  return opened
+    (selection : WAL.TwoSlot.Selection) : IO WalSegmentRepair.Reopened :=
+  WAL.TwoSlot.reopenWith
+    (WalSegmentRepair.prepareBoundedMarkedFromReaders dir
+      (readIntegrityCheckpointSized dir (readOptionalCachedOpenFile dir (dir.file .manifest))
+        readCheckpointRunSize readCheckpointRunPrefix)
+      (fun _ => pure (some (WAL.Boundary.encode selection.frontier)))
+      (fun watermark frontier => WalSegmentRepair.readSelectedWithCachedExtents dir watermark frontier
+        readDirectoryChecked inspectWalSegment readSealedWalPrefix (readKeeperPrefix files)))
+    -- Stabilize a visible complete but uncertain slot before its witness can
+    -- be overwritten or its covered WAL reclaimed.
+    (fsyncHandle marker)
+    (fun plan size => WalSegmentRepair.finishBoundedMarkedOpen dir plan size
+      (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename)
 
 /-- Open an existing experimental database or initialize a fresh one.
 A legacy marker is rejected under the same exclusive database lock. -/
