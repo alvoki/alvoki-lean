@@ -1003,6 +1003,11 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+A machine stop during reopen marker sync now extends the same reported
+retry trace as a returned error. The reopen schedule skips keeper
+repair at the stop. The reported barrier effect and the surviving
+directory, keeper and later names determine the next retry image.
+
 A reported reopen marker-sync error now extends the pre-authorization
 retry trace with the exact file image returned after cleanup. Both
 before-effect and after-effect errors preserve the keeper, and the
