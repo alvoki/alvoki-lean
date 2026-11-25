@@ -160,8 +160,8 @@ canonical names that the logical segment inventory did not account for. -/
 theorem SegmentedCollectionReport.Installs.retainedWalNameCount_fromListing {directory descriptor}
     {before after : SegmentedWriterState} {report : SegmentedCollectionReport directory before}
     (installed : report.Installs after) (ready : before.RetainedReady directory descriptor)
-    (complete : report.offsets = before.wal.collectionOffsets) {tail : ByteArray}
-    (raw : HealthyBoundedWalReports directory after.owners descriptor after.wal after.target.pair
+    (complete : report.offsets = before.wal.collectionOffsets) {owners readerDescriptor tail}
+    (raw : HealthyBoundedWalReports directory owners readerDescriptor after.wal after.target.pair
       after.target.range.watermark after.published.durable tail) :
     ((raw.entries.toList.map (·.fileName)).filterMap parseWalSegmentName).length ≤
       min (before.wal.active.first + 1)
