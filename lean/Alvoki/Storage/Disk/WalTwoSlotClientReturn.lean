@@ -2811,11 +2811,17 @@ theorem recoveredRetries_installedReads
     (offset : current.slot = slotIndex active)
     {history batch : List Write}
     (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
-    (observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
-      pair = ⟨checkpoint, none⟩ ∨
-      ∃ bytes,
-        InterruptedSlotBytes before bytes active next ∧
-        projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
+    {visibleMarker : Option ByteArray} {crashMarkers : List (Option ByteArray)}
+    (projectedVisible : projectMarkerBytes checkpoint visibleMarker = .ok initial.directory.active)
+    (projectedCrash : crashMarkers.mapM (projectMarkerBytes checkpoint) = .ok initial.directory.crashImages)
+    {addresses : List Nat} {cursor : Nat}
+    (transferred : SlotWriteTransfers (next.slot * stride) 0 addresses cursor)
+    (slotOutcome : ∀ bytes, some bytes ∈ visibleMarker :: crashMarkers →
+      bytes.size = containerSize ∧
+      (∀ position, bytes.get! position ≠ before.get! position → position ∈ addresses) ∧
+      (decodeSlot bytes (slotIndex active.other) = decodeSlot before (slotIndex active.other) ∨
+        decodeSlot bytes (slotIndex active.other) = none ∨
+        decodeSlot bytes (slotIndex active.other) = some next))
     (selected : Selection)
     (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
     {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared prepared target plan)
@@ -3049,6 +3055,22 @@ theorem recoveredRetries_installedReads
   have recovery : WalSegmentRecovery image after.directory.active target.range (history ++ batch)
       base layout.first table := ready.selected.symm ▸ selectedRecovery
   have retries : SettledRetries target after after := .start
+  have observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
+      pair = ⟨checkpoint, none⟩ ∨
+      ∃ bytes, InterruptedSlotBytes before bytes active next ∧
+        projectBinding ⟨checkpoint, none⟩ bytes = .ok pair := by
+    intro pair member
+    have candidate : ∃ raw ∈ visibleMarker :: crashMarkers, projectMarkerBytes checkpoint raw = .ok pair := by
+      rcases List.mem_cons.mp member with rfl | survived
+      · exact ⟨visibleMarker, List.mem_cons_self .., projectedVisible⟩
+      · obtain ⟨raw, present, projected⟩ := projectedMarker_member projectedCrash survived
+        exact ⟨raw, List.mem_cons_of_mem _ present, projected⟩
+    obtain ⟨raw, present, projected⟩ := candidate
+    cases raw with
+    | none => exact .inl (Except.ok.inj projected).symm
+    | some bytes =>
+      obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes present
+      exact .inr ⟨bytes, transferred.interruptedBytes offset advanced size attributed decoded, projected⟩
   have ledger := recoveredRetries_retainUncertainBatch beforeBarrier.refines accepted offset advanced
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2.1
