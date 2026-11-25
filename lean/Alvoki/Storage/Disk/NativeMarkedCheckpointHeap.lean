@@ -46,6 +46,22 @@ def MarkedTemporaryReadCalls.readOptional (calls : MarkedTemporaryReadCalls heap
     (fun metadata => calls.readWith path (calls.readMetadata directory path metadata))
     (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
 
+/-- Project either result of acquisition on the admitted manifest. -/
+theorem MarkedTemporaryReadCalls.readOptionalManifest_effects (calls : MarkedTemporaryReadCalls heap)
+    (directory : DiskDirectory) {before : heap} {metadata : IO.FS.Metadata}
+    (stat : calls.stat (directory.file .manifest) before = .ok (.ok metadata) before)
+    (regular : metadata.type = .file) :
+    calls.readOptional directory (directory.file .manifest) before =
+      ((calls.readWith (directory.file .manifest) fun file =>
+        readIntegrityManifestPrefixWith (calls.readChunk file) metadata.byteSize.toNat) >>= fun bytes => pure (some bytes))
+        before := by
+  have schedule : calls.readMetadata directory (directory.file .manifest) metadata =
+      fun file => readIntegrityManifestPrefixWith (calls.readChunk file) metadata.byteSize.toNat := by
+    funext file
+    simp [MarkedTemporaryReadCalls.readMetadata, manifestPath_ne_boundary]
+  simp [readOptional, schedule, readOptionalDatabaseFileWithMetadata, stat, regular,
+    show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
 theorem MarkedTemporaryReadCalls.readOptionalManifest (calls : MarkedTemporaryReadCalls heap)
     (directory : DiskDirectory) {before after : heap} {metadata : IO.FS.Metadata} {bytes : ByteArray}
     (stat : calls.stat (directory.file .manifest) before = .ok (.ok metadata) before)
@@ -53,12 +69,8 @@ theorem MarkedTemporaryReadCalls.readOptionalManifest (calls : MarkedTemporaryRe
     (read : calls.readWith (directory.file .manifest)
       (fun file => readIntegrityManifestPrefixWith (calls.readChunk file) metadata.byteSize.toNat) before = .ok bytes after) :
     calls.readOptional directory (directory.file .manifest) before = .ok (some bytes) after := by
-  have schedule : calls.readMetadata directory (directory.file .manifest) metadata =
-      fun file => readIntegrityManifestPrefixWith (calls.readChunk file) metadata.byteSize.toNat := by
-    funext file
-    simp [MarkedTemporaryReadCalls.readMetadata, manifestPath_ne_boundary]
-  simp [readOptional, schedule, readOptionalDatabaseFileWithMetadata, stat, regular,
-    read, show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  rw [calls.readOptionalManifest_effects directory stat regular]
+  simp only [Bind.bind, EStateM.bind, read, Pure.pure, EStateM.pure]
 
 theorem MarkedTemporaryReadCalls.readOptionalMissing (calls : MarkedTemporaryReadCalls heap)
     (directory : DiskDirectory) (path : FilePath) {before : heap} {name message : String}

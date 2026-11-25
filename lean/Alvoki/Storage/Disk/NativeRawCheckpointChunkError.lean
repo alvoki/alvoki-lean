@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeRawCheckpointExtentError
+import Alvoki.Storage.Disk.NativeTemporaryChunkReadFailure
 
 namespace Alvoki.Storage.DiskSession
 
@@ -18,49 +19,14 @@ private abbrev runPath (selected : RawSelectedCheckpointRunStat (admitted := adm
 private abbrev beforeRun (selected : RawSelectedCheckpointRunStat (admitted := admitted) seed fileCalls) : heap :=
   selected.reads.atRun selected.index
 
-/-- The failing run passed its extent check and opened the selected
-inode. Both chunk requests use the same descriptor, and that
-unretained descriptor is released before the worker returns. -/
-structure RawCheckpointChunkReadError (selected : RawSelectedCheckpointRunStat (admitted := admitted) seed fileCalls) where
+/-- A selected run passes its stamped extent before the raw reads. -/
+structure RawCheckpointChunkReadError (selected : RawSelectedCheckpointRunStat (admitted := admitted) seed fileCalls)
+    extends RawTemporaryChunkReadFailure seed fileCalls (runPath selected) selected.child selected.stamp.byteCount.toNat
+      (beforeRun selected) where
   extent : selected.metadata.byteSize.toNat = selected.stamp.byteCount.toNat
   fits : selected.stamp.byteCount.toNat < USize.size
-  openChild : RunChildLookup admission.root
-    (renderRunFileName selected.reads.manifest.header.generation selected.index) admission.view
-  handle : IO.FS.Handle
-  slot : DescriptorSlot
-  opened : heap
-  afterChunk : heap
-  failed : heap
-  reached : heap
-  openRaw : fileCalls.openRead (runPath selected) (beforeRun selected) = .ok handle opened
-  openHandle : view.handle opened handle = (view.descriptors opened, slot, 0)
-  identified : (view.descriptors opened).inode slot.description = admission.view.modelObject openChild.child
-  beforeOpen : List LockReferenceDrop
-  free : ∀ prior ∈ ((view.descriptors (beforeRun selected)).afterDrops beforeOpen).slots, prior.address ≠ slot.address
-  fresh : ((view.descriptors (beforeRun selected)).afterDrops beforeOpen).references slot.description = []
-  allocated : view.descriptors opened = ((view.descriptors (beforeRun selected)).afterDrops beforeOpen).insert slot free
-  bytes : ByteArray
   contents : selected.reads.reads.objectBytes (admission.view.modelObject selected.child.child) = some bytes
   physicalExtent : bytes.size = selected.metadata.byteSize.toNat
-  chunk : ByteArray
-  firstBytes : chunk = bytes.extract 0 chunk.size
-  positive : 0 < chunk.size
-  short : chunk.size < selected.stamp.byteCount.toNat
-  first : fileCalls.readChunk handle selected.stamp.byteCount.toNat.toUSize opened = .ok chunk afterChunk
-  partialHandle : view.handle afterChunk handle = (view.descriptors afterChunk, slot, chunk.size)
-  partialCensus : view.descriptors afterChunk = view.descriptors opened
-  cause : IO.Error
-  second : fileCalls.readChunk handle (selected.stamp.byteCount.toNat - chunk.size).toUSize afterChunk =
-    .error cause failed
-  failedHandle : (view.handle failed handle).1 = view.descriptors failed ∧
-    (view.handle failed handle).2.1 = slot
-  failedCensus : view.descriptors failed = view.descriptors opened
-  release : dataErrorDropState fileCalls.release handle failed = reached
-  releasedCensus : view.descriptors reached = (view.descriptors failed).afterDrops [slot.closeEvent]
-  openFrame : MarkedReadCacheFrame seed (beforeRun selected) opened
-  firstFrame : MarkedReadCacheFrame seed opened afterChunk
-  failedFrame : MarkedReadCacheFrame seed afterChunk failed
-  releasedFrame : MarkedReadCacheFrame seed failed reached
 
 namespace RawCheckpointChunkReadError
 
@@ -91,30 +57,9 @@ theorem releasesSelected (seen : RawCheckpointChunkReadError selected) : seen.Re
     (fun handle => readExactPrefixWith (IO.userError checkpointIntegrityMismatch) (fileCalls.readChunk handle)
       selected.stamp.byteCount.toNat ByteArray.empty) seen.openRaw body
   rw [seen.release] at failed
-  have closed := DescriptorInventory.insert_thenClose
-    ((view.descriptors (beforeRun selected)).afterDrops seen.beforeOpen) seen.slot seen.free []
-  simp only [List.nil_append] at closed
-  have census := seen.releasedCensus
-  rw [seen.failedCensus, seen.allocated, closed, DescriptorInventory.afterDrops_append] at census
-  have retired : (view.descriptors seen.reached).references seen.slot.description = [] := by
-    rw [census, ← DescriptorInventory.afterDrops_append, DescriptorInventory.references_afterDrops, seen.fresh]
-    rfl
-  have bound := selected.child.binds
-  rw [selected.child.atRoot, selected.child.atName] at bound
-  have sameChild := seen.openChild.child_eq bound
-  have live : seen.slot ∈ (view.descriptors seen.opened).slots := by
-    rw [seen.allocated]
-    exact List.mem_cons_self
-  have afterChunk : view.handle seen.afterChunk seen.handle = (view.descriptors seen.opened, seen.slot, seen.chunk.size) := by
-    rw [seen.partialHandle, seen.partialCensus]
-  have liveAfterChunk : seen.slot ∈ (view.descriptors seen.afterChunk).slots := seen.partialCensus.symm ▸ live
-  have liveAtFailure : seen.slot ∈ (view.descriptors seen.failed).slots := seen.failedCensus.symm ▸ live
-  refine ⟨failed, ?_, seen.contents, seen.physicalExtent.trans seen.extent, seen.firstBytes, afterChunk,
-    ⟨seen.failedHandle.1.trans seen.failedCensus, seen.failedHandle.2⟩,
-    ⟨live, liveAfterChunk, liveAtFailure⟩, census, retired,
-    ((seen.openFrame.trans seen.firstFrame).trans seen.failedFrame).trans seen.releasedFrame⟩
-  rw [seen.openHandle]
-  exact seen.identified.trans (congrArg admission.view.modelObject sameChild)
+  have released := seen.toRawTemporaryChunkReadFailure.releases
+  exact ⟨failed, released.inode, seen.contents, seen.physicalExtent.trans seen.extent, seen.firstBytes,
+    released.afterChunk, released.failedHandle, released.live, released.census, released.retired, released.frame⟩
 
 /-- A transient run read error returns after the same descriptor has
 closed, before restoration, later runs or WAL recovery. -/

@@ -227,7 +227,9 @@ lake env leanchecker Alvoki.Storage.Disk.NativeFinalizedListingRetry
 lake env leanchecker Alvoki.Storage.Disk.NativeRawPresentManifestListing
 lake env leanchecker Alvoki.Storage.Disk.NativeRawCheckpointDigestError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawCheckpointExtentError
+lake env leanchecker Alvoki.Storage.Disk.NativeTemporaryChunkReadFailure
 lake env leanchecker Alvoki.Storage.Disk.NativeRawCheckpointChunkError
+lake env leanchecker Alvoki.Storage.Disk.NativeRawManifestChunkError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawMarkerChunkError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawFinalizedManifestError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawAbsentManifestListing

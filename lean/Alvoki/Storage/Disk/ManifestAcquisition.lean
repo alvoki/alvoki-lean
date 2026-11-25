@@ -57,6 +57,16 @@ oversize witness. The machine guard covers the accumulated prefix. -/
     throw (IO.userError "integrity manifest prefix exceeds machine size")
   readExactPrefixWith mismatch read rest header
 
+/-- If the bounded header read fails, its error stops acquisition
+before the declared stamp bytes are computed or requested. -/
+theorem readIntegrityManifestPrefixWith_headerError {state : Type}
+    (read : USize → EStateM IO.Error state ByteArray) (extent : Nat)
+    {before failed : state} {cause : IO.Error}
+    (header : readExactPrefixWith (IO.userError "integrity manifest extent changed while reading")
+      read (min 48 extent) .empty before = .error cause failed) :
+    readIntegrityManifestPrefixWith read extent before = .error cause failed := by
+  simp only [readIntegrityManifestPrefixWith, Bind.bind, EStateM.bind, header]
+
 /-- Given the extent and successful chunk observations for the same stable
 opened description, acquisition supplies exactly the decoder's prefix.
 Only that prefix has to fit the platform, with no separate run-count cap. -/
