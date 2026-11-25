@@ -280,7 +280,7 @@ theorem recoveredRetries_retainUncertainBatch
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first table) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
     ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
-  obtain ⟨_, binding, choice⟩ := retries_preservePublishedFrontier beforeBarrier checkpoint old new
+  obtain ⟨_, binding, choice, _⟩ := retries_preservePublishedFrontier beforeBarrier checkpoint old new
     choices selected observed authorizedRepair targetPair keeper later retries (List.mem_cons_self ..)
   rcases choice with oldFrontier | newFrontier
   · exact recoveredBatch_retains prior recovery binding (.inl (oldFrontier ▸ oldSize))

@@ -192,6 +192,24 @@ theorem UnsettledRetries.preserves {initial after : FileImage}
       simpa [FileImage.crash, Image.settled] using present
     exact same ▸ ih pair (List.mem_cons_of_mem _ metadata)
 
+/-- A retry before the directory barrier cannot replace WAL bytes. Its
+keeper can only narrow to a surviving crash image. -/
+theorem UnsettledRetries.keepsWal {initial after : FileImage}
+    (retries : UnsettledRetries initial after) {accepts : Option ByteArray → Prop}
+    (keeper : initial.keeper.Valid accepts) :
+    after.keeper.Valid accepts := by
+  induction retries with
+  | start => exact keeper
+  | settle _ _ _ ih => exact ih
+  | crash _ _ survived _ ih =>
+    exact Storage.Publication.Image.settled_valid (ih.crashValid _ survived)
+
+theorem UnsettledRetries.keepsSealed {initial after : FileImage}
+    (retries : UnsettledRetries initial after) : after.kept = initial.kept := by
+  induction retries with
+  | start => rfl
+  | settle _ _ _ ih | crash _ _ _ _ ih => exact ih
+
 /-- At a retry that reads a present marker, the chosen frontier is one
 of the two complete publications. This applies even when every preceding
 open returned an error. -/
@@ -330,13 +348,14 @@ theorem retries_preservePublishedFrontier
     {survivor : Bindings} (chosen : survivor ∈ after.directory.active :: after.directory.crashImages) :
     survivor.manifest = checkpoint ∧
       survivor.walBoundary = some (Boundary.encode selected.frontier) ∧
-      (selected.frontier = old ∨ selected.frontier = new) := by
+      (selected.frontier = old ∨ selected.frontier = new) ∧ after.kept = initial.kept := by
   have ⟨manifest, allowed⟩ := beforeBarrier.selectsOldOrNew checkpoint old new choices observed
-  have ⟨valid, _⟩ := retries.preserves (firstRepair.valid pair keeper later)
+  have ⟨valid, keep⟩ := retries.preserves (firstRepair.valid pair keeper later)
   have same : survivor = target.pair := by
     simpa [valid.selected, valid.settled] using chosen
   rw [same, ← pair]
-  exact ⟨manifest, by simp [settleMarker, observed], allowed⟩
+  exact ⟨manifest, by simp [settleMarker, observed], allowed,
+    keep.trans (firstRepair.keepsSealed.trans beforeBarrier.keepsSealed)⟩
 
 /-- The native preparation feeds its decoded slot frontier into the shared
 bounded reader. The returned payload uses the table from the reported

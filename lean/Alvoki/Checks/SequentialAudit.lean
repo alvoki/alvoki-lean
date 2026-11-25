@@ -2182,3 +2182,5 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.prepareSelected_reported
 #check_axioms Alvoki.WAL.TwoSlot.reopenWith_prepareError
 #check_axioms Alvoki.WAL.TwoSlot.reopenWith_markerSyncError_retries
+#check_axioms Alvoki.WAL.TwoSlot.UnsettledRetries.keepsWal
+#check_axioms Alvoki.WAL.TwoSlot.UnsettledRetries.keepsSealed
