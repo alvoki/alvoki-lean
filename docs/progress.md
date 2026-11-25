@@ -867,6 +867,11 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+For an aligned keeper with no later segments, the successful directory
+and keeper sync reports now give both the exact repair callback return
+and its filesystem effect trace. The client theorem still needs to
+consume that pair alongside the other repair cases and retry reports.
+
 Checkpoint acceptance for the marked-open client theorem is now against
 the history before the uncertain submission. The accepted manifest bounds
 the loaded checkpoint's watermark by that prior history. Both permitted

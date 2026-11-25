@@ -297,5 +297,37 @@ theorem syncFromRead (captured : CapturedKeeperOpenReports report)
   simp only [Bind.bind, EStateM.bind, readResult]
   exact captured.finishAlignedFromCache aligned noLater openRead fsync removeFile write renameFile settled
 
+/-- The aligned finish returns the same file image as two modeled
+barriers, using the original directory and the captured keeper. -/
+theorem finishAligned_effects (captured : CapturedKeeperOpenReports report)
+    (aligned : layout.keeper.bytes.size = report.wal.keeper.calls.metadata.byteSize.toNat)
+    (noLater : retry.image.later.visible = [])
+    (openRead : FilePath → EStateM IO.Error CensusOpenState (DescriptorInventory × DescriptorSlot × Nat))
+    (fsync : (DescriptorInventory × DescriptorSlot × Nat) → EStateM IO.Error CensusOpenState Unit)
+    (removeFile : FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (files : LockedFileState FileImage)
+    (later : files.image.later.visible = [])
+    (exactRead : files.image.keeper.active = some layout.keeper.bytes)
+    {after : DescriptorInventory}
+    (directorySync : fsync (admission.reached, admission.cached, 0) (captured.afterRead, files) =
+      match (captured.directoryBarrier .completed).run files with
+      | .ok value reached => .ok value (captured.afterRead, reached)
+      | .error cause reached => .error cause (captured.afterRead, reached))
+    (keeperSync : fsync (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+      (captured.afterRead, { files with image := files.image.syncDirectory }) =
+      .ok () (after, { files with image := files.image.syncDirectory.syncKeeper })) :
+    finishBoundedMarkedOpen directory layout.boundedPlan report.wal.keeper.calls.metadata.byteSize.toNat
+      removeFile write (SyncPathGroup.run (sync directory.path openRead fsync)) renameFile
+      (admission.cache.remember (directory.file (.walSegment layout.keeper.first))
+        (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0), captured.afterRead, files) =
+      .ok () (admission.cache, after, { files with image := files.image.syncDirectory.syncKeeper }) ∧
+    EffectTrace layout.target files.image files.image.syncDirectory.syncKeeper := by
+  have returned := captured.finishAlignedFromCache aligned noLater openRead fsync removeFile write renameFile
+    (captured.directoryBarrier_completed files fsync directorySync)
+  refine ⟨by simpa only [keeperSync] using returned, EffectTrace.aligned .authorized ?_ exactRead⟩
+  simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.settled, LaterNames.DurablyEmpty, later]
+
 end CapturedKeeperOpenReports
 end Alvoki.Storage.DiskSession

@@ -2562,6 +2562,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.afterRead_inode
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.directoryBarrier_completed
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.finishAlignedFromCache
+#check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.finishAligned_effects
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperOpenReports.preservesSlotAfterKeeperClose
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanWal_closed
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanWal_fromEntry
