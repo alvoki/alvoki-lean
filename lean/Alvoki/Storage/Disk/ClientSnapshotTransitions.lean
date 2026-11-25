@@ -124,6 +124,109 @@ theorem SnapshotUpdate.poisoned (update : SnapshotUpdate α) (phase : session.ph
   rw [phase]
   rfl
 
+/-- The response together with the phase update, if the call made one. -/
+inductive SnapshotUpdate.Outcome (α : Type) where
+  | unchanged (value : α)
+  | updated (value : α) (installed : Installed)
+  | failed (cause : IO.Error)
+
+def SnapshotUpdate.Outcome.reached (outcome : SnapshotUpdate.Outcome α)
+    (session : SegmentedSession) : EStateM.Result IO.Error SegmentedSession α :=
+  match outcome with
+  | .unchanged value => .ok value session
+  | .updated value installed => .ok value { session with phase := .ready installed }
+  | .failed cause => .error cause session
+
+/-- Read the response and phase update from the installed table and the
+reported identity of the release handle. The token and pin of a successful
+acquisition are those issued by this session. -/
+def SnapshotUpdate.outcome (update : SnapshotUpdate α) (session : SegmentedSession) :
+    SnapshotUpdate.Outcome α :=
+  match session.phase with
+  | .closed => .failed (IO.userError "database is closed")
+  | .poisoned => .failed (IO.userError "publication failed; reopen the database")
+  | .ready installed =>
+    match update with
+    | .acquireAt snapshot =>
+      match installed.table.acquireAt snapshot with
+      | none => .unchanged none
+      | some (pin, table) => .updated (some (session.sessionRef, pin)) { installed with table }
+    | .acquire =>
+      match installed.table.acquireAt installed.table.committed with
+      | none => .failed (IO.userError "cannot acquire the latest snapshot")
+      | some (pin, table) => .updated (session.sessionRef, pin) { installed with table }
+    | .release issuer handle =>
+      if issuer = session.sessionRef then
+        .updated () { installed with table := installed.table.release handle }
+      else .unchanged ()
+    | .advanceFloor floor =>
+      match installed.table.advanceFloor floor with
+      | none => .unchanged false
+      | some table => .updated true { installed with table }
+
+/-- Interpret the shared schedules for `DiskTable.acquireAt`, `acquire`,
+`release` and `advanceFloor` on the same sequential phase cell. For
+release, `run_release` substitutes the reported native pointer comparison. -/
+theorem SnapshotUpdate.run_outcome (update : SnapshotUpdate α) (session : SegmentedSession) :
+    update.run session = (update.outcome session).reached session := by
+  cases phase : session.phase with
+  | closed => simpa [outcome, phase, Outcome.reached] using update.closed phase
+  | poisoned => simpa [outcome, phase, Outcome.reached] using update.poisoned phase
+  | ready installed =>
+    cases update with
+    | acquireAt snapshot =>
+      rw [run, runAcquireAt_result phase snapshot]
+      cases acquired : installed.table.acquireAt snapshot with
+      | none => simp [outcome, phase, acquired, Outcome.reached]
+      | some found =>
+        obtain ⟨pin, table⟩ := found
+        simp [outcome, phase, acquired, Outcome.reached]
+    | acquire =>
+      rw [run, runAcquire_result phase]
+      cases acquired : installed.table.acquireAt installed.table.committed with
+      | none => simp [outcome, phase, acquired, Outcome.reached]
+      | some found =>
+        obtain ⟨pin, table⟩ := found
+        simp [outcome, phase, acquired, Outcome.reached]
+    | release issuer handle =>
+      change session.runRelease (decide (issuer = session.sessionRef)) handle = _
+      rw [SegmentedSession.runRelease_ready phase handle (issuer := issuer) rfl]
+      by_cases localToken : issuer = session.sessionRef <;>
+        simp [outcome, phase, localToken, Outcome.reached]
+    | advanceFloor floor =>
+      rw [run, SegmentedSession.runAdvanceFloor_ready phase]
+      cases advanced : installed.table.advanceFloor floor <;>
+        simp [outcome, phase, advanced, Outcome.reached]
+
+/-- Extend the client ledger from the actual result, keeping the precise
+returned phase and the same submissions and recorded reads on every branch. -/
+theorem SegmentedClientReadTrace.snapshotUpdateOutcome
+    (trace : SegmentedClientReadTrace session.directory initialDescriptor initial allowCollection log reads
+      session.descriptor before)
+    (update : SnapshotUpdate α)
+    (ready : ∀ installed, session.phase = .ready installed → installed = before.installed) :
+    ∃ after, (match update.run session with
+        | .ok _ reached => reached = { session with phase := .ready after.installed }
+        | .error _ reached => reached = session ∧ after = before) ∧
+      SegmentedClientReadTrace session.directory initialDescriptor initial allowCollection log reads session.descriptor after := by
+  cases returned : update.run session with
+  | ok result next =>
+    have phase : session.phase = .ready before.installed := by
+      cases reachedPhase : session.phase with
+      | closed =>
+        rw [update.closed reachedPhase] at returned
+        contradiction
+      | poisoned =>
+        rw [update.poisoned reachedPhase] at returned
+        contradiction
+      | ready installed => exact congrArg Phase.ready (ready installed reachedPhase)
+    obtain ⟨after, reached, step⟩ := update.readyTransition (allowCollection := allowCollection) phase returned
+    exact ⟨after, reached, by simpa only [List.append_nil] using trace.advance step⟩
+  | error cause next =>
+    rw [update.run_outcome] at returned
+    cases seen : update.outcome session <;> simp [seen, SnapshotUpdate.Outcome.reached] at returned
+    exact ⟨before, ⟨returned.2.symm, rfl⟩, trace⟩
+
 /-- Extend the chronological trace while keeping the actual returned
 session and the existing submissions and recorded reads. -/
 theorem SegmentedClientReadTrace.observeSnapshotUpdate
@@ -133,8 +236,8 @@ theorem SegmentedClientReadTrace.observeSnapshotUpdate
     (returned : update.run session = .ok result next) :
     ∃ after, next = { session with phase := .ready after.installed } ∧
       SegmentedClientReadTrace session.directory initialDescriptor initial allowCollection log reads session.descriptor after := by
-  obtain ⟨after, exactNext, step⟩ := update.readyTransition (allowCollection := allowCollection) phase returned
-  exact ⟨after, exactNext, by simpa only [List.append_nil] using trace.advance step⟩
+  simpa only [returned] using trace.snapshotUpdateOutcome update
+    (fun _ supplied => Phase.ready.inj (supplied.symm.trans phase))
 
 inductive SnapshotReadRequest : Type → Type where
   | lookup (key : UInt64) : SnapshotReadRequest (Option UInt64)
