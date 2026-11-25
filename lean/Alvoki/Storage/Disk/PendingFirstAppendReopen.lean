@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.PendingClientReplay
-import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
+import Alvoki.Storage.Disk.NativeReadyReadPrefix
 
 namespace Alvoki.Storage.DiskSession
 
@@ -134,7 +134,11 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
         observations.admission.owner observations.reads.bindings before.published observations.callbacks.liveRefs
         (.ok session final) ∧
       recoverSelected (before.checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok after.installed.table ∧
-      InstalledClientReplay (log ++ [.uncertainBatch report.batch]) recorded before.history after.installed session := by
+      InstalledClientReplay (log ++ [.uncertainBatch report.batch]) recorded before.history after.installed session ∧
+      let state : NativeReadyState := ⟨session, after, observations.finish.census, observations.admission.cache,
+        observations.admission.owner, observations.admission.cached⟩
+      NativeReadyReadPrefix (observations.finish.run observations.chronology) state before.history
+        (log ++ [.uncertainBatch report.batch]) recorded state := by
   dsimp only
   have beforeReady := (client.writes.preservesRetained (start.bootstrap.writerReady start.held).toRetained).1
   obtain ⟨_, _, attempts, pair, pending, layout, prepared⟩ :=
@@ -170,9 +174,19 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
   have generation : after.installed.generation = before.installed.generation := by
     rw [nextReady.resumed.generation, sameCheckpoint, ← beforeReady.resumed.generation]
   have sealed : after.wal.sealed = before.wal.sealed := by rw [wal]
+  let state : NativeReadyState := ⟨session, after, observations.finish.census, observations.admission.cache,
+    observations.admission.owner, observations.admission.cached⟩
+  have exactFiles : state.files = final := by
+    change (⟨after.files, after.owners⟩ : LockedFileState FileImage) = final
+    rw [files, owners]
+  have valid : state.Valid := ⟨nextPhase, lock.symm, owner, cached, ⟨observations.admission.reached, rfl⟩,
+    path.symm ▸ lock.symm ▸ nextReady⟩
+  have continued : NativeReadyReadPrefix (observations.finish.run observations.chronology)
+      state before.history (log ++ [.uncertainBatch report.batch]) recorded state :=
+    .installed (exactFiles.symm ▸ returned) valid history pending
   exact ⟨observed.stopsWriteRequest request rows stage sync rename, attempts, layout, selected, observations, session,
     final, after, prepared.target, returned, samePair.trans pair, path, lock, nextPhase, files, owners,
     lock.symm ▸ nextReady, sameTarget, history, sameCheckpoint, generation, durable, sealed,
-    owner, cached, observations.reads.chunkReads, installed, loaded.uniqueResult selected ▸ recovered, refined⟩
+    owner, cached, observations.reads.chunkReads, installed, loaded.uniqueResult selected ▸ recovered, refined, continued⟩
 
 end Alvoki.Storage.DiskSession
