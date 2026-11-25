@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
+import Alvoki.Storage.Disk.ClientRunMaintenance
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.SnapshotReadHistoryBounds
 
@@ -64,8 +65,8 @@ private theorem readReturns (state : NativeReadyState) {table : PackedTable} {pi
 end NativeReadyState
 
 /-- The first ready session is the exact result of the selected restart.
-Local snapshot updates and reads keep its files and descriptor inventory.
-Reads use an acquired or separately supplied handle at the reached table. -/
+Local snapshot operations and in-memory rewrites keep its files and
+descriptor inventory. Reads use a handle at the reached table. -/
 inductive NativeReadyReadPrefix
     (opened : EStateM.Result IO.Error CensusOpenState SegmentedSession)
     (initial : NativeReadyState) (history : List WAL.Write) (log : List DatabaseSubmissions) :
@@ -89,6 +90,12 @@ inductive NativeReadyReadPrefix
       (prior : NativeReadyReadPrefix opened initial history log reads state)
       (returned : update.run state.session = .ok result (state.withTable table).session)
       (step : SegmentedTableStep state.writer.installed.table table) :
+      NativeReadyReadPrefix opened initial history log reads (state.withTable table)
+  | rewriteRun {reads : List RecordedSnapshotRead} {state : NativeReadyState} {table : PackedTable}
+      (request : RunMaintenance)
+      (prior : NativeReadyReadPrefix opened initial history log reads state)
+      (returned : request.run state.session = .ok true (state.withTable table).session)
+      (rewritten : request.update state.writer.installed.table = some table) :
       NativeReadyReadPrefix opened initial history log reads (state.withTable table)
   | readHandle {reads : List RecordedSnapshotRead} {state : NativeReadyState}
       {α : Type} {request : SnapshotReadRequest α} {handle : Sequential.SnapshotHandle}
@@ -139,6 +146,7 @@ theorem NativeReadyReadPrefix.frames
   | installed returned _ _ _ _ => exact ⟨returned, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   | acquireRead _ _ _ _ ih => exact ih
   | snapshotUpdate _ _ _ _ ih => exact ih
+  | rewriteRun _ _ _ _ ih => exact ih
   | readHandle _ _ _ ih => exact ih
 
 /-- The ledger and exact native read results are preserved by induction
@@ -160,6 +168,8 @@ theorem NativeReadyReadPrefix.refines
       exact equal.symm ▸ readReplay request reference snapshot
   | snapshotUpdate _ _ _ step ih =>
     exact ⟨ih.1.tablePreserves step, ih.2⟩
+  | rewriteRun request _ _ rewritten ih =>
+    exact ⟨ih.1.tablePreserves (request.update_spec rewritten).1, ih.2⟩
   | readHandle _ _ returned ih =>
     obtain ⟨valid, history, reference, replayed, retained, acknowledged, submitted, responses⟩ := ih
     refine ⟨valid, history, reference, replayed, retained, acknowledged, submitted, ?_⟩
@@ -191,6 +201,7 @@ theorem NativeReadyReadPrefix.readsBounded
       have committed := committedCount ▸ UInt64.le_iff_toNat_le.mp (acquiredAtBounds acquired).2
       cases request <;> exact committed
   | snapshotUpdate _ _ _ _ ih => exact ih
+  | rewriteRun _ _ _ _ ih => exact ih
   | readHandle prior _ returned ih =>
     intro read member
     rcases List.mem_append.mp member with earlier | latest

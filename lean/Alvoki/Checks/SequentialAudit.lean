@@ -243,6 +243,7 @@ import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeSnapshotExecution
 import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
 import Alvoki.Storage.Disk.NativeExecutionTrace
+import Alvoki.Storage.Disk.NativeRunMaintenance
 import Alvoki.Storage.Disk.NativeExecutionPrefix
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
@@ -1568,6 +1569,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeSnapshotUpdateObservation.run_eq_update
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.updatesSnapshot
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.acknowledges
+#check_axioms Alvoki.Storage.DiskSession.RunMaintenance.update_spec
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rewritesRun
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.checkpoints
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionStep.ledgers

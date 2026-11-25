@@ -170,6 +170,8 @@ After a successful ordinary close, any finite sequence of these admitted route e
 
 The same execution can reopen after a reported power loss following the final checkpoint barrier error. That operation uses the exact joint survivor and its matching run bytes. It returns a session with the same committed history and read ledger. Successful obsolete-run collection enters the ready trace with its exact held generation list, live original directory descriptor at the barrier, and settled selected checkpoint. Executions can stop at the issued WAL rotation directory barrier or after any reported finite sequence of the covered early open errors following a successful close. [Native execution trace](../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean) · [Native execution prefix](../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean)
 
+The ready execution now includes `compact` and `retainRunVersions` for the prescribed run index. The original native schedule determines rejection or the exact successor table. The commit sequence, pins, installed WAL replay, physical checkpoint and original session anchor remain available to the next instruction. A subsequent checkpoint therefore takes the rewritten table at its reached state. [Native run maintenance](../lean/Alvoki/Storage/Disk/NativeRunMaintenance.lean)
+
 Extend the invariant to every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and

@@ -14,6 +14,7 @@ import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeReadyRotation
 import Alvoki.Storage.Disk.NativeCheckpointErrorPowerLoss
 import Alvoki.Storage.Disk.NativeObsoleteRunCollection
+import Alvoki.Storage.Disk.NativeRunMaintenance
 
 namespace Alvoki.Storage.DiskSession
 
@@ -38,6 +39,7 @@ inductive NativeExecutionEvent : Type 1 where
   | walCollectionPlan (result : Except IO.Error (List Nat))
   | rotatedWal
   | collectedObsoleteRuns (held : List UInt64)
+  | rewroteRun (request : RunMaintenance) (result : Bool)
   | closedAndReopened (input : FilePath) (result : Except IO.Error Unit)
   | uncertainWriteRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (attempted retained : List WAL.Write)
@@ -200,6 +202,10 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (returned : NativeObsoleteRunCollectionStep current.ready observed next) :
       NativeExecutionStep current (.collectedObsoleteRuns observed.reports.held)
         ⟨current.history, current.submissions, next⟩
+  | rewriteRun (current : NativeExecutionPosition) (request : RunMaintenance) (result : Bool)
+      (next : NativeReadPosition current.history current.submissions)
+      (returned : NativeRunMaintenanceStep current.ready request result next) :
+      NativeExecutionStep current (.rewroteRun request result) ⟨current.history, current.submissions, next⟩
 
 /-- Interpret the submitted single or batch write with the reported
 primitive effects and start the next position from its actual result. -/
@@ -266,6 +272,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case collectObsoleteRuns returned => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.reads⟩
+  case rewriteRun returned => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.reads⟩
 
 theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep before event after) :
     event.uncertainBatchWhole := by
@@ -331,6 +339,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | planWalCollection
   | rotateWal
   | collectObsoleteRuns (held : List UInt64)
+  | rewriteRun (request : RunMaintenance)
   | closeAndReopen (input : FilePath)
   | writeThenCloseAndReopen (request : WriteRequest) (input : FilePath)
   | collectThenCloseAndReopen (input : FilePath)
@@ -353,6 +362,7 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .planWalCollection, .walCollectionPlan _ => True
   | .rotateWal, .rotatedWal => True
   | .collectObsoleteRuns held, .collectedObsoleteRuns issued => issued = held
+  | .rewriteRun request, .rewroteRun issued _ => issued = request
   | .closeAndReopen input, .closedAndReopened opened _ => opened = input
   | .writeThenCloseAndReopen request input, .uncertainWriteRecovered submitted opened _ _ _ =>
     submitted = request ∧ opened = input
@@ -402,6 +412,7 @@ inductive NativeExecutionObservation (state : NativeReadyState) : Type 1 where
   | rotateEmpty (empty : state.writer.installed.walBytes / WAL.frameSize ≤ state.writer.installed.activeFirst)
   | checkpointThenPowerLossAndReopen (input : FilePath) (observed : NativeCheckpointCrashObservation state input)
   | collectObsoleteRuns (observed : NativeObsoleteRunCollection state)
+  | rewriteRun (request : RunMaintenance)
 
 def NativeExecutionObservation.instruction : NativeExecutionObservation state → NativeExecutionInstruction
   | .snapshot sequence request _ _ => .snapshot sequence request
@@ -421,6 +432,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation state �
   | .rotateCreated _ | .rotateExisting _ | .rotateEmpty _ => .rotateWal
   | .checkpointThenPowerLossAndReopen input _ => .checkpointThenPowerLossAndReopen input
   | .collectObsoleteRuns observed => .collectObsoleteRuns observed.reports.held
+  | .rewriteRun request => .rewriteRun request
 
 theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     (observed : NativeExecutionObservation current.ready.state) :
@@ -483,6 +495,9 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | collectObsoleteRuns observed =>
     obtain ⟨next, returned⟩ := current.ready.collectsObsoleteRuns observed
     exact ⟨_, _, .collectObsoleteRuns current observed next returned, rfl⟩
+  | rewriteRun request =>
+    obtain ⟨result, next, returned⟩ := current.ready.rewritesRun request
+    exact ⟨_, _, .rewriteRun current request result next returned, rfl⟩
 
 /-- Supply the primitive reports for the next prescribed instruction
 at its reached state. The whole trace and its endpoint are derived from

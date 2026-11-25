@@ -34,6 +34,17 @@ theorem RunMaintenance.outcome (request : RunMaintenance) (session : SegmentedSe
       simp [RunMaintenance.run, rewriteRunWith, phase, Phase.installed, rewritten,
         Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
 
+theorem RunMaintenance.update_spec (request : RunMaintenance) {before after : PackedTable}
+    (updated : request.update before = some after) :
+    SegmentedTableStep before after ∧ after.committed = before.committed ∧ after.pins = before.pins := by
+  cases request with
+  | compact _ =>
+    have spec := PackedTable.compact_spec updated
+    exact ⟨.compact updated, spec.2.1, spec.2.2.1⟩
+  | retainRunVersions _ =>
+    have spec := PackedTable.retainRunVersions_spec updated
+    exact ⟨.retainRunVersions updated, spec.2.1, spec.2.2.1⟩
+
 /-- Feed the same table returned by either native schedule into the client
 trace. The successor keeps the original files, lock, WAL and pin identities.
 A rejected rewrite leaves the full reached session and earlier trace available. -/
@@ -55,16 +66,7 @@ theorem SegmentedClientReadTrace.observeRunMaintenance
   cases updated : request.update before.installed.table with
   | none => simpa only [updated] using result
   | some table =>
-    have preserved : SegmentedTableStep before.installed.table table ∧
-        table.committed = before.installed.table.committed ∧ table.pins = before.installed.table.pins := by
-      cases request with
-      | compact _ =>
-        have spec := PackedTable.compact_spec updated
-        exact ⟨.compact updated, spec.2.1, spec.2.2.1⟩
-      | retainRunVersions _ =>
-        have spec := PackedTable.retainRunVersions_spec updated
-        exact ⟨.retainRunVersions updated, spec.2.1, spec.2.2.1⟩
-    obtain ⟨step, clock, pins⟩ := preserved
+    obtain ⟨step, clock, pins⟩ := request.update_spec updated
     refine ⟨?_, clock, pins, ?_⟩
     · simpa only [updated, SegmentedWriterState.withTable] using result
     · simpa only [List.append_nil] using trace.advance (.table .start step)
