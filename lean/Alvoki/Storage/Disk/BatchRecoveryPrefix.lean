@@ -48,10 +48,14 @@ inductive ReportedReopenPrefix (directory : DiskDirectory) (keeper : Nat)
   | authorizationFailed {before} (prior : ReportedReopenPrefix directory keeper initial before)
       (failure : CachedOpenAuthorizationFailure directory before) (first : failure.target.first = keeper) :
       ReportedReopenPrefix directory keeper initial failure.after
-  | repairFailed {before target plan cause reached} (prior : ReportedReopenPrefix directory keeper initial before)
+  | repairFailed {before target plan opened cause reached} (prior : ReportedReopenPrefix directory keeper initial before)
       (attempt : CachedOpenAttempt directory before) (prepared : Prepared before.image target plan)
-      (first : target.first = keeper) (effects : EffectTrace target before.image reached)
-      (returned : attempt.run = .error (attempt.cleanupError cause reached).1 (attempt.cleanupError cause reached).2) :
+      (first : target.first = keeper)
+      (preparedRead : attempt.prepare before.image =
+        .ok ({ plan with keeperBytes := plan.keeperBytes.extract 0 plan.keeperSize }, opened, plan.keeperBytes.size) before.image)
+      (failed : finishBoundedMarkedOpen directory { plan with keeperBytes := plan.keeperBytes.extract 0 plan.keeperSize }
+        plan.keeperBytes.size attempt.removeFile attempt.write attempt.sync attempt.renameFile before.image = .error cause reached)
+      (effects : EffectTrace target before.image reached) :
       ReportedReopenPrefix directory keeper initial (attempt.cleanupError cause reached).2
   | referenceDrops {before description} (prior : ReportedReopenPrefix directory keeper initial before)
       (references : HeldLockReferences description) (drops : List LockReferenceDrop) :
@@ -75,10 +79,10 @@ private theorem ReportedReopenPrefix.refines {directory keeper initial after} {a
     obtain ⟨chosen, _, allowed, chosenFirst, prepared⟩ := selects ih
     have same := samePreparedTarget prepared failure.prepared (chosenFirst.trans first.symm)
     exact .cachedAuthorizationFailed ih failure (same ▸ allowed)
-  | repairFailed _ attempt prepared first effects returned ih =>
+  | repairFailed _ attempt prepared first preparedRead failed effects ih =>
     obtain ⟨chosen, _, allowed, chosenFirst, earlier⟩ := selects ih
     have same := samePreparedTarget earlier prepared (chosenFirst.trans first.symm)
-    exact .cachedRepairFailed ih attempt (same ▸ allowed) prepared effects returned
+    exact .cachedRepairFailed ih attempt (same ▸ allowed) prepared effects (attempt.run_repairError preparedRead failed)
   | referenceDrops _ references drops ih => exact .referenceDrops ih references drops
   | powerLoss _ metadata payload later ih => exact .powerLoss ih metadata payload later
 
