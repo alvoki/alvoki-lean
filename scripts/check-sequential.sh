@@ -180,6 +180,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeReadRecoveryTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeSnapshotExecution
 lake env leanchecker Alvoki.Storage.Disk.NativeExplicitSnapshotRead
 lake env leanchecker Alvoki.Storage.Disk.NativeInactiveSessionCalls
+lake env leanchecker Alvoki.Storage.Disk.NativePendingClientRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeRunMaintenance
 lake env leanchecker Alvoki.Storage.Disk.NativeRunMaintenanceReopen

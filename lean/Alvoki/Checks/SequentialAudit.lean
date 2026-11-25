@@ -269,6 +269,7 @@ import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeSnapshotExecution
 import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
 import Alvoki.Storage.Disk.NativeInactiveSessionCalls
+import Alvoki.Storage.Disk.NativePendingClientRecovery
 import Alvoki.Storage.Disk.NativeExecutionTrace
 import Alvoki.Storage.Disk.NativeRunMaintenance
 import Alvoki.Storage.Disk.NativeRunMaintenanceReopen
@@ -1540,6 +1541,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.rejectsCalls
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rejectsCallsAfterClose
 #check_axioms Alvoki.Storage.DiskSession.NativePendingClose.rejectsCalls
+#check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.executesClientCalls
+#check_axioms Alvoki.Storage.DiskSession.NativePendingClientRecovery.errorsInOrder
+#check_axioms Alvoki.Storage.DiskSession.NativePendingClientRecovery.rejectsAfterClose
+#check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.recoversAfterClientCalls
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperFinish.startsNativeReadPrefix
 #check_axioms Alvoki.Storage.DiskSession.CensusOpenAdmissionReports.recoverWithMarked_selects
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.readsMarker
