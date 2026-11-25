@@ -183,7 +183,9 @@ def NativeCloseAlignedResult {state : NativeReadyState} (files : NativeCloseFile
         seen.ReadsOriginal (state.session.directory.file (.walSegment segment.first)) segment.bytes) ∧
       InstalledClientReplay log reads history next.writer.installed next.session
 
-private theorem reopenReleasedAligned
+/-- Install a healthy aligned session from the exact released files and
+the reached inventory supplied by the preceding close or retry prefix. -/
+theorem NativeReadyReadPrefix.reopensReleasedAligned
     {opened : EStateM.Result IO.Error CensusOpenState SegmentedSession}
     {initial state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
     {reads : List RecordedSnapshotRead}
@@ -254,7 +256,7 @@ theorem NativeReadyReadPrefix.reopensAfterClose
       (close.report.drops .active ++ close.report.drops .pending ++ close.report.drops .directory) ∧
     NativeCloseAlignedResult files input close.report.finished.descriptors history log reads := by
   obtain ⟨closed, phase, cleared, census, _⟩ := close.closes prior.refines.1 success
-  exact ⟨closed, phase, cleared, census, reopenReleasedAligned prior files observe⟩
+  exact ⟨closed, phase, cleared, census, prior.reopensReleasedAligned files observe⟩
 
 /-- A failed `LOCK_UN` returns the original ready state. Its subsequent
 reported reference trace ends with the event that removes the last
@@ -294,6 +296,6 @@ theorem NativeReadyReadPrefix.reopensAfterFailedUnlock
       simp only [last, List.not_mem_nil] at keeps
   exact ⟨failed, same, fun vacant => live (beforeDrop.freshFlockAllowed.mp vacant), removed,
     by simpa only [last, ite_true] using released, allowed.mpr last, completed.reopenTrace .start,
-    reopenReleasedAligned prior files observe⟩
+    prior.reopensReleasedAligned files observe⟩
 
 end Alvoki.Storage.DiskSession

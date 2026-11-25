@@ -225,6 +225,7 @@ import Alvoki.Storage.Disk.NativeOpenChoice
 import Alvoki.Storage.Disk.NativeOpenEarlyError
 import Alvoki.Storage.Disk.NativeOpenListingError
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
+import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeReadyUncertainWrite
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeExecutionPendingWrite
@@ -1471,6 +1472,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeRejectedOpenLineage.preserves
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.startsRejectedOpenLineage
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rejectedOpensAfterClose
+#check_axioms Alvoki.Storage.DiskSession.NativeRejectedOpenLineage.availableFiles
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensReleasedAligned
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensAfterRejectedOpens
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.retriesAndReopens
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteFailure.returnsUnknown
