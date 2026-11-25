@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The client replay theorem derives successful preparation from the
+chronological manifest, checkpoint runs, directory scan, seals and
+bounded keeper read. It constructs the reopened table, repair plan,
+physical extent and cache from those reports. Marker stabilization
+and the final repair return still enter as observed callback outcomes.
+
 The session replay theorem derives marker acquisition from its bounded
 file-read reports. It composes preparation, marker stabilization and
 repair in order, carrying the opened marker census into preparation

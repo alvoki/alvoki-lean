@@ -1693,22 +1693,47 @@ theorem installsAfterAcquiredRecovery_replays
     (privateFile : file.calls.metadata.numLinks = 1)
     (available : PrefixChunksAvailableUntilEof payload (markerReads.readChunk file.calls.slot.description))
     {selection : Selection} (decoded : decode payload = .ok selection)
-    (prepare : DiskDirectory → Selection → EStateM IO.Error (CensusDirectoryCache × CensusOpenState)
-      (Plan × Reopened × Nat))
     (stabilize : KeeperDescriptorIdentity → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
     (finish : DiskDirectory → Plan → Nat → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
-    {opened : Reopened} {after : CensusOpenState}
+    {after : CensusOpenState}
     (report : CapturedMarkedReadReports admission layout published false file.calls.inventory)
     (keeper : CapturedKeeperOpenReports report)
-    {extent : Nat} {cache : CensusDirectoryCache}
-    (prepared : prepare directory selection (admission.cache, file.calls.inventory, admission.held) =
-      .ok (layout.boundedPlan, opened, extent) (cache, keeper.afterRead, admission.held))
+    {metadataRelease : System.FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
+    (manifest : CapturedManifestCensus report metadataRelease file.calls.inventory manifestDrops)
+    (runs : CapturedRunReadCensus report (file.calls.inventory.afterDrops manifestDrops))
+    {loaded : Option (PackedTable × UInt64)}
+    (checkpointSelected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest loaded)
+    (chronology : report.listing.beforeOpen = manifestDrops ++
+      runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest))
+    (count : selection.frontier.toNat = layout.range.through * WAL.frameSize)
+    (orderedLayout : WAL.OrdinalsFrom 1 history) {table : PackedTable}
+    (replay : recoverSelected (loaded.getD (.empty, 0)).1 (WAL.encode history) = .ok table)
+    {released : System.FilePath → List LockReferenceDrop}
+    {required : List (Nat × IO.FS.Metadata)}
+    {retains : DescriptorSlot → Prop}
+    (seals : CapturedSealReadChainWith report released retains required report.listing.afterClose keeper.beforeOpen)
+    (offsets : required.map Prod.fst = (layout.sealed ++ [layout.keeper]).map WalSegment.first)
+    (retained : ∀ event ∈ keeper.beforeOpen,
+      event.removes admission.owner.reference = false ∧ event.removes admission.cached.reference = false)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (later : ∀ start ∈ retry.image.later.visible, layout.range.through < start)
+    (keepsMarker : retains file.calls.slot)
+    (listingDrops : ∀ event ∈ report.listing.beforeOpen ++ report.listing.duringScan,
+      event.removes file.calls.slot.reference = false)
+    (keeperDrops : ∀ event ∈ keeper.duringRead, event.removes file.calls.slot.reference = false)
     (stabilized : stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩
-      (cache, keeper.afterRead, admission.held) =
-      .ok () (cache, keeper.afterRead,
+      (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
+        (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+        layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead, admission.held) =
+      .ok () (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
+        (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+        layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead,
         { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }))
-    (finished : finish directory layout.boundedPlan extent
-      (cache, keeper.afterRead,
+    (finished : finish directory layout.boundedPlan report.wal.keeper.calls.metadata.byteSize.toNat
+      (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
+        (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
+        layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead,
         { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }) =
       .ok () (admission.cache, after))
     {bootstrapFirst writer : Nat}
@@ -1719,7 +1744,7 @@ theorem installsAfterAcquiredRecovery_replays
     {image : WalSegmentImage} {range : MarkedWalRange}
     {base : PackedTable} {first : Nat}
     (selected : WalSegmentRecovery image after.2.image.directory.active range (prior.history ++ batch) base first
-      opened.installed.table)
+      table)
     {interrupted firstRepair : FileImage} {target : Target}
     (beforeBarrier : UnsettledRetries interrupted retry.image)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
@@ -1738,6 +1763,12 @@ theorem installsAfterAcquiredRecovery_replays
     (retries : SettledRetries target firstRepair after.2.image)
     (oldSize : current.frontier.toNat = (WAL.encode prior.history).size)
     (ordered : WAL.OrdinalsFrom 1 ((prior.history ++ batch).take range.through)) :
+    let opened : Reopened := ⟨table, (loaded.getD (.empty, 0)).2, selection.frontier, layout.keeper.first⟩
+    let prepare := fun (resolved : DiskDirectory) (chosen : Selection) =>
+      prepareBoundedMarkedFromReaders resolved (report.readCheckpointFromCensus metadataRelease runs.released)
+        (fun _ => pure (some (Boundary.encode chosen.frontier)))
+        (fun watermark length => readSelectedWithCachedExtents resolved watermark length report.scanWal
+          report.inspectWal (readTemporarySeal report.reads released) keeper.readKeeperAt)
     ∃ session,
       calls.runWithMarked (fun resolved cache before =>
         match reopenAcquiredWith (acquireMarkerInCensus markerReads (resolved.file .walBoundary))
@@ -1747,18 +1778,20 @@ theorem installsAfterAcquiredRecovery_replays
         .ok session after ∧
       InstalledClientReplay (log ++ [.uncertainBatch batch]) reads ((prior.history ++ batch).take range.through)
         opened.installed session := by
+  intro opened prepare
+  obtain ⟨acquisition, prepared, _, _⟩ := preparesFromHeldMarker file privateFile available report
+    manifest runs checkpointSelected chronology selection decoded count orderedLayout replay keeper
+    seals offsets retained following later keepsMarker listingDrops keeperDrops
   obtain ⟨_, _, previous, _, _, _⟩ := trace.keyValueRefinement start.bootstrap start.held
   have whole := (recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
     observations selection observed authorizedRepair preparedPlan retries previous oldSize selected).2.2
   obtain ⟨reference, replayed, retained, acknowledged, bounded, priorReads⟩ :=
     trace.replaysUncertainSubmission start whole ordered
-  have acquisition := acquireMarkerInCensus_returns file privateFile available decoded
-    (admission.cache, admission.reached, admission.held)
   have recovery : reopenWith (prepare directory selection)
       (stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩)
       (finish directory) (admission.cache, file.calls.inventory, admission.held) =
         .ok opened (admission.cache, after) := by
-    simp only [reopenWith_reports, prepared, stabilized, finished]
+    simp only [reopenWith_reports, prepare, opened, prepared, stabilized, finished]
   have returned := installsAfterAcquiredRecovery calls marker
     (fun resolved => acquireMarkerInCensus markerReads (resolved.file .walBoundary))
     prepare stabilize finish acquisition recovery
