@@ -19,6 +19,8 @@ structure NativeReaddirFailure (entry : DescriptorInventory) (view : DirectoryRe
   opened : openDir path entry = .ok stream (entry.insert stream free)
   scan : OpenedDirectoryScan
   cause : IO.Error
+  readDir : DescriptorSlot → DescriptorInventory → (List String × Except IO.Error Unit) × DescriptorInventory
+  read : readDir stream (entry.insert stream free) = ((scan.names, scan.terminal), entry.insert stream free)
   failed : scan.terminal = .error cause
   closeDir : DescriptorSlot → EStateM IO.Error DescriptorInventory Unit
   closeReturned : scan.closed = .ok ()
@@ -45,6 +47,28 @@ theorem releases (seen : NativeReaddirFailure entry view root path) :
       · simp [DescriptorSlot.closeEvent, LockReferenceDrop.removes, process]
   have same : (entry.insert seen.stream seen.free).afterDrops [seen.stream.closeEvent] = entry := close.trans kept
   exact ⟨seen.closed.trans (congrArg (EStateM.Result.ok ()) same), same.symm ▸ seen.fresh⟩
+
+/-- Read the returned stream, then close that stream before projecting
+the listing. A terminal read error takes precedence over a close error. -/
+def run (seen : NativeReaddirFailure entry view root path) :
+    EStateM IO.Error DescriptorInventory (Array IO.FS.DirEntry) := fun before =>
+  match seen.openDir path before with
+  | .error cause reached => .error cause reached
+  | .ok stream opened =>
+    let ((names, terminal), read) := seen.readDir stream opened
+    let (closed, reached) := match seen.closeDir stream read with
+      | .ok () reached => (Except.ok (), reached)
+      | .error cause reached => (Except.error cause, reached)
+    (liftExcept ((CheckedDirectoryReadReport.scanned ⟨names, terminal, closed⟩).result path) :
+      EStateM IO.Error DescriptorInventory _) reached
+
+theorem run_error (seen : NativeReaddirFailure entry view root path) :
+    seen.run entry = .error seen.cause entry := by
+  simp only [run, seen.opened, seen.read, seen.releases.1]
+  have scan : (⟨seen.scan.names, seen.scan.terminal, .ok ()⟩ : OpenedDirectoryScan) = seen.scan := by
+    rw [seen.closeReturned.symm]
+  rw [scan, CheckedDirectoryReadReport.scan_readError path seen.failed]
+  rfl
 
 end NativeReaddirFailure
 
@@ -73,8 +97,9 @@ structure NativeMarkedListingError (admission : CensusOpenAdmissionReports input
   listing : NativeReaddirFailure atListing admission.view admission.root directory.path
   list : FilePath → EStateM IO.Error CensusOpenState (Array IO.FS.DirEntry)
   listed : list directory.path (atListing, admission.held) =
-    (liftExcept ((CheckedDirectoryReadReport.scanned listing.scan).result directory.path) : EStateM IO.Error CensusOpenState _)
-      (atListing, admission.held)
+    match listing.run atListing with
+    | .ok entries reached => .ok entries (reached, admission.held)
+    | .error cause reached => .error cause (reached, admission.held)
   rootObject : atListing.inode admission.cached.description = admission.view.modelObject admission.root
   lock : DeviceInode
   lockEntry : admission.view.child admission.root "LOCK" = some lock
@@ -107,8 +132,7 @@ theorem stopsAtListing (seen : NativeMarkedListingError admission) (rest : Remai
       .error seen.listing.cause (seen.atListing, admission.held) := by
   have failed : seen.list directory.path (seen.atListing, admission.held) =
       .error seen.listing.cause (seen.atListing, admission.held) := by
-    rw [seen.listed, CheckedDirectoryReadReport.scan_readError directory.path seen.listing.failed]
-    rfl
+    rw [seen.listed, seen.listing.run_error]
   rw [admission.recoverWithMarked_selects seen.flat seen.route]
   simp only [Option.isSome_some, ↓reduceIte, marked, reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders,
     readSelectedWithCachedExtents, Bind.bind, EStateM.bind, seen.loaded, seen.markerRead, seen.decoded, seen.checked, true_and,

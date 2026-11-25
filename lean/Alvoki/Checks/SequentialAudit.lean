@@ -1449,6 +1449,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.stopsBeforeRecovery
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeReaddirFailure.releases
+#check_axioms Alvoki.Storage.DiskSession.NativeReaddirFailure.run_error
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingError.stopsAtListing
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedListingError.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensUncertainWrite
