@@ -1482,6 +1482,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorDisposal.canRetry_iff
 #check_axioms Alvoki.Storage.DiskSession.NativeEarlyOpenRejection.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeEarlyOpenRejection.captures
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenRejectionRoute.censusInodes
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenRejectionRoute.captures
+#check_axioms Alvoki.Storage.DiskSession.NativeRejectedOpenAttempt.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeRejectedOpenAttempt.captures
+#check_axioms Alvoki.Storage.DiskSession.NativeRejectedOpenLineage.rejected
 #check_axioms Alvoki.Storage.DiskSession.NativeRejectedOpenLineage.preserves
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.startsRejectedOpenLineage
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rejectedOpensAfterClose
