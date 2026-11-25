@@ -130,6 +130,8 @@ A healthy aligned keeper with visible later WAL names now uses the same descript
 
 The native read and quiet-recovery trace is a first finite execution invariant for a fixed acknowledged history. It permits any number of supported local snapshot reads and observed settled power losses with healthy aligned reopens. Each next event starts from the exact reached session and its earlier read ledger. The final table uses the same checkpoint and WAL, under the same physical directory and lock identities, and explains the exact accumulated responses. [Native read and recovery trace](../lean/Alvoki/Storage/Disk/NativeReadRecoveryTrace.lean)
 
+A nonempty confirmed write at the last reached session connects this prefix to a next one. The native reported publication supplies the same session's exact new writer and file state. The whole batch extends the history, and the original committed snapshot bounds let the extended replay explain every previous read. The normalized state of the new prefix comes from the write return. [Native write handoff](../lean/Alvoki/Storage/Disk/NativeReadRecoveryTrace.lean)
+
 Prove a single invariant for every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and

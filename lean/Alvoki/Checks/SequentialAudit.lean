@@ -1393,6 +1393,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.restartsAfterPowerLoss
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.readAt
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.restart
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.acknowledgesWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadRecoveryStep.frames
 #check_axioms Alvoki.Storage.DiskSession.NativeReadRecoveryTrace.frames
 #check_axioms Alvoki.Storage.DiskSession.NativeReadRecoveryTrace.keyValueRefinement

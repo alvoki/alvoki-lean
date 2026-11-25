@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
+import Alvoki.Storage.Disk.NativeReadyWrite
 
 namespace Alvoki.Storage.DiskSession
 
@@ -77,6 +78,12 @@ inductive NativeReadRecoveryStep : NativeReadPosition history log → NativeRead
         crash.retry.image.directory.active.manifest current.state.writer.checkpoint)
       (observed : NativeReadyRestartReads crash input layout selected) (next : NativeReadyState)
       (readPrefix : NativeReadyReadPrefix observed.run next history log current.reads next)
+      (owner : next.owner = observed.opening.admission.owner)
+      (directorySlot : next.directorySlot = observed.opening.admission.cached)
+      (cache : next.cache = observed.opening.admission.cache)
+      (census : next.census = observed.opening.finish.census)
+      (sessionRef : next.session.sessionRef ≠ current.state.session.sessionRef)
+      (phaseRef : next.session.phaseRef ≠ current.state.session.phaseRef)
       (frame : NativeReadRecoveryFrame current.state next) :
       NativeReadRecoveryStep current .restart (current.afterRestart observed.run next readPrefix)
 
@@ -102,17 +109,18 @@ theorem NativeReadPosition.restart (current : NativeReadPosition history log) (c
         crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
       Nonempty (NativeReadyRestartReads crash input layout selected)) :
     ∃ next, NativeReadRecoveryStep current .restart next := by
-  obtain ⟨lost, _, layout, selected, observed, next, readPrefix, directory, _, _, _, _, _, _, lockObject,
-    directoryObject, _, target, checkpoint, durable, _⟩ := current.readPrefix.restartsAfterPowerLoss crash observe
-  exact ⟨_, .restart current crash lost layout selected observed next readPrefix
-    ⟨directory, directoryObject, lockObject, target, checkpoint, durable⟩⟩
+  obtain ⟨lost, _, layout, selected, observed, next, readPrefix, directory, owner, directorySlot, cache, census,
+    sessionRef, phaseRef, lockObject, directoryObject, _, target, checkpoint, durable, _⟩ :=
+    current.readPrefix.restartsAfterPowerLoss crash observe
+  exact ⟨_, .restart current crash lost layout selected observed next readPrefix owner directorySlot cache census
+    sessionRef phaseRef ⟨directory, directoryObject, lockObject, target, checkpoint, durable⟩⟩
 
 theorem NativeReadRecoveryStep.frames
     (step : NativeReadRecoveryStep (history := history) (log := log) before event after) :
     after.reads = before.reads ++ event.responses ∧ NativeReadRecoveryFrame before.state after.state := by
   cases step with
   | read => exact ⟨rfl, ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩⟩
-  | restart _ _ _ _ _ _ _ _ frame =>
+  | restart _ _ _ _ _ _ _ _ _ _ _ _ _ _ frame =>
     exact ⟨by simp [NativeReadRecoveryEvent.responses, NativeReadPosition.afterRestart], frame⟩
 
 /-- Arbitrary finite interleavings in this scoped execution share one
@@ -143,5 +151,34 @@ theorem NativeReadRecoveryTrace.keyValueRefinement
     NativeReadRecoveryFrame start.state last.state ∧
     InstalledClientReplay log last.reads history last.state.writer.installed last.state.session :=
   ⟨run.frames.1, run.frames.2, last.readPrefix.guardedReplay⟩
+
+/-- A confirmed native write advances the history and preserves every
+previously recorded read at its original committed snapshot. Project its
+actual reached ready state to the next read and recovery trace. -/
+theorem NativeReadPosition.acknowledgesWrite (current : NativeReadPosition history log)
+    {prepared : NativeReadyWritePreparation current.state} (observed : NativeReadyWriteReport prepared)
+    (request : WriteRequest) (rows : request.rows = prepared.rows) :
+    ∃ target, ∃ next : NativeReadPosition (history ++ prepared.batch) (log ++ [.acknowledgedBatch prepared.batch]),
+      let reached := observed.next target
+      observed.calls.run request current.state.session.directory current.state.writer =
+        .ok prepared.table.committed (reached.session.phase, ⟨(reached.cache, prepared.settled), reached.files.owners⟩) ∧
+      next.state = reached ∧ next.reads = current.reads ∧
+      next.opened = .ok reached.session (reached.census, reached.files) ∧
+      next.state.session.sessionRef = current.state.session.sessionRef ∧
+      next.state.writer.history = history ++ prepared.batch ∧
+      InstalledClientReplay (log ++ [.acknowledgedBatch prepared.batch]) current.reads
+        (history ++ prepared.batch) next.state.writer.installed next.state.session := by
+  obtain ⟨valid, beforeHistory, pending⟩ := current.readPrefix.refines
+  obtain ⟨target, _, ready, returned, extended, _, sameToken, _, _⟩ := observed.acknowledges valid request rows
+  let reached := observed.next target
+  have nextHistory : reached.writer.history = history ++ prepared.batch :=
+    extended.trans (congrArg (· ++ prepared.batch) beforeHistory)
+  have ordered : WAL.OrdinalsFrom 1 (history ++ prepared.batch) :=
+    nextHistory ▸ ready.retained.resumed.ordered
+  obtain ⟨replayed, bounded⟩ := pending.appendAcknowledged current.readPrefix.readsBounded ordered
+  let next : NativeReadPosition (history ++ prepared.batch) (log ++ [.acknowledgedBatch prepared.batch]) :=
+    ⟨.ok reached.session (reached.census, reached.files), reached, reached, current.reads,
+      .installed rfl ready nextHistory replayed bounded⟩
+  exact ⟨target, next, returned, rfl, rfl, rfl, sameToken, nextHistory, next.readPrefix.guardedReplay⟩
 
 end Alvoki.Storage.DiskSession
