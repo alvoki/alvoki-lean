@@ -1140,4 +1140,6 @@ The original single or batch write's reported `commitUnknown` return now connect
 
 A reported failure of the checked marked listing with an absent manifest now directly supplies the next step of the finalized retry sequence. Its exact marker and stream operations derive the worker error and the stable inode map. The two reported scope drops carry the same attempt to its caller-visible result. [Finalized listing retry](../lean/Alvoki/Storage/Disk/NativeFinalizedListingRetry.lean)
 
+The exact last heap of a finite finalized rejection sequence can now supply a healthy aligned open. The reported selected reader starts from the same file image and inode map as before the failures. Its recovery and constructor yield the returned table and a fresh ready position under the earlier client ledger. [Aligned open after finalized retries](../lean/Alvoki/Storage/Disk/NativeFinalizedRetryAlignedOpen.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)

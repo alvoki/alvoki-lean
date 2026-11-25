@@ -308,6 +308,7 @@ import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
 import Alvoki.Storage.Disk.NativeRawFinalizedOpenError
 import Alvoki.Storage.Disk.NativeRawFinalizedLateGuardError
 import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
+import Alvoki.Storage.Disk.NativeFinalizedRetryAlignedOpen
 import Alvoki.Storage.Disk.NativeFinalizedListingRetry
 import Alvoki.Storage.Disk.NativeRawFinalizedManifestError
 import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
@@ -1926,6 +1927,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawHeldLateGuardError.returnsFinalized
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.returns
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.preserves
+#check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.reopensAligned
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.finalizedAttempt
 #check_axioms Alvoki.Storage.DiskSession.RawAbsentManifestMarkerPrefix.readsSelected
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.stops
