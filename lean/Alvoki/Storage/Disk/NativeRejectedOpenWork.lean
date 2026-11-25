@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeMarkedRecoveryWork
+import Alvoki.Storage.Disk.NativeMarkedListingWork
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
 
 namespace Alvoki.Storage.DiskSession
@@ -40,9 +41,9 @@ end NativeManifestDecodeError
 def selectedManifestExtent (state : LockedFileState FileImage) : Nat :=
   (state.image.directory.active.manifest.map ByteArray.size).getD 0
 
-/-- The covered errors stop before directory and repair requests. An
-early marker probe uses no payload callback. A malformed manifest charges
-its own bounded reader. The listing branch needs its own read accounting. -/
+/-- These errors stop before directory and repair requests. An early
+marker probe uses no payload callback. A malformed manifest charges its
+own bounded reader. The listing branch uses its separate read report. -/
 def NativeOpenRejectionRoute.chunkRequests : NativeOpenRejectionRoute admission → Option Nat
   | .marker _ _ => some 0
   | .manifest fault _ _ _ _ => some (recoveryCalls Prod.snd fault.countedManifest)
@@ -64,6 +65,35 @@ structure NativeRejectedOpenWorkEvent where
   input : FilePath
   diagnostic : IO.Error
   chunks : Nat
+  directoryRequests : Nat
+  runAndMarkerBudget : Nat
+
+structure NativeCountedListingAttempt (input : FilePath) (directory : DiskDirectory) (before : CensusOpenState) where
+  admission : CensusOpenAdmissionReports input directory before.1 before.2
+  failure : NativeMarkedListingError admission
+  work : NativeMarkedListingWork failure
+  rest : NativeMarkedListingError.Remainder
+  bootstrap : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened
+  install : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Reopened →
+    EStateM IO.Error CensusOpenState SegmentedSession
+
+namespace NativeCountedListingAttempt
+
+variable {input : FilePath} {directory : DiskDirectory} {before : CensusOpenState}
+
+def attempt (seen : NativeCountedListingAttempt input directory before) : NativeRejectedOpenAttempt input directory before :=
+  ⟨seen.admission, .listing seen.failure seen.rest seen.work.listingInodes, seen.bootstrap, seen.install⟩
+
+noncomputable def event (seen : NativeCountedListingAttempt input directory before) : NativeRejectedOpenWorkEvent :=
+  ⟨input, seen.attempt.diagnostic, seen.work.chunkRequests, seen.work.directoryRequests,
+    seen.work.selectedRunBytes + WAL.Boundary.acquisitionLimit⟩
+
+theorem chunks_le (seen : NativeCountedListingAttempt input directory before) :
+    seen.event.chunks ≤ selectedManifestExtent before.2 + seen.event.runAndMarkerBudget := by
+  simpa only [event, selectedManifestExtent, seen.work.selected, Option.map_some, Option.getD_some, Nat.add_assoc]
+    using seen.work.chunkRequests_le
+
+end NativeCountedListingAttempt
 
 /-- Store the count computed from each actual rejected route alongside
 its caller input and error. Every attempt uses the preceding reached
@@ -78,7 +108,13 @@ inductive NativeRejectedOpenWorkTrace (directory : DiskDirectory) (lock root : N
       (disposed : NativeOpenErrorDisposal attempt.route.cleanup after)
       (counted : attempt.route.chunkRequests = some requests) :
       NativeRejectedOpenWorkTrace directory lock root first
-        (events ++ [⟨input, attempt.diagnostic, requests⟩]) after (attempt.route.cleanup.canRetry after.1)
+        (events ++ [⟨input, attempt.diagnostic, requests, 0, 0⟩]) after (attempt.route.cleanup.canRetry after.1)
+  | listing {events before after}
+      (prior : NativeRejectedOpenWorkTrace directory lock root first events before true) (input : FilePath)
+      (seen : NativeCountedListingAttempt input directory before) (objects : seen.attempt.sameObjects lock root)
+      (disposed : NativeOpenErrorDisposal seen.attempt.route.cleanup after) :
+      NativeRejectedOpenWorkTrace directory lock root first
+        (events ++ [seen.event]) after (seen.attempt.route.cleanup.canRetry after.1)
 
 theorem NativeRejectedOpenWorkTrace.lineage
     (trace : NativeRejectedOpenWorkTrace directory lock root first events after available) :
@@ -88,19 +124,30 @@ theorem NativeRejectedOpenWorkTrace.lineage
   | step _ input attempt objects disposed _ earlier =>
     simpa only [List.map_append, List.map_cons, List.map_nil] using
       earlier.attempted input attempt objects disposed
+  | listing _ input seen objects disposed earlier =>
+    simpa only [List.map_append, List.map_cons, List.map_nil, NativeCountedListingAttempt.event] using
+      earlier.attempted input seen.attempt objects disposed
 
-/-- There is no upper bound on the number of attempts in this theorem.
-For a finite reported sequence, its selected chunk requests stay within
-one initial manifest extent per attempt. A marker probe costs zero here. -/
+/-- For a finite reported sequence, the selected chunk count has one
+initial manifest extent per attempt. A listing failure adds the declared
+run bytes and marker cap. Failed marker probes reach zero chunk reads. -/
 theorem NativeRejectedOpenWorkTrace.chunkRequests_le
     (trace : NativeRejectedOpenWorkTrace directory lock root first events after available) :
-    (events.map (·.chunks)).sum ≤ events.length * selectedManifestExtent first.2 := by
+    (events.map (·.chunks)).sum ≤ events.length * selectedManifestExtent first.2 +
+      (events.map (·.runAndMarkerBudget)).sum := by
   induction trace with
   | start => simp
   | step prior _ attempt _ _ counted earlier =>
     have image := prior.lineage.preserves.2.1
     have bounded := attempt.route.chunkRequests_le counted
     change _ ≤ selectedManifestExtent _ at bounded
+    simp only [selectedManifestExtent, image] at bounded
+    simp only [List.map_append, List.map_cons, List.map_nil, List.sum_append, List.sum_cons, List.sum_nil,
+      Nat.add_zero, List.length_append, List.length_singleton, Nat.add_mul, Nat.one_mul, selectedManifestExtent] at earlier ⊢
+    omega
+  | listing prior _ seen _ _ earlier =>
+    have image := prior.lineage.preserves.2.1
+    have bounded := seen.chunks_le
     simp only [selectedManifestExtent, image] at bounded
     simp only [List.map_append, List.map_cons, List.map_nil, List.sum_append, List.sum_cons, List.sum_nil,
       Nat.add_zero, List.length_append, List.length_singleton, Nat.add_mul, Nat.one_mul, selectedManifestExtent] at earlier ⊢
@@ -144,12 +191,14 @@ theorem NativeRejectedOpenWorkTrace.finishesWithWork
       finish.admission.reached.inode finish.admission.cached.description = root ∧
       countBoundedRepairCallbacks directory layout.boundedPlan finish.reads.wal.keeper.calls.metadata.byteSize.toNat =
         .ok repairs ∧
-      (events.map (·.chunks)).sum + (finish.metadataReadRequests + finish.payloadReadRequests) +
+      ((events.map (·.chunks)).sum + (events.map (·.directoryRequests)).sum) +
+        (finish.metadataReadRequests + finish.payloadReadRequests) +
         (finish.directoryWork.opendirCalls + finish.directoryWork.readdirCalls + finish.directoryWork.closedirCalls) + repairs ≤
-        events.length * selectedManifestExtent first.2 + finishChunks + finishDirectory + finishRepair := by
+        (events.length * selectedManifestExtent first.2 + (events.map (·.runAndMarkerBudget)).sum +
+          (events.map (·.directoryRequests)).sum) + finishChunks + finishDirectory + finishRepair := by
   obtain ⟨session, final, repairs, returned, pair, installed, chunks, listed, repairCount, repairBound⟩ :=
     finish.installsWithWork prepared following accepted ordered
-  have earlier := trace.chunkRequests_le
+  have earlier := Nat.add_le_add_right trace.chunkRequests_le (events.map (·.directoryRequests)).sum
   have image := trace.lineage.preserves.2.1
   refine ⟨session, final, repairs, returned, pair.trans (congrArg (·.directory.active) image), installed,
     finish.reads.identifiesLock.symm.trans objects.1, finish.admission.opened.captures.2.2.2.2.1.symm.trans objects.2,

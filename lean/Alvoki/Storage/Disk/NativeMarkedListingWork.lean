@@ -299,6 +299,15 @@ theorem countedMarked_projects (report : NativeMarkedListingWork seen) (rest : N
   rw [report.countedMarked_error, actual]
   rfl
 
+theorem listingInodes (report : NativeMarkedListingWork seen) : seen.atListing.inode = admission.reached.inode := by
+  have listing := congrArg DescriptorInventory.inode report.enteredListing
+  have marker := congrArg DescriptorInventory.inode report.enteredMarker
+  have runs := congrArg DescriptorInventory.inode report.enteredRuns
+  change seen.atListing.inode = seen.atMarker.inode at listing
+  change seen.atMarker.inode = report.atRuns.inode at marker
+  change report.atRuns.inode = admission.reached.inode at runs
+  exact listing.trans (marker.trans runs)
+
 def selectedRunBytes (report : NativeMarkedListingWork seen) : Nat :=
   (report.manifest.runs.map (·.byteCount.toNat)).sum
 
