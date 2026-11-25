@@ -38,7 +38,7 @@ def afterRead (captured : CapturedKeeperOpenReports report) : DescriptorInventor
 /-- Interpret `readKeeperPrefix_fileEffects` with the same open and exact
 prefix loop as the held read. In the successful projection the open adds
 its reported slot, and the prefix applies the reported slot drops. -/
-def readKeeper (captured : CapturedKeeperOpenReports report) :
+def readKeeperAt (captured : CapturedKeeperOpenReports report) (path : FilePath) (count physical : Nat) :
     EStateM IO.Error (CensusDirectoryCache × CensusOpenState) ByteArray :=
   readKeeperWith
     (fun name (cache, census, files) => match report.reads.openRead name with
@@ -49,7 +49,12 @@ def readKeeper (captured : CapturedKeeperOpenReports report) :
       | .error cause => .error cause (cache, census, files)
       | .ok bytes => .ok bytes (cache, census.afterDrops captured.duringRead, files))
     (fun name handle (cache, state) => .ok () (cache.remember name handle, state))
-    (directory.file (.walSegment layout.keeper.first)) layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat
+    path count physical
+
+def readKeeper (captured : CapturedKeeperOpenReports report) :
+    EStateM IO.Error (CensusDirectoryCache × CensusOpenState) ByteArray :=
+  captured.readKeeperAt (directory.file (.walSegment layout.keeper.first)) layout.keeper.bytes.size
+    report.wal.keeper.calls.metadata.byteSize.toNat
 
 /-- Both native lookups resolve the checked keeper name at the captured
 root. The reported open inserts a fresh description into the same slot
@@ -110,7 +115,7 @@ theorem reads (captured : CapturedKeeperOpenReports report)
   have selected := seen.readOpenedExactPrefix (IO.userError "short or oversized WAL keeper read")
     layout.keeper.bytes.size report.wal.keeperFits covered
   rw [ByteArray.extract_append_eq_left rfl] at selected
-  unfold readKeeper
+  unfold readKeeper readKeeperAt
   refine readKeeperWith_success admission.cache path layout.keeper.bytes.size file.calls.metadata.byteSize.toNat
     _ _ (openedState := (file.calls.inventory, admission.held)) ⟨within, report.wal.keeperFits⟩ ?_ ?_
   · rw [show report.reads.openRead path = .ok handle from file.calls.opened]

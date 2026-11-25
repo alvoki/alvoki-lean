@@ -373,15 +373,29 @@ private def bootstrapAt (calls : CapturedAlignedCallbacks admission) (_resolved 
   | .ok value reached => .ok value (openCensus, { before with image := reached })
   | .error cause reached => .error cause (openCensus, { before with image := reached })
 
+private def installAfterRecovery (calls : CapturedAlignedCallbacks admission)
+    (resolved : DiskDirectory) (owner : DescriptorSlot) (recover : EStateM IO.Error CensusOpenState Reopened) :
+    EStateM IO.Error CensusOpenState SegmentedSession := do
+  let opened ← recover
+  installReady opened.installed (fun phase => pure (phase, calls.nextRef)) (fun _ => pure (calls.nextRef + 1))
+    fun (phase, phaseRef) sessionRef => pure ⟨resolved, owner.description, phase, phaseRef, sessionRef⟩
+
 def recoverWithFinish (calls : CapturedAlignedCallbacks admission)
     (report : CapturedMarkedReadReports admission layout published)
     (finish : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Plan × Reopened × Nat →
       EStateM IO.Error CensusOpenState Reopened)
     (resolved : DiskDirectory) (owner : DescriptorSlot) (cache : CensusDirectoryCache) :
-    EStateM IO.Error CensusOpenState SegmentedSession := do
-  let opened ← report.recoverThroughReads finish calls.bootstrapAt resolved owner cache
-  installReady opened.installed (fun phase => pure (phase, calls.nextRef)) (fun _ => pure (calls.nextRef + 1))
-    fun (phase, phaseRef) sessionRef => pure ⟨resolved, owner.description, phase, phaseRef, sessionRef⟩
+    EStateM IO.Error CensusOpenState SegmentedSession :=
+  calls.installAfterRecovery resolved owner (report.recoverThroughReads finish calls.bootstrapAt resolved owner cache)
+
+/-- The native-shaped open can keep the reached read state all the way
+through marked repair, under the same guards and ready installation. -/
+def runWithMarked (calls : CapturedAlignedCallbacks admission)
+    (marked : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened) :
+    EStateM.Result IO.Error CensusOpenState SegmentedSession :=
+  admission.run fun resolved owner cache =>
+    calls.installAfterRecovery resolved owner
+      (admission.recoverWithMarked resolved (marked resolved cache) (calls.bootstrapAt resolved cache))
 
 /-- Use the shared marked recovery and allocate the ready session after the
 reached repair callback returns. -/
@@ -391,6 +405,29 @@ def runWithFinish (calls : CapturedAlignedCallbacks admission)
       EStateM IO.Error CensusOpenState Reopened) :
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
   admission.run (calls.recoverWithFinish report finish)
+
+/-- In the marked route, two interpretations with the same reached
+recovery return allocate the same session and expose the same final state. -/
+theorem runWithMarked_eq (calls : CapturedAlignedCallbacks admission)
+    (report : CapturedMarkedReadReports admission layout published)
+    (marked : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened)
+    (finish : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Plan × Reopened × Nat →
+      EStateM IO.Error CensusOpenState Reopened)
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    (agrees : marked directory admission.cache (admission.reached, admission.held) =
+      (report.walReads.prepare report.reads.readPrefix >>= finish directory admission.owner admission.cache)
+        (admission.reached, admission.held)) :
+    calls.runWithMarked marked = calls.runWithFinish report finish := by
+  have route : optionalMetadataWith (admission.lookup (directory.file .walBoundary))
+      (admission.reached, admission.held) = .ok (some metadata) (admission.reached, admission.held) := by
+    simp only [optionalMetadataWith, Bind.bind, EStateM.bind, marker, Pure.pure, EStateM.pure]
+  simp only [runWithMarked, runWithFinish, admission.run_reachesRecovery, recoverWithFinish, installAfterRecovery,
+    CapturedMarkedReadReports.recoverThroughReads, CensusOpenAdmissionReports.recoverWithMarked,
+    tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch,
+    recoverSegmentedWalWith, rejectFlatWalWith, calls.flat, route, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+    Option.isSome_none, Bool.false_eq_true, ↓reduceIte, Option.isSome_some, agrees]
 
 /-- A successful reached repair completes the same admitted read and
 installation, independent of which bounded repair path was selected. -/
@@ -432,7 +469,8 @@ theorem installsWithFinish
   have returned : calls.runWithFinish report finish = .ok session (census, final) := by
     unfold runWithFinish
     rw [admission.run_reachesRecovery]
-    simp only [recoverWithFinish, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, Bind.bind, EStateM.bind, reached]
+    simp only [recoverWithFinish, installAfterRecovery, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch,
+      Bind.bind, EStateM.bind, reached]
     rfl
   have lock : final.owners.Owns directory session.descriptor := admission.opened.held
   have different : calls.nextRef ≠ calls.nextRef + 1 := by omega

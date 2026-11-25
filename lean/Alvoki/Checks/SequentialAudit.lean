@@ -184,6 +184,7 @@ import Alvoki.Storage.Disk.RotationCreateInterruption
 import Alvoki.Storage.Disk.RotationCreatePhysical
 import Alvoki.Storage.Disk.RotationSuccessorFsyncStop
 import Alvoki.Storage.Disk.RotationDirectoryFsyncStop
+import Alvoki.Storage.Disk.RotationEffectiveAlignedOpen
 import Alvoki.Storage.Disk.RotationReopenAdmission
 import Alvoki.Storage.Disk.BootstrapAdmissionEffects
 import Alvoki.Storage.Disk.FirstMarkedSession
@@ -209,8 +210,10 @@ import Alvoki.Storage.Disk.ClientWriteTrace
 import Alvoki.Storage.Disk.ReturnedWriteRecovery
 import Alvoki.Storage.Disk.PendingClientReplay
 import Alvoki.Storage.Disk.PendingAlignedReopen
+import Alvoki.Storage.Disk.PendingFirstAppendReopen
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
+import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
 import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
 import Alvoki.Storage.Disk.BatchGroupedWriteError
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
@@ -292,6 +295,7 @@ import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
 import Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
+import Alvoki.Storage.Disk.FailedMarkerReadCensus
 import Alvoki.Storage.Disk.CachedWalExtentRetry
 import Alvoki.Storage.Disk.CachedCheckpointExtentRetry
 import Alvoki.Storage.Disk.SegmentedRunRetentionReopen
@@ -1018,6 +1022,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.stopsBatchSchedule
 #check_axioms Alvoki.Storage.DiskSession.runSingleWriteWithInterruption_eq_singleton
 #check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Valid.stopsSingleWriteSchedule
+#check_axioms Alvoki.Storage.DiskSession.BatchAppendInterruption.Valid.stopsWriteRequest
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.stopsSingleWriteSchedule
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchMarkerPowerLossReport.Reached.stopsWriteRequest
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedBatchMarker
@@ -1354,6 +1359,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryInstalled.refinesPendingClient
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensReturnedWriteAligned
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensInterruptedMarkerAligned
+#check_axioms Alvoki.Storage.DiskSession.CapturedKeeperFinish.installsAfterVacancy
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensInterruptedFirstAppend
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.replaysClient
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysClientAtManifestDirectory
 #check_axioms Alvoki.Storage.CheckpointPublication.successfulFrame
@@ -1361,6 +1368,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryReached.WalFrame.retainsAtCut
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysPhysicalWalAtManifestDirectory
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.barrierCrashVacant
+#check_axioms Alvoki.Storage.DiskSession.CheckpointBarrierLockOpenFailure.returns
+#check_axioms Alvoki.Storage.DiskSession.CheckpointBarrierRetryPrefix.reached
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.reopensPhysicalBarrierAligned
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.guardedReplay
@@ -1489,6 +1498,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RotationDirectoryFsyncStop.keepsKeeperMarker
 #check_axioms Alvoki.Storage.DiskSession.RotationDirectoryFsyncStop.selectedKeeperPayload
 #check_axioms Alvoki.Storage.DiskSession.RotationDirectoryFsyncStop.refinesReopenPrefix
+#check_axioms Alvoki.Storage.DiskSession.RotationDirectoryFsyncStop.effectiveCrashVacant
+#check_axioms Alvoki.Storage.DiskSession.RotationDirectoryFsyncStop.reopensEffectiveAligned
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterRotationWithAdmission
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetainedCached
@@ -1674,6 +1685,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.readKeeperWith_rejectsExtent
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.read_error
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.reachesRead
+#check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_keeperSuccess
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.keeperReached_eq_of_readonly
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.reopen_keeperExtentError
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedKeeperExtentError
@@ -1694,6 +1706,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofManifestDecodeError
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofMarkerReadError
 #check_axioms Alvoki.Storage.DiskSession.CachedOpenRejection.ofMarkerPayloadReadError
+#check_axioms Alvoki.Storage.DiskSession.HeldMarkerChunkFailure.custody
+#check_axioms Alvoki.Storage.DiskSession.HeldMarkerChunkFailure.returnsError
+#check_axioms Alvoki.Storage.DiskSession.HeldMarkerChunkFailure.reachesCleanup
+#check_axioms Alvoki.Storage.DiskSession.HeldMarkerChunkFailure.certifies
+#check_axioms Alvoki.Storage.DiskSession.HeldMarkerChunkFailure.continues
 #check_axioms Alvoki.Storage.readExactPrefixWith_readError
 #check_axioms Alvoki.Storage.readExactPrefixWith_badChunk
 #check_axioms Alvoki.Storage.readExactPrefixWith_success
@@ -1990,10 +2007,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkerCensus.reads
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.beforeWalScan
 #check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.stat
+#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.sealPayload
 #check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.matchesExtents
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.guardedWalScan
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.selectedWalReachesKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.beforeKeeper
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.preparesFromCensus
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.liveAtRead
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.closedDescription
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.custody
@@ -2216,12 +2235,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.recoverThroughReads_prepared
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.installs
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedCallbacks.installsWithFinish
+#check_axioms Alvoki.Storage.DiskSession.CapturedAlignedCallbacks.runWithMarked_eq
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.readAndClose
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.stagedAllocation
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.sameCensusObjects
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.replacementInodes
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.repairAt_returns
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.readRepair_returns
+#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.installsAfterVacancy
+#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.installsFromCensus
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.installs
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.sameKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.rawTail_returns

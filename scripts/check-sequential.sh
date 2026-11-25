@@ -123,8 +123,10 @@ lake env leanchecker Alvoki.Storage.Disk.ClientWriteTrace
 lake env leanchecker Alvoki.Storage.Disk.ReturnedWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.PendingAlignedReopen
+lake env leanchecker Alvoki.Storage.Disk.PendingFirstAppendReopen
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
+lake env leanchecker Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
 lake env leanchecker Alvoki.Storage.Disk.BatchGroupedWriteError
 lake env leanchecker Alvoki.Storage.Disk.ClientSnapshotTransitions
@@ -218,6 +220,7 @@ lake env leanchecker Alvoki.Storage.Disk.RotationCreateInterruption
 lake env leanchecker Alvoki.Storage.Disk.RotationCreatePhysical
 lake env leanchecker Alvoki.Storage.Disk.RotationSuccessorFsyncStop
 lake env leanchecker Alvoki.Storage.Disk.RotationDirectoryFsyncStop
+lake env leanchecker Alvoki.Storage.Disk.RotationEffectiveAlignedOpen
 lake env leanchecker Alvoki.Storage.Disk.RotationReopenAdmission
 lake env leanchecker Alvoki.Storage.Disk.BootstrapAdmissionEffects
 lake env leanchecker Alvoki.Storage.Disk.FirstMarkedSession
@@ -349,6 +352,7 @@ lake env leanchecker Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
+lake env leanchecker Alvoki.Storage.Disk.FailedMarkerReadCensus
 lake env leanchecker Alvoki.Storage.Disk.CachedOpenRejection
 lake env leanchecker Alvoki.Storage.Disk.CachedWalExtentRetry
 lake env leanchecker Alvoki.Storage.Disk.CachedCheckpointExtentRetry
