@@ -118,7 +118,10 @@ the subsequent repair in the same order as the shared schedule. The shared
 installer allocates a fresh snapshot identity for the recovered table.
 Modeled marker-sync errors preserve the reached file image through lock
 cleanup. Native fault injection checks errors
-before and after the marker sync with a keeper tail still pending repair.
+before and after the marker sync with a keeper tail still pending repair. The shared
+reopen proof also propagates a keeper read error through the selected
+extent scan and preparation. It preserves the reached state and skips both
+the marker barrier and keeper repair.
 The native trace checks the descriptor, device and inode at reopen sync,
 slot write and publication sync. The engine assumes exclusive control of
 the database directory while its lock is held.

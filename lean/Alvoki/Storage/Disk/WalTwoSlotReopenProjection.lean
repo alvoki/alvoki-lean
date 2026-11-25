@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.WalSegmentBoundedOpenEffects
+import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.WalSegmentOpenFastEffects
 import Alvoki.Storage.Disk.WalTwoSlot
 import Alvoki.Storage.Disk.WalSegmentReplayStability
@@ -644,29 +645,44 @@ error aborts the shared reopen before marker sync or WAL repair. -/
 theorem reopenWith_keeperReadError {state : Type} {directory : Storage.DiskDirectory}
     (selection : Selection)
     (readCheckpoint : EStateM IO.Error state (Option (Storage.PackedTable × UInt64)))
-    (readWal : Nat → UInt64 → EStateM IO.Error state (Storage.WalSegmentMarkerReads × Nat))
+    (list : System.FilePath → EStateM IO.Error state (Array IO.FS.DirEntry))
+    (lstat : System.FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata))
     {readSeal : System.FilePath → Nat → EStateM IO.Error state ByteArray}
     (readKeeper : System.FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
     (stabilize : EStateM IO.Error state Unit)
     (finish : Plan → Nat → EStateM IO.Error state Unit)
-    {before checked atKeeper reached : state} {checkpoint : Option (Storage.PackedTable × UInt64)}
+    {before checked listedState scannedState atKeeper reached : state}
+    {checkpoint : Option (Storage.PackedTable × UInt64)}
     (checkpointRead : readCheckpoint before = .ok checkpoint checked)
-    {required : List (Nat × IO.FS.Metadata)} {keeper : Nat} {metadata : IO.FS.Metadata}
-    (seals : CachedWalKeeperReached directory readSeal keeper metadata required checked atKeeper)
+    (aligned : selection.frontier.toNat % frameSize = 0 ∧
+      (checkpoint.getD (.empty, 0)).1.committed.toNat ≤ selection.frontier.toNat / frameSize)
+    {entries : Array IO.FS.DirEntry}
+    (listed : list directory.path checked = .ok entries listedState)
+    {extents required : List (Nat × IO.FS.Metadata)} {newer : List Nat}
+    (scanned : Storage.readWalSegmentExtentsWith directory lstat (entries.toList.map (·.fileName)) listedState =
+      .ok extents scannedState)
+    (selected : selectWalExtentsThrough extents (checkpoint.getD (.empty, 0)).1.committed.toNat
+      (selection.frontier.toNat / frameSize) = some (required, newer))
+    {keeper : Nat} {metadata : IO.FS.Metadata}
+    (seals : CachedWalKeeperReached directory readSeal keeper metadata required scannedState atKeeper)
     {cause : IO.Error}
     (failed : readKeeper (directory.file (.walSegment keeper))
-      ((selection.frontier.toNat / frameSize - keeper) * frameSize) metadata.byteSize.toNat atKeeper = .error cause reached)
-    (walReadError : readCachedWalPayloads directory (selection.frontier.toNat / frameSize)
-      readSeal readKeeper required checked = .error cause reached →
-      readWal (checkpoint.getD (.empty, 0)).1.committed.toNat selection.frontier checked =
+      ((selection.frontier.toNat / frameSize - keeper) * frameSize) metadata.byteSize.toNat atKeeper =
         .error cause reached) :
     reopenWith
       (prepareBoundedMarkedFromReaders directory readCheckpoint
-        (fun _ => pure (some (Boundary.encode selection.frontier))) readWal)
+        (fun _ => pure (some (Boundary.encode selection.frontier)))
+        (fun watermark length =>
+          readSelectedWithCachedExtents directory watermark length list lstat readSeal readKeeper))
       stabilize finish before = .error cause reached := by
   have payloadError := seals.read_error (selection.frontier.toNat / frameSize) readKeeper failed
+  have walError := readSelectedWithCachedExtents_payloadError directory _ selection.frontier
+    list lstat readSeal readKeeper aligned listed scanned selected payloadError
   have read := prepareSelected_walReadError directory (Boundary.encode selection.frontier)
-    selection.frontier (Boundary.decode_encode _) readCheckpoint readWal checkpointRead (walReadError payloadError)
+    selection.frontier (Boundary.decode_encode _) readCheckpoint
+    (fun watermark length =>
+      readSelectedWithCachedExtents directory watermark length list lstat readSeal readKeeper)
+    checkpointRead walError
   simp only [reopenWith_reports, read]
 
 /-- A failed file barrier returns exactly its reached file image through
