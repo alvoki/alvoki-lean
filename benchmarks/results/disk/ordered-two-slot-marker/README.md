@@ -78,3 +78,19 @@ The sequential check suite covered Lean kernel checking, dependency audit,
 differential workloads, native disk faults, process exit, and exact replay
 with and without a torn tail. Its Linux cut fixtures exercise the reported
 effects and visible byte images.
+
+### Rerun after bounded marker reads
+
+At `bedf647`, the same closed-loop workloads yielded 2,464, 4,356 and
+8,359 operations/s in mixed mode for rename, ordered slots and RocksDB
+9.10.0 respectively. Ordered slots measured 4.5 µs read p99 and 1,445 µs
+acknowledged write p99. The reference recorded 6.5 µs and 665 µs. Slots
+reached 52.1% of reference throughput and 2.17× its write p99 in this run.
+This comparison measures service latency. Common-load response latency
+remains a separate release check.
+
+Maintenance throughput was 2,323, 4,577 and 8,556 operations/s in the same
+engine order. The aligned, torn-tail and missing-acknowledged-frame cases
+passed, as did the unchanged, unwritten and torn-checksum slot images.
+Raw samples and crash checks are in
+`work/alvoki-performance/two-slot-ledger-rerun`.
