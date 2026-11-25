@@ -277,6 +277,7 @@ import Alvoki.Storage.Disk.NativeCoveredWalDirectoryStop
 import Alvoki.Storage.Disk.NativeCoveredWalDirectoryReopen
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkErrorReopen
+import Alvoki.Storage.Disk.NativeCoveredWalUnlinkErrorPowerLoss
 import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeReadyClose
 import Alvoki.Storage.Disk.NativeCloseAlignedReopen
@@ -1764,6 +1765,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCoveredWalUnlinkError.selects
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.returnsCoveredWalUnlinkError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCoveredWalUnlinkError
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCoveredWalUnlinkErrorPowerLoss
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPlan.plans
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunPass.barrierCensus
