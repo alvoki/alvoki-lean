@@ -50,6 +50,7 @@ import Alvoki.Storage.Disk.LockCensusOpenAdmission
 import Alvoki.Storage.Disk.CapturedMarkedReads
 import Alvoki.Storage.Disk.CapturedAlignedInstallation
 import Alvoki.Storage.Disk.CapturedPrunedAlignedInstallation
+import Alvoki.Storage.Disk.CapturedMarkedInstallation
 import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
 import Alvoki.Storage.Disk.DelayedKeeperInventory
 import Alvoki.Storage.Disk.AppendHandleCustody

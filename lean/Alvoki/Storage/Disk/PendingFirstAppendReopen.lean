@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.PendingClientReplay
 import Alvoki.Storage.Disk.NativeReadyReadPrefix
+import Alvoki.Storage.Disk.CapturedMarkedInstallation
 
 namespace Alvoki.Storage.DiskSession
 
@@ -12,64 +13,6 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
   {admission : CensusOpenAdmissionReports input directory inventory retry}
   {vacant : TryLockObserves retry.owners directory (.ok true)}
   {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
-
-/-- An interrupted append can leave an aligned keeper or a physical tail.
-Both healthy finishes with no later names use the same captured reads. -/
-inductive CapturedKeeperFinish (calls : CapturedAlignedCallbacks admission)
-    (reads : CapturedMarkedReadReports admission layout published)
-    (vacant : TryLockObserves retry.owners directory (.ok true))
-    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) where
-  | aligned (finish : CapturedAlignedFinish calls reads vacant selected)
-  | longer (finish : CapturedLongKeeperFinish calls reads vacant selected)
-
-namespace CapturedKeeperFinish
-
-variable {calls : CapturedAlignedCallbacks admission} {reads : CapturedMarkedReadReports admission layout published}
-
-def reader : CapturedKeeperFinish calls reads vacant selected → CapturedKeeperOpenReports reads
-  | .aligned finish => finish.readCustody
-  | .longer finish => finish.reader
-
-noncomputable def run (finish : CapturedKeeperFinish calls reads vacant selected)
-    (chronology : CapturedMarkedReadCensus reads finish.reader) :
-    EStateM.Result IO.Error CensusOpenState SegmentedSession := by
-  cases finish with
-  | aligned finish => exact finish.runFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
-  | longer finish => exact finish.runFromCensus chronology.metadataRelease chronology.runs.released chronology.sealRelease
-
-noncomputable def census : CapturedKeeperFinish calls reads vacant selected → DescriptorInventory
-  | .aligned finish => finish.census
-  | .longer finish => finish.census
-
-theorem installsFromCensus (finish : CapturedKeeperFinish calls reads vacant selected)
-    (chronology : CapturedMarkedReadCensus reads finish.reader)
-    {metadata : IO.FS.Metadata}
-    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
-      .ok (.ok metadata) (admission.reached, admission.held))
-    (prepared : Prepared retry.image layout.target layout.plan)
-    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
-      layout.range.watermark < start)
-    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
-      retry.image.directory.active.manifest)
-    (ordered : WAL.OrdinalsFrom 1 history) :
-    ∃ session final, finish.run chronology = .ok session (finish.census, final) ∧
-      final.image.directory.active = retry.image.directory.active ∧
-      admission.owner ∈ finish.census.slots ∧ admission.cached ∈ finish.census.slots ∧
-      CachedRetryInstalled (before := retry) reads.walReads admission.reached admission.owner reads.bindings
-        published calls.liveRefs (.ok session final) := by
-  cases finish with
-  | aligned finish =>
-    exact finish.installsFromCensus chronology.manifest chronology.runs chronology.marker chronology.beforeListing
-      chronology.seals chronology.offsets chronology.retained marker prepared.keeperPrefix prepared.newer
-      following accepted ordered
-  | longer finish =>
-    obtain ⟨session, returned, pair, owner, directory, installed⟩ :=
-      finish.installsFromCensus chronology.manifest chronology.runs chronology.marker chronology.beforeListing
-        chronology.seals chronology.offsets chronology.retained marker prepared.keeperPrefix prepared.newer
-        following accepted ordered
-    exact ⟨session, finish.settled, returned, pair, owner, directory, installed⟩
-
-end CapturedKeeperFinish
 
 /-- Reports for the final healthy held open. The retry prefix supplies the
 physical image and selects the checkpoint before these reports are used. -/
