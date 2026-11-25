@@ -1347,6 +1347,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedSession.guardedAcquireReads
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryInstalled.refinesPendingClient
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensReturnedWriteAligned
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopensInterruptedMarkerAligned
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCut.replaysClient
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysClientAtManifestDirectory
 #check_axioms Alvoki.Storage.CheckpointPublication.successfulFrame
