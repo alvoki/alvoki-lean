@@ -2019,6 +2019,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RotationDirectoryFsyncFailure.returnsError
 #check_axioms Alvoki.Storage.DiskSession.RotationDirectoryFsyncFailure.preparesReopenPrefix
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.rotationReturnsError
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseFiles.reopensReleasedAlignedAt
 #check_axioms Alvoki.Storage.DiskSession.NativeCloseFiles.reopensReleasedAligned
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryFailure.liveWal
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryFailure.liveRetained
@@ -2090,6 +2091,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.reachesExecutionPrefix
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.reachesExecutionPrefixWithReferences
 #check_axioms Alvoki.Storage.DiskSession.BootstrapKeeperMarkerHandoff.executesPrefixFromEmpty
+#check_axioms Alvoki.Storage.DiskSession.NativeCloseReopenStep.fromSelectedOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.closesAndReopens
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCloseError.trace
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyCloseError.returns
