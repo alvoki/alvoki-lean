@@ -40,67 +40,46 @@ theorem CheckpointPowerCut.priorSelectedGeneration {directory : DiskDirectory} {
   rw [UInt64.toNat_ofNat_of_lt' cut.generationFits] at values
   omega
 
-/-- All run-file barriers can complete before power is lost at the first
-directory barrier. The ordered native prefix reaches that exact callback
-with the directory handle in the reached cache. An observed effective cut settles the
-new run names. The old manifest remains selected on either outcome. -/
-theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : SegmentedWriterState}
-    {writer : Nat} {handle : Type}
-    (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
-    (completedRuns : cut.completed = runSteps cut.checkpoint.table.runs.length)
-    (writeRun writeStage : FilePath → ByteArray → EStateM IO.Error (Cache handle × WalInodeImage) Unit)
-    (openRead : FilePath → EStateM IO.Error WalInodeImage handle)
-    (fsync : handle → EStateM IO.Error WalInodeImage Unit)
-    (rename : FilePath → FilePath → EStateM IO.Error (Cache handle × WalInodeImage) Unit)
-    (atRun : Nat → Cache handle × WalInodeImage) (interrupted : Cache handle × WalInodeImage)
-    (runs : Cache handle × WalInodeImage → RunUnlinkImage)
-    (manifest : Cache handle × WalInodeImage → Publication.Image)
-    (views : ∀ index, RunDirectoryInodeView directory (atRun index).2 (runs (atRun index)))
-    (directoryHandle : handle) :
+/-- The guarded run callbacks reach this exact prefix. They establish the
+new visible run bytes and preserve the prior checkpoint's stable bindings. -/
+structure CheckpointRunPrefix {directory : DiskDirectory} {before : SegmentedWriterState} {handle : Type}
+    (cut : CheckpointPowerCut directory before) (perform : Step → EStateM IO.Error (Cache handle × WalInodeImage) Unit)
+    (atRun : Nat → Cache handle × WalInodeImage) (runs : Cache handle × WalInodeImage → RunUnlinkImage) : Prop where
+  returned : ((runSteps cut.checkpoint.table.runs.length).forM perform) (atRun 0) =
+    .ok () (atRun cut.checkpoint.table.runs.length)
+  freshVisible : ∀ index < cut.checkpoint.table.runs.length,
+    (runs (atRun cut.checkpoint.table.runs.length)).visible (SegmentedCheckpointReport.generation before) index =
+      cut.checkpoint.plan.files[index]?
+  priorGuaranteed : SelectedRunsAgree before.wal.directory.active.manifest
+    (runs (atRun cut.checkpoint.table.runs.length)).guaranteed before.published.durable
+  priorVisible : SelectedRunsAgree before.wal.directory.active.manifest
+    (runs (atRun cut.checkpoint.table.runs.length)).visible before.published.durable
+
+/-- Entry custody ties the retained logical checkpoint to the same physical
+run namespace that the writes preserve. -/
+def CheckpointRunPrefix.EntrySelection {directory : DiskDirectory} {image : WalInodeImage}
+    {runs : RunUnlinkImage} (before : SegmentedWriterState) (view : RunDirectoryInodeView directory image runs) : Prop :=
+  ∀ bytes metadata, before.wal.directory.active.manifest = some bytes →
+    Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+    ∀ index < metadata.header.runCount.toNat, ∀ payload,
+      before.published.durable metadata.header.generation index = some payload →
+      ∃ inode, view.Stable (directory.file (.run metadata.header.generation index)) inode payload
+
+/-- Reconstruct the same completed run-file prefix for any later checkpoint
+cut. No directory or manifest callback has run at this point. -/
+theorem CheckpointPowerCut.reportedRunPrefix {directory : DiskDirectory} {before : SegmentedWriterState}
+    {writer : Nat} {handle : Type} (cut : CheckpointPowerCut directory before)
+    (ready : before.RetainedReady directory writer)
+    (perform : Step → EStateM IO.Error (Cache handle × WalInodeImage) Unit)
+    (atRun : Nat → Cache handle × WalInodeImage) (runs : Cache handle × WalInodeImage → RunUnlinkImage)
+    (views : ∀ index, RunDirectoryInodeView directory (atRun index).2 (runs (atRun index))) :
     let count := cut.checkpoint.table.runs.length
     let generation := SegmentedCheckpointReport.generation before
-    let perform := performCheckpointFileStep directory generation cut.checkpoint.table.runs.toArray
-      (directory.file .stagedManifest) cut.checkpoint.manifest
-      (fun found => match found with
-        | some run => pure run
-        | none => throw (IO.userError "checkpoint run index is out of bounds"))
-      writeRun writeStage (SyncPathGroup.run (sync directory.path openRead fsync)) rename
-    (∀ index < count,
-      Nonempty (CheckpointRunPairCustody directory generation cut.checkpoint.table perform
-        (atRun index) (atRun (index + 1)) (views index) (views (index + 1)) index)) →
-    (∀ bytes metadata, before.wal.directory.active.manifest = some bytes →
-      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
-      ∀ index < metadata.header.runCount.toNat, ∀ payload,
-        before.published.durable metadata.header.generation index = some payload →
-        ∃ inode, (views 0).Stable (directory.file (.run metadata.header.generation index)) inode payload) →
-    (atRun count).1.directory = some directoryHandle →
-    runs interrupted = (if cut.tookEffect then (runs (atRun count)).syncDirectory else runs (atRun count)) →
-    manifest (atRun 0) = before.published.manifest →
-    (∀ index < count, manifest (atRun (index + 1)) = manifest (atRun index)) →
-    manifest interrupted = manifest (atRun count) →
-    cut.current = .syncRunsDirectory ∧
-    (cut.completed.forM perform) (atRun 0) = .ok () (atRun count) ∧
-    perform cut.current (atRun count) =
-      SyncPathGroup.run (m := EStateM IO.Error (Cache handle × WalInodeImage))
-        (fun _ (cache, image) => withCache cache (fsync directoryHandle image))
-        #[directory.path] (atRun count) ∧
-    ∃ published, CheckpointRunBarrierCut cut published (runs (atRun count)) (runs interrupted) ∧
-      manifest interrupted = published.manifest ∧
-      (cut.tookEffect = false → published = before.published) ∧
-      (∀ index < count, (runs (atRun count)).visible generation index = cut.checkpoint.plan.files[index]?) ∧
-      (cut.tookEffect = true →
-        ∀ index < count, (runs interrupted).guaranteed generation index = published.durable generation index) := by
-  intro count generation perform writes entry captured namespaceCut
-    initialManifest frameManifest cutManifest
-  have current : cut.current = .syncRunsDirectory := by
-    have suffix : .syncRunsDirectory :: Publication.steps.map Step.manifest = cut.current :: cut.remaining := by
-      apply List.append_cancel_left (as := runSteps count)
-      have schedule := cut.schedule
-      rw [completedRuns] at schedule
-      simpa only [steps, List.append_assoc, List.cons_append, List.nil_append] using schedule
-    exact (List.cons.inj suffix).1.symm
-  have exactCount := cut.reachedCount.1
-  rw [completedRuns] at exactCount
+    (∀ index < count, Nonempty (CheckpointRunPairCustody directory generation cut.checkpoint.table perform
+      (atRun index) (atRun (index + 1)) (views index) (views (index + 1)) index)) →
+    CheckpointRunPrefix.EntrySelection before (views 0) →
+    CheckpointRunPrefix cut perform atRun runs := by
+  intro count generation writes entry
   have prefixRan := runSteps_returned perform count atRun (fun index within =>
     let ⟨pair⟩ := writes index within
     pair.returned)
@@ -131,9 +110,14 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
     rfl
   have oldSelected := ready.resumed.selected
   rw [← ready.walPair] at oldSelected
-  have priorBindings : SelectedRunsAgree before.wal.directory.active.manifest
-      (runs (atRun count)).guaranteed before.published.durable := by
-    intro bytes metadata binding decoded index within
+  have priorBindings (bytes : ByteArray) (metadata : Manifest.IntegrityCheckpoint)
+      (binding : before.wal.directory.active.manifest = some bytes)
+      (decoded : Manifest.IntegrityCheckpoint.decode bytes = .ok metadata)
+      (index : Nat) (within : index < metadata.header.runCount.toNat) :
+      (runs (atRun count)).guaranteed metadata.header.generation index =
+        before.published.durable metadata.header.generation index ∧
+      (runs (atRun count)).visible metadata.header.generation index =
+        before.published.durable metadata.header.generation index := by
     have differentGeneration := (cut.priorSelectedGeneration ready binding decoded).2
     obtain ⟨payload, stored⟩ := oldSelected.runExists binding decoded within
     obtain ⟨inode, reported⟩ := entry bytes metadata binding decoded index within payload stored
@@ -147,7 +131,71 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
           runPath_ne directory (fun same => differentGeneration (congrArg Prod.fst same))
         exact pair.frame.keepsStable pair.synced pair.privateBinding distinct
           (ih (Nat.le_trans (Nat.le_succ _) bounded))
-    exact ((retained count (Nat.le_refl _)).guaranteed).trans stored.symm
+    have stable := retained count (Nat.le_refl _)
+    refine ⟨stable.guaranteed.trans stored.symm, ?_⟩
+    rw [(views count).visibleProjects _ _ _ stable.visibleBinding, stable.visibleBytes, stored]
+  exact ⟨prefixRan, visible, fun bytes metadata bound decoded index within =>
+    (priorBindings bytes metadata bound decoded index within).1, fun bytes metadata bound decoded index within =>
+    (priorBindings bytes metadata bound decoded index within).2⟩
+
+/-- All run-file barriers can complete before power is lost at the first
+directory barrier. The ordered native prefix reaches that exact callback
+with the directory handle in the reached cache. An observed effective cut settles the
+new run names. The old manifest remains selected on either outcome. -/
+theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : SegmentedWriterState}
+    {writer : Nat} {handle : Type}
+    (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
+    (completedRuns : cut.completed = runSteps cut.checkpoint.table.runs.length)
+    (writeRun writeStage : FilePath → ByteArray → EStateM IO.Error (Cache handle × WalInodeImage) Unit)
+    (openRead : FilePath → EStateM IO.Error WalInodeImage handle)
+    (fsync : handle → EStateM IO.Error WalInodeImage Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error (Cache handle × WalInodeImage) Unit)
+    (atRun : Nat → Cache handle × WalInodeImage) (interrupted : Cache handle × WalInodeImage)
+    (runs : Cache handle × WalInodeImage → RunUnlinkImage)
+    (manifest : Cache handle × WalInodeImage → Publication.Image)
+    (views : ∀ index, RunDirectoryInodeView directory (atRun index).2 (runs (atRun index)))
+    (directoryHandle : handle) :
+    let count := cut.checkpoint.table.runs.length
+    let generation := SegmentedCheckpointReport.generation before
+    let perform := performCheckpointFileStep directory generation cut.checkpoint.table.runs.toArray
+      (directory.file .stagedManifest) cut.checkpoint.manifest
+      (fun found => match found with
+        | some run => pure run
+        | none => throw (IO.userError "checkpoint run index is out of bounds"))
+      writeRun writeStage (SyncPathGroup.run (sync directory.path openRead fsync)) rename
+    (∀ index < count,
+      Nonempty (CheckpointRunPairCustody directory generation cut.checkpoint.table perform
+        (atRun index) (atRun (index + 1)) (views index) (views (index + 1)) index)) →
+    CheckpointRunPrefix.EntrySelection before (views 0) →
+    (atRun count).1.directory = some directoryHandle →
+    runs interrupted = (if cut.tookEffect then (runs (atRun count)).syncDirectory else runs (atRun count)) →
+    manifest (atRun 0) = before.published.manifest →
+    (∀ index < count, manifest (atRun (index + 1)) = manifest (atRun index)) →
+    manifest interrupted = manifest (atRun count) →
+    cut.current = .syncRunsDirectory ∧
+    (cut.completed.forM perform) (atRun 0) = .ok () (atRun count) ∧
+    perform cut.current (atRun count) =
+      SyncPathGroup.run (m := EStateM IO.Error (Cache handle × WalInodeImage))
+        (fun _ (cache, image) => withCache cache (fsync directoryHandle image))
+        #[directory.path] (atRun count) ∧
+    ∃ published, CheckpointRunBarrierCut cut published (runs (atRun count)) (runs interrupted) ∧
+      manifest interrupted = published.manifest ∧
+      (cut.tookEffect = false → published = before.published) ∧
+      (∀ index < count, (runs (atRun count)).visible generation index = cut.checkpoint.plan.files[index]?) ∧
+      (cut.tookEffect = true →
+        ∀ index < count, (runs interrupted).guaranteed generation index = published.durable generation index) := by
+  intro count generation perform writes entry captured namespaceCut
+    initialManifest frameManifest cutManifest
+  have current : cut.current = .syncRunsDirectory := by
+    have suffix : .syncRunsDirectory :: Publication.steps.map Step.manifest = cut.current :: cut.remaining := by
+      apply List.append_cancel_left (as := runSteps count)
+      have schedule := cut.schedule
+      rw [completedRuns] at schedule
+      simpa only [steps, List.append_assoc, List.cons_append, List.nil_append] using schedule
+    exact (List.cons.inj suffix).1.symm
+  have exactCount := cut.reachedCount.1
+  rw [completedRuns] at exactCount
+  have runPrefix := cut.reportedRunPrefix ready perform atRun runs views writes entry
   have allManifests (through : Nat) (within : through ≤ count) :
       manifest (atRun through) = before.published.manifest := by
     induction through with
@@ -167,10 +215,10 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
   have selected : published.manifest.crashImages = [before.wal.directory.active.manifest] := by
     rw [sameManifest]
     exact settled
-  refine ⟨current, completedRuns.symm ▸ prefixRan, ?_, published,
-    ⟨current, executed, selected, oldRuns, namespaceCut, priorBindings⟩,
+  refine ⟨current, completedRuns.symm ▸ runPrefix.returned, ?_, published,
+    ⟨current, executed, selected, oldRuns, namespaceCut, runPrefix.priorGuaranteed⟩,
     cutManifest.trans ((allManifests count (Nat.le_refl _)).trans sameManifest.symm),
-    beforeEffect, visible, ?_⟩
+    beforeEffect, runPrefix.freshVisible, ?_⟩
   · rw [current]
     let cached (_ : FilePath) : EStateM IO.Error (Cache handle × WalInodeImage) Unit :=
       fun (cache, image) => withCache cache (fsync directoryHandle image)
@@ -185,6 +233,6 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
     have runBytes := congrArg Image.durable
       (RunUnlinkImage.project_settled (runs (atRun count)).visible (.settled none))
     exact (congrFun (congrFun runBytes generation) index).trans
-      ((visible index within).trans (afterEffect effective index).symm)
+      ((runPrefix.freshVisible index within).trans (afterEffect effective index).symm)
 
 end Alvoki.Storage.DiskSession

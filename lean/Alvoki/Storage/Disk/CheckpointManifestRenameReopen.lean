@@ -67,6 +67,20 @@ private theorem CheckpointPowerCut.newManifestHeader {directory : DiskDirectory}
   rw [exactBytes] at decoded
   exact congrArg Manifest.IntegrityCheckpoint.header (Except.ok.inj (decoded.symm.trans roundTrip))
 
+/-- Any prior manifest describes a different generation from the new one. -/
+theorem CheckpointPowerCut.manifestChanges {directory : DiskDirectory} {before : SegmentedWriterState}
+    {writer : Nat} (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer) :
+    before.wal.directory.active.manifest ≠ some cut.checkpoint.manifest := by
+  intro same
+  have prior := CheckpointPowerCut.selectedGeneration ready.resumed.selected
+  rw [← ready.resumed.generation, ← ready.walPair, same] at prior
+  cases decoded : Manifest.IntegrityCheckpoint.decode cut.checkpoint.manifest with
+  | error cause => simp [Option.mapM, Functor.map, Except.map, decoded] at prior
+  | ok metadata =>
+    apply (cut.priorSelectedGeneration ready same decoded).2
+    rw [cut.newManifestHeader ready decoded]
+    rfl
+
 private abbrev OpenHandle := DescriptorInventory × DescriptorSlot × Nat
 
 /-- The native-shaped reports for the checked open of the physical run
@@ -194,6 +208,41 @@ theorem CheckpointPowerCut.reopensSelectedRunMap {directory : DiskDirectory}
     rw [descriptor]
     exact .checkpointPowerLossObserved prior cut projected pairSurvives failures retryPair installed
 
+/-- The same held installer handles either manifest once the selected
+physical run map agrees with the corresponding checkpoint bytes. -/
+theorem CheckpointPowerCut.reopensPhysicalCheckpoint {directory : DiskDirectory}
+    {before : SegmentedWriterState} {writer : Nat} {input : FilePath}
+    (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
+    (published : Image)
+    (projected : before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published)
+    (binding : Option ByteArray) (survives : binding ∈ published.manifest.crashImages)
+    (origin : binding = before.wal.directory.active.manifest ∨ binding = some cut.checkpoint.manifest)
+    (runs : RunFiles)
+    (newRuns : ∀ index < cut.checkpoint.table.runs.length, runs (SegmentedCheckpointReport.generation before) index =
+      published.durable (SegmentedCheckpointReport.generation before) index)
+    (oldRuns : SelectedRunsAgree before.wal.directory.active.manifest runs published.durable)
+    (retry : LockedFileState FileImage) :
+    let pair : DirectoryPublication.Bindings := ⟨binding, before.wal.directory.active.walBoundary⟩
+    let physical := { published with durable := runs }
+    BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
+      ⟨(CheckpointPowerCut.physical before published).crash pair (some before.wal.active.bytes) [],
+        before.owners.set (directory.file .lock) none⟩ retry →
+    CheckpointHeldOpen.Reports input directory before retry published physical →
+    cut.HeldReopen input writer retry published binding runs := by
+  intro pair physical failures observes
+  have agrees : SelectedRunsAgree binding runs published.durable := by
+    rcases origin with old | new
+    · exact old.symm ▸ oldRuns
+    · intro bytes metadata present decoded index inside
+      have sameBytes : bytes = cut.checkpoint.manifest := Option.some.inj (present.symm.trans new)
+      subst bytes
+      rw [cut.newManifestHeader ready decoded] at inside ⊢
+      have count : (checkpointHeader cut.checkpoint.table (SegmentedCheckpointReport.generation before)).runCount.toNat =
+          cut.checkpoint.table.runs.length := UInt64.toNat_ofNat_of_lt' cut.runCountFits
+      exact newRuns index (count ▸ inside)
+  exact cut.reopensSelectedRunMap ready published projected binding survives
+    runs agrees retry failures observes
+
 /-- At an interrupted manifest rename the reported surviving inode determines
 the selected manifest. Open reports use the same run bindings through the
 retries. The held-directory packet supplies the exact callbacks and admission.
@@ -233,18 +282,9 @@ theorem CheckpointPowerCut.reopensAfterManifestRename {directory : DiskDirectory
   have sameImage := Option.some.inj (executed.symm.trans projected)
   subst computed
   obtain ⟨_, _, _, _, _, _, _, _, _, _, _, choice, _, _, _, _⟩ := crash pairSurvives
-  have agrees : SelectedRunsAgree binding (runs interrupted).guaranteed published.durable := by
-    rcases choice with ⟨_, old⟩ | ⟨_, new⟩
-    · change binding = before.wal.directory.active.manifest at old
-      exact old.symm ▸ oldRuns
-    · intro bytes metadata present decoded index inside
-      have sameBytes : bytes = cut.checkpoint.manifest := Option.some.inj (present.symm.trans new)
-      subst bytes
-      rw [cut.newManifestHeader ready decoded] at inside ⊢
-      have count : (checkpointHeader cut.checkpoint.table (SegmentedCheckpointReport.generation before)).runCount.toNat =
-          cut.checkpoint.table.runs.length := UInt64.toNat_ofNat_of_lt' cut.runCountFits
-      exact newRuns index (count ▸ inside)
-  exact cut.reopensSelectedRunMap ready published projected binding survived
-    (runs interrupted).guaranteed agrees retry failures observes
+  have origin : binding = before.wal.directory.active.manifest ∨ binding = some cut.checkpoint.manifest :=
+    choice.imp And.right And.right
+  exact cut.reopensPhysicalCheckpoint ready published projected binding survived origin
+    (runs interrupted).guaranteed newRuns oldRuns retry failures observes
 
 end Alvoki.Storage.DiskSession

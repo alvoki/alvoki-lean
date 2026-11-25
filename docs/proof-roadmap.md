@@ -173,6 +173,8 @@ Cached preparation, completion and authorization failures share one reader callb
 
 The session adapter now proves the exact effects of snapshot release and floor advancement. An unsupported acquisition returns no pin and leaves the ready cell unchanged. Releasing a local handle retires that handle and preserves every other active read. An accepted floor move preserves all current handle reads, the durable checkpoint and the WAL. A live pin below the requested floor blocks the move. [Snapshot guards](../lean/Alvoki/Storage/Disk/SessionReadGuards.lean) · [Retention floor](../lean/Alvoki/Storage/Disk/SessionRetentionFloor.lean)
 
+After the manifest rename returns, the final directory sync issues through the same captured directory description as the first. Before its effect, the reported rename survivors can select the old or new manifest. After its effect, the physical survivor list contains exactly the new manifest. The two manifests have different generations. The reported namespace and inode effects preserve the settled run map, whose selected bytes come from the actual completed run prefix. The exact admitted reopen replays the unchanged WAL and continues the original mixed trace. [Final manifest-directory sync](../lean/Alvoki/Storage/Disk/CheckpointManifestDirectoryCut.lean)
+
 ### Garbage collection contract
 
 The engine must eventually reclaim obsolete run generations, covered WAL data, and versions that no supported snapshot can observe. The proof covers the executable collector, including interruption and retry.

@@ -5,7 +5,7 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
-private theorem stagedManifest_ne_directory (directory : DiskDirectory) :
+theorem CheckpointPowerCut.stagedManifest_ne_directory (directory : DiskDirectory) :
     directory.file .stagedManifest ≠ directory.path := by
   intro same
   have length := congrArg (fun path : FilePath => path.toString.length) same
@@ -114,7 +114,7 @@ theorem CheckpointPowerCut.atManifestRename {directory : DiskDirectory} {before 
         .ok () (directoryCache.remember stagePath captured, written) := by
       simp only [stageFreshWithCache, stageReturned]
     have route := syncRemembered (dir := directory.path) (path := stagePath) (cache := directoryCache)
-      (stagedManifest_ne_directory directory) captured openRead fsync written
+      (CheckpointPowerCut.stagedManifest_ne_directory directory) captured openRead fsync written
     simp only [Bind.bind, EStateM.bind, wrote, SyncPathGroup.run_single, route, fsyncReturned]
   have completedRan : (cut.completed.forM perform) (atRun 0) =
       .ok () (directoryCache.consume stagePath, synced) := by
