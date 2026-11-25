@@ -344,6 +344,7 @@ import Alvoki.Storage.Disk.NativeRawManifestStatError
 import Alvoki.Storage.Disk.NativeRawSelectedMarkerStatError
 import Alvoki.Storage.Disk.NativeRawSelectedMarkerDecodeError
 import Alvoki.Storage.Disk.NativeRawAlignedWalDecodeError
+import Alvoki.Storage.Disk.NativeFinalizedWalDecodeError
 import Alvoki.Storage.Disk.NativeRawMarkerChunkError
 import Alvoki.Storage.Disk.NativeRawFinalizedManifestError
 import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
@@ -2122,6 +2123,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedWalDecodeRead.readsSelected
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedWalDecodeRead.replayError
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedWalDecodeRead.stopsMarkedWorker
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedWalPendingDrop.retiresKeeper
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedWalPendingDrop.finalizedAttempt
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedWalPendingDrop.finalizedCensus
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.missingManifest
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.releasesSelected
 #check_axioms Alvoki.Storage.DiskSession.RawMarkerChunkReadError.stopsMarkedWorker
