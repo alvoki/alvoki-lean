@@ -10,17 +10,15 @@ open System
 open DiskSession SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
-/-- States reached after each run's adjacent write and sync and after each
-of the following directory and manifest operations. Each equality is a
-report of the actual callback at the state left by its predecessor. -/
-structure SuccessfulCheckpointSteps {state : Type}
+/-- The returned file prefix through manifest rename. The final directory
+barrier can return successfully, report an error, or be interrupted. -/
+structure ReturnedCheckpointPrefix {state : Type}
     (perform : Step → EStateM IO.Error state Unit) (count : Nat) where
   atRun : Nat → state
   runsSettled : state
   staged : state
   stagedSynced : state
   renamed : state
-  completed : state
   pairs : ∀ index < count,
     (perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (atRun index) =
       .ok () (atRun (index + 1))
@@ -28,21 +26,39 @@ structure SuccessfulCheckpointSteps {state : Type}
   stageManifest : perform (.manifest .writeStaged) runsSettled = .ok () staged
   syncManifest : perform (.manifest .syncStaged) staged = .ok () stagedSynced
   renameManifest : perform (.manifest .renameStaged) stagedSynced = .ok () renamed
+
+/-- A successful checkpoint continues the returned rename prefix through
+the final directory barrier. -/
+structure SuccessfulCheckpointSteps {state : Type}
+    (perform : Step → EStateM IO.Error state Unit) (count : Nat) extends ReturnedCheckpointPrefix perform count where
+  completed : state
   syncManifestDirectory : perform (.manifest .syncDirectory) renamed = .ok () completed
+
+/-- The final directory barrier is the only step after the returned prefix. -/
+def manifestDirectoryPrefix (count : Nat) : List Step :=
+  runSteps count ++ [.syncRunsDirectory, .manifest .writeStaged, .manifest .syncStaged, .manifest .renameStaged]
+
+theorem manifestDirectoryPrefix_steps (count : Nat) :
+    steps count = manifestDirectoryPrefix count ++ [.manifest .syncDirectory] := by
+  simp [steps, Publication.steps, manifestDirectoryPrefix, List.append_assoc]
+
+theorem ReturnedCheckpointPrefix.returns {state : Type} {perform : Step → EStateM IO.Error state Unit}
+    {count : Nat} (observed : ReturnedCheckpointPrefix perform count) :
+    ((manifestDirectoryPrefix count).forM perform) (observed.atRun 0) = .ok () observed.renamed := by
+  have pairs := runSteps_returned perform count observed.atRun observed.pairs
+  rw [manifestDirectoryPrefix, List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
+  simp only [EStateM.bind, Bind.bind, pairs, List.forM_eq_forM, List.forM_cons, List.forM_nil,
+    observed.syncRunsDirectory, observed.stageManifest, observed.syncManifest, observed.renameManifest,
+    Pure.pure, EStateM.pure]
 
 /-- Run the actual shared writer's schedule from the individual reached
 reports. No report of the whole return is needed. -/
 theorem SuccessfulCheckpointSteps.returns {state : Type} {perform : Step → EStateM IO.Error state Unit}
     {count : Nat} (observed : SuccessfulCheckpointSteps perform count) :
     run count perform (observed.atRun 0) = .ok () observed.completed := by
-  have pairs := runSteps_returned perform count observed.atRun observed.pairs
-  simp only [run, steps, Publication.steps, List.map_cons, List.map_nil, List.forM_eq_forM, List.forM_append]
-  change EStateM.bind (EStateM.bind ((runSteps count).forM perform) (fun _ => [Step.syncRunsDirectory].forM perform))
-    (fun _ => ([Step.manifest .writeStaged, .manifest .syncStaged, .manifest .renameStaged,
-      .manifest .syncDirectory].forM perform)) (observed.atRun 0) = _
-  simp only [EStateM.bind, pairs, List.forM_eq_forM, List.forM_cons, List.forM_nil,
-    Bind.bind, observed.syncRunsDirectory, observed.stageManifest, observed.syncManifest, observed.renameManifest,
-    observed.syncManifestDirectory, Pure.pure, EStateM.pure]
+  rw [run, manifestDirectoryPrefix_steps, List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
+  simp only [EStateM.bind, Bind.bind, observed.toReturnedCheckpointPrefix.returns,
+    List.forM_eq_forM, List.forM_cons, List.forM_nil, observed.syncManifestDirectory, Pure.pure, EStateM.pure]
 
 /-- The completed run pairs retain the exact bytes at every earlier
 selected run address before any directory barrier. -/
@@ -109,13 +125,11 @@ theorem SuccessfulCheckpointSteps.manifestSettled {state : Type}
       staged, synced, renamed, settled, Bind.bind, Option.bind, Pure.pure]
   exact Option.some.inj (executed.symm.trans (Publication.successful_replace _ _))
 
-/-- Binding and durability projections of the same locally observed file
-steps. Report the run at its reached file barrier, preserve earlier run
-bindings, and settle names only through the corresponding barriers. -/
-structure CheckpointBindingReports {state : Type} {perform : Step → EStateM IO.Error state Unit} {count : Nat}
-    (observed : SuccessfulCheckpointSteps perform count)
-    (runs : state → RunUnlinkImage) (manifest : state → Publication.Image)
-    (generation : UInt64) (files : List ByteArray) (bytes : ByteArray) : Prop where
+/-- Run projections through the returned rename. Each projection is
+paired with its actual reached callback state. -/
+structure ReturnedCheckpointRuns {state : Type} {perform : Step → EStateM IO.Error state Unit} {count : Nat}
+    (observed : ReturnedCheckpointPrefix perform count) (runs : state → RunUnlinkImage)
+    (generation : UInt64) (files : List ByteArray) : Prop where
   syncedRun : ∀ index < count, (runs (observed.atRun (index + 1))).visible generation index = files[index]?
   previousRuns : ∀ index < count, ∀ prior < index,
     (runs (observed.atRun (index + 1))).visible generation prior =
@@ -124,10 +138,18 @@ structure CheckpointBindingReports {state : Type} {perform : Step → EStateM IO
   stageRuns : runs observed.staged = runs observed.runsSettled
   syncRuns : runs observed.stagedSynced = runs observed.staged
   renameRuns : runs observed.renamed = runs observed.stagedSynced
-  finalRuns : runs observed.completed = (runs observed.renamed).syncDirectory
+
+/-- Manifest projections through rename, followed by the successful final
+directory sync that settles both views. -/
+structure CheckpointBindingReports {state : Type} {perform : Step → EStateM IO.Error state Unit} {count : Nat}
+    (observed : SuccessfulCheckpointSteps perform count)
+    (runs : state → RunUnlinkImage) (manifest : state → Publication.Image)
+    (generation : UInt64) (files : List ByteArray) (bytes : ByteArray) : Prop
+    extends ReturnedCheckpointRuns observed.toReturnedCheckpointPrefix runs generation files where
   stageManifest : (manifest observed.runsSettled).step bytes .writeStaged = some (manifest observed.staged)
   syncManifest : (manifest observed.staged).step bytes .syncStaged = some (manifest observed.stagedSynced)
   renameManifest : (manifest observed.stagedSynced).step bytes .renameStaged = some (manifest observed.renamed)
+  finalRuns : runs observed.completed = (runs observed.renamed).syncDirectory
   finalManifest : (manifest observed.renamed).step bytes .syncDirectory = some (manifest observed.completed)
 
 /-- Build the `syncedRun` part of the checkpoint binding report from the

@@ -25,17 +25,14 @@ def CheckpointPowerCut.PendingReplay {directory : DiskDirectory} {before : Segme
 /-- Every manifest reported to survive the reached checkpoint barrier
 has its exact ordered run bytes. The selected checkpoint and unchanged
 WAL reconstruct the old client history, even before any open returns. -/
-theorem CheckpointManifestDirectoryCut.replaysClient {directory : DiskDirectory}
-    {before : SegmentedWriterState} {first writer : Nat}
-    {initial : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession}
-    (start : BootstrapClientStart directory first initial)
-    (trace : SegmentedClientReadTrace directory first start.writer allowCollection log reads writer before)
+theorem CheckpointManifestDirectoryCut.replaysPending {directory : DiskDirectory}
+    {before : SegmentedWriterState} {writer : Nat}
     {cut : CheckpointPowerCut directory before} {published : Image}
     {runs : RunUnlinkImage} {manifests : List (Option ByteArray)}
     (observed : CheckpointManifestDirectoryCut cut published runs manifests)
+    (ready : before.RetainedReady directory writer) (replay : PendingClientReplay log reads before.history)
     {binding : Option ByteArray} (survived : binding ∈ manifests) :
     cut.PendingReplay runs binding log reads := by
-  have ready := (trace.writes.preservesRetained (start.bootstrap.writerReady start.held).toRetained).1
   obtain ⟨expected, ran, _, _, _, afterCrash⟩ := cut.selectsAcknowledgedHistory ready
   have same := Option.some.inj (ran.symm.trans observed.executed)
   subst expected
@@ -48,13 +45,27 @@ theorem CheckpointManifestDirectoryCut.replaysClient {directory : DiskDirectory}
     generation.imp And.right And.right
   have sameRuns := cut.selectedRunAgreement ready published binding origin runs.guaranteed
     observed.newRuns observed.priorRuns
-  have replay : PendingClientReplay log reads before.history :=
-    trace.keyValueRefinement start.bootstrap start.held
   refine ⟨?_, checkpoint, table, model, SelectedIntegrityCheckpoint.withRunMap selected sameRuns.symm, generation, restored,
     clock, refinement, represents, replay⟩
   intro effective
   rw [observed.effective effective] at survived
   exact List.mem_singleton.mp survived
+
+/-- A bootstrap-origin trace supplies the pending ledger at the same
+checkpoint cut. -/
+theorem CheckpointManifestDirectoryCut.replaysClient {directory : DiskDirectory}
+    {before : SegmentedWriterState} {first writer : Nat}
+    {initial : EStateM.Result IO.Error (LockedFileState WalSegmentRotation.State) SegmentedSession}
+    (start : BootstrapClientStart directory first initial)
+    (trace : SegmentedClientReadTrace directory first start.writer allowCollection log reads writer before)
+    {cut : CheckpointPowerCut directory before} {published : Image}
+    {runs : RunUnlinkImage} {manifests : List (Option ByteArray)}
+    (observed : CheckpointManifestDirectoryCut cut published runs manifests)
+    {binding : Option ByteArray} (survived : binding ∈ manifests) :
+    cut.PendingReplay runs binding log reads :=
+  observed.replaysPending
+    (trace.writes.preservesRetained (start.bootstrap.writerReady start.held).toRetained).1
+    (trace.keyValueRefinement start.bootstrap start.held) survived
 
 /-- The actual prepared checkpoint has poisoned the old session at its
 issued directory barrier. The returned callbacks and reported survivors of

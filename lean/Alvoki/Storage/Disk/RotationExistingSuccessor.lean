@@ -260,6 +260,17 @@ theorem directoryGroup (report : RotationExistingSuccessorDirectorySync file) :
   rw [SyncPathGroup.run_single]
   simp [sync, Cache.resolve, report.cached, report.returned, withCache]
 
+theorem publishes (report : RotationExistingSuccessorDirectorySync file)
+    (create : FilePath → EStateM IO.Error (Cache Handle × Files) Unit) :
+    WalSegmentRotation.runAt directory (before.installed.walBytes / WAL.frameSize)
+      opened.readEmpty create file.group (opened.cache, opened.inventory, opened.files) =
+      .ok () (opened.cache, report.after) := by
+  have fileSynced := file.fileGroup
+  rw [report.fileSucceeded] at fileSynced
+  rw [WalSegmentRotation.runAt_fileEffects]
+  simp [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind,
+    opened.readsEmpty, fileSynced, report.directoryGroup, Pure.pure, EStateM.pure]
+
 /-- Both barriers succeed on the existing empty successor route.
 The returned writer changes its keeper offset, clears the old append
 entry, and keeps the same table and lock. -/
@@ -269,10 +280,9 @@ theorem returnsRotation (report : RotationExistingSuccessorDirectorySync file)
       (.ready before.installed, ⟨(opened.cache, opened.inventory, opened.files), before.owners⟩) =
     .ok () (.ready { before.installed with activeFirst := before.installed.walBytes / WAL.frameSize },
       ⟨({ opened.cache with active := none }, report.after), before.owners⟩) := by
-  have fileSynced := file.fileGroup
-  rw [report.fileSucceeded] at fileSynced
-  exact runObservedRotation_present directory before.installed _ opened.lookup opened.readEmpty create file.group
-    opened.nonempty opened.checked opened.readsEmpty fileSynced report.directoryGroup
+  exact runObservedRotationWithReset_ready directory before.installed
+    ⟨(opened.cache, opened.inventory, opened.files), before.owners⟩ opened.lookup opened.readEmpty create file.group
+    (fun _ files => files) opened.nonempty opened.checked (report.publishes create)
 
 /-- The settled name and payload are for the same private empty inode that
 was inspected and opened, and the lock and directory slots remain live. -/

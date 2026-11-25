@@ -46,23 +46,25 @@ private def directoryFsyncResult (outcome : DelayedDirectorySyncOutcome) (after 
   | .errorBeforeEffect cause | .errorAfterEffect cause => .error cause after
 
 /-- Physical reports for the final fsync. The writer retains the cache
-captured at entry through the unlink prefix. The same observed directory
-object names the root of the unlink lookup view and the live cached
-description, including at the effect. -/
+captured at entry through the unlink prefix. The cache handle carries its
+capture inventory. The current inventory and drops determine liveness at
+the barrier. Both inventories identify the same directory object. -/
 structure WalCollectionDirectoryFsync (directory : DiskDirectory) (root : DeviceInode)
     (entryView effectView : DirectoryReadNamespace) (writer : Nat) (before : WalSealedUnlinkImage) where
   cache : Cache WalCollectionDirectoryHandle
   handle : WalCollectionDirectoryHandle
   captured : cache.directory = some handle
   captureInode : entryView.modelObject root = handle.1.inode handle.2.1.description
-  effectInode : effectView.modelObject root = handle.1.inode handle.2.1.description
+  inventory : DescriptorInventory
+  sameInode : handle.1.inode handle.2.1.description = inventory.inode handle.2.1.description
+  effectInode : effectView.modelObject root = inventory.inode handle.2.1.description
   pathObject : FilePath → Option DeviceInode
   bound : pathObject directory.path = some root
   drops : List LockReferenceDrop
-  directoryLive : handle.2.1 ∈ (handle.1.afterDrops drops).slots
+  directoryLive : handle.2.1 ∈ (inventory.afterDrops drops).slots
   writerSlot : DescriptorSlot
   writerDescription : writerSlot.description = writer
-  writerLive : writerSlot ∈ (handle.1.afterDrops drops).slots
+  writerLive : writerSlot ∈ (inventory.afterDrops drops).slots
   openRead : FilePath → EStateM IO.Error WalSealedUnlinkImage WalCollectionDirectoryHandle
   fsync : WalCollectionDirectoryHandle → EStateM IO.Error WalSealedUnlinkImage Unit
   outcome : DelayedDirectorySyncOutcome
@@ -74,6 +76,10 @@ namespace WalCollectionDirectoryFsync
 
 variable {directory : DiskDirectory} {root : DeviceInode} {entryView effectView : DirectoryReadNamespace}
   {writer : Nat} {before : WalSealedUnlinkImage}
+
+abbrev reached (report : WalCollectionDirectoryFsync directory root entryView effectView writer before) :
+    DescriptorInventory :=
+  report.inventory.afterDrops report.drops
 
 def group (report : WalCollectionDirectoryFsync directory root entryView effectView writer before)
     (path : FilePath) :
@@ -98,14 +104,14 @@ writer stretch. The selected directory slot still names its captured
 root inode. -/
 theorem custody (report : WalCollectionDirectoryFsync directory root entryView effectView writer before) :
     report.pathObject directory.path = some root ∧
-    entryView.modelObject root = (report.handle.1.afterDrops report.drops).inode report.handle.2.1.description ∧
-    effectView.modelObject root = (report.handle.1.afterDrops report.drops).inode report.handle.2.1.description ∧
+    entryView.modelObject root = report.reached.inode report.handle.2.1.description ∧
+    effectView.modelObject root = report.reached.inode report.handle.2.1.description ∧
     report.handle.2.1.reference ∈
-      (report.handle.1.afterDrops report.drops).references report.handle.2.1.description ∧
-    report.writerSlot.reference ∈ (report.handle.1.afterDrops report.drops).references writer :=
-  ⟨report.bound, report.captureInode, report.effectInode,
-    (report.handle.1.afterDrops report.drops).mem_references.mpr ⟨_, report.directoryLive, rfl, rfl⟩,
-    (report.handle.1.afterDrops report.drops).mem_references.mpr
+      report.reached.references report.handle.2.1.description ∧
+    report.writerSlot.reference ∈ report.reached.references writer :=
+  ⟨report.bound, report.captureInode.trans report.sameInode, report.effectInode,
+    report.reached.mem_references.mpr ⟨_, report.directoryLive, rfl, rfl⟩,
+    report.reached.mem_references.mpr
       ⟨_, report.writerLive, rfl, report.writerDescription⟩⟩
 
 /-- The actual directory slot reaches the singleton group. Reuse the

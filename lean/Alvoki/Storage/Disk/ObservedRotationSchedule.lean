@@ -11,12 +11,13 @@ private def onRotationFiles {image α : Type} (action : EStateM IO.Error image �
   | .ok value reached => .ok value (phase, { before with image := reached })
   | .error cause reached => .error cause (phase, { before with image := reached })
 
-/-- Interpret the native rotation schedule over the ready phase, held lock,
-file effects and actual reached handle cache. -/
-def runObservedRotation {handle image : Type} (directory : DiskDirectory)
+/-- Interpret the native rotation schedule, including the file-descriptor
+effect of clearing the active handle before publishing readiness. -/
+def runObservedRotationWithReset {handle image : Type} (directory : DiskDirectory)
     (lookup : FilePath → Except IO.Error IO.FS.Metadata)
     (read : FilePath → EStateM IO.Error (Cache handle × image) (Option ByteArray))
-    (create sync : FilePath → EStateM IO.Error (Cache handle × image) Unit) :
+    (create sync : FilePath → EStateM IO.Error (Cache handle × image) Unit)
+    (releaseActive : Cache handle → image → image) :
     EStateM IO.Error (Phase Installed × LockedFileState (Cache handle × image)) Unit :=
   rotateWalSchedule
     (fun state => match (state.1.installed : Except IO.Error Installed) with
@@ -26,7 +27,48 @@ def runObservedRotation {handle image : Type} (directory : DiskDirectory)
     (fun phase (_, before) => .ok () (phase, before))
     (fun first => onRotationFiles (WalSegmentRotation.runAt directory first read create sync))
     (fun (phase, before) =>
-      .ok () (phase, { before with image := ({ before.image.1 with active := none }, before.image.2) }))
+      .ok () (phase, { before with image :=
+        ({ before.image.1 with active := none }, releaseActive before.image.1 before.image.2) }))
+
+/-- Project the native rotation onto an image without descriptor effects
+from releasing the previous active handle. -/
+def runObservedRotation {handle image : Type} (directory : DiskDirectory)
+    (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+    (read : FilePath → EStateM IO.Error (Cache handle × image) (Option ByteArray))
+    (create sync : FilePath → EStateM IO.Error (Cache handle × image) Unit) :=
+  runObservedRotationWithReset directory lookup read create sync (fun _ files => files)
+
+theorem runObservedRotationWithReset_empty {handle image : Type} (directory : DiskDirectory) (installed : Installed)
+    (before : LockedFileState (Cache handle × image))
+    (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+    (read : FilePath → EStateM IO.Error (Cache handle × image) (Option ByteArray))
+    (create sync : FilePath → EStateM IO.Error (Cache handle × image) Unit)
+    (releaseActive : Cache handle → image → image)
+    (empty : installed.walBytes / WAL.frameSize ≤ installed.activeFirst) :
+    runObservedRotationWithReset directory lookup read create sync releaseActive (.ready installed, before) =
+      .ok () (.ready installed, before) := by
+  simp [runObservedRotationWithReset, rotateWalSchedule, Phase.installed, Nat.not_lt.mpr empty,
+    Bind.bind, EStateM.bind, Pure.pure, Except.pure, EStateM.pure]
+
+/-- A completing publication reaches the same cache and files set by the
+issued callbacks. The active retirement is sequenced before the ready phase. -/
+theorem runObservedRotationWithReset_ready {handle image : Type} (directory : DiskDirectory) (installed : Installed)
+    (before : LockedFileState (Cache handle × image))
+    (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+    (read : FilePath → EStateM IO.Error (Cache handle × image) (Option ByteArray))
+    (create sync : FilePath → EStateM IO.Error (Cache handle × image) Unit)
+    (releaseActive : Cache handle → image → image)
+    (nonempty : installed.activeFirst < installed.walBytes / WAL.frameSize)
+    (checked : checkActiveSegmentWith (m := EStateM IO.Error (Cache handle × image))
+      directory installed (fun path => liftExcept (lookup path)) before.image = .ok () before.image)
+    {settled : Cache handle × image}
+    (published : WalSegmentRotation.runAt directory (installed.walBytes / WAL.frameSize) read create sync before.image =
+      .ok () settled) :
+    runObservedRotationWithReset directory lookup read create sync releaseActive (.ready installed, before) =
+      .ok () (.ready { installed with activeFirst := installed.walBytes / WAL.frameSize },
+        { before with image := ({ settled.1 with active := none }, releaseActive settled.1 settled.2) }) := by
+  simp [runObservedRotationWithReset, rotateWalSchedule, Phase.installed, nonempty, onRotationFiles,
+    checked, publishPrepared, published, Bind.bind, EStateM.bind, Pure.pure, Except.pure]
 
 /-- An empty keeper makes rotation a no-op, including on the append cache. -/
 theorem runObservedRotation_empty {handle image : Type} (directory : DiskDirectory) (installed : Installed)
@@ -36,8 +78,7 @@ theorem runObservedRotation_empty {handle image : Type} (directory : DiskDirecto
     (create sync : FilePath → EStateM IO.Error (Cache handle × image) Unit)
     (empty : installed.walBytes / WAL.frameSize ≤ installed.activeFirst) :
     runObservedRotation directory lookup read create sync (.ready installed, before) = .ok () (.ready installed, before) := by
-  simp [runObservedRotation, rotateWalSchedule, Phase.installed, Nat.not_lt.mpr empty,
-    Bind.bind, EStateM.bind, Pure.pure, Except.pure, EStateM.pure]
+  exact runObservedRotationWithReset_empty directory installed before lookup read create sync _ empty
 
 /-- A publication error leaves the writer poisoned with the exact reached
 files and cache. The active-handle reset belongs to successful publication. -/
@@ -54,7 +95,7 @@ theorem runObservedRotation_publishError {handle image : Type} (directory : Disk
       .error cause reached) :
     runObservedRotation directory lookup read create sync (.ready installed, before) =
       .error cause (.poisoned, { before with image := reached }) := by
-  simp [runObservedRotation, rotateWalSchedule, Phase.installed, nonempty, onRotationFiles,
+  simp [runObservedRotation, runObservedRotationWithReset, rotateWalSchedule, Phase.installed, nonempty, onRotationFiles,
     checked, publishPrepared, failed, Bind.bind, EStateM.bind, Pure.pure, Except.pure]
 
 /-- An already present empty successor skips creation. Successful file and
@@ -79,8 +120,7 @@ theorem runObservedRotation_present {handle image : Type} (directory : DiskDirec
   have ran : WalSegmentRotation.runAt directory successor read create sync before.image = .ok () settled := by
     rw [WalSegmentRotation.runAt_fileEffects]
     simp [observeSuccessorWith, present, file, directorySync, path, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
-  simp [runObservedRotation, rotateWalSchedule, Phase.installed, nonempty, onRotationFiles, successor,
-    checked, publishPrepared, ran, Bind.bind, EStateM.bind, Pure.pure, Except.pure]
+  exact runObservedRotationWithReset_ready directory installed before lookup read create sync _ nonempty checked ran
 
 /-- The successful local observations for an initially absent successor.
 Each cached callback starts in the exact state left by its predecessor.
@@ -120,8 +160,8 @@ theorem ObservedRotation.rotates {directory : DiskDirectory} {before : Segmented
     rw [report.settled, WalSegmentRotation.runAt_fileEffects]
     simp [observeSuccessorWith, observed.absent, observed.createReturned, observed.fileReturned,
       observed.directoryReturned, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
-  simp [runObservedRotation, rotateWalSchedule, Phase.installed, report.nonempty, onRotationFiles,
-    observed.checked, publishPrepared, ran, SegmentedRotationReport.nextInstalled,
+  simp [runObservedRotation, runObservedRotationWithReset, rotateWalSchedule, Phase.installed, report.nonempty, onRotationFiles,
+    observed.checked, publishPrepared, ran, SegmentedRotationReport.nextInstalled, SegmentedWriterState.rotationInstalled,
     Bind.bind, EStateM.bind, Pure.pure, Except.pure]
 
 /-- The exact rotated writer can close and reopen under the same canonical

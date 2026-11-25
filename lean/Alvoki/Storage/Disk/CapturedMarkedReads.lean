@@ -22,6 +22,19 @@ def recoverWithMarked (admission : CensusOpenAdmissionReports input directory in
     (rejectFlatWalWith resolved (optionalMetadataWith (admission.lookup (resolved.file .wal))))
     (optionalMetadataWith (admission.lookup (resolved.file .walBoundary))) marked bootstrap
 
+/-- The reached guard and marker probe select the worker before either
+worker has returned. Both choices start in the same held state. -/
+theorem recoverWithMarked_selects (admission : CensusOpenAdmissionReports input directory inventory retry)
+    {marked bootstrap : EStateM IO.Error CensusOpenState Reopened} {marker : Option IO.FS.Metadata}
+    (flat : optionalMetadataWith (admission.lookup (directory.file .wal)) (admission.reached, admission.held) =
+      .ok none (admission.reached, admission.held))
+    (found : optionalMetadataWith (admission.lookup (directory.file .walBoundary)) (admission.reached, admission.held) =
+      .ok marker (admission.reached, admission.held)) :
+    admission.recoverWithMarked directory marked bootstrap (admission.reached, admission.held) =
+      (if marker.isSome then marked else bootstrap) (admission.reached, admission.held) := by
+  simp only [recoverWithMarked, recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind,
+    flat, Option.isSome_none, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure, found]
+
 /-- The original cache capture supplies the directory identity. The read
 report supplies the canonical lock child and the intervening slot drops. -/
 def readLifetime (admission : CensusOpenAdmissionReports input directory inventory retry)
@@ -182,10 +195,8 @@ theorem recoverThroughReads_prepared (report : CapturedMarkedReadReports admissi
   have selectedRoute : optionalMetadataWith (admission.lookup (directory.file .walBoundary))
       (admission.reached, admission.held) = .ok (some metadata) (admission.reached, admission.held) := by
     simp only [optionalMetadataWith, Bind.bind, EStateM.bind, marker, Pure.pure, EStateM.pure]
-  simp only [recoverThroughReads, CensusOpenAdmissionReports.recoverWithMarked, recoverSegmentedWalWith, rejectFlatWalWith,
-    Bind.bind, EStateM.bind,
-    flat, Option.isSome_none, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure,
-    selectedRoute, Option.isSome_some, read]
+  simp only [recoverThroughReads, admission.recoverWithMarked_selects flat selectedRoute,
+    Option.isSome_some, ↓reduceIte, Bind.bind, EStateM.bind, read]
 
 /-- The admitted open reaches the continuation for the selected read plan
 using the lock, cache, census and namespace from that very admission.

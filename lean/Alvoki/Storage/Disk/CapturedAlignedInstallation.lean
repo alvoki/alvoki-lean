@@ -444,10 +444,8 @@ theorem runWithMarked_eq (calls : CapturedAlignedCallbacks admission)
       (admission.reached, admission.held) = .ok (some metadata) (admission.reached, admission.held) := by
     simp only [optionalMetadataWith, Bind.bind, EStateM.bind, marker, Pure.pure, EStateM.pure]
   simp only [runWithMarked, runWithFinish, admission.run_reachesRecovery, recoverWithFinish, installAfterRecovery,
-    CapturedMarkedReadReports.recoverThroughReads, CensusOpenAdmissionReports.recoverWithMarked,
-    tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch,
-    recoverSegmentedWalWith, rejectFlatWalWith, calls.flat, route, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
-    Option.isSome_none, Bool.false_eq_true, ↓reduceIte, Option.isSome_some, agrees]
+    CapturedMarkedReadReports.recoverThroughReads, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch,
+    Bind.bind, EStateM.bind, admission.recoverWithMarked_selects calls.flat route, Option.isSome_some, ↓reduceIte, agrees]
 
 /-- A successful reached repair completes the same admitted read and
 installation, independent of which bounded repair path was selected. -/
