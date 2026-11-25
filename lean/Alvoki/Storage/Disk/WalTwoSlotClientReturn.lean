@@ -1520,15 +1520,17 @@ theorem reopenSyncInterrupted_preservesRetry {stop : Type}
 reachable. A reported error after persistence settles only the marker. -/
 theorem reopenSyncError_preservesRetry
     {directory : DiskDirectory} {descriptor nextRef : Nat} (unlock : DiskSession.UnlockReport)
-    {initial prepared reached : FileImage} {before : LockedFileState FileImage}
+    {initial acquired prepared reached : FileImage} {before : LockedFileState FileImage}
     (prior : ReportedMarkerRetries initial prepared) (selection : Selection)
     (observed : prepared.directory.active.walBoundary = some (Boundary.encode selection.frontier))
-    {prepare : EStateM IO.Error FileImage (WalSegmentRepair.Plan × WalSegmentRepair.Reopened × Nat)}
+    {acquire : EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection)}
+    {prepare : Selection → EStateM IO.Error FileImage (WalSegmentRepair.Plan × WalSegmentRepair.Reopened × Nat)}
     {syncMarker : KeeperDescriptorIdentity → EStateM IO.Error (WalInodeImage × FileImage) Unit}
     {finish : WalSegmentRepair.Plan → Nat → EStateM IO.Error FileImage Unit}
     {plan : WalSegmentRepair.Plan} {opened : WalSegmentRepair.Reopened} {size : Nat} {cause : IO.Error}
-    (read : prepare before.image = .ok (plan, opened, size) prepared)
     {physical after : WalInodeImage} {handle : KeeperDescriptorIdentity}
+    (openedMarker : acquire before.image = .ok (handle, selection) acquired)
+    (read : prepare selection acquired = .ok (plan, opened, size) prepared)
     (barrier : syncMarker handle (physical, prepared) = .error cause (after, reached))
     (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
       handle physical (fun inode files => files.completeFileSync inode) (.error cause after))
@@ -1539,7 +1541,10 @@ theorem reopenSyncError_preservesRetry
       { prepared with directory := settleMarker prepared.directory selection }) :
     ∃ error final,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
-        (reopenWith prepare (projectMarkerSync syncMarker physical handle) finish) before = .error error final ∧
+        (do
+          let (opened, _, _) ← reopenAcquiredWith acquire prepare
+            (projectMarkerSync syncMarker physical) finish
+          pure opened) before = .error error final ∧
       ReportedMarkerRetries initial final.image ∧ final.image.keeper = prepared.keeper := by
   have retry : ReportedMarkerRetries initial reached := by
     rw [← reachedImage]
@@ -1553,9 +1558,12 @@ theorem reopenSyncError_preservesRetry
     | errorAfter => rw [← reachedImage, syncImage]
   have projectedFailure : projectMarkerSync syncMarker physical handle prepared = .error cause reached := by
     simp only [projectMarkerSync, barrier]
-  have returned := reopenWith_markerSyncError (directory := directory) (descriptor := descriptor)
-    (nextRef := nextRef) (finish := finish) unlock read projectedFailure
-  cases unlock <;> exact ⟨_, _, returned, retry, keeper⟩
+  have reopened : reopenAcquiredWith acquire prepare
+      (projectMarkerSync syncMarker physical) finish before.image = .error cause reached := by
+    simp only [reopenAcquiredWith_reports, openedMarker, reopenWith_reports, read, projectedFailure]
+  rw [DiskSession.runOpenWithInstallation_outcome, DiskSession.runOpenWithImage_acquired]
+  simp only [Bind.bind, EStateM.bind, reopened]
+  cases unlock <;> exact ⟨_, _, rfl, retry, keeper⟩
 
 /-- Derive the initial retry alternatives from the physical marker
 survivors of the interrupted slot write. An absent binding can arise
