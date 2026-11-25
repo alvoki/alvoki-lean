@@ -1613,6 +1613,18 @@ def collectCoveredWal (db : TwoSlotDiskTable) : IO Unit := do
 
 end TwoSlotDiskTable
 
+/-- Stage the bytes, then store the returned descriptor in the original
+pending cell. This is the callback the marked keeper replacement uses
+for its staging file. -/
+theorem DiskTable.OpenSyncFiles.stageCacheSchedule {files : DiskTable.OpenSyncFiles}
+    {active pending directory} (uses : files.UsesCacheReferences active pending directory)
+    (path : FilePath) (bytes : ByteArray) :
+    files.stage path bytes =
+      (writeFreshStagedHandle path bytes >>= fun handle =>
+        pending.modify (SyncHandleRouting.pushPending path handle)) := by
+  rw [← uses.2.1]
+  exact syncFilesStage_schedule files path bytes
+
 /-- The two markerless publication writes keep their produced handles
 in the same pending cell that is consumed by the file barriers. -/
 def DiskTable.OpenSyncFiles.UsesBootstrapCacheSchedules (files : DiskTable.OpenSyncFiles)

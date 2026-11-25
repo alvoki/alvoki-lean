@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
 import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
+import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 
 namespace Alvoki.Storage.DiskSession
 
@@ -62,8 +63,17 @@ inductive NativeOpenedInstruction : Type 1 where
 /-- Per-call observations at the reached position. A read gets its pin
 by index from the reached list of tracked and newly issued pins. -/
 inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpenedInstruction → Type 1 where
-  | write (request : WriteRequest) {prepared : NativeReadyWritePreparation start.current.ready.state}
-      (reported : NativeReadyWriteReport prepared) (rows : request.rows = prepared.rows) :
+  | write (request : WriteRequest) (nonempty : request.rows ≠ [])
+      (calls : WriteRequest.Calls (DescriptorInventory × DescriptorSlot × Nat))
+      (cache : calls.cache = start.current.ready.state.cache)
+      (observe : ∀ checked : CheckedWriteRequest request start.current.ready.state.session.directory
+          start.current.ready.state.writer.installed calls.lookup,
+        Nonempty (WriteCallPublication calls checked))
+      {sequence : UInt64} {returnedHeap : heap} {reached : OpenWriteFiles}
+      (actual : request.runOnOpenPhase start.current.ready.state.session.directory calls opened.phase opened.get opened.set
+        (start.reached, (WriteRequest.readyCall start.current.ready.state.writer start.current.ready.state.cache).2.image) =
+          .ok sequence (returnedHeap, reached))
+      (custody : NativePendingWriteCensus start.current.ready.state reached.1) :
       NativeOpenedReport start (.write request)
   | writePreflight (request : WriteRequest) (calls : WriteRequest.Calls (DescriptorInventory × DescriptorSlot × Nat))
       (cache : calls.cache = start.current.ready.state.cache)
@@ -92,11 +102,16 @@ same returned writer, table, or read response. -/
 def Returns (report : NativeOpenedReport start instruction) (event : NativeExecutionEvent)
     (next : NativeOpenedPosition opened) : Prop :=
   match report with
-  | .write request (prepared := prepared) reported _ =>
-    opened.table.UsesOpenWriteSchedules start.current.ready.state.session.directory opened.files opened.phase ∧
-    reported.ReturnsOnOpenPhase request opened.phase opened.get opened.set start.reached next.reached ∧
-    (∃ target, next.current.ready.state = reported.next target) ∧
-    event = .acknowledged request prepared.batch ∧ next.pins = start.pins
+  | .write request _ calls _ _ (sequence := sequence) (reached := reached) _ custody =>
+    let state := start.current.ready.state
+    let before := WriteRequest.readyCall state.writer state.cache
+    opened.table.UsesOpenWriteSchedules state.session.directory opened.files opened.phase ∧
+    request.runOnOpenPhase state.session.directory calls opened.phase opened.get opened.set
+      (start.reached, before.2.image) = .ok sequence (next.reached, reached) ∧
+    ∃ ack : ClassifiedWriteAcknowledgement start.current.ready request calls sequence reached custody,
+      next.current = ⟨start.current.history ++ ack.report.batch,
+        start.current.submissions ++ [.acknowledgedBatch ack.report.batch], ack.next⟩ ∧
+      event = .acknowledged request ack.report.batch ∧ next.pins = start.pins
   | .writePreflight request calls _ _ =>
     let state := start.current.ready.state
     let before := WriteRequest.readyCall state.writer state.cache
@@ -146,17 +161,17 @@ from the local report. The step acquires its next position here. -/
 theorem reaches (report : NativeOpenedReport start instruction) :
     ∃ event next, report.Reached event next := by
   cases report with
-  | @write request prepared reported rows =>
-    obtain ⟨source, _, reached, target, next, _, _, _, _, stored, raw, normalized, state, initial, seed, reads, _, _⟩ :=
-      start.current.ready.acknowledgesViaOpenReferences opened.table start.uses opened.phaseEffects start.stored reported request rows
-    have directory : next.state.session.directory = opened.directory := by
-      rw [state]
+  | @write request nonempty calls cache observe sequence returnedHeap reached actual custody =>
+    obtain ⟨ack, stored, _⟩ := start.current.ready.acknowledgesClassifiedWrite opened.table start.uses
+      opened.phaseEffects start.stored request nonempty calls cache observe actual custody
+    have directory : ack.next.state.session.directory = opened.directory := by
+      rw [ack.exactState]
       exact start.directory
     let nextPosition : NativeOpenedPosition opened :=
-      ⟨⟨start.current.history ++ prepared.batch, start.current.submissions ++ [.acknowledgedBatch prepared.batch], next⟩,
-        reached, directory, stored, start.pins⟩
-    exact ⟨_, nextPosition, .acknowledged start.current reported request rows target next normalized state initial seed reads,
-      source, raw, ⟨target, state⟩, rfl, rfl⟩
+      ⟨⟨start.current.history ++ ack.report.batch, start.current.submissions ++ [.acknowledgedBatch ack.report.batch],
+        ack.next⟩, returnedHeap, directory, stored, start.pins⟩
+    exact ⟨_, nextPosition, .acknowledgedClassified start.current ack, start.uses.writeSchedules,
+      actual, ack, rfl, rfl, rfl⟩
   | writePreflight request calls cache preflight =>
     obtain ⟨source, seen, lookup, normalized, raw, continuation⟩ :=
       start.current.ready.preflightsClassifiedWriteOnOpenPhase opened.table start.uses opened.phaseEffects start.stored

@@ -1,6 +1,49 @@
 import Alvoki.Storage.Disk.NativeOpenAcquire
 import Alvoki.Storage.Disk.NativeReadyCheckpoint
 
+namespace Alvoki.Storage.CheckpointPublication
+
+/-- The actual schedule returned the completed prefix, then its first
+failing callback returned the indicated diagnostic and reached state. -/
+def FirstFailure {image : Type} (count : Nat) (perform : Step → EStateM IO.Error image Unit)
+    (before : image) (cause : IO.Error) (after : image) : Prop :=
+  ∃ done step remaining atIssue,
+    steps count = done ++ step :: remaining ∧
+    (done.forM perform) before = .ok () atIssue ∧
+    perform step atIssue = .error cause after
+
+private theorem forM_firstFailure {image : Type} (actions : List Step)
+    (perform : Step → EStateM IO.Error image Unit) {before after : image} {cause : IO.Error}
+    (returned : (actions.forM perform) before = .error cause after) :
+    ∃ done step remaining atIssue,
+      actions = done ++ step :: remaining ∧
+      (done.forM perform) before = .ok () atIssue ∧
+      perform step atIssue = .error cause after := by
+  induction actions generalizing before with
+  | nil => simp [List.forM_nil, Pure.pure, EStateM.pure] at returned
+  | cons step tail ih =>
+    change EStateM.bind (perform step) (fun _ => tail.forM perform) before = _ at returned
+    cases issued : perform step before with
+    | error reason reached =>
+      have failed : perform step before = .error cause after := by
+        simpa only [EStateM.bind, issued] using returned
+      exact ⟨[], step, tail, before, rfl, rfl, failed⟩
+    | ok value reached =>
+      have failed : (tail.forM perform) reached = .error cause after := by
+        simpa only [EStateM.bind, issued] using returned
+      obtain ⟨done, first, remaining, atIssue, order, returnedPrefix, fails⟩ := ih failed
+      refine ⟨step :: done, first, remaining, atIssue, congrArg (List.cons step) order, ?_, fails⟩
+      change EStateM.bind (perform step) (fun _ => done.forM perform) before = _
+      simp only [EStateM.bind, issued, returnedPrefix]
+
+theorem run_firstFailure {image : Type} {count : Nat} {perform : Step → EStateM IO.Error image Unit}
+    {before after : image} {cause : IO.Error}
+    (returned : run count perform before = .error cause after) :
+    FirstFailure count perform before cause after :=
+  forM_firstFailure (steps count) perform returned
+
+end Alvoki.Storage.CheckpointPublication
+
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication
@@ -35,6 +78,101 @@ private theorem fileEffects_forM {files : Type} (steps : List Step)
       simpa only [EStateM.bind, fileEffect, ran] using ih (heap, after)
     | error cause after =>
       simp only [EStateM.bind, fileEffect, ran]
+
+/-- Interpret the public checkpoint using its opened phase cell and
+one fixed model of the cached file calls. -/
+def runCheckpointOnOpenPhase {image : Type}
+    (perform : Installed → ByteArray → Step → EStateM IO.Error image Unit)
+    (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit) :
+    EStateM IO.Error (heap × image) Unit :=
+  withPreparedCheckpoint (do (← phaseEffect (get phase)).installed) liftCheckpointExcept
+    (fun next manifest => publishPrepared (fun value => phaseEffect (set phase value))
+      (CheckpointPublication.run next.table.runs.length (fun step => fileEffect (perform next manifest step)))
+      (phaseEffect (set phase (.ready next))))
+
+/-- Pair the actual phase-heap return with its normalized file and phase
+return, retaining the branch evidence from the same fixed callbacks. -/
+inductive OpenCheckpointReturn {image : Type}
+    (perform : Installed → ByteArray → Step → EStateM IO.Error image Unit)
+    (before : Phase Installed) (files : LockedFileState image) (reference : IO.Ref (Phase Installed))
+    (contents : heap → IO.Ref (Phase Installed) → Option (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit) (entry : heap) :
+    EStateM.Result IO.Error (heap × image) Unit →
+      EStateM.Result IO.Error (Phase Installed × LockedFileState image) Unit → Prop where
+  | rejected {cause : IO.Error} (preflight : CheckpointPreflight before (.error cause)) :
+      OpenCheckpointReturn perform before files reference contents set entry
+        (.error cause (entry, files.image)) (.error cause (before, files))
+  | published {next : Installed} {manifest : ByteArray} {poisoned reached : heap} {after : image}
+      (preflight : CheckpointPreflight before (.ok (next, manifest)))
+      (excluded : set reference .poisoned entry = .ok () poisoned)
+      (poison : contents poisoned reference = some .poisoned)
+      (published : CheckpointPublication.run next.table.runs.length (perform next manifest) files.image = .ok () after)
+      (installed : set reference (.ready next) poisoned = .ok () reached)
+      (ready : contents reached reference = some (.ready next)) :
+      OpenCheckpointReturn perform before files reference contents set entry
+        (.ok () (reached, after)) (.ok () (.ready next, ⟨after, files.owners⟩))
+  | fileError {next : Installed} {manifest : ByteArray} {poisoned : heap} {cause : IO.Error} {after : image}
+      (preflight : CheckpointPreflight before (.ok (next, manifest)))
+      (excluded : set reference .poisoned entry = .ok () poisoned)
+      (poison : contents poisoned reference = some .poisoned)
+      (failed : CheckpointPublication.FirstFailure next.table.runs.length (perform next manifest) files.image cause after) :
+      OpenCheckpointReturn perform before files reference contents set entry
+        (.error cause (poisoned, after)) (.error cause (.poisoned, ⟨after, files.owners⟩))
+
+/-- Classify every ordinary return of this opened checkpoint. The first
+failing publication step is derived from the same schedule return that
+provides the exact reached image and diagnostic. -/
+theorem OpenPhaseCellEffects.classifiesCheckpointReturn {image : Type}
+    {db : DiskTable} {directory : DiskDirectory} {lock : IO.FS.Handle} {files : DiskTable.OpenSyncFiles}
+    {reference : IO.Ref (Phase Installed)} {token : IO.Ref Unit}
+    (uses : db.UsesOpenReferences directory lock files reference token)
+    {contents : heap → IO.Ref (Phase Installed) → Option (Phase Installed)}
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (effects : OpenPhaseCellEffects contents get set) {entry : heap} {before : Phase Installed}
+    (stored : contents entry reference = some before)
+    (calls : CheckpointPrimitiveCalls CheckpointOpenHandle image)
+    (fileState : LockedFileState (CensusDirectoryCache × image)) :
+    db.UsesOpenCheckpointSchedule directory files reference ∧
+    OpenCheckpointReturn (calls.cached.perform directory) before fileState reference contents set entry
+      (runCheckpointOnOpenPhase (calls.cached.perform directory) reference get set (entry, fileState.image))
+      (runCheckpointWithEffects (calls.cached.perform directory) (before, fileState)) := by
+  refine ⟨uses.checkpoint, ?_⟩
+  obtain ⟨preparation, preflight⟩ := CheckpointPreflight.total before
+  let perform := calls.cached.perform directory
+  let load : EStateM IO.Error (heap × (CensusDirectoryCache × image)) Installed := do
+    (← phaseEffect (get reference)).installed
+  let publish := fun next manifest => publishPrepared (fun value => phaseEffect (set reference value))
+    (CheckpointPublication.run next.table.runs.length (fun step => fileEffect (perform next manifest step)))
+    (phaseEffect (set reference (.ready next)))
+  have loaded : load (entry, fileState.image) = before.installed (m := EStateM IO.Error _) (entry, fileState.image) := by
+    simp only [load, phaseEffect, Bind.bind, EStateM.bind, effects.reads entry reference before stored]
+  rw [show runCheckpointOnOpenPhase perform reference get set = withPreparedCheckpoint load liftCheckpointExcept publish from rfl,
+    preflight.preparesFrom load loaded publish, preflight.effect perform fileState]
+  cases preparation with
+  | error cause => exact .rejected preflight
+  | ok prepared =>
+    obtain ⟨next, manifest⟩ := prepared
+    obtain ⟨poisoned, excluded, poison⟩ := effects.writes entry reference before .poisoned stored
+    have lifted : CheckpointPublication.run next.table.runs.length (fun step => fileEffect (perform next manifest step))
+        (poisoned, fileState.image) =
+      fileEffect (CheckpointPublication.run next.table.runs.length (perform next manifest)) (poisoned, fileState.image) :=
+      fileEffects_forM (steps next.table.runs.length) (perform next manifest) (poisoned, fileState.image)
+    cases published : CheckpointPublication.run next.table.runs.length (perform next manifest) fileState.image with
+    | ok value after =>
+      cases value
+      obtain ⟨reached, installed, ready⟩ := effects.writes poisoned reference .poisoned (.ready next) poison
+      simp only [publish, publishPrepared, Bind.bind, EStateM.bind, phaseEffect, excluded, lifted, fileEffect,
+        published, installed, runPreparedCheckpoint, runCheckpointActions, modify, modifyGet, MonadStateOf.modifyGet,
+        EStateM.modifyGet]
+      exact .published preflight excluded poison published installed ready
+    | error cause after =>
+      simp only [publish, publishPrepared, Bind.bind, EStateM.bind, phaseEffect, excluded, lifted, fileEffect,
+        published, runPreparedCheckpoint, runCheckpointActions, modify, modifyGet, MonadStateOf.modifyGet,
+        EStateM.modifyGet]
+      exact .fileError preflight excluded poison (CheckpointPublication.run_firstFailure published)
 
 /-- An observed rejected checkpoint stops before any phase update or
 publication callback, including from a closed or poisoned opened cell. -/

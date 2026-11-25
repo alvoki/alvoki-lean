@@ -92,20 +92,43 @@ def selectedRunCount (binding : Option ByteArray) : Nat :=
   ((binding.bind fun bytes => (IntegrityCheckpoint.decode bytes).toOption).map
     (fun manifest => manifest.header.runCount.toNat)).getD 0
 
+/-- Every visited index names a payload in the same selected durable run map. -/
+theorem _root_.Alvoki.Storage.SelectedIntegrityCheckpoint.selectedRun {binding durable checkpoint}
+    (selected : SelectedIntegrityCheckpoint durable binding checkpoint) {index : Nat}
+    (within : index < selectedRunCount binding) :
+    ∃ bytes manifest payload, binding = some bytes ∧ IntegrityCheckpoint.decode bytes = .ok manifest ∧
+      index < manifest.header.runCount.toNat ∧ durable manifest.header.generation index = some payload := by
+  cases selected with
+  | absent => simp [selectedRunCount] at within
+  | @present bytes manifest files table decoded stored loaded =>
+    have count : index < manifest.header.runCount.toNat := by
+      simpa [selectedRunCount, decoded, Except.toOption] using within
+    obtain ⟨validated, _⟩ := loadIntegrityRunSet_iff.mp loaded
+    obtain ⟨total, length, _⟩ := (manifest.validateRuns_iff files).mp validated
+    have inFiles : index < files.length := length.symm.trans total ▸ count
+    let payload := files[index]'inFiles
+    have mapped := getElem?_mapM_option stored index
+    rw [List.getElem?_eq_getElem inFiles, List.getElem?_range count] at mapped
+    exact ⟨bytes, manifest, payload, rfl, decoded, count, mapped.symm⟩
+
 /-- Reconstruct the selected checkpoint from the actual sized callbacks and
 the accepted durable run map, carrying the reached state through each run. -/
-theorem SizedCheckpointRunReports.readExactWithState {state : Type} {directory reports binding durable}
-    (sizes : SizedCheckpointRunReports directory reports binding durable)
+theorem readIntegrityCheckpointSized_fromSelectedReads {state : Type} {directory binding durable}
     {checkpoint : Option (PackedTable × UInt64)} (selected : SelectedIntegrityCheckpoint durable binding checkpoint)
-    (readManifest : EStateM IO.Error state (Option ByteArray))
+    (readManifest : EStateM IO.Error state (Option ByteArray)) (readSize : FilePath → EStateM IO.Error state Nat)
     (readPrefix : FilePath → Nat → EStateM IO.Error state ByteArray) (initial : state) (atIndex : Nat → state)
     (manifestSeen : readManifest initial = .ok binding (atIndex 0))
+    (measured : ∀ bytes manifest, binding = some bytes → IntegrityCheckpoint.decode bytes = .ok manifest →
+      ∀ index < manifest.header.runCount.toNat, ∀ payload,
+        durable manifest.header.generation index = some payload →
+          readSize (directory.file (.run manifest.header.generation index)) (atIndex index) =
+            .ok payload.size (atIndex index))
     (advances : ∀ bytes manifest, binding = some bytes → IntegrityCheckpoint.decode bytes = .ok manifest →
       ∀ index < manifest.header.runCount.toNat, ∀ payload,
         durable manifest.header.generation index = some payload →
           readPrefix (directory.file (.run manifest.header.generation index)) payload.size (atIndex index) =
             .ok payload (atIndex (index + 1))) :
-    readIntegrityCheckpointSized directory readManifest (fun path => liftExcept (checkpointRunSizeReport reports path))
+    readIntegrityCheckpointSized directory readManifest readSize
       readPrefix initial = .ok checkpoint (atIndex (selectedRunCount binding)) := by
   cases selected with
   | absent => simp [readIntegrityCheckpointSized, selectedRunCount, manifestSeen, Bind.bind, EStateM.bind,
@@ -128,7 +151,7 @@ theorem SizedCheckpointRunReports.readExactWithState {state : Type} {directory r
         have noFile : files[index]? = none := List.getElem?_eq_none (numberOfFiles ▸ beyond)
         simp [noIndex, noFile]
     have filesRead := readIntegrityRunBytesSized_effects directory manifest
-      (fun path => liftExcept (checkpointRunSizeReport reports path)) readPrefix atIndex payload (by
+      readSize readPrefix atIndex payload (by
         intro index within
         have stampBound : index < manifest.runs.length := count.symm ▸ within
         have fileBound : index < files.length := length ▸ stampBound
@@ -141,26 +164,43 @@ theorem SizedCheckpointRunReports.readExactWithState {state : Type} {directory r
           exact mapped.symm
         have expected := (stamped index stamp (payload index) stampAt fileAt).1
         have fits := loadedRun_fits parsed (payload index) (List.mem_of_getElem? fileAt)
-        obtain ⟨metadata, stat, regular, measured, _⟩ :=
-          sizes.runs bytes manifest rfl decoded index within _ durableAt
         refine ⟨stamp, stampAt, expected ▸ fits, expected, ?_, ?_⟩
-        · have sized : checkpointRunSizeReport reports (directory.file (.run manifest.header.generation index)) =
-              .ok stamp.byteCount.toNat := by
-            simp [checkpointRunSizeReport, stat, regular, measured, expected, Bind.bind, Except.bind,
-              Pure.pure, Except.pure]
-            rfl
-          rw [sized]
-          rfl
+        · rw [← expected]
+          exact measured bytes manifest rfl decoded index within _ durableAt
         · rw [← expected]
           exact advances bytes manifest rfl decoded index within _ durableAt)
     have readRuns : readIntegrityRunBytesSized (m := EStateM IO.Error state) directory manifest
-        (fun path => liftExcept (checkpointRunSizeReport reports path)) readPrefix (atIndex 0) =
+        readSize readPrefix (atIndex 0) =
           .ok files (atIndex manifest.header.runCount.toNat) := by
       simpa only [exactFiles] using filesRead
     have decodedState : (liftExcept ((IntegrityCheckpoint.decode bytes).mapError IO.userError) :
         EStateM IO.Error state _) (atIndex 0) = .ok manifest (atIndex 0) := by rw [decoded]; rfl
     simp only [readIntegrityCheckpointSized, Bind.bind, EStateM.bind, manifestSeen, decodedState, readRuns, loaded]
     simp [selectedRunCount, decoded, liftExcept, Except.mapError, Pure.pure, EStateM.pure, Except.toOption]
+
+/-- The report-only size interpreter is a state-preserving instance of the sized loop. -/
+theorem SizedCheckpointRunReports.readExactWithState {state : Type} {directory reports binding durable}
+    (sizes : SizedCheckpointRunReports directory reports binding durable)
+    {checkpoint : Option (PackedTable × UInt64)} (selected : SelectedIntegrityCheckpoint durable binding checkpoint)
+    (readManifest : EStateM IO.Error state (Option ByteArray))
+    (readPrefix : FilePath → Nat → EStateM IO.Error state ByteArray) (initial : state) (atIndex : Nat → state)
+    (manifestSeen : readManifest initial = .ok binding (atIndex 0))
+    (advances : ∀ bytes manifest, binding = some bytes → IntegrityCheckpoint.decode bytes = .ok manifest →
+      ∀ index < manifest.header.runCount.toNat, ∀ payload,
+        durable manifest.header.generation index = some payload →
+          readPrefix (directory.file (.run manifest.header.generation index)) payload.size (atIndex index) =
+            .ok payload (atIndex (index + 1))) :
+    readIntegrityCheckpointSized directory readManifest (fun path => liftExcept (checkpointRunSizeReport reports path))
+      readPrefix initial = .ok checkpoint (atIndex (selectedRunCount binding)) := by
+  apply readIntegrityCheckpointSized_fromSelectedReads selected _ _ _ _ _ manifestSeen _ advances
+  intro bytes manifest bound decoded index within payload stored
+  obtain ⟨metadata, stat, regular, measured, _⟩ := sizes.runs bytes manifest bound decoded index within payload stored
+  have sized : checkpointRunSizeReport reports (directory.file (.run manifest.header.generation index)) =
+      .ok payload.size := by
+    simp [checkpointRunSizeReport, stat, regular, measured, Bind.bind, Except.bind, Pure.pure, Except.pure]
+    rfl
+  rw [sized]
+  rfl
 
 /-- Reconstruct the selected checkpoint in the read-only projection. -/
 theorem SizedCheckpointRunReports.readExact {state : Type} {directory reports binding durable}

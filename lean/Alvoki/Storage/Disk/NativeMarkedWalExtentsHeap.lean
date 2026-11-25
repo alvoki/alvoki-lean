@@ -1,0 +1,243 @@
+import Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
+
+namespace Alvoki.Storage.DiskSession
+
+open System WalSegmentRepair
+
+/-- The observations at the checked directory primitive use the opaque
+returned stream until closedir. The read report includes terminal errno. -/
+structure MarkedDirectoryReadCalls (heap stream : Type) where
+  openDir : FilePath → EStateM IO.Error heap stream
+  readDir : stream → heap → (List String × Except IO.Error Unit) × heap
+  closeDir : stream → EStateM IO.Error heap Unit
+
+/-- Interpret the native checked directory result from its observed
+stream callbacks, keeping the heap returned by closedir. -/
+def MarkedDirectoryReadCalls.run (calls : MarkedDirectoryReadCalls heap stream) (path : FilePath) :
+    EStateM IO.Error heap (Array IO.FS.DirEntry) := fun before =>
+  match calls.openDir path before with
+  | .error cause reached => .error cause reached
+  | .ok opened entry =>
+    let ((names, terminal), scanned) := calls.readDir opened entry
+    let (closed, reached) := match calls.closeDir opened scanned with
+      | .ok () reached => (.ok (), reached)
+      | .error cause reached => (.error cause, reached)
+    (liftExcept ((CheckedDirectoryReadReport.scanned ⟨names, terminal, closed⟩).result path) :
+      EStateM IO.Error heap _) reached
+
+variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
+  {retry : LockedFileState FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
+  {published : CheckpointPublication.Image} {admission : CensusOpenAdmissionReports input directory inventory retry}
+  {reads : CapturedMarkedReadReports admission layout published} {keeper : CapturedKeeperOpenReports reads}
+  {chronology : CapturedMarkedReadCensus reads keeper} {view : OpenCloseHeapView heap FileImage}
+  {init : OpenSyncCacheCallbacks heap} {entry : heap} {seed : OpenSyncCacheAllocations admission.opened view init entry}
+  {fileCalls : MarkedTemporaryReadCalls heap} {directoryCalls : MarkedDirectoryReadCalls heap stream}
+
+/-- The reached checked scan opens and closes the actual reported stream
+in the original held directory. Its closed heap is the inventory entry
+for subsequent no-follow probes. -/
+structure MarkedDirectoryReadReport (prepared : NativeMarkedCheckpointReadHeap seed chronology fileCalls)
+    (calls : MarkedDirectoryReadCalls heap stream) (slotOf : heap → stream → DescriptorSlot) where
+  descriptor : stream
+  opened : heap
+  scanned : heap
+  reached : heap
+  openedRaw : calls.openDir directory.path prepared.atScan = .ok descriptor opened
+  openedSlot : slotOf opened descriptor = reads.listing.stream
+  openedCensus : view.descriptors opened = reads.listing.opened
+  readRaw : calls.readDir descriptor opened = ((reads.listing.scan.names, reads.listing.scan.terminal), scanned)
+  closedSlot : slotOf scanned descriptor = slotOf opened descriptor
+  scanCensus : view.descriptors scanned = reads.listing.opened.afterDrops reads.listing.duringScan
+  closedRaw : calls.closeDir descriptor scanned = .ok () reached
+  closedCensus : view.descriptors reached = (view.descriptors scanned).afterDrops [reads.listing.stream.closeEvent]
+  openFrame : MarkedReadCacheFrame seed prepared.atScan opened
+  readFrame : MarkedReadCacheFrame seed opened scanned
+  closeFrame : MarkedReadCacheFrame seed scanned reached
+
+/-- The checked directory primitive returns the exact complete listing
+from the same stream it closed. The reached census is the one after
+that particular stream's release. -/
+theorem MarkedDirectoryReadReport.returns {prepared : NativeMarkedCheckpointReadHeap seed chronology fileCalls}
+    {slotOf : heap → stream → DescriptorSlot} (seen : MarkedDirectoryReadReport prepared directoryCalls slotOf) :
+    directoryCalls.run directory.path prepared.atScan = .ok (reads.listing.scan.entries directory.path) seen.reached ∧
+    view.descriptors seen.reached = reads.listing.afterClose ∧
+    slotOf seen.scanned seen.descriptor = reads.listing.stream ∧
+    (view.descriptors seen.reached).references reads.listing.stream.description = [] ∧
+    MarkedReadCacheFrame seed prepared.atScan seen.reached := by
+  have after : view.descriptors seen.reached = reads.listing.afterClose := by
+    rw [seen.closedCensus, seen.scanCensus]
+    rfl
+  refine ⟨?_, after, seen.closedSlot.trans seen.openedSlot, after.symm ▸ reads.listing.custody.streamClosed,
+    ⟨seen.closeFrame.directoryCell.trans (seen.readFrame.directoryCell.trans seen.openFrame.directoryCell),
+      seen.closeFrame.activeCell.trans (seen.readFrame.activeCell.trans seen.openFrame.activeCell),
+      seen.closeFrame.pendingCell.trans (seen.readFrame.pendingCell.trans seen.openFrame.pendingCell),
+      seen.closeFrame.directoryHandle.trans (seen.readFrame.directoryHandle.trans seen.openFrame.directoryHandle),
+      seen.closeFrame.files.trans (seen.readFrame.files.trans seen.openFrame.files)⟩⟩
+  simp only [MarkedDirectoryReadCalls.run, seen.openedRaw, seen.readRaw, seen.closedRaw]
+  have scan : (⟨reads.listing.scan.names, reads.listing.scan.terminal, .ok ()⟩ : OpenedDirectoryScan) = reads.listing.scan := by
+    rw [reads.listing.closed.symm]
+  rw [scan, (CheckedDirectoryReadReport.scan_complete directory.path reads.listing.eof reads.listing.closed
+    reads.listing.complete).1]
+  rfl
+
+/-- The actual inventory lookup reads only parsed WAL names from the
+reached checked listing, and returns the same no-follow reports used by
+the physical catalog. These probes preserve the reached heap. -/
+structure MarkedWalExtentReports (prepared : NativeMarkedCheckpointReadHeap seed chronology fileCalls)
+    {slotOf : heap → stream → DescriptorSlot} (listing : MarkedDirectoryReadReport prepared directoryCalls slotOf) where
+  stat : ∀ name ∈ (reads.listing.scan.entries directory.path).toList.map (·.fileName),
+    ∀ first, parseWalSegmentName name = some first →
+      let path := directory.file (.walSegment first)
+      fileCalls.stat path listing.reached = .ok (reads.catalog.inventory.reports.lstat path) listing.reached
+
+namespace MarkedWalExtentReports
+
+variable {prepared : NativeMarkedCheckpointReadHeap seed chronology fileCalls} {slotOf : heap → stream → DescriptorSlot}
+  {listing : MarkedDirectoryReadReport prepared directoryCalls slotOf}
+
+def inspect (fileCalls : MarkedTemporaryReadCalls heap) (path : FilePath) :
+    EStateM IO.Error heap (Except IO.Error IO.FS.Metadata) :=
+  inspectWalSegmentWith path (fileCalls.stat path)
+
+private theorem scan (seen : MarkedWalExtentReports prepared listing)
+    {extents : List (Nat × IO.FS.Metadata)}
+    (reported : readWalSegmentExtentsWith directory (fun path => .ok (reads.catalog.inventory.reports.lstat path) :
+      FilePath → Except IO.Error _) ((reads.listing.scan.entries directory.path).toList.map (·.fileName)) = .ok extents) :
+    readWalSegmentExtentsWith directory (inspect fileCalls)
+      ((reads.listing.scan.entries directory.path).toList.map (·.fileName)) listing.reached =
+        .ok extents listing.reached := by
+  let expected : FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata) :=
+    fun path => .ok (reads.catalog.inventory.reports.lstat path)
+  let seenNames := (reads.listing.scan.entries directory.path).toList.map (·.fileName)
+  have checked := (CheckedDirectoryReadReport.scan_complete directory.path reads.listing.eof reads.listing.closed
+    reads.listing.complete).1
+  have entries := Except.ok.inj (reads.catalog.listed.symm.trans (reads.listed.trans checked))
+  have catalogNames : seenNames = reads.catalog.inventory.names := by
+    change (reads.listing.scan.entries directory.path).toList.map (·.fileName) = _
+    rw [← entries]
+    exact reads.catalog.names
+  have extent (name : String) (member : name ∈ seenNames) :
+      readWalSegmentExtentWith directory (inspect fileCalls) name listing.reached =
+        (liftExcept (readWalSegmentExtentWith directory expected name) : EStateM IO.Error heap _) listing.reached := by
+    cases parsed : parseWalSegmentName name with
+    | none => simp [readWalSegmentExtentWith, parsed, liftExcept, Pure.pure, EStateM.pure, Except.pure]
+    | some first =>
+      have rendering := parseWalSegmentName_eq_some_iff.mp parsed
+      have found := (reads.catalog.present first).mp (rendering ▸ catalogNames ▸ member)
+      obtain ⟨metadata, lookedUp, regular, privateFile⟩ := reads.catalog.regular first found
+      have raw := seen.stat name member first parsed
+      have observed : inspect fileCalls (directory.file (.walSegment first)) listing.reached =
+          .ok (.ok metadata) listing.reached := by
+        simp [inspect, inspectWalSegmentWith, checkPrivateRegularWith, Bind.bind, EStateM.bind, raw, lookedUp,
+          regular, privateFile, show (IO.FS.FileType.file == .file) = true from rfl, Pure.pure, EStateM.pure]
+      simp only [readWalSegmentExtentWith, parsed, Bind.bind, EStateM.bind, observed, expected, lookedUp,
+        Except.bind, Pure.pure]
+      cases classifyWalSegmentLookup (directory.file (.walSegment first)) first (.ok metadata) with
+      | error cause => rfl
+      | ok value => cases value <;> rfl
+  have loop (names : List String) (listed : ∀ name ∈ names, name ∈ seenNames) :
+      (names.filterMapM (readWalSegmentExtentWith directory (inspect fileCalls))) listing.reached =
+        (liftExcept (names.filterMapM (readWalSegmentExtentWith directory expected)) : EStateM IO.Error heap _) listing.reached := by
+    induction names with
+    | nil => rfl
+    | cons name rest ih =>
+      have head := extent name (listed name List.mem_cons_self)
+      have tail := ih (fun later included => listed later (List.mem_cons_of_mem _ included))
+      rw [List.filterMapM_cons, List.filterMapM_cons]
+      cases first : readWalSegmentExtentWith directory expected name with
+      | error cause =>
+        simp only [first, liftExcept] at head
+        simp [head, Bind.bind, EStateM.bind, Except.bind, liftExcept, throw, throwThe,
+          MonadExceptOf.throw, EStateM.throw]
+      | ok found =>
+        simp only [first, liftExcept] at head
+        cases found with
+        | none => simpa [Bind.bind, EStateM.bind, Except.bind, head, Pure.pure, EStateM.pure] using tail
+        | some value =>
+          cases reportedTail : rest.filterMapM (readWalSegmentExtentWith directory expected) <;>
+            simp [Bind.bind, EStateM.bind, Except.bind, liftExcept, head, tail, reportedTail, Pure.pure, EStateM.pure,
+              Except.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+  have raw := loop seenNames (fun _ member => member)
+  change (seenNames.filterMapM (readWalSegmentExtentWith directory expected) >>= fun values =>
+    pure (values.mergeSort (fun left right => left.1 ≤ right.1))) = Except.ok extents at reported
+  change ((seenNames.filterMapM (readWalSegmentExtentWith directory (inspect fileCalls))) >>= fun values =>
+    pure (values.mergeSort (fun left right => left.1 ≤ right.1))) listing.reached = .ok extents listing.reached
+  cases collected : seenNames.filterMapM (readWalSegmentExtentWith directory expected) with
+  | error cause => simp [collected, Bind.bind, Except.bind] at reported
+  | ok values =>
+    simp only [collected, Bind.bind, Except.bind, Pure.pure, Except.pure, Except.ok.injEq] at reported
+    simp [Bind.bind, EStateM.bind, raw, collected, liftExcept, reported, Pure.pure, EStateM.pure]
+
+/-- The actual listing and extent checks hand the exact retained extents
+to the selected payload loop. The seal and keeper callbacks are still
+passed through unchanged at the heap reached by the scoped scan. -/
+theorem selects (seen : MarkedWalExtentReports prepared listing)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (later : ∀ start ∈ retry.image.later.visible, layout.range.through < start)
+    (readSeal : FilePath → Nat → EStateM IO.Error heap ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray) :
+    let watermark := (checkpoint.getD (.empty, 0)).1.committed.toNat
+    ∃ (length : UInt64) (extents : List (Nat × IO.FS.Metadata)),
+      WAL.Boundary.decode chronology.marker.bytes = .ok length ∧
+      length.toNat = layout.range.through * WAL.frameSize ∧
+      view.descriptors prepared.atScan = admission.reached.afterDrops reads.listing.beforeOpen ∧
+      (view.descriptors listing.opened).inode reads.listing.stream.description = admission.reached.inode admission.cached.description ∧
+      view.descriptors listing.reached = reads.listing.afterClose ∧
+      (view.descriptors listing.reached).references reads.listing.stream.description = [] ∧
+      view.cacheAt listing.reached seed.directoryRef seed.activeRef seed.pendingRef = admission.cache ∧
+      view.files listing.reached = admission.held ∧
+      directoryCalls.run directory.path prepared.atScan = .ok (reads.listing.scan.entries directory.path) listing.reached ∧
+      readWalSegmentExtentsWith directory (inspect fileCalls)
+          ((reads.listing.scan.entries directory.path).toList.map (·.fileName)) listing.reached = .ok extents listing.reached ∧
+      selectWalExtentsThrough extents watermark (length.toNat / WAL.frameSize) =
+        some (chronology.required, retry.image.later.visible) ∧
+      readSelectedWithCachedExtents directory watermark length directoryCalls.run (inspect fileCalls) readSeal readKeeper
+          prepared.atScan =
+        (do
+          let (files, fileSize) ← readCachedWalPayloads directory (length.toNat / WAL.frameSize) readSeal readKeeper
+            chronology.required
+          pure (⟨files, retry.image.later.visible⟩, fileSize) : EStateM IO.Error heap (WalSegmentMarkerReads × Nat)) listing.reached := by
+  intro watermark
+  let walRead := fun watermark length =>
+    readSelectedWithCachedExtents directory watermark length directoryCalls.run (inspect fileCalls) readSeal readKeeper
+  obtain ⟨_, _, _, scanEntry, startFrame, openedCache, heldFiles, _⟩ := prepared.reachesScan selected walRead
+  obtain ⟨listed, closedCensus, _, streamClosed, frame⟩ := listing.returns
+  obtain ⟨watermarked, covered, markerBytes, length, bound, decoded, absolute⟩ :=
+    DirectoryPublication.Bindings.walRange_accounting layout.decoded
+  have exactMarker := Option.some.inj (bound.symm.trans chronology.marker.bound)
+  rw [exactMarker] at decoded
+  have exactWatermark : watermark = layout.range.watermark := Option.some.inj (selected.watermark.symm.trans watermarked)
+  obtain ⟨extents, chosen, scanned, selection, offsets, _⟩ := reads.catalog.scanSelected following later absolute
+  have complete := (CheckedDirectoryReadReport.scan_complete directory.path reads.listing.eof reads.listing.closed
+    reads.listing.complete).1
+  have entries := Except.ok.inj (reads.catalog.listed.symm.trans (reads.listed.trans complete))
+  rw [entries] at scanned
+  have submitted := seen.scan scanned
+  have sameExtents := chronology.seals.matchesExtents (chronology.offsets.trans offsets.symm)
+    (fun extent member => OpenPathReadReports.walSegmentExtents_metadata scanned (selectWalExtentsThrough_required_subset selection member))
+  rw [← sameExtents, ← exactWatermark] at selection
+  have aligned : length.toNat % WAL.frameSize = 0 := by rw [absolute, Nat.mul_mod_left]
+  have through : length.toNat / WAL.frameSize = layout.range.through := by
+    rw [absolute, Nat.mul_div_cancel _ (by decide : 0 < WAL.frameSize)]
+  have covers : watermark ≤ length.toNat / WAL.frameSize := by rwa [exactWatermark, through]
+  have cache : view.cacheAt listing.reached seed.directoryRef seed.activeRef seed.pendingRef = admission.cache := by
+    obtain ⟨_, _, _, _, _, _, _, _, installedDirectory, installedActive, installedPending, _, _⟩ := seed.installs
+    have atScan := startFrame.directoryCell.trans installedDirectory
+    have noActive := startFrame.activeCell.trans installedActive
+    have noPending := startFrame.pendingCell.trans installedPending
+    rw [← openedCache]
+    simp only [OpenCloseHeapView.cacheAt, frame.directoryCell, frame.activeCell, frame.pendingCell, atScan,
+      noActive, noPending, Option.map_none, List.map_nil, Option.map_some, frame.directoryHandle]
+  refine ⟨length, extents, decoded, absolute, scanEntry, ?_, closedCensus, streamClosed, cache, frame.files.trans heldFiles,
+    listed, submitted, selection, ?_⟩
+  · rw [listing.openedCensus]
+    exact reads.listing.sameDirectoryObject
+  · simp only [readSelectedWithCachedExtents, aligned, covers, and_self, ↓reduceIte, Bind.bind, EStateM.bind,
+      listed, submitted, selection]
+
+end MarkedWalExtentReports
+
+end Alvoki.Storage.DiskSession

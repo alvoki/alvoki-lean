@@ -5,37 +5,74 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
-/-- The reached manifest bytes are the encoding of this exact run plan. -/
-theorem CheckpointPowerCut.plannedManifestBytes {directory : DiskDirectory} {before : SegmentedWriterState}
-    (cut : CheckpointPowerCut directory before) : cut.checkpoint.plan.manifest.encode = cut.checkpoint.manifest := by
+/-- The successful encoder uses this report's exact run plan. -/
+private theorem SegmentedCheckpointReport.encodedManifestBytes {directory : DiskDirectory}
+    {before : SegmentedWriterState} (attempt : SegmentedCheckpointReport directory before)
+    (encoded : encodeCheckpointIntegrityManifest attempt.table (SegmentedCheckpointReport.generation before) =
+      .ok attempt.manifest) :
+    attempt.plan.manifest.encode = attempt.manifest := by
   let generation := SegmentedCheckpointReport.generation before
-  have encoded := cut.encoded
-  by_cases fits : (cut.checkpoint.table.runs.map (·.run.bytes)).all (fun bytes => decide (bytes.size < UInt64.size)) = true
+  by_cases fits : (attempt.table.runs.map (·.run.bytes)).all (fun bytes => decide (bytes.size < UInt64.size)) = true
   · exact Except.ok.inj ((encodeCheckpointIntegrityManifest_exact generation
       (fun bytes member => of_decide_eq_true (List.all_eq_true.mp fits bytes member))).symm.trans encoded)
   · simp [encodeCheckpointIntegrityManifest, fits, Bind.bind, Except.bind] at encoded
+
+/-- The reached manifest bytes are the encoding of this exact run plan. -/
+theorem CheckpointPowerCut.plannedManifestBytes {directory : DiskDirectory} {before : SegmentedWriterState}
+    (cut : CheckpointPowerCut directory before) : cut.checkpoint.plan.manifest.encode = cut.checkpoint.manifest :=
+  cut.checkpoint.encodedManifestBytes cut.encoded
+
+/-- The checkpoint's actual preparation keeps the committed clock and
+encodes the exact full-history manifest. Whenever those bytes become
+authoritative, their decoded watermark covers that history. -/
+theorem SegmentedCheckpointReport.preparedManifestWatermark {directory : DiskDirectory}
+    {before : SegmentedWriterState} {writer : Nat} (attempt : SegmentedCheckpointReport directory before)
+    (ready : before.RetainedReady directory writer)
+    (preflight : CheckpointPreflight (.ready before.installed) (.ok (attempt.prepared, attempt.manifest))) :
+    let manifest := Manifest.IntegrityCheckpoint.fromRuns
+      (checkpointHeader attempt.table (SegmentedCheckpointReport.generation before)) attempt.plan.files
+    Manifest.IntegrityCheckpoint.decode attempt.manifest = .ok manifest ∧
+      selectedCheckpointWatermark (some attempt.manifest) = some before.history.length := by
+  intro manifest
+  obtain ⟨flushed, _, countFits, encoded⟩ := preflight.preparedFacts
+  obtain ⟨_, refinement, represented⟩ := ready.resumed.canonical
+  let generation := SegmentedCheckpointReport.generation before
+  obtain ⟨written, clock, _⟩ := WrittenCheckpoint.of_flushForCheckpoint flushed refinement countFits
+    ready.resumed.bounds.runs ready.resumed.bounds.memory generation
+  have decoded : Manifest.IntegrityCheckpoint.decode attempt.manifest = .ok manifest := by
+    rw [← attempt.encodedManifestBytes encoded]
+    change Manifest.IntegrityCheckpoint.decode manifest.encode = .ok manifest
+    apply Manifest.IntegrityCheckpoint.decode_encode
+    · exact written.validFloor
+    · simpa only [manifest, generation, SegmentedCheckpointReport.prepared, SegmentedCheckpointReport.plan,
+        VersionedRunSet.integrity, Manifest.IntegrityCheckpoint.fromRuns, List.length_map] using written.count
+  have covers : manifest.header.committed.toNat = before.history.length :=
+    (congrArg UInt64.toNat (clock.trans refinement.committed)).trans represented.committed_count
+  exact ⟨decoded, selectedCheckpointWatermark_present_iff.mpr ⟨manifest, decoded, covers⟩⟩
 
 private theorem CheckpointPowerCut.newManifestHeader {directory : DiskDirectory} {before : SegmentedWriterState}
     {writer : Nat} (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
     {metadata : Manifest.IntegrityCheckpoint}
     (decoded : Manifest.IntegrityCheckpoint.decode cut.checkpoint.manifest = .ok metadata) :
     metadata.header = checkpointHeader cut.checkpoint.table (SegmentedCheckpointReport.generation before) := by
-  obtain ⟨_, refinement, _⟩ := ready.resumed.canonical
-  let generation := SegmentedCheckpointReport.generation before
-  let files := cut.checkpoint.table.runs.map (·.run.bytes)
-  let exactManifest := Manifest.IntegrityCheckpoint.fromRuns (checkpointHeader cut.checkpoint.table generation) files
-  have encoded := cut.encoded
-  have exactBytes : cut.checkpoint.manifest = exactManifest.encode := by
-    by_cases fits : files.all (fun bytes => decide (bytes.size < UInt64.size)) = true
-    · exact Except.ok.inj (encoded.symm.trans (encodeCheckpointIntegrityManifest_exact generation
-        (fun bytes member => of_decide_eq_true (List.all_eq_true.mp fits bytes member))))
-    · simp [encodeCheckpointIntegrityManifest, files, fits, Bind.bind, Except.bind] at encoded
-  have written := (WrittenCheckpoint.of_flushForCheckpoint cut.flushed refinement cut.runCountFits
-    ready.resumed.bounds.runs ready.resumed.bounds.memory generation).1
-  have roundTrip := Manifest.IntegrityCheckpoint.decode_encode exactManifest written.validFloor
-    (by simpa [exactManifest, files, Manifest.IntegrityCheckpoint.fromRuns] using written.count)
-  rw [exactBytes] at decoded
-  exact congrArg Manifest.IntegrityCheckpoint.header (Except.ok.inj (decoded.symm.trans roundTrip))
+  have planned := (cut.checkpoint.preparedManifestWatermark ready cut.preflight).1
+  exact congrArg Manifest.IntegrityCheckpoint.header (Except.ok.inj (decoded.symm.trans planned))
+
+/-- A checkpoint cut can select its prior authority or the newly prepared
+manifest. The two possible decoded watermarks come from those exact bytes. -/
+theorem CheckpointPowerCut.selectedManifestWatermark {directory : DiskDirectory} {before : SegmentedWriterState}
+    {writer : Nat} (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
+    {binding : Option ByteArray}
+    (chosen : binding = before.wal.directory.active.manifest ∨ binding = some cut.checkpoint.manifest) :
+    selectedCheckpointWatermark binding = some before.target.range.watermark ∨
+      selectedCheckpointWatermark binding = some before.history.length := by
+  rcases chosen with old | published
+  · left
+    rw [old, ready.walPair]
+    exact (DirectoryPublication.Bindings.walRange_accounting before.target.decoded).1
+  · right
+    rw [published]
+    exact (cut.checkpoint.preparedManifestWatermark ready cut.preflight).2
 
 /-- Any prior manifest describes a different generation from the new one. -/
 theorem CheckpointPowerCut.manifestChanges {directory : DiskDirectory} {before : SegmentedWriterState}

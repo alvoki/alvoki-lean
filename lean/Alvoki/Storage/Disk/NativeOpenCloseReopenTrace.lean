@@ -78,7 +78,7 @@ theorem NativeOpenedTrace.closesAndReopens
 /-- The close/reopen reader is a marked-opening report with the already
 selected checkpoint, retained WAL and chronological callbacks. Its
 worker is the one that the close/reopen edge returned. -/
-private def NativeCloseAlignedReads.markedReport {state : NativeReadyState} {files : NativeCloseFiles state}
+def NativeCloseAlignedReads.markedReport {state : NativeReadyState} {files : NativeCloseFiles state}
     {inventory : DescriptorInventory} {plan : ClosedReadyReopenLayout state.writer state.releasedFiles}
     {selected : SelectedIntegrityCheckpoint state.writer.published.durable
       state.releasedFiles.image.directory.active.manifest state.writer.checkpoint}
@@ -111,6 +111,31 @@ private def NativeCloseAlignedReads.markedReport {state : NativeReadyState} {fil
   kept := retained.sealedFiles
   pending := pending
   bounded := bounded
+
+/-- Conversion keeps the exact admission that supplied the returned
+lock and directory cache. -/
+theorem NativeCloseAlignedReads.markedReport_admission {state : NativeReadyState} {files : NativeCloseFiles state}
+    {inventory : DescriptorInventory} {plan : ClosedReadyReopenLayout state.writer state.releasedFiles}
+    {selected : SelectedIntegrityCheckpoint state.writer.published.durable
+      state.releasedFiles.image.directory.active.manifest state.writer.checkpoint}
+    (seen : NativeCloseAlignedReads files input inventory plan.layout selected)
+    (retained : state.writer.RetainedReady state.session.directory state.session.descriptor)
+    (pending : PendingClientReplay log reads state.writer.history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy state.writer.history.length) :
+    (seen.markedReport retained pending bounded).opening.admission = seen.opening.admission := rfl
+
+/-- The marked installer can use the original reader directly. Both
+routes execute its same aligned chronology. -/
+theorem NativeCloseAlignedReads.markedReport_run {state : NativeReadyState} {files : NativeCloseFiles state}
+    {inventory : DescriptorInventory} {plan : ClosedReadyReopenLayout state.writer state.releasedFiles}
+    {selected : SelectedIntegrityCheckpoint state.writer.published.durable
+      state.releasedFiles.image.directory.active.manifest state.writer.checkpoint}
+    (seen : NativeCloseAlignedReads files input inventory plan.layout selected)
+    (retained : state.writer.RetainedReady state.session.directory state.session.descriptor)
+    (pending : PendingClientReplay log reads state.writer.history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy state.writer.history.length) :
+    let marked := seen.markedReport retained pending bounded
+    marked.opening.finish.run marked.opening.chronology = seen.run := rfl
 
 /-- Expose the exact chosen close/reopen reader as the marked report
 used by the phase and cache installer. The result still points to the

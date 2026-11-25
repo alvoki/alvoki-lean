@@ -58,20 +58,15 @@ theorem SegmentedWriterState.RetainedReady.closeWithHeldReports {directory descr
   obtain ⟨layout, opened, after, endpoint, _⟩ := ready.closeWithHeldEvidence closed (fun _ => True) observed
   exact ⟨layout, opened, after, endpoint⟩
 
-/-- Following a fully covering checkpoint, the admitted held open still
-reads that checkpoint's selected runs and just the retained keeper.
-The preparation counter uses exactly the packet that installed the
-returned session. -/
-theorem SegmentedWriterState.RetainedReady.closeWithHeldRequestBound {directory descriptor input}
-    {before : SegmentedWriterState} (ready : before.RetainedReady directory descriptor)
-    (full : before.target.range.watermark = before.history.length)
-    (closed : CleanUnlockReports directory descriptor) (observed : closed.HeldReopenObservations (before := before) input) :
-    ∃ (layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history)
-      (opened : CheckpointHeldOpen input directory layout before.published) (after : SegmentedWriterState),
-      AdmittedCleanReopen closed opened.chunkReports opened.admission after ∧
-      opened.preparationRequests ≤ ((before.checkpoint.getD (.empty, 0)).1.runs.map (·.run.bytes.size)).sum +
-        before.wal.active.bytes.size := by
-  obtain ⟨layout, opened, after, endpoint⟩ := ready.closeWithHeldReports closed observed
+/-- On a fully covering checkpoint, this admitted open selected exactly
+the prior keeper. These are the same reads that installed the session. -/
+theorem AdmittedCleanReopen.selectedKeeperAfterFullCheckpoint {directory descriptor input}
+    {before : SegmentedWriterState} {closed : CleanUnlockReports directory descriptor}
+    {layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history}
+    {opened : CheckpointHeldOpen input directory layout before.published} {after : SegmentedWriterState}
+    (endpoint : AdmittedCleanReopen closed opened.chunkReports opened.admission after)
+    (ready : before.RetainedReady directory descriptor) (full : before.target.range.watermark = before.history.length) :
+    layout.range = before.target.range ∧ layout.sealed = [] ∧ layout.first = layout.keeper.first := by
   have range : layout.range = before.target.range :=
     congrArg Target.range (endpoint.writer.target.symm.trans endpoint.target)
   have layouts : layout.sealed ++ [layout.keeper] = [before.wal.active] := by
@@ -86,19 +81,46 @@ theorem SegmentedWriterState.RetainedReady.closeWithHeldRequestBound {directory 
     rfl
   have first : layout.first = layout.keeper.first :=
     firstOfOne (by simpa only [noSeals, List.nil_append] using layout.chain)
+  exact ⟨range, noSeals, first⟩
+
+/-- Bound the selected chunk reads of this particular admitted packet,
+so other work bounds can use its exact same guarded directory scan. -/
+theorem AdmittedCleanReopen.preparationRequests_le {directory descriptor input}
+    {before : SegmentedWriterState} {closed : CleanUnlockReports directory descriptor}
+    {layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history}
+    {opened : CheckpointHeldOpen input directory layout before.published} {after : SegmentedWriterState}
+    (endpoint : AdmittedCleanReopen closed opened.chunkReports opened.admission after)
+    (ready : before.RetainedReady directory descriptor) (full : before.target.range.watermark = before.history.length) :
+    opened.preparationRequests ≤ ((before.checkpoint.getD (.empty, 0)).1.runs.map (·.run.bytes.size)).sum +
+      before.wal.active.bytes.size := by
+  obtain ⟨_, noSeals, first⟩ := endpoint.selectedKeeperAfterFullCheckpoint ready full
   have checkpoint : SelectedIntegrityCheckpoint before.published.durable
       (SegmentedCleanReopenReport.released directory before).image.directory.active.manifest before.checkpoint := by
     change SelectedIntegrityCheckpoint before.published.durable before.files.directory.active.manifest before.checkpoint
     rw [ready.resumed.ready.selected]
     exact ready.resumed.selected
-  have bounded := opened.preparationRequests_le checkpoint (by simp [layouts]) (by
+  have bounded := opened.preparationRequests_le checkpoint (by simp [noSeals]) (by
     change ∀ first ∈ before.files.later.visible, layout.range.through < first
     rw [ready.resumed.ready.pruned.1]
     simp)
   have keeperBytes : layout.keeper.bytes.size = (layout.range.through - layout.keeper.first) * frameSize :=
     layout.target.trimmedSize
   rw [first, ← keeperBytes, endpoint.writer.keeper] at bounded
-  exact ⟨layout, opened, after, endpoint, bounded⟩
+  exact bounded
+
+/-- A fully covering checkpoint leaves only the retained keeper beside
+the selected run payload in the installed session's preparation budget. -/
+theorem SegmentedWriterState.RetainedReady.closeWithHeldRequestBound {directory descriptor input}
+    {before : SegmentedWriterState} (ready : before.RetainedReady directory descriptor)
+    (full : before.target.range.watermark = before.history.length)
+    (closed : CleanUnlockReports directory descriptor) (observed : closed.HeldReopenObservations (before := before) input) :
+    ∃ (layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history)
+      (opened : CheckpointHeldOpen input directory layout before.published) (after : SegmentedWriterState),
+      AdmittedCleanReopen closed opened.chunkReports opened.admission after ∧
+      opened.preparationRequests ≤ ((before.checkpoint.getD (.empty, 0)).1.runs.map (·.run.bytes.size)).sum +
+        before.wal.active.bytes.size := by
+  obtain ⟨layout, opened, after, endpoint⟩ := ready.closeWithHeldReports closed observed
+  exact ⟨layout, opened, after, endpoint, endpoint.preparationRequests_le ready full⟩
 
 /-- The selected portion of a completed maintenance pass bounds the
 primitive prefix requests of the following held admitted open. Its

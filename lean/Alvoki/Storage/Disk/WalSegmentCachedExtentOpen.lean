@@ -245,18 +245,33 @@ inductive CachedWalKeeperReached {state : Type} (dir : DiskDirectory)
       CachedWalKeeperReached dir readSeal keeper keeperMetadata
         ((first, metadata) :: (next, nextMetadata) :: rest) initial reached
 
+/-- Certify the payload on each callback already reached by this prefix.
+Only the actual report at each step has to agree with the selected file. -/
+inductive CachedWalKeeperReached.HasPayloads {state : Type} {dir : DiskDirectory}
+    {readSeal : FilePath → Nat → EStateM IO.Error state ByteArray} {keeper : Nat} {metadata : IO.FS.Metadata}
+    (selected : Nat → ByteArray → Prop) :
+    ∀ {required : List (Nat × IO.FS.Metadata)} {initial reached : state},
+      CachedWalKeeperReached dir readSeal keeper metadata required initial reached → Prop where
+  | noSeals {initial : state} : HasPayloads selected (.noSeals (initial := initial))
+  | sealed {first next : Nat} {extent nextExtent : IO.FS.Metadata} {rest : List (Nat × IO.FS.Metadata)}
+      {initial observed reached : state} {bytes : ByteArray} {forward : first < next}
+      {span : extent.byteSize.toNat = (next - first) * frameSize} {fits : (next - first) * frameSize < USize.size}
+      {reported : readSeal (dir.file (.walSegment first)) ((next - first) * frameSize) initial = .ok bytes observed}
+      {size : bytes.size = (next - first) * frameSize}
+      {remaining : CachedWalKeeperReached dir readSeal keeper metadata ((next, nextExtent) :: rest) observed reached}
+      (payload : selected first bytes) (tail : HasPayloads selected remaining) :
+      HasPayloads selected (.sealed forward span fits reported size remaining)
+
 /-- The actual selected payload loop reaches the keeper callback with
 the state produced by the preceding seal reads. The returned seal payloads
 keep their order and the keeper's own length checks still run. -/
-theorem CachedWalKeeperReached.reachesRead {state : Type} {dir : DiskDirectory} (through : Nat)
+theorem CachedWalKeeperReached.reachesReadWithPayloads {state : Type} {dir : DiskDirectory} (through : Nat)
     {readSeal : FilePath → Nat → EStateM IO.Error state ByteArray}
     (readKeeper : FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
     {keeper : Nat} {metadata : IO.FS.Metadata} {required : List (Nat × IO.FS.Metadata)}
     {initial reached : state} (seals : CachedWalKeeperReached dir readSeal keeper metadata required initial reached)
     {selected : Nat → ByteArray → Prop}
-    (reportedPayload : ∀ entry ∈ required.dropLast, ∀ {before after bytes},
-      readSeal (dir.file (.walSegment entry.1)) entry.2.byteSize.toNat before = .ok bytes after →
-      selected entry.1 bytes) :
+    (payloads : seals.HasPayloads selected) :
     ∃ earlier : List (Nat × ByteArray), earlier.map Prod.fst = required.dropLast.map Prod.fst ∧
       (∀ entry ∈ earlier, selected entry.1 entry.2) ∧
       readCachedWalPayloads dir through readSeal readKeeper required initial =
@@ -272,7 +287,7 @@ theorem CachedWalKeeperReached.reachesRead {state : Type} {dir : DiskDirectory} 
           EStateM IO.Error state (List (Nat × ByteArray) × Nat)) reached by
     obtain ⟨earlier, offsets, contents, read⟩ := loop
     exact ⟨earlier, offsets, contents, by simpa [readCachedWalPayloads] using read []⟩
-  induction seals with
+  induction payloads with
   | noSeals =>
     refine ⟨[], rfl, by simp, fun acc => ?_⟩
     simp [readCachedWalPayloads, readCachedWalPayloadsFrom, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
@@ -281,21 +296,46 @@ theorem CachedWalKeeperReached.reachesRead {state : Type} {dir : DiskDirectory} 
     | ok bytes after =>
       by_cases valid : bytes.size = (through - keeper) * frameSize ∧ (through - keeper) * frameSize ≤ metadata.byteSize.toNat <;>
         simp [valid, throw, throwThe, MonadExceptOf.throw] <;> rfl
-  | @sealed first next extent nextExtent rest initial observed reached bytes forward span fits reported size remaining ih =>
-    obtain ⟨tail, offsets, contents, read⟩ := ih (by
-      intro entry member before after payload seen
-      exact reportedPayload entry
-        (by simpa only [List.dropLast_cons_cons] using List.mem_cons_of_mem (first, extent) member) seen)
+  | @sealed first next extent nextExtent rest initial observed reached bytes forward span fits reported size remaining
+      payload tail ih =>
+    obtain ⟨tail, offsets, contents, read⟩ := ih
     refine ⟨(first, bytes) :: tail, by simpa using offsets, ?_, ?_⟩
     · intro entry member
       rcases List.mem_cons.mp member with rfl | later
-      · apply reportedPayload (first, extent) (by simp [List.dropLast_cons_cons])
-        simpa only [span] using reported
+      · exact payload
       · exact contents entry later
     · intro acc
       rw [readCachedWalPayloadsFrom_afterSealed dir through readSeal readKeeper first next extent nextExtent rest
         acc forward span fits reported size, read]
       simp [List.reverse_cons, List.append_assoc]
+
+/-- The uniform payload contract supplies the local certificates. -/
+theorem CachedWalKeeperReached.reachesRead {state : Type} {dir : DiskDirectory} (through : Nat)
+    {readSeal : FilePath → Nat → EStateM IO.Error state ByteArray}
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
+    {keeper : Nat} {metadata : IO.FS.Metadata} {required : List (Nat × IO.FS.Metadata)}
+    {initial reached : state} (seals : CachedWalKeeperReached dir readSeal keeper metadata required initial reached)
+    {selected : Nat → ByteArray → Prop}
+    (reportedPayload : ∀ entry ∈ required.dropLast, ∀ {before after bytes},
+      readSeal (dir.file (.walSegment entry.1)) entry.2.byteSize.toNat before = .ok bytes after →
+      selected entry.1 bytes) :
+    ∃ earlier : List (Nat × ByteArray), earlier.map Prod.fst = required.dropLast.map Prod.fst ∧
+      (∀ entry ∈ earlier, selected entry.1 entry.2) ∧
+      readCachedWalPayloads dir through readSeal readKeeper required initial =
+        (do
+          let (last, size) ← readCachedWalPayloads dir through readSeal readKeeper [(keeper, metadata)]
+          pure (earlier ++ last, size) : EStateM IO.Error state (List (Nat × ByteArray) × Nat)) reached := by
+  have evidence : seals.HasPayloads selected := by
+    induction seals with
+    | noSeals => exact .noSeals
+    | @sealed first next extent nextExtent rest _ _ _ _ forward span fits reported size _ ih =>
+      refine .sealed (forward := forward) (span := span) (fits := fits) (reported := reported) (size := size)
+        (reportedPayload (first, extent) (by simp [List.dropLast_cons_cons]) (by simpa only [span] using reported))
+        (ih (by
+          intro entry member before after bytes seen
+          exact reportedPayload entry
+            (by simpa only [List.dropLast_cons_cons] using List.mem_cons_of_mem (first, extent) member) seen))
+  exact seals.reachesReadWithPayloads through readKeeper evidence
 
 /-- The keeper error is returned at its reached state after the earlier seals. -/
 theorem CachedWalKeeperReached.read_error {state : Type} {dir : DiskDirectory} (through : Nat)
