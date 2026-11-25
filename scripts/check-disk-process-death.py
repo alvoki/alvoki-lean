@@ -325,6 +325,37 @@ def check_batch_append_cut(binary, shim, root):
             "the fresh batch changed the checkpoint or sealed prefix")
 
 
+def check_two_slot_partial_write_error(binary, shim, database, rotated):
+    database.mkdir()
+    status, stderr = run_probe(binary, "--two-slot-seed", database, "rotated" if rotated else "zero")
+    require(status == 0, f"could not seed the two-slot database: {stderr}")
+    marker = database / "WAL.commit"
+    wal = database / f"WAL-segment-{int(rotated)}"
+    before, prefix = marker.read_bytes(), wal.read_bytes()
+    log = database.with_suffix(".sync.log")
+    status, stderr = run_probe(binary, "--two-slot-check-unknown", database, env={
+        **os.environ,
+        "LD_PRELOAD": str(shim),
+        "ALVOKI_CHECK_SLOT_PARTIAL_ERROR": str(marker),
+        "ALVOKI_CHECK_SYNC_LOG": str(log),
+    })
+    require(status == 0, f"partial slot write did not return commit-unknown: {stderr}")
+    reached = marker.read_bytes()
+    require(reached[:17] != before[:17] and reached[17:] == before[17:],
+            "failed positional write did not preserve the untouched bytes")
+    require(log.read_text().splitlines().count(str(marker)) == 1,
+            "publication attempted marker sync after a positional-write error")
+    frame_size = (database / "WAL-segment-0").stat().st_size if rotated else len(prefix)
+    appended = wal.read_bytes()
+    require(appended.startswith(prefix) and len(appended) == len(prefix) + frame_size,
+            "failed positional write did not leave exactly one appended frame")
+    status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "old")
+    require(status == 0, f"could not recover after a partial slot error: {stderr}")
+    resumed = wal.read_bytes()
+    require(resumed.startswith(prefix) and len(resumed) == len(appended) and resumed != appended,
+            "recovery did not replace the unacknowledged frame with the new write")
+
+
 def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False):
     database.mkdir()
     status, stderr = run_probe(binary, "--two-slot-seed", database, "rotated" if rotated else "zero")
@@ -587,6 +618,7 @@ if __name__ == "__main__":
         check_fork_exec_lock(binary, shim, root / "fork-exec")
         check_batch_append_cut(binary, shim, root / "batch-append-cut")
         for rotated in (False, True):
+            check_two_slot_partial_write_error(binary, shim, root / f"two-slot-{int(rotated)}-partial-error", rotated)
             check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-short-write",
                                      "slot-write", rotated, resume=True)
             for cut in ("wal-sync", "slot-write", "marker-sync"):

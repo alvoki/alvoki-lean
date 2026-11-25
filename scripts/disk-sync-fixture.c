@@ -320,6 +320,18 @@ ssize_t pwrite(int fd, const void *bytes, size_t size, off_t offset) {
             opened.st_dev == expected.st_dev && opened.st_ino == expected.st_ino)
             log_marker_descriptor(getenv("ALVOKI_CHECK_SYNC_LOG"), "marker pwrite: ", fd);
     }
+    const char *partial_error = getenv("ALVOKI_CHECK_SLOT_PARTIAL_ERROR");
+    if (partial_error != NULL) {
+        struct stat opened, expected;
+        if (fstat(fd, &opened) == 0 && stat(partial_error, &expected) == 0 &&
+            opened.st_dev == expected.st_dev && opened.st_ino == expected.st_ino) {
+            const size_t prefix = 17;
+            if ((offset == 0 || offset == 4096) && size == 40)
+                return real_pwrite(fd, bytes, prefix, offset);
+            errno = EIO;
+            return -1;
+        }
+    }
     const char *cut = getenv("ALVOKI_CHECK_SLOT_WRITE_HOLD");
     if (cut != NULL && (offset == 0 || offset == 4096)) {
         struct stat opened, expected;
