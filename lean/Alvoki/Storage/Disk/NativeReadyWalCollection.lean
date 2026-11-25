@@ -48,7 +48,7 @@ private theorem WalUnlinkPrefix.keepsOtherChild
       (effect.frame name (different _ List.mem_cons_self))
   | failed _ effect _ => exact effect.frame name (different _ List.mem_cons_self)
 
-/-- A complete covered-WAL collection from this exact ready state.
+/-- A covered-WAL collection that reaches the final barrier from this exact ready state.
 Temporary planner reads and directory enumeration can open descriptors,
 which are released by the time the checked listing has returned. The
 drop reports frame the existing slots throughout this observed pass. -/
@@ -70,7 +70,6 @@ structure NativeReadyWalCollection (state : NativeReadyState) where
     reachedView state.session.descriptor atBarrier
   originalCache : barrier.cache = state.cache
   sameWriter : barrier.writerSlot = state.owner
-  completed : barrier.outcome = .completed
   barrierEntry : barrier.inventory = inventory.listing.afterClose
   reachedObjects : reachedView.modelObject = inventory.lifetime.namespaceView.modelObject
   afterBarrier : List LockReferenceDrop
@@ -111,27 +110,41 @@ def run (reported : NativeReadyWalCollection state) :
   reported.calls.collectWithEffects state.session.directory (removeWithCache reported.remove)
     reported.barrier.group (state.session.phase, ⟨(state.cache, .start state.writer.wal), state.files.owners⟩)
 
-/-- The session cells and cache stay in place. Only the physical
-projection of its covered seals changes. -/
-def next (reported : NativeReadyWalCollection state) : NativeReadyState :=
+/-- After a successful barrier, the same ready session continues with
+the physical projection of its remaining seals. -/
+def next (reported : NativeReadyWalCollection state) (_completed : reported.barrier.outcome = .completed) :
+    NativeReadyState :=
   { state with writer := state.writer.afterWalCollection reported.barrier.after, census := reported.census }
 
-theorem runs (reported : NativeReadyWalCollection state) (valid : state.Valid) :
-    reported.run = .ok () (reported.next.session.phase,
-      ⟨(reported.next.cache, reported.barrier.after), reported.next.files.owners⟩) := by
+/-- The complete ordered plan reaches the reported cached barrier.
+Its ordinary return determines whether the original phase is restored. -/
+theorem returned (reported : NativeReadyWalCollection state) (valid : state.Valid) :
+    reported.run =
+      match reported.barrier.outcome with
+      | .completed => .ok () (state.session.phase, ⟨(state.cache, reported.barrier.after), state.files.owners⟩)
+      | .errorBeforeEffect cause | .errorAfterEffect cause =>
+        .error (IO.userError s!"sync failed for '{state.session.directory.path}': {cause}")
+          (.poisoned, ⟨(state.cache, reported.barrier.after), state.files.owners⟩) := by
   have plan := valid.retained.completeObservedWalPlan reported.calls reported.inventory reported.manifest reported.marker
   have group := reported.barrier.groupReturns
-  rw [reported.completed, reported.originalCache] at group
+  rw [reported.originalCache] at group
   rw [run, valid.phase, WalCollectionReads.collectWithEffects_plan _ _ _ _ _ _ plan,
     reported.unlinked.carriesCache rfl _ _ _ _, WalCollectionReads.continueWithEffects_barrier, group]
-  simp [next, NativeReadyState.files, SegmentedWriterState.afterWalCollection, valid.phase]
+  cases reported.barrier.outcome <;> rfl
+
+theorem runs (reported : NativeReadyWalCollection state) (valid : state.Valid)
+    (completed : reported.barrier.outcome = .completed) :
+    reported.run = .ok () ((reported.next completed).session.phase,
+      ⟨((reported.next completed).cache, reported.barrier.after), (reported.next completed).files.owners⟩) := by
+  simpa only [completed, next, NativeReadyState.files, SegmentedWriterState.afterWalCollection] using
+    reported.returned valid
 
 /-- The final fsync uses the exact cached description for the root.
 The writer and directory slots are live in the reached returned census. -/
 theorem retainsCustody (reported : NativeReadyWalCollection state) (valid : state.Valid) :
     reported.barrier.handle.2.1 = state.directorySlot ∧
       reported.barrier.handle.1.inode state.directorySlot.description = state.census.inode state.directorySlot.description ∧
-      state.owner ∈ reported.next.census.slots ∧ state.directorySlot ∈ reported.next.census.slots := by
+      state.owner ∈ reported.census.slots ∧ state.directorySlot ∈ reported.census.slots := by
   obtain ⟨capture, cached⟩ := valid.captured
   have cache := (congrArg Cache.directory reported.originalCache).trans cached
   have same := Option.some.inj (reported.barrier.captured.symm.trans cache)
@@ -144,8 +157,8 @@ theorem retainsCustody (reported : NativeReadyWalCollection state) (valid : stat
   refine ⟨slot, ?_, ?_, ?_⟩
   · exact (congrArg (fun own : DescriptorSlot => reported.barrier.handle.1.inode own.description) slot.symm).trans
       (reported.barrier.captureInode.symm.trans object)
-  · simpa only [next, reported.censusPreserved] using valid.ownerLive
-  · simpa only [next, reported.censusPreserved] using valid.directoryLive
+  · simpa only [reported.censusPreserved] using valid.ownerLive
+  · simpa only [reported.censusPreserved] using valid.directoryLive
 
 /-- The complete listing and ensuing unlinks use the held writer's root.
 Every unlink preserves the lock binding read under the original owner. -/
@@ -189,17 +202,18 @@ theorem NativeReadyReadPrefix.collectsCoveredWal
     {initial state : NativeReadyState} {history : List WAL.Write}
     {log : List DatabaseSubmissions} {reads : List RecordedSnapshotRead}
     (prior : NativeReadyReadPrefix opened initial history log reads state)
-    (reported : NativeReadyWalCollection state) :
-    reported.run = .ok () (reported.next.session.phase,
-      ⟨(reported.next.cache, reported.barrier.after), reported.next.files.owners⟩) ∧
-    reported.next.Valid ∧
-    reported.next.session = state.session ∧ reported.next.cache = state.cache ∧ reported.next.census = state.census ∧
-    reported.next.writer.installed = state.writer.installed ∧
-    reported.next.writer.checkpoint = state.writer.checkpoint ∧
-    reported.next.writer.wal.active = state.writer.wal.active ∧
-    reported.next.writer.wal.readDescriptors state.writer.target.range.watermark =
+    (reported : NativeReadyWalCollection state) (completed : reported.barrier.outcome = .completed) :
+    let next := reported.next completed
+    reported.run = .ok () (next.session.phase,
+      ⟨(next.cache, reported.barrier.after), next.files.owners⟩) ∧
+    next.Valid ∧
+    next.session = state.session ∧ next.cache = state.cache ∧ next.census = state.census ∧
+    next.writer.installed = state.writer.installed ∧
+    next.writer.checkpoint = state.writer.checkpoint ∧
+    next.writer.wal.active = state.writer.wal.active ∧
+    next.writer.wal.readDescriptors state.writer.target.range.watermark =
       state.writer.wal.readDescriptors state.writer.target.range.watermark ∧
-    reported.next.writer.history = history ∧
+    next.writer.history = history ∧
     reported.barrier.writerSlot = state.owner ∧
     reported.reachedView.child reported.inventory.lifetime.root "LOCK" = some reported.inventory.lifetime.lock ∧
     reported.barrier.handle.2.1 = state.directorySlot ∧
@@ -207,12 +221,12 @@ theorem NativeReadyReadPrefix.collectsCoveredWal
     reported.barrier.reached = reported.inventory.listing.afterClose.afterDrops reported.barrier.drops ∧
     state.directorySlot ∈ reported.barrier.reached.slots ∧ state.owner ∈ reported.barrier.reached.slots ∧
     reported.reachedView.modelObject reported.inventory.lifetime.lock = reported.barrier.reached.inode state.owner.description ∧
-    reported.barrier.after.crashSealed = [reported.next.writer.wal.sealed] ∧
+    reported.barrier.after.crashSealed = [next.writer.wal.sealed] ∧
     (∀ offset ∈ state.writer.wal.collectionOffsets,
       reported.reachedView.child reported.inventory.lifetime.root (renderWalSegmentName offset) = none) ∧
     (∀ segment ∈ state.writer.wal.sealed, state.writer.wal.Eligible segment →
-      segment ∉ reported.next.writer.wal.sealed) ∧
-    InstalledClientReplay log reads history reported.next.writer.installed reported.next.session := by
+      segment ∉ next.writer.wal.sealed) ∧
+    InstalledClientReplay log reads history next.writer.installed next.session := by
   obtain ⟨valid, sameHistory, _⟩ := prior.refines
   have ready := valid.retained
   have plan := ready.completeObservedWalPlan reported.calls reported.inventory reported.manifest reported.marker
@@ -223,8 +237,8 @@ theorem NativeReadyReadPrefix.collectsCoveredWal
     rfl
   obtain ⟨_, _, retries, settled, readyAfter, _⟩ := ready.reportedWalCollectionBarrier reported.calls plan
     (fun _ member => member) bound reported.remove reported.unlinked reported.barrier
-  have after := readyAfter reported.completed
-  have effective : reported.barrier.outcome.effective = true := by rw [reported.completed]; rfl
+  have after := readyAfter completed
+  have effective : reported.barrier.outcome.effective = true := by rw [completed]; rfl
   obtain ⟨names, absent⟩ := settled effective
   have crash : reported.barrier.after.crashSealed = [reported.barrier.after.visible.sealed] :=
     names.trans (congrArg (fun sealed => [sealed]) reported.barrier.effect.sealed.symm)
@@ -236,9 +250,9 @@ theorem NativeReadyReadPrefix.collectsCoveredWal
   obtain ⟨owner, lock, lockObject⟩ := reported.retainsLock
   have directoryAtIssue := directory ▸ reported.barrier.directoryLive
   have ownerAtIssue := owner ▸ reported.barrier.writerLive
-  have nextValid : reported.next.Valid :=
+  have nextValid : (reported.next completed).Valid :=
     ⟨valid.phase, valid.owner, ownerLive, directoryLive, valid.captured, after⟩
-  refine ⟨reported.runs valid, nextValid, rfl, rfl, reported.censusPreserved, rfl, rfl, retry.keepsActive,
+  refine ⟨reported.runs valid completed, nextValid, rfl, rfl, reported.censusPreserved, rfl, rfl, retry.keepsActive,
     stillReads, sameHistory, owner, lock, directory, object, reported.reachesBarrier, directoryAtIssue, ownerAtIssue,
     lockObject, crash, reported.unlinked.completedNamesAbsent rfl rfl, ?_,
     prior.guardedReplay⟩
