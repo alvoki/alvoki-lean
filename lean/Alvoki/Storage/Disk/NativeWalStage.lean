@@ -396,30 +396,131 @@ theorem commitAfterRename (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs
   simp only [grouped, moved]
   exact (calls.rootBarrier cache loaded).2
 
+/-- The cached directory lookup can itself fail or report a closed
+session. Only a returned handle reaches the literal fsync. -/
+theorem rootBarrierResult (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
+    (entry : heap) :
+    calls.group directory.path cache.directory cache.active cache.pending #[directory.path] entry =
+      match calls.readDirectory cache.directory entry with
+      | .error cause reached => .error (IO.userError s!"sync failed for '{directory.path}': {cause}") reached
+      | .ok none reached =>
+        .error (IO.userError s!"sync failed for '{directory.path}': {IO.userError "database is closed"}") reached
+      | .ok (some handle) issued => match calls.fsync handle issued with
+        | .ok () reached => .ok () reached
+        | .error cause reached => .error (IO.userError s!"sync failed for '{directory.path}': {cause}") reached := by
+  cases loaded : calls.readDirectory cache.directory entry with
+  | error =>
+    rw [group, SyncPathGroup.run_single]
+    simp [syncPath, syncWithHandles, Bind.bind, EStateM.bind, loaded]
+    rfl
+  | ok contents issued =>
+    cases contents with
+    | none =>
+      rw [group, SyncPathGroup.run_single]
+      simp [syncPath, syncWithHandles, loaded, Bind.bind, EStateM.bind, throw, throwThe,
+        MonadExceptOf.throw, EStateM.throw]
+      rfl
+    | some handle =>
+      exact (calls.rootBarrier cache loaded).2
+
 private theorem rootBarrierReturned (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
     {before reached : heap} (returned : calls.group directory.path cache.directory cache.active cache.pending
       #[directory.path] before = .ok () reached) :
     ∃ issued handle, calls.readDirectory cache.directory before = .ok (some handle) issued ∧
       calls.fsync handle issued = .ok () reached := by
+  rw [calls.rootBarrierResult cache] at returned
   cases loaded : calls.readDirectory cache.directory before with
-  | error =>
-    rw [group, SyncPathGroup.run_single] at returned
-    simp [syncPath, syncWithHandles, Bind.bind, EStateM.bind, loaded] at returned
+  | error => simp [loaded] at returned
   | ok contents issued =>
     cases contents with
-    | none =>
-      rw [group, SyncPathGroup.run_single] at returned
-      simp [syncPath, syncWithHandles, loaded, Bind.bind, EStateM.bind, throw, throwThe,
-        MonadExceptOf.throw, EStateM.throw] at returned
+    | none => simp [loaded] at returned
     | some handle =>
-      rw [(calls.rootBarrier cache loaded).2] at returned
       cases synced : calls.fsync handle issued with
-      | error => simp [synced] at returned
+      | error => simp [loaded, synced] at returned
       | ok value after =>
         cases value
-        simp [synced] at returned
+        simp [loaded, synced] at returned
         subst reached
         exact ⟨issued, handle, rfl, synced⟩
+
+/-- The actual returning commit identifies its successful prefix and
+the first failing publication callback, or the final directory outcome.
+A failing file group retains the heap after all its reached syncs. -/
+inductive PublicationOutcome (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
+    (append : RawWalAppendCalls heap) (stage : RawWalStageCalls heap)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) (first count : Nat) (bytes : ByteArray)
+    (entry : heap) : EStateM.Result IO.Error heap Unit → Prop where
+  | appendError {cause reached}
+      (failed : append.run cache.active (directory.file (.walSegment first)) bytes entry = .error cause reached) :
+      PublicationOutcome calls cache append stage rename first count bytes entry (.error cause reached)
+  | stageError {appended cause reached}
+      (wrote : append.run cache.active (directory.file (.walSegment first)) bytes entry = .ok () appended)
+      (failed : stage.run cache.pending (directory.file .stagedWalBoundary) (WAL.Boundary.encode count.toUInt64)
+        appended = .error cause reached) :
+      PublicationOutcome calls cache append stage rename first count bytes entry (.error cause reached)
+  | groupError {appended staged cause reached}
+      (wrote : append.run cache.active (directory.file (.walSegment first)) bytes entry = .ok () appended)
+      (stagedMarker : stage.run cache.pending (directory.file .stagedWalBoundary) (WAL.Boundary.encode count.toUInt64)
+        appended = .ok () staged)
+      (failed : calls.group directory.path cache.directory cache.active cache.pending
+        #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .error cause reached) :
+      PublicationOutcome calls cache append stage rename first count bytes entry (.error cause reached)
+  | renameError {appended staged grouped cause reached}
+      (wrote : append.run cache.active (directory.file (.walSegment first)) bytes entry = .ok () appended)
+      (stagedMarker : stage.run cache.pending (directory.file .stagedWalBoundary) (WAL.Boundary.encode count.toUInt64)
+        appended = .ok () staged)
+      (filesSynced : calls.group directory.path cache.directory cache.active cache.pending
+        #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .ok () grouped)
+      (failed : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) grouped =
+        .error cause reached) :
+      PublicationOutcome calls cache append stage rename first count bytes entry (.error cause reached)
+  | directory {appended staged grouped renamed result}
+      (wrote : append.run cache.active (directory.file (.walSegment first)) bytes entry = .ok () appended)
+      (stagedMarker : stage.run cache.pending (directory.file .stagedWalBoundary) (WAL.Boundary.encode count.toUInt64)
+        appended = .ok () staged)
+      (filesSynced : calls.group directory.path cache.directory cache.active cache.pending
+        #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .ok () grouped)
+      (moved : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) grouped = .ok () renamed)
+      (barrier : calls.group directory.path cache.directory cache.active cache.pending
+        #[directory.path] renamed = result) :
+      PublicationOutcome calls cache append stage rename first count bytes entry result
+
+theorem publicationOutcome (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
+    (append : RawWalAppendCalls heap) (stage : RawWalStageCalls heap)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {first count : Nat} {bytes : ByteArray} (entry : heap) :
+    PublicationOutcome calls cache append stage rename first count bytes entry
+      (WalSegmentCommit.commitBytesAt directory first bytes count
+        (append.run cache.active) (stage.run cache.pending)
+        (calls.group directory.path cache.directory cache.active cache.pending) rename entry) := by
+  cases wrote : append.run cache.active (directory.file (.walSegment first)) bytes entry with
+  | error =>
+    rw [WalSegmentCommit.commitBytesAt_fileEffects]
+    simp only [WAL.Boundary.commit, Bind.bind, EStateM.bind, wrote]
+    exact .appendError wrote
+  | ok value appended =>
+    cases value
+    cases stagedMarker : stage.run cache.pending (directory.file .stagedWalBoundary)
+        (WAL.Boundary.encode count.toUInt64) appended with
+    | error =>
+      rw [WalSegmentCommit.commitBytesAt_fileEffects]
+      simp only [WAL.Boundary.commit, Bind.bind, EStateM.bind, wrote, stagedMarker]
+      exact .stageError wrote stagedMarker
+    | ok value staged =>
+      cases value
+      rw [calls.commitAfterStaging cache append stage rename wrote stagedMarker]
+      cases filesSynced : calls.group directory.path cache.directory cache.active cache.pending
+          #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged with
+      | error => exact .groupError wrote stagedMarker filesSynced
+      | ok value grouped =>
+        cases value
+        cases moved : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) grouped with
+        | error =>
+          simp only [moved]
+          exact .renameError wrote stagedMarker filesSynced moved
+        | ok value renamed =>
+          cases value
+          simp only [moved]
+          exact .directory wrote stagedMarker filesSynced moved rfl
 
 /-- The exact successful raw commit fixes the returned prefix and all
 later publication callbacks, including the original cached root. -/
@@ -439,31 +540,13 @@ theorem publicationReturned (calls : RawSyncCalls heap) (cache : OpenSyncCacheRe
       rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) grouped = .ok () renamed ∧
       calls.readDirectory cache.directory renamed = .ok (some handle) issued ∧
       calls.fsync handle issued = .ok () reached := by
-  have successful := returned
-  rw [WalSegmentCommit.commitBytesAt_fileEffects] at successful
-  cases wrote : append.run cache.active (directory.file (.walSegment first)) bytes entry with
-  | error => simp [WAL.Boundary.commit, Bind.bind, EStateM.bind, wrote] at successful
-  | ok value appended =>
-    cases value
-    cases stagedWrite : stage.run cache.pending (directory.file .stagedWalBoundary)
-        (WAL.Boundary.encode count.toUInt64) appended with
-    | error => simp [WAL.Boundary.commit, Bind.bind, EStateM.bind, wrote, stagedWrite] at successful
-    | ok value staged =>
-      cases value
-      rw [calls.commitAfterStaging cache append stage rename wrote stagedWrite] at returned
-      cases grouped : calls.group directory.path cache.directory cache.active cache.pending
-          #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged with
-      | error => simp [grouped] at returned
-      | ok value groupedAt =>
-        cases value
-        cases moved : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) groupedAt with
-        | error => simp [grouped, moved] at returned
-        | ok value renamed =>
-          cases value
-          have barrier : calls.group directory.path cache.directory cache.active cache.pending #[directory.path] renamed =
-              .ok () reached := by simpa only [grouped, moved] using returned
-          obtain ⟨issued, handle, loaded, synced⟩ := calls.rootBarrierReturned cache barrier
-          exact ⟨appended, staged, groupedAt, renamed, issued, handle, rfl, stagedWrite, grouped, moved, loaded, synced⟩
+  have outcome := calls.publicationOutcome cache append stage rename (first := first) (count := count)
+    (bytes := bytes) entry
+  rw [returned] at outcome
+  cases outcome with
+  | directory wrote stagedMarker filesSynced moved barrier =>
+    obtain ⟨issued, handle, loaded, synced⟩ := calls.rootBarrierReturned cache barrier
+    exact ⟨_, _, _, _, issued, handle, wrote, stagedMarker, filesSynced, moved, loaded, synced⟩
 
 /-- Use the append's active entry and staging's returned pending entry
 instead of supplying a second handle selection. Even a failed keeper
@@ -539,6 +622,45 @@ theorem groupedFromStaging (calls : RawSyncCalls heap) (cache : OpenSyncCacheRef
       | .ok () after | .error _ after => .error (IO.userError s!"sync failed for '{keeper}': {cause}") after) second
     refine retained.trans ?_
     cases calls.fsync markerHandle consumed <;> rfl
+
+
+/-- A returned file-group error still reaches the marker sync. The
+keeper error takes diagnostic priority, while the marker sync supplies
+the final heap on either branch. -/
+theorem groupedFileError (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
+    {first : Nat} {staged consumed reached : heap} {keeperHandle markerHandle : IO.FS.Handle} {cause : IO.Error}
+    (keeper : calls.syncPath directory.path (directory.file (.walSegment first))
+      cache.directory cache.active cache.pending staged = calls.fsync keeperHandle staged)
+    (marker : calls.syncPath directory.path (directory.file .stagedWalBoundary)
+      cache.directory cache.active cache.pending (reachedState (calls.fsync keeperHandle staged)) =
+        calls.fsync markerHandle consumed)
+    (grouped : calls.group directory.path cache.directory cache.active cache.pending
+      #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .error cause reached) :
+    (∃ error afterKeeper, calls.fsync keeperHandle staged = .error error afterKeeper ∧
+      reachedState (calls.fsync markerHandle consumed) = reached ∧
+      cause = IO.userError s!"sync failed for '{directory.file (.walSegment first)}': {error}") ∨
+    (∃ afterKeeper error, calls.fsync keeperHandle staged = .ok () afterKeeper ∧
+      calls.fsync markerHandle consumed = .error error reached ∧
+      cause = IO.userError s!"sync failed for '{directory.file .stagedWalBoundary}': {error}") := by
+  unfold group at grouped
+  rw [SyncPathGroup.run_pair, keeper] at grouped
+  cases firstCall : calls.fsync keeperHandle staged with
+  | error error afterKeeper =>
+    simp only [firstCall, reachedState] at marker
+    cases secondCall : calls.fsync markerHandle consumed <;>
+      simp only [firstCall, marker, secondCall, EStateM.Result.error.injEq] at grouped <;>
+      exact .inl ⟨error, afterKeeper, rfl, grouped.2, grouped.1.symm⟩
+  | ok value afterKeeper =>
+    cases value
+    simp only [firstCall, reachedState] at marker
+    cases secondCall : calls.fsync markerHandle consumed with
+    | error error afterMarker =>
+      simp only [firstCall, marker, secondCall, EStateM.Result.error.injEq] at grouped
+      obtain ⟨rfl, rfl⟩ := grouped
+      exact .inr ⟨afterKeeper, error, rfl, rfl, rfl⟩
+    | ok value afterMarker =>
+      cases value
+      simp [firstCall, marker, secondCall] at grouped
 
 end RawSyncCalls
 end Alvoki.Storage.DiskSession
