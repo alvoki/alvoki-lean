@@ -126,8 +126,12 @@ needs unchanged bytes outside the inactive record and an old, exact-new or
 invalid decode at that record. Given the complete encoded WAL prefix from
 the preceding WAL barrier, the native marker decoder and the boundary
 reader jointly select exactly the old history or the whole new history.
-After the marker barrier they select the whole new history. The remaining native refinement must justify
-these reports for the same held file and connect the WAL sync to persistence.
+After the marker barrier they select the whole new history. For settled
+file bindings, the descriptor proof derives both surviving byte sequences
+from successful sync reports on the held WAL and marker inodes. The reports
+assume successful file sync persists the visible bytes of the named inode.
+The native refinement still has to connect the reached append and positional
+write to those same inodes and account for interrupted and failed effects.
 Derive the projected retry steps from reached native events and connect the
 returned session to the common client ledger. Use the physical reports for
 checkpoint selection and segmented extents from that same attempt.

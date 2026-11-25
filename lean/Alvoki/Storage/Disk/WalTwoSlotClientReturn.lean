@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.WalTwoSlotReopenProjection
 import Alvoki.Storage.Disk.BatchInterruptionDispatch
+import Alvoki.Storage.Disk.SyncHandleEffects
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -155,6 +156,57 @@ theorem uncertain_batch_selects_prefix
       (fun frontier => (Boundary.select frontier physical).isOk) present newer
     exact ⟨next, history ++ batch, by simpa [readNext, Except.isOk, Except.toBool] using selection,
       .inr rfl, readNext⟩
+
+open Boundary (WalInodeImage)
+open Storage.SyncHandleRouting (FsyncObservation)
+open WalSegmentRepair (KeeperDescriptorIdentity)
+
+private theorem syncedInode_survivor {image reached : WalInodeImage}
+    {descriptor : KeeperDescriptorIdentity}
+    (report : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      descriptor image (fun inode files => files.completeFileSync inode) (.ok () reached))
+    (current : descriptor.inode = image.active)
+    (settled : image.crashBindings = [image.active])
+    {bytes : ByteArray} (survived : ∃ inode ∈ reached.crashBindings, bytes ∈ reached.crashBytes inode) :
+    bytes = image.visible image.active := by
+  have completed := report.effect.completed_of_return ⟨reached, rfl⟩
+  have target := report.sameInode.trans current
+  rw [target] at completed
+  have state : reached = image.completeFileSync image.active := by injection completed
+  obtain ⟨inode, bound, stored⟩ := survived
+  have live : inode = image.active := by
+    simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, settled] using bound
+  simpa [state, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, live] using stored
+
+/-- A successful barrier on each held descriptor fixes the bytes used by
+recovery. The marker encoding comes from the reported positional write;
+the WAL prefix comes from the reported append on the selected keeper. -/
+theorem syncedDescriptors_selectBatch
+    {wal marker walSynced markerSynced : WalInodeImage}
+    {walHandle markerHandle : KeeperDescriptorIdentity}
+    (walSync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      walHandle wal (fun inode files => files.completeFileSync inode) (.ok () walSynced))
+    (markerSync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      markerHandle marker (fun inode files => files.completeFileSync inode) (.ok () markerSynced))
+    (walCurrent : walHandle.inode = wal.active) (markerCurrent : markerHandle.inode = marker.active)
+    (walSettled : wal.crashBindings = [wal.active]) (markerSettled : marker.crashBindings = [marker.active])
+    {walBytes markerBytes before : ByteArray} {current next : Selection}
+    (walSurvived : ∃ inode ∈ walSynced.crashBindings, walBytes ∈ walSynced.crashBytes inode)
+    (markerSurvived : ∃ inode ∈ markerSynced.crashBindings, markerBytes ∈ markerSynced.crashBytes inode)
+    (history batch : List WAL.Write)
+    (prior : decode before = .ok current)
+    (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
+    (size : (marker.visible marker.active).size = containerSize)
+    (unchanged : ∀ position,
+      (position < next.slot * stride ∨ next.slot * stride + 40 ≤ position) →
+        (marker.visible marker.active).get! position = before.get! position)
+    (written : (marker.visible marker.active).extract (next.slot * stride) (next.slot * stride + 40) = next.encode)
+    (appended : ∃ tail, wal.visible wal.active = WAL.encode (history ++ batch) ++ tail) :
+    decode markerBytes = .ok next ∧
+      Boundary.select next.frontier walBytes = .ok (WAL.encode (history ++ batch)) := by
+  rw [syncedInode_survivor walSync walCurrent walSettled walSurvived,
+    syncedInode_survivor markerSync markerCurrent markerSettled markerSurvived]
+  exact syncedBytes_selectBatch history batch prior advanced size unchanged written appended
 
 open DiskSession (DatabaseSubmissions DatabaseBatchRetention)
 
