@@ -2,6 +2,8 @@ import Alvoki.Storage.Disk.NativeExecutionTrace
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
+import Alvoki.Storage.Disk.NativePendingRotation
+import Alvoki.Storage.Disk.NativeRejectedOpenLineage
 import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
 
 namespace Alvoki.Storage.DiskSession
@@ -13,8 +15,24 @@ inductive NativeExecutionEndInstruction where
   | write (request : WriteRequest)
   | writeThenClose (request : WriteRequest)
   | close
+  | closeThenOpenAttempts (inputs : List FilePath)
   | checkpoint
   | collectCoveredWal
+  | rotateWal
+
+/-- The first open uses the files and census left by the successful
+close. Each rejected attempt uses the exact predecessor in the lineage. -/
+structure NativeRejectedOpenSequence (current : NativeExecutionPosition) where
+  close : NativeReadyClose current.ready.state
+  closed : close.report.result = .ok ()
+  inputs : List FilePath
+  errors : List IO.Error
+  after : CensusOpenState
+  available : Bool
+  reported : NativeRejectedOpenLineage current.ready.state.session.directory
+    (current.ready.state.census.inode current.ready.state.owner.description)
+    (current.ready.state.census.inode current.ready.state.directorySlot.description)
+    (close.report.finished.descriptors, current.ready.state.releasedFiles) inputs errors after available
 
 /-- An execution can stop at a ready session, the return of an
 operation that requires recovery, or an interrupted native call.
@@ -24,6 +42,7 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
   | uncertainWrite (pending : NativePendingWrite current.ready)
   | closeAfterUncertainWrite (pending : NativePendingWrite current.ready) (close : NativePendingClose pending)
   | close (reported : NativeReadyClose current.ready.state)
+  | rejectedOpensAfterClose (sequence : NativeRejectedOpenSequence current)
   | interruptedClose
       (cut : NativeCloseUnlockInterruption current.ready.state.session.directory
         current.ready.state.session.descriptor current.ready.state.closeState)
@@ -36,6 +55,7 @@ inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
       (reported : NativeCheckpointDirectoryError (image := image) current.ready.state cut) (physical : reported.Physical)
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause)
+  | interruptedRotation (stop : NativeRotationDirectoryStop current.ready.state)
 
 namespace NativeExecutionEnd
 
@@ -44,10 +64,12 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .uncertainWrite pending => .write pending.write.request
   | .closeAfterUncertainWrite pending _ => .writeThenClose pending.write.request
   | .close _ => .close
+  | .rejectedOpensAfterClose sequence => .closeThenOpenAttempts sequence.inputs
   | .interruptedClose _ _ => .close
   | .interruptedCloseAfterUncertainWrite pending _ _ => .writeThenClose pending.write.request
   | .checkpointError _ _ => .checkpoint
   | .collectionError _ _ _ => .collectCoveredWal
+  | .interruptedRotation _ => .rotateWal
 
 def uncertainBatch : NativeExecutionEnd current → Option (List WAL.Write)
   | .uncertainWrite pending | .closeAfterUncertainWrite pending _ => some pending.write.failure.batch
@@ -58,8 +80,8 @@ def submissions (ending : NativeExecutionEnd current) : List DatabaseSubmissions
   current.submissions ++ (ending.uncertainBatch.map DatabaseSubmissions.uncertainBatch).toList
 
 /-- Retain the native schedule's exact endpoint, including the original
-write return when close follows it. An interruption keeps the issued
-unlock slot and determines when reported drops allow another opener. -/
+write return when close follows it. The interrupted cases record the
+issued unlock or directory barrier and its reached state. -/
 def Reached : NativeExecutionEnd current → Prop
   | .ready => current.ready.opened =
       .ok current.ready.initial.session (current.ready.initial.census, current.ready.initial.files)
@@ -70,6 +92,15 @@ def Reached : NativeExecutionEnd current → Prop
         | .ok () => .ok () closed.reached
         | .error cause => .error cause closed.reached
   | .close reported => reported.Returned
+  | .rejectedOpensAfterClose sequence =>
+      sequence.close.report.run = .ok () sequence.close.report.finished ∧
+      sequence.close.report.finished.phase = .closed ∧
+      sequence.close.report.finished.descriptors = current.ready.state.census.afterDrops
+        (sequence.close.report.drops .active ++ sequence.close.report.drops .pending ++ sequence.close.report.drops .directory) ∧
+      sequence.after.1.inode = current.ready.state.census.inode ∧
+      sequence.after.2.image = current.ready.state.files.image ∧
+      (TryLockObserves sequence.after.2.owners current.ready.state.session.directory (.ok true) ↔ sequence.available = true) ∧
+      sequence.errors.length = sequence.inputs.length
   | .interruptedClose cut _ =>
       (∀ clear, cut.run clear = .error current.ready.state.owner cut.atCut ∧
         cut.atCut.phase = .ready current.ready.state.writer.installed ∧
@@ -101,6 +132,7 @@ def Reached : NativeExecutionEnd current → Prop
         (.poisoned, ⟨(current.ready.state.cache, reported.pending.image), reported.pending.owners⟩) ∧
       ∀ sealed ∈ reported.pending.image.crashSealed,
         Nonempty (CoveredWalRetrySelection current.ready.state.writer { reported.pending.image.visible with sealed })
+  | .interruptedRotation stop => NativePendingRotation current.ready stop
 
 theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   cases ending with
@@ -118,6 +150,10 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
       rw [status] at result
       simpa only [status] using result.1
   | close reported => exact (current.ready.closes reported).returned
+  | rejectedOpensAfterClose sequence =>
+    obtain ⟨closed, phase, census, _, inodes, files, vacant, count, _⟩ :=
+      current.ready.rejectedOpensAfterClose sequence.close sequence.closed sequence.reported
+    exact ⟨closed, phase, census, inodes, files, vacant, count⟩
   | interruptedClose cut owner =>
     refine ⟨?_, cut.admitsAfterDrops⟩
     intro clear
@@ -133,6 +169,7 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
     obtain ⟨returned, _, _, _, _, _, _, _, _, _, _, _, _, survivors, _⟩ :=
       current.ready.readPrefix.collectionBarrierFailed reported failed
     exact ⟨returned, survivors⟩
+  | interruptedRotation stop => exact current.ready.stopsDuringRotation stop
 
 def ReadyReplay : NativeExecutionEnd current → Prop
   | .ready => InstalledClientReplay current.submissions current.ready.reads current.history
@@ -167,7 +204,7 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
   | interruptedCloseAfterUncertainWrite pending =>
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
-  | ready | close | interruptedClose | checkpointError | collectionError =>
+  | ready | close | rejectedOpensAfterClose | interruptedClose | checkpointError | collectionError | interruptedRotation =>
     refine ⟨current.history, .inl rfl, ?_, current.ready.readPrefix.readsBounded⟩
     all_goals simpa [submissions, uncertainBatch] using current.ready.readPrefix.refines.2.2
 
@@ -187,6 +224,8 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
       (close : ∀ pending : NativePendingWrite current.ready, pending.write = write → Nonempty (NativePendingClose pending)) :
       NativeExecutionEndObservation current (.writeThenClose write.request)
   | close (reported : NativeReadyClose current.ready.state) : NativeExecutionEndObservation current .close
+  | rejectedOpensAfterClose (sequence : NativeRejectedOpenSequence current) :
+      NativeExecutionEndObservation current (.closeThenOpenAttempts sequence.inputs)
   | interruptedClose
       (cut : NativeCloseUnlockInterruption current.ready.state.session.directory
         current.ready.state.session.descriptor current.ready.state.closeState)
@@ -203,6 +242,8 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
   | collectionError (reported : NativeReadyWalCollection current.ready.state) (cause : IO.Error)
       (failed : reported.barrier.outcome = .errorBeforeEffect cause ∨ reported.barrier.outcome = .errorAfterEffect cause) :
       NativeExecutionEndObservation current .collectCoveredWal
+  | interruptedRotation (stop : NativeRotationDirectoryStop current.ready.state) :
+      NativeExecutionEndObservation current .rotateWal
 
 theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObservation current requested) :
     ∃ ending : NativeExecutionEnd current, ending.instruction = requested ∧ ending.Reached := by
@@ -220,6 +261,7 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
     change NativeExecutionEndInstruction.writeThenClose pending.write.request = .writeThenClose write.request
     rw [same]
   | close reported => exact ⟨.close reported, rfl, NativeExecutionEnd.reached _⟩
+  | rejectedOpensAfterClose sequence => exact ⟨.rejectedOpensAfterClose sequence, rfl, NativeExecutionEnd.reached _⟩
   | interruptedClose cut owner => exact ⟨.interruptedClose cut owner, rfl, NativeExecutionEnd.reached _⟩
   | interruptedCloseAfterUncertainWrite write inspect stop =>
     obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite write inspect
@@ -229,11 +271,12 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
     rw [same]
   | checkpointError reported physical => exact ⟨.checkpointError reported physical, rfl, NativeExecutionEnd.reached _⟩
   | collectionError reported cause failed => exact ⟨.collectionError reported cause failed, rfl, NativeExecutionEnd.reached _⟩
+  | interruptedRotation stop => exact ⟨.interruptedRotation stop, rfl, NativeExecutionEnd.reached _⟩
 
 /-- The exact empty bootstrap starts one native execution. Completed
-instructions retain their ordered replay. The final report can stop at
-an issued unlock or a returned result and retains the reached native
-state and permitted history. -/
+instructions retain their ordered replay. The final report retains
+the reached native state and permitted history, including when it
+stops at an issued unlock or WAL rotation barrier. -/
 theorem BootstrapKeeperMarkerHandoff.executesPrefixFromEmpty
     {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
     {calls : BootstrapOpenCalls (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory before}
