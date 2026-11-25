@@ -1352,8 +1352,6 @@ theorem recoveredRetries_installedReads
       { prepared with directory := settleMarker prepared.directory selected } = .ok () after)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
     (sealedRead : ∀ file ∈ sealed, prepared.kept file.1 = some file.2)
-    (checked : checkSelectedWalSegmentSpans (selected.frontier.toNat / frameSize)
-      (sealed ++ [(target.first, plan.keeperBytes)]) = true)
     (layout : DiskSession.CanonicalKeeperLayout prepared ((history ++ batch).take range.through))
     (layoutTarget : layout.target = target) (layoutStart : layout.first = first)
     (layoutOffsets : layout.sealed.map WalSegment.first = required.dropLast.map Prod.fst)
@@ -1428,8 +1426,6 @@ theorem recoveredRetries_installedReads
     recovery.marked
   have sameMarker := Option.some.inj (marked.symm.trans liveMarker)
   have sameLength := Except.ok.inj ((sameMarker ▸ decodedLength).symm.trans (Boundary.decode_encode _))
-  have boundedChecked := checkSelectedWalSegmentSpans_replaceKeeperBytes (after := target.trimmed)
-    sealed (Nat.le_of_eq keeperSize.symm) checked
   let segments := layout.sealed ++ [layout.keeper]
   have selectedChain : WalSegment.Chain ((history ++ batch).take range.through) first segments :=
     layoutStart ▸ layout.chain
@@ -1441,6 +1437,15 @@ theorem recoveredRetries_installedReads
     · intro file member
       obtain ⟨segment, found, rfl⟩ := List.mem_map.mp member
       exact layoutBytes segment found
+  have selectedThrough : selected.frontier.toNat / frameSize = ((history ++ batch).take range.through).length := by
+    rw [through, ← congrArg Target.range layoutTarget]
+    exact layout.through
+  have checked : checkSelectedWalSegmentSpans (selected.frontier.toNat / frameSize)
+      (sealed ++ [(target.first, plan.keeperBytes)]) = true := by
+    rw [selectedThrough, full, ← exactSeals, ← keeperOffset, ← keeperBytes]
+    exact layout.chain.checkSelectedSpans tail
+  have boundedChecked := checkSelectedWalSegmentSpans_replaceKeeperBytes (after := target.trimmed)
+    sealed (Nat.le_of_eq keeperSize.symm) checked
   have selectedSegments : segments.map (fun segment => (segment.first, segment.bytes)) =
       sealed ++ [(target.first, target.trimmed)] := by
     simp [segments, exactSeals, keeperOffset, keeperBytes]

@@ -47,6 +47,27 @@ theorem WalSegment.Chain.keeperBytes {history : List WAL.Write} {first : Nat}
     cases chain with
     | cons _ _ _ remaining => exact ih remaining
 
+/-- A canonical chain passes the selected span checks, including an
+arbitrary suffix beyond the marker in its final file. -/
+theorem WalSegment.Chain.checkSelectedSpans {history : List WAL.Write} {first : Nat}
+    {sealed : List WalSegment} {keeper : WalSegment}
+    (chain : Chain history first (sealed ++ [keeper])) (tail : ByteArray) :
+    checkSelectedWalSegmentSpans history.length
+      (sealed.map (fun segment => (segment.first, segment.bytes)) ++ [(keeper.first, keeper.bytes ++ tail)]) = true := by
+  let files := sealed.map (fun segment => (segment.first, segment.bytes)) ++ [(keeper.first, keeper.bytes ++ tail)]
+  change checkSelectedWalSegmentSpans history.length files = true
+  have span : checkWalSegmentSpans history.length files = true :=
+    chain.checkReadSpans chain.start_le (Nat.le_refl _)
+  have keeperWithin := chain.startsWithin keeper (List.mem_append_right _ (by simp))
+  rw [checkSelectedWalSegmentSpans, Bool.and_eq_true]
+  refine ⟨List.all_eq_true.mpr ?_, span⟩
+  intro file member
+  rcases List.mem_append.mp member with earlier | last
+  · obtain ⟨segment, sealedMember, rfl⟩ := List.mem_map.mp earlier
+    exact decide_eq_true (chain.startsWithin segment (List.mem_append_left _ sealedMember))
+  · obtain rfl := List.mem_singleton.mp last
+    exact decide_eq_true keeperWithin
+
 /-- Each observed sealed file supplies its exact canonical span and the
 keeper can carry an arbitrary unselected tail. The executable per-file
 reader's replay therefore agrees with replay on the complete history. -/
@@ -63,18 +84,8 @@ theorem WalSegment.Chain.replaysMarked {history : List WAL.Write} {first : Nat}
   have through : count.toNat / frameSize = history.length := by
     rw [absolute, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
   have aligned : count.toNat % frameSize = 0 := by rw [absolute, Nat.mul_mod_left]
-  have span : checkWalSegmentSpans history.length files = true :=
-    chain.checkReadSpans chain.start_le (Nat.le_refl _)
-  have keeperWithin := chain.startsWithin keeper (List.mem_append_right _ (by simp))
-  have checked : checkSelectedWalSegmentSpans history.length files = true := by
-    rw [checkSelectedWalSegmentSpans, Bool.and_eq_true]
-    refine ⟨List.all_eq_true.mpr ?_, span⟩
-    intro file member
-    rcases List.mem_append.mp member with earlier | last
-    · obtain ⟨segment, sealedMember, rfl⟩ := List.mem_map.mp earlier
-      exact decide_eq_true (chain.startsWithin segment (List.mem_append_left _ sealedMember))
-    · obtain rfl := List.mem_singleton.mp last
-      exact decide_eq_true keeperWithin
+  have checked : checkSelectedWalSegmentSpans history.length files = true :=
+    chain.checkSelectedSpans tail
   obtain ⟨bytes, rest, firstFile⟩ : ∃ bytes rest, files = (first, bytes) :: rest := by
     cases sealed with
     | nil => cases chain; exact ⟨_, [], rfl⟩
