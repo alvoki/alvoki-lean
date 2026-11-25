@@ -763,4 +763,75 @@ theorem countCachedWalReadCalls_bound (dir : DiskDirectory) (watermark : Nat) (l
   unfold countCachedWalReadCalls
   omega
 
+-- Use the existing result recursor so this proof does not emit a separate matcher.
+private theorem readCachedWalPayloadsFrom_prepend {state : Type} (dir : DiskDirectory) (through : Nat)
+    (readSeal : FilePath → Nat → EStateM IO.Error state ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
+    (required : List (Nat × IO.FS.Metadata)) (read : List (Nat × ByteArray)) (entry : state) :
+    readCachedWalPayloadsFrom dir through readSeal readKeeper required read entry =
+      EStateM.Result.rec (fun payload reached => .ok (read.reverse ++ payload.1, payload.2) reached)
+        (fun cause reached => .error cause reached)
+        (readCachedWalPayloadsFrom dir through readSeal readKeeper required [] entry) := by
+  induction required generalizing read entry with
+  | nil => rfl
+  | cons head tail ih =>
+    obtain ⟨first, metadata⟩ := head
+    cases tail with
+    | nil =>
+      simp only [readCachedWalPayloadsFrom, Bind.bind, EStateM.bind]
+      cases got : readKeeper (dir.file (.walSegment first)) ((through - first) * frameSize)
+          metadata.byteSize.toNat entry with
+      | error cause reached => rfl
+      | ok bytes reached =>
+        by_cases checked : bytes.size = (through - first) * frameSize ∧
+            (through - first) * frameSize ≤ metadata.byteSize.toNat
+        · simp [checked, Pure.pure, EStateM.pure, List.reverse_cons]
+        · simp [checked, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+    | cons next rest =>
+      obtain ⟨next, nextMetadata⟩ := next
+      by_cases forward : first < next
+      · simp only [readCachedWalPayloadsFrom, Bind.bind, EStateM.bind, ite_eq_left forward, Pure.pure]
+        cases got : readExactRecoveryFileWith (dir.file (.walSegment first)) ((next - first) * frameSize)
+            selectedWalSpanError (fun _ => EStateM.pure metadata.byteSize.toNat) readSeal entry with
+        | error cause reached => rfl
+        | ok bytes reached =>
+          simp only [ih ((first, bytes) :: read) reached, ih [(first, bytes)] reached]
+          cases readCachedWalPayloadsFrom dir through readSeal readKeeper ((next, nextMetadata) :: rest) [] reached with
+          | error cause final => rfl
+          | ok payload final =>
+            obtain ⟨files, size⟩ := payload
+            simp [List.reverse_cons]
+      · simp [readCachedWalPayloadsFrom, forward, Bind.bind, EStateM.bind, throw, throwThe,
+          MonadExceptOf.throw, EStateM.throw]
+
+/-- Expose one actual seal step without publishing the private accumulator.
+Only a successful checked seal read continues at the next selected extent. -/
+theorem readCachedWalPayloads_cons_cons {state : Type} (dir : DiskDirectory) (through first next : Nat)
+    (metadata nextMetadata : IO.FS.Metadata) (rest : List (Nat × IO.FS.Metadata))
+    (readSeal : FilePath → Nat → EStateM IO.Error state ByteArray)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error state ByteArray) :
+    readCachedWalPayloads dir through readSeal readKeeper ((first, metadata) :: (next, nextMetadata) :: rest) = (do
+      unless first < next do throw selectedWalSpanError
+      let bytes ← readExactRecoveryFileWith (dir.file (.walSegment first)) ((next - first) * frameSize)
+        selectedWalSpanError (fun _ => pure metadata.byteSize.toNat) readSeal
+      let (files, size) ← readCachedWalPayloads dir through readSeal readKeeper ((next, nextMetadata) :: rest)
+      pure ((first, bytes) :: files, size)) := by
+  funext entry
+  by_cases forward : first < next
+  · simp only [readCachedWalPayloads, readCachedWalPayloadsFrom, Bind.bind, EStateM.bind, ite_eq_left forward,
+      Pure.pure, EStateM.pure]
+    cases got : readExactRecoveryFileWith (dir.file (.walSegment first)) ((next - first) * frameSize)
+        selectedWalSpanError (fun _ => EStateM.pure metadata.byteSize.toNat) readSeal entry with
+    | error cause reached => rfl
+    | ok bytes reached =>
+      dsimp only
+      rw [readCachedWalPayloadsFrom_prepend]
+      cases readCachedWalPayloadsFrom dir through readSeal readKeeper ((next, nextMetadata) :: rest) [] reached with
+      | error cause final => rfl
+      | ok payload final =>
+        obtain ⟨files, size⟩ := payload
+        rfl
+  · simp [readCachedWalPayloads, readCachedWalPayloadsFrom, forward, Bind.bind, EStateM.bind,
+      throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+
 end Alvoki.Storage.WalSegmentRepair

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
+import Alvoki.Storage.Disk.NativeWalPayloadReturn
 
 namespace Alvoki.Storage
 
@@ -105,12 +105,14 @@ inductive SelectedWalPayloadReturn (directory : DiskDirectory) (watermark throug
   | payloadError {required : List (Nat × IO.FS.Metadata)} {later : List Nat}
       {cause : IO.Error} {reached : heap}
       (selected : selectWalExtentsThrough extents watermark through = some (required, later))
-      (failed : readCachedWalPayloads directory through readSeal readKeeper required entry = .error cause reached) :
+      (failed : readCachedWalPayloads directory through readSeal readKeeper required entry = .error cause reached)
+      (ordered : CachedWalPayloadReturn directory through readSeal readKeeper required entry (.error cause reached)) :
       SelectedWalPayloadReturn directory watermark through readSeal readKeeper extents entry (.error cause reached)
   | payloadReturned {required : List (Nat × IO.FS.Metadata)} {later : List Nat}
       {files : List (Nat × ByteArray)} {size : Nat} {reached : heap}
       (selected : selectWalExtentsThrough extents watermark through = some (required, later))
-      (read : readCachedWalPayloads directory through readSeal readKeeper required entry = .ok (files, size) reached) :
+      (read : readCachedWalPayloads directory through readSeal readKeeper required entry = .ok (files, size) reached)
+      (ordered : CachedWalPayloadReturn directory through readSeal readKeeper required entry (.ok (files, size) reached)) :
       SelectedWalPayloadReturn directory watermark through readSeal readKeeper extents entry
         (.ok (⟨files, later⟩, size) reached)
 
@@ -172,11 +174,13 @@ theorem SelectedWalReadReturn.classifies (directory : DiskDirectory) (watermark 
         | some chosen =>
           obtain ⟨required, later⟩ := chosen
           simp only [EStateM.bind]
+          have ordered := CachedWalPayloadReturn.classifies directory (length.toNat / frameSize)
+            readSeal readKeeper required afterScan
           cases payload : readCachedWalPayloads directory (length.toNat / frameSize) readSeal readKeeper required afterScan with
-          | error cause reached => exact .payloadError selection payload
+          | error cause reached => exact .payloadError selection payload (by simpa only [payload] using ordered)
           | ok reads reached =>
             obtain ⟨files, size⟩ := reads
-            exact .payloadReturned selection payload
+            exact .payloadReturned selection payload (by simpa only [payload] using ordered)
   · simpa [checked, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] using
       (SelectedWalReadReturn.invalidMarker (directory := directory) (list := list) (lstat := lstat)
         (readSeal := readSeal) (readKeeper := readKeeper) (entry := entry) checked)

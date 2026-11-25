@@ -195,6 +195,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeRawRecoveryReturn
 lake env leanchecker Alvoki.Storage.Disk.NativeWalSelectionReturn
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedPreparationReturn
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointReadReturn
+lake env leanchecker Alvoki.Storage.Disk.NativeWalPayloadReturn
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedKeeperCache
 lake env leanchecker Alvoki.Storage.Disk.NativePrunedAlignedKeeperCache
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedCheckpointHeap

@@ -285,6 +285,7 @@ import Alvoki.Storage.Disk.NativeRawRecoveryReturn
 import Alvoki.Storage.Disk.NativeWalSelectionReturn
 import Alvoki.Storage.Disk.NativeMarkedPreparationReturn
 import Alvoki.Storage.Disk.NativeCheckpointReadReturn
+import Alvoki.Storage.Disk.NativeWalPayloadReturn
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
 import Alvoki.Storage.Disk.NativePrunedAlignedKeeperCache
 import Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
@@ -1894,6 +1895,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.ExactRecoveryFileReturn.classifies
 #check_axioms Alvoki.Storage.readIntegrityRunBytesSized_firstFailure
 #check_axioms Alvoki.Storage.SizedCheckpointReadReturn.classifies
+#check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_cons_cons
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalPayloadReturn.classifies
 #check_axioms Alvoki.Storage.DiskSession.MarkedHeapInstallation.opensFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.opensAlignedFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedReopenEffects.opens
