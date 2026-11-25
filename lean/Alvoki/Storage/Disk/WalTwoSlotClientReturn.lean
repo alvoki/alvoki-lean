@@ -300,6 +300,17 @@ theorem acknowledgedWrite_selectBatch {α : Type}
     walCurrent markerCurrent walSettled markerSettled walSurvived markerSurvived history batch
     prior advanced size unchanged writtenBytes appendedBytes
 
+/-- Filesystem contract for one surviving marker container after an
+interrupted positional write to its inactive record. -/
+def InterruptedSlotBytes (before bytes : ByteArray) (active : Slot) (next : Selection) : Prop :=
+  bytes.size = containerSize ∧
+    (∀ position,
+      (position < slotIndex active.other * stride ∨ slotIndex active.other * stride + 40 ≤ position) →
+        bytes.get! position = before.get! position) ∧
+    (decodeSlot bytes (slotIndex active.other) = decodeSlot before (slotIndex active.other) ∨
+      decodeSlot bytes (slotIndex active.other) = none ∨
+      decodeSlot bytes (slotIndex active.other) = some next)
+
 /-- After the successful WAL barrier, any marker bytes surviving an
 interrupted positional write on the live marker can expose only the
 previous history or the whole newly durable batch. The slot isolation
@@ -319,13 +330,7 @@ theorem interruptedDescriptors_selectBatch
     (activeOffset : current.slot = slotIndex active)
     (advanced : advance current (WAL.encode (history ++ batch)).size = .ok next)
     (slotOutcome : ∀ bytes ∈ marker.crashBytes markerHandle.inode,
-      bytes.size = containerSize ∧
-      (∀ position,
-        (position < slotIndex active.other * stride ∨ slotIndex active.other * stride + 40 ≤ position) →
-          bytes.get! position = before.get! position) ∧
-      (decodeSlot bytes (slotIndex active.other) = decodeSlot before (slotIndex active.other) ∨
-        decodeSlot bytes (slotIndex active.other) = none ∨
-        decodeSlot bytes (slotIndex active.other) = some next))
+      InterruptedSlotBytes before bytes active next)
     (oldCount : current.frontier.toNat = (WAL.encode history).size)
     (appended : ∃ tail, wal.visible wal.active = WAL.encode (history ++ batch) ++ tail) :
     ∃ chosen events, decode markerBytes = .ok chosen ∧
@@ -514,14 +519,14 @@ before bootstrap has settled the marker name. -/
 theorem interruptedMarker_retryChoices
     {image : DirectoryPublication.Image} {checkpoint : Option ByteArray}
     {before : ByteArray} {active : OrderedTwoSlot.Slot} {current : Selection}
-    {next : OrderedTwoSlot.Record UInt64}
+    {next : Selection}
     (accepted : decode before = .ok current)
     (offset : current.slot = slotIndex active)
-    (newer : current.toRecord.epoch < next.epoch)
+    (newer : current.toRecord.epoch < next.toRecord.epoch)
     (observations : ∀ pair ∈ image.active :: image.crashImages,
       pair = ⟨checkpoint, none⟩ ∨
       ∃ bytes,
-        OrderedTwoSlot.Survivor (decodedSlots before) active next .slotWriteUncertain (decodedSlots bytes) ∧
+        InterruptedSlotBytes before bytes active next ∧
         projectBinding ⟨checkpoint, none⟩ bytes = .ok pair) :
     ∀ pair ∈ image.active :: image.crashImages,
       pair.manifest = checkpoint ∧ (pair.walBoundary = none ∨
@@ -530,7 +535,17 @@ theorem interruptedMarker_retryChoices
   intro pair member
   rcases observations pair member with rfl | ⟨bytes, report, projected⟩
   · exact ⟨rfl, .inl rfl⟩
-  · obtain ⟨manifest, boundary⟩ := projectBinding_oldOrNew report accepted offset newer projected
+  · obtain ⟨_, unchanged, target⟩ := report
+    have slotTarget :
+        decodedSlots bytes active.other = decodedSlots before active.other ∨
+        decodedSlots bytes active.other = none ∨
+        decodedSlots bytes active.other = some next.toRecord := by
+      rcases target with old | invalid | fresh
+      · exact .inl (congrArg (Option.map Selection.toRecord) old)
+      · exact .inr (.inl (congrArg (Option.map Selection.toRecord) invalid))
+      · exact .inr (.inr (congrArg (Option.map Selection.toRecord) fresh))
+    have survivor := uncertainSurvivor_of_bytes active next unchanged slotTarget
+    obtain ⟨manifest, boundary⟩ := projectBinding_oldOrNew survivor accepted offset newer projected
     exact ⟨manifest, .inr boundary⟩
 
 /-- The retry trace supplies the actual frontier used by the recovered
@@ -539,14 +554,14 @@ theorem recoveredRetries_retainUncertainBatch
     {initial prepared firstRepair after : FileImage} {target : Target}
     (beforeBarrier : UnsettledRetries initial prepared)
     {checkpoint : Option ByteArray} {before : ByteArray} {active : OrderedTwoSlot.Slot}
-    {current : Selection} {next : OrderedTwoSlot.Record UInt64}
+    {current : Selection} {next : Selection}
     (accepted : decode before = .ok current)
     (offset : current.slot = slotIndex active)
-    (newer : current.toRecord.epoch < next.epoch)
+    (newer : current.toRecord.epoch < next.toRecord.epoch)
     (observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
       pair = ⟨checkpoint, none⟩ ∨
       ∃ bytes,
-        OrderedTwoSlot.Survivor (decodedSlots before) active next .slotWriteUncertain (decodedSlots bytes) ∧
+        InterruptedSlotBytes before bytes active next ∧
         projectBinding ⟨checkpoint, none⟩ bytes = .ok pair)
     (selected : Selection)
     (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
