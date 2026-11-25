@@ -5,124 +5,29 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
-private abbrev ManifestHandle := DescriptorInventory × DescriptorSlot
-private abbrev ManifestState := Cache ManifestHandle × WalInodeImage
-
-private def manifestInode (handle : ManifestHandle) : Nat := handle.1.inode handle.2.description
-
-/-- The versioned checkpoint's concrete dispatch with reported callbacks. -/
-structure CheckpointManifestDirectoryCalls where
-  writeRun : FilePath → ByteArray → EStateM IO.Error ManifestState Unit
-  stage : FilePath → ByteArray → EStateM IO.Error WalInodeImage ManifestHandle
-  openRead : FilePath → EStateM IO.Error WalInodeImage ManifestHandle
-  fsync : ManifestHandle → EStateM IO.Error WalInodeImage Unit
-  rename : FilePath → FilePath → EStateM IO.Error ManifestState Unit
-
-noncomputable def CheckpointManifestDirectoryCalls.perform {directory : DiskDirectory} {before : SegmentedWriterState}
-    (calls : CheckpointManifestDirectoryCalls) (cut : CheckpointPowerCut directory before) :
-    Step → EStateM IO.Error ManifestState Unit :=
-  performCheckpointFileStep directory (SegmentedCheckpointReport.generation before) cut.checkpoint.table.runs.toArray
-    (directory.file .stagedManifest) cut.checkpoint.manifest
-    (fun found => match found with
-      | some run => pure run
-      | none => throw (IO.userError "checkpoint run index is out of bounds"))
-    calls.writeRun (fun path bytes => stageFreshWithCache path bytes calls.stage)
-    (SyncPathGroup.run (sync directory.path calls.openRead calls.fsync)) calls.rename
-
-/-- The returned run directory sync, staged manifest write and staged
-file sync leave this exact prefix at the issued manifest rename. -/
-structure CheckpointManifestRenamePrefix {directory : DiskDirectory} {before : SegmentedWriterState}
-    (cut : CheckpointPowerCut directory before) (calls : CheckpointManifestDirectoryCalls)
-    (runEnd : ManifestState) (runs : ManifestState → RunUnlinkImage) where
-  directoryHandle : ManifestHandle
-  directoryCaptured : runEnd.1.directory = some directoryHandle
-  directorySettled : WalInodeImage
-  runSynced : calls.fsync directoryHandle runEnd.2 = .ok () directorySettled
-  runNames : runs (runEnd.1, directorySettled) = (runs runEnd).syncDirectory
-  stageHandle : ManifestHandle
-  written : WalInodeImage
-  staged : calls.stage (directory.file .stagedManifest) cut.checkpoint.manifest directorySettled = .ok stageHandle written
-  stageLive : stageHandle.2 ∈ stageHandle.1.slots
-  stageBytes : written.visible (manifestInode stageHandle) = cut.checkpoint.manifest
-  synced : calls.fsync stageHandle written = .ok () (written.completeFileSync (manifestInode stageHandle))
-  bindings : WalInodeImage → FilePath → Option Nat
-  stageBinding : bindings (written.completeFileSync (manifestInode stageHandle))
-    (directory.file .stagedManifest) = some (manifestInode stageHandle)
-  oldVisible : (bindings (written.completeFileSync (manifestInode stageHandle))
-    (directory.file .manifest)).map written.visible = before.wal.directory.active.manifest
-  oldStable : ∀ inode, bindings (written.completeFileSync (manifestInode stageHandle))
-    (directory.file .manifest) = some inode →
-    (written.completeFileSync (manifestInode stageHandle)).crashBytes inode = [written.visible inode]
-  stageRunNames : runs (runEnd.1.remember (directory.file .stagedManifest) stageHandle, written) =
-    runs (runEnd.1, directorySettled)
-  syncRunNames : runs (runEnd.1.consume (directory.file .stagedManifest),
-      written.completeFileSync (manifestInode stageHandle)) =
-    runs (runEnd.1.remember (directory.file .stagedManifest) stageHandle, written)
-
-namespace CheckpointManifestRenamePrefix
-
-variable {directory : DiskDirectory} {before : SegmentedWriterState} {cut : CheckpointPowerCut directory before}
-  {calls : CheckpointManifestDirectoryCalls} {runEnd : ManifestState} {runs : ManifestState → RunUnlinkImage}
-
-def inode (observed : CheckpointManifestRenamePrefix cut calls runEnd runs) : Nat := manifestInode observed.stageHandle
-
-def atRename (observed : CheckpointManifestRenamePrefix cut calls runEnd runs) : ManifestState :=
-  (runEnd.1.consume (directory.file .stagedManifest), observed.written.completeFileSync observed.inode)
-
-def oldBinding (observed : CheckpointManifestRenamePrefix cut calls runEnd runs) : Option Nat :=
-  observed.bindings observed.atRename.2 (directory.file .manifest)
-
-/-- The initial run barrier settles the complete run map. The following
-stage write and file barrier preserve it up to the reached rename. -/
-theorem runNamesSettled (observed : CheckpointManifestRenamePrefix cut calls runEnd runs) :
-    runs observed.atRename = (runs runEnd).syncDirectory :=
-  observed.syncRunNames.trans (observed.stageRunNames.trans observed.runNames)
-
-/-- The staged inode carries the newly encoded manifest at the issued rename. -/
-theorem stagedCrashBytes (observed : CheckpointManifestRenamePrefix cut calls runEnd runs) :
-    manifestCrashBytes observed.atRename.2 (some observed.inode) = [some cut.checkpoint.manifest] := by
-  simp [atRename, inode, manifestCrashBytes, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, observed.stageBytes]
-
-/-- The untouched prior live name selects its own synced bytes or absence. -/
-theorem priorCrashBytes (observed : CheckpointManifestRenamePrefix cut calls runEnd runs) :
-    manifestCrashBytes observed.atRename.2 observed.oldBinding = [before.wal.directory.active.manifest] := by
-  have visible : observed.oldBinding.map observed.written.visible = before.wal.directory.active.manifest := observed.oldVisible
-  cases binding : observed.oldBinding with
-  | none =>
-    rw [binding] at visible
-    exact congrArg (fun bytes => [bytes]) visible
-  | some inode =>
-    have data : observed.atRename.2.crashBytes inode = [observed.written.visible inode] := observed.oldStable inode binding
-    rw [binding] at visible
-    change (observed.atRename.2.crashBytes inode).map some = _
-    rw [data, List.map_singleton]
-    exact congrArg (fun bytes => [bytes]) visible
-
-end CheckpointManifestRenamePrefix
-
 /-- The returned rename leaves a prefix that reuses the same directory
 capture at the interrupted final barrier. -/
 structure CheckpointManifestDirectoryReached {directory : DiskDirectory} {before : SegmentedWriterState}
     (cut : CheckpointPowerCut directory before) (calls : CheckpointManifestDirectoryCalls)
-    (runEnd : ManifestState) (runs : ManifestState → RunUnlinkImage) extends
+    (runEnd : CheckpointManifestState) (runs : CheckpointManifestState → RunUnlinkImage) extends
       CheckpointManifestRenamePrefix cut calls runEnd runs where
   drops : List LockReferenceDrop
   directoryLive : directoryHandle.2.reference ∈
     (directoryHandle.1.afterDrops drops).references directoryHandle.2.description
   renamed : WalInodeImage
   renameReturned : calls.rename (directory.file .stagedManifest) (directory.file .manifest)
-    (runEnd.1.consume (directory.file .stagedManifest), written.completeFileSync (manifestInode stageHandle)) =
+    (runEnd.1.consume (directory.file .stagedManifest), written.completeFileSync (checkpointManifestInode stageHandle)) =
     .ok () (runEnd.1.consume (directory.file .stagedManifest), renamed)
-  liveBinding : bindings renamed (directory.file .manifest) = some (manifestInode stageHandle)
-  directoryBinding : bindings renamed directory.path = some (manifestInode directoryHandle)
+  liveBinding : bindings renamed (directory.file .manifest) = some (checkpointManifestInode stageHandle)
+  directoryBinding : bindings renamed directory.path = some (checkpointManifestInode directoryHandle)
   renameRunNames : runs (runEnd.1.consume (directory.file .stagedManifest), renamed) =
-    runs (runEnd.1.consume (directory.file .stagedManifest), written.completeFileSync (manifestInode stageHandle))
+    runs (runEnd.1.consume (directory.file .stagedManifest), written.completeFileSync (checkpointManifestInode stageHandle))
   renameSurvivors : List (Option Nat)
-  renameChoices : ∀ binding ∈ renameSurvivors, binding = some (manifestInode stageHandle) ∨
-    binding = bindings (written.completeFileSync (manifestInode stageHandle)) (directory.file .manifest)
-  renameBytes : ∀ binding, binding = some (manifestInode stageHandle) ∨ binding ∈ renameSurvivors →
+  renameChoices : ∀ binding ∈ renameSurvivors, binding = some (checkpointManifestInode stageHandle) ∨
+    binding = bindings (written.completeFileSync (checkpointManifestInode stageHandle)) (directory.file .manifest)
+  renameBytes : ∀ binding, binding = some (checkpointManifestInode stageHandle) ∨ binding ∈ renameSurvivors →
     manifestCrashBytes renamed binding =
-      manifestCrashBytes (written.completeFileSync (manifestInode stageHandle)) binding
+      manifestCrashBytes (written.completeFileSync (checkpointManifestInode stageHandle)) binding
   interrupted : WalInodeImage
   crashBindings : List (Option Nat)
   directoryEffect : crashBindings = if cut.tookEffect then [bindings renamed (directory.file .manifest)] else renameSurvivors
@@ -185,75 +90,27 @@ private theorem CheckpointPowerCut.finalDirectoryPublication {directory : DiskDi
     exact ⟨published, exactLength.symm ▸ ran, by simp [manifest, cut.plannedManifestBytes, Publication.Image.settled],
       by simp [manifest, cut.plannedManifestBytes, Publication.Image.settled], durable, older⟩
 
-private theorem syncDirectorySelected (directory : DiskDirectory) (calls : CheckpointManifestDirectoryCalls)
-    (state : ManifestState) (handle : ManifestHandle) (captured : state.1.directory = some handle) :
-    sync directory.path calls.openRead calls.fsync directory.path state = withCache state.1 (calls.fsync handle state.2) := by
-  rcases state with ⟨cache, image⟩
-  change cache.directory = some handle at captured
-  simp [sync, Cache.resolve, captured]
-
-/-- Compose the actual run prefix, retained directory sync, stage write
-and exact staged descriptor sync into their shared returned prefix. -/
-theorem CheckpointManifestRenamePrefix.returns {directory : DiskDirectory} {before : SegmentedWriterState}
-    {cut : CheckpointPowerCut directory before} {calls : CheckpointManifestDirectoryCalls}
-    {atRun : Nat → ManifestState} {runs : ManifestState → RunUnlinkImage}
-    (runPrefix : CheckpointRunPrefix cut (calls.perform cut) atRun runs)
-    (observed : CheckpointManifestRenamePrefix cut calls (atRun cut.checkpoint.table.runs.length) runs) :
-    ((runSteps cut.checkpoint.table.runs.length ++ [Step.syncRunsDirectory, .manifest .writeStaged, .manifest .syncStaged]).forM
-      (calls.perform cut)) (atRun 0) = .ok () observed.atRename := by
-  let count := cut.checkpoint.table.runs.length
-  let perform := calls.perform cut
-  let runEnd := atRun count
-  let stagePath := directory.file .stagedManifest
-  let cache := runEnd.1.consume stagePath
-  let staged := (runEnd.1.remember stagePath observed.stageHandle, observed.written)
-  let synced := observed.written.completeFileSync observed.inode
-  have runDirectory : perform .syncRunsDirectory runEnd = .ok () (runEnd.1, observed.directorySettled) := by
-    change SyncPathGroup.run (sync directory.path calls.openRead calls.fsync) #[directory.path] runEnd = _
-    rw [SyncPathGroup.run_single, syncDirectorySelected _ _ _ _ observed.directoryCaptured, observed.runSynced]
-    rfl
-  have stageWritten : perform (.manifest .writeStaged) (runEnd.1, observed.directorySettled) = .ok () staged := by
-    change stageFreshWithCache stagePath cut.checkpoint.manifest calls.stage (runEnd.1, observed.directorySettled) = _
-    have wrote : calls.stage stagePath cut.checkpoint.manifest observed.directorySettled =
-        .ok observed.stageHandle observed.written := observed.staged
-    simp only [stageFreshWithCache, wrote, staged]
-  have stageSynced : perform (.manifest .syncStaged) staged = .ok () (cache, synced) := by
-    change SyncPathGroup.run (sync directory.path calls.openRead calls.fsync) #[stagePath] staged = _
-    rw [SyncPathGroup.run_single, syncRemembered (cache := runEnd.1) (CheckpointPowerCut.stagedManifest_ne_directory directory),
-      observed.synced]
-    rfl
-  rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
-  let suffix : List Step := [.syncRunsDirectory, .manifest .writeStaged, .manifest .syncStaged]
-  change EStateM.bind ((runSteps count).forM perform) (fun _ => suffix.forM perform) (atRun 0) = _
-  have finishedRuns : ((runSteps count).forM perform) (atRun 0) = .ok () runEnd := runPrefix.returned
-  have finishedSuffix : suffix.forM perform = (perform .syncRunsDirectory >>= fun _ =>
-      perform (.manifest .writeStaged) >>= fun _ => perform (.manifest .syncStaged)) := by
-    simp [suffix, List.forM_eq_forM, List.forM_cons, List.forM_nil]
-  rw [finishedSuffix]
-  simp only [Bind.bind, EStateM.bind, finishedRuns, runDirectory, stageWritten, stageSynced]
-  rfl
-
 /-- Reach the final directory barrier through the returned rename. The
 same retained directory description issues both directory syncs. A crash
 after the final effect settles the exact new manifest and its synced runs.
 Before the effect, the observed old or new bindings are admissible. -/
 theorem CheckpointPowerCut.atManifestDirectory {directory : DiskDirectory} {before : SegmentedWriterState}
     {writer : Nat} (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
-    (calls : CheckpointManifestDirectoryCalls) (atRun : Nat → ManifestState) (runs : ManifestState → RunUnlinkImage)
+    (calls : CheckpointManifestDirectoryCalls) (atRun : Nat → CheckpointManifestState) (runs : CheckpointManifestState → RunUnlinkImage)
     (runPrefix : CheckpointRunPrefix cut (calls.perform cut) atRun runs)
     (reached : CheckpointManifestDirectoryReached cut calls (atRun cut.checkpoint.table.runs.length) runs)
     (completed : cut.completed = runSteps cut.checkpoint.table.runs.length ++
       [.syncRunsDirectory, .manifest .writeStaged, .manifest .syncStaged, .manifest .renameStaged]) :
     let stagePath := directory.file .stagedManifest
     let cache := (atRun cut.checkpoint.table.runs.length).1.consume stagePath
-    let atBarrier : ManifestState := (cache, reached.renamed)
-    let interrupted : ManifestState := (cache, reached.interrupted)
+    let atBarrier : CheckpointManifestState := (cache, reached.renamed)
+    let interrupted : CheckpointManifestState := (cache, reached.interrupted)
     ((cut.completed.forM (calls.perform cut)) (atRun 0) = .ok () atBarrier) ∧
     reached.directoryHandle.2.reference ∈
       (reached.directoryHandle.1.afterDrops reached.drops).references reached.directoryHandle.2.description ∧
-    reached.bindings reached.renamed directory.path = some (manifestInode reached.directoryHandle) ∧
+    reached.bindings reached.renamed directory.path = some (checkpointManifestInode reached.directoryHandle) ∧
     calls.perform cut cut.current atBarrier =
-      SyncPathGroup.run (m := EStateM IO.Error ManifestState)
+      SyncPathGroup.run (m := EStateM IO.Error CheckpointManifestState)
         (fun _ (files, image) => withCache files (calls.fsync reached.directoryHandle image)) #[directory.path] atBarrier ∧
     ∃ published, CheckpointManifestDirectoryCut cut published (runs interrupted)
       (reached.crashBindings.flatMap (manifestCrashBytes reached.interrupted)) := by
@@ -262,7 +119,7 @@ theorem CheckpointPowerCut.atManifestDirectory {directory : DiskDirectory} {befo
   let perform := calls.perform cut
   let runEnd := atRun count
   let issuedRename := reached.toCheckpointManifestRenamePrefix
-  let stageInode := manifestInode reached.stageHandle
+  let stageInode := checkpointManifestInode reached.stageHandle
   let synced := reached.written.completeFileSync stageInode
   let old := reached.bindings synced (directory.file .manifest)
   have current : cut.current = .manifest .syncDirectory := by
@@ -280,16 +137,16 @@ theorem CheckpointPowerCut.atManifestDirectory {directory : DiskDirectory} {befo
     have syncedPrefix : (prior.forM perform) (atRun 0) = .ok () (cache, synced) := issuedRename.returns runPrefix
     simp only [EStateM.bind, syncedPrefix]
     simpa [List.forM_eq_forM, List.forM_cons, List.forM_nil] using stageRenamed
-  have finalRoute : perform cut.current atBarrier = SyncPathGroup.run (m := EStateM IO.Error ManifestState)
+  have finalRoute : perform cut.current atBarrier = SyncPathGroup.run (m := EStateM IO.Error CheckpointManifestState)
       (fun _ (files, image) => withCache files (calls.fsync reached.directoryHandle image)) #[directory.path] atBarrier := by
     rw [current]
-    let cached (_ : FilePath) : EStateM IO.Error ManifestState Unit :=
+    let cached (_ : FilePath) : EStateM IO.Error CheckpointManifestState Unit :=
       fun (files, image) => withCache files (calls.fsync reached.directoryHandle image)
     change SyncPathGroup.run (sync directory.path calls.openRead calls.fsync) #[directory.path] atBarrier =
       SyncPathGroup.run cached #[directory.path] atBarrier
     rw [SyncPathGroup.run_single (sync directory.path calls.openRead calls.fsync), SyncPathGroup.run_single cached]
     have capturedFinal : atBarrier.1.directory = some reached.directoryHandle := reached.directoryCaptured
-    rw [syncDirectorySelected directory calls atBarrier reached.directoryHandle capturedFinal]
+    rw [calls.syncDirectorySelected directory atBarrier reached.directoryHandle capturedFinal]
   obtain ⟨published, projected, visible, choices, freshBytes, older⟩ := cut.finalDirectoryPublication ready completed
   have settled : runs interrupted = (runs runEnd).syncDirectory := by
     rw [show runs interrupted = _ from reached.directoryRunNames,

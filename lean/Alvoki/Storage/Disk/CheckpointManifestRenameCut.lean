@@ -1,24 +1,9 @@
-import Alvoki.Storage.Disk.CheckpointRunDirectoryCut
+import Alvoki.Storage.Disk.Checkpoint.Manifest.RenamePrefix
 
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
-
-theorem CheckpointPowerCut.stagedManifest_ne_directory (directory : DiskDirectory) :
-    directory.file .stagedManifest ≠ directory.path := by
-  intro same
-  have length := congrArg (fun path : FilePath => path.toString.length) same
-  change (directory.path.toString ++ "/" ++ "MANIFEST.next").length =
-    directory.path.toString.length at length
-  simp only [String.length_append] at length
-  have slash : "/".length = 1 := rfl
-  omega
-
-/-- Read the admitted payloads of a manifest binding, including an absent name. -/
-def manifestCrashBytes (files : WalInodeImage) : Option Nat → List (Option ByteArray)
-  | none => [none]
-  | some inode => (files.crashBytes inode).map some
 
 /-- The reached manifest bytes are the encoding of this exact run plan. -/
 theorem CheckpointPowerCut.plannedManifestBytes {directory : DiskDirectory} {before : SegmentedWriterState}

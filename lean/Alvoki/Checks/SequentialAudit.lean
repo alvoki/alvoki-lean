@@ -79,6 +79,7 @@ import Alvoki.Storage.Disk.CheckpointRunPrefixCustody
 import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 import Alvoki.Storage.Disk.CheckpointObservedCompletion
 import Alvoki.Storage.Disk.CheckpointRunDirectoryCut
+import Alvoki.Storage.Disk.Checkpoint.Manifest.RenamePrefix
 import Alvoki.Storage.Disk.CheckpointRunDirectoryFailure
 import Alvoki.Storage.Disk.CheckpointRunDirectoryClose
 import Alvoki.Storage.Disk.CheckpointRunFileSyncFailureReopen
@@ -446,6 +447,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.atManifestRename
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.plannedManifestBytes
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestRenamePrefix.returns
+#check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryCalls.syncDirectorySelected
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestRenamePrefix.runNamesSettled
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestRenamePrefix.stagedCrashBytes
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestRenamePrefix.priorCrashBytes
