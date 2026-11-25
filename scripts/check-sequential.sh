@@ -129,6 +129,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeReadyReadPrefix
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedReadPrefix
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenChoice
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyUncertainWrite
+lake env leanchecker Alvoki.Storage.Disk.NativeUncertainExecution
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWalCollection
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWalCollectionError
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyClose
