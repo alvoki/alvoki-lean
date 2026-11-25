@@ -1354,10 +1354,10 @@ theorem recoveredRetries_installedReads
     (sealedRead : ∀ file ∈ sealed, prepared.kept file.1 = some file.2)
     (checked : checkSelectedWalSegmentSpans (selected.frontier.toNat / frameSize)
       (sealed ++ [(target.first, plan.keeperBytes)]) = true)
-    {segments : List WalSegment}
-    (selectedChain : WalSegment.Chain ((history ++ batch).take range.through) first segments)
-    (selectedSegments : segments.map (fun segment => (segment.first, segment.bytes)) =
-      sealed ++ [(target.first, target.trimmed)])
+    (layout : DiskSession.CanonicalKeeperLayout prepared ((history ++ batch).take range.through))
+    (layoutTarget : layout.target = target) (layoutStart : layout.first = first)
+    (layoutOffsets : layout.sealed.map WalSegment.first = required.dropLast.map Prod.fst)
+    (layoutBytes : ∀ segment ∈ layout.sealed, prepared.kept segment.first = some segment.bytes)
     {snapshot : UInt64} (retained : opened.table.pins.floor ≤ snapshot)
     (within : snapshot.toNat ≤ range.through) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
@@ -1430,10 +1430,26 @@ theorem recoveredRetries_installedReads
   have sameLength := Except.ok.inj ((sameMarker ▸ decodedLength).symm.trans (Boundary.decode_encode _))
   have boundedChecked := checkSelectedWalSegmentSpans_replaceKeeperBytes (after := target.trimmed)
     sealed (Nat.le_of_eq keeperSize.symm) checked
+  let segments := layout.sealed ++ [layout.keeper]
+  have selectedChain : WalSegment.Chain ((history ++ batch).take range.through) first segments :=
+    layoutStart ▸ layout.chain
+  have keeperOffset : layout.keeper.first = target.first := congrArg Target.first layoutTarget
+  have keeperBytes : layout.keeper.bytes = target.trimmed := congrArg Target.trimmed layoutTarget
+  have exactSeals : layout.sealed.map (fun segment => (segment.first, segment.bytes)) = sealed := by
+    apply sealedReads_eq _ _ sealedRead
+    · simpa only [List.map_map, Function.comp_def] using layoutOffsets.trans sealedOffsets.symm
+    · intro file member
+      obtain ⟨segment, found, rfl⟩ := List.mem_map.mp member
+      exact layoutBytes segment found
+  have selectedSegments : segments.map (fun segment => (segment.first, segment.bytes)) =
+      sealed ++ [(target.first, target.trimmed)] := by
+    simp [segments, exactSeals, keeperOffset, keeperBytes]
   have selectedStart : ((sealed ++ [(target.first, target.trimmed)]).head?.map Prod.fst) = some first := by
     rw [← selectedSegments]
+    generalize segmentList : segments = parts at selectedChain ⊢
+    have nonempty : parts ≠ [] := by rw [← segmentList]; simp [segments]
     cases selectedChain with
-    | endOfHistory => simp at selectedSegments
+    | endOfHistory => exact (nonempty rfl).elim
     | cons => rfl
   have concatenated : walSegmentPayloadBytes (sealed ++ [(target.first, target.trimmed)]) = payload := by
     have concatenate (parts : List WalSegment) :
