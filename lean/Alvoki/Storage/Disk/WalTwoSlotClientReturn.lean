@@ -1680,10 +1680,11 @@ def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) 
 
 /-- The native acquisition projection retains the opened marker slot
 in the state passed to checkpoint preparation. -/
-def acquireMarkerInCensus (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
+def acquireMarkerInCensus (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath)
+    (rewind : EStateM IO.Error Nat Unit) :
     EStateM IO.Error (DiskSession.CensusDirectoryCache × DiskSession.CensusOpenState)
       (KeeperDescriptorIdentity × Selection) :=
-  acquireMarkerWithInventoryUsing (readMarkerBytesWith (EStateM.pure ()))
+  acquireMarkerWithInventoryUsing (readMarkerBytesWith rewind)
     (fun inventory (cache, _, files) => (cache, inventory, files)) reads path
 
 /-- A successful rewind on the reached marker description and its
@@ -1717,7 +1718,7 @@ theorem acquireMarkerInCensus_returns
     (available : PrefixChunksAvailableUntilEof payload (reads.readChunk file.calls.slot.description))
     {selected : Selection} (decoded : decode payload = .ok selected)
     (before : DiskSession.CensusDirectoryCache × DiskSession.CensusOpenState) :
-    acquireMarkerInCensus reads (directory.file .walBoundary) before =
+    acquireMarkerInCensus reads (directory.file .walBoundary) (EStateM.pure ()) before =
       .ok (⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩, selected)
         (before.1, file.calls.inventory, before.2.2) := by
   exact acquireMarkerInCensus_afterRewind file privateFile available (EStateM.pure ()) rfl decoded before
@@ -1748,7 +1749,7 @@ theorem acquiresAndReadsCheckpoint
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) :
     ((do
-      let marker ← acquireMarkerInCensus report.reads (directory.file .walBoundary)
+      let marker ← acquireMarkerInCensus report.reads (directory.file .walBoundary) (EStateM.pure ())
       let checkpoint ← report.readCheckpointFromCensus release runs.released
       pure (marker, checkpoint)) :
       EStateM IO.Error (CensusDirectoryCache × CensusOpenState)
@@ -1769,6 +1770,7 @@ theorem preparesFromHeldMarker
     (file : HeldMetadataFile markerReads (directory.file .walBoundary) "WAL.commit" admission.view admission.root payload)
     (privateFile : file.calls.metadata.numLinks = 1)
     (available : PrefixChunksAvailableUntilEof payload (markerReads.readChunk file.calls.slot.description))
+    (rewind : EStateM IO.Error Nat Unit) (rewound : rewind 0 = .ok () 0)
     (report : CapturedMarkedReadReports admission layout published false file.calls.inventory)
     {metadataRelease : System.FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
     (manifest : CapturedManifestCensus report metadataRelease file.calls.inventory manifestDrops)
@@ -1798,7 +1800,7 @@ theorem preparesFromHeldMarker
     let handle := (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
     let cache := admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
       handle layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat
-    acquireMarkerInCensus markerReads (directory.file .walBoundary)
+    acquireMarkerInCensus markerReads (directory.file .walBoundary) rewind
       (admission.cache, admission.reached, admission.held) =
       .ok (⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩, selection)
         (admission.cache, file.calls.inventory, admission.held) ∧
@@ -1833,7 +1835,7 @@ theorem preparesFromHeldMarker
   have through : selection.frontier.toNat / WAL.frameSize = layout.range.through := by
     rw [count, Nat.mul_div_cancel _ (by decide : 0 < WAL.frameSize)]
   rw [through] at prepared
-  exact ⟨acquireMarkerInCensus_returns file privateFile available decoded _, prepared, live,
+  exact ⟨acquireMarkerInCensus_afterRewind file privateFile available rewind rewound decoded _, prepared, live,
     congrFun (captured.afterRead_inode.trans report.objectMap.symm) file.calls.slot.description⟩
 
 /-- Construct the marker barrier from the prepared keeper census and
@@ -2319,6 +2321,7 @@ theorem installsAfterAcquiredRecovery_replays
       admission.view admission.root payload)
     (privateFile : file.calls.metadata.numLinks = 1)
     (available : PrefixChunksAvailableUntilEof payload (markerReads.readChunk file.calls.slot.description))
+    (rewind : EStateM IO.Error Nat Unit) (rewound : rewind 0 = .ok () 0)
     {selection : Selection} (decoded : decode payload = .ok selection)
     (stabilize : KeeperDescriptorIdentity → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
     (finish : DiskDirectory → Plan → Nat → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
@@ -2431,7 +2434,7 @@ theorem installsAfterAcquiredRecovery_replays
           report.inspectWal (readTemporarySeal report.reads released) keeper.readKeeperAt)
     ∃ session,
       calls.runWithMarked (fun resolved cache before =>
-        match reopenAcquiredWith (acquireMarkerInCensus markerReads (resolved.file .walBoundary))
+        match reopenAcquiredWith (acquireMarkerInCensus markerReads (resolved.file .walBoundary) rewind)
             (prepare resolved) stabilize (finish resolved) (cache, before) with
         | .ok (opened, _, _) (_, reached) => .ok opened reached
         | .error cause (_, reached) => .error cause reached) =
@@ -2487,7 +2490,7 @@ theorem installsAfterAcquiredRecovery_replays
   have samePayload := Option.some.inj (observed.symm.trans present)
   have sameFrontier : selection.frontier = frontier :=
     Except.ok.inj ((Boundary.decode_encode selection.frontier).symm.trans (samePayload ▸ markerDecoded))
-  obtain ⟨acquisition, prepared, markerLive, sameInode⟩ := preparesFromHeldMarker file privateFile available report
+  obtain ⟨acquisition, prepared, markerLive, sameInode⟩ := preparesFromHeldMarker file privateFile available rewind rewound report
     manifest runs checkpointSelected chronology selection decoded (sameFrontier.symm ▸ count) orderedLayout replay keeper
     seals offsets retained following later keepsMarker listingDrops keeperDrops
   obtain ⟨_, epoch, newSize, _, _⟩ := advance_fields advanced
@@ -2566,7 +2569,7 @@ theorem installsAfterAcquiredRecovery_replays
       projected]
     erw [finished.1]
   have returned := installsAfterAcquiredRecovery calls marker
-    (fun resolved => acquireMarkerInCensus markerReads (resolved.file .walBoundary))
+    (fun resolved => acquireMarkerInCensus markerReads (resolved.file .walBoundary) rewind)
     prepare stabilize finish acquisition recovery
   refine ⟨_, returned, pending.install rfl represented refined (recoverSelected_rowBounds baseBounds replay),
     validAfter.selected,
