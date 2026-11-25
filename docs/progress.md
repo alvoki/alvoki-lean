@@ -1070,7 +1070,8 @@ and the recovery result on that same handle and selected frontier.
 The marked worker's returned table and marker determine the arguments
 of the three allocations. The marker reference is allocated after the
 existing phase and token, and the phase still contains the recovered
-table at the final return. The raw worker result and allocation effects
+table at the final return. The returned marker reference carries the
+observed handle and frontier for the next write. The raw worker result and allocation effects
 remain observations.
 
 The client recovery theorem now returns both the replay certificate

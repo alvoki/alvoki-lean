@@ -64,20 +64,24 @@ theorem installsWithRecoveredMarker
     (allocateMarker : Option (handle × WAL.TwoSlot.Selection) → EStateM IO.Error heap (IO.Ref (Option (handle × WAL.TwoSlot.Selection))))
     {cell : IO.Ref (Option (handle × WAL.TwoSlot.Selection))}
     (markerAllocated : allocateMarker (some (marker, selected)) observed.afterToken = .ok cell afterMarker)
-    (keepsPhase : phaseContents afterMarker observed.phase = phaseContents observed.afterToken observed.phase) :
+    (keepsPhase : phaseContents afterMarker observed.phase = phaseContents observed.afterToken observed.phase)
+    (markerContents : heap → IO.Ref (Option (handle × WAL.TwoSlot.Selection)) →
+      Option (Option (handle × WAL.TwoSlot.Selection)))
+    (initializedMarker : markerContents afterMarker cell = some (some (marker, selected))) :
     (do
       let (reopened, marker, selected) ← WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish
       let table ← installReady reopened.installed allocatePhase allocateToken (fun phase token => pure (assemble phase token))
       let cell ← allocateMarker (some (marker, selected))
       pure (table, cell)) entry = .ok (assemble observed.phase observed.token, cell) afterMarker ∧
     (assemble observed.phase observed.token).UsesOpenReferences directory lock syncFiles observed.phase observed.token ∧
-    phaseContents afterMarker observed.phase = some (.ready opened.installed) := by
+    phaseContents afterMarker observed.phase = some (.ready opened.installed) ∧
+    markerContents afterMarker cell = some (some (marker, selected)) := by
   have worker : WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish entry =
       .ok (opened, marker, selected) before := by
     simp only [WAL.TwoSlot.reopenAcquiredWith_reports, markerRead, recovered]
   obtain ⟨_, references, ready⟩ := observed.installs constructor
   exact ⟨by simp only [Bind.bind, EStateM.bind, worker, installReady, observed.phaseAllocated, observed.tokenAllocated, markerAllocated, Pure.pure, EStateM.pure],
-    references, keepsPhase.trans ready⟩
+    references, keepsPhase.trans ready, initializedMarker⟩
 
 end OpenReferenceAllocations
 
