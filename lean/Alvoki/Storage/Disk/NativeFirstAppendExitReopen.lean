@@ -11,6 +11,10 @@ variable {state : NativeReadyState} {prepared : NativeReadyWritePreparation stat
 append issuer's exit. Observed later drops may end lock aliases that
 outlive that process. -/
 structure NativeFirstAppendExit (stop : NativeFirstAppendStop prepared) where
+  issuerLock : DescriptorSlot
+  issuerLockLive : issuerLock ∈ stop.cutFiles.1.slots
+  issuerLockDescription : issuerLock.description = state.session.descriptor
+  issuerProcess : issuerLock.reference.process = stop.handle.2.1.reference.process
   exit : LockReferenceDrop
   reported : exit = .exited stop.handle.2.1.reference.process
   later : List LockReferenceDrop
@@ -40,8 +44,7 @@ theorem noIssuerSlots (seen : NativeFirstAppendExit stop) :
 /-- Start the earlier append recovery proof with the exact lock references
 at the interrupted callback. The exit and every later drop have the
 same inventories and file authority in both interpretations. -/
-theorem reaches (seen : NativeFirstAppendExit stop) (valid : state.Valid)
-    (ownerLive : state.owner ∈ stop.cutFiles.1.slots) :
+theorem reaches (seen : NativeFirstAppendExit stop) (valid : state.Valid) :
     ∃ first : stop.logical.Stop state.session.descriptor,
       LockCensusTrace state.session.directory state.session.descriptor stop.cutFiles.1
         ⟨stop.files, state.files.owners⟩ seen.census seen.retry ∧
@@ -49,7 +52,7 @@ theorem reaches (seen : NativeFirstAppendExit stop) (valid : state.Valid)
   let initial : LockedFileState FileImage := ⟨stop.files, state.files.owners⟩
   let desc := state.session.descriptor
   have live : stop.cutFiles.1.references desc ≠ [] := List.ne_nil_of_mem
-    (stop.cutFiles.1.mem_references.mpr ⟨state.owner, ownerLive, rfl, valid.owner⟩)
+    (stop.cutFiles.1.mem_references.mpr ⟨seen.issuerLock, seen.issuerLockLive, rfl, seen.issuerLockDescription⟩)
   let references := stop.cutFiles.1.held desc live
   let first : stop.logical.Stop desc := .processExit references stop.handle.2.1.reference.process
   let afterExit := stop.cutFiles.1.afterDrops [seen.exit]
@@ -144,6 +147,7 @@ structure NativeFirstAppendExitContinuation {history : List WAL.Write} {log : Li
   released : LockCensusTrace current.state.session.directory current.state.session.descriptor stop.cutFiles.1
     ⟨stop.files, current.state.files.owners⟩ seen.census seen.retry
   issuerRetired : ∀ slot ∈ seen.census.slots, slot.reference.process ≠ stop.handle.2.1.reference.process
+  issuerLockRetired : seen.issuerLock ∉ seen.census.slots
   reads : next.reads = current.reads
   path : next.state.session.directory = current.state.session.directory
   phaseFresh : next.state.session.phaseRef ≠ current.state.session.phaseRef
@@ -186,7 +190,7 @@ theorem NativeReadPosition.recoversFirstAppendAfterExit (current : NativeReadPos
     ∃ next, NativeFirstAppendExitContinuation current stop seen input next := by
   let stopped := current.stopsAtFirstAppend stop
   obtain ⟨valid, oldHistory, _⟩ := current.readPrefix.refines
-  obtain ⟨first, released, reported⟩ := seen.reaches valid stopped.lockLive
+  obtain ⟨first, released, reported⟩ := seen.reaches valid
   obtain ⟨_, _, pair, layout, chosen⟩ := first.refinesReopenPrefix valid.retained reported
   have manifest := congrArg DirectoryPublication.Bindings.manifest pair
   let selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
@@ -215,7 +219,9 @@ theorem NativeReadPosition.recoversFirstAppendAfterExit (current : NativeReadPos
   have keeper := Option.some.inj (layout.visible.symm.trans stopped.visibleKeeper)
   have bindings := stop.heldBindings stop.cutFiles (by simp [NativeFirstAppendStop.cutFiles])
   obtain ⟨directory, lock⟩ := opened.rootAndLock
-  exact ⟨next, stopped, released, seen.noIssuerSlots, rfl, path,
+  have issuerLockRetired : seen.issuerLock ∉ seen.census.slots := fun live =>
+    seen.noIssuerSlots seen.issuerLock live seen.issuerProcess
+  exact ⟨next, stopped, released, seen.noIssuerSlots, issuerLockRetired, rfl, path,
     fun same => phaseFresh (same.symm ▸ opened.earlierRefs.1),
     fun same => sessionFresh (same.symm ▸ opened.earlierRefs.2), target.trans chosen.target, checkpoint, durable,
     (congrArg DirectoryPublication.Bindings.walBoundary active).trans stopped.marker,
