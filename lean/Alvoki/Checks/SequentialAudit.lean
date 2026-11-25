@@ -2533,6 +2533,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionStep.ledgers
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionStep.uncertainBatchWhole
+#check_axioms Alvoki.Storage.DiskSession.NativeEarlyCheckpointReboot.issuedStage
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionStep.recoverInterruptedCheckpointRunDirectory
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.ledgers
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.uncertainBatchesWhole
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.keyValueRefinement

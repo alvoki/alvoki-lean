@@ -41,6 +41,7 @@ import Alvoki.Storage.Disk.NativeUncertainStageRetry
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryReboot
+import Alvoki.Storage.Disk.NativeCheckpointRunFileReboot
 import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
 import Alvoki.Storage.Disk.NativeFirstAppendPowerLoss
 import Alvoki.Storage.Disk.NativeInterruptedCloseReopen
@@ -66,6 +67,39 @@ structure NativeExecutionPosition where
   submissions : List DatabaseSubmissions
   ready : NativeReadPosition history submissions
 
+/-- One reported stop and its selected reboot before manifest publication.
+The issued run fsync and first directory fsync keep their own observations. -/
+inductive NativeEarlyCheckpointReboot (state : NativeReadyState) : Type 1 where
+  | file {image : Type} {cut : CheckpointPowerCut state.session.directory state.writer}
+      {stop : NativeCheckpointRunFileStop (image := image) state cut}
+      (reboot : NativeCheckpointRunFileReboot stop)
+  | directory {image : Type} {cut : CheckpointPowerCut state.session.directory state.writer}
+      {stop : NativeCheckpointRunDirectoryStop (image := image) state cut}
+      (reboot : NativeCheckpointRunDirectoryReboot stop)
+
+namespace NativeEarlyCheckpointReboot
+
+def cut : NativeEarlyCheckpointReboot state → CheckpointPowerCut state.session.directory state.writer
+  | .file (cut := cut) _ | .directory (cut := cut) _ => cut
+
+def stage : NativeEarlyCheckpointReboot state → CheckpointPublication.Step
+  | .file (stop := stop) _ => .syncRun stop.effect.index
+  | .directory _ => .syncRunsDirectory
+
+theorem issuedStage (seen : NativeEarlyCheckpointReboot state) : seen.cut.current = seen.stage := by
+  cases seen with
+  | @file _ _ stop _ => exact stop.issue.current
+  | @directory _ _ stop _ => exact stop.current
+
+def tookEffect (seen : NativeEarlyCheckpointReboot state) : Bool := seen.cut.tookEffect
+
+def observed (seen : NativeEarlyCheckpointReboot state) (valid : state.Valid) : NativeReadyQuietCrash state :=
+  match seen with
+  | .file reboot => reboot.observed valid
+  | .directory reboot => reboot.observed valid
+
+end NativeEarlyCheckpointReboot
+
 inductive NativeExecutionEvent : Type 1 where
   | readOrRestart (event : NativeReadRecoveryEvent)
   | acknowledged (request : WriteRequest) (batch : List WAL.Write)
@@ -78,6 +112,7 @@ inductive NativeExecutionEvent : Type 1 where
   | checkpointCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | checkpointManifestRenameCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | interruptedCheckpointRecovered (input : FilePath) (manifest : Option ByteArray)
+  | interruptedCheckpointRunFileRecovered (input : FilePath) (index : Nat) (effective : Bool) (manifest : Option ByteArray)
   | interruptedCheckpointRunDirectoryRecovered (input : FilePath) (effective : Bool) (manifest : Option ByteArray)
   | collectCoveredWal
   | coveredWalCollectionRejected (error : IO.Error)
@@ -130,6 +165,16 @@ inductive NativeExecutionEvent : Type 1 where
   | snapshotHandleRead (issuer : Nat) (handle : SnapshotHandle) (request : SnapshotReadRequest α)
       (result : Option α) (recorded : RecordedSnapshotRead)
 
+/-- Record the issued checkpoint step and its reported effect without any
+ordinary return from the interrupted checkpoint. -/
+def NativeEarlyCheckpointReboot.event (seen : NativeEarlyCheckpointReboot state) (input : FilePath) :
+    NativeExecutionEvent :=
+  match seen with
+  | .file (stop := stop) _ =>
+    .interruptedCheckpointRunFileRecovered input stop.effect.index seen.tookEffect state.writer.target.pair.manifest
+  | .directory _ =>
+    .interruptedCheckpointRunDirectoryRecovered input seen.tookEffect state.writer.target.pair.manifest
+
 namespace NativeExecutionEvent
 
 def writes : NativeExecutionEvent → List WAL.Write
@@ -177,6 +222,12 @@ def appendRetryRecovery (request : WriteRequest) (errors : List (FilePath × IO.
   | some busy => .interruptedAppendContendedRetriesRecovered request busy errors input attempted
 
 end NativeExecutionEvent
+
+private theorem NativeEarlyCheckpointReboot.eventLedgers (seen : NativeEarlyCheckpointReboot state)
+    (input : FilePath) :
+    (seen.event input).writes = [] ∧ (seen.event input).submissions = [] ∧
+      (seen.event input).reads = [] ∧ (seen.event input).uncertainBatchWhole := by
+  cases seen <;> exact ⟨rfl, rfl, rfl, trivial⟩
 
 /-- The observed checkpoint and close start from the successful
 rewrite's exact table and published run binding. -/
@@ -483,16 +534,17 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (reopened : NativePendingCheckpointReopened current.ready observed next) :
       NativeExecutionStep current (.interruptedCheckpointRecovered input observed.crash.pair.manifest)
         ⟨current.history, current.submissions, next⟩
-  | recoverInterruptedCheckpointRunDirectory (current : NativeExecutionPosition) {input : FilePath} {image : Type}
-      {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
-      {stop : NativeCheckpointRunDirectoryStop (image := image) current.ready.state cut}
-      (reboot : NativeCheckpointRunDirectoryReboot stop) {valid : current.ready.state.Valid} {plan : reboot.Plan valid}
-      (reader : NativeReadyRestartReads (reboot.observed valid) input plan.layout plan.selected)
+  | recoverInterruptedEarlyCheckpoint (current : NativeExecutionPosition) {input : FilePath}
+      (recovery : NativeEarlyCheckpointReboot current.ready.state) {valid : current.ready.state.Valid}
+      {layout : CanonicalKeeperLayout (recovery.observed valid).retry.image current.ready.state.writer.history}
+      {selected : SelectedIntegrityCheckpoint current.ready.state.writer.published.durable
+        (recovery.observed valid).retry.image.directory.active.manifest current.ready.state.writer.checkpoint}
+      (reader : NativeReadyRestartReads (recovery.observed valid) input layout selected)
       (next : NativeReadPosition current.history current.submissions)
-      (reopened : NativeCheckpointRunDirectoryReopened current.ready reboot reader next) :
-      NativeExecutionStep current
-        (.interruptedCheckpointRunDirectoryRecovered input cut.tookEffect current.ready.state.writer.target.pair.manifest)
-        ⟨current.history, current.submissions, next⟩
+      (sameReader : next.opened = reader.run)
+      (reached : reader.ReachedSession next.state current.history current.submissions current.ready.reads)
+      (sameReads : next.reads = current.ready.reads) :
+      NativeExecutionStep current (recovery.event input) ⟨current.history, current.submissions, next⟩
   | recoverUncertainWriteCrash (current : NativeExecutionPosition) {input : FilePath}
       (observed : NativeUncertainWriteCrashObservation current.ready.state input) (retained : List WAL.Write)
       (next : NativeReadPosition (current.history ++ retained)
@@ -683,6 +735,22 @@ theorem NativeExecutionPosition.collectsCoveredWal (current : NativeExecutionPos
     ∃ next, NativeExecutionStep current .collectCoveredWal next := by
   exact ⟨_, .collectCoveredWal current observed completed (current.ready.readPrefix.collectsCoveredWal observed completed)⟩
 
+/-- Preserve the established directory-stop interface by projecting it
+to the shared early checkpoint transition. -/
+theorem NativeExecutionStep.recoverInterruptedCheckpointRunDirectory
+    (current : NativeExecutionPosition) {input : FilePath} {image : Type}
+    {cut : CheckpointPowerCut current.ready.state.session.directory current.ready.state.writer}
+    {stop : NativeCheckpointRunDirectoryStop (image := image) current.ready.state cut}
+    (reboot : NativeCheckpointRunDirectoryReboot stop) {valid : current.ready.state.Valid} {plan : reboot.Plan valid}
+    (reader : NativeReadyRestartReads (reboot.observed valid) input plan.layout plan.selected)
+    (next : NativeReadPosition current.history current.submissions)
+    (reopened : NativeCheckpointRunDirectoryReopened current.ready reboot reader next) :
+    NativeExecutionStep current
+      (.interruptedCheckpointRunDirectoryRecovered input cut.tookEffect current.ready.state.writer.target.pair.manifest)
+      ⟨current.history, current.submissions, next⟩ :=
+  .recoverInterruptedEarlyCheckpoint current (.directory reboot) (valid := valid) reader next
+    reopened.returned.1 reopened.returned.2 reopened.reads
+
 theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event after) :
     after.history = before.history ++ event.writes ∧
     after.submissions = before.submissions ++ event.submissions ∧
@@ -756,8 +824,9 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverInterruptedCheckpoint reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
-  case recoverInterruptedCheckpointRunDirectory reopened => exact ⟨by simp [NativeExecutionEvent.writes],
-      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverInterruptedEarlyCheckpoint input recovery _ _ _ _ _ _ _ sameReads =>
+    obtain ⟨writes, submissions, reads, _⟩ := recovery.eventLedgers input
+    exact ⟨by simp [writes], by simp [submissions], by simpa [reads] using sameReads⟩
   case recoverUncertainWriteCrash reopened =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWriteStageRetry reopened =>
@@ -805,6 +874,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
 theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep before event after) :
     event.uncertainBatchWhole := by
   cases step <;> try trivial
+  case recoverInterruptedEarlyCheckpoint recovery _ _ _ _ _ _ _ _ =>
+    exact (recovery.eventLedgers _).2.2.2
   case recoverUncertainWrite recovered => exact recovered.wholeOrNone
   case recoverUncertainWriteCrash recovered => exact recovered.wholeOrNone
   case recoverUncertainWriteInterruptedClose recovered => exact recovered.wholeOrNone
