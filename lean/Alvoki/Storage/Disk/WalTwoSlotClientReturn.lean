@@ -2977,7 +2977,9 @@ theorem recoveredRetries_installedReads
     (decodedMarker : decode markerBytes = .ok selected)
     (markerSource :
       (openedFrom.image.directory.active = survivingBindings ∧
-        survivingMarker = markerReads.objectBytes (markerView.modelObject markerFile.object)) ∨
+        ∃ rebootObject : DiskSession.DeviceInode,
+          markerView.child markerRoot "WAL.commit" = some rebootObject ∧
+          survivingMarker = markerReads.objectBytes (markerView.modelObject rebootObject)) ∨
       projectBinding openedFrom.image.directory.active (marker.visible markerHandle.inode) =
         .ok openedFrom.image.directory.active)
     {stabilize : KeeperDescriptorIdentity → EStateM IO.Error FileImage Unit}
@@ -3070,11 +3072,12 @@ theorem recoveredRetries_installedReads
     exact decodedMarker
   have observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier) := by
     rw [preparationPreservesFiles]
-    rcases markerSource with ⟨binding, bytes⟩ | projected
+    rcases markerSource with ⟨binding, rebootObject, rebootBinding, bytes⟩ | projected
     · rw [binding]
+      have sameObject : rebootObject = markerFile.object :=
+        Option.some.inj (rebootBinding.symm.trans markerFile.bound)
       have survived := survivorProjects
-      have contents := markerFile.contents
-      rw [bytes, contents] at survived
+      rw [bytes, sameObject, markerFile.contents] at survived
       change projectBinding ⟨checkpoint, none⟩ (marker.visible marker.active) =
         .ok survivingBindings at survived
       rw [projectBinding_decodes (by simpa only [markerCurrent] using markerAccepted)] at survived
