@@ -4,7 +4,7 @@ import Alvoki.Storage.Disk.NativeOpenedFailedCloseReport
 import Alvoki.Storage.Disk.NativeOpenedFinalizedRetryReport
 import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
-import Alvoki.Storage.Disk.NativeOpenedStoppedRunDirectoryReport
+import Alvoki.Storage.Disk.NativeOpenedEarlyCheckpointReport
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeUncertainWriteExitTableOpen
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
@@ -149,7 +149,7 @@ inductive NativeOpenedSessionAction : Type 1 where
   | closeRetriesAndReopen (inputs : List FilePath) (input : FilePath)
   | checkpointRenameReboot (input : FilePath)
   | stoppedCheckpointReboot (input : FilePath)
-  | stoppedCheckpointRunDirectoryReboot (input : FilePath)
+  | stoppedCheckpointEarlyReboot (stage : CheckpointPublication.Step) (input : FilePath)
   | uncertainWriteReboot (request : WriteRequest) (input : FilePath)
   | uncertainWriteExitAndReopen (request : WriteRequest) (input : FilePath)
   | stoppedWalWriteReboot (request : WriteRequest) (input : FilePath)
@@ -158,6 +158,9 @@ inductive NativeOpenedSessionAction : Type 1 where
   | stoppedFirstAppendContendedRetries (request : WriteRequest) (contended : FilePath)
       (inputs : List FilePath) (input : FilePath)
   | stoppedObsoleteRunUnlink (held : List UInt64) (input : FilePath)
+
+abbrev NativeOpenedSessionAction.stoppedCheckpointRunDirectoryReboot (input : FilePath) : NativeOpenedSessionAction :=
+  .stoppedCheckpointEarlyReboot .syncRunsDirectory input
 
 /-- Same-handle calls and the supported reopen routes compose at
 the exact handle and ready position reached by the preceding segment. -/
@@ -192,10 +195,10 @@ inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
   | stoppedCheckpoint {input : FilePath} (seen : NativeOpenedStoppedCheckpointReport before.position input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
       NativeOpenedSessionStep view names bytes before (.stoppedCheckpointReboot input) [seen.event] next
-  | stoppedCheckpointRunDirectory {input : FilePath}
-      (seen : NativeOpenedStoppedRunDirectoryReport before.position input view names bytes)
+  | stoppedCheckpointEarly {input : FilePath}
+      (seen : NativeOpenedEarlyCheckpointReport before.position input view names bytes)
       {next : NativeOpenedSessionPoint heap} (returned : seen.Returned next.position) :
-      NativeOpenedSessionStep view names bytes before (.stoppedCheckpointRunDirectoryReboot input) [seen.event] next
+      NativeOpenedSessionStep view names bytes before (.stoppedCheckpointEarlyReboot seen.recovery.stage input) [seen.event] next
   | uncertainWrite {request : WriteRequest} {input : FilePath}
       (seen : NativeOpenedUncertainWriteReport before.position request input view names bytes)
       {retained : List WAL.Write} {next : NativeOpenedSessionPoint heap} (returned : seen.Returned retained next.position) :
@@ -260,7 +263,7 @@ theorem NativeOpenedSessionTrace.common (trace : NativeOpenedSessionTrace view n
     | closeRetries _ returned => exact .step prior returned.common
     | checkpointRename _ returned => exact .step prior returned.common
     | stoppedCheckpoint _ returned => exact .step prior returned.common
-    | stoppedCheckpointRunDirectory _ returned => exact .step prior returned.common
+    | stoppedCheckpointEarly _ returned => exact .step prior returned.common
     | uncertainWrite _ returned => exact .step prior returned.common
     | uncertainWriteExit _ returned => exact .step prior returned.common
     | stoppedWalWrite _ returned => exact .step prior returned.common
@@ -291,9 +294,9 @@ inductive NativeOpenedSessionReport (view : OpenCloseHeapView heap FileImage)
       NativeOpenedSessionReport view names bytes before (.checkpointRenameReboot input)
   | stoppedCheckpoint (input : FilePath) (report : NativeOpenedStoppedCheckpointReport before.position input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.stoppedCheckpointReboot input)
-  | stoppedCheckpointRunDirectory (input : FilePath)
-      (report : NativeOpenedStoppedRunDirectoryReport before.position input view names bytes) :
-      NativeOpenedSessionReport view names bytes before (.stoppedCheckpointRunDirectoryReboot input)
+  | stoppedCheckpointEarly (input : FilePath)
+      (report : NativeOpenedEarlyCheckpointReport before.position input view names bytes) :
+      NativeOpenedSessionReport view names bytes before (.stoppedCheckpointEarlyReboot report.recovery.stage input)
   | uncertainWrite (request : WriteRequest) (input : FilePath)
       (report : NativeOpenedUncertainWriteReport before.position request input view names bytes) :
       NativeOpenedSessionReport view names bytes before (.uncertainWriteReboot request input)
@@ -348,9 +351,9 @@ theorem NativeOpenedSessionReport.reaches (report : NativeOpenedSessionReport vi
   | stoppedCheckpoint input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .stoppedCheckpoint seen returned⟩
-  | stoppedCheckpointRunDirectory input seen =>
+  | stoppedCheckpointEarly input seen =>
     obtain ⟨handle, start, returned⟩ := seen.reaches
-    exact ⟨_, ⟨handle, start⟩, .stoppedCheckpointRunDirectory seen returned⟩
+    exact ⟨_, ⟨handle, start⟩, .stoppedCheckpointEarly seen returned⟩
   | uncertainWrite request input seen =>
     obtain ⟨_, handle, start, returned⟩ := seen.reaches
     exact ⟨_, ⟨handle, start⟩, .uncertainWrite seen returned⟩
