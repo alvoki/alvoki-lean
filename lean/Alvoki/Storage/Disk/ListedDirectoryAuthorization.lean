@@ -110,7 +110,6 @@ theorem settles (observed : ListedDirectoryAuthorization report) (completed : ob
 /-- Feed the projected first grouped barrier into the exact admitted
 installer. No independent successful-settlement report is needed. -/
 theorem installs {input : FilePath}
-    {report : HeldDirectoryMarkedRetryReports operations published}
     (observed : ListedDirectoryAuthorization report)
     (metadata : HeldMarkedMetadata report) (completed : observed.outcome = .completed)
     (healthy : operations.HealthyFinish)

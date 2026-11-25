@@ -42,7 +42,8 @@ def operations (observed : HeldWalInstallReads layout calls) :
 bounded reader. Both identify the unique stat result and opened slot and
 cursor of the same callbacks. -/
 theorem keeperObserved (observed : HeldWalInstallReads layout calls)
-    {held : HeldDirectoryMarkedRetryReports observed.operations published}
+    {readStart : DescriptorInventory}
+    {held : HeldDirectoryMarkedRetryReports observed.operations published readStart}
     (authorization : ListedDirectoryAuthorization held) :
     authorization.keeper = observed.wal.keeper.observesFile := by
   generalize authorization.keeper = authorized

@@ -68,6 +68,14 @@ theorem admittedAtIssue {input : FilePath} (issue : ListedLongKeeperDirectoryIss
   rw [runOpenWithInstallation_outcome, runOpenWithInstallation_outcome,
     runOpenWithImage_acquired, runOpenWithImage_acquired, reached]
 
+section ReachedCensus
+
+variable {readStart : DescriptorInventory}
+  {held : HeldDirectoryMarkedRetryReports operations published readStart}
+  {authorization : ListedDirectoryAuthorization held}
+  {pruning : LongKeeperPruning authorization} {stage : ListedLongKeeperStageAt pruning}
+  {rename : ListedLongKeeperRename stage}
+
 /-- The same renamed inode remains visible. An effective directory
 barrier makes it the sole crash binding. -/
 def stoppedInodes (_issue : ListedLongKeeperDirectoryIssue rename) (effective : Bool) : WalInodeImage :=
@@ -96,6 +104,8 @@ theorem projectsStoppedInodes (issue : ListedLongKeeperDirectoryIssue rename) (e
     simp [stopped, stoppedInodes, files,
       FileImage.withKeeperInodes, WalInodeImage.project, WalInodeImage.settleBinding, WalInodeImage.renameSynced]
     rfl
+
+end ReachedCensus
 
 /-- Both effects of the issued, nonreturning barrier are cuts of the same
 authorized repair. The prefix has already durably pruned later names. -/

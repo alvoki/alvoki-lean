@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+Both keeper-replacement and suffix-pruning recovery now accept the
+descriptor inventory reached by marker acquisition. The shared repair
+proofs use the reported inode map to connect the later allocation and
+sync targets to the original cached directory and lock. The final
+composition still needs to connect the returned native session to the
+existing client-history theorem across retries.
+
 The shared directory authorization and ordered suffix unlink reports now
 accept the marker-open read inventory. Lock ownership follows from the
 live reference in that inventory after the reported drops. The suffix

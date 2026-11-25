@@ -194,7 +194,7 @@ theorem HeldDirectoryMarkedRetryReports.metadataReads {directory : DiskDirectory
     {before : LockedFileState FileImage} {history : List WAL.Write}
     {layout : CanonicalKeeperLayout before.image history}
     {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
-    {published : CheckpointPublication.Image} (held : HeldDirectoryMarkedRetryReports operations published)
+    {published : CheckpointPublication.Image} {readStart : DescriptorInventory} (held : HeldDirectoryMarkedRetryReports operations published readStart)
     (report : DirectoryMetadataReadReports directory held.lifetime.namespaceView held.lifetime.root
       operations.reads operations.reported.inventory.reports.readOptional before.image.directory.active) :
     operations.reported.inventory.reports.readOptional (directory.file .manifest) =
@@ -213,7 +213,7 @@ Its canonical child is resolved in the same held directory as the later reads. -
 structure HeldMarkedMetadata {directory : DiskDirectory} {before : LockedFileState FileImage}
     {history : List WAL.Write} {layout : CanonicalKeeperLayout before.image history}
     {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
-    {published : CheckpointPublication.Image} (held : HeldDirectoryMarkedRetryReports operations published) where
+    {published : CheckpointPublication.Image} {readStart : DescriptorInventory} (held : HeldDirectoryMarkedRetryReports operations published readStart) where
   reads : DirectoryMetadataReadReports directory held.lifetime.namespaceView held.lifetime.root
     operations.reads operations.reported.inventory.reports.readOptional before.image.directory.active
   route : RunChildLookup held.lifetime.root "WAL.commit" held.lifetime.namespaceView
@@ -227,7 +227,7 @@ namespace HeldMarkedMetadata
 variable {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout before.image history}
   {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
-  {published : CheckpointPublication.Image} {held : HeldDirectoryMarkedRetryReports operations published}
+  {published : CheckpointPublication.Image} {readStart : DescriptorInventory} {held : HeldDirectoryMarkedRetryReports operations published readStart}
 
 /-- The separate route stat and payload open resolve to the same canonical
 child. The earlier metadata itself need only establish that the marker exists. -/

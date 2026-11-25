@@ -10,9 +10,9 @@ open WAL.Boundary (CheckpointRepresentsPrefix WalInodeImage)
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
   {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
-  {published : CheckpointPublication.Image}
+  {published : CheckpointPublication.Image} {readStart : DescriptorInventory}
   {calls : CapturedAlignedCallbacks admission} {renameMarker : Bool}
-  {report : CapturedMarkedReadReports admission layout published renameMarker}
+  {report : CapturedMarkedReadReports admission layout published renameMarker readStart}
   {vacant : TryLockObserves retry.owners directory (.ok true)} {checkpoint : Option (PackedTable × UInt64)}
   {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
 
@@ -23,7 +23,7 @@ private abbrev ReplacementState := CensusDirectoryCache × ReplacementSyncState
 precedes the authorization barrier, the ordered unlinks and the suffix
 directory barrier before staged replacement. -/
 structure CapturedLongKeeperFinish (calls : CapturedAlignedCallbacks admission)
-    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     (vacant : TryLockObserves retry.owners directory (.ok true))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) where
@@ -128,7 +128,7 @@ theorem sameCensusObjects (finish : CapturedLongKeeperFinish calls report vacant
   rw [finish.stage.captured]
   change (calls.heldReport report vacant selected).listing.afterClose.inode = admission.reached.inode
   rw [(calls.heldReport report vacant selected).listing.afterClose_eq]
-  rfl
+  exact report.objectMap
 
 /-- The last barrier settles the replacement's name. Any already open
 description of the old inode still refers to its former bytes. -/

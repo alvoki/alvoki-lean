@@ -9,13 +9,13 @@ open WAL.Boundary (CheckpointRepresentsPrefix)
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
   {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
-  {published : CheckpointPublication.Image}
+  {published : CheckpointPublication.Image} {readStart : DescriptorInventory}
 
 /-- The selected keeper survives authorization and the checked suffix
 prune in the pending cache. Its final sync and the reported release leave
 the owner and cached directory live. -/
 structure CapturedPrunedAlignedFinish (calls : CapturedAlignedCallbacks admission)
-    {renameMarker : Bool} (reads : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} (reads : CapturedMarkedReadReports admission layout published renameMarker readStart)
     (vacant : TryLockObserves retry.owners directory (.ok true))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint) where
@@ -33,7 +33,7 @@ structure CapturedPrunedAlignedFinish (calls : CapturedAlignedCallbacks admissio
 namespace CapturedPrunedAlignedFinish
 
 variable {calls : CapturedAlignedCallbacks admission} {renameMarker : Bool}
-  {reads : CapturedMarkedReadReports admission layout published renameMarker}
+  {reads : CapturedMarkedReadReports admission layout published renameMarker readStart}
   {vacant : TryLockObserves retry.owners directory (.ok true)} {checkpoint : Option (PackedTable × UInt64)}
   {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
 

@@ -1671,7 +1671,8 @@ theorem installsAfterAcquiredRecovery
 /-- After marker stabilization, a longer keeper uses the shared native
 replacement schedule once its first directory sync authorizes repair. -/
 theorem reopensLongAfterCapturedPreparation
-    (report : CapturedMarkedReadReports admission layout published false)
+    {readStart : DescriptorInventory}
+    (report : CapturedMarkedReadReports admission layout published false readStart)
     (calls : CapturedAlignedCallbacks admission)
     (vacant : TryLockObserves retry.owners directory (.ok true))
     {checkpoint : Option (PackedTable × UInt64)}
@@ -1726,7 +1727,8 @@ theorem reopensLongAfterCapturedPreparation
 /-- An aligned keeper with later segments uses the same ordered suffix
 repair after the marker barrier reaches the common authorized image. -/
 theorem reopensPrunedAfterCapturedPreparation
-    (report : CapturedMarkedReadReports admission layout published false)
+    {readStart : DescriptorInventory}
+    (report : CapturedMarkedReadReports admission layout published false readStart)
     (calls : CapturedAlignedCallbacks admission)
     (vacant : TryLockObserves retry.owners directory (.ok true))
     {checkpoint : Option (PackedTable × UInt64)}

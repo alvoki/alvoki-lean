@@ -8,8 +8,8 @@ open WAL.Boundary (CheckpointRepresentsPrefix)
 variable {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout before.image history}
   {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
-  {published : CheckpointPublication.Image}
-  {held : HeldDirectoryMarkedRetryReports operations published}
+  {published : CheckpointPublication.Image} {readStart : DescriptorInventory}
+  {held : HeldDirectoryMarkedRetryReports operations published readStart}
   {authorization : ListedDirectoryAuthorization held}
 
 private abbrev Handle := DescriptorInventory × DescriptorSlot × Nat
@@ -182,7 +182,8 @@ theorem keeperCustody (repair : ListedPrunedAlignedKeeper prune)
   refine ⟨?_, ⟨refs, rfl, ?_⟩, observed, rfl, rfl, ?_⟩
   · change _ = some (authorization.keeper.inventory.inode operations.slot.description)
     rw [repair.opened]
-    exact prune.lockBound
+    simpa only [DescriptorInventory.insert, DescriptorInventory.afterDrops,
+      held.listing.afterClose_eq, held.objectMap] using prune.lockBound
   · rw [refs.afterFileDrops_surviving remains]
     simp [after, owned, LockOwners.Owns, LockOwners.set]
   · change prune.reached path = some (inventory.inode authorization.keeper.slot.description)

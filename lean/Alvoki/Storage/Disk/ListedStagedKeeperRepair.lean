@@ -8,8 +8,8 @@ open System SyncHandleRouting WalSegmentRepair
 variable {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout before.image history}
   {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
-  {published : CheckpointPublication.Image}
-  {held : HeldDirectoryMarkedRetryReports operations published}
+  {published : CheckpointPublication.Image} {readStart : DescriptorInventory}
+  {held : HeldDirectoryMarkedRetryReports operations published readStart}
   {authorization : ListedDirectoryAuthorization held}
 
 private abbrev Handle := DescriptorInventory × DescriptorSlot × Nat
@@ -63,8 +63,8 @@ theorem pruneCustody (reported : ListedLongKeeperPrune authorization) :
     reported.bindings (directory.file .lock) = some (atPrune.inode operations.slot.description) := by
   intro atPrune
   refine ⟨reported.directoryRetained, reported.lockRetained, ?_, ?_⟩
-  · simpa only [atPrune, DescriptorInventory.afterDrops, held.listing.afterClose_eq] using reported.directoryBound
-  · simpa only [atPrune, DescriptorInventory.afterDrops, held.listing.afterClose_eq] using reported.lockBound
+  · simpa only [atPrune, DescriptorInventory.afterDrops, held.listing.afterClose_eq, held.objectMap] using reported.directoryBound
+  · simpa only [atPrune, DescriptorInventory.afterDrops, held.listing.afterClose_eq, held.objectMap] using reported.lockBound
 
 /-- Reading a long keeper returns the exact prefix without remembering
 its open handle. Both reached directory barriers use the retained cache. -/
@@ -340,7 +340,7 @@ theorem stageCustody (reported : ListedLongKeeperStageAt pruning) :
     reported.outcome
   refine ⟨?_, ⟨refs, rfl, ?_⟩, barrier, rfl, rfl, reported.stageBound, reported.keeperBound, reported.distinctKeeper⟩
   · rw [reported.lockBound, reported.captured]
-    rfl
+    simp only [DescriptorInventory.insert, DescriptorInventory.afterDrops, held.listing.afterClose_eq, held.objectMap]
   · rw [refs.afterFileDrops_surviving remains]
     simp [written, scratch, LongKeeperPruning.stageInput, acquired, LockOwners.Owns, LockOwners.set]
 
@@ -471,7 +471,7 @@ theorem renameTargets (rename : ListedLongKeeperRename stage) :
       stage.bindings (directory.file (.walSegment layout.keeper.first)) ∧
     rename.bindings (directory.file .stagedWal) ≠ rename.bindings (directory.file (.walSegment layout.keeper.first)) := by
   refine ⟨?_, rename.sourceBound.trans stage.stageBound.symm, ?_, ?_⟩
-  · rw [rename.directoryBound, authorization.bound, held.lifetime.identifiesDirectory]
+  · rw [rename.directoryBound, authorization.bound, held.lifetime.identifiesDirectory, held.objectMap]
   · rw [rename.keeperBound, rename.originalKeeper, stage.keeperBound]
   · rw [rename.sourceBound, rename.keeperBound, rename.originalKeeper]
     exact fun same => stage.distinctKeeper (Option.some.inj same)
@@ -525,7 +525,7 @@ theorem lockAtRename (rename : ListedLongKeeperRename stage) :
     exact List.ne_nil_of_mem issuing
   refine ⟨?_, refs, rfl, ?_⟩
   · rw [rename.lockBound, stage.captured]
-    rfl
+    simp only [DescriptorInventory.insert, DescriptorInventory.afterDrops, held.listing.afterClose_eq, held.objectMap]
   · rw [refs.afterFileDrops_surviving remains]
     simp [acquired, LockOwners.Owns, LockOwners.set]
 
@@ -633,10 +633,10 @@ theorem custody (issued : ListedLongKeeperDirectoryIssue rename) :
     issued.stageAbsent.trans (rename.renamedSource effective),
     issued.keeperBound.trans (rename.renamedKeeper effective)⟩
   · simp only [atSync, inventory, DescriptorInventory.afterDrops, stage.captured, DescriptorInventory.insert,
-      held.listing.afterClose_eq]
+      held.listing.afterClose_eq, held.objectMap]
     exact issued.directoryBound
   · simp only [atSync, inventory, DescriptorInventory.afterDrops, stage.captured, DescriptorInventory.insert,
-      held.listing.afterClose_eq]
+      held.listing.afterClose_eq, held.objectMap]
     exact issued.lockBound
 
 private theorem renamed (issued : ListedLongKeeperDirectoryIssue rename) :

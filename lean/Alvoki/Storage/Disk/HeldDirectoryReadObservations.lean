@@ -368,7 +368,7 @@ theorem keeperRead_syncListedDirectory (report : HeldDirectoryMarkedRetryReports
 
 /-- The admitted marked open now takes its selected checkpoint reports from
 the same observed directory lifetime as the checked listing. -/
-theorem installs {input : FilePath} (report : HeldDirectoryMarkedRetryReports operations published)
+theorem installs {input : FilePath} (report : HeldDirectoryMarkedRetryReports operations published readStart)
     (settles : operations.sync operations.cache #[directory.path] before.image = .ok () before.image.syncDirectory)
     (metadataReads : operations.MarkedMetadata) (healthy : operations.HealthyFinish)
     (admission : OpenAdmissionReports input directory operations.slot)
