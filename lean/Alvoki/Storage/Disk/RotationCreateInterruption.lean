@@ -5,12 +5,6 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRotation WalSegmentRepair SyncHandleRouting
 
-private def readRotationReport {image α : Type} (action : EStateM IO.Error image α) :
-    ExceptT IO.Error (EStateM FilePath image) α :=
-  fun before => match action before with
-  | .ok value after => .ok (.ok value) after
-  | .error cause after => .ok (.error cause) after
-
 private def rotateFileCall {image α : Type} (action : ExceptT IO.Error (EStateM FilePath image) α) :
     ExceptT IO.Error (EStateM FilePath (Phase Installed × LockedFileState image)) α :=
   fun (phase, before) => match action.run before.image with
@@ -23,16 +17,14 @@ reported first cut of the rotation body. -/
 structure ObservedRotationCreateStop {directory : DiskDirectory} {before : SegmentedWriterState}
     (cut : RotationInFlightCut directory before) (handle : Type) where
   lookup : FilePath → Except IO.Error IO.FS.Metadata
-  read : FilePath → EStateM IO.Error (Cache handle × State) (Option ByteArray)
   openNew : FilePath → ExceptT IO.Error (EStateM FilePath (Cache handle × State)) handle
   cache : Cache handle
-  atOpen : Cache handle
   checked : checkActiveSegmentWith directory before.installed lookup = .ok ()
-  absent : read (directory.file (.walSegment (before.installed.walBytes / WAL.frameSize)))
-    (cache, .initial before.wal) = .ok none (atOpen, .initial before.wal)
+  absent : ∃ name message, lookup (directory.file (.walSegment (before.installed.walBytes / WAL.frameSize))) =
+    .error (.noFileOrDirectory name 2 message)
   first : cut.completed = 0
   stopped : let path := directory.file (.walSegment (before.installed.walBytes / WAL.frameSize))
-    (openNew path).run (atOpen, .initial before.wal) = .error path (atOpen, cut.image)
+    (openNew path).run (cache, .initial before.wal) = .error path (cache, cut.image)
 
 namespace ObservedRotationCreateStop
 
@@ -48,29 +40,32 @@ def runUntilCreate (observed : ObservedRotationCreateStop cut handle)
   let create := fun path => do
     let descriptor ← observed.openNew path
     ExceptT.lift (modify fun (cache, files) => ({ cache with pending := pushPending path descriptor cache.pending }, files))
+  let read := fun path => readEmptyWith (pure (observed.lookup path)) path "WAL segment successor is not empty"
   (rotateWalSchedule
     (fun state => .ok (state.1.installed : Except IO.Error Installed) state)
     (fun installed state => .ok (checkActiveSegmentWith directory installed observed.lookup) state)
     (fun phase state => .ok (.ok ()) (phase, state.2))
     (fun successor => rotateFileCall
-      (runAt directory successor (fun path => readRotationReport (observed.read path)) create sync))
+      (runAt directory successor read create sync))
     (fun (phase, before) =>
       .ok (.ok ()) (phase, { before with image := ({ before.image.1 with active := none }, before.image.2) }))).run
     (.ready before.installed, ⟨(observed.cache, .initial before.wal), before.owners⟩)
 
 /-- After the active-file guard passes, the outer schedule records the
 poisoned phase and issues the exclusive open on the canonical successor
-path. The stop retains the cache from the preceding read. -/
+path. The no-follow lookup and the nonreturning open preserve the original cache. -/
 theorem stopsSchedule (observed : ObservedRotationCreateStop cut handle) (sync) :
     observed.runUntilCreate sync =
       .error (directory.file (.walSegment (before.installed.walBytes / WAL.frameSize)))
-        (.poisoned, ⟨(observed.atOpen, cut.image), before.owners⟩) := by
+        (.poisoned, ⟨(observed.cache, cut.image), before.owners⟩) := by
   let path := directory.file (.walSegment (before.installed.walBytes / WAL.frameSize))
-  have stopped : observed.openNew path (observed.atOpen, .initial before.wal) =
-      .error path (observed.atOpen, cut.image) := observed.stopped
+  have stopped : observed.openNew path (observed.cache, .initial before.wal) =
+      .error path (observed.cache, cut.image) := observed.stopped
+  obtain ⟨name, message, absent⟩ := observed.absent
   simp [runUntilCreate, rotateWalSchedule, Phase.installed, cut.nonempty, observed.checked,
-    publishPrepared, rotateFileCall, WalSegmentRotation.runAt_fileEffects, observeSuccessorWith, readRotationReport, observed.absent,
-    path, stopped, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind, Pure.pure,
+    publishPrepared, rotateFileCall, WalSegmentRotation.runAt_fileEffects, observeSuccessorWith, readEmptyWith,
+    optionalMetadataWith, absent, path, stopped, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
+    EStateM.bind, Pure.pure,
     ExceptT.pure, EStateM.pure, Except.pure]
 
 /-- With zero returned create or sync calls, the only possible file effect
@@ -100,7 +95,7 @@ theorem startsReopen (observed : ObservedRotationCreateStop cut handle)
     (metadata : pair ∈ reached.2.image.2.metadata.crashImages)
     (survives : reached.2.image.2.successor.MaySurvive present) :
     tag = directory.file (.walSegment (before.installed.walBytes / WAL.frameSize)) ∧
-    reached.1 = .poisoned ∧ reached.2.image.1 = observed.atOpen ∧
+    reached.1 = .poisoned ∧ reached.2.image.1 = observed.cache ∧
     RotationReopenFailures directory before.wal before.history ⟨reached.2.image.2, reached.2.owners⟩
       (cut.released pair present) ∧
     pair = before.target.pair ∧
