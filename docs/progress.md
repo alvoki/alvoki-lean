@@ -1064,6 +1064,11 @@ the exact reached cache. The sync result identifies the descriptor
 whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
+The held recovery proof now derives the acquired selection and
+descriptor inventory in one step from the reported rewind and bounded
+reads. The projection that already accounts for rewind is a special
+case of that same proof.
+
 The acquisition model now takes its bounded reader as an argument.
 Lean proves equality with the shared native reader once the primitive
 open and rewind have been projected to their reached cursor. Both recovery projections now use that shared reader and apply the

@@ -1686,6 +1686,28 @@ def acquireMarkerInCensus (reads : WalSegmentRepair.CheckpointRunChunkReads) (pa
   acquireMarkerWithInventoryUsing (readMarkerBytesWith (EStateM.pure ()))
     (fun inventory (cache, _, files) => (cache, inventory, files)) reads path
 
+/-- A successful rewind on the reached marker description and its
+bounded reads supply the exact selection and descriptor to recovery. -/
+theorem acquireMarkerInCensus_afterRewind
+    {reads : WalSegmentRepair.CheckpointRunChunkReads} {directory : DiskDirectory}
+    {view : DiskSession.DirectoryReadNamespace} {root : DiskSession.DeviceInode} {payload : ByteArray}
+    (file : DiskSession.HeldMetadataFile reads (directory.file .walBoundary) "WAL.commit" view root payload)
+    (privateFile : file.calls.metadata.numLinks = 1)
+    (available : PrefixChunksAvailableUntilEof payload (reads.readChunk file.calls.slot.description))
+    (rewind : EStateM IO.Error Nat Unit) (rewound : rewind 0 = .ok () 0)
+    {selected : Selection} (decoded : decode payload = .ok selected)
+    (before : DiskSession.CensusDirectoryCache × DiskSession.CensusOpenState) :
+    acquireMarkerWithInventoryUsing (readMarkerBytesWith rewind)
+      (fun inventory (cache, _, files) => (cache, inventory, files)) reads (directory.file .walBoundary) before =
+      .ok (⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩, selected)
+        (before.1, file.calls.inventory, before.2.2) := by
+  obtain ⟨bytes, returned, agrees⟩ := readMarkerBytesWith_decodesHeldMarker file available rewind 0 rewound
+  cases before
+  simp [acquireMarkerWithInventoryUsing, checkPrivateRegularWith, file.calls.stat,
+    file.calls.regular, privateFile, file.calls.opened, returned,
+    show (IO.FS.FileType.file == .file) = true from rfl,
+    Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept, agrees.trans decoded]
+
 theorem acquireMarkerInCensus_returns
     {reads : WalSegmentRepair.CheckpointRunChunkReads} {directory : DiskDirectory}
     {view : DiskSession.DirectoryReadNamespace} {root : DiskSession.DeviceInode}
@@ -1698,13 +1720,8 @@ theorem acquireMarkerInCensus_returns
     acquireMarkerInCensus reads (directory.file .walBoundary) before =
       .ok (⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩, selected)
         (before.1, file.calls.inventory, before.2.2) := by
-  obtain ⟨bytes, returned, agrees⟩ := decode_markerFromHeldDirectory file available
-  rw [acquireMarkerInCensus, acquireMarkerWithInventory_sharedReader]
-  cases before
-  simp [acquireMarkerWithInventory, acquireMarkerWithInventoryUsing, checkPrivateRegularWith, file.calls.stat,
-    file.calls.regular, privateFile, file.calls.opened, returned,
-    show (IO.FS.FileType.file == .file) = true from rfl,
-    Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept, agrees.trans decoded]
+  exact acquireMarkerInCensus_afterRewind file privateFile available (EStateM.pure ()) rfl decoded before
+
 
 section CapturedPreparation
 
