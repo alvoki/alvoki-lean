@@ -431,19 +431,23 @@ returns that table and the physical keeper prefix for repair. -/
 theorem prepareSelected_of_retainedReplay
     (directory : Storage.DiskDirectory) (selection : Selection)
     (readCheckpoint : Except IO.Error (Option (Storage.PackedTable × UInt64)))
-    (readWal : Nat → UInt64 → Except IO.Error (Storage.WalSegmentMarkerReads × Nat))
+    (list : System.FilePath → Except IO.Error (Array IO.FS.DirEntry))
+    (lstat : System.FilePath → Except IO.Error (Except IO.Error IO.FS.Metadata))
     {checkpoint : Option (Storage.PackedTable × UInt64)} (checkpointRead : readCheckpoint = .ok checkpoint)
     {reads : Storage.WalSegmentMarkerReads} {fileSize first : Nat}
-    (walRead : readWal (checkpoint.getD (.empty, 0)).1.committed.toNat selection.frontier = .ok (reads, fileSize))
     {firstBytes : ByteArray} {rest : List (Nat × ByteArray)}
     (files : reads.files = (first, firstBytes) :: rest)
     (aligned : selection.frontier.toNat % frameSize = 0)
     {readSeal : System.FilePath → Nat → Except IO.Error ByteArray}
     {readKeeper : System.FilePath → Nat → Nat → Except IO.Error ByteArray}
-    {required : List (Nat × IO.FS.Metadata)}
+    {entries : Array IO.FS.DirEntry} (listed : list directory.path = .ok entries)
+    {extents required : List (Nat × IO.FS.Metadata)}
+    (scanned : Storage.readWalSegmentExtentsWith directory lstat (entries.toList.map (·.fileName)) = .ok extents)
+    (watermark : (checkpoint.getD (.empty, 0)).1.committed.toNat ≤ selection.frontier.toNat / frameSize)
+    (selected : selectWalExtentsThrough extents (checkpoint.getD (.empty, 0)).1.committed.toNat
+      (selection.frontier.toNat / frameSize) = some (required, reads.newer))
     (reports : CachedWalPayloadReports directory (selection.frontier.toNat / frameSize)
       readSeal readKeeper required reads.files fileSize)
-    (covered : ∀ entry ∈ required, entry.1 ≤ selection.frontier.toNat / frameSize)
     {physical tail payload : ByteArray} {table : Storage.PackedTable}
     (exactBytes : physical = Storage.walSegmentPayloadBytes reads.files ++ tail)
     (replayed : Boundary.recoverRetainedMarked (checkpoint.getD (.empty, 0)).1
@@ -451,10 +455,29 @@ theorem prepareSelected_of_retainedReplay
     {keeper : Nat} {bytes : ByteArray}
     (keeperRead : reads.files.getLast? = some (keeper, bytes)) :
     prepareBoundedMarkedFromReaders directory readCheckpoint
-      (fun _ => pure (some (Boundary.encode selection.frontier))) readWal =
+      (fun _ => pure (some (Boundary.encode selection.frontier)))
+      (fun start frontier => readSelectedWithCachedExtents directory start frontier list lstat readSeal readKeeper) =
       .ok (⟨selection.frontier.toNat / frameSize, keeper, reads.newer, bytes⟩,
         ⟨table, (checkpoint.getD (.empty, 0)).2, selection.frontier, keeper⟩, fileSize) := by
-  refine prepareSelected_reported (payload := payload) directory selection readCheckpoint readWal checkpointRead walRead ?_ keeperRead
+  have readWal := readSelectedWithCachedExtents_reported directory _ _ list lstat readSeal readKeeper
+    ⟨aligned, watermark⟩ listed scanned selected reports
+  have walRead : readSelectedWithCachedExtents directory (checkpoint.getD (.empty, 0)).1.committed.toNat
+      selection.frontier list lstat readSeal readKeeper = .ok (reads, fileSize) := by
+    cases reads
+    exact readWal
+  have covered : ∀ entry ∈ required, entry.1 ≤ selection.frontier.toNat / frameSize := by
+    unfold selectWalExtentsThrough at selected
+    cases found : ((extents.map Prod.fst).filter
+      (fun offset => decide (offset ≤ (checkpoint.getD (.empty, 0)).1.committed.toNat))).max? with
+    | none => simp [found, Bind.bind, Option.bind] at selected
+    | some first =>
+      simp [found, Bind.bind, Option.bind, Pure.pure] at selected
+      rw [← selected.1]
+      intro entry member
+      have checked := List.all_eq_true.mp (List.all_takeWhile (p := fun item : Nat × IO.FS.Metadata =>
+        decide (item.1 ≤ selection.frontier.toNat / frameSize))) entry member
+      exact of_decide_eq_true checked
+  refine prepareSelected_reported (payload := payload) directory selection readCheckpoint _ checkpointRead walRead ?_ keeperRead
   have checked := cachedPayloads_checkSpans reports covered
   rw [files] at checked exactBytes ⊢
   rw [Storage.recoverMarkedWalSegments_eq_retained _ _ _ _ _ tail aligned checked, ← exactBytes]
