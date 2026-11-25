@@ -1439,8 +1439,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadRecoveryTrace.frames
 #check_axioms Alvoki.Storage.DiskSession.NativeReadRecoveryTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.acknowledges
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.checkpoints
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.collectsCoveredWal
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionStep.ledgers
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionStep.uncertainBatchWhole
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.ledgers
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.uncertainBatchesWhole
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.observesStep
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.executes

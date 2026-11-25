@@ -194,6 +194,39 @@ theorem retainsLock (reported : NativeReadyWalCollection state) :
 
 end NativeReadyWalCollection
 
+/-- Exact returned state and the namespace settled by the successful
+directory barrier. The collector preserves the installed replay. -/
+structure NativeReadyWalCollection.Completed {state : NativeReadyState} (reported : NativeReadyWalCollection state)
+    (next : NativeReadyState) (log : List DatabaseSubmissions) (reads : List RecordedSnapshotRead)
+    (history : List WAL.Write) : Prop where
+  returned : reported.run = .ok () (next.session.phase,
+    ⟨(next.cache, reported.barrier.after), next.files.owners⟩)
+  valid : next.Valid
+  session : next.session = state.session
+  cache : next.cache = state.cache
+  census : next.census = state.census
+  installed : next.writer.installed = state.writer.installed
+  checkpoint : next.writer.checkpoint = state.writer.checkpoint
+  keeper : next.writer.wal.active = state.writer.wal.active
+  readDescriptors : next.writer.wal.readDescriptors state.writer.target.range.watermark =
+    state.writer.wal.readDescriptors state.writer.target.range.watermark
+  historyEq : next.writer.history = history
+  writerSlot : reported.barrier.writerSlot = state.owner
+  lockBinding : reported.reachedView.child reported.inventory.lifetime.root "LOCK" = some reported.inventory.lifetime.lock
+  directorySlot : reported.barrier.handle.2.1 = state.directorySlot
+  directoryInode : reported.barrier.handle.1.inode state.directorySlot.description = state.census.inode state.directorySlot.description
+  reached : reported.barrier.reached = reported.inventory.listing.afterClose.afterDrops reported.barrier.drops
+  directoryLive : state.directorySlot ∈ reported.barrier.reached.slots
+  writerLive : state.owner ∈ reported.barrier.reached.slots
+  lockInode : reported.reachedView.modelObject reported.inventory.lifetime.lock =
+    reported.barrier.reached.inode state.owner.description
+  sealed : reported.barrier.after.crashSealed = [next.writer.wal.sealed]
+  absent : ∀ offset ∈ state.writer.wal.collectionOffsets,
+    reported.reachedView.child reported.inventory.lifetime.root (renderWalSegmentName offset) = none
+  removed : ∀ segment ∈ state.writer.wal.sealed, state.writer.wal.Eligible segment →
+    segment ∉ next.writer.wal.sealed
+  replay : InstalledClientReplay log reads history next.writer.installed next.session
+
 /-- A complete native collection after the reached read prefix keeps
 the same ready phase, installed table, checkpoint, cache and ledger.
 The reported barrier durably removes every seal covered by the plan. -/
@@ -203,30 +236,7 @@ theorem NativeReadyReadPrefix.collectsCoveredWal
     {log : List DatabaseSubmissions} {reads : List RecordedSnapshotRead}
     (prior : NativeReadyReadPrefix opened initial history log reads state)
     (reported : NativeReadyWalCollection state) (completed : reported.barrier.outcome = .completed) :
-    let next := reported.next completed
-    reported.run = .ok () (next.session.phase,
-      ⟨(next.cache, reported.barrier.after), next.files.owners⟩) ∧
-    next.Valid ∧
-    next.session = state.session ∧ next.cache = state.cache ∧ next.census = state.census ∧
-    next.writer.installed = state.writer.installed ∧
-    next.writer.checkpoint = state.writer.checkpoint ∧
-    next.writer.wal.active = state.writer.wal.active ∧
-    next.writer.wal.readDescriptors state.writer.target.range.watermark =
-      state.writer.wal.readDescriptors state.writer.target.range.watermark ∧
-    next.writer.history = history ∧
-    reported.barrier.writerSlot = state.owner ∧
-    reported.reachedView.child reported.inventory.lifetime.root "LOCK" = some reported.inventory.lifetime.lock ∧
-    reported.barrier.handle.2.1 = state.directorySlot ∧
-    reported.barrier.handle.1.inode state.directorySlot.description = state.census.inode state.directorySlot.description ∧
-    reported.barrier.reached = reported.inventory.listing.afterClose.afterDrops reported.barrier.drops ∧
-    state.directorySlot ∈ reported.barrier.reached.slots ∧ state.owner ∈ reported.barrier.reached.slots ∧
-    reported.reachedView.modelObject reported.inventory.lifetime.lock = reported.barrier.reached.inode state.owner.description ∧
-    reported.barrier.after.crashSealed = [next.writer.wal.sealed] ∧
-    (∀ offset ∈ state.writer.wal.collectionOffsets,
-      reported.reachedView.child reported.inventory.lifetime.root (renderWalSegmentName offset) = none) ∧
-    (∀ segment ∈ state.writer.wal.sealed, state.writer.wal.Eligible segment →
-      segment ∉ next.writer.wal.sealed) ∧
-    InstalledClientReplay log reads history next.writer.installed next.session := by
+    reported.Completed (reported.next completed) log reads history := by
   obtain ⟨valid, sameHistory, _⟩ := prior.refines
   have ready := valid.retained
   have plan := ready.completeObservedWalPlan reported.calls reported.inventory reported.manifest reported.marker
