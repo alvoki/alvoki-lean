@@ -166,6 +166,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeAlignedOpenHeap
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapCacheMutations
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapCacheChronology
 lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapKeeperPhysical
+lake env leanchecker Alvoki.Storage.Disk.NativeBootstrapMarkerPhysical
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenEarlyError
 lake env leanchecker Alvoki.Storage.Disk.NativeCacheOpenRejection
 lake env leanchecker Alvoki.Storage.Disk.NativeContendedOpen

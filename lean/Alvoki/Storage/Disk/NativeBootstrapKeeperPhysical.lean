@@ -11,17 +11,17 @@ variable {heap : Type} {directory : DiskDirectory} {before : LockedFileState Wal
   {captured : BootstrapCacheOpen fileCalls.toBootstrapAdmissionCalls}
   {listed : BootstrapCheckedListing captured}
 
-private abbrev KeeperFiles := WalSegmentRotation.State × WalInodeImage
+abbrev BootstrapFileProjection := WalSegmentRotation.State × WalInodeImage
 
-private def keeperFiles (view : OpenCloseHeapView heap WalSegmentRotation.State)
-    (inodes : heap → WalInodeImage) (state : heap) : KeeperFiles :=
+def BootstrapFileProjection.atHeap (view : OpenCloseHeapView heap WalSegmentRotation.State)
+    (inodes : heap → WalInodeImage) (state : heap) : BootstrapFileProjection :=
   ((view.files state).image, inodes state)
 
-private def keeperResult (view : OpenCloseHeapView heap WalSegmentRotation.State)
+def BootstrapFileProjection.result (view : OpenCloseHeapView heap WalSegmentRotation.State)
     (inodes : heap → WalInodeImage) (value : heap → α → β) :
-    EStateM.Result IO.Error heap α → EStateM.Result IO.Error KeeperFiles β
-  | .ok returned reached => .ok (value reached returned) (keeperFiles view inodes reached)
-  | .error cause reached => .error cause (keeperFiles view inodes reached)
+    EStateM.Result IO.Error heap α → EStateM.Result IO.Error BootstrapFileProjection β
+  | .ok returned reached => .ok (value reached returned) (BootstrapFileProjection.atHeap view inodes reached)
+  | .error cause reached => .error cause (BootstrapFileProjection.atHeap view inodes reached)
 
 private abbrev BootstrapFreshZeroKeeper.inventory (observed : BootstrapFreshZeroKeeper listed) :=
   (listed.scan.afterClose.afterDrops observed.beforeCreate).insert observed.slot observed.free
@@ -31,7 +31,7 @@ private abbrev BootstrapFreshZeroKeeper.handle (observed : BootstrapFreshZeroKee
 
 variable {view : OpenCloseHeapView heap WalSegmentRotation.State} {init : OpenSyncCacheCallbacks heap} {entry : heap}
   {seed : OpenSyncCacheAllocations captured.opened view init entry} {calls : FreshBootstrapCacheCalls heap}
-  {prepared : heap}
+  {prepared : heap} {expected : CheckpointOpenHandle}
 
 /-- Connect the raw keeper creation and its two barriers to their own
 physical reports. The pending reference operations preserve only the
@@ -40,26 +40,26 @@ reported at the actual reached heaps. -/
 structure FreshBootstrapKeeperPhysical
     (observed : BootstrapFreshZeroKeeper listed)
     (keeper : BootstrapPendingObservation view calls.toBootstrapPendingCalls directory .keeper
-      seed.pendingRef observed.handle prepared)
+      seed.pendingRef expected prepared)
     (barrier : FreshBootstrapDirectoryBarrier seed calls keeper.reached) where
   inodes : heap → WalInodeImage
-  atCreate : keeperFiles view inodes prepared = (before.image, observed.initial)
-  created : keeperResult view inodes view.handle (calls.create (directory.file (.walSegment 0)) prepared) =
-    observed.openExclusive (directory.file (.walSegment 0)) (keeperFiles view inodes prepared)
-  remembered : keeperFiles view inodes keeper.recorded = keeperFiles view inodes keeper.produced
-  consumed : keeperFiles view inodes keeper.consumed = keeperFiles view inodes keeper.recorded
-  fileSynced : keeperResult view inodes (fun _ value => value) (calls.fsync keeper.handle keeper.consumed) =
-    observed.fsync (view.handle keeper.consumed keeper.handle) (keeperFiles view inodes keeper.consumed)
+  atCreate : BootstrapFileProjection.atHeap view inodes prepared = (before.image, observed.initial)
+  created : BootstrapFileProjection.result view inodes view.handle (calls.create (directory.file (.walSegment 0)) prepared) =
+    observed.openExclusive (directory.file (.walSegment 0)) (BootstrapFileProjection.atHeap view inodes prepared)
+  remembered : BootstrapFileProjection.atHeap view inodes keeper.recorded = BootstrapFileProjection.atHeap view inodes keeper.produced
+  consumed : BootstrapFileProjection.atHeap view inodes keeper.consumed = BootstrapFileProjection.atHeap view inodes keeper.recorded
+  fileSynced : BootstrapFileProjection.result view inodes (fun _ value => value) (calls.fsync keeper.handle keeper.consumed) =
+    observed.fsync (view.handle keeper.consumed keeper.handle) (BootstrapFileProjection.atHeap view inodes keeper.consumed)
   fileCensus : view.descriptors keeper.consumed = observed.inventory.afterDrops observed.beforeFile
-  directorySynced : keeperResult view inodes (fun _ value => value) (calls.fsync seed.handle keeper.reached) =
-    observed.fsync (captured.reached, captured.cached, 0) (keeperFiles view inodes keeper.reached)
+  directorySynced : BootstrapFileProjection.result view inodes (fun _ value => value) (calls.fsync seed.handle keeper.reached) =
+    observed.fsync (captured.reached, captured.cached, 0) (BootstrapFileProjection.atHeap view inodes keeper.reached)
   directoryCensus : view.descriptors keeper.reached = observed.inventory.afterDrops (observed.beforeFile ++ observed.afterFile)
   finalCensus : view.descriptors barrier.reached = view.descriptors keeper.reached
 
 namespace FreshBootstrapKeeperPhysical
 
 variable {observed : BootstrapFreshZeroKeeper listed}
-  {keeper : BootstrapPendingObservation view calls.toBootstrapPendingCalls directory .keeper seed.pendingRef observed.handle prepared}
+  {keeper : BootstrapPendingObservation view calls.toBootstrapPendingCalls directory .keeper seed.pendingRef expected prepared}
   {barrier : FreshBootstrapDirectoryBarrier seed calls keeper.reached}
 
 /-- The same raw opened and consumed descriptor reaches the keeper
@@ -84,19 +84,21 @@ theorem settles (seen : FreshBootstrapKeeperPhysical observed keeper barrier) (s
   have rawCreate : calls.create (directory.file (.walSegment 0)) prepared = .ok keeper.handle keeper.produced :=
     keeper.returnedHandle
   rw [rawCreate, seen.atCreate, observed.created] at created
-  have createdFiles := (EStateM.Result.ok.inj created).2
+  obtain ⟨openedHandle, createdFiles⟩ := EStateM.Result.ok.inj created
+  have keeperHandle : view.handle keeper.consumed keeper.handle = observed.handle :=
+    keeper.sameIssuing.trans (keeper.sameProduced.symm.trans openedHandle)
   have observedSync := seen.fileSynced
   have rawSync := keeper.syncReturned
   rw [synced] at rawSync
-  rw [rawSync, keeper.sameIssuing, seen.consumed, seen.remembered, createdFiles, observed.fileSynced] at observedSync
+  rw [rawSync, keeperHandle, seen.consumed, seen.remembered, createdFiles, observed.fileSynced] at observedSync
   have syncedFiles := (EStateM.Result.ok.inj observedSync).2
   have originalSync := seen.directorySynced
   rw [barrier.synced, syncedFiles, observed.directorySynced] at originalSync
-  have durable : keeperFiles view seen.inodes barrier.reached = (⟨before.image.metadata.syncDirectory, .durable⟩, state) :=
+  have durable : BootstrapFileProjection.atHeap view seen.inodes barrier.reached = (⟨before.image.metadata.syncDirectory, .durable⟩, state) :=
     (EStateM.Result.ok.inj originalSync).2
   obtain ⟨fileLive, lockLive, dirLive, _, _, name, _, _, _, binding, bytes⟩ := observed.settledKeeper
   have finalInodes : seen.inodes barrier.reached = state := congrArg Prod.snd durable
-  refine ⟨keeper.sameIssuing, seen.fileCensus.symm ▸ fileLive, congrArg Prod.fst durable, finalInodes, name,
+  refine ⟨keeperHandle, seen.fileCensus.symm ▸ fileLive, congrArg Prod.fst durable, finalInodes, name,
     ?_, barrier.selectsRoot.2.2, ?_, ?_, ?_, ?_⟩
   · rw [seen.fileCensus]
     exact observed.object
