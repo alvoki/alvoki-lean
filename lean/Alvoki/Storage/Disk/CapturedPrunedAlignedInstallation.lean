@@ -277,6 +277,28 @@ def runFromCensus (finish : CapturedPrunedAlignedFinish calls reads vacant selec
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
   calls.runWithMarked (finish.recoverFromCensus chronology)
 
+/-- The checked reads produce the selected preparation used by the ordered prune.
+The worker returns the replay and settled files before session allocation. -/
+theorem recoversWithSelectedPreparation (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
+    (chronology : CapturedMarkedReadCensus reads finish.reader)
+    (prepared : Prepared retry.image layout.target layout.plan)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ opened,
+      reads.walReads.prepare reads.reads.readPrefix (admission.reached, admission.held) =
+        .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) ∧
+      finish.recoverFromCensus chronology directory admission.cache (admission.reached, admission.held) =
+        .ok opened (finish.census, finish.settled) := by
+  obtain ⟨opened, reached, projected⟩ := reads.preparesFromCensus chronology.manifest chronology.runs selected
+    chronology.marker chronology.beforeListing finish.reader chronology.seals chronology.offsets chronology.retained
+    following prepared.newer accepted ordered finish.reader.readKeeperAt (finish.reader.readsAligned finish.aligned)
+  have later := prepared.newer _ List.mem_cons_self
+  exact ⟨opened, projected, by simp only [recoverFromCensus, finishPreparedWithCensus, reached, repairActions,
+    finish.repairAt_returns later]⟩
+
 /-- The checked reads and ordered prune return the exact recovery result
 and settled files before the session allocations. -/
 theorem recoversFromCensus (finish : CapturedPrunedAlignedFinish calls reads vacant selected)
@@ -289,12 +311,8 @@ theorem recoversFromCensus (finish : CapturedPrunedAlignedFinish calls reads vac
     (ordered : WAL.OrdinalsFrom 1 history) :
     ∃ opened, finish.recoverFromCensus chronology directory admission.cache (admission.reached, admission.held) =
       .ok opened (finish.census, finish.settled) := by
-  obtain ⟨opened, reached, _⟩ := reads.preparesFromCensus chronology.manifest chronology.runs selected
-    chronology.marker chronology.beforeListing finish.reader chronology.seals chronology.offsets chronology.retained
-    following prepared.newer accepted ordered finish.reader.readKeeperAt (finish.reader.readsAligned finish.aligned)
-  have later := prepared.newer _ List.mem_cons_self
-  exact ⟨opened, by simp only [recoverFromCensus, finishPreparedWithCensus, reached, repairActions,
-    finish.repairAt_returns later]⟩
+  obtain ⟨opened, _, recovered⟩ := finish.recoversWithSelectedPreparation chronology prepared following accepted ordered
+  exact ⟨opened, recovered⟩
 
 /-- The successful aligned prune returns the same table selected from
 the physical checkpoint and WAL. The final image has no later WAL names,
