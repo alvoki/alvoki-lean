@@ -188,6 +188,7 @@ import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
 import Alvoki.Storage.Disk.HeldMetadataReadObservations
 import Alvoki.Storage.Disk.HeldWalPayloadObservations
+import Alvoki.Storage.Disk.HeldWalInstallation
 import Alvoki.Storage.Disk.WalInventoryWork
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
@@ -1397,6 +1398,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.HeldWalPayloadReports.keeperCache
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryMarkedRetryReports.selectedWalListed
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryMarkedRetryReports.selectedWalPayloads
+#check_axioms Alvoki.Storage.DiskSession.HeldWalInstallReads.operations
+#check_axioms Alvoki.Storage.DiskSession.HeldWalInstallReads.keeperObserved
+#check_axioms Alvoki.Storage.DiskSession.HeldWalInstallReads.keeperAtAlignedBarriers
+#check_axioms Alvoki.Storage.DiskSession.HeldWalInstallReads.installs
 #check_axioms Alvoki.Storage.mergeSortWithComparisonWork_spec
 #check_axioms Alvoki.Storage.readWalSegmentExtentsWithWork_spec
 #check_axioms Alvoki.Storage.readWalSegmentExtentsWithWork_bound

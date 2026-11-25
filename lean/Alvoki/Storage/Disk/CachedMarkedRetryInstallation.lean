@@ -8,12 +8,10 @@ open System WalSegmentRepair
 open WAL (frameSize)
 open WAL.Boundary (CheckpointRepresentsPrefix)
 
-/-- The reached callbacks of a held marked reopen. The individual checkpoint
-open observations are supplied separately. -/
-structure MarkedRetryChunkOperations (files : Type) (directory : DiskDirectory)
-    {before : LockedFileState FileImage} {history : List WAL.Write}
-    (layout : CanonicalKeeperLayout before.image history) where
-  reported : CachedRetryReadReports directory layout
+/-- The live callbacks and state observations of a held open, before
+certifying the canonical WAL payload reads. -/
+structure MarkedRetryChunkCalls (files : Type) (directory : DiskDirectory)
+    (before : LockedFileState FileImage) where
   descriptors : DescriptorInventory
   slot : DescriptorSlot
   live : slot ∈ descriptors.slots
@@ -22,8 +20,6 @@ structure MarkedRetryChunkOperations (files : Type) (directory : DiskDirectory)
   flock : DescriptorSlot → Except IO.Error Bool
   acquired : flock slot = .ok true
   acquisition : TryLockObserves before.owners directory (flock slot)
-  inventoryDescription : reported.inventory.descriptor = slot.description
-  inventoryOwners : reported.inventory.owners = before.owners.set (directory.file .lock) (some slot.description)
   nextRef : Nat
   liveRefs : List Nat
   fresh : ∀ ref ∈ liveRefs, ref < nextRef
@@ -38,13 +34,22 @@ structure MarkedRetryChunkOperations (files : Type) (directory : DiskDirectory)
   flatAbsent : lookup (directory.file .wal) before.image =
     .ok (.error (.noFileOrDirectory flatName 2 flatMessage)) before.image
   reads : CheckpointRunChunkReads
-  metadata : ∀ path, reported.inventory.reports.lstat path = (reads.stat path).map Prod.fst
   readKeeper : files → FilePath → Nat → Nat → Except IO.Error ByteArray
-  keeperReads : readKeeper cache = reported.readKeeper
   removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit)
   write : files → FilePath → ByteArray → EStateM IO.Error FileImage Unit
   sync : files → Array FilePath → EStateM IO.Error FileImage Unit
   renameFile : FilePath → FilePath → EStateM IO.Error FileImage Unit
+
+/-- Add the selected WAL callback reports. The individual checkpoint read
+observations are supplied separately. -/
+structure MarkedRetryChunkOperations (files : Type) (directory : DiskDirectory)
+    {before : LockedFileState FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout before.image history) extends MarkedRetryChunkCalls files directory before where
+  reported : CachedRetryReadReports directory layout
+  inventoryDescription : reported.inventory.descriptor = slot.description
+  inventoryOwners : reported.inventory.owners = before.owners.set (directory.file .lock) (some slot.description)
+  metadata : ∀ path, reported.inventory.reports.lstat path = (reads.stat path).map Prod.fst
+  keeperReads : readKeeper cache = reported.readKeeper
 
 namespace MarkedRetryChunkOperations
 
