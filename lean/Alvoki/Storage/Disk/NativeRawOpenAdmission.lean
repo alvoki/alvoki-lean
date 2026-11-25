@@ -40,14 +40,16 @@ structure RawOpenAdmissionReport (admission : CensusOpenAdmissionReports input d
 variable {admission : CensusOpenAdmissionReports input directory initial files}
   {view : OpenCloseHeapView heap image} {calls : RawOpenAdmissionCallbacks heap} {entry : heap}
 
-/-- Run the shared native admission, then the raw cache initialization
-from the lock acquisition's reached heap. Use the exact opened lock
+/-- Run the shared native admission, repeat the flat-WAL guard under
+the acquired lock, then initialize the cache from that reached heap. Use the exact opened lock
 and synchronization record for the held continuation, with the native
 unlock-on-error handler still attached. -/
 theorem RawOpenAdmissionReport.admitsWithCache
     (seen : RawOpenAdmissionReport admission view calls entry)
     (init : OpenSyncCacheCallbacks heap)
-    (seed : OpenSyncCacheAllocations admission.opened view init seen.afterFlock) :
+    (seed : OpenSyncCacheAllocations admission.opened view init seen.afterFlock)
+    (flatAfterLock : optionalMetadataWith (calls.lookup (directory.file .wal)) seen.afterFlock =
+      .ok none seen.afterFlock) :
     ∃ (cache : DiskTable.OpenSyncFiles)
       (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
         IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
@@ -66,6 +68,7 @@ theorem RawOpenAdmissionReport.admitsWithCache
           (fun resolved lock =>
             openWithLock (calls.flock lock) (fun _ => IO.userError s!"database already open: {resolved.path}")
               (fun _ => calls.unlock lock) fun _ => do
+                rejectFlatWalWith resolved (optionalMetadataWith (calls.lookup (resolved.file .wal)))
                 let opened ← openSyncFilesWith (init.openDirectory resolved.path) init.newRef init.newRef init.newRef makeCache
                 recovery resolved lock opened) entry =
           (tryCatchThe IO.Error (recovery directory seen.lock cache) fun cause => do
@@ -78,7 +81,10 @@ theorem RawOpenAdmissionReport.admitsWithCache
   intro α recovery
   rw [DiskTable.withOpenAdmission_lockOpen calls.realPath calls.lookup calls.openAppend _
     seen.resolved seen.flat seen.lockProbe admission.safe, seen.appended]
-  simp only [openWithLock, Bind.bind, EStateM.bind, seen.acquired, ↓reduceIte, initialized,
+  have guardPassed : rejectFlatWalWith directory (optionalMetadataWith (calls.lookup (directory.file .wal)))
+      seen.afterFlock = .ok () seen.afterFlock := by
+    simp [rejectFlatWalWith, Bind.bind, EStateM.bind, flatAfterLock, Pure.pure, EStateM.pure]
+  simp only [openWithLock, Bind.bind, EStateM.bind, seen.acquired, ↓reduceIte, guardPassed, initialized,
     MonadExcept.tryCatch, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch]
 
 end Alvoki.Storage.DiskSession

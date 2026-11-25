@@ -1003,6 +1003,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The shared native admission proof now repeats the flat-WAL probe
+under the acquired lock before allocating the cache, as required by
+the two-slot open schedule. The successful probe supplies the same
+heap to cache initialization. Recovery then receives that cache and
+the acquired lock. The projected held recovery remains a separate step.
+
 For a returned marker write or sync error, the client proof now uses
 the completed positional-write counts to derive slot isolation for the
 reported survivors. This requires that changed bytes lie within the
