@@ -944,3 +944,9 @@ exact census at the directory scan entry. This theorem combines the
 manifest and selected-run drops without reducing the entire preparation
 worker. That worker still needs to consume this census in the two-slot
 client proof.
+
+The marker-independent checkpoint callback now composes with the
+checked directory scan in one stateful execution. It returns the
+selected checkpoint, exact listing and post-close descriptor census.
+The full preparation proof still needs to consume that listing and
+carry the post-keeper state into stabilization and repair.

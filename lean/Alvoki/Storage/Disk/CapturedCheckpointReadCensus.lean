@@ -210,6 +210,28 @@ theorem CapturedMarkedReadReports.checkpointAtScan
       .ok checkpoint (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) := by
   simpa only [chronology, DescriptorInventory.afterDrops_append] using runs.reads manifest selected
 
+/-- Checkpoint acquisition and the checked WAL scan compose using the
+same reached census. The selected marker is already held by the caller. -/
+theorem CapturedMarkedReadReports.checkpointThenScan
+    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
+    (manifest : CapturedManifestCensus report metadataRelease manifestDrops)
+    (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (chronology : report.listing.beforeOpen = manifestDrops ++
+      runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest)) :
+    ((do
+      let checkpoint ← report.readCheckpointFromCensus metadataRelease runs.released
+      let entries ← report.scanWal directory.path
+      pure (checkpoint, entries)) :
+      EStateM IO.Error ReadState (Option (PackedTable × UInt64) × Array IO.FS.DirEntry))
+      (admission.cache, admission.reached, admission.held) =
+      .ok (checkpoint, report.listing.scan.entries directory.path)
+        (admission.cache, report.listing.afterClose, admission.held) := by
+  simp only [Bind.bind, EStateM.bind, report.checkpointAtScan manifest runs selected chronology,
+    report.scanWal_fromEntry, Pure.pure, EStateM.pure]
+
 /-- The marker is opened after the selected runs. Its bounded EOF read
 uses that exact description and the finalizer releases its temporary slot. -/
 structure CapturedMarkerCensus (report : CapturedMarkedReadReports admission layout published)
