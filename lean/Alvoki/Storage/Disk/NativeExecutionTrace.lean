@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.NativeReadyCheckpoint
 import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeUncertainExecution
+import Alvoki.Storage.Disk.NativeCollectionErrorReopen
 
 namespace Alvoki.Storage.DiskSession
 
@@ -24,6 +25,7 @@ inductive NativeExecutionEvent where
   | closedAndReopened (input : FilePath) (result : Except IO.Error Unit)
   | uncertainWriteRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (attempted retained : List WAL.Write)
+  | collectionErrorRecovered (input : FilePath) (error : IO.Error)
 
 namespace NativeExecutionEvent
 
@@ -104,6 +106,12 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
         (.uncertainWriteRecovered observed.write.request observed.input observed.write.failure.cause
           observed.write.failure.batch retained)
         ⟨current.history ++ retained, current.submissions ++ [.uncertainBatch observed.write.failure.batch], next⟩
+  | recoverCollectionError (current : NativeExecutionPosition) {input : FilePath}
+      (observed : NativeCollectionReopenObservation current.ready.state input)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeCollectionReopenContinuation current.ready observed next) :
+      NativeExecutionStep current (.collectionErrorRecovered input observed.diagnostic)
+        ⟨current.history, current.submissions, next⟩
 
 /-- Interpret the submitted single or batch write with the reported
 primitive effects and start the next position from its actual result. -/
@@ -146,6 +154,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   | recoverUncertainWrite _ _ _ recovered =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using recovered.earlierReads⟩
+  | recoverCollectionError _ _ reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
 
 theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep before event after) :
     event.uncertainBatchWhole := by
@@ -208,6 +218,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | collectCoveredWal
   | closeAndReopen (input : FilePath)
   | writeThenCloseAndReopen (request : WriteRequest) (input : FilePath)
+  | collectThenCloseAndReopen (input : FilePath)
 
 /-- The recorded event belongs to the submitted instruction. Read
 observations determine the requested key or range and sequence. -/
@@ -221,6 +232,7 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .closeAndReopen input, .closedAndReopened opened _ => opened = input
   | .writeThenCloseAndReopen request input, .uncertainWriteRecovered submitted opened _ _ _ =>
     submitted = request ∧ opened = input
+  | .collectThenCloseAndReopen input, .collectionErrorRecovered opened _ => opened = input
   | _, _ => False
 
 inductive NativeExecutionInstructions : List NativeExecutionInstruction → List NativeExecutionEvent → Prop where
@@ -251,6 +263,7 @@ inductive NativeExecutionObservation (state : NativeReadyState) : Type 1 where
       (completed : observed.barrier.outcome = .completed)
   | closeAndReopen (input : FilePath) (observed : NativeCloseReopenObservation state input)
   | writeThenCloseAndReopen (observed : NativeUncertainWriteObservation state)
+  | collectThenCloseAndReopen (input : FilePath) (observed : NativeCollectionReopenObservation state input)
 
 def NativeExecutionObservation.instruction : NativeExecutionObservation state → NativeExecutionInstruction
   | .snapshot sequence request _ _ => .snapshot sequence request
@@ -260,6 +273,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation state �
   | .collectCoveredWal _ _ => .collectCoveredWal
   | .closeAndReopen input _ => .closeAndReopen input
   | .writeThenCloseAndReopen observed => .writeThenCloseAndReopen observed.write.request observed.input
+  | .collectThenCloseAndReopen input _ => .collectThenCloseAndReopen input
 
 theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     (observed : NativeExecutionObservation current.ready.state) :
@@ -286,6 +300,9 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | writeThenCloseAndReopen observed =>
     obtain ⟨retained, next, recovered⟩ := current.ready.recoversUncertainWrite observed
     exact ⟨_, _, .recoverUncertainWrite current observed retained next recovered, rfl, rfl⟩
+  | collectThenCloseAndReopen _ observed =>
+    obtain ⟨next, reopened⟩ := current.ready.recoversCollectionBarrier observed
+    exact ⟨_, _, .recoverCollectionError current observed next reopened, rfl⟩
 
 /-- Supply the primitive reports for the next prescribed instruction
 at its reached state. The whole trace and its endpoint are derived from
