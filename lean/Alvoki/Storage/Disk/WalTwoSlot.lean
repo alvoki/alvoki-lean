@@ -626,4 +626,33 @@ theorem reopenWith_reports {ε σ α β : Type} (prepare : EStateM ε σ (α × 
       cases last : finish plan size settled <;>
         simp [reopenWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, first, second, last]
 
+/-- Keep the acquired marker alongside the returned table. Preparation uses
+its decoded frontier and stabilization uses the very same handle. -/
+@[macro_inline] def reopenAcquiredWith [Monad m]
+    (acquire : m (handle × Selection)) (prepare : Selection → m (plan × opened × Nat))
+    (stabilize : handle → m Unit) (finish : plan → Nat → m Unit) :
+    m (opened × handle × Selection) := do
+  let (marker, selection) ← acquire
+  let table ← reopenWith (prepare selection) (stabilize marker) finish
+  return (table, marker, selection)
+
+theorem reopenAcquiredWith_reports {ε σ handle plan opened : Type}
+    (acquire : EStateM ε σ (handle × Selection))
+    (prepare : Selection → EStateM ε σ (plan × opened × Nat))
+    (stabilize : handle → EStateM ε σ Unit) (finish : plan → Nat → EStateM ε σ Unit)
+    (initial : σ) :
+    reopenAcquiredWith acquire prepare stabilize finish initial =
+      match acquire initial with
+      | .error cause after => .error cause after
+      | .ok (marker, selection) acquired =>
+        match reopenWith (prepare selection) (stabilize marker) finish acquired with
+        | .error cause after => .error cause after
+        | .ok table after => .ok (table, marker, selection) after := by
+  cases first : acquire initial with
+  | error => simp [reopenAcquiredWith, Bind.bind, EStateM.bind, first]
+  | ok result acquired =>
+    obtain ⟨marker, selection⟩ := result
+    cases second : reopenWith (prepare selection) (stabilize marker) finish acquired <;>
+      simp [reopenAcquiredWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, first, second]
+
 end Alvoki.WAL.TwoSlot

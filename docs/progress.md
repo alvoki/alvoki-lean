@@ -776,3 +776,16 @@ for that chronology. The two-slot path still needs to thread the held
 marker descriptor through acquisition and stabilization, and connect the
 reported keeper and repair effects to the same reached descriptor census.
 The existing client replay theorem can consume the resulting reports.
+
+The native marked opener now instantiates `reopenAcquiredWith`. The
+shared schedule takes the frontier from successful marker acquisition,
+uses the returned handle for stabilization, and keeps that same handle
+and selection for installation. Its stateful report theorem propagates
+each failure with the state reached by that callback. The native
+filesystem witness must still account for descriptor liveness and the
+keeper and repair effects at those reached states.
+
+The client replay theorem derives the successful marker sync observation
+from the reached inventory's live issuing slot, its description-to-inode
+map and the syscall effect. The inventory at that call is still a report
+to be threaded from the earlier native recovery callbacks.

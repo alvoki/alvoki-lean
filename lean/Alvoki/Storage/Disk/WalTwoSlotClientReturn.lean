@@ -9,6 +9,7 @@ import Alvoki.Storage.Disk.WalTwoSlotReopenProjection
 import Alvoki.Storage.Disk.BatchInterruptionDispatch
 import Alvoki.Storage.Disk.SyncHandleEffects
 import Alvoki.Storage.Disk.AppendHandleCustody
+import Alvoki.Storage.Disk.DescriptorInventory
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -1378,8 +1379,13 @@ theorem recoveredRetries_installedReads
     (keeperRead : readKeeper (directory.file (.walSegment target.first)) target.trimmed.size
       keeperMetadata.byteSize.toNat atKeeper = .ok target.trimmed prepared)
     {marker settledMarker : WalInodeImage} {markerHandle : KeeperDescriptorIdentity}
-    (markerSync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
-      markerHandle marker (fun inode files => files.completeFileSync inode) (.ok () settledMarker))
+    (markerInventory : DiskSession.DescriptorInventory)
+    (markerDrops : List DiskSession.LockReferenceDrop)
+    (markerIssuer : DiskSession.LockReference)
+    (markerLive : markerIssuer ∈ (markerInventory.afterDrops markerDrops).references markerHandle.description)
+    (markerInode : markerInventory.inode markerHandle.description = markerHandle.inode)
+    (markerEffect : Storage.SyncHandleRouting.FsyncResult marker
+      (marker.completeFileSync (markerInventory.inode markerHandle.description)) true (.ok () settledMarker))
     (markerCurrent : markerHandle.inode = marker.active)
     (markerBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
     {markerBytes : ByteArray} {readMarker : USize → EStateM IO.Error Nat ByteArray}
@@ -1450,6 +1456,9 @@ theorem recoveredRetries_installedReads
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
   have logicalMarker : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
+  let markerSync := FsyncObservation.ofInventory markerInventory markerDrops
+    KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode markerHandle
+    markerIssuer markerLive markerInode marker (fun inode (files : WalInodeImage) => files.completeFileSync inode) markerEffect
   obtain ⟨manifestWatermark, checkpointCovered, marker, length, binding, decoded, absolute⟩ :=
     DirectoryPublication.Bindings.walRange_accounting target.decoded
   have sameMarker := Option.some.inj (binding.symm.trans logicalMarker)

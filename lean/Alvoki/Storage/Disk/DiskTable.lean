@@ -1173,10 +1173,10 @@ private def bootstrap (dir : DiskDirectory) (files : SyncFiles) : IO WalSegmentR
   WalSegmentRepair.bootstrapEmptyWithMarker dir empty staged WAL.TwoSlot.initial
     files.create files.stage files.syncPaths IO.FS.rename
 
-private def reopen (dir : DiskDirectory) (files : SyncFiles) (marker : IO.FS.Handle)
-    (selection : WAL.TwoSlot.Selection) : IO WalSegmentRepair.Reopened :=
-  WAL.TwoSlot.reopenWith
-    (WalSegmentRepair.prepareBoundedMarkedFromReaders dir
+private def reopen (dir : DiskDirectory) (files : SyncFiles) :
+    IO (WalSegmentRepair.Reopened × IO.FS.Handle × WAL.TwoSlot.Selection) :=
+  WAL.TwoSlot.reopenAcquiredWith (openMarker dir)
+    (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders dir
       (readIntegrityCheckpointSized dir (readOptionalCachedOpenFile dir (dir.file .manifest))
         readCheckpointRunSize readCheckpointRunPrefix)
       (fun _ => pure (some (WAL.Boundary.encode selection.frontier)))
@@ -1184,26 +1184,28 @@ private def reopen (dir : DiskDirectory) (files : SyncFiles) (marker : IO.FS.Han
         readDirectoryChecked inspectWalSegment readSealedWalPrefix (readKeeperPrefix files)))
     -- Stabilize a visible complete but uncertain slot before its witness can
     -- be overwritten or its covered WAL reclaimed.
-    (fsyncHandle marker)
+    fsyncHandle
     (fun plan size => WalSegmentRepair.finishBoundedMarkedOpen dir plan size
       (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename)
 
 /-- A marked reopen validates the selected WAL and checkpoint, syncs
 the descriptor returned by marker acquisition, then repairs the WAL. -/
-theorem reopen_fileEffects (directory : DiskDirectory) (files : SyncFiles)
-    (marker : IO.FS.Handle) (selection : WAL.TwoSlot.Selection) :
-    reopen directory files marker selection = (do
-      let (plan, opened, size) ← WalSegmentRepair.prepareBoundedMarkedFromReaders directory
-        (readIntegrityCheckpointSized directory
-          (readOptionalCachedOpenFile directory (directory.file .manifest))
-          readCheckpointRunSize readCheckpointRunPrefix)
-        (fun _ => pure (some (WAL.Boundary.encode selection.frontier)))
-        (fun watermark frontier => WalSegmentRepair.readSelectedWithCachedExtents directory watermark frontier
-          readDirectoryChecked inspectWalSegment readSealedWalPrefix (readKeeperPrefix files))
-      fsyncHandle marker
-      WalSegmentRepair.finishBoundedMarkedOpen directory plan size
-        (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
-      return opened) := rfl
+theorem reopen_fileEffects (directory : DiskDirectory) (files : SyncFiles) :
+    reopen directory files = (do
+      let (marker, selection) ← openMarker directory
+      let opened ← (do
+        let (plan, opened, size) ← WalSegmentRepair.prepareBoundedMarkedFromReaders directory
+          (readIntegrityCheckpointSized directory
+            (readOptionalCachedOpenFile directory (directory.file .manifest))
+            readCheckpointRunSize readCheckpointRunPrefix)
+          (fun _ => pure (some (WAL.Boundary.encode selection.frontier)))
+          (fun watermark frontier => WalSegmentRepair.readSelectedWithCachedExtents directory watermark frontier
+            readDirectoryChecked inspectWalSegment readSealedWalPrefix (readKeeperPrefix files))
+        fsyncHandle marker
+        WalSegmentRepair.finishBoundedMarkedOpen directory plan size
+          (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
+        return opened)
+      return (opened, marker, selection)) := rfl
 
 /-- Open an existing experimental database or initialize a fresh one.
 A legacy marker is rejected under the same exclusive database lock. -/
@@ -1218,8 +1220,7 @@ def «open» (path : FilePath) : IO TwoSlotDiskTable := do
       rejectFlatWal dir
       let files ← SyncFiles.open dir.path
       let (opened, marker, selection) ← if (← optionalMetadata (dir.file .walBoundary)).isSome then do
-        let (marker, selection) ← openMarker dir
-        pure (← reopen dir files marker selection, marker, selection)
+        reopen dir files
       else do
         let opened ← bootstrap dir files
         let (marker, selection) ← openMarker dir
@@ -1237,8 +1238,7 @@ theorem open_admission (input : FilePath) :
             rejectFlatWal directory
             let files ← SyncFiles.open directory.path
             let (opened, marker, selection) ← if (← optionalMetadata (directory.file .walBoundary)).isSome then do
-              let (marker, selection) ← openMarker directory
-              pure (← reopen directory files marker selection, marker, selection)
+              reopen directory files
             else do
               let opened ← bootstrap directory files
               let (marker, selection) ← openMarker directory
