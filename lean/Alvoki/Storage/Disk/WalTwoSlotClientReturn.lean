@@ -193,6 +193,32 @@ theorem prepared_write_errorStage {α σ : Type}
           obtain ⟨installed, completed⟩ := installOk synced
           simp [wrote, walBarrier, slotWrite, markerBarrier, completed] at returned
 
+/-- Dispatch recovery of a commit-unknown result to the filesystem
+contract of the reached callback, using the exact states from that run. -/
+theorem prepared_write_recoverUnknown {α σ : Type}
+    (next : α) (sequence : UInt64) (prior : DiskSession.Phase α)
+    (append syncWal writeSlot syncSlot install : EStateM IO.Error σ Unit)
+    {files reached : σ} {cause : IO.Error} {recovers : Prop}
+    (installOk : ∀ state, ∃ installed, install state = .ok () installed)
+    (returned : DiskSession.publishPreparedWrite next sequence setPhase
+      (commitReports (publish append syncWal writeSlot syncSlot install)) (prior, files) =
+        .error (.commitUnknown cause) (.poisoned, reached))
+    (onAppend : append files = .error cause reached → recovers)
+    (onWalSync : ∀ appended, append files = .ok () appended →
+      syncWal appended = .error cause reached → recovers)
+    (onSlotWrite : ∀ appended durable, append files = .ok () appended →
+      syncWal appended = .ok () durable → writeSlot durable = .error cause reached → recovers)
+    (onMarkerSync : ∀ appended durable written, append files = .ok () appended →
+      syncWal appended = .ok () durable → writeSlot durable = .ok () written →
+      syncSlot written = .error cause reached → recovers) : recovers := by
+  rcases prepared_write_errorStage next sequence prior append syncWal writeSlot syncSlot install
+      installOk returned with (failed | ⟨appended, wrote, failed⟩) |
+      ⟨appended, durable, wrote, synced, failed | ⟨written, wroteSlot, failed⟩⟩
+  · exact onAppend failed
+  · exact onWalSync appended wrote failed
+  · exact onSlotWrite appended durable wrote synced failed
+  · exact onMarkerSync appended durable written wrote synced wroteSlot failed
+
 /-- A client acknowledgement supplies successful reports for all four
 file operations in execution order, including the marker barrier. -/
 theorem prepared_write_acknowledged {α σ : Type}
