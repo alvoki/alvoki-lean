@@ -160,6 +160,7 @@ lake env leanchecker Alvoki.Storage.Disk.LockedRecoveryCompletion
 lake env leanchecker Alvoki.Storage.Disk.UncertainWriteTraceEntry
 lake env leanchecker Alvoki.Storage.Disk.LockedInterruptedCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.ManifestIntegrity
+lake env leanchecker Alvoki.Storage.Disk.ManifestAcquisition
 lake env leanchecker Alvoki.Storage.Disk.IntegrityCheckpointRead
 lake env leanchecker Alvoki.Storage.Disk.ManifestIntegritySingleByte
 lake env leanchecker Alvoki.Storage.Disk.VersionedCheckpointRead

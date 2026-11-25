@@ -86,6 +86,7 @@ import Alvoki.Storage.Disk.LockedRecoveryCompletion
 import Alvoki.Storage.Disk.UncertainWriteTraceEntry
 import Alvoki.Storage.Disk.LockedInterruptedCheckpoint
 import Alvoki.Storage.Disk.ManifestIntegritySingleByte
+import Alvoki.Storage.Disk.ManifestAcquisition
 import Alvoki.Storage.Disk.VersionedCheckpointRead
 import Alvoki.Storage.Disk.VersionedCheckpointLineage
 import Alvoki.Storage.Disk.VersionedCheckpointPublication
@@ -379,6 +380,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.Boundary.decode_encode
 #check_axioms Alvoki.WAL.Boundary.decode_reencode
 #check_axioms Alvoki.WAL.Boundary.decode_acquisitionPrefix
+#check_axioms Alvoki.Manifest.IntegrityCheckpoint.decode_acquisitionPrefix
+#check_axioms Alvoki.Manifest.IntegrityCheckpoint.acquisitionPrefix_eq_of_decode
+#check_axioms Alvoki.Storage.readIntegrityManifestPrefixWith_completes
+#check_axioms Alvoki.Storage.readIntegrityManifestPrefixWith_accepted
 #check_axioms Alvoki.WAL.Boundary.withOpenWal_marked
 #check_axioms Alvoki.WAL.Boundary.select_encoded
 #check_axioms Alvoki.WAL.Boundary.select_size
