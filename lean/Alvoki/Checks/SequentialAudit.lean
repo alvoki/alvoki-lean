@@ -209,6 +209,7 @@ import Alvoki.Storage.Disk.PendingAlignedReopen
 import Alvoki.Storage.Disk.PendingFirstAppendReopen
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
+import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
 import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
 import Alvoki.Storage.Disk.BatchGroupedWriteError
 import Alvoki.Storage.Disk.ClientSnapshotTransitions
@@ -1362,6 +1363,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointManifestDirectoryReached.WalFrame.retainsAtCut
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.replaysPhysicalWalAtManifestDirectory
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.barrierCrashVacant
+#check_axioms Alvoki.Storage.DiskSession.CheckpointBarrierLockOpenFailure.returns
+#check_axioms Alvoki.Storage.DiskSession.CheckpointBarrierRetryPrefix.reached
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.reopensPhysicalBarrierAligned
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.keyValueRefinement
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.guardedReplay
