@@ -464,4 +464,136 @@ theorem decodeOrdinals_repairPrefix (bytes : ByteArray) :
     decodeOrdinals ((repairPrefix bytes).getD bytes) = decodeOrdinals bytes :=
   decodeFrom_repairPrefix true bytes
 
+structure OrdinalDecodeWork where
+  frames : Nat
+  ordinals : Nat
+
+private noncomputable def decodeOrdinalsWithWorkFrom (bytes : ByteArray) (ordinal offset remaining : Nat)
+    (reversed : List Write) : Except String (List Write) × OrdinalDecodeWork :=
+  match remaining with
+  | 0 => (.ok reversed.reverse, ⟨0, 0⟩)
+  | n + 1 =>
+    match decodeFrame (bytes.extract offset (offset + frameSize)) with
+    | .error cause => (.error cause, ⟨1, 0⟩)
+    | .ok event =>
+      if event.sequence.toNat != ordinal then
+        (.error "WAL frame sequence does not match its ordinal", ⟨1, 1⟩)
+      else
+        let (result, work) := decodeOrdinalsWithWorkFrom bytes (ordinal + 1) (offset + frameSize)
+          n (event :: reversed)
+        (result, ⟨work.frames + 1, work.ordinals + 1⟩)
+
+/-- Count one format validation per reached complete frame and one ordinal
+check per reached frame that passes format validation. -/
+noncomputable def decodeOrdinalsFromWithWork (first : Nat) (bytes : ByteArray) :
+    Except String (List Write) × OrdinalDecodeWork :=
+  decodeOrdinalsWithWorkFrom bytes first 0 (bytes.size / frameSize) []
+
+private theorem decodeOrdinalsWithWorkFrom_spec (bytes : ByteArray) (ordinal offset remaining : Nat)
+    (reversed : List Write) :
+    let result := decodeOrdinalsWithWorkFrom bytes ordinal offset remaining reversed
+    result.1 = decodeFrom true bytes ordinal offset remaining reversed ∧
+      result.2.ordinals ≤ result.2.frames ∧ result.2.frames ≤ remaining ∧
+      (∀ events, result.1 = .ok events → result.2 = ⟨remaining, remaining⟩) := by
+  induction remaining generalizing ordinal offset reversed with
+  | zero => simp [decodeOrdinalsWithWorkFrom, decodeFrom]
+  | succ n ih =>
+    dsimp only at ih ⊢
+    cases frame : decodeFrame (bytes.extract offset (offset + frameSize)) with
+    | error cause => simp [decodeOrdinalsWithWorkFrom, decodeFrom, frame]
+    | ok event =>
+      by_cases order : event.sequence.toNat = ordinal
+      · have tail := ih (ordinal + 1) (offset + frameSize) (event :: reversed)
+        cases next : decodeOrdinalsWithWorkFrom bytes (ordinal + 1) (offset + frameSize) n (event :: reversed) with
+        | mk result work =>
+          rw [next] at tail
+          obtain ⟨same, ordinals, frames, exactCount⟩ := tail
+          simp [decodeOrdinalsWithWorkFrom, decodeFrom, frame, order, advanceOrdinal, next,
+            ← same, ordinals, frames]
+          intro events accepted
+          have exactWork : work = ⟨n, n⟩ := exactCount events accepted
+          simp [exactWork]
+      · simp [decodeOrdinalsWithWorkFrom, decodeFrom, frame, order]
+
+/-- Validate at most the complete frames in the selected byte span, with
+one format and one ordinal validation per frame on a successful decode. -/
+theorem decodeOrdinalsFromWithWork_spec (first : Nat) (bytes : ByteArray) :
+    let result := decodeOrdinalsFromWithWork first bytes
+    let complete := bytes.size / frameSize
+    result.1 = decodeOrdinalsFrom first bytes ∧
+      result.2.ordinals ≤ result.2.frames ∧ result.2.frames ≤ complete ∧
+      (∀ events, result.1 = .ok events → result.2 = ⟨complete, complete⟩) :=
+  decodeOrdinalsWithWorkFrom_spec bytes first 0 (bytes.size / frameSize) []
+
+private theorem decodeOrdinalsWithWorkFrom_firstFailure (bytes : ByteArray) (ordinal offset remaining : Nat)
+    (reversed : List Write) {cause : String}
+    (stopped : (decodeOrdinalsWithWorkFrom bytes ordinal offset remaining reversed).1 = .error cause) :
+    let work := (decodeOrdinalsWithWorkFrom bytes ordinal offset remaining reversed).2
+    let frameAt := fun position =>
+      decodeFrame (bytes.extract (offset + position * frameSize) (offset + position * frameSize + frameSize))
+    ∃ failed, failed < remaining ∧ work.frames = failed + 1 ∧
+      (∀ earlier, earlier < failed → ∃ event, frameAt earlier = .ok event ∧ event.sequence.toNat = ordinal + earlier) ∧
+      ((frameAt failed = .error cause ∧ work.ordinals = failed) ∨
+        (∃ event, frameAt failed = .ok event ∧ event.sequence.toNat ≠ ordinal + failed ∧
+          cause = "WAL frame sequence does not match its ordinal" ∧ work.ordinals = failed + 1)) := by
+  dsimp only
+  induction remaining generalizing ordinal offset reversed with
+  | zero => simp [decodeOrdinalsWithWorkFrom] at stopped
+  | succ n ih =>
+    cases frame : decodeFrame (bytes.extract offset (offset + frameSize)) with
+    | error message =>
+      simp [decodeOrdinalsWithWorkFrom, frame] at stopped
+      subst cause
+      refine ⟨0, Nat.zero_lt_succ _, ?_, by simp, Or.inl ?_⟩ <;>
+        simp [decodeOrdinalsWithWorkFrom, frame]
+    | ok event =>
+      by_cases order : event.sequence.toNat = ordinal
+      · cases next : decodeOrdinalsWithWorkFrom bytes (ordinal + 1) (offset + frameSize) n (event :: reversed) with
+        | mk result work =>
+          have tailError : result = .error cause := by
+            simpa [decodeOrdinalsWithWorkFrom, frame, order, next] using stopped
+          have tailStopped : (decodeOrdinalsWithWorkFrom bytes (ordinal + 1) (offset + frameSize)
+              n (event :: reversed)).1 = .error cause := by rw [next]; exact tailError
+          obtain ⟨failed, beforeEnd, frames, earlier, reason⟩ := ih _ _ _ tailStopped
+          simp only [next] at frames reason
+          have position (index : Nat) :
+              offset + (index + 1) * frameSize = offset + frameSize + index * frameSize := by
+            rw [Nat.add_mul, Nat.one_mul]
+            omega
+          have numbered (index : Nat) : ordinal + (index + 1) = ordinal + 1 + index := by omega
+          refine ⟨failed + 1, by omega, ?_, ?_, ?_⟩
+          · simp [decodeOrdinalsWithWorkFrom, frame, order, next, frames]
+          · intro index before
+            cases index with
+            | zero => exact ⟨event, by simpa using frame, by simpa using order⟩
+            | succ index =>
+              simpa only [position index, numbered index] using earlier index (by omega)
+          · rcases reason with ⟨malformed, ordinals⟩ | ⟨wrong, decoded, unexpected, message, ordinals⟩
+            · exact Or.inl ⟨by simpa only [position failed] using malformed,
+                by simp [decodeOrdinalsWithWorkFrom, frame, order, next, ordinals]⟩
+            · exact Or.inr ⟨wrong, by simpa only [position failed] using decoded,
+                by simpa only [numbered failed] using unexpected, message,
+                by simp [decodeOrdinalsWithWorkFrom, frame, order, next, ordinals]⟩
+      · simp [decodeOrdinalsWithWorkFrom, frame, order] at stopped
+        subst cause
+        refine ⟨0, Nat.zero_lt_succ _, ?_, by simp, Or.inr ⟨event, ?_, ?_, rfl, ?_⟩⟩ <;>
+          simp [decodeOrdinalsWithWorkFrom, frame, order]
+
+/-- The failed frame is the first one that fails format or ordinal
+validation. Format rejection charges only the frame validation. Ordinal
+rejection also charges the checked ordinal. -/
+theorem decodeOrdinalsFromWithWork_firstFailure (first : Nat) (bytes : ByteArray) {cause : String}
+    (stopped : decodeOrdinalsFrom first bytes = .error cause) :
+    let work := (decodeOrdinalsFromWithWork first bytes).2
+    let frameAt := fun position =>
+      decodeFrame (bytes.extract (position * frameSize) (position * frameSize + frameSize))
+    ∃ failed, failed < bytes.size / frameSize ∧ work.frames = failed + 1 ∧
+      (∀ earlier, earlier < failed → ∃ event, frameAt earlier = .ok event ∧ event.sequence.toNat = first + earlier) ∧
+      ((frameAt failed = .error cause ∧ work.ordinals = failed) ∨
+        (∃ event, frameAt failed = .ok event ∧ event.sequence.toNat ≠ first + failed ∧
+          cause = "WAL frame sequence does not match its ordinal" ∧ work.ordinals = failed + 1)) := by
+  have result := (decodeOrdinalsFromWithWork_spec first bytes).1.trans stopped
+  simpa only [decodeOrdinalsFromWithWork, Nat.zero_add] using
+    decodeOrdinalsWithWorkFrom_firstFailure bytes first 0 (bytes.size / frameSize) [] result
+
 end Alvoki.WAL

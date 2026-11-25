@@ -605,6 +605,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_encode
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_append
 #check_axioms Alvoki.WAL.decodeOrdinalsFrom_length
+#check_axioms Alvoki.WAL.decodeOrdinalsFromWithWork_spec
+#check_axioms Alvoki.WAL.decodeOrdinalsFromWithWork_firstFailure
 #check_axioms Alvoki.WAL.decodeOrdinals_append_encoded
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_eq_recoverSelected
 #check_axioms Alvoki.Storage.recoverRetainedSuffix_refines
@@ -1389,6 +1391,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.replayWithWork_errorAfterPrefix
 #check_axioms Alvoki.Storage.recoverRetainedFromWithReplayWork_spec
 #check_axioms Alvoki.Storage.recoverMarkedWalSegmentsWithReplayWork_spec
+#check_axioms Alvoki.Storage.markedWalDecodeWork_of_selection
+#check_axioms Alvoki.Storage.markedWalDecodeWork_spec
 #check_axioms Alvoki.Storage.WalSegment.Chain.checkReadSpans
 #check_axioms Alvoki.Storage.planWalSegmentRepair_beforeStart
 #check_axioms Alvoki.Storage.WalSegment.Chain.plansRepair

@@ -159,4 +159,67 @@ theorem recoverMarkedWalSegmentsWithReplayWork_spec (base : PackedTable) (length
           | ok table => simp [Except.map, Pure.pure, Except.pure, exactCount table rfl]
     · simp [recoverMarkedWalSegmentsWithReplayWork, recoverMarkedWalSegments, spans]
 
+/-- Account for decoding after the marked worker's span and marker
+selection. A rejection during either selection stage reaches no frame. -/
+noncomputable def markedWalDecodeWork (length : UInt64) (files : List (Nat × ByteArray)) : WAL.OrdinalDecodeWork :=
+  match files with
+  | [] => ⟨0, 0⟩
+  | (first, _) :: _ =>
+    if checkSelectedWalSegmentSpans (length.toNat / frameSize) files then
+      let clipped := (walSegmentPayloadBytes files).extract 0 (length.toNat - first * frameSize)
+      match WAL.Boundary.selectRetained first length clipped with
+      | .error _ => ⟨0, 0⟩
+      | .ok selected => (WAL.decodeOrdinalsFromWithWork (first + 1) selected).2
+    else ⟨0, 0⟩
+
+/-- Marked recovery validates the same selected bytes at the same absolute
+ordinals. In particular, decoder rejection reaches the caller unchanged. -/
+theorem markedWalDecodeWork_of_selection (base : PackedTable) (length : UInt64)
+    (first : Nat) (bytes : ByteArray) (rest : List (Nat × ByteArray))
+    (spans : checkSelectedWalSegmentSpans (length.toNat / frameSize) ((first, bytes) :: rest) = true)
+    {selected : ByteArray}
+    (selection : WAL.Boundary.selectRetained first length
+      ((walSegmentPayloadBytes ((first, bytes) :: rest)).extract 0 (length.toNat - first * frameSize)) = .ok selected) :
+    markedWalDecodeWork length ((first, bytes) :: rest) = (WAL.decodeOrdinalsFromWithWork (first + 1) selected).2 ∧
+      ∀ cause, WAL.decodeOrdinalsFrom (first + 1) selected = .error cause →
+        recoverMarkedWalSegments base length ((first, bytes) :: rest) = .error cause := by
+  refine ⟨by simp [markedWalDecodeWork, spans, selection], ?_⟩
+  intro cause stopped
+  rw [recoverMarkedWalSegments_eq_extract base length first bytes rest spans]
+  simp [WAL.Boundary.recoverRetainedMarked, recoverRetainedFrom, selection, stopped, Bind.bind, Except.bind]
+
+/-- Bound the decoded span by the absolute marker measured from the first
+retained frame. Success reaches every format and ordinal check in the span. -/
+theorem markedWalDecodeWork_spec (base : PackedTable) (length : UInt64) (files : List (Nat × ByteArray)) :
+    let work := markedWalDecodeWork length files
+    let through := length.toNat / frameSize
+    let complete := through - (files.head?.map Prod.fst).getD through
+    work.ordinals ≤ work.frames ∧ work.frames ≤ complete ∧
+      (∀ output, recoverMarkedWalSegments base length files = .ok output → work = ⟨complete, complete⟩) := by
+  dsimp only
+  cases files with
+  | nil => simp [markedWalDecodeWork, recoverMarkedWalSegments]
+  | cons file rest =>
+    obtain ⟨first, bytes⟩ := file
+    by_cases spans : checkSelectedWalSegmentSpans (length.toNat / frameSize) ((first, bytes) :: rest) = true
+    · let clipped := (walSegmentPayloadBytes ((first, bytes) :: rest)).extract 0 (length.toNat - first * frameSize)
+      cases chosen : WAL.Boundary.selectRetained first length clipped with
+      | error cause =>
+        dsimp only [clipped] at chosen
+        rw [recoverMarkedWalSegments_eq_extract base length first bytes rest spans]
+        simp [markedWalDecodeWork, spans, chosen, WAL.Boundary.recoverRetainedMarked, Bind.bind, Except.bind]
+      | ok selected =>
+        obtain ⟨work, decoderError⟩ := markedWalDecodeWork_of_selection base length first bytes rest spans chosen
+        have complete : length.toNat / frameSize - first = selected.size / frameSize := by
+          rw [← WAL.Boundary.selectRetained_absoluteSize chosen, Nat.add_comm,
+            Nat.add_mul_div_right _ _ (by decide), Nat.add_sub_cancel]
+        obtain ⟨same, ordinals, frames, exact⟩ := WAL.decodeOrdinalsFromWithWork_spec (first + 1) selected
+        simp only [work, List.head?_cons, Option.map_some, Option.getD_some, complete]
+        refine ⟨ordinals, frames, ?_⟩
+        intro output recovered
+        cases decoded : WAL.decodeOrdinalsFrom (first + 1) selected with
+        | error cause => rw [decoderError cause decoded] at recovered; contradiction
+        | ok events => exact exact events (same.trans decoded)
+    · simp [markedWalDecodeWork, recoverMarkedWalSegments, spans]
+
 end Alvoki.Storage
