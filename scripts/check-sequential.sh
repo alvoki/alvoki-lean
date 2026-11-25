@@ -136,6 +136,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeCloseAlignedReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.NativeReadRecoveryTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionTrace
+lake env leanchecker Alvoki.Storage.Disk.NativeExecutionClose
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWrite
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
