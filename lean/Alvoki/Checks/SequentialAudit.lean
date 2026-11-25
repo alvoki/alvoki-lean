@@ -2231,6 +2231,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.advance_fields
 #check_axioms Alvoki.WAL.TwoSlot.decode_newer
 #check_axioms Alvoki.WAL.TwoSlot.prepared_write_reports
+#check_axioms Alvoki.WAL.TwoSlot.prepared_write_slotError
 #check_axioms Alvoki.WAL.TwoSlot.prepared_write_acknowledged
 #check_axioms Alvoki.WAL.TwoSlot.uncertain_batch_selects_prefix
 #check_axioms Alvoki.WAL.TwoSlot.projectBinding_decodes

@@ -36,6 +36,22 @@ theorem prepared_write_reports {α σ : Type}
   simp only [DiskSession.publishPreparedWrite, DiskSession.publishPrepared, setPhase,
     commitReports, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, result]
 
+/-- If the positional marker write fails after the WAL barrier, the
+client receives commit-unknown with exactly the reached file state.
+Neither the marker barrier nor installation runs. -/
+theorem prepared_write_slotError {α σ : Type}
+    (next : α) (sequence : UInt64) (prior : DiskSession.Phase α)
+    (append syncWal writeSlot syncSlot install : EStateM IO.Error σ Unit)
+    {files appended durable reached : σ} {cause : IO.Error}
+    (wrote : append files = .ok () appended)
+    (walBarrier : syncWal appended = .ok () durable)
+    (failed : writeSlot durable = .error cause reached) :
+    DiskSession.publishPreparedWrite next sequence setPhase
+      (commitReports (publish append syncWal writeSlot syncSlot install)) (prior, files) =
+        .error (.commitUnknown cause) (.poisoned, reached) := by
+  rw [prepared_write_reports, publish_reports]
+  simp only [wrote, walBarrier, failed]
+
 /-- A client acknowledgement supplies successful reports for all four
 file operations in execution order, including the marker barrier. -/
 theorem prepared_write_acknowledged {α σ : Type}
