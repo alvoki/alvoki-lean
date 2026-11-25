@@ -78,7 +78,7 @@ private theorem continuesAuthorized {initial final : LockedFileState FileImage} 
     (trace : EffectTrace target source initial.image)
     (unique : ∀ {left right}, admits left → admits right → left.pair = right.pair → left = right) :
     EffectTrace target source final.image := by
-  have continueFailure {before after : FileImage} (earlier : EffectTrace target source before)
+  have continueEffects {before after : FileImage} (earlier : EffectTrace target source before)
       (effects : after = before ∨ ∃ next plan, admits next ∧ Prepared before next plan ∧ EffectTrace next before after) :
       EffectTrace target source after := by
     obtain unchanged | ⟨next, _, admittedNext, preparedNext, applied⟩ := effects
@@ -90,16 +90,18 @@ private theorem continuesAuthorized {initial final : LockedFileState FileImage} 
   induction attempts with
   | empty => exact trace
   | failed _ attempt acquisition _ reports ran ih =>
-    exact continueFailure ih (attempt.errorFiles acquisition reports ran)
+    exact continueEffects ih (attempt.errorFiles acquisition reports ran)
   | cachedPrefixFailed _ failure unchanged ih =>
     change EffectTrace target source failure.reached
     rw [unchanged]
     exact ih
   | cachedRejected _ _ ih => exact ih
-  | cachedAuthorizationFailed _ failure admitted ih => exact continueFailure ih (failure.errorFiles admitted)
+  | cachedAuthorizationFailed _ failure admitted ih => exact continueEffects ih (failure.errorFiles admitted)
   | cachedRepairFailed _ attempt admitted prepared effects _ ih =>
-    exact continueFailure ih (.inr ⟨_, _, admitted, prepared, by
+    exact continueEffects ih (.inr ⟨_, _, admitted, prepared, by
       simpa only [CachedOpenAttempt.cleanupError_keepsFiles] using effects⟩)
+  | repairInterrupted _ _ _ admitted prepared effects ih =>
+    exact continueEffects ih (.inr ⟨_, _, admitted, prepared, effects⟩)
   | referenceDrops _ _ _ ih => exact ih
   | powerLoss _ metadata keeper later ih => exact .crash ih metadata keeper later
 

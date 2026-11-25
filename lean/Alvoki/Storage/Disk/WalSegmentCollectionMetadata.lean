@@ -225,7 +225,8 @@ theorem planWalCollectionWith_reported (reports : OpenPathReadReports) (director
   exact congrArg Except.ok (reports.walCollectionOffsets_eq_extents directory keeper decoded extents
     (fun _ member => OpenPathReadReports.walSegmentExtents_metadata scan member)).symm
 
-private theorem walCollectionOffsetsFromExtents_observed {extents : List (Nat × IO.FS.Metadata)}
+/-- Every selected offset came from a nonkeeper extent and its checked end. -/
+theorem walCollectionOffsetsFromExtents_observed {extents : List (Nat × IO.FS.Metadata)}
     {keeper first : Nat} {range : MarkedWalRange}
     (planned : first ∈ walCollectionOffsetsFromExtents extents keeper range) :
     first ≠ keeper ∧ ∃ metadata last, (first, metadata) ∈ extents ∧

@@ -198,39 +198,33 @@ theorem ObservedSnapshotReader.recordRange (reader : ObservedSnapshotReader dire
     subst reader
     exact ⟨pin.pin, writer.installed.table.pins.find_of_mem pin.active, .range pin returned⟩
 
-private theorem ObservedLocalPin.responsesAfterSuffix
+private theorem ObservedLocalPin.responsesForReplay
     (observed : ObservedLocalPin directory descriptor before)
-    (suffix : SegmentedBatchDatabaseTrace directory descriptor before allowCollection log next last)
     (ready : before.RetainedReady directory descriptor)
-    (replay : SnapshotWalReplay .empty last.history reference) :
+    (replay : SnapshotWalReplay .empty (before.history ++ trailing) reference) :
     (∀ key, observed.session.runSnapshotRead observed.sameSession (fun table => table.lookup observed.pin.handle key) =
       .ok (some (reference.table.lookup key observed.pin.sequence)) observed.session) ∧
     ∀ lo hi, observed.session.runSnapshotRead observed.sameSession (fun table => table.range observed.pin.handle lo hi) =
       .ok (some (reference.table.range lo hi observed.pin.sequence)) observed.session := by
-  have atSession : SegmentedBatchDatabaseTrace observed.session.directory observed.session.descriptor
-      before allowCollection log next last := by
-    rw [observed.sameDirectory, observed.sameDescriptor]
-    exact suffix
   have readySession : before.RetainedReady observed.session.directory observed.session.descriptor := by
     rw [observed.sameDirectory, observed.sameDescriptor]
     exact ready
-  exact atSession.guardedReadsBeforeSuffix readySession observed.phase replay observed.active
+  exact readySession.guardedReadsForReplay observed.phase replay observed.active
     observed.localToken observed.compared
 
-theorem RecordedSnapshotRead.Observed.agreesAfterSuffix {read : RecordedSnapshotRead}
+theorem RecordedSnapshotRead.Observed.agreesForReplay {read : RecordedSnapshotRead}
     (observed : RecordedSnapshotRead.Observed directory descriptor before read)
-    (suffix : SegmentedBatchDatabaseTrace directory descriptor before allowCollection log next last)
     (ready : before.RetainedReady directory descriptor)
-    (replay : SnapshotWalReplay .empty last.history reference) : read.agrees reference := by
+    (replay : SnapshotWalReplay .empty (before.history ++ trailing) reference) : read.agrees reference := by
   cases observed with
   | lookup pin returned =>
     change _ = reference.table.lookup _ _
     exact Option.some.inj (EStateM.Result.ok.inj
-      (returned.symm.trans ((pin.responsesAfterSuffix suffix ready replay).1 _))).1
+      (returned.symm.trans ((pin.responsesForReplay ready replay).1 _))).1
   | range pin returned =>
     change _ = reference.table.range _ _ _
     exact Option.some.inj (EStateM.Result.ok.inj
-      (returned.symm.trans ((pin.responsesAfterSuffix suffix ready replay).2 _ _))).1
+      (returned.symm.trans ((pin.responsesForReplay ready replay).2 _ _))).1
   | lookupDenied reader handle returned =>
     exact (reader.lookupDenied_iff handle _).mp returned
   | rangeDenied reader handle returned =>
@@ -257,23 +251,39 @@ theorem SegmentedClientReadTrace.writes
   | advance _ step previous => exact previous.append step
   | read _ _ previous => exact previous
 
-/-- A replay of the exact trace and any further admitted suffix
-explains every response recorded in chronological order. -/
+/-- Replay of the reached writer's history and any valid trailing writes
+explains every response in the client log, even before a new open returns. -/
+theorem SegmentedClientReadTrace.responsesForReplay
+    (trace : SegmentedClientReadTrace directory initialDescriptor initial allowCollection log reads descriptor last)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (replayed : SnapshotWalReplay .empty (last.history ++ trailing) reference) :
+    ∀ read ∈ reads, read.agrees reference := by
+  induction trace generalizing trailing with
+  | start => simp
+  | advance prior step previous =>
+    have earlier := (prior.writes.preservesRetained initialReady).1
+    obtain ⟨_, retained, history, _⟩ := step.preservesRetained earlier
+    rw [history, List.append_assoc] at replayed
+    exact previous replayed
+  | read prior observed previous =>
+    intro read present
+    rcases List.mem_append.mp present with earlier | latest
+    · exact previous replayed read earlier
+    · obtain rfl := List.mem_singleton.mp latest
+      exact observed.agreesForReplay (prior.writes.preservesRetained initialReady).1 replayed
+
+/-- A replay after a further admitted suffix explains the same recorded
+responses. The suffix's retained frames extend the reached history. -/
 theorem SegmentedClientReadTrace.responses
     (trace : SegmentedClientReadTrace directory initialDescriptor initial allowCollection log reads descriptor last)
     (initialReady : initial.RetainedReady directory initialDescriptor)
     (suffix : SegmentedBatchDatabaseTrace directory descriptor last allowCollection trailing finalDescriptor final)
     (replayed : SnapshotWalReplay .empty final.history reference) :
     ∀ read ∈ reads, read.agrees reference := by
-  induction trace generalizing trailing finalDescriptor final reference with
-  | start => simp
-  | advance _ step previous => exact previous (step.append suffix) replayed
-  | read prior observed previous =>
-    intro read present
-    rcases List.mem_append.mp present with earlier | latest
-    · exact previous suffix replayed read earlier
-    · obtain rfl := List.mem_singleton.mp latest
-      exact observed.agreesAfterSuffix suffix (prior.writes.preservesRetained initialReady).1 replayed
+  have ready := (trace.writes.preservesRetained initialReady).1
+  obtain ⟨_, retained, history, _⟩ := suffix.preservesRetained ready
+  rw [history] at replayed
+  exact trace.responsesForReplay initialReady replayed
 
 /-- From installed bootstrap, one replay includes every acknowledged
 group in order and only submitted writes. The replay explains successful

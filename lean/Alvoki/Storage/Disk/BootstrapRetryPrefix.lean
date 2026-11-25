@@ -73,7 +73,7 @@ theorem BootstrapReturnedFault.returns {input : FilePath} {directory : DiskDirec
     exact ⟨_, returned, listed.validAfterPublicationError admission valid localUnlock effects returned⟩
 
 /-- Finite observed operations before the first installed client writer.
-Each publication fault ends at its actual returned state. A crash can
+Each returned fault ends at its actual returned state. A crash can
 choose only the file image's admitted survivors. A reference drop can
 release the held owner without changing files. -/
 inductive BootstrapRetryPrefix (directory : DiskDirectory) (initial : BootstrapState) : BootstrapState → Prop where
@@ -85,6 +85,14 @@ inductive BootstrapRetryPrefix (directory : DiskDirectory) (initial : BootstrapS
       {admission : OpenAdmissionReports input directory calls.slot}
       (fault : BootstrapReturnedFault captured admission after) (localUnlock : calls.unlock.LocalFlock) :
       BootstrapRetryPrefix directory initial after
+  | markedAuthorizationError {input : FilePath} {before : BootstrapState}
+      (prior : BootstrapRetryPrefix directory initial before)
+      {retry : BootstrapAdmissionCalls (Cache Handle) directory before} {captured : BootstrapCacheOpen retry}
+      {zero : BootstrapMarkedZero before.image} (fault : BootstrapMarkedAuthorizationError captured zero)
+      (admission : OpenAdmissionReports input directory retry.slot)
+      {metadata : IO.FS.Metadata} (returned : retry.lookup (directory.file .walBoundary) = .ok metadata)
+      (bootstrap : DiskDirectory → Cache Handle → EStateM IO.Error WalSegmentRotation.State Reopened) :
+      BootstrapRetryPrefix directory initial fault.final
   | dropped {before : BootstrapState} {description : Nat}
       (prior : BootstrapRetryPrefix directory initial before) (owned : before.owners.Owns directory description)
       (references : HeldLockReferences description) (drops : List LockReferenceDrop) :
@@ -110,6 +118,8 @@ theorem BootstrapRetryPrefix.preservesValid {directory : DiskDirectory} {initial
   | returnedFault _ fault localUnlock healthy =>
     obtain ⟨_, _, validAfter⟩ := fault.returns healthy localUnlock
     exact validAfter
+  | markedAuthorizationError _ fault admission returned bootstrap healthy =>
+    exact (fault.returns admission healthy returned bootstrap).2
   | dropped _ _ _ _ healthy => exact healthy
   | powerLoss _ selected keeper healthy => exact healthy.crash selected keeper
   | survivingMarkerFlush _ survivor admission localUnlock healthy =>

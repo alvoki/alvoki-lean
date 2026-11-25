@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.ObservedBootstrapRetry
 import Alvoki.Storage.Disk.HeldWalInstallation
+import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
 
 namespace Alvoki.Storage.WalSegmentRepair
 
@@ -67,8 +68,8 @@ private def projectMarked {before : LockedFileState WalSegmentRotation.State} :
 /-- The bootstrap route and the cached marked worker are two projections of
 the same open. The boundary equation fixes the worker and its raw reports,
 without requiring a successful result. The held observations supply the
-empty keeper read and both reached synchronization callbacks. -/
-structure BootstrapMarkedRetryOpen {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
+empty keeper read and the first directory barrier. -/
+structure BootstrapMarkedRetryPreparation {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
     {retry : BootstrapAdmissionCalls (Cache Handle) directory before}
     (captured : BootstrapCacheOpen retry) (zero : BootstrapMarkedZero before.image) where
   calls : MarkedRetryChunkCalls (Cache Handle) directory (locked zero)
@@ -85,14 +86,156 @@ structure BootstrapMarkedRetryOpen {directory : DiskDirectory} {before : LockedF
   readRoot : reads.root = held.lifetime.root
   authorization : ListedDirectoryAuthorization held
   metadata : HeldMarkedMetadata held
+  projected : retry.marked directory captured.cache before.image =
+    projectMarked (before := before) (reads.operations.markedAt directory captured.cache zero.files)
+
+/-- Successful marked recovery also reports the reached keeper barrier. -/
+structure BootstrapMarkedRetryOpen {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
+    {retry : BootstrapAdmissionCalls (Cache Handle) directory before}
+    (captured : BootstrapCacheOpen retry) (zero : BootstrapMarkedZero before.image)
+    extends BootstrapMarkedRetryPreparation captured zero where
   repair : ListedAlignedKeeperRepair authorization
   synced :
     let input : LockedFileState FileImage :=
       ⟨zero.files.syncDirectory, before.owners.set (directory.file .lock) (some retry.slot.description)⟩
     authorization.fsync (authorization.keeper.inventory, authorization.keeper.slot, 0) input =
       .ok () {input with image := input.image.syncKeeper}
-  projected : retry.marked directory captured.cache before.image =
-    projectMarked (before := before) (reads.operations.markedAt directory captured.cache zero.files)
+
+namespace BootstrapMarkedRetryPreparation
+
+variable {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
+  {retry : BootstrapAdmissionCalls (Cache Handle) directory before} {captured : BootstrapCacheOpen retry}
+  {zero : BootstrapMarkedZero before.image}
+
+private theorem keeperValid : zero.files.keeper.Valid zero.layout.target.Accepts :=
+  Publication.Image.settled_valid zero.layout.target.acceptsTrimmed
+
+private theorem laterValid : zero.files.later.Beyond zero.layout.range.through := by
+  simp [BootstrapMarkedZero.files, LaterNames.settled, LaterNames.Beyond]
+
+private theorem noFollowing :
+    ∀ start ∈ ((zero.layout.sealed ++ [zero.layout.keeper]).map WalSegment.first).drop 1,
+      zero.layout.range.watermark < start := by
+  intro start member
+  cases member
+
+private theorem acceptsNoCheckpoint : zero.checkpoint.AcceptsVersioned 0 (CheckpointRepresentsPrefix [])
+    zero.files.directory.active.manifest := by
+  change zero.checkpoint.AcceptsVersioned 0 (CheckpointRepresentsPrefix []) before.image.metadata.active.manifest
+  rw [zero.noManifest]
+  exact trivial
+
+end BootstrapMarkedRetryPreparation
+
+/-- An admitted marked-zero attempt reached the first directory barrier
+and reported its failure. The same local unlock belongs to both views of
+the open. The failure timing fixes the reached directory image. -/
+structure BootstrapMarkedAuthorizationError {directory : DiskDirectory}
+    {before : LockedFileState WalSegmentRotation.State}
+    {retry : BootstrapAdmissionCalls (Cache Handle) directory before}
+    (captured : BootstrapCacheOpen retry) (zero : BootstrapMarkedZero before.image) where
+  preparation : BootstrapMarkedRetryPreparation captured zero
+  sameUnlock : preparation.calls.unlock = retry.unlock
+  localUnlock : preparation.calls.unlock.LocalFlock
+  cause : IO.Error
+  settled : Bool
+  outcome : preparation.authorization.outcome =
+    if settled then .errorAfterEffect cause else .errorBeforeEffect cause
+
+namespace BootstrapMarkedAuthorizationError
+
+variable {directory : DiskDirectory} {before : LockedFileState WalSegmentRotation.State}
+  {retry : BootstrapAdmissionCalls (Cache Handle) directory before} {captured : BootstrapCacheOpen retry}
+  {zero : BootstrapMarkedZero before.image}
+
+private def reached (fault : BootstrapMarkedAuthorizationError captured zero) : WalSegmentRotation.State :=
+  if fault.settled then {before.image with metadata := before.image.metadata.syncDirectory}
+  else before.image
+
+private def syncError (fault : BootstrapMarkedAuthorizationError captured zero) : IO.Error :=
+  IO.userError s!"sync failed for '{directory.path}': {fault.cause}"
+
+def error (fault : BootstrapMarkedAuthorizationError captured zero) : IO.Error :=
+  match retry.unlock with
+  | .success => fault.syncError
+  | .failure cleanup _ => cleanup
+
+def final (fault : BootstrapMarkedAuthorizationError captured zero) : LockedFileState WalSegmentRotation.State :=
+  let owner := match retry.unlock with
+    | .success => none
+    | .failure _ _ => some retry.slot.description
+  ⟨fault.reached, before.owners.set (directory.file .lock) owner⟩
+
+private theorem worker (fault : BootstrapMarkedAuthorizationError captured zero) :
+    retry.marked directory captured.cache before.image = .error fault.syncError fault.reached := by
+  let preparation := fault.preparation
+  let ops := preparation.reads.operations
+  let attempt := ops.cachedAttempt fault.localUnlock
+  have later := BootstrapMarkedRetryPreparation.laterValid (zero := zero)
+  have following := BootstrapMarkedRetryPreparation.noFollowing (zero := zero)
+  have accepted := BootstrapMarkedRetryPreparation.acceptsNoCheckpoint (zero := zero)
+  have keeper := BootstrapMarkedRetryPreparation.keeperValid (zero := zero)
+  obtain ⟨opened, prepared⟩ :=
+    preparation.metadata.cachedAttemptPrepared fault.localUnlock later following accepted trivial
+  change attempt.prepare zero.files = _ at prepared
+  rw [zero.layout.boundedPlan_eq_extract] at prepared
+  have valid : Prepared zero.files zero.layout.target zero.layout.plan :=
+    ⟨rfl, keeper, later, rfl, rfl, rfl, zero.layout.visible⟩
+  let reachedFiles := if fault.settled then zero.files.syncDirectory else zero.files
+  have failure : attempt.sync #[directory.path] zero.files = .error fault.syncError reachedFiles := by
+    have sync := preparation.authorization.syncResult
+    change attempt.sync #[directory.path] zero.files = _ at sync
+    rw [fault.outcome] at sync
+    cases timing : fault.settled <;>
+      simpa only [Bool.false_eq_true, ↓reduceIte, reachedFiles, timing, syncError] using sync
+  have finish := finishBoundedMarkedOpen_authorizationError directory zero.layout.plan valid.valid
+    attempt.removeFile attempt.write attempt.sync attempt.renameFile failure
+  have recover : attempt.recover zero.files = .error fault.syncError reachedFiles := by
+    change (attempt.prepare >>= _) zero.files = _
+    simp only [Bind.bind, EStateM.bind, prepared, finish]
+  have atCache : ops.markedAt directory ops.cache = attempt.recover := by
+    simp only [MarkedRetryChunkOperations.markedAt, ops.keeperReads]
+    rfl
+  have workerAtCache : ops.markedAt directory captured.cache zero.files = .error fault.syncError reachedFiles := by
+    have sameCache : ops.cache = captured.cache := preparation.sameCache
+    rw [← sameCache, atCache, recover]
+  rw [preparation.projected]
+  change projectMarked (before := before) (ops.markedAt directory captured.cache zero.files) = _
+  rw [workerAtCache]
+  cases timing : fault.settled <;> simp [reachedFiles, reached, timing, projectMarked, restore, BootstrapMarkedZero.files,
+    FileImage.syncDirectory]
+
+/-- The admitted open returns the exact error and reached state. In
+particular the local unlock can replace the sync error and retain ownership
+of the same acquired description. The resulting image is still a valid
+bootstrap state for an eventual retry. -/
+theorem returns {input : FilePath} (fault : BootstrapMarkedAuthorizationError captured zero)
+    (admission : OpenAdmissionReports input directory retry.slot) (valid : BootstrapValid before.image)
+    {metadata : IO.FS.Metadata} (returned : retry.lookup (directory.file .walBoundary) = .ok metadata)
+    (bootstrap : DiskDirectory → Cache Handle → EStateM IO.Error WalSegmentRotation.State Reopened) :
+    retry.run bootstrap admission = .error fault.error fault.final ∧ BootstrapValid fault.final.image := by
+  have visible : before.image.metadata.active.walBoundary ≠ none := by
+    rw [zero.zeroMarker]
+    exact Option.some_ne_none _
+  have selection := captured.retrySelects admission valid (.present visible returned) bootstrap
+  obtain ⟨_, _, branch⟩ := selection.2.2.resolve_left (fun missing => visible missing.1)
+  constructor
+  · rw [branch, runOpenWithInstallation_acquiredRecoveryError _ _ _ _ _ _ fault.worker]
+    have localUnlock : retry.unlock.LocalFlock := fault.sameUnlock ▸ fault.localUnlock
+    cases unlock : retry.unlock with
+    | success => simp [error, final, unlock]
+    | failure cleanup released =>
+      have retained : released = false := by simpa [UnlockReport.LocalFlock, unlock] using localUnlock
+      simp [error, final, unlock, retained]
+  · change BootstrapValid fault.reached
+    cases timing : fault.settled with
+    | false => simpa [reached, timing] using valid
+    | true =>
+      unfold reached
+      simp only [timing, ↓reduceIte]
+      exact ⟨valid.metadata.syncDirectory, fun _ _ _ => zero.keeperDurable⟩
+
+end BootstrapMarkedAuthorizationError
 
 namespace BootstrapMarkedRetryOpen
 
@@ -142,19 +285,11 @@ theorem installed {input : FilePath} (observed : BootstrapMarkedRetryOpen captur
     CachedRetryInstalled (before := locked zero) ops.reported calls.descriptors calls.slot calls.bindings
       zero.checkpoint calls.liveRefs (ops.runWithAdmission (observed.sameSlot.symm ▸ admission)) := by
   intro calls ops
-  have keeper : zero.files.keeper.Valid zero.layout.target.Accepts :=
-    Publication.Image.settled_valid zero.layout.target.acceptsTrimmed
-  have later : zero.files.later.Beyond zero.layout.range.through := by
-    simp [BootstrapMarkedZero.files, LaterNames.settled, LaterNames.Beyond]
-  have accepted : zero.checkpoint.AcceptsVersioned 0 (CheckpointRepresentsPrefix [])
-      zero.files.directory.active.manifest := by
-    change zero.checkpoint.AcceptsVersioned 0 (CheckpointRepresentsPrefix []) before.image.metadata.active.manifest
-    rw [zero.noManifest]
-    exact trivial
   have exactSync := observed.synced
   rw [← observed.sameSlot] at exactSync
-  exact observed.repair.installs observed.metadata exactSync (observed.sameSlot.symm ▸ admission) keeper later
-    (by intro start member; cases member) accepted trivial
+  exact observed.repair.installs observed.metadata exactSync (observed.sameSlot.symm ▸ admission)
+    BootstrapMarkedRetryPreparation.keeperValid BootstrapMarkedRetryPreparation.laterValid
+    BootstrapMarkedRetryPreparation.noFollowing BootstrapMarkedRetryPreparation.acceptsNoCheckpoint trivial
 
 /-- The retry dispatches to that same marked worker after acquiring its
 lock. Its exact result installs the empty ready table and restores the

@@ -24,16 +24,14 @@ theorem SegmentedSession.runSnapshotRead_poisoned {session : SegmentedSession} (
   rw [SegmentedSession.runSnapshotRead, poisoned]
   rfl
 
-/-- A local read at an active intermediate pin agrees with the same
-snapshot in the final abstract replay. The suffix starts at the exact
-ready writer that served the read under the observed lock description.
-Its later writes cannot affect that earlier sequence. -/
-theorem SegmentedBatchDatabaseTrace.guardedReadsBeforeSuffix
+/-- A guarded pin read agrees with replay of the reached history
+followed by any valid WAL suffix. Later writes cannot affect the pin. -/
+theorem SegmentedWriterState.RetainedReady.guardedReadsForReplay
     {session : SegmentedSession} {before : SegmentedWriterState}
-    (suffix : SegmentedBatchDatabaseTrace session.directory session.descriptor before allowCollection log descriptor last)
+    {trailing : List WAL.Write}
     (ready : before.RetainedReady session.directory session.descriptor)
     (phase : session.phase = .ready before.installed)
-    {reference : SnapshotTable UInt64} (replayed : SnapshotWalReplay .empty last.history reference)
+    {reference : SnapshotTable UInt64} (replayed : SnapshotWalReplay .empty (before.history ++ trailing) reference)
     {pin : SnapshotPin} (active : pin ∈ before.installed.table.pins.active)
     {issuer : Nat} (localToken : issuer = session.sessionRef) {sameSession : Bool}
     (compared : sameSession = decide (issuer = session.sessionRef)) :
@@ -41,8 +39,6 @@ theorem SegmentedBatchDatabaseTrace.guardedReadsBeforeSuffix
       .ok (some (reference.table.lookup key pin.sequence)) session) ∧
     ∀ lo hi, session.runSnapshotRead sameSession (fun table => table.range pin.handle lo hi) =
       .ok (some (reference.table.range lo hi pin.sequence)) session := by
-  obtain ⟨_, retained, history, _⟩ := suffix.preservesRetained ready
-  rw [history] at replayed
   obtain ⟨earlier, prefixReplay, continued⟩ := replayed.split
   obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
   obtain ⟨lookup, range⟩ := represented.packedPinnedReads refined prefixReplay active
@@ -64,6 +60,27 @@ theorem SegmentedBatchDatabaseTrace.guardedReadsBeforeSuffix
     rw [SegmentedSession.runSnapshotRead, phase]
     change EStateM.Result.ok (before.installed.table.range pin.handle lo hi) session = _
     rw [range, Table.range_of_visibleEntry_eq lo hi _ stable]
+
+/-- A local read at an active intermediate pin agrees with the same
+snapshot in the final abstract replay. The suffix starts at the exact
+ready writer that served the read under the observed lock description.
+Its later writes cannot affect that earlier sequence. -/
+theorem SegmentedBatchDatabaseTrace.guardedReadsBeforeSuffix
+    {session : SegmentedSession} {before : SegmentedWriterState}
+    (suffix : SegmentedBatchDatabaseTrace session.directory session.descriptor before allowCollection log descriptor last)
+    (ready : before.RetainedReady session.directory session.descriptor)
+    (phase : session.phase = .ready before.installed)
+    {reference : SnapshotTable UInt64} (replayed : SnapshotWalReplay .empty last.history reference)
+    {pin : SnapshotPin} (active : pin ∈ before.installed.table.pins.active)
+    {issuer : Nat} (localToken : issuer = session.sessionRef) {sameSession : Bool}
+    (compared : sameSession = decide (issuer = session.sessionRef)) :
+    (∀ key, session.runSnapshotRead sameSession (fun table => table.lookup pin.handle key) =
+      .ok (some (reference.table.lookup key pin.sequence)) session) ∧
+    ∀ lo hi, session.runSnapshotRead sameSession (fun table => table.range pin.handle lo hi) =
+      .ok (some (reference.table.range lo hi pin.sequence)) session := by
+  obtain ⟨_, retained, history, _⟩ := suffix.preservesRetained ready
+  rw [history] at replayed
+  exact ready.guardedReadsForReplay phase replayed active localToken compared
 
 /-- One final replay explains every local pin read at the reached earlier
 writer, including sequences that are outside the final writer's floor. -/

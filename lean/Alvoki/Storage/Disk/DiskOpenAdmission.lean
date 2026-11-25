@@ -84,6 +84,35 @@ theorem _root_.Alvoki.Storage.DiskTable.withOpenAdmission_lockRefused {state han
     rejectFlatWalWith, Bind.bind, EStateM.bind, flat, Option.isSome_none, Bool.false_eq_true, ↓reduceIte,
     Pure.pure, EStateM.pure, probed, rejected]
 
+/-- Once the admission guards pass, the actual append-open result
+supplies the state for acquisition or for an early error. -/
+theorem _root_.Alvoki.Storage.DiskTable.withOpenAdmission_lockOpen {state handle result : Type}
+    {input : FilePath} {directory : DiskDirectory} {before : state}
+    (realPath : FilePath → EStateM IO.Error state FilePath)
+    (lookup : FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata))
+    (openAppend : FilePath → EStateM IO.Error state handle)
+    (acquire : DiskDirectory → handle → EStateM IO.Error state result)
+    (resolved : realPath input before = .ok directory.path before)
+    (flat : optionalMetadataWith (lookup (directory.file .wal)) before = .ok none before)
+    {lock : Option IO.FS.Metadata}
+    (probed : optionalMetadataWith (lookup (directory.file .lock)) before = .ok lock before)
+    (safe : ∀ metadata, lock = some metadata → (metadata.type == .file && metadata.numLinks == 1) = true) :
+    DiskTable.withOpenAdmission input realPath lookup openAppend acquire before =
+      match openAppend (directory.file .lock) before with
+      | .ok slot reached => acquire directory slot reached
+      | .error cause reached => .error cause reached := by
+  have checked := DiskDirectory.openWith_reported realPath directory resolved
+  cases lock with
+  | none =>
+    simp [DiskTable.withOpenAdmission, checked, rejectFlatWalWith, flat, probed, Bind.bind,
+      EStateM.bind, Pure.pure, EStateM.pure]
+    cases openAppend (directory.file .lock) before <;> rfl
+  | some metadata =>
+    have regular := safe metadata rfl
+    simp [DiskTable.withOpenAdmission, checked, rejectFlatWalWith, flat, probed, checkPrivateRegularWith,
+      regular, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+    cases openAppend (directory.file .lock) before <;> rfl
+
 /-- A reported append-open error returns its reached state before flock.
 Creating the lock name or obtaining a raw descriptor can precede the
 failed runtime handle allocation, so the result retains those effects. -/
@@ -100,15 +129,7 @@ theorem _root_.Alvoki.Storage.DiskTable.withOpenAdmission_lockOpenError {state h
     (safe : ∀ metadata, lock = some metadata → (metadata.type == .file && metadata.numLinks == 1) = true)
     {cause : IO.Error} (failed : openAppend (directory.file .lock) before = .error cause reached) :
     DiskTable.withOpenAdmission input realPath lookup openAppend acquire before = .error cause reached := by
-  have checked := DiskDirectory.openWith_reported realPath directory resolved
-  cases lock with
-  | none =>
-    simp [DiskTable.withOpenAdmission, checked, rejectFlatWalWith, flat, probed, failed, Bind.bind,
-      EStateM.bind, Pure.pure, EStateM.pure]
-  | some metadata =>
-    have regular := safe metadata rfl
-    simp [DiskTable.withOpenAdmission, checked, rejectFlatWalWith, flat, probed, checkPrivateRegularWith,
-      regular, failed, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  rw [DiskTable.withOpenAdmission_lockOpen realPath lookup openAppend acquire resolved flat probed safe, failed]
 
 def MarkedRetryChunkOperations.runWithAdmission {files : Type} {input : FilePath}
     {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
