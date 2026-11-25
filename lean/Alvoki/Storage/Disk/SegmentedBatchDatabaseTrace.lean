@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.CheckpointManifestStageFailureReopen
+import Alvoki.Storage.Disk.CheckpointManifestDirectoryFailureReopen
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
@@ -97,6 +98,14 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       {opened : CheckpointHeldOpen input directory layout (report.reachedPublication manifest runs)} {session final}
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (endpoint : ManifestStageFailureReopened (report := report) release opened session final after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log opened.calls.slot.description after
+  | checkpointManifestDirectoryError {input : System.FilePath}
+      {cut : CheckpointPowerCut directory before} {report : ObservedManifestDirectoryFailure cut}
+      {retry : LockedFileState FileImage} {layout : CanonicalKeeperLayout retry.image before.history}
+      {release : SegmentedFailureRelease writer}
+      {opened : CheckpointHeldOpen input directory layout report.publication} {session final}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (endpoint : report.Reopened release opened session final after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log opened.calls.slot.description after
   | checkpointPowerLossObserved {files : Type}
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
@@ -213,6 +222,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | checkpointManifestStageError _ endpoint ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨endpoint.retained, retained, endpoint.history.trans history, retention⟩
+  | checkpointManifestDirectoryError _ endpoint ih =>
+    obtain ⟨_, retained, history, retention⟩ := ih
+    exact ⟨endpoint.ready, retained, endpoint.history.trans history, retention⟩
   | checkpointPowerLossObserved _ _ _ _ _ _ installed ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨installed.retained, retained, installed.history.trans history, retention⟩

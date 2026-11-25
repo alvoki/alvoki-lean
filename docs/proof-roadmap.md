@@ -179,7 +179,7 @@ After the manifest rename returns, the final directory sync issues through the s
 
 If that final sync returns an error, the grouped callback reports the path and keeps the reached cache and files. The writer stays poisoned with its original lock. A reported successful close or last reference drop releases the same image. The new manifest remains visible in either effect case. When a later crash precedes the first effective recovery barrier, the bounded retry can select the old manifest only from the reported pre-effect crash choices. The admitted opener loads the strict selected manifest and exact physical run map, and the returned writer retains the ordered WAL. The returned-failure endpoint records the native error, release, bounded attempts and admitted reopen. [Returned final sync failure and reopen](../lean/Alvoki/Storage/Disk/CheckpointManifestDirectoryFailureReopen.lean)
 
-Carry this final-sync error endpoint through the mixed client trace with its unchanged submission and read ledgers.
+The exact returned final-sync error, lock release and admitted reopen now extend the mixed client trace at the returned ready session. The submission and read ledgers are unchanged. One replay accounts for the acknowledged writes, successful recorded reads and guarded reads from snapshots acquired in the reopened session. Recorded token and registry checks account for denied reads. [Client trace after final sync error](../lean/Alvoki/Storage/Disk/CheckpointManifestDirectoryClientTrace.lean)
 
 ### Garbage collection contract
 

@@ -1,4 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointManifestDirectoryFailure
+import Alvoki.Storage.Disk.CheckpointHeldOpen
+import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 
 namespace Alvoki.Storage.DiskSession
 

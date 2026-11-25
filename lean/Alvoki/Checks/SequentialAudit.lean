@@ -83,7 +83,9 @@ import Alvoki.Storage.Disk.CheckpointManifestStageCut
 import Alvoki.Storage.Disk.CheckpointHeldOpen
 import Alvoki.Storage.Disk.CheckpointManifestStageFailureReopen
 import Alvoki.Storage.Disk.CheckpointManifestDirectoryCut
+import Alvoki.Storage.Disk.CheckpointManifestDirectoryReopen
 import Alvoki.Storage.Disk.CheckpointManifestDirectoryFailureReopen
+import Alvoki.Storage.Disk.CheckpointManifestDirectoryClientTrace
 import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.SessionRetentionFloor
 import Alvoki.Storage.Disk.MarkedOpenControl
@@ -396,6 +398,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ObservedManifestStageFailure.poisonsAndReleases
 #check_axioms Alvoki.Storage.DiskSession.ManifestStageFailureBindings.reopens
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.checkpointManifestStageError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.checkpointManifestDirectoryError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.afterManifestDirectoryError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterManifestDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.afterManifestStageError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterManifestStageError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.manifestStageErrorRefines

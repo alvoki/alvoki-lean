@@ -1,5 +1,6 @@
-import Alvoki.Storage.Disk.CheckpointObservedCompletion
+import Alvoki.Storage.Disk.CheckpointRunPrefixReports
 import Alvoki.Storage.Disk.CheckpointRunPrefixCustody
+import Alvoki.Storage.Disk.WalSegmentCheckpointPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 

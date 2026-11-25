@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.CheckpointManifestRenameCut
 import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
 import Alvoki.Storage.Disk.CheckpointHeldOpen
+import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 
 namespace Alvoki.Storage.DiskSession
 
@@ -25,42 +26,6 @@ private def MarkedRetryChunkReports.withRunMap {files : Type} {directory : DiskD
       change runs metadata.header.generation index = some payload at stored
       rw [← same bytes metadata selected decoded index inside] at stored
       exact report.chunks bytes metadata selected decoded index inside payload stored }
-
-private theorem CheckpointPowerCut.newManifestHeader {directory : DiskDirectory} {before : SegmentedWriterState}
-    {writer : Nat} (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
-    {metadata : Manifest.IntegrityCheckpoint}
-    (decoded : Manifest.IntegrityCheckpoint.decode cut.checkpoint.manifest = .ok metadata) :
-    metadata.header = checkpointHeader cut.checkpoint.table (SegmentedCheckpointReport.generation before) := by
-  obtain ⟨_, refinement, _⟩ := ready.resumed.canonical
-  let generation := SegmentedCheckpointReport.generation before
-  let files := cut.checkpoint.table.runs.map (·.run.bytes)
-  let exactManifest := Manifest.IntegrityCheckpoint.fromRuns (checkpointHeader cut.checkpoint.table generation) files
-  have encoded := cut.encoded
-  have exactBytes : cut.checkpoint.manifest = exactManifest.encode := by
-    by_cases fits : files.all (fun bytes => decide (bytes.size < UInt64.size)) = true
-    · exact Except.ok.inj (encoded.symm.trans (encodeCheckpointIntegrityManifest_exact generation
-        (fun bytes member => of_decide_eq_true (List.all_eq_true.mp fits bytes member))))
-    · simp [encodeCheckpointIntegrityManifest, files, fits, Bind.bind, Except.bind] at encoded
-  have written := (WrittenCheckpoint.of_flushForCheckpoint cut.flushed refinement cut.runCountFits
-    ready.resumed.bounds.runs ready.resumed.bounds.memory generation).1
-  have roundTrip := Manifest.IntegrityCheckpoint.decode_encode exactManifest written.validFloor
-    (by simpa [exactManifest, files, Manifest.IntegrityCheckpoint.fromRuns] using written.count)
-  rw [exactBytes] at decoded
-  exact congrArg Manifest.IntegrityCheckpoint.header (Except.ok.inj (decoded.symm.trans roundTrip))
-
-/-- Any prior manifest describes a different generation from the new one. -/
-theorem CheckpointPowerCut.manifestChanges {directory : DiskDirectory} {before : SegmentedWriterState}
-    {writer : Nat} (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer) :
-    before.wal.directory.active.manifest ≠ some cut.checkpoint.manifest := by
-  intro same
-  have prior := CheckpointPowerCut.selectedGeneration ready.resumed.selected
-  rw [← ready.resumed.generation, ← ready.walPair, same] at prior
-  cases decoded : Manifest.IntegrityCheckpoint.decode cut.checkpoint.manifest with
-  | error cause => simp [Option.mapM, Functor.map, Except.map, decoded] at prior
-  | ok metadata =>
-    apply (cut.priorSelectedGeneration ready same decoded).2
-    rw [cut.newManifestHeader ready decoded]
-    rfl
 
 /-- The actual held open and the next writer at its exact returned state. -/
 abbrev CheckpointPowerCut.HeldReopen {directory : DiskDirectory} {before : SegmentedWriterState}
@@ -153,28 +118,6 @@ theorem CheckpointPowerCut.reopensSelectedRunMap {directory : DiskDirectory}
   · intro _ _ _ _ prior
     rw [descriptor]
     exact .checkpointPowerLossObserved prior cut projected pairSurvives failures retryPair installed
-
-/-- A physical run map can be reindexed using the exact manifest that
-selected it. The published new header fixes its generation and run count. -/
-theorem CheckpointPowerCut.selectedRunAgreement {directory : DiskDirectory}
-    {before : SegmentedWriterState} {writer : Nat}
-    (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
-    (published : Image) (binding : Option ByteArray)
-    (origin : binding = before.wal.directory.active.manifest ∨ binding = some cut.checkpoint.manifest)
-    (runs : RunFiles)
-    (newRuns : ∀ index < cut.checkpoint.table.runs.length, runs (SegmentedCheckpointReport.generation before) index =
-      published.durable (SegmentedCheckpointReport.generation before) index)
-    (oldRuns : SelectedRunsAgree before.wal.directory.active.manifest runs published.durable) :
-    SelectedRunsAgree binding runs published.durable := by
-  rcases origin with old | new
-  · exact old.symm ▸ oldRuns
-  · intro bytes metadata present decoded index inside
-    have sameBytes : bytes = cut.checkpoint.manifest := Option.some.inj (present.symm.trans new)
-    subst bytes
-    rw [cut.newManifestHeader ready decoded] at inside ⊢
-    have count : (checkpointHeader cut.checkpoint.table (SegmentedCheckpointReport.generation before)).runCount.toNat =
-        cut.checkpoint.table.runs.length := UInt64.toNat_ofNat_of_lt' cut.runCountFits
-    exact newRuns index (count ▸ inside)
 
 /-- The same held installer handles either manifest once the selected
 physical run map agrees with the corresponding checkpoint bytes. -/

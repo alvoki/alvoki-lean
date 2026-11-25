@@ -17,6 +17,7 @@ theorem SegmentedBatchDatabaseTrace.append
   | ordinary _ step ih => simpa only [List.append_assoc] using ih.ordinary step
   | cleanReopenObserved _ closed endpoint ih => exact .cleanReopenObserved ih closed endpoint
   | checkpointManifestStageError _ endpoint ih => exact .checkpointManifestStageError ih endpoint
+  | checkpointManifestDirectoryError _ endpoint ih => exact .checkpointManifestDirectoryError ih endpoint
   | checkpointPowerLossObserved _ cut projected survives failures selected installed ih =>
     exact .checkpointPowerLossObserved ih cut projected survives failures selected installed
   | acknowledgedBatch _ report selected ih => simpa only [List.append_assoc] using ih.acknowledgedBatch report selected

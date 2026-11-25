@@ -24,6 +24,9 @@ theorem SegmentedBatchDatabaseTrace.preservesPositiveSeals
   | checkpointManifestStageError _ endpoint ih =>
     rw [endpoint.wal]
     exact ih
+  | checkpointManifestDirectoryError _ endpoint ih =>
+    rw [endpoint.wal]
+    exact ih
   | checkpointPowerLossObserved _ _ _ _ _ _ installed ih =>
     rw [installed.wal]
     exact ih
