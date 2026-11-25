@@ -1351,18 +1351,19 @@ theorem recoveredRetries_installedReads
     (repaired : finish ⟨selected.frontier.toNat / frameSize, target.first, newer, target.trimmed⟩ keeperMetadata.byteSize.toNat
       { prepared with directory := settleMarker prepared.directory selected } = .ok () after)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first opened.table)
-    {payload : ByteArray}
     (sealedRead : ∀ file ∈ sealed, prepared.kept file.1 = some file.2)
     (checked : checkSelectedWalSegmentSpans (selected.frontier.toNat / frameSize)
       (sealed ++ [(target.first, plan.keeperBytes)]) = true)
-    (selectedReplay : recoverMarkedWalSegments base selected.frontier
-      (sealed ++ [(target.first, plan.keeperBytes)]) = .ok (payload, opened.table))
+    (selectedStart : ((sealed ++ [(target.first, target.trimmed)]).head?.map Prod.fst) = some first)
+    {laterBytes : ByteArray}
+    (exactBytes : WalSegment.concatenate (image.afterWatermark range.watermark) =
+      walSegmentPayloadBytes (sealed ++ [(target.first, target.trimmed)]) ++ laterBytes)
     {snapshot : UInt64} (retained : opened.table.pins.floor ≤ snapshot)
     (within : snapshot.toNat ≤ range.through) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
     (∀ bytes, some bytes ∈ after.keeper.active :: after.keeper.crashImages →
       recoverMarkedWalSegments base selected.frontier (sealed ++ [(target.first, bytes)]) =
-        .ok (payload, opened.table) ∧
+        .ok (WAL.encode (((history ++ batch).take range.through).drop first), opened.table) ∧
       ∀ file ∈ sealed, after.kept file.1 = some file.2) ∧
     ∃ session final reference state pin pinned,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
@@ -1419,11 +1420,31 @@ theorem recoveredRetries_installedReads
   obtain ⟨tail, fullKeeper⟩ := preparedPlan.keeperPrefix.activeValid
   have full : plan.keeperBytes = target.trimmed ++ tail :=
     Option.some.inj (preparedPlan.keeperRead.symm.trans fullKeeper)
+  let payload := WAL.encode (((history ++ batch).take range.through).drop first)
+  have authorized := prepared_settleMarker preparedPlan selected observed
+  have liveMarker := (retries.preservesSelectedMarker prepared selected observed authorizedRepair
+    authorized.pair authorized.keeperPrefix authorized.newer (List.mem_cons_self ..)).1
+  obtain ⟨actualMarker, actualLength, recoveredBytes, marked, decodedLength, _, samePayload, physicalReplay, _⟩ :=
+    recovery.marked
+  have sameMarker := Option.some.inj (marked.symm.trans liveMarker)
+  have sameLength := Except.ok.inj ((sameMarker ▸ decodedLength).symm.trans (Boundary.decode_encode _))
+  have boundedChecked := checkSelectedWalSegmentSpans_replaceKeeperBytes (after := target.trimmed)
+    sealed (Nat.le_of_eq keeperSize.symm) checked
   have boundedReplay : recoverMarkedWalSegments base selected.frontier
       (sealed ++ [(target.first, target.trimmed)]) = .ok (payload, opened.table) := by
-    rw [full] at checked selectedReplay
+    obtain ⟨entry, rest, files⟩ := List.exists_cons_of_ne_nil
+      (show sealed ++ [(target.first, target.trimmed)] ≠ [] by simp)
+    obtain ⟨startOffset, bytes⟩ := entry
+    have start : startOffset = first := by simpa [files] using selectedStart
+    subst startOffset
+    rw [files] at boundedChecked exactBytes ⊢
+    rw [recoverMarkedWalSegments_eq_retained _ _ first bytes rest laterBytes aligned boundedChecked,
+      ← exactBytes, ← sameLength, physicalReplay, samePayload]
+  have selectedReplay : recoverMarkedWalSegments base selected.frontier
+      (sealed ++ [(target.first, plan.keeperBytes)]) = .ok (payload, opened.table) := by
+    rw [full] at checked ⊢
     exact (recoverMarkedWalSegments_removeKeeperTail base selected.frontier sealed target.first
-      target.trimmed tail aligned (Nat.le_of_eq keeperSize.symm) checked).symm.trans selectedReplay
+      target.trimmed tail aligned (Nat.le_of_eq keeperSize.symm) checked).trans boundedReplay
   let readCheckpoint := readIntegrityCheckpointSized directory readManifest
     (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix
   have checkpointRead := sizes.readExactWithState checkpointSelected readManifest readRunPrefix
@@ -1442,7 +1463,6 @@ theorem recoveredRetries_installedReads
     openedResult.symm ▸ read
   obtain ⟨session, final, returned, installed, reached, owner, freshSession⟩ :=
     reopenWith_installsPrepared (unlock := unlock) liveRefs fresh acquisition preparedRead barrier repaired
-  have authorized := prepared_settleMarker preparedPlan selected observed
   have physical bytes survives := retries.replayUnchanged authorizedRepair authorized base sealed
     sealedRead markerRead (Boundary.decode_encode selected.frontier) checked (bytes := bytes) survives
   exact ⟨ledger.1, fun bytes survives =>

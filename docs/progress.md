@@ -15,9 +15,11 @@ supplies their exact keeper to repair. The selected WAL reader now derives
 its report from the directory listing, extent scan, ordered seal reads and
 the final bounded keeper read, in order on their reached states. The full
 keeper and the marker-bounded prefix provably replay to the same table,
-including when the keeper contains an unchecked tail. The remaining
-integration work is to derive the primitive reports and segmented replay
-from one native descriptor chronology. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
+including when the keeper contains an unchecked tail. The client theorem
+now derives replay of the selected files from the segmented recovery using
+their common marker, start offset and exact retained byte prefix. The
+remaining integration work is to derive that byte-prefix witness and the
+primitive reports from one native descriptor chronology. [Two-slot client recovery](../lean/Alvoki/Storage/Disk/WalTwoSlotClientReturn.lean)
 
 Rotation can reuse an existing empty WAL successor. The no-follow extent check and the read open used on a sync cache miss identify the same private inode under the held lock. Both file-sync outcomes release that temporary read handle. A returned file sync error preserves the active cache, returns the path-specific diagnostic and leaves the writer poisoned, with the reported byte effect before any directory barrier. When both barriers succeed, rotation settles that successor as the durable empty keeper, clears the old append cache and returns the same table with the new active offset. This proof covers the observed cache miss and the returned rotation. Connecting the resulting files to a later captured open remains part of the chronological proof. [Rotation with an existing successor](../lean/Alvoki/Storage/Disk/RotationExistingSuccessor.lean)
 

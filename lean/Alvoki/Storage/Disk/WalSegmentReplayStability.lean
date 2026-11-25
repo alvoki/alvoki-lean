@@ -22,7 +22,8 @@ private theorem WalSegmentSpans.replaceKeeperBytes {through keeper : Nat} {befor
       cases spans with
       | sealed forward size old => exact .sealed forward size (ih old)
 
-private theorem checkSelectedWalSegmentSpans_replaceKeeperBytes {through keeper : Nat} {before after : ByteArray}
+/-- Replacing the last file preserves the checks when it still covers the marker. -/
+theorem checkSelectedWalSegmentSpans_replaceKeeperBytes {through keeper : Nat} {before after : ByteArray}
     (sealed : List (Nat × ByteArray)) (enough : (through - keeper) * frameSize ≤ after.size)
     (checked : checkSelectedWalSegmentSpans through (sealed ++ [(keeper, before)]) = true) :
     checkSelectedWalSegmentSpans through (sealed ++ [(keeper, after)]) = true := by
