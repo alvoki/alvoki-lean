@@ -88,6 +88,7 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionInventory
 lake env leanchecker Alvoki.Storage.Disk.SegmentedRetainedWriter
 lake env leanchecker Alvoki.Storage.Disk.AppendLockHandoff
+lake env leanchecker Alvoki.Storage.Disk.SingleWritePreflight
 lake env leanchecker Alvoki.Storage.Disk.AppendCutSession
 lake env leanchecker Alvoki.Storage.Disk.ReopenedSegmentAppend
 lake env leanchecker Alvoki.Storage.Disk.AppendCutContinuation

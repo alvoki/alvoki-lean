@@ -553,16 +553,27 @@ theorem commitWalWrite_fileEffects (dir : DiskDirectory) (files : SyncFiles) (ac
         files.syncPaths #[dir.path]
         pure ()) := rfl
 
-@[inline] private def DiskTable.writeWith (db : DiskTable) (key : UInt64) (value : Option UInt64)
-    (onRejected onCommitUnknown : IO.Error → ε) : EIO ε UInt64 := do
-  let state ← db.installed.adapt onRejected
-  let (event, table) ← (fromOption (prepareWrite state.table key value)
-    "write sequence space exhausted").adapt onRejected
+/-- Enter the publication callback only after the single-write preflight.
+The sequence guard precedes the WAL byte-count guard on this path. -/
+@[macro_inline] def DiskSession.withPreparedSingleWrite [Monad m] [MonadExceptOf ε m]
+    (key : UInt64) (value : Option UInt64) (installed : m Installed) (rejected : IO.Error → ε)
+    (requirePrepared : Option (WAL.Write × PackedTable) → m (WAL.Write × PackedTable))
+    (guard : Installed → m Unit) (publish : Installed → WAL.Write → PackedTable → Nat → m UInt64) : m UInt64 := do
+  let state ← installed
+  let (event, table) ← requirePrepared (prepareWrite state.table key value)
   let walBytes := state.walBytes + WAL.frameSize
-  unless walBytes < UInt64.size do throw (onRejected (IO.userError "WAL byte count is too large"))
-  (checkActiveSegment db.dir state).adapt onRejected
-  DiskSession.publishPreparedWrite { state with table, walBytes } event.sequence db.phase.set
-    ((commitWalWrite db.dir db.files state.activeFirst event walBytes).adapt onCommitUnknown)
+  unless walBytes < UInt64.size do throw (rejected (IO.userError "WAL byte count is too large"))
+  guard state
+  publish state event table walBytes
+
+@[inline] private def DiskTable.writeWith (db : DiskTable) (key : UInt64) (value : Option UInt64)
+    (onRejected onCommitUnknown : IO.Error → ε) : EIO ε UInt64 :=
+  DiskSession.withPreparedSingleWrite key value (db.installed.adapt onRejected) onRejected
+    (fun result => (fromOption result "write sequence space exhausted").adapt onRejected)
+    (fun state => (checkActiveSegment db.dir state).adapt onRejected)
+    (fun state event table walBytes =>
+      DiskSession.publishPreparedWrite { state with table, walBytes } event.sequence db.phase.set
+        ((commitWalWrite db.dir db.files state.activeFirst event walBytes).adapt onCommitUnknown))
 
 /-- Acknowledgement follows the WAL sync and durable publication of the byte boundary. -/
 def DiskTable.write (db : DiskTable) (key : UInt64) (value : Option UInt64) : IO UInt64 :=
@@ -573,6 +584,19 @@ commit outcome is unknown, close and reopen the database before further use. -/
 def DiskTable.writeWithOutcome (db : DiskTable) (key : UInt64) (value : Option UInt64) :
     EIO DiskWriteError UInt64 :=
   db.writeWith key value .rejected .commitUnknown
+
+/-- Project the native single-write preflight onto the reached phase and
+no-follow metadata reads, then the existing append and marker callbacks. -/
+theorem DiskTable.writeWithOutcome_schedule (db : DiskTable) (key : UInt64) (value : Option UInt64) :
+    db.writeWithOutcome key value =
+      DiskSession.withPreparedSingleWrite key value
+        (db.installed.adapt DiskWriteError.rejected) DiskWriteError.rejected
+        (fun result => (fromOption result "write sequence space exhausted").adapt DiskWriteError.rejected)
+        (fun state => (checkActiveSegmentWith db.dir state FilePath.symlinkMetadata).adapt DiskWriteError.rejected)
+        (fun state event table walBytes =>
+          DiskSession.publishPreparedWrite { state with table, walBytes } event.sequence db.phase.set
+            ((WalSegmentCommit.commitAt db.dir state.activeFirst event walBytes
+              db.files.append db.files.stage db.files.syncPaths IO.FS.rename).adapt DiskWriteError.commitUnknown)) := rfl
 
 /-- Rejection checks the required existing segment before any write. An
 attempted commit poisons the session until the absolute marker settles. -/

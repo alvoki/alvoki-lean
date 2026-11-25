@@ -9,6 +9,7 @@ import Alvoki.Storage.Disk.BatchAppendReopenAdmission
 import Alvoki.Storage.Disk.SegmentedBatchMarkerProcessExit
 import Alvoki.Storage.Disk.SegmentedBootstrapCompletion
 import Alvoki.Storage.Disk.AppendCutContinuation
+import Alvoki.Storage.Disk.SingleWritePreflight
 import Alvoki.Storage.Disk.AppendRetrySession
 import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
 import Alvoki.Storage.Disk.WalBatchAppendPowerLoss
@@ -839,6 +840,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentCommit.forgetError_commitAt
 #check_axioms Alvoki.Storage.DiskSession.AppendCommitReports.run
 #check_axioms Alvoki.Storage.DiskSession.runPreparedWrite_failure_handoff
+#check_axioms Alvoki.Storage.DiskTable.writeWithOutcome_schedule
+#check_axioms Alvoki.Storage.DiskSession.runSingleWrite_rejectedPhase
+#check_axioms Alvoki.Storage.DiskSession.runSingleWrite_rejectedSequence
+#check_axioms Alvoki.Storage.DiskSession.runSingleWrite_rejectedWalCount
+#check_axioms Alvoki.Storage.DiskSession.runSingleWrite_rejectedActive
+#check_axioms Alvoki.Storage.DiskSession.runSingleWrite_of_preflight
 #check_axioms Alvoki.Storage.DiskSession.runPreparedWrite_success
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterAppendCut
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.afterRetainedAppendCut
