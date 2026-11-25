@@ -2176,3 +2176,5 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.publish_appendInterrupted
 #check_axioms Alvoki.WAL.TwoSlot.publish_walSyncInterrupted
 #check_axioms Alvoki.WAL.TwoSlot.publish_markerSyncInterrupted
+#check_axioms Alvoki.WAL.TwoSlot.publish_slotWriteInterrupted
+#check_axioms Alvoki.WAL.TwoSlot.runBatch_slotWriteInterrupted

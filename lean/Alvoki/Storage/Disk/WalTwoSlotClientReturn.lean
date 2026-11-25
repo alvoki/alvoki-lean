@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.DiskSession
 import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.WalTwoSlotReopenProjection
+import Alvoki.Storage.Disk.BatchInterruptionDispatch
 
 namespace Alvoki.WAL.TwoSlot
 
@@ -55,6 +56,44 @@ theorem publish_walSyncInterrupted {stop image : Type}
   change append before = .ok (.ok ()) appended at wrote
   change syncWal appended = .error stopped reached at cut
   simp [publish, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind, wrote, cut]
+
+/-- A stop reached inside the inactive-slot write keeps its reported
+physical state and never issues the marker barrier. -/
+theorem publish_slotWriteInterrupted {stop image : Type}
+    (append syncWal writeSlot syncSlot install : ExceptT IO.Error (EStateM stop image) Unit)
+    {before appended durable reached : image} {stopped : stop}
+    (wrote : append.run before = .ok (.ok ()) appended)
+    (walBarrier : syncWal.run appended = .ok (.ok ()) durable)
+    (cut : writeSlot.run durable = .error stopped reached) :
+    (publish append syncWal writeSlot syncSlot install).run before = .error stopped reached := by
+  change append before = .ok (.ok ()) appended at wrote
+  change syncWal appended = .ok (.ok ()) durable at walBarrier
+  change writeSlot durable = .error stopped reached at cut
+  simp [publish, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind,
+    wrote, walBarrier, cut]
+
+open DiskSession (Installed LockedFileState runBatchWriteWithInterruption runBatchWriteWithInterruption_stopped)
+
+/-- Interpret a prepared batch once its slot preflight has admitted the
+publication. Interruption in the positional write reaches the poisoned
+writer with the exact reached image and no acknowledgement. -/
+theorem runBatch_slotWriteInterrupted {stop image : Type} {directory : DiskDirectory}
+    {rows : List (UInt64 × Option UInt64)} {installed : Installed}
+    {events : List Write} {table : PackedTable}
+    {lookup : System.FilePath → Except IO.Error IO.FS.Metadata}
+    (nonempty : rows ≠ []) (prepared : prepareBatch installed.table rows = some (events, table))
+    (fits : installed.walBytes + frameSize * rows.length < UInt64.size)
+    (guard : checkActiveSegmentWith directory installed lookup = .ok ())
+    (append syncWal writeSlot syncSlot install : ExceptT IO.Error (EStateM stop image) Unit)
+    {before : LockedFileState image} {appended durable reached : image} {stopped : stop}
+    (wrote : append.run before.image = .ok (.ok ()) appended)
+    (walBarrier : syncWal.run appended = .ok (.ok ()) durable)
+    (cut : writeSlot.run durable = .error stopped reached) :
+    runBatchWriteWithInterruption directory rows lookup
+      (fun _ _ _ => publish append syncWal writeSlot syncSlot install) (.ready installed, before) =
+      .error stopped (.poisoned, { before with image := reached }) :=
+  runBatchWriteWithInterruption_stopped nonempty prepared fits guard _
+    (publish_slotWriteInterrupted append syncWal writeSlot syncSlot install wrote walBarrier cut)
 
 /-- A process stop at marker sync follows both WAL sync and the slot write,
 but it cannot install the cached marker or return an acknowledgement. -/
