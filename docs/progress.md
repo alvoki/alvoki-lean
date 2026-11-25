@@ -1,5 +1,7 @@
 # Current handoff
 
+A focused Linux process-exit reproduction exercised both sides of the actual WAL marker rename. Both file syncs preceded the exit. Reopen recovered the prior history before rename and the whole pending batch after rename, from the same checkpoint files. An append after either reopen succeeded. [WAL publication proof and reproduction](proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
+
 The original opened phase cell now reaches a stopped WAL marker rename through the actual single or batch write schedule. The ready getter and WAL guard run before poison is stored on that cell. The reported append, marker staging and grouped file sync return at the exact cache and census used by the rename. The stop leaves that heap poisoned without a write response or final directory sync and retains the earlier replay and allowed marker outcomes. [Opened phase at marker rename](../lean/Alvoki/Storage/Disk/NativePendingMarkerRenameOpenPhase.lean)
 
 The finite opened-table trace now includes the public acquisition of the latest snapshot. Its original schedule reads the same phase cell twice. The first read selects the committed sequence, and the second obtains an active pin at that sequence and stores the updated registry in the cell. Readiness proves that the committed sequence is supported. The exact returned pin joins the tracked issuance list, and the earlier client ledgers carry through. [Latest snapshot in the opened trace](../lean/Alvoki/Storage/Disk/NativeOpenReadyTrace.lean)
