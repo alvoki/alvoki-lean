@@ -1702,6 +1702,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheAllocations.installs
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.admitsWithCache
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.keeperCacheSchedules
+#check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.stageCacheSchedule
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.returns
 #check_axioms Alvoki.Storage.DiskSession.PrunedWalUnlinkHeaps.returns
 #check_axioms Alvoki.Storage.DiskSession.PrunedAlignedKeeperCacheReport.returns
