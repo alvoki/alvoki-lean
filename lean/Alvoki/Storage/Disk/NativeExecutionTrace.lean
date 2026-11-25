@@ -16,6 +16,7 @@ import Alvoki.Storage.Disk.NativeSnapshotExecution
 import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
 import Alvoki.Storage.Disk.NativeCheckpointErrorReopen
 import Alvoki.Storage.Disk.NativeEarlyCheckpointReopen
+import Alvoki.Storage.Disk.NativeCheckpointRunFileReopen
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkErrorReopen
 import Alvoki.Storage.Disk.NativeCheckpointPreflight
 import Alvoki.Storage.Disk.NativeWalPlanningQuery
@@ -57,6 +58,7 @@ inductive NativeExecutionEvent : Type 1 where
   | checkpoint
   | checkpointRejected (error : IO.Error)
   | checkpointErrorRecovered (input : FilePath) (error : IO.Error)
+  | checkpointRunFileErrorRecovered (input : FilePath) (index : Nat) (error : IO.Error)
   | firstCheckpointBarrierErrorRecovered (input : FilePath) (error : IO.Error)
   | checkpointCrashRecovered (input : FilePath) (error : IO.Error) (manifest : Option ByteArray)
   | interruptedCheckpointRecovered (input : FilePath) (manifest : Option ByteArray)
@@ -313,6 +315,12 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (reopened : NativeInterruptedCloseReopenContinuation current.ready next observed) :
       NativeExecutionStep current (.interruptedCloseRecovered input observed.cut.effective)
         ⟨current.history, current.submissions, next⟩
+  | recoverCheckpointRunFileError (current : NativeExecutionPosition) {input : FilePath}
+      (seen : NativeCheckpointRunFileReopenObservation current.ready.state input)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeCheckpointRunFileReopened current.ready seen next) :
+      NativeExecutionStep current (.checkpointRunFileErrorRecovered input seen.error.index seen.error.error)
+        ⟨current.history, current.submissions, next⟩
   | recoverInterruptedCheckpoint (current : NativeExecutionPosition) {input : FilePath}
       (observed : NativePendingCheckpointCrashObservation current.ready.state input)
       (next : NativeReadPosition current.history current.submissions)
@@ -515,6 +523,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverInterruptedClose reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverCheckpointRunFileError reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverInterruptedCheckpoint reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWriteCrash reopened =>
@@ -619,6 +629,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | restart (input : FilePath)
   | checkpoint
   | checkpointThenCloseAndReopen (input : FilePath)
+  | checkpointRunFileErrorThenReopen (input : FilePath) (index : Nat)
   | checkpointFirstBarrierErrorThenReopen (input : FilePath)
   | coveredWalUnlinkErrorThenReopen (input : FilePath)
   | checkpointThenPowerLossAndReopen (input : FilePath)
@@ -664,6 +675,8 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .checkpoint, .checkpoint => True
   | .checkpoint, .checkpointRejected _ => True
   | .checkpointThenCloseAndReopen input, .checkpointErrorRecovered opened _ => opened = input
+  | .checkpointRunFileErrorThenReopen input index, .checkpointRunFileErrorRecovered opened issued _ =>
+    opened = input ∧ issued = index
   | .checkpointFirstBarrierErrorThenReopen input, .firstCheckpointBarrierErrorRecovered opened _ => opened = input
   | .coveredWalUnlinkErrorThenReopen input, .coveredWalUnlinkErrorRecovered opened _ => opened = input
   | .checkpointThenPowerLossAndReopen input, .checkpointCrashRecovered opened _ _ => opened = input
@@ -798,6 +811,8 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
   | snapshotHandleRead (observed : NativeSnapshotHandleObservation current.state.session) (request : SnapshotReadRequest α)
   | checkpointRejected (cause : IO.Error) (preflight : CheckpointPreflight (.ready current.state.writer.installed) (.error cause))
   | checkpointThenCloseAndReopen (input : FilePath) (observed : NativeCheckpointReopenObservation current.state input)
+  | checkpointRunFileErrorThenReopen (input : FilePath)
+      (seen : NativeCheckpointRunFileReopenObservation current.state input)
   | checkpointFirstBarrierErrorThenReopen (input : FilePath) (seen : NativeEarlyCheckpointReopenObservation current.state input)
   | coveredWalUnlinkErrorThenReopen (input : FilePath) (seen : NativeCoveredWalUnlinkErrorReopen current.state input)
   | planWalCollection (observed : NativeWalPlanningObservation current.state)
@@ -871,6 +886,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .snapshotHandleRead observed request => .snapshotHandleRead observed.issuer observed.handle request
   | .checkpointRejected _ _ => .checkpoint
   | .checkpointThenCloseAndReopen input _ => .checkpointThenCloseAndReopen input
+  | .checkpointRunFileErrorThenReopen input seen => .checkpointRunFileErrorThenReopen input seen.error.index
   | .checkpointFirstBarrierErrorThenReopen input _ => .checkpointFirstBarrierErrorThenReopen input
   | .coveredWalUnlinkErrorThenReopen input _ => .coveredWalUnlinkErrorThenReopen input
   | .planWalCollection _ => .planWalCollection
@@ -969,6 +985,9 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     exact ⟨_, _, .snapshotHandleRead current observed request result recorded next returned, rfl, rfl, HEq.rfl⟩
   | checkpointRejected cause preflight =>
     exact ⟨_, current, .checkpointRejected current cause (current.ready.rejectsCheckpoint preflight), trivial⟩
+  | checkpointRunFileErrorThenReopen _ seen =>
+    obtain ⟨next, reopened⟩ := current.ready.recoversCheckpointRunFileError seen
+    exact ⟨_, _, .recoverCheckpointRunFileError current seen next reopened, rfl, rfl⟩
   | checkpointFirstBarrierErrorThenReopen _ seen =>
     obtain ⟨next, reopened⟩ := current.ready.recoversEarlyCheckpointError seen
     exact ⟨_, _, .recoverEarlyCheckpointError current seen next reopened, rfl⟩
