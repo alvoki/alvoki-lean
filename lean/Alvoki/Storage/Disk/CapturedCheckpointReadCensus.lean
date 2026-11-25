@@ -75,6 +75,28 @@ theorem CapturedManifestCensus.reads {report : CapturedMarkedReadReports admissi
     rw [bound]
     exact custody.readMetadata read admission.cache admission.held
 
+/-- An absent manifest leaves the held slot alone. A present manifest
+uses a separate temporary descriptor whose finalizer preserves it. -/
+theorem CapturedManifestCensus.preservesSlot
+    {report : CapturedMarkedReadReports admission layout published}
+    {released : FilePath → List LockReferenceDrop} {drops : List LockReferenceDrop}
+    (manifest : CapturedManifestCensus report released drops)
+    {slot : DescriptorSlot} (present : slot ∈ admission.reached.slots)
+    (ambient : ∀ {bytes : ByteArray}
+      (file : HeldMetadataFile report.reads (directory.file .manifest) "MANIFEST" admission.view admission.root bytes)
+      (custody : TemporaryPrefixCustody file.calls admission.reached (released (directory.file .manifest))),
+      drops = custody.beforeOpen ++ released (directory.file .manifest) →
+      ∀ event ∈ custody.beforeOpen ++ custody.beforeClose, event.removes slot.reference = false) :
+    slot ∈ (admission.reached.afterDrops drops).slots := by
+  cases manifest with
+  | missing => simpa [DescriptorInventory.afterDrops] using present
+  | present _ file _ custody =>
+    have drops := ambient file custody rfl
+    have retained := custody.preservesSlot present
+      (fun event found => drops event (List.mem_append_left _ found))
+      (fun event found => drops event (List.mem_append_right _ found))
+    rwa [custody.closes.1] at retained
+
 /-- The drops accumulated by the increasing manifest-index traversal. -/
 def runReadDrops (events : Nat → List LockReferenceDrop) : Nat → List LockReferenceDrop
   | 0 => []

@@ -918,3 +918,10 @@ selected WAL seals and the bounded keeper read, reaching the exact
 post-read census with the same marker slot. This covers that WAL read
 phase under the ambient-drop reports. The checkpoint-to-scan handoff
 and the post-read stabilization and repair handoff remain open.
+
+The manifest phase now preserves a retained descriptor whether the
+manifest is absent or read through a temporary open. For the shared
+outer witness, the existing captured marked-read report still bundles
+the rename-format boundary read with the checkpoint and WAL reports.
+The two-slot opener needs those common reports independently of that
+boundary read to compose the native chronology.
