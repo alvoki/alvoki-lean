@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
 import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
 import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
+import Alvoki.Storage.Disk.NativeOpenRunMaintenance
 
 namespace Alvoki.Storage.DiskSession
 
@@ -14,6 +15,7 @@ variable {heap : Type} {opened : NativeOpenedHandle heap}
 inductive NativeOpenedInstruction : Type 1 where
   | write (request : WriteRequest)
   | checkpoint
+  | rewriteRun (request : RunMaintenance)
   | acquireAt (sequence : UInt64)
   | releaseAt (index : Nat)
   | advanceFloor (floor : UInt64)
@@ -55,6 +57,8 @@ inductive NativeOpenedReport (start : NativeOpenedPosition opened) : NativeOpene
           .error cause (reached, after))
       (stillReady : opened.contents reached opened.phase = some start.current.ready.state.session.phase) :
       NativeOpenedReport start .checkpoint
+  | rewriteRun (request : RunMaintenance) :
+      NativeOpenedReport start (.rewriteRun request)
   | acquireAt (sequence : UInt64) {pin : SnapshotPin} {table : PackedTable}
       (acquired : start.current.ready.state.writer.installed.table.acquireAt sequence = some (pin, table)) :
       NativeOpenedReport start (.acquireAt sequence)
@@ -117,6 +121,16 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
         .error cause (next.reached, state.cache, atEntry) ∧
     CheckpointPreflight (.ready state.writer.installed) (.error cause) ∧
     event = .checkpointRejected cause ∧ next = start
+  | .rewriteRun request =>
+    request.publicCall opened.table = rewriteRunWith (m := IO) (do (← opened.phase.get).installed)
+      opened.phase.set request.update ∧
+    ∃ result : Bool,
+      rewriteRunWith (m := EStateM IO.Error heap) (do (← opened.get opened.phase).installed)
+        (opened.set opened.phase) request.update start.reached = .ok result next.reached ∧
+      (result = false → next.reached = start.reached) ∧
+      (result = true →
+        opened.set opened.phase next.current.ready.state.session.phase start.reached = .ok () next.reached) ∧
+      event = .rewroteRun request result ∧ next.pins = start.pins
   | .acquireAt sequence (pin := pin) _ =>
     ∃ issue : SnapshotPin → DiskSnapshotPin, ∃ returned : NativeOpenedPin opened,
       opened.table.acquireAt sequence = acquireSnapshotWith (m := IO)
@@ -223,6 +237,13 @@ theorem reaches (report : NativeOpenedReport start instruction) :
     obtain ⟨source, reached, after, preflight, _, step⟩ :=
       start.rejectsCheckpointFromReturn calls atEntry returned stillReady
     exact ⟨_, start, step, source, by simpa only [reached, after] using returned, preflight, rfl, rfl⟩
+  | rewriteRun request =>
+    obtain ⟨source, result, next, reached, returned, raw, stored, directory, refused, setter⟩ :=
+      start.rewritesRunViaOpenReferences request
+    let position : NativeOpenedPosition opened :=
+      ⟨⟨start.current.history, start.current.submissions, next⟩, reached, directory, stored, start.pins⟩
+    exact ⟨_, position, .rewriteRun start.current request result next returned, source, result,
+      raw, refused, setter, rfl, rfl⟩
   | @acquireAt sequence pin table acquired =>
     obtain ⟨issue, next, result, reached, issued, source, transition, returned, raw, stored, _⟩ :=
       start.current.ready.acquiresViaOpenReferences opened.table start.uses opened.phaseEffects start.stored sequence

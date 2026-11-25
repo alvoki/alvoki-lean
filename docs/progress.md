@@ -1,5 +1,7 @@
 # Current handoff
 
+Public run compaction and version retention now join the opened-table trace. The reached table determines the Boolean result. Refusal keeps the same heap, and success stores the exact rewritten table in the opened phase cell while preserving the pins, file state and client ledgers. Finite snapshot sequences can interleave either rewrite using only the existing operand and token requirements. [Public run rewrites](../lean/Alvoki/Storage/Disk/NativeOpenRunMaintenance.lean) · [Finite continuation](../lean/Alvoki/Storage/Disk/NativeOpenSnapshotTrace.lean)
+
 Finite snapshot continuations now derive their own call reports. Acquisition and floor changes use the reached table's guards. An unavailable acquisition returns `none` without changing the heap. Each read or release uses a valid issuance index and the reported token comparison at its reached heap. The sequence derives the common trace and its client replay. [Finite snapshot continuation](../lean/Alvoki/Storage/Disk/NativeOpenSnapshotTrace.lean)
 
 The finite execution on one opened table now includes release by issuance index and retention-floor changes. Release compares the tracked pin's token and follows the setter on the original phase cell. A refused floor change keeps the heap, while an accepted change stores the new table in the same cell. Both preserve the issuance list and client ledgers. Later reads still consult the table's active pin registry. [Snapshot controls in the opened trace](../lean/Alvoki/Storage/Disk/NativeOpenReadyTrace.lean)

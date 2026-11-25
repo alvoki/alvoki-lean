@@ -13,14 +13,14 @@ def NativeOpenedInstruction.SnapshotOperands (instruction : NativeOpenedInstruct
   | .acquireAt _ | .advanceFloor _ => True
   | .releaseAt index | .readAt index _ =>
     index < start.pins.length ∧ opened.ptrEq opened.token opened.token start.reached = .ok true start.reached
-  | .write _ | .checkpoint => False
+  | .write _ | .checkpoint | .rewriteRun _ => False
 
 theorem NativeOpenedInstruction.observesSnapshot
     (instruction : NativeOpenedInstruction) (start : NativeOpenedPosition opened)
     (operands : instruction.SnapshotOperands start) :
     Nonempty (NativeOpenedReport start instruction) := by
   cases instruction with
-  | write | checkpoint => exact False.elim operands
+  | write | checkpoint | rewriteRun => exact False.elim operands
   | acquireAt sequence =>
     cases acquired : start.current.ready.state.writer.installed.table.acquireAt sequence with
     | none => exact ⟨.acquireAtUnavailable sequence acquired⟩
@@ -53,5 +53,26 @@ theorem NativeOpenedTrace.executesSnapshots
   apply executes start instructions
   intro issued events reached instruction remaining ordered previous
   exact instruction.observesSnapshot reached (operands issued events reached instruction remaining ordered previous)
+
+/-- The same finite continuation can include public run rewrites.
+Their accept or refuse decisions use only the reached phase table. -/
+theorem NativeOpenedTrace.executesSnapshotsAndRewrites
+    (start : NativeOpenedPosition opened) (instructions : List NativeOpenedInstruction)
+    (operands : ∀ issued events reached instruction remaining,
+      instructions = issued ++ instruction :: remaining →
+      NativeOpenedTrace start issued events reached →
+      match instruction with
+      | .rewriteRun _ => True
+      | instruction => instruction.SnapshotOperands reached) :
+    ∃ events last, NativeOpenedTrace start instructions events last ∧
+      NativeExecutionTrace start.current events last.current ∧
+      InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
+        last.current.ready.state.writer.installed last.current.ready.state.session := by
+  apply executes start instructions
+  intro issued events reached instruction remaining ordered previous
+  have reported := operands issued events reached instruction remaining ordered previous
+  cases instruction with
+  | rewriteRun request => exact ⟨.rewriteRun request⟩
+  | _ => exact NativeOpenedInstruction.observesSnapshot _ reached reported
 
 end Alvoki.Storage.DiskSession
