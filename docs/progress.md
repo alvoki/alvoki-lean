@@ -1021,9 +1021,9 @@ whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
 When the reached marker image differs from the initial one, the
-first reboot's surviving keeper payload belongs to the crash choices
-of the preceding successful WAL barrier. This uses keeper preservation
-by the marker callbacks.
+first reboot's surviving keeper payload equals the exact active bytes
+after the append. This uses the successful WAL barrier's persistence
+contract and keeper preservation by the marker callbacks.
 
 At a writer interruption after the WAL barrier, the modeled marker
 callbacks preserve the exact keeper image produced by that barrier

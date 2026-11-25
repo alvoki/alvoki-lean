@@ -2187,8 +2187,8 @@ theorem InterruptedBatchMarkerPublication.keeperUnchangedOrWalSynced
     · exact writeKeepsKeeper durable _ writeCut
     · exact (syncKeepsKeeper written syncCut).trans (writeKeepsKeeper durable _ writeReturned)
 
-/-- If the marker changed, the first reboot's keeper bytes come from
-the image reached by the successful WAL barrier. -/
+/-- If the marker changed, the first reboot sees exactly the keeper
+bytes from the append, under the successful WAL barrier's persistence contract. -/
 theorem InterruptedBatchMarkerPublication.survivingKeeperOfMarkerChange
     {directory : DiskDirectory} {prior : SegmentedWriterState} {batch : List WAL.Write}
     {next : Selection} {reached : FileImage × WalInodeImage}
@@ -2200,17 +2200,22 @@ theorem InterruptedBatchMarkerPublication.survivingKeeperOfMarkerChange
     (syncKeepsKeeper : ∀ before,
       (report.syncSlot report.markerHandle).run before = .error report.stopped reached →
       reached.1.keeper = before.1.keeper)
+    (walPersists : ∀ {appended durable},
+      (report.syncWal (directory.file (.walSegment prior.installed.activeFirst))).run appended =
+        .ok (.ok ()) durable → durable.1.keeper = appended.1.syncKeeper.keeper)
     (changed : reached.2 ≠ report.initialMarker)
     {bytes : Option ByteArray} (survives : bytes ∈ reached.1.keeper.crashImages) :
     ∃ appended durable,
       let active := directory.file (.walSegment prior.installed.activeFirst)
       (report.append active (WAL.encode batch)).run (prior.files, report.initialMarker) = .ok (.ok ()) appended ∧
         (report.syncWal active).run appended = .ok (.ok ()) durable ∧
-        bytes ∈ durable.1.keeper.crashImages := by
+        bytes = appended.1.keeper.active := by
   rcases report.keeperUnchangedOrWalSynced writeKeepsKeeper syncKeepsKeeper with unchanged |
     ⟨appended, durable, wrote, synced, keeper⟩
   · exact False.elim (changed unchanged)
-  · exact ⟨appended, durable, wrote, synced, keeper ▸ survives⟩
+  · have membership : bytes ∈ durable.1.keeper.crashImages := keeper ▸ survives
+    rw [walPersists synced] at membership
+    exact ⟨appended, durable, wrote, synced, by simpa [FileImage.syncKeeper] using membership⟩
 
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
