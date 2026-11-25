@@ -429,7 +429,7 @@ def check_two_slot_effective_sync_error(binary, shim, database, rotated, fail_wa
             "reopen did not extend the expected recovered history")
 
 
-def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False):
+def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False, prefix=17, full_marker=None):
     database.mkdir()
     status, stderr = run_probe(binary, "--two-slot-seed", database, "rotated" if rotated else "zero")
     require(status == 0, f"could not seed the two-slot database: {stderr}")
@@ -442,7 +442,8 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False)
     with tempfile.TemporaryDirectory() as scratch:
         ready = Path(scratch) / "sync.pid"
         release = Path(scratch) / "release"
-        hold = ({"ALVOKI_CHECK_SLOT_WRITE_HOLD": str(marker)} if cut == "slot-write" else
+        hold = ({"ALVOKI_CHECK_SLOT_WRITE_HOLD": str(marker),
+                  "ALVOKI_CHECK_SLOT_WRITE_PREFIX": str(prefix)} if cut == "slot-write" else
                 {"ALVOKI_CHECK_SYNC_HOLD": str(marker if cut == "marker-sync" else wal)})
         with native_process(binary, "--two-slot-submit-batch", database, sync_pid_file=ready, env={
             **os.environ,
@@ -459,8 +460,9 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False)
                 require(new_marker[:40] != old_marker[:40] and new_marker[40:] == old_marker[40:],
                         "the positional write did not update only the inactive slot")
             elif cut == "slot-write":
-                require(new_marker[:17] != old_marker[:17] and new_marker[17:] == old_marker[17:],
-                        "the interrupted positional write did not leave just its strict prefix")
+                expected = full_marker[:prefix] + old_marker[prefix:]
+                require(new_marker == expected,
+                        f"the interrupted positional write did not leave exactly its {prefix}-byte prefix")
             else:
                 require(new_marker == old_marker, "marker changed before the WAL sync")
             require(new_wal.startswith(old_wal) and len(new_wal) == len(old_wal) + 2 * len(seed_bytes),
@@ -518,7 +520,7 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False)
                     f"two-slot reopen went past the {failure} marker sync error")
             require(marker.read_bytes() == new_marker and wal.read_bytes() == new_wal,
                     "failed retry changed the marker or trimmed the WAL")
-    published = resume or cut == "marker-sync"
+    published = resume or cut == "marker-sync" or new_marker == full_marker
     status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "new" if published else "old")
     require(status == 0, f"could not recover and extend the two-slot batch: {stderr}")
     retained = new_wal if published else old_wal
@@ -527,6 +529,7 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False)
             "recovery did not preserve the exact prefix and append one frame")
     if rotated:
         require(sealed.read_bytes() == seed_bytes, "two-slot retries modified the sealed WAL segment")
+    return new_marker
 
 
 def check_process_death(binary, shim, root, after_rename, rotated, detached, batch):
@@ -699,10 +702,15 @@ if __name__ == "__main__":
                     binary, shim, root / f"two-slot-{int(rotated)}-sync-error-{int(fail_wal)}", rotated, fail_wal
                 )
             check_two_slot_partial_write_error(binary, shim, root / f"two-slot-{int(rotated)}-partial-error", rotated)
+            full_marker = check_two_slot_batch_cut(
+                binary, shim, root / f"two-slot-{int(rotated)}-marker-sync", "marker-sync", rotated
+            )
+            check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-wal-sync", "wal-sync", rotated)
             check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-short-write",
-                                     "slot-write", rotated, resume=True)
-            for cut in ("wal-sync", "slot-write", "marker-sync"):
-                check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-{cut}", cut, rotated)
+                                     "slot-write", rotated, resume=True, full_marker=full_marker)
+            for prefix in range(40):
+                check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-slot-write-{prefix}",
+                                         "slot-write", rotated, prefix=prefix, full_marker=full_marker)
         for batch in (False, True):
             for rotated in (False, True):
                 for after_rename in (False, True):
@@ -716,4 +724,5 @@ if __name__ == "__main__":
     print("Interrupted ready and poisoned close before or after LOCK_UN; an inherited alias blocked only the no-effect cut.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
     print("Recovered zero and rotated two-slot keepers after short writes, publication and reopen cuts, and failed retries.")
+    print("Checked every strict marker-write prefix from 0 through 39 bytes in both keeper layouts.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")

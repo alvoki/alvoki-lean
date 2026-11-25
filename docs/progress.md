@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+Native process-death coverage now checks all 40 strict marker write
+prefixes for both the original and rotated keeper. Each test compares
+the exact mixed record with the same fixture's complete slot write,
+then checks failed reopen attempts and the retained old or complete
+batch. These are Linux process-exit cases, outside the power-loss model.
+
 Lean now identifies the addresses of the reported short positional
 writes with the contiguous prefix ending at the reached cursor. The
 client theorem accepts that cursor interval for attributing surviving

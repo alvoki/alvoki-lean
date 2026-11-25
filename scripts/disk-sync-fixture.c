@@ -346,10 +346,13 @@ ssize_t pwrite(int fd, const void *bytes, size_t size, off_t offset) {
             opened.st_dev == expected.st_dev && opened.st_ino == expected.st_ino) {
             const char *ready = getenv("ALVOKI_CHECK_SYNC_PID");
             const char *release = getenv("ALVOKI_CHECK_SYNC_RELEASE");
-            // Include the first epoch byte, but leave the old frontier and checksum.
-            const size_t prefix = 17;
-            if (ready == NULL || release == NULL || size <= prefix) _exit(125);
-            if (real_pwrite(fd, bytes, prefix, offset) != (ssize_t)prefix) _exit(125);
+            const char *length = getenv("ALVOKI_CHECK_SLOT_WRITE_PREFIX");
+            char *end = NULL;
+            long prefix = length == NULL ? 17 : strtol(length, &end, 10);
+            if (ready == NULL || release == NULL ||
+                (length != NULL && (end == length || *end != '\0')) ||
+                prefix < 0 || (size_t)prefix >= size) _exit(125);
+            if (prefix > 0 && real_pwrite(fd, bytes, (size_t)prefix, offset) != prefix) _exit(125);
             hold_owner(ready, release);
             return (ssize_t)prefix;
         }
