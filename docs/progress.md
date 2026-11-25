@@ -1073,3 +1073,10 @@ the exact inventory returned by the manifest and run reads, including
 an earlier marker allocation, and gives the listing and census after
 closedir. The WAL seal reports still need to consume this scan instance
 in the combined two-slot reopen.
+
+Captured reads now have an explicit start census. The scan, seal chain
+and keeper reads all share that census, which can include the two-slot
+marker allocated after lock and directory acquisition. The two-slot
+preparation theorem now indexes its report by the actual marker-open
+inventory and derives both the acquisition return and the prepared
+state. The rename path still takes the existing admission census.

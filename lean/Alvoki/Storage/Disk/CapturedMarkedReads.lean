@@ -37,6 +37,25 @@ theorem recoverWithMarked_selects (admission : CensusOpenAdmissionReports input 
 
 /-- The original cache capture supplies the directory identity. The read
 report supplies the canonical lock child and the intervening slot drops. -/
+def readLifetimeFrom (admission : CensusOpenAdmissionReports input directory inventory retry)
+    (lock : DeviceInode) (bound : admission.view.child admission.root "LOCK" = some lock)
+    (identified : admission.view.modelObject lock = admission.reached.inode admission.owner.description)
+    (start : DescriptorInventory) (objects : start.inode = admission.reached.inode)
+    (drops : List LockReferenceDrop)
+    (ownerRetained : admission.owner ∈ (start.afterDrops drops).slots)
+    (directoryRetained : admission.cached ∈ (start.afterDrops drops).slots) :
+    HeldDirectoryReadLifetime start admission.owner where
+  namespaceView := admission.view
+  directorySlot := admission.cached
+  root := admission.root
+  lock := lock
+  identifiesDirectory := by rw [objects]; exact admission.opened.captures.2.2.2.2.1
+  identifiesLock := by rw [objects]; exact identified
+  drops := drops
+  ownerRetained := ownerRetained
+  directoryRetained := directoryRetained
+  lockEntry := bound
+
 def readLifetime (admission : CensusOpenAdmissionReports input directory inventory retry)
     (lock : DeviceInode) (bound : admission.view.child admission.root "LOCK" = some lock)
     (identified : admission.view.modelObject lock = admission.reached.inode admission.owner.description)
@@ -62,18 +81,20 @@ append-open, acquisition and cache initialization. The stream and every
 selected stat and open resolve in that capture's same canonical namespace. -/
 structure CapturedMarkedReadReports (admission : CensusOpenAdmissionReports input directory inventory retry)
     {history : List WAL.Write} (layout : CanonicalKeeperLayout retry.image history)
-    (published : CheckpointPublication.Image) (renameMarker : Bool := true) where
+    (published : CheckpointPublication.Image) (renameMarker : Bool := true)
+    (readStart : DescriptorInventory := admission.reached) where
   lock : DeviceInode
   lockEntry : admission.view.child admission.root "LOCK" = some lock
   identifiesLock : admission.view.modelObject lock = admission.reached.inode admission.owner.description
   bindings : FilePath → Option Nat
   canonicalDirectory : bindings directory.path = some (admission.view.modelObject admission.root)
   canonicalLock : bindings (directory.file .lock) = some (admission.view.modelObject lock)
+  objectMap : readStart.inode = admission.reached.inode := by rfl
   drops : List LockReferenceDrop
-  ownerRetained : admission.owner ∈ (admission.reached.afterDrops drops).slots
-  directoryRetained : admission.cached ∈ (admission.reached.afterDrops drops).slots
+  ownerRetained : admission.owner ∈ (readStart.afterDrops drops).slots
+  directoryRetained : admission.cached ∈ (readStart.afterDrops drops).slots
   listing : HeldDirectoryScan
-    (admission.readLifetime lock lockEntry identifiesLock drops ownerRetained directoryRetained)
+    (admission.readLifetimeFrom lock lockEntry identifiesLock readStart objectMap drops ownerRetained directoryRetained)
   catalog : CachedRetryReadInventory directory layout
   listed : catalog.list directory.path = (CheckedDirectoryReadReport.scanned listing.scan).result directory.path
   reads : CheckpointRunChunkReads
@@ -98,22 +119,22 @@ namespace CapturedMarkedReadReports
 variable {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
   {published : CheckpointPublication.Image}
 
-theorem manifestReports {renameMarker : Bool}
-    (report : CapturedMarkedReadReports admission layout published renameMarker) :
+theorem manifestReports {renameMarker : Bool} {readStart : DescriptorInventory}
+    (report : CapturedMarkedReadReports admission layout published renameMarker readStart) :
     DirectoryManifestReadReports directory admission.view admission.root report.reads
       report.catalog.inventory.reports.readOptional retry.image.directory.active.manifest := by
   cases renameMarker
   · exact report.metadata
   · exact DirectoryMetadataReadReports.manifestReports report.metadata
 
-def lifetime {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker) :
-    HeldDirectoryReadLifetime admission.reached admission.owner :=
-  admission.readLifetime report.lock report.lockEntry report.identifiesLock report.drops report.ownerRetained
+def lifetime {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart) :
+    HeldDirectoryReadLifetime readStart admission.owner :=
+  admission.readLifetimeFrom report.lock report.lockEntry report.identifiesLock readStart report.objectMap report.drops report.ownerRetained
     report.directoryRetained
 
 /-- The locked catalog uses the owner installed by this very admission.
 Only the entries and metadata are taken from the catalog report. -/
-def inventoryWithOwner {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker) :
+def inventoryWithOwner {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart) :
     CachedRetryReadInventory directory layout :=
   { report.catalog with
     inventory :=
@@ -122,11 +143,11 @@ def inventoryWithOwner {renameMarker : Bool} (report : CapturedMarkedReadReports
         descriptor := admission.owner.description
         held := admission.opened.held } }
 
-def walReads {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker) :
+def walReads {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart) :
     CachedRetryReadReports directory layout :=
   report.wal.toCachedReads report.inventoryWithOwner report.stat
 
-theorem sameObjects {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker) :
+theorem sameObjects {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart) :
     report.bindings directory.path = some (admission.reached.inode admission.cached.description) ∧
     report.bindings (directory.file .lock) = some (admission.reached.inode admission.owner.description) ∧
     report.catalog.inventory.names.Perm (admission.view.names admission.root) ∧ report.listing.Custody := by
@@ -134,13 +155,13 @@ theorem sameObjects {renameMarker : Bool} (report : CapturedMarkedReadReports ad
     report.listing.eof report.listing.closed report.listing.complete
   have listed := Except.ok.inj (report.catalog.listed.symm.trans (report.listed.trans returned))
   refine ⟨?_, ?_, ?_, report.listing.custody⟩
-  · exact report.canonicalDirectory.trans (congrArg some report.lifetime.identifiesDirectory)
+  · exact report.canonicalDirectory.trans (congrArg some (report.lifetime.identifiesDirectory.trans (congrFun report.objectMap _)))
   · rw [report.canonicalLock, report.identifiesLock]
   · have root : report.listing.directoryObject = admission.root := report.listing.sameRoot
     rw [← report.catalog.names, listed, ← root]
     exact names
 
-theorem chunkReads {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker) :
+theorem chunkReads {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart) :
     report.reads.ObservesSelected directory retry.image.directory.active.manifest published.durable := by
   intro bytes manifest visible decoded index within payload stored
   obtain ⟨_, bound, contents, ⟨call⟩⟩ := report.runs bytes manifest visible decoded index within payload stored

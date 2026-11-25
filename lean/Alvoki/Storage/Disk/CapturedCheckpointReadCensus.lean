@@ -38,11 +38,11 @@ end TemporaryPrefixCustody
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
   {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
-  {published : CheckpointPublication.Image} {renameMarker : Bool}
+  {published : CheckpointPublication.Image} {renameMarker : Bool} {readStart : DescriptorInventory}
 
 /-- The manifest is read first. The missing branch uses the observed
 no-follow ENOENT and allocates no temporary description. -/
-inductive CapturedManifestCensus (report : CapturedMarkedReadReports admission layout published renameMarker)
+inductive CapturedManifestCensus (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     (released : FilePath → List LockReferenceDrop) (start : DescriptorInventory) : List LockReferenceDrop → Prop where
   | missing (bound : retry.image.directory.active.manifest = none) : CapturedManifestCensus report released start []
   | present {bytes : ByteArray} (bound : retry.image.directory.active.manifest = some bytes)
@@ -51,7 +51,7 @@ inductive CapturedManifestCensus (report : CapturedMarkedReadReports admission l
       (custody : TemporaryPrefixCustody file.calls start (released (directory.file .manifest))) :
       CapturedManifestCensus report released start (custody.beforeOpen ++ released (directory.file .manifest))
 
-theorem CapturedManifestCensus.reads {report : CapturedMarkedReadReports admission layout published renameMarker}
+theorem CapturedManifestCensus.reads {report : CapturedMarkedReadReports admission layout published renameMarker readStart}
     {released : FilePath → List LockReferenceDrop} {start : DescriptorInventory} {drops : List LockReferenceDrop}
     (manifest : CapturedManifestCensus report released start drops) :
     readTemporaryMetadata report.reads directory released (directory.file .manifest)
@@ -78,7 +78,7 @@ theorem CapturedManifestCensus.reads {report : CapturedMarkedReadReports admissi
 /-- An absent manifest leaves the held slot alone. A present manifest
 uses a separate temporary descriptor whose finalizer preserves it. -/
 theorem CapturedManifestCensus.preservesSlot
-    {report : CapturedMarkedReadReports admission layout published renameMarker}
+    {report : CapturedMarkedReadReports admission layout published renameMarker readStart}
     {released : FilePath → List LockReferenceDrop} {start : DescriptorInventory} {drops : List LockReferenceDrop}
     (manifest : CapturedManifestCensus report released start drops)
     {slot : DescriptorSlot} (present : slot ∈ start.slots)
@@ -104,7 +104,7 @@ def runReadDrops (events : Nat → List LockReferenceDrop) : Nat → List LockRe
 
 /-- For each actual selected generation/index, the raw opened description
 comes from the previous census, and its observed release closes the step. -/
-structure CapturedRunReadCensus (report : CapturedMarkedReadReports admission layout published renameMarker)
+structure CapturedRunReadCensus (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     (initial : DescriptorInventory) where
   events : Nat → List LockReferenceDrop
   released : FilePath → List LockReferenceDrop
@@ -123,7 +123,7 @@ structure CapturedRunReadCensus (report : CapturedMarkedReadReports admission la
 Each report accounts for the ambient drops. Free-address allocation
 accounts for the temporary descriptor's own finalizer. -/
 theorem CapturedRunReadCensus.preservesSlot
-    {report : CapturedMarkedReadReports admission layout published renameMarker}
+    {report : CapturedMarkedReadReports admission layout published renameMarker readStart}
     {initial : DescriptorInventory} (runs : CapturedRunReadCensus report initial)
     {slot : DescriptorSlot} (present : slot ∈ initial.slots)
     {bytes : ByteArray} {manifest : IntegrityCheckpoint}
@@ -156,7 +156,7 @@ theorem CapturedRunReadCensus.preservesSlot
     rw [custody.closes.1] at retained
     simpa only [runReadDrops, ← DescriptorInventory.afterDrops_append, ordered] using retained
 
-def CapturedMarkedReadReports.readCheckpointFromCensus (report : CapturedMarkedReadReports admission layout published renameMarker)
+def CapturedMarkedReadReports.readCheckpointFromCensus (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     (metadataRelease runRelease : FilePath → List LockReferenceDrop) :
     EStateM IO.Error ReadState (Option (PackedTable × UInt64)) :=
   readIntegrityCheckpointSized directory
@@ -166,7 +166,7 @@ def CapturedMarkedReadReports.readCheckpointFromCensus (report : CapturedMarkedR
 
 /-- The executable sized checkpoint reader produces the selected table
 from the durable run map and reaches the census left by exactly those runs. -/
-theorem CapturedRunReadCensus.reads {report : CapturedMarkedReadReports admission layout published renameMarker}
+theorem CapturedRunReadCensus.reads {report : CapturedMarkedReadReports admission layout published renameMarker readStart}
     {start : DescriptorInventory} {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
     (manifest : CapturedManifestCensus report metadataRelease start manifestDrops)
     (runs : CapturedRunReadCensus report (start.afterDrops manifestDrops))
@@ -198,25 +198,25 @@ theorem CapturedRunReadCensus.reads {report : CapturedMarkedReadReports admissio
 /-- When the marker was already acquired, the manifest and selected runs
 account for exactly the descriptor drops before the WAL scan. -/
 theorem CapturedMarkedReadReports.checkpointAtScan
-    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
-    (manifest : CapturedManifestCensus report metadataRelease admission.reached manifestDrops)
-    (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
+    (manifest : CapturedManifestCensus report metadataRelease readStart manifestDrops)
+    (runs : CapturedRunReadCensus report (readStart.afterDrops manifestDrops))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
     (chronology : report.listing.beforeOpen = manifestDrops ++
       runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest)) :
-    report.readCheckpointFromCensus metadataRelease runs.released (admission.cache, admission.reached, admission.held) =
-      .ok checkpoint (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) := by
+    report.readCheckpointFromCensus metadataRelease runs.released (admission.cache, readStart, admission.held) =
+      .ok checkpoint (admission.cache, readStart.afterDrops report.listing.beforeOpen, admission.held) := by
   simpa only [chronology, DescriptorInventory.afterDrops_append] using runs.reads manifest selected
 
 /-- Checkpoint acquisition and the checked WAL scan compose using the
 same reached census. The selected marker is already held by the caller. -/
 theorem CapturedMarkedReadReports.checkpointThenScan
-    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
-    (manifest : CapturedManifestCensus report metadataRelease admission.reached manifestDrops)
-    (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
+    (manifest : CapturedManifestCensus report metadataRelease readStart manifestDrops)
+    (runs : CapturedRunReadCensus report (readStart.afterDrops manifestDrops))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
     (chronology : report.listing.beforeOpen = manifestDrops ++
@@ -226,7 +226,7 @@ theorem CapturedMarkedReadReports.checkpointThenScan
       let entries ← report.scanWal directory.path
       pure (checkpoint, entries)) :
       EStateM IO.Error ReadState (Option (PackedTable × UInt64) × Array IO.FS.DirEntry))
-      (admission.cache, admission.reached, admission.held) =
+      (admission.cache, readStart, admission.held) =
       .ok (checkpoint, report.listing.scan.entries directory.path)
         (admission.cache, report.listing.afterClose, admission.held) := by
   simp only [Bind.bind, EStateM.bind, report.checkpointAtScan manifest runs selected chronology,
@@ -235,7 +235,7 @@ theorem CapturedMarkedReadReports.checkpointThenScan
 /-- When the checkpoint starts with the marker already open, the scan
 report is indexed by the inventory reached after all checkpoint reads. -/
 theorem CapturedMarkedReadReports.scanAfterCheckpoint
-    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     {start : DescriptorInventory} {release : FilePath → List LockReferenceDrop}
     {manifestDrops : List LockReferenceDrop}
     (manifest : CapturedManifestCensus report release start manifestDrops)
@@ -267,10 +267,10 @@ private theorem bindAtReportedSuccess {ε σ α β : Type}
 /-- With the marker already acquired, the selected manifest and run
 reads reach the census used by the checked WAL directory scan. -/
 theorem CapturedMarkedReadReports.prepareFromHeldFrontier
-    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     {metadataRelease : FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
-    (manifest : CapturedManifestCensus report metadataRelease admission.reached manifestDrops)
-    (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
+    (manifest : CapturedManifestCensus report metadataRelease readStart manifestDrops)
+    (runs : CapturedRunReadCensus report (readStart.afterDrops manifestDrops))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
     (chronology : report.listing.beforeOpen = manifestDrops ++
@@ -278,16 +278,16 @@ theorem CapturedMarkedReadReports.prepareFromHeldFrontier
     (frontier : UInt64) (readWal : Nat → UInt64 → EStateM IO.Error ReadState (WalSegmentMarkerReads × Nat)) :
     prepareBoundedMarkedFromReaders directory (report.readCheckpointFromCensus metadataRelease runs.released)
       (fun _ => pure (some (WAL.Boundary.encode frontier))) readWal
-      (admission.cache, admission.reached, admission.held) =
+      (admission.cache, readStart, admission.held) =
     prepareBoundedMarkedFromReaders directory (pure checkpoint)
       (fun _ => pure (some (WAL.Boundary.encode frontier))) readWal
-      (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) := by
+      (admission.cache, readStart.afterDrops report.listing.beforeOpen, admission.held) := by
   let readBoundary : FilePath → EStateM IO.Error ReadState (Option ByteArray) :=
     fun _ => pure (some (WAL.Boundary.encode frontier))
   let readCheckpoint := report.readCheckpointFromCensus metadataRelease runs.released
-  let initial : ReadState := (admission.cache, admission.reached, admission.held)
+  let initial : ReadState := (admission.cache, readStart, admission.held)
   let reached : ReadState :=
-    (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held)
+    (admission.cache, readStart.afterDrops report.listing.beforeOpen, admission.held)
   have observed : readCheckpoint initial = .ok checkpoint reached :=
     report.checkpointAtScan manifest runs selected chronology
   change prepareBoundedMarkedFromReaders directory readCheckpoint readBoundary readWal initial =
@@ -387,7 +387,7 @@ def CapturedMarkedReadReports.prepareFromCensus (report : CapturedMarkedReadRepo
 /-- Use the same checked WAL catalog and ordered seal reads for either
 marker format. The observed keeper callback starts at the reached census. -/
 theorem CapturedMarkedReadReports.walFromScanToKeeper
-    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     {length : UInt64} (count : length.toNat = layout.range.through * WAL.frameSize)
     (captured : CapturedKeeperOpenReports report) {released : FilePath → List LockReferenceDrop}
     {required : List (Nat × IO.FS.Metadata)}
@@ -403,7 +403,7 @@ theorem CapturedMarkedReadReports.walFromScanToKeeper
     admission.owner ∈ captured.atOpen.slots ∧ admission.cached ∈ captured.atOpen.slots ∧
     readSelectedWithCachedExtents directory layout.range.watermark length report.scanWal
         report.inspectWal (readTemporarySeal report.reads released) readKeeper
-        (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) =
+        (admission.cache, readStart.afterDrops report.listing.beforeOpen, admission.held) =
       (do
         let (last, extent) ← readCachedWalPayloads directory (length.toNat / WAL.frameSize)
           (readTemporarySeal report.reads released) readKeeper [(layout.keeper.first, report.wal.keeper.calls.metadata)]
@@ -511,7 +511,7 @@ theorem CapturedMarkedReadReports.beforeKeeper (report : CapturedMarkedReadRepor
 /-- The complete bounded WAL read returns the exact selected payloads
 and the reached keeper census. The held marker remains live there. -/
 theorem CapturedMarkedReadReports.walFromScan
-    {renameMarker : Bool} (report : CapturedMarkedReadReports admission layout published renameMarker)
+    {renameMarker : Bool} {readStart : DescriptorInventory} (report : CapturedMarkedReadReports admission layout published renameMarker readStart)
     {length : UInt64} (count : length.toNat = layout.range.through * WAL.frameSize)
     (captured : CapturedKeeperOpenReports report) {released : FilePath → List LockReferenceDrop}
     {required : List (Nat × IO.FS.Metadata)}
@@ -524,7 +524,7 @@ theorem CapturedMarkedReadReports.walFromScan
       layout.range.watermark < start)
     (later : ∀ start ∈ retry.image.later.visible, layout.range.through < start)
     {slot : DescriptorSlot} (keepsMarker : retains slot)
-    (markerLive : slot ∈ admission.reached.slots)
+    (markerLive : slot ∈ readStart.slots)
     (listingDrops : ∀ event ∈ report.listing.beforeOpen ++ report.listing.duringScan,
       event.removes slot.reference = false)
     (keeperDrops : ∀ event ∈ captured.duringRead, event.removes slot.reference = false) :
@@ -533,7 +533,7 @@ theorem CapturedMarkedReadReports.walFromScan
       handle layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat
     readSelectedWithCachedExtents directory layout.range.watermark length report.scanWal
         report.inspectWal (readTemporarySeal report.reads released) captured.readKeeperAt
-        (admission.cache, admission.reached.afterDrops report.listing.beforeOpen, admission.held) =
+        (admission.cache, readStart.afterDrops report.listing.beforeOpen, admission.held) =
       .ok (⟨(layout.sealed ++ [layout.keeper]).map (fun segment => (segment.first, segment.bytes)),
         retry.image.later.visible⟩, report.wal.keeper.calls.metadata.byteSize.toNat)
         (cache, captured.afterRead, admission.held) ∧

@@ -1420,15 +1420,19 @@ theorem acquiresAndReadsCheckpoint
 /-- The prepared table and plan use the exact checkpoint and WAL
 callbacks. The reached state carries both the keeper and marker slots. -/
 theorem preparesFromHeldMarker
-    (report : CapturedMarkedReadReports admission layout published false)
+    {markerReads : CheckpointRunChunkReads} {payload : ByteArray}
+    (file : HeldMetadataFile markerReads (directory.file .walBoundary) "WAL.commit" admission.view admission.root payload)
+    (privateFile : file.calls.metadata.numLinks = 1)
+    (available : PrefixChunksAvailableUntilEof payload (markerReads.readChunk file.calls.slot.description))
+    (report : CapturedMarkedReadReports admission layout published false file.calls.inventory)
     {metadataRelease : System.FilePath → List LockReferenceDrop} {manifestDrops : List LockReferenceDrop}
-    (manifest : CapturedManifestCensus report metadataRelease admission.reached manifestDrops)
-    (runs : CapturedRunReadCensus report (admission.reached.afterDrops manifestDrops))
+    (manifest : CapturedManifestCensus report metadataRelease file.calls.inventory manifestDrops)
+    (runs : CapturedRunReadCensus report (file.calls.inventory.afterDrops manifestDrops))
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
     (chronology : report.listing.beforeOpen = manifestDrops ++
       runReadDrops runs.events (selectedRunCount retry.image.directory.active.manifest))
-    (selection : Selection)
+    (selection : Selection) (decoded : decode payload = .ok selection)
     (count : selection.frontier.toNat = layout.range.through * WAL.frameSize)
     (ordered : WAL.OrdinalsFrom 1 history) {table : PackedTable}
     (replay : recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok table)
@@ -1442,27 +1446,30 @@ theorem preparesFromHeldMarker
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
     (later : ∀ start ∈ retry.image.later.visible, layout.range.through < start)
-    {slot : DescriptorSlot} (keepsMarker : retains slot)
-    (markerLive : slot ∈ admission.reached.slots)
+    (keepsMarker : retains file.calls.slot)
     (listingDrops : ∀ event ∈ report.listing.beforeOpen ++ report.listing.duringScan,
-      event.removes slot.reference = false)
-    (keeperDrops : ∀ event ∈ captured.duringRead, event.removes slot.reference = false) :
+      event.removes file.calls.slot.reference = false)
+    (keeperDrops : ∀ event ∈ captured.duringRead, event.removes file.calls.slot.reference = false) :
     let handle := (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
     let cache := admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
       handle layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat
+    acquireMarkerInCensus markerReads (directory.file .walBoundary)
+      (admission.cache, admission.reached, admission.held) =
+      .ok (⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩, selection)
+        (admission.cache, file.calls.inventory, admission.held) ∧
     prepareBoundedMarkedFromReaders directory (report.readCheckpointFromCensus metadataRelease runs.released)
         (fun _ => pure (some (Boundary.encode selection.frontier)))
         (fun watermark length => readSelectedWithCachedExtents directory watermark length report.scanWal
           report.inspectWal (readTemporarySeal report.reads released) captured.readKeeperAt)
-        (admission.cache, admission.reached, admission.held) =
+        (admission.cache, file.calls.inventory, admission.held) =
       .ok (layout.boundedPlan, ⟨table, (checkpoint.getD (.empty, 0)).2, selection.frontier, layout.keeper.first⟩,
           report.wal.keeper.calls.metadata.byteSize.toNat) (cache, captured.afterRead, admission.held) ∧
-    slot ∈ captured.afterRead.slots := by
+    file.calls.slot ∈ captured.afterRead.slots := by
   intro handle cache
   have watermark := Option.some.inj (selected.watermark.symm.trans
     (DirectoryPublication.Bindings.walRange_accounting layout.decoded).1)
   obtain ⟨walRead, live⟩ := report.walFromScan count captured seals offsets retained following later
-    keepsMarker markerLive listingDrops keeperDrops
+    keepsMarker file.calls.live listingDrops keeperDrops
   let files := (layout.sealed ++ [layout.keeper]).map (fun segment => (segment.first, segment.bytes))
   have replayed : recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1 selection.frontier files =
       .ok (WAL.encode (history.drop layout.first), table) := by
@@ -1479,7 +1486,7 @@ theorem preparesFromHeldMarker
   have through : selection.frontier.toNat / WAL.frameSize = layout.range.through := by
     rw [count, Nat.mul_div_cancel _ (by decide : 0 < WAL.frameSize)]
   rw [through] at prepared
-  exact ⟨prepared, live⟩
+  exact ⟨acquireMarkerInCensus_returns file privateFile available decoded _, prepared, live⟩
 
 /-- Construct the marker barrier from the prepared keeper census and
 derive the exact directory image that enters repair. -/
