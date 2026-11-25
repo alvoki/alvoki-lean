@@ -272,6 +272,35 @@ theorem reopenSync_projectsCrashBinding
     rw [projectBinding_decodes decoded]
     cases boundary : before.walBoundary <;> simp_all
 
+/-- Map physical outcomes to the complete logical crash list after the
+reopen barrier. The list preserves each manifest and marker-presence choice. -/
+theorem reopenSync_projectsCrashBindings
+    {marker settled : WalInodeImage} {handle : KeeperDescriptorIdentity}
+    (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      handle marker (fun inode files => files.completeFileSync inode) (.ok () settled))
+    (current : handle.inode = marker.active)
+    (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
+    {selected : Selection} (observed : decode (marker.visible handle.inode) = .ok selected)
+    (choices : List (DirectoryPublication.Bindings × Option ByteArray))
+    (presence : ∀ choice ∈ choices, choice.2.isSome = choice.1.walBoundary.isSome)
+    (physical : ∀ choice ∈ choices, ∀ bytes, choice.2 = some bytes →
+      ∃ inode ∈ settled.crashBindings, bytes ∈ settled.crashBytes inode) :
+    choices.mapM (fun choice =>
+      match choice.2 with
+      | none => Except.ok (ε := String) (⟨choice.1.manifest, none⟩ : DirectoryPublication.Bindings)
+      | some bytes => projectBinding choice.1 bytes) =
+    .ok ((settleMarker ⟨⟨none, none⟩, choices.map Prod.fst, fun _ => none⟩ selected).crashImages) := by
+  simp only [settleMarker, List.map_map]
+  induction choices with
+  | nil => rfl
+  | cons choice rest ih =>
+    have head := reopenSync_projectsCrashBinding sync current sameBinding observed choice.1
+      (presence choice (List.mem_cons_self ..)) (physical choice (List.mem_cons_self ..))
+    have tail := ih (fun item member => presence item (List.mem_cons_of_mem _ member))
+      (fun item member => physical item (List.mem_cons_of_mem _ member))
+    simp [List.mapM_cons, head, tail, Bind.bind, Except.bind, Pure.pure, Except.pure,
+      Function.comp_def]
+
 /-- A successful barrier on each held descriptor fixes the bytes used by
 recovery. The marker encoding comes from the reported positional write;
 the WAL prefix comes from the reported append on the selected keeper. -/
