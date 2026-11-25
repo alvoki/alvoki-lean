@@ -197,7 +197,7 @@ theorem returns (seen : FreshBootstrapCacheChronology seed calls) :
   refine ⟨action, assemble, cache, native, source, allocated, schedules, ?_, final.directory.trans loaded,
     final.activeUnchanged.trans activeEmpty,
     seen.markerDirectory.pending.trans (seen.renamePending.trans markerConsumed)⟩
-  simp [FreshBootstrapCacheCalls.run, bootstrapSegmentedWith, bootstrapEmptyWith, Bind.bind, EStateM.bind,
+  simp [FreshBootstrapCacheCalls.run, bootstrapSegmentedWith, bootstrapEmptyWith, bootstrapEmptyWithMarker, Bind.bind, EStateM.bind,
     Pure.pure, EStateM.pure, guards, rotation, published]
 
 end FreshBootstrapCacheChronology

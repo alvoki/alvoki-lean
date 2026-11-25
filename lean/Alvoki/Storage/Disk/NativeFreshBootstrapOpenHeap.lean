@@ -54,7 +54,7 @@ private theorem EmptyOpenSuccessReports.returnedBootstrapPayload (report : Empty
     {opened : Reopened} {after : BootstrapImage}
     (worker : report.calls.bootstrapAt directory report.captured.cache report.before.image = .ok opened after) :
     opened = ⟨.empty, 0, 0, 0⟩ := by
-  unfold BootstrapOpenCalls.bootstrapAt bootstrapSegmentedWith bootstrapEmptyWith at worker
+  unfold BootstrapOpenCalls.bootstrapAt bootstrapSegmentedWith bootstrapEmptyWith bootstrapEmptyWithMarker at worker
   simp only [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure] at worker
   split at worker <;> try contradiction
   split at worker <;> try contradiction

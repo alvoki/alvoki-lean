@@ -1003,6 +1003,11 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The full Lean build and sequential axiom audit now pass on the merged
+experiment branch. Two rename-bootstrap proofs unfold the shared
+marker-parameterized bootstrap helper introduced by the two-slot
+adapter. The original rename schedule and its statements are unchanged.
+
 The successful WAL append and cache-routed sync now feed one crash
 survivor theorem. The append report supplies the flushed handle and
 the exact reached cache. The sync result identifies the descriptor
