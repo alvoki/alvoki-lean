@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeExecutionTrace
+import Alvoki.Storage.Disk.NativeOpenChoice
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 import Alvoki.Storage.Disk.NativeInactiveSessionCalls
@@ -543,6 +544,66 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
   | interruptedRotation stop => exact ⟨.interruptedRotation stop, rfl, NativeExecutionEnd.reached _⟩
   | rotationError cause failure => exact ⟨.rotationError cause failure, rfl, NativeExecutionEnd.reached _⟩
 
+/-- The ending belongs to the last state of the executed instruction
+prefix, so it can use that state even when its last call cannot return. -/
+structure NativeReachedExecutionPrefix (start : NativeExecutionPosition)
+    (instructions : List NativeExecutionInstruction) (requested : NativeExecutionEndInstruction) where
+  events : List NativeExecutionEvent
+  last : NativeExecutionPosition
+  ending : NativeExecutionEnd last
+  ordered : NativeExecutionInstructions instructions events
+  trace : NativeExecutionTrace start events last
+  requestedEnd : ending.instruction = requested
+  reached : ending.Reached
+
+/-- One replay explains the reads at the last ready position. An ending
+that returns ready preserves that refinement, and an interrupted ending
+has a permitted selection that still explains the earlier responses. -/
+theorem NativeReachedExecutionPrefix.keyValueRefinement
+    (run : NativeReachedExecutionPrefix start instructions requested) :
+    (∀ event ∈ run.events, event.uncertainBatchWhole) ∧
+    InstalledClientReplay run.last.submissions run.last.ready.reads run.last.history
+      run.last.ready.state.writer.installed run.last.ready.state.session ∧
+    run.ending.ReadyReplay ∧
+    ∃ chosen, run.ending.allows chosen ∧ PendingClientReplay run.ending.submissions run.last.ready.reads chosen ∧
+      ∀ read ∈ run.last.ready.reads, read.BoundedBy chosen.length :=
+  ⟨run.trace.uncertainBatchesWhole, run.trace.keyValueRefinement.2.2.2,
+    run.ending.guarded, run.ending.selectsAtEnd⟩
+
+theorem NativeExecutionTrace.reachesPrefix (start : NativeExecutionPosition)
+    (instructions : List NativeExecutionInstruction) (requested : NativeExecutionEndInstruction)
+    (reports : NativeExecutionTrace.Reports start instructions)
+    (terminal : ∀ events last, NativeExecutionInstructions instructions events → NativeExecutionTrace start events last →
+      Nonempty (NativeExecutionEndObservation last requested)) :
+    Nonempty (NativeReachedExecutionPrefix start instructions requested) := by
+  obtain ⟨events, last, ordered, trace, _⟩ := NativeExecutionTrace.executes start instructions reports
+  obtain ⟨observed⟩ := terminal events last ordered trace
+  obtain ⟨ending, request, reached⟩ := observed.reaches
+  exact ⟨⟨events, last, ending, ordered, trace, request, reached⟩⟩
+
+/-- The exact returned bootstrap or marked recovery can seed the same
+execution. The marked route starts with the ledger justified by its
+checkpoint and WAL. Future reports and the ending use the reached state
+of that execution. -/
+theorem NativeOpenSuccessReports.reachesExecutionPrefix
+    {input : FilePath} {directory : DiskDirectory} {history : List WAL.Write}
+    {log : List DatabaseSubmissions} {recorded : List RecordedSnapshotRead}
+    (opened : NativeOpenSuccessReports input directory history log recorded) :
+    opened.markerRead = .ok opened.marker ∧ opened.Selects ∧
+    ∃ (start : NativeExecutionPosition) (files : opened.Image),
+      opened.run = .ok start.ready.state.session files ∧ start.ready.state.session.directory = directory ∧
+      opened.UsesReachedState start.ready.state files ∧
+      start.history = history ∧ start.submissions = log ∧ start.ready.reads = recorded ∧
+      ∀ instructions requested, NativeExecutionTrace.Reports start instructions →
+        (∀ events last, NativeExecutionInstructions instructions events → NativeExecutionTrace start events last →
+          Nonempty (NativeExecutionEndObservation last requested)) →
+        Nonempty (NativeReachedExecutionPrefix start instructions requested) := by
+  obtain ⟨marker, selected, state, files, returned, path, reached, _, _, ready⟩ := opened.returnsReady
+  let start : NativeExecutionPosition :=
+    ⟨history, log, ⟨.ok state.session (state.census, state.files), state, state, recorded, ready⟩⟩
+  exact ⟨marker, selected, start, files, returned, path, reached, rfl, rfl, rfl,
+    NativeExecutionTrace.reachesPrefix start⟩
+
 /-- The exact empty bootstrap starts one native execution. Completed
 instructions retain their ordered replay. The final report retains
 the reached native state and permitted history, including when it
@@ -572,13 +633,19 @@ theorem BootstrapKeeperMarkerHandoff.executesPrefixFromEmpty
           ending.instruction = requested ∧ ending.Reached ∧ ending.ReadyReplay ∧
           ∃ chosen, ending.allows chosen ∧ PendingClientReplay ending.submissions last.ready.reads chosen ∧
             ∀ read ∈ last.ready.reads, read.BoundedBy chosen.length := by
-  obtain ⟨boot, start, opened, session, writer, census, executes⟩ := bootstrap.executesFromEmpty admission empty effects
-  refine ⟨boot, start, opened, session, writer, census, ?_⟩
+  obtain ⟨boot, returned, _, _, _, _, _, _, _, _, ready⟩ :=
+    bootstrap.startsNativeReadPrefixFromEmpty admission empty effects
+  let state : NativeReadyState :=
+    ⟨boot.session, boot.writer, effects.reached, captured.cache, calls.slot, captured.cached⟩
+  let start : NativeExecutionPosition :=
+    ⟨[], [], ⟨.ok state.session (state.census, state.files), state, state, [], ready⟩⟩
+  refine ⟨boot, start, returned, rfl, rfl, rfl, ?_⟩
   intro instructions requested reports terminal
-  obtain ⟨events, last, matched, trace, writes, submissions, reads, whole, _⟩ := executes instructions reports
-  obtain ⟨observed⟩ := terminal events last matched trace
-  obtain ⟨ending, request, reached⟩ := observed.reaches
-  exact ⟨events, last, ending, matched, trace, writes, submissions, reads, whole, request, reached,
-    ending.guarded, ending.selectsAtEnd⟩
+  obtain ⟨run⟩ := NativeExecutionTrace.reachesPrefix start instructions requested reports terminal
+  obtain ⟨writes, submissions, reads⟩ := run.trace.ledgers
+  obtain ⟨whole, _, guarded, selection⟩ := run.keyValueRefinement
+  exact ⟨run.events, run.last, run.ending, run.ordered, run.trace,
+    by simpa [start] using writes, by simpa [start] using submissions, by simpa [start] using reads,
+    whole, run.requestedEnd, run.reached, guarded, selection⟩
 
 end Alvoki.Storage.DiskSession
