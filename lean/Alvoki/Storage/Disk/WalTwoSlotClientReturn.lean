@@ -2931,7 +2931,7 @@ theorem recoveredRetries_installedReads
       retry.target = target ∧ retry.first = layout.first ∧
       retry.sealed = layout.sealed ∧ retry.keeper = layout.keeper ∧
       WalSegmentRepair.Prepared after target retry.plan ∧
-    ∃ session final reference state pin pinned,
+    ∃ session final reference opened pin pinned,
       DiskSession.runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
         (do
           let (opened, _, _) ← reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary))
@@ -2945,8 +2945,7 @@ theorem recoveredRetries_installedReads
             (fun bounded size =>
               WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
           pure opened) openedFrom = .ok session final ∧
-      (∃ opened,
-        reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary))
+      reopenAcquiredWith (acquireMarkerFromReports markerReads (directory.file .walBoundary))
           (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory
             (readIntegrityCheckpointSized directory readManifest
               (fun path => liftExcept (WalSegmentRepair.checkpointRunSizeReport checkpointReports path)) readRunPrefix)
@@ -2957,14 +2956,13 @@ theorem recoveredRetries_installedReads
           (fun bounded size =>
             WalSegmentRepair.finishBoundedMarkedOpen directory bounded size removeFile write sync renameFile)
           openedFrom.image = .ok (opened, markerHandle, selected) after ∧
-        session.phase = .ready opened.installed) ∧
+      session.phase = .ready opened.installed ∧ opened.table = table ∧
       final.image = after ∧ final.image.Ready target ∧
       EffectTrace target { prepared with directory := settleMarker prepared.directory selected } final.image ∧
       final.owners.Owns directory descriptor ∧
       session.sessionRef ∉ liveRefs ∧
       SnapshotWalReplay .empty ((history ++ batch).take target.range.through) reference ∧
-      session.phase = .ready state ∧
-      state.table.acquireAt snapshot = some (pin, pinned) ∧
+      opened.installed.table.acquireAt snapshot = some (pin, pinned) ∧
       (∀ key, pinned.lookup pin.handle key = some (reference.table.lookup key snapshot)) ∧
       ∀ start stop, pinned.range pin.handle start stop =
         some (reference.table.range start stop snapshot) := by
@@ -3205,8 +3203,8 @@ theorem recoveredRetries_installedReads
     simpa only [layoutTarget] using retryPrepared
   refine ⟨⟨markerBytes, (by simpa only [markerCurrent] using markerRead), decodedMarker⟩, ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
     retrySeals, retryKeeper, retryPlan, session, final, reference,
-    opened.installed, pin, pinned, returned, ⟨opened, fullReopen, installed⟩, reached, reached.symm ▸ ready,
-    reached.symm ▸ authorizedRepair, owner, freshSession, replayed, installed, acquired, points, ranges⟩
+    opened, pin, pinned, returned, fullReopen, installed, rfl, reached, reached.symm ▸ ready,
+    reached.symm ▸ authorizedRepair, owner, freshSession, replayed, acquired, points, ranges⟩
   intro bytes survives
   obtain ⟨equalReplay, sealedBytes⟩ := physical bytes survives
   exact ⟨equalReplay.trans selectedReplay, fun segment found =>
