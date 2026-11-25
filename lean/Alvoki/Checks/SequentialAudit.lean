@@ -399,6 +399,7 @@ import Alvoki.Storage.Disk.NativeMarkedRecoveryWork
 import Alvoki.Storage.Disk.NativeMarkedFirstBarrierWork
 import Alvoki.Storage.Disk.NativeMarkedFirstBarrierRetries
 import Alvoki.Storage.Disk.NativeMarkedBarrierRetryReopen
+import Alvoki.Storage.Disk.NativeCloseMarkedBarrierReopen
 import Alvoki.Storage.Disk.NativeMarkedFirstUnlinkError
 import Alvoki.Storage.Disk.NativeMarkedUnlinkRetryReopen
 import Alvoki.Storage.Disk.NativeRejectedOpenWork
@@ -2817,6 +2818,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedBarrierRetries.target
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedBarrierRetries.prepared
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedBarrierRetries.reopensWithWork
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedBarrierRetries.availableSettledFiles
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensAfterMarkedBarriers
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedFirstUnlinkError.authorizes
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedFirstUnlinkError.unlinkReturns
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedFirstUnlinkError.finishes
