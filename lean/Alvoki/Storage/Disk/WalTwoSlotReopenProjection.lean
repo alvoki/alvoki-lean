@@ -643,7 +643,8 @@ private theorem prepareSelected_walReadError {state : Type} (directory : Storage
 /-- After the extent scan and the earlier seal reads, a keeper read
 error aborts the shared reopen before marker sync or WAL repair. -/
 theorem reopenWith_keeperReadError {state : Type} {directory : Storage.DiskDirectory}
-    (selection : Selection)
+    {markerBytes : ByteArray} {selection : Selection}
+    (accepted : decode markerBytes = .ok selection)
     (readCheckpoint : EStateM IO.Error state (Option (Storage.PackedTable × UInt64)))
     (list : System.FilePath → EStateM IO.Error state (Array IO.FS.DirEntry))
     (lstat : System.FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata))
@@ -654,8 +655,7 @@ theorem reopenWith_keeperReadError {state : Type} {directory : Storage.DiskDirec
     {before checked listedState scannedState atKeeper reached : state}
     {checkpoint : Option (Storage.PackedTable × UInt64)}
     (checkpointRead : readCheckpoint before = .ok checkpoint checked)
-    (aligned : selection.frontier.toNat % frameSize = 0 ∧
-      (checkpoint.getD (.empty, 0)).1.committed.toNat ≤ selection.frontier.toNat / frameSize)
+    (watermark : (checkpoint.getD (.empty, 0)).1.committed.toNat ≤ selection.frontier.toNat / frameSize)
     {entries : Array IO.FS.DirEntry}
     (listed : list directory.path checked = .ok entries listedState)
     {extents required : List (Nat × IO.FS.Metadata)} {newer : List Nat}
@@ -675,9 +675,10 @@ theorem reopenWith_keeperReadError {state : Type} {directory : Storage.DiskDirec
         (fun watermark length =>
           readSelectedWithCachedExtents directory watermark length list lstat readSeal readKeeper))
       stabilize finish before = .error cause reached := by
+  obtain ⟨_, _, _, aligned, _⟩ := decode_valid accepted
   have payloadError := seals.read_error (selection.frontier.toNat / frameSize) readKeeper failed
   have walError := readSelectedWithCachedExtents_payloadError directory _ selection.frontier
-    list lstat readSeal readKeeper aligned listed scanned selected payloadError
+    list lstat readSeal readKeeper ⟨aligned, watermark⟩ listed scanned selected payloadError
   have read := prepareSelected_walReadError directory (Boundary.encode selection.frontier)
     selection.frontier (Boundary.decode_encode _) readCheckpoint
     (fun watermark length =>
