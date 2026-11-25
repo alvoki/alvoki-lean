@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.CheckpointObservedCompletion
+import Alvoki.Storage.Disk.CheckpointRunPrefixCustody
 
 namespace Alvoki.Storage.DiskSession
 
@@ -17,6 +18,27 @@ structure CheckpointRunBarrierCut {directory : DiskDirectory} {before : Segmente
   olderRuns : ∀ older, older ≠ SegmentedCheckpointReport.generation before → ∀ index,
     published.durable older index = before.published.durable older index
   namespaceCut : interrupted = if cut.tookEffect then reached.syncDirectory else reached
+  priorBindings : SelectedRunsAgree before.wal.directory.active.manifest reached.guaranteed before.published.durable
+
+/-- The retained writer's selected manifest names its installed generation,
+which differs from the next checkpoint generation. -/
+theorem CheckpointPowerCut.priorSelectedGeneration {directory : DiskDirectory} {before : SegmentedWriterState}
+    {writer : Nat} (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
+    {bytes : ByteArray} {metadata : Manifest.IntegrityCheckpoint}
+    (visible : before.wal.directory.active.manifest = some bytes)
+    (decoded : Manifest.IntegrityCheckpoint.decode bytes = .ok metadata) :
+    metadata.header.generation = before.installed.generation ∧
+      metadata.header.generation ≠ SegmentedCheckpointReport.generation before := by
+  have parsed := CheckpointPowerCut.selectedGeneration ready.resumed.selected
+  rw [← ready.resumed.generation, ← ready.walPair, visible, Option.mapM, decoded] at parsed
+  have previous : metadata.header.generation = before.installed.generation := Except.ok.inj parsed
+  refine ⟨previous, ?_⟩
+  rw [previous]
+  intro same
+  have values := congrArg UInt64.toNat same
+  unfold SegmentedCheckpointReport.generation at values
+  rw [UInt64.toNat_ofNat_of_lt' cut.generationFits] at values
+  omega
 
 /-- All run-file barriers can complete before power is lost at the first
 directory barrier. The ordered native prefix reaches that exact callback
@@ -33,7 +55,8 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
     (atRun : Nat → Cache handle × WalInodeImage) (interrupted : Cache handle × WalInodeImage)
     (runs : Cache handle × WalInodeImage → RunUnlinkImage)
     (manifest : Cache handle × WalInodeImage → Publication.Image)
-    (bindings : WalInodeImage → FilePath → Option Nat) (directoryHandle : handle) :
+    (views : ∀ index, RunDirectoryInodeView directory (atRun index).2 (runs (atRun index)))
+    (directoryHandle : handle) :
     let count := cut.checkpoint.table.runs.length
     let generation := SegmentedCheckpointReport.generation before
     let perform := performCheckpointFileStep directory generation cut.checkpoint.table.runs.toArray
@@ -42,22 +65,14 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
         | some run => pure run
         | none => throw (IO.userError "checkpoint run index is out of bounds"))
       writeRun writeStage (SyncPathGroup.run (sync directory.path openRead fsync)) rename
-    (∀ index < count, (perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (atRun index) =
-      .ok () (atRun (index + 1))) →
-    (∀ index < count, let reached := atRun (index + 1)
-      (runs reached).visible generation index =
-        knownSyncedRunBytes directory (bindings reached.2) reached.2 generation index) →
     (∀ index < count,
-      ∃ (run : Compaction.CheckedRun) (cache : Cache handle) (flushed : WalInodeImage) (inode : Nat),
-        let pathname := directory.file (.run generation index)
-        cut.checkpoint.table.runs.toArray[index]? = some run ∧
-        (perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (atRun index) =
-          .ok () (cache, flushed.completeFileSync inode) ∧
-        bindings flushed pathname = some inode ∧
-        bindings (flushed.completeFileSync inode) pathname = bindings flushed pathname ∧
-        flushed.visible inode = run.run.bytes) →
-    (∀ index < count, ∀ prior < index,
-      (runs (atRun (index + 1))).visible generation prior = (runs (atRun index)).visible generation prior) →
+      Nonempty (CheckpointRunPairCustody directory generation cut.checkpoint.table perform
+        (atRun index) (atRun (index + 1)) (views index) (views (index + 1)) index)) →
+    (∀ bytes metadata, before.wal.directory.active.manifest = some bytes →
+      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+      ∀ index < metadata.header.runCount.toNat, ∀ payload,
+        before.published.durable metadata.header.generation index = some payload →
+        ∃ inode, (views 0).Stable (directory.file (.run metadata.header.generation index)) inode payload) →
     (atRun count).1.directory = some directoryHandle →
     runs interrupted = (if cut.tookEffect then (runs (atRun count)).syncDirectory else runs (atRun count)) →
     manifest (atRun 0) = before.published.manifest →
@@ -75,7 +90,7 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
       (∀ index < count, (runs (atRun count)).visible generation index = cut.checkpoint.plan.files[index]?) ∧
       (cut.tookEffect = true →
         ∀ index < count, (runs interrupted).guaranteed generation index = published.durable generation index) := by
-  intro count generation perform pairs projects writes preserves captured namespaceCut
+  intro count generation perform writes entry captured namespaceCut
     initialManifest frameManifest cutManifest
   have current : cut.current = .syncRunsDirectory := by
     have suffix : .syncRunsDirectory :: Publication.steps.map Step.manifest = cut.current :: cut.remaining := by
@@ -86,10 +101,53 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
     exact (List.cons.inj suffix).1.symm
   have exactCount := cut.reachedCount.1
   rw [completedRuns] at exactCount
-  have prefixRan := runSteps_returned perform count atRun pairs
-  have known := syncedRunsFromInodes directory generation cut.checkpoint.table atRun pairs runs bindings projects writes
-  have visible := visibleSyncedRunPrefix atRun count runs generation
-    cut.checkpoint.plan.files known preserves
+  have prefixRan := runSteps_returned perform count atRun (fun index within =>
+    let ⟨pair⟩ := writes index within
+    pair.returned)
+  have freshRuns (through : Nat) (bounded : through ≤ count) : ∀ index < through,
+      ∃ (run : Compaction.CheckedRun) (inode : Nat), cut.checkpoint.table.runs.toArray[index]? = some run ∧
+        (views through).visible (directory.file (.run generation index)) = some inode ∧
+        (atRun through).2.visible inode = run.run.bytes := by
+    induction through with
+    | zero => simp
+    | succ through ih =>
+      intro index within
+      obtain ⟨pair⟩ := writes through bounded
+      by_cases same : index = through
+      · subst index
+        exact ⟨pair.run, pair.inode, pair.selected, pair.bound,
+          pair.synced.symm ▸ pair.bytes⟩
+      · obtain ⟨run, inode, selected, bound, bytes⟩ := ih (Nat.le_trans (Nat.le_succ _) bounded) index (by omega)
+        have different : directory.file (.run generation index) ≠ directory.file (.run generation through) :=
+          runPath_ne directory (fun paths => same (congrArg Prod.snd paths))
+        have framed := pair.frame.keepsVisible pair.synced pair.privateBinding different bound bytes
+        exact ⟨run, inode, selected, framed.2⟩
+  have visible : ∀ index < count, (runs (atRun count)).visible generation index = cut.checkpoint.plan.files[index]? := by
+    intro index within
+    obtain ⟨run, inode, selected, bound, bytes⟩ := freshRuns count (Nat.le_refl _) index within
+    rw [(views count).visibleProjects generation index inode bound, bytes]
+    change some run.run.bytes = (cut.checkpoint.table.runs.map (·.run.bytes))[index]?
+    rw [List.getElem?_map, ← List.getElem?_toArray, selected]
+    rfl
+  have oldSelected := ready.resumed.selected
+  rw [← ready.walPair] at oldSelected
+  have priorBindings : SelectedRunsAgree before.wal.directory.active.manifest
+      (runs (atRun count)).guaranteed before.published.durable := by
+    intro bytes metadata binding decoded index within
+    have differentGeneration := (cut.priorSelectedGeneration ready binding decoded).2
+    obtain ⟨payload, stored⟩ := oldSelected.runExists binding decoded within
+    obtain ⟨inode, reported⟩ := entry bytes metadata binding decoded index within payload stored
+    let path := directory.file (.run metadata.header.generation index)
+    have retained (through : Nat) (bounded : through ≤ count) : (views through).Stable path inode payload := by
+      induction through with
+      | zero => exact reported
+      | succ through ih =>
+        obtain ⟨pair⟩ := writes through bounded
+        have distinct : path ≠ directory.file (.run generation through) :=
+          runPath_ne directory (fun same => differentGeneration (congrArg Prod.fst same))
+        exact pair.frame.keepsStable pair.synced pair.privateBinding distinct
+          (ih (Nat.le_trans (Nat.le_succ _) bounded))
+    exact ((retained count (Nat.le_refl _)).guaranteed).trans stored.symm
   have allManifests (through : Nat) (within : through ≤ count) :
       manifest (atRun through) = before.published.manifest := by
     induction through with
@@ -109,7 +167,8 @@ theorem CheckpointPowerCut.atRunDirectory {directory : DiskDirectory} {before : 
   have selected : published.manifest.crashImages = [before.wal.directory.active.manifest] := by
     rw [sameManifest]
     exact settled
-  refine ⟨current, completedRuns.symm ▸ prefixRan, ?_, published, ⟨current, executed, selected, oldRuns, namespaceCut⟩,
+  refine ⟨current, completedRuns.symm ▸ prefixRan, ?_, published,
+    ⟨current, executed, selected, oldRuns, namespaceCut, priorBindings⟩,
     cutManifest.trans ((allManifests count (Nat.le_refl _)).trans sameManifest.symm),
     beforeEffect, visible, ?_⟩
   · rw [current]

@@ -72,6 +72,7 @@ import Alvoki.Storage.Disk.MarkedWriteReopenProgress
 import Alvoki.Storage.Disk.OptionalFileRead
 import Alvoki.Storage.Disk.CheckpointFileDispatch
 import Alvoki.Storage.Disk.CheckpointRunWriteCustody
+import Alvoki.Storage.Disk.CheckpointRunPrefixCustody
 import Alvoki.Storage.Disk.CheckpointObservedCompletion
 import Alvoki.Storage.Disk.CheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.CheckpointManifestRenameCut
@@ -347,10 +348,17 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.run_performCheckpointFileStep_io
 #check_axioms Alvoki.Storage.CheckpointPublication.RunWriteReports.captures
 #check_axioms Alvoki.Storage.CheckpointPublication.performCheckpointRunPair_observed
+#check_axioms Alvoki.Storage.CheckpointPublication.RunOpenLinkReports.privateBinding
+#check_axioms Alvoki.Storage.CheckpointPublication.RunDirectoryInodeView.Stable.guaranteed
+#check_axioms Alvoki.Storage.CheckpointPublication.RunWriteInodeFrame.keepsVisible
+#check_axioms Alvoki.Storage.CheckpointPublication.RunWriteInodeFrame.keepsStable
+#check_axioms Alvoki.Storage.CheckpointPublication.CheckpointRunPairCustody.ofObservedWrite
+#check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.runExists
 #check_axioms Alvoki.Storage.CheckpointPublication.knownSyncedRunBytes_ofFileSync
 #check_axioms Alvoki.Storage.CheckpointPublication.syncedRunsFromInodes
 #check_axioms Alvoki.Storage.CheckpointPublication.visibleSyncedRunPrefix
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.executeVersioned_atRunDirectory
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.priorSelectedGeneration
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.atRunDirectory
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.executeVersioned_atManifestRename
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.atManifestRename

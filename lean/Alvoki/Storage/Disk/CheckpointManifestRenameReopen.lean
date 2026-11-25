@@ -7,12 +7,6 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication WalSegmentRepair SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
-/-- Compare the run maps only at the indices named by the selected manifest. -/
-def SelectedRunsAgree (binding : Option ByteArray) (left right : RunFiles) : Prop :=
-  ∀ bytes metadata, binding = some bytes → Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
-    ∀ index < metadata.header.runCount.toNat,
-      left metadata.header.generation index = right metadata.header.generation index
-
 private theorem SelectedRunsAgree.symm {binding : Option ByteArray} {left right : RunFiles}
     (same : SelectedRunsAgree binding left right) : SelectedRunsAgree binding right left :=
   fun bytes metadata selected decoded index inside => (same bytes metadata selected decoded index inside).symm
