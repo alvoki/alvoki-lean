@@ -116,6 +116,7 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 lake env leanchecker Alvoki.Storage.Disk.MixedTraceSnapshotReads
 lake env leanchecker Alvoki.Storage.Disk.ClientReadTrace
 lake env leanchecker Alvoki.Storage.Disk.ClientCachedClose
+lake env leanchecker Alvoki.Storage.Disk.ClosedReadyReopen
 lake env leanchecker Alvoki.Storage.Disk.ClientWriteTrace
 lake env leanchecker Alvoki.Storage.Disk.ReturnedWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.PendingClientReplay

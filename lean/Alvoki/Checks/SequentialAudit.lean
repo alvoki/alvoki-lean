@@ -191,6 +191,7 @@ import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.MixedTraceSnapshotReads
 import Alvoki.Storage.Disk.ClientReadTrace
 import Alvoki.Storage.Disk.ClientCachedClose
+import Alvoki.Storage.Disk.ClosedReadyReopen
 import Alvoki.Storage.Disk.ClientWriteTrace
 import Alvoki.Storage.Disk.ReturnedWriteRecovery
 import Alvoki.Storage.Disk.PendingClientReplay
@@ -1263,6 +1264,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReopenCensus.captures
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.cachedClosePrefix
 #check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterCachedCloseRetries
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.cleanReopenLayout
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.admitsCleanReopenAt
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.refinesClosedReopenPrefix
+#check_axioms Alvoki.Storage.DiskSession.SegmentedClientReadTrace.reopenAfterReportedCloseRetries
 #check_axioms Alvoki.Storage.DiskSession.ObservedBatchFailure.reopensAfterCachedClose
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.pinnedReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.acquireReads

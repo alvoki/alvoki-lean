@@ -125,7 +125,7 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
   | cleanReopenObserved {files : Type} {input : System.FilePath}
       (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
       (closed : CleanUnlockReports directory writer)
-      {layout : CanonicalKeeperLayout (SegmentedCleanReopenReport.released directory before).image before.history}
+      {retry : LockedFileState FileImage} {layout : CanonicalKeeperLayout retry.image before.history}
       {observed : MarkedRetryChunkReports files directory layout before.published}
       {admission : OpenAdmissionReports input directory observed.slot}
       (endpoint : AdmittedCleanReopen closed observed admission after) :

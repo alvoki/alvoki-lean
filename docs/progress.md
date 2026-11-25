@@ -543,4 +543,12 @@ Snapshot acquisition, release and floor updates now share a result interpretatio
 
 An interruption at that barrier now extends the earlier recovery prefix with the actual reached image and lock owner, including after a batch publication error or crash. The refinement derives the matching target from the earlier prefix and chains the authorized repair effects. The reported process exit and the modeled power-loss choices then extend the same history. The observation still supplies the barrier effect and crash survivors. [Reported recovery history](../lean/Alvoki/Storage/Disk/BatchRecoveryPrefix.lean) · [Keeper directory interruption](../lean/Alvoki/Storage/Disk/KeeperDirectoryInterruption.lean)
 
+A ready cached close can precede a finite prefix of failed marked reopens. The exact close clears the cache and
+releases the owner. The settled files fix the retry target, and each reported error, lock-reference drop or
+modeled power loss preserves the same selected manifest, sealed WAL and exact keeper bytes. The healthy final
+attempt uses the reached file state and held reads of the prior checkpoint's physical run map. It reinstalls the
+same checkpoint, replays the same WAL and continues both client ledgers. The proof uses local callback and
+effect reports, with lock and directory identity for the final open. A shared raw descriptor census across the
+failed opens remains a separate obligation. [Close and retry](../lean/Alvoki/Storage/Disk/ClosedReadyReopen.lean)
+
 Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequential.sh` for the disk fixtures, kernel checks and enforced axiom policy, with the pinned toolchains from the README. [Local commands](../README.md#reproduce-on-linux-x86-64)
