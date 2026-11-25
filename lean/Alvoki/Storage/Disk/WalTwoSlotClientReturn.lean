@@ -1398,25 +1398,24 @@ theorem recoveredRetries_installedReads
     (keeperRead : readKeeper (directory.file (.walSegment target.first)) target.trimmed.size
       keeperMetadata.byteSize.toNat atKeeper = .ok target.trimmed prepared)
     {marker settledMarker : WalInodeImage} {markerHandle : KeeperDescriptorIdentity}
+    {markerReads : WalSegmentRepair.CheckpointRunChunkReads}
+    {markerView : DiskSession.DirectoryReadNamespace} {markerRoot : DiskSession.DeviceInode}
+    (markerFile : DiskSession.HeldMetadataFile markerReads (directory.file .walBoundary)
+      "WAL.commit" markerView markerRoot (marker.visible markerHandle.inode))
     (markerInventory : DiskSession.DescriptorInventory)
     (markerDrops : List DiskSession.LockReferenceDrop)
-    (markerSlot : DiskSession.DescriptorSlot)
-    (markerFree : ∀ slot ∈ markerInventory.slots, slot.address ≠ markerSlot.address)
-    (markerDescription : markerSlot.description = markerHandle.description)
-    (markerRetained : ∀ event ∈ markerDrops, event.removes markerSlot.reference = false)
+    (markerFree : ∀ slot ∈ markerInventory.slots, slot.address ≠ markerFile.calls.slot.address)
+    (markerAllocated : markerFile.calls.inventory = markerInventory.insert markerFile.calls.slot markerFree)
+    (markerDescription : markerFile.calls.slot.description = markerHandle.description)
+    (markerRetained : ∀ event ∈ markerDrops, event.removes markerFile.calls.slot.reference = false)
     (markerInode : markerInventory.inode markerHandle.description = markerHandle.inode)
     (markerEffect : Storage.SyncHandleRouting.FsyncResult marker
       (marker.completeFileSync (markerInventory.inode markerHandle.description)) true (.ok () settledMarker))
     (markerCurrent : markerHandle.inode = marker.active)
     (markerBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
-    {markerBytes : ByteArray} {readMarker : USize → EStateM IO.Error Nat ByteArray}
-    {markerReached : Nat} (mismatch : IO.Error)
-    (markerObserved : PrefixChunkObserves (marker.visible markerHandle.inode) readMarker)
-    (markerAvailable : PrefixChunksAvailableUntilEof (marker.visible markerHandle.inode) readMarker)
-    (markerFits : acquisitionLimit < USize.size)
-    (markerRead : readPrefixUntilEofWith mismatch readMarker acquisitionLimit ByteArray.empty 0 =
-      .ok markerBytes markerReached)
-    (markerAccepted : decode markerBytes = .ok selected)
+    (markerAvailable : PrefixChunksAvailableUntilEof (marker.visible markerHandle.inode)
+      (markerReads.readChunk markerFile.calls.slot.description))
+    (markerAccepted : decode (marker.visible markerHandle.inode) = .ok selected)
     (markerChoices : List (DirectoryPublication.Bindings × Option ByteArray))
     (enumerated : markerChoices.map Prod.fst = prepared.directory.crashImages)
     (presence : ∀ choice ∈ markerChoices, choice.2.isSome = choice.1.walBoundary.isSome)
@@ -1441,6 +1440,10 @@ theorem recoveredRetries_installedReads
     (layoutBytes : ∀ segment ∈ layout.sealed, prepared.kept segment.first = some segment.bytes)
     {snapshot : UInt64} (retained : table.pins.floor ≤ snapshot)
     (within : snapshot.toNat ≤ target.range.through) :
+    (∃ bytes, readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+      (markerReads.readChunk markerFile.calls.slot.description) acquisitionLimit ByteArray.empty 0 =
+        .ok bytes (min acquisitionLimit (marker.visible markerHandle.inode).size) ∧
+      decode bytes = .ok selected) ∧
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take target.range.through) ∧
     ∃ after : FileImage,
     (∀ bytes, some bytes ∈ after.keeper.active :: after.keeper.crashImages →
@@ -1477,16 +1480,18 @@ theorem recoveredRetries_installedReads
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
   have logicalMarker : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
-  let acquiredInventory := markerInventory.insert markerSlot markerFree
-  have markerLive : markerSlot.reference ∈
-      (acquiredInventory.afterDrops markerDrops).references markerHandle.description := by
-    rw [DiskSession.DescriptorInventory.references_afterDrops,
+  have markerLive : markerFile.calls.slot.reference ∈
+      (markerFile.calls.inventory.afterDrops markerDrops).references markerHandle.description := by
+    rw [markerAllocated, DiskSession.DescriptorInventory.references_afterDrops,
       DiskSession.DescriptorInventory.references_insert, ite_eq_left markerDescription]
     exact List.mem_filter.mpr ⟨List.mem_cons_self, List.all_eq_true.mpr (by simpa using markerRetained)⟩
-  let markerSync := FsyncObservation.ofInventory acquiredInventory markerDrops
+  have reachedInode : markerFile.calls.inventory.inode markerHandle.description = markerHandle.inode := by
+    rw [markerAllocated]
+    exact markerInode
+  let markerSync := FsyncObservation.ofInventory markerFile.calls.inventory markerDrops
     KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode markerHandle
-    markerSlot.reference markerLive markerInode marker
-    (fun inode (files : WalInodeImage) => files.completeFileSync inode) markerEffect
+    markerFile.calls.slot.reference markerLive reachedInode marker
+    (fun inode (files : WalInodeImage) => files.completeFileSync inode) (by rwa [markerAllocated])
   obtain ⟨manifestWatermark, checkpointCovered, marker, length, binding, decoded, absolute⟩ :=
     DirectoryPublication.Bindings.walRange_accounting target.decoded
   have sameMarker := Option.some.inj (binding.symm.trans logicalMarker)
@@ -1631,9 +1636,8 @@ theorem recoveredRetries_installedReads
   let opened : WalSegmentRepair.Reopened :=
     ⟨table, (checkpointResult.getD (.empty, 0)).2, selected.frontier, target.first⟩
   have markerBound : prepared.directory.active.walBoundary.isSome = true := by simp [observed]
-  have projected := reopenSync_projectsAcquiredMarker markerSync markerCurrent markerBinding
-    mismatch markerObserved markerAvailable markerFits markerRead markerAccepted
-    prepared.directory markerBound markerChoices enumerated presence physicalChoices
+  have projected := reopenSync_projectsRepairDirectory markerSync markerCurrent markerBinding
+    markerAccepted prepared.directory markerBound markerChoices enumerated presence physicalChoices
   have barrier : stabilize prepared = .ok ()
       { prepared with directory := settleMarker prepared.directory selected } := by
     rw [stabilizeReport, projected]
@@ -1676,7 +1680,8 @@ theorem recoveredRetries_installedReads
       (layoutTarget.symm ▸ authorizedRepair) (layoutTarget.symm ▸ retries)
   have retryPlan : WalSegmentRepair.Prepared after target retry.plan := by
     simpa only [layoutTarget] using retryPrepared
-  refine ⟨ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
+  obtain ⟨markerBytes, markerRead, markerDecode⟩ := decode_markerFromHeldDirectory markerFile markerAvailable
+  refine ⟨⟨markerBytes, markerRead, markerDecode.trans markerAccepted⟩, ledger.1, after, ?_, retry, retryTarget.trans layoutTarget, retryStart,
     retrySeals, retryKeeper, retryPlan, session, final, reference,
     opened.installed, pin, pinned, returned, reached, reached.symm ▸ ready,
     reached.symm ▸ authorizedRepair, owner, freshSession, replayed, installed, acquired, points, ranges⟩
