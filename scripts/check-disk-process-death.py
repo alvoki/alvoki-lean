@@ -356,7 +356,7 @@ def check_two_slot_partial_write_error(binary, shim, database, rotated):
             "recovery did not replace the unacknowledged frame with the new write")
 
 
-def check_two_slot_effective_sync_error(binary, shim, database, rotated):
+def check_two_slot_effective_sync_error(binary, shim, database, rotated, fail_wal):
     database.mkdir()
     status, stderr = run_probe(binary, "--two-slot-seed", database, "rotated" if rotated else "zero")
     require(status == 0, f"could not seed the two-slot database: {stderr}")
@@ -365,29 +365,37 @@ def check_two_slot_effective_sync_error(binary, shim, database, rotated):
     old_marker = marker.read_bytes()
     prefix = wal.read_bytes()
     frame_size = (database / "WAL-segment-0").stat().st_size if rotated else len(prefix)
+    target = wal if fail_wal else marker
     log = database.with_suffix(".sync.log")
     status, stderr = run_probe(binary, "--two-slot-check-unknown-batch", database, env={
         **os.environ,
         "LD_PRELOAD": str(shim),
-        "ALVOKI_CHECK_SYNC_FAIL": str(marker),
+        "ALVOKI_CHECK_SYNC_FAIL": str(target),
         "ALVOKI_CHECK_SYNC_FAIL_MODE": "after",
         "ALVOKI_CHECK_SYNC_SKIP": "1",
         "ALVOKI_CHECK_SYNC_LOG": str(log),
     })
-    require(status == 0, f"effective marker sync error did not return commit-unknown: {stderr}")
-    require(log.read_text().splitlines()[-3:] == [str(wal), str(marker), f"synced before error: {marker}"],
-            "the batch WAL and marker barriers did not run in order")
+    require(status == 0, f"effective sync error did not return commit-unknown: {stderr}")
+    syncs = log.read_text().splitlines()
     new_marker = marker.read_bytes()
-    require(new_marker[:40] != old_marker[:40] and new_marker[40:] == old_marker[40:],
-            "the effective marker barrier did not cover the complete inactive-slot write")
+    if fail_wal:
+        require(syncs[-2:] == [str(wal), f"synced before error: {wal}"] and syncs.count(str(marker)) == 1,
+                "publication attempted a marker sync after a WAL sync error")
+        require(new_marker == old_marker, "publication altered the marker after a WAL sync error")
+    else:
+        require(syncs[-3:] == [str(wal), str(marker), f"synced before error: {marker}"],
+                "the batch WAL and marker barriers did not run in order")
+        require(new_marker[:40] != old_marker[:40] and new_marker[40:] == old_marker[40:],
+                "the effective marker barrier did not cover the complete inactive-slot write")
     appended = wal.read_bytes()
     require(appended.startswith(prefix) and len(appended) == len(prefix) + 2 * frame_size,
             "the marker barrier did not follow the complete batch append")
-    status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "new")
-    require(status == 0, f"could not recover the whole batch after the marker sync error: {stderr}")
+    status, stderr = run_probe(binary, "--two-slot-check-resumed-batch", database, "old" if fail_wal else "new")
+    require(status == 0, f"could not recover the expected history after the sync error: {stderr}")
     resumed = wal.read_bytes()
-    require(resumed.startswith(appended) and len(resumed) == len(appended) + frame_size,
-            "reopen did not extend the entire recovered batch")
+    retained = prefix if fail_wal else appended
+    require(resumed.startswith(retained) and len(resumed) == len(retained) + frame_size,
+            "reopen did not extend the expected recovered history")
 
 
 def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False):
@@ -652,7 +660,10 @@ if __name__ == "__main__":
         check_fork_exec_lock(binary, shim, root / "fork-exec")
         check_batch_append_cut(binary, shim, root / "batch-append-cut")
         for rotated in (False, True):
-            check_two_slot_effective_sync_error(binary, shim, root / f"two-slot-{int(rotated)}-sync-error", rotated)
+            for fail_wal in (False, True):
+                check_two_slot_effective_sync_error(
+                    binary, shim, root / f"two-slot-{int(rotated)}-sync-error-{int(fail_wal)}", rotated, fail_wal
+                )
             check_two_slot_partial_write_error(binary, shim, root / f"two-slot-{int(rotated)}-partial-error", rotated)
             check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-short-write",
                                      "slot-write", rotated, resume=True)
