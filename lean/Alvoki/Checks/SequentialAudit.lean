@@ -317,6 +317,7 @@ import Alvoki.Storage.Disk.NativeBootstrapFlushReopen
 import Alvoki.Storage.Disk.NativeInitialMarkerFlushError
 import Alvoki.Storage.Disk.NativeInitialMarkerFlushSessions
 import Alvoki.Storage.Disk.NativeBootstrapMarkerDirectoryStop
+import Alvoki.Storage.Disk.NativeFreshBootstrapMarkerDirectoryStop
 import Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectReboot
 import Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectTableOpen
 import Alvoki.Storage.Disk.NativeBootstrapMarkerDirectoryReboot
@@ -1955,6 +1956,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.bootstrapCacheSchedules
 #check_axioms Alvoki.Storage.DiskSession.BootstrapPendingObservation.returns
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapDirectoryBarrier.selectsRoot
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapKeeperChronology.prepares
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapKeeperChronology.rotates
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapCacheChronology.returns
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapKeeperPhysical.settles
 #check_axioms Alvoki.Storage.DiskSession.ReusedBootstrapKeeperGuards.prepare
@@ -1978,6 +1981,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerFlushCleanup.returns
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerFlushCleanup.callerReturn
 #check_axioms Alvoki.Storage.DiskSession.BootstrapFlushRetryReader.executesAfterCallerError
+#check_axioms Alvoki.Storage.DiskSession.BootstrapMarkerDirectoryStopPrefix.stopsHeld
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.stopsBootstrapDirectory
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapKeeperChronology.stopsHeldAtMarkerDirectory
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapKeeperChronology.stopsPublicAtMarkerDirectory
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.stopsHeldBootstrap
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.reachesPhysical
 #check_axioms Alvoki.Storage.DiskSession.RawBootstrapMarkerDirectoryStop.stopsPublicOpen

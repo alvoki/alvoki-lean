@@ -82,13 +82,14 @@ variable {heap : Type} {directory : DiskDirectory} {before : LockedFileState Wal
   {seed : OpenSyncCacheAllocations captured.opened view init entry} {calls : FreshBootstrapCacheCalls heap}
   {observed : BootstrapReusedZeroKeeper listed} {guards : ReusedBootstrapKeeperGuards observed seed calls}
 
-/-- The already settled keeper feeds the returned stage, grouped file
-fsync and rename. The final group has selected the original live root
-directory handle and has no fsync return. -/
-structure RawBootstrapMarkerDirectoryStop (keeper : ReusedBootstrapKeeperHeap guards) where
+/-- Either keeper route feeds the same marker stage, file sync and rename.
+The final group selects the original directory handle at its fsync issue. -/
+structure BootstrapMarkerDirectoryStopPrefix
+    (seed : OpenSyncCacheAllocations captured.opened view init entry) (calls : FreshBootstrapCacheCalls heap)
+    (beforeMarker : heap) where
   markerHandle : CheckpointOpenHandle
   marker : BootstrapPendingObservation view calls.toBootstrapPendingCalls directory .marker seed.pendingRef markerHandle
-    keeper.directoryBarrier.reached
+    beforeMarker
   markerOK : marker.result = .ok ()
   afterRename : heap
   renamed : calls.rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) marker.reached =
@@ -99,9 +100,9 @@ structure RawBootstrapMarkerDirectoryStop (keeper : ReusedBootstrapKeeperHeap gu
   sameInode : (view.descriptors afterRename).inode captured.cached.description =
     (captured.initial.insert captured.cached captured.opened.free).inode captured.cached.description
 
-namespace RawBootstrapMarkerDirectoryStop
+namespace BootstrapMarkerDirectoryStopPrefix
 
-variable {keeper : ReusedBootstrapKeeperHeap guards} (seen : RawBootstrapMarkerDirectoryStop keeper)
+variable {beforeMarker : heap} (seen : BootstrapMarkerDirectoryStopPrefix seed calls beforeMarker)
 
 private theorem issues :
     (markerDirectoryCall calls directory seed.directoryRef seed.activeRef seed.pendingRef).run seen.afterRename =
@@ -115,13 +116,13 @@ private theorem issues :
 
 private theorem publishesUntil :
     (publishUntilDirectory calls directory seed.directoryRef seed.activeRef seed.pendingRef).run
-      keeper.directoryBarrier.reached =
+      beforeMarker =
       .error (directory.path, seed.handle) seen.afterRename := by
   obtain ⟨_, _, cache, _, _, _, references, path, _⟩ := seed.installs
   obtain ⟨_, staged, synced, _⟩ := seen.marker.returns cache references path
   rw [seen.markerOK] at synced
   have stageReturn : calls.stagePending seed.pendingRef (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0)
-      keeper.directoryBarrier.reached = .ok () seen.marker.recorded := staged
+      beforeMarker = .ok () seen.marker.recorded := staged
   have fileReturn : calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
       #[directory.file .stagedWalBoundary] seen.marker.recorded = .ok () seen.marker.reached := synced
   have issued := seen.issues
@@ -130,6 +131,79 @@ private theorem publishesUntil :
   simp only [List.forM_eq_forM, List.forM_cons, Publication.performReplacement, Array.push_empty,
     Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind, returned,
     stageReturn, fileReturn, seen.renamed, issued]
+
+/-- The returned preparation and keeper callbacks determine the entry
+heap of the one shared marker publication. -/
+theorem stopsHeld {prepared : heap} {empty : Option ByteArray}
+    (prepare : prepareBootstrapWith directory calls.list calls.readEmpty calls.metadata seed.afterPending =
+      .ok empty prepared)
+    (rotate : WalSegmentRotation.runAt directory 0 (fun _ => EStateM.pure empty) (calls.createPending seed.pendingRef)
+      (fun path => calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[path]) prepared =
+      .ok () beforeMarker) :
+    (calls.untilMarkerDirectory directory seed.directoryRef seed.activeRef seed.pendingRef).run seed.afterPending =
+      .error (directory.path, seed.handle) seen.afterRename := by
+  change WalSegmentRotation.runAt directory 0 (fun _ => pure empty) (calls.createPending seed.pendingRef)
+    (fun path => calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[path]) prepared = _ at rotate
+  have published := seen.publishesUntil
+  change publishUntilDirectory calls directory seed.directoryRef seed.activeRef seed.pendingRef beforeMarker = _ at published
+  simp only [FreshBootstrapCacheCalls.untilMarkerDirectory, bootstrapUntilDirectory, returned, prepare, Bind.bind,
+    ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run, EStateM.bind, rotate, published]
+
+end BootstrapMarkerDirectoryStopPrefix
+
+/-- The admitted public schedule runs the held markerless worker on the
+heap returned by the same cache initialization. A terminal directory issue
+does not enter the ordinary unlock handler or install a table. -/
+theorem RawOpenAdmissionReport.stopsBootstrapDirectory
+    {input : FilePath} {inventory : DescriptorInventory}
+    {admission : CensusOpenAdmissionReports input directory inventory before}
+    {raw : RawOpenAdmissionCallbacks heap}
+    (admitted : RawOpenAdmissionReport admission view raw entry)
+    (heldSeed : OpenSyncCacheAllocations captured.opened view init admitted.afterFlock)
+    {cache : DiskTable.OpenSyncFiles}
+    {makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles}
+    (initialized : openSyncFilesWith (init.openDirectory directory.path) init.newRef init.newRef init.newRef makeCache
+      admitted.afterFlock = .ok cache heldSeed.afterPending)
+    (metadata : ∀ path, calls.metadata path = optionalMetadataWith (raw.lookup path))
+    (flat : calls.metadata (directory.file .wal) heldSeed.afterPending = .ok none heldSeed.afterPending)
+    (absent : calls.metadata (directory.file .walBoundary) heldSeed.afterPending = .ok none heldSeed.afterPending)
+    {cutHeap : heap}
+    (cut : (calls.untilMarkerDirectory directory heldSeed.directoryRef heldSeed.activeRef heldSeed.pendingRef).run
+      heldSeed.afterPending = .error (directory.path, heldSeed.handle) cutHeap)
+    (marked : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (install : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap DiskTable) :
+    raw.runUntilBootstrapDirectory input init makeCache
+      (fun resolved _ => calls.untilMarkerDirectory resolved heldSeed.directoryRef heldSeed.activeRef heldSeed.pendingRef)
+      marked install entry = .error (directory.path, heldSeed.handle) cutHeap := by
+  have flatGuard : (rejectFlatWalWith directory (optionalMetadataWith (raw.lookup (directory.file .wal))) :
+      EStateM IO.Error heap Unit) heldSeed.afterPending = .ok () heldSeed.afterPending := by
+    rw [← metadata]
+    simp [rejectFlatWalWith, flat, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  have noMarker := (metadata (directory.file .walBoundary)).symm ▸ absent
+  change bootstrapUntilDirectory calls directory heldSeed.directoryRef heldSeed.activeRef heldSeed.pendingRef
+    heldSeed.afterPending = _ at cut
+  have admissionPrefix := DiskTable.withOpenAdmission_lockOpen raw.realPath raw.lookup raw.openAppend
+    (fun resolved handle => pure (resolved, handle))
+    admitted.resolved admitted.flat admitted.lockProbe admission.safe
+  rw [admitted.appended] at admissionPrefix
+  change DiskTable.withOpenAdmission input raw.realPath raw.lookup raw.openAppend
+    (fun resolved handle => EStateM.pure (resolved, handle)) entry =
+      .ok (directory, admitted.lock) admitted.afterAppend at admissionPrefix
+  unfold RawOpenAdmissionCallbacks.runUntilBootstrapDirectory
+  simp only [openWithLock, recoverSegmentedWalWith, returned, admissionPrefix, admitted.acquired, initialized,
+    flatGuard, noMarker, cut, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
+    EStateM.bind, Pure.pure, MonadExcept.tryCatch, MonadExceptOf.tryCatch,
+    tryCatchThe, ExceptT.tryCatch, Option.isSome_none, Bool.false_eq_true, ↓reduceIte]
+
+/-- The same marker stop following a keeper that already existed at the
+start of the admitted bootstrap. -/
+structure RawBootstrapMarkerDirectoryStop (keeper : ReusedBootstrapKeeperHeap guards)
+    extends BootstrapMarkerDirectoryStopPrefix seed calls keeper.directoryBarrier.reached
+
+namespace RawBootstrapMarkerDirectoryStop
+
+variable {keeper : ReusedBootstrapKeeperHeap guards} (seen : RawBootstrapMarkerDirectoryStop keeper)
 
 theorem stopsHeldBootstrap :
     (bootstrapUntilDirectory calls directory seed.directoryRef seed.activeRef seed.pendingRef).run seed.afterPending =
@@ -141,14 +215,7 @@ theorem stopsHeldBootstrap :
     rw [WalSegmentRotation.runAt_fileEffects]
     simp [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
       sync, keeper.syncsKeeper, keeper.directoryBarrier.returns]
-  change WalSegmentRotation.runAt directory 0 (fun _ => pure (some ByteArray.empty))
-    (calls.createPending seed.pendingRef)
-    (fun path => calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[path]) guards.prepared = _ at rotates
-  have published := seen.publishesUntil
-  change publishUntilDirectory calls directory seed.directoryRef seed.activeRef seed.pendingRef keeper.directoryBarrier.reached = _
-    at published
-  simp only [bootstrapUntilDirectory, returned, guards.prepare, Bind.bind, ExceptT.bind, ExceptT.bindCont,
-    ExceptT.mk, ExceptT.run, EStateM.bind, rotates, published]
+  exact seen.toBootstrapMarkerDirectoryStopPrefix.stopsHeld guards.prepare rotates
 
 
 /-- Project only the completed callbacks before the stop. The physical
@@ -292,26 +359,8 @@ theorem stopsPublicOpen
   have schedules := cache.bootstrapCacheSchedules references path
   refine ⟨cacheOpen, makeCache, cache, isOpen, source, initialized, schedules, ?_, ?_, reached, lockLive⟩
   · rw [heldGuards.source, keeperLookup]
-  have flatGuard : (rejectFlatWalWith directory (optionalMetadataWith (raw.lookup (directory.file .wal))) :
-      EStateM IO.Error heap Unit) heldSeed.afterPending = .ok () heldSeed.afterPending := by
-    rw [← metadata]
-    simp [rejectFlatWalWith, flat, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
-  have noMarker := (metadata (directory.file .walBoundary)).symm ▸ absent
-  have bootstrap := stop.stopsHeldBootstrap
-  change bootstrapUntilDirectory calls directory heldSeed.directoryRef heldSeed.activeRef heldSeed.pendingRef
-    heldSeed.afterPending = _ at bootstrap
-  have admissionPrefix := DiskTable.withOpenAdmission_lockOpen raw.realPath raw.lookup raw.openAppend
-    (fun resolved handle => pure (resolved, handle))
-    admitted.resolved admitted.flat admitted.lockProbe admission.safe
-  rw [admitted.appended] at admissionPrefix
-  change DiskTable.withOpenAdmission input raw.realPath raw.lookup raw.openAppend
-    (fun resolved handle => EStateM.pure (resolved, handle)) entry =
-      .ok (directory, admitted.lock) admitted.afterAppend at admissionPrefix
-  unfold RawOpenAdmissionCallbacks.runUntilBootstrapDirectory
-  simp only [openWithLock, recoverSegmentedWalWith, returned, admissionPrefix, admitted.acquired, initialized,
-    flatGuard, noMarker, bootstrap, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
-    EStateM.bind, Pure.pure, MonadExcept.tryCatch, MonadExceptOf.tryCatch,
-    tryCatchThe, ExceptT.tryCatch, Option.isSome_none, Bool.false_eq_true, ↓reduceIte]
+  exact admitted.stopsBootstrapDirectory heldSeed initialized metadata flat absent
+    stop.stopsHeldBootstrap marked install
 
 end RawBootstrapMarkerDirectoryStop
 

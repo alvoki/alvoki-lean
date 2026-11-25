@@ -146,11 +146,9 @@ theorem BootstrapMarkerPublicationHeap.returns
   simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, stageReturn, fileReturn, seen.renamed,
     seen.markerDirectory.returns]
 
-/-- The fresh markerless path starts at the actual directory cache
-allocation and uses its references through the two file barriers,
-both directory barriers and marker rename. Every link starts at the
-previous callback's returned heap. -/
-structure FreshBootstrapCacheChronology
+/-- The fresh markerless path prepares and creates its keeper and returns
+from the keeper's two syncs on the original cache. -/
+structure FreshBootstrapKeeperChronology
     (seed : OpenSyncCacheAllocations opened view init entry) (calls : FreshBootstrapCacheCalls heap) where
   entries : Array IO.FS.DirEntry
   afterList : heap
@@ -168,6 +166,40 @@ structure FreshBootstrapCacheChronology
   keeperOK : keeper.result = .ok ()
   keeperFrames : keeper.CacheFrames seed.directoryRef seed.activeRef
   keeperDirectory : FreshBootstrapDirectoryBarrier seed calls keeper.reached
+
+namespace FreshBootstrapKeeperChronology
+
+variable {seed : OpenSyncCacheAllocations opened view init entry} {calls : FreshBootstrapCacheCalls heap}
+
+theorem prepares (seen : FreshBootstrapKeeperChronology seed calls) :
+    prepareBootstrapWith directory calls.list calls.readEmpty calls.metadata seed.afterPending = .ok none seen.prepared := by
+  simp [prepareBootstrapWith, Bind.bind, EStateM.bind, seen.checked, seen.clear, seen.empty, seen.absentStage,
+    Pure.pure, EStateM.pure]
+
+/-- The checked missing keeper takes the create branch and reaches the
+cached directory sync's return before marker publication begins. -/
+theorem rotates (seen : FreshBootstrapKeeperChronology seed calls) :
+    WalSegmentRotation.runAt directory 0 (fun _ => EStateM.pure none) (calls.createPending seed.pendingRef)
+      (fun path => calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[path]) seen.prepared =
+      .ok () seen.keeperDirectory.reached := by
+  obtain ⟨_, _, cache, _, _, _, references, path, _⟩ := seed.installs
+  obtain ⟨_, keeperCreated, keeperSynced, _, _, _, _⟩ := seen.keeper.returns cache references path
+  rw [seen.keeperOK] at keeperSynced
+  have created : calls.createPending seed.pendingRef (directory.file (.walSegment 0)) seen.prepared =
+      .ok () seen.keeper.recorded := keeperCreated
+  have keeperSync : calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
+      #[directory.file (.walSegment 0)] seen.keeper.recorded = .ok () seen.keeper.reached := keeperSynced
+  rw [WalSegmentRotation.runAt_fileEffects]
+  simp [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+    created, keeperSync, seen.keeperDirectory.returns]
+
+end FreshBootstrapKeeperChronology
+
+/-- The successful fresh markerless path continues from the keeper's
+reached heap through marker publication on the same cache references. -/
+structure FreshBootstrapCacheChronology
+    (seed : OpenSyncCacheAllocations opened view init entry) (calls : FreshBootstrapCacheCalls heap)
+    extends FreshBootstrapKeeperChronology seed calls where
   markerHandle : CheckpointOpenHandle
   marker : BootstrapPendingObservation view calls.toBootstrapPendingCalls directory .marker seed.pendingRef
     markerHandle keeperDirectory.reached
@@ -210,32 +242,17 @@ theorem returns (seen : FreshBootstrapCacheChronology seed calls) :
       view.pending seen.markerDirectory.reached seed.pendingRef = [] := by
   obtain ⟨action, assemble, cache, native, source, allocated, references, path, loaded, activeEmpty,
     _, _, _, _, _, _, _, _⟩ := seed.installs
-  obtain ⟨schedules, keeperCreated, keeperSynced, _, _, _, _⟩ := seen.keeper.returns cache references path
-  rw [seen.keeperOK] at keeperSynced
-  have created : calls.createPending seed.pendingRef (directory.file (.walSegment 0)) seen.prepared =
-      .ok () seen.keeper.recorded := keeperCreated
-  have keeperSync : calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
-      #[directory.file (.walSegment 0)] seen.keeper.recorded = .ok () seen.keeper.reached := keeperSynced
-  have rotation : WalSegmentRotation.runAt directory 0 (fun _ => EStateM.pure none) (calls.createPending seed.pendingRef)
-      (fun path => calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[path]) seen.prepared =
-      .ok () seen.keeperDirectory.reached := by
-    rw [WalSegmentRotation.runAt_fileEffects]
-    simp [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
-      created, keeperSync, seen.keeperDirectory.returns]
   obtain ⟨published, markerFrame, pending⟩ := seen.markerPublication.returns
-  have guards : prepareBootstrapWith directory calls.list calls.readEmpty calls.metadata seed.afterPending =
-      .ok none seen.prepared := by
-    simp [prepareBootstrapWith, Bind.bind, EStateM.bind, seen.checked, seen.clear, seen.empty, seen.absentStage,
-      Pure.pure, EStateM.pure]
   have guardsFrame := (seen.listingFrame.trans seen.emptyFrame).trans seen.stageProbeFrame
   have keeperFrame := (guardsFrame.trans seen.keeperFrames.preserves).trans seen.keeperDirectory.frame
   have final := keeperFrame.trans markerFrame
-  refine ⟨action, assemble, cache, native, source, allocated, schedules, ?_, final.directory.trans loaded,
+  refine ⟨action, assemble, cache, native, source, allocated, cache.bootstrapCacheSchedules references path, ?_, final.directory.trans loaded,
     final.activeUnchanged.trans activeEmpty, pending⟩
   have rawPublication : calls.publishZeroMarker directory seed.directoryRef seed.activeRef seed.pendingRef
       seen.keeperDirectory.reached = .ok ⟨.empty, 0, 0, 0⟩ seen.markerDirectory.reached := published
   simp only [FreshBootstrapCacheCalls.run, bootstrapSegmentedWith, bootstrapEmptyWith,
-    Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, guards, rotation]
+    Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, seen.toFreshBootstrapKeeperChronology.prepares,
+    seen.toFreshBootstrapKeeperChronology.rotates]
   exact rawPublication
 
 end FreshBootstrapCacheChronology
