@@ -94,9 +94,9 @@ namespace ReusedBootstrapKeeperHeap
 variable {observed : BootstrapReusedZeroKeeper listed} {guards : ReusedBootstrapKeeperGuards observed seed calls}
 
 theorem syncsKeeper (seen : ReusedBootstrapKeeperHeap guards) :
-    calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[zeroKeeper directory] guards.prepared =
+    calls.toRawSyncCalls.group directory.path seed.directoryRef seed.activeRef seed.pendingRef #[zeroKeeper directory] guards.prepared =
       .ok () seen.released := by
-  rw [FreshBootstrapCacheCalls.sync, SyncPathGroup.run_single]
+  rw [RawSyncCalls.group, SyncPathGroup.run_single]
   simp [syncWithHandles, Bind.bind, EStateM.bind, zeroPath_ne_directory directory, seen.pendingLoaded,
     seen.activeLoaded, seen.rawOpen, seen.rawSynced]
 
@@ -164,7 +164,7 @@ theorem reachesMarker (seen : ReusedBootstrapKeeperHeap guards) :
       calls.publishZeroMarker directory seed.directoryRef seed.activeRef seed.pendingRef next ∧
     view.cacheAt next seed.directoryRef seed.activeRef seed.pendingRef = captured.cache := by
   intro next
-  let sync := calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
+  let sync := calls.toRawSyncCalls.group directory.path seed.directoryRef seed.activeRef seed.pendingRef
   have rotates : WalSegmentRotation.runAt directory 0 (fun _ => EStateM.pure (some ByteArray.empty))
       (calls.createPending seed.pendingRef) (fun path => sync #[path]) guards.prepared = .ok () next := by
     rw [WalSegmentRotation.runAt_fileEffects]

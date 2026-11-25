@@ -33,7 +33,7 @@ private def publishUntilDirectory {heap : Type} (calls : FreshBootstrapCacheCall
     match step with
     | .syncDirectory => markerDirectoryCall calls directory cached active pending
     | other => returned (Publication.performReplacement
-        (calls.stagePending pending · (WAL.Boundary.encode 0)) (calls.sync directory cached active pending) calls.rename
+        (calls.stagePending pending · (WAL.Boundary.encode 0)) (calls.toRawSyncCalls.group directory.path cached active pending) calls.rename
         (directory.file .stagedWalBoundary) directory.path (fun _ => directory.file .walBoundary) #[] other)
   pure ⟨.empty, 0, 0, 0⟩
 
@@ -42,7 +42,7 @@ private def bootstrapUntilDirectory {heap : Type} (calls : FreshBootstrapCacheCa
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : StoppedOpen heap Reopened := do
   let empty ← returned (prepareBootstrapWith directory calls.list calls.readEmpty calls.metadata)
   returned (WalSegmentRotation.runAt directory 0 (fun _ => pure empty)
-    (calls.createPending pending) (fun path => calls.sync directory cached active pending #[path]))
+    (calls.createPending pending) (fun path => calls.toRawSyncCalls.group directory.path cached active pending #[path]))
   publishUntilDirectory calls directory cached active pending
 
 /-- The markerless worker interpreted through its final directory
@@ -123,7 +123,7 @@ private theorem publishesUntil :
   rw [seen.markerOK] at synced
   have stageReturn : calls.stagePending seed.pendingRef (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0)
       beforeMarker = .ok () seen.marker.recorded := staged
-  have fileReturn : calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
+  have fileReturn : calls.toRawSyncCalls.group directory.path seed.directoryRef seed.activeRef seed.pendingRef
       #[directory.file .stagedWalBoundary] seen.marker.recorded = .ok () seen.marker.reached := synced
   have issued := seen.issues
   change markerDirectoryCall calls directory seed.directoryRef seed.activeRef seed.pendingRef seen.afterRename = _ at issued
@@ -138,12 +138,12 @@ theorem stopsHeld {prepared : heap} {empty : Option ByteArray}
     (prepare : prepareBootstrapWith directory calls.list calls.readEmpty calls.metadata seed.afterPending =
       .ok empty prepared)
     (rotate : WalSegmentRotation.runAt directory 0 (fun _ => EStateM.pure empty) (calls.createPending seed.pendingRef)
-      (fun path => calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[path]) prepared =
+      (fun path => calls.toRawSyncCalls.group directory.path seed.directoryRef seed.activeRef seed.pendingRef #[path]) prepared =
       .ok () beforeMarker) :
     (calls.untilMarkerDirectory directory seed.directoryRef seed.activeRef seed.pendingRef).run seed.afterPending =
       .error (directory.path, seed.handle) seen.afterRename := by
   change WalSegmentRotation.runAt directory 0 (fun _ => pure empty) (calls.createPending seed.pendingRef)
-    (fun path => calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[path]) prepared = _ at rotate
+    (fun path => calls.toRawSyncCalls.group directory.path seed.directoryRef seed.activeRef seed.pendingRef #[path]) prepared = _ at rotate
   have published := seen.publishesUntil
   change publishUntilDirectory calls directory seed.directoryRef seed.activeRef seed.pendingRef beforeMarker = _ at published
   simp only [FreshBootstrapCacheCalls.untilMarkerDirectory, bootstrapUntilDirectory, returned, prepare, Bind.bind,
@@ -208,7 +208,7 @@ variable {keeper : ReusedBootstrapKeeperHeap guards} (seen : RawBootstrapMarkerD
 theorem stopsHeldBootstrap :
     (bootstrapUntilDirectory calls directory seed.directoryRef seed.activeRef seed.pendingRef).run seed.afterPending =
       .error (directory.path, seed.handle) seen.afterRename := by
-  let sync := calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
+  let sync := calls.toRawSyncCalls.group directory.path seed.directoryRef seed.activeRef seed.pendingRef
   have rotates : WalSegmentRotation.runAt directory 0 (fun _ => EStateM.pure (some ByteArray.empty))
       (calls.createPending seed.pendingRef) (fun path => sync #[path]) guards.prepared =
       .ok () keeper.directoryBarrier.reached := by

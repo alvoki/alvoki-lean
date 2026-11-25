@@ -10,12 +10,6 @@ structure FreshBootstrapCacheCalls (heap : Type) extends BootstrapPendingCalls h
   metadata : FilePath → EStateM IO.Error heap (Option IO.FS.Metadata)
   rename : FilePath → FilePath → EStateM IO.Error heap Unit
 
-def FreshBootstrapCacheCalls.sync (calls : FreshBootstrapCacheCalls heap) (directory : DiskDirectory)
-    (directoryRef : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
-    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (paths : Array FilePath) : EStateM IO.Error heap Unit :=
-  SyncPathGroup.run (fun name => syncWithHandles directory.path name (calls.readDirectory directoryRef)
-    (calls.readPending pending) (calls.setPending pending) (calls.readActive active) calls.openRead calls.fsync) paths
-
 def FreshBootstrapCacheCalls.createPending (calls : FreshBootstrapCacheCalls heap)
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (path : FilePath) : EStateM IO.Error heap Unit := do
   let handle ← calls.create path
@@ -31,14 +25,14 @@ def FreshBootstrapCacheCalls.run (calls : FreshBootstrapCacheCalls heap) (direct
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : EStateM IO.Error heap Reopened :=
   bootstrapSegmentedWith directory calls.list calls.readEmpty calls.metadata
     (calls.createPending pending) (calls.stagePending pending)
-    (calls.sync directory directoryRef active pending) calls.rename
+    (calls.toRawSyncCalls.group directory.path directoryRef active pending) calls.rename
 
 /-- Both successful keeper routes continue with the same zero-marker publication. -/
 def FreshBootstrapCacheCalls.publishZeroMarker (calls : FreshBootstrapCacheCalls heap) (directory : DiskDirectory)
     (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : EStateM IO.Error heap Reopened := do
   Publication.run (Publication.performReplacement
-    (calls.stagePending pending · (WAL.Boundary.encode 0)) (calls.sync directory cached active pending) calls.rename
+    (calls.stagePending pending · (WAL.Boundary.encode 0)) (calls.toRawSyncCalls.group directory.path cached active pending) calls.rename
     (directory.file .stagedWalBoundary) directory.path (fun _ => directory.file .walBoundary) #[])
   pure ⟨.empty, 0, 0, 0⟩
 
@@ -94,8 +88,8 @@ structure FreshBootstrapDirectoryBarrier
 theorem FreshBootstrapDirectoryBarrier.returns
     {seed : OpenSyncCacheAllocations opened view init entry} {calls : FreshBootstrapCacheCalls heap}
     (report : FreshBootstrapDirectoryBarrier seed calls before) :
-    calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[directory.path] before = .ok () report.reached := by
-  unfold FreshBootstrapCacheCalls.sync
+    calls.toRawSyncCalls.group directory.path seed.directoryRef seed.activeRef seed.pendingRef #[directory.path] before = .ok () report.reached := by
+  unfold RawSyncCalls.group
   rw [SyncPathGroup.run_single]
   simp [syncWithHandles, Bind.bind, EStateM.bind, report.read, report.synced, Pure.pure, EStateM.pure]
 
@@ -137,7 +131,7 @@ theorem BootstrapMarkerPublicationHeap.returns
   rw [seen.markerOK] at synced
   have stageReturn : calls.stagePending seed.pendingRef (directory.file .stagedWalBoundary) (WAL.Boundary.encode 0)
       before = .ok () seen.marker.recorded := staged
-  have fileReturn : calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
+  have fileReturn : calls.toRawSyncCalls.group directory.path seed.directoryRef seed.activeRef seed.pendingRef
       #[directory.file .stagedWalBoundary] seen.marker.recorded = .ok () seen.marker.reached := synced
   have frame := (seen.markerFrames.preserves.trans seen.renameFrame).trans seen.markerDirectory.frame
   refine ⟨?_, frame, seen.markerDirectory.pending.trans (seen.renamePending.trans consumed)⟩
@@ -180,14 +174,14 @@ theorem prepares (seen : FreshBootstrapKeeperChronology seed calls) :
 cached directory sync's return before marker publication begins. -/
 theorem rotates (seen : FreshBootstrapKeeperChronology seed calls) :
     WalSegmentRotation.runAt directory 0 (fun _ => EStateM.pure none) (calls.createPending seed.pendingRef)
-      (fun path => calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef #[path]) seen.prepared =
+      (fun path => calls.toRawSyncCalls.group directory.path seed.directoryRef seed.activeRef seed.pendingRef #[path]) seen.prepared =
       .ok () seen.keeperDirectory.reached := by
   obtain ⟨_, _, cache, _, _, _, references, path, _⟩ := seed.installs
   obtain ⟨_, keeperCreated, keeperSynced, _, _, _, _⟩ := seen.keeper.returns cache references path
   rw [seen.keeperOK] at keeperSynced
   have created : calls.createPending seed.pendingRef (directory.file (.walSegment 0)) seen.prepared =
       .ok () seen.keeper.recorded := keeperCreated
-  have keeperSync : calls.sync directory seed.directoryRef seed.activeRef seed.pendingRef
+  have keeperSync : calls.toRawSyncCalls.group directory.path seed.directoryRef seed.activeRef seed.pendingRef
       #[directory.file (.walSegment 0)] seen.keeper.recorded = .ok () seen.keeper.reached := keeperSynced
   rw [WalSegmentRotation.runAt_fileEffects]
   simp [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,

@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeOpenCacheReferences
+import Alvoki.Storage.Disk.NativeRawSync
 
 namespace Alvoki.Storage.DiskSession
 
@@ -12,17 +13,11 @@ def BootstrapPendingFile.path (directory : DiskDirectory) : BootstrapPendingFile
   | .keeper => directory.file (.walSegment 0)
   | .marker => directory.file .stagedWalBoundary
 
-structure BootstrapPendingCalls (heap : Type) where
+structure BootstrapPendingCalls (heap : Type) extends RawSyncCalls heap where
   create : FilePath → EStateM IO.Error heap IO.FS.Handle
   stage : FilePath → ByteArray → EStateM IO.Error heap IO.FS.Handle
   remember : IO.Ref (List (FilePath × IO.FS.Handle)) →
     (List (FilePath × IO.FS.Handle) → List (FilePath × IO.FS.Handle)) → EStateM IO.Error heap Unit
-  readDirectory : IO.Ref (Option IO.FS.Handle) → EStateM IO.Error heap (Option IO.FS.Handle)
-  readPending : IO.Ref (List (FilePath × IO.FS.Handle)) → EStateM IO.Error heap (List (FilePath × IO.FS.Handle))
-  setPending : IO.Ref (List (FilePath × IO.FS.Handle)) → List (FilePath × IO.FS.Handle) → EStateM IO.Error heap Unit
-  readActive : IO.Ref (Option (FilePath × IO.FS.Handle)) → EStateM IO.Error heap (Option (FilePath × IO.FS.Handle))
-  openRead : FilePath → EStateM IO.Error heap IO.FS.Handle
-  fsync : IO.FS.Handle → EStateM IO.Error heap Unit
 
 def BootstrapPendingCalls.produces (calls : BootstrapPendingCalls heap) (directory : DiskDirectory) :
     BootstrapPendingFile → EStateM IO.Error heap IO.FS.Handle
@@ -73,9 +68,7 @@ theorem returns (seen : BootstrapPendingObservation view calls directory file pe
       let handle ← calls.produces directory file
       calls.remember pending (pushPending (file.path directory) handle) : EStateM IO.Error heap Unit)
       before = .ok () seen.recorded ∧
-    SyncPathGroup.run (fun name =>
-      syncWithHandles directory.path name (calls.readDirectory cachedDirectory) (calls.readPending pending)
-        (calls.setPending pending) (calls.readActive active) calls.openRead calls.fsync)
+    calls.toRawSyncCalls.group directory.path cachedDirectory active pending
       #[file.path directory] seen.recorded =
         (match seen.result with
           | .ok () => .ok () seen.reached
@@ -86,10 +79,6 @@ theorem returns (seen : BootstrapPendingObservation view calls directory file pe
   have one : view.pending seen.recorded pending = [(file.path directory, seen.handle)] := by
     rw [seen.recordedValue, seen.previouslyEmpty]
     rfl
-  have read : calls.readPending pending seen.recorded = .ok [(file.path directory, seen.handle)] seen.recorded := by
-    rw [seen.pendingRead, one]
-  have removed : calls.setPending pending [] seen.recorded = .ok () seen.consumed := by
-    simpa only [one, List.filter_cons, List.filter_nil, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte] using seen.removed
   have empty : view.pending seen.consumed pending = [] := by
     simp only [seen.consumedValue, one, List.filter_cons, List.filter_nil, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte]
   refine ⟨cache.bootstrapCacheSchedules uses path, ?_, ?_, one, empty, seen.pendingKept.trans empty,
@@ -99,16 +88,16 @@ theorem returns (seen : BootstrapPendingObservation view calls directory file pe
       cases file
       · exact file_ne_directory directory (.walSegment 0)
       · exact file_ne_directory directory .stagedWalBoundary
-    rw [SyncPathGroup.run_single]
-    cases result : seen.result with
-    | error cause =>
-      simp [syncWithHandles, Bind.bind, EStateM.bind, separate, read, removed,
-        seen.syncReturned, result, Pure.pure, EStateM.pure]
-      rfl
-    | ok value =>
-      cases value
-      simp [syncWithHandles, Bind.bind, EStateM.bind, separate, read, removed,
-        seen.syncReturned, result, Pure.pure, EStateM.pure]
+    let refs : OpenSyncCacheRefs cache directory.path := ⟨cachedDirectory, active, pending, uses, path⟩
+    have selected : (view.pending seen.recorded pending).find? (fun entry => entry.1 == file.path directory) =
+        some (file.path directory, seen.handle) := by simp [one]
+    have synced := calls.toRawSyncCalls.syncPending refs separate seen.pendingRead selected seen.removed
+    rw [RawSyncCalls.group, SyncPathGroup.run_single]
+    dsimp only [refs] at synced
+    rw [synced, seen.syncReturned]
+    cases seen.result with
+    | ok value => cases value; rfl
+    | error => rfl
 
 end BootstrapPendingObservation
 

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeOpenCheckpointScheduleStop
-import Alvoki.Storage.Disk.NativeOpenClose
+import Alvoki.Storage.Disk.NativeRawSync
 
 namespace Alvoki.Storage.DiskSession
 
@@ -14,12 +14,7 @@ private def returned {heap α : Type} (action : EStateM IO.Error heap α) : RawS
 
 /-- The native cache selectors and syscall, interpreted at their raw
 heap. Only the syscall can issue without returning. -/
-structure CheckpointRawSyncCalls (heap : Type) where
-  getDirectory : IO.Ref (Option IO.FS.Handle) → EStateM IO.Error heap (Option IO.FS.Handle)
-  getActive : IO.Ref (Option (FilePath × IO.FS.Handle)) → EStateM IO.Error heap (Option (FilePath × IO.FS.Handle))
-  getPending : IO.Ref (List (FilePath × IO.FS.Handle)) → EStateM IO.Error heap (List (FilePath × IO.FS.Handle))
-  setPending : IO.Ref (List (FilePath × IO.FS.Handle)) → List (FilePath × IO.FS.Handle) → EStateM IO.Error heap Unit
-  openRead : FilePath → EStateM IO.Error heap IO.FS.Handle
+structure CheckpointRawSyncCalls (heap : Type) extends RawSyncCacheCalls heap where
   fsync : IO.FS.Handle → EStateM FilePath heap (Except IO.Error Unit)
 
 variable {heap image : Type} {opened : NativeOpenedHandle heap}
@@ -27,9 +22,7 @@ variable {heap image : Type} {opened : NativeOpenedHandle heap}
 abbrev CheckpointRawSyncCalls.select (calls : CheckpointRawSyncCalls heap) (dir path : FilePath)
     (directory : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : RawSyncM heap Unit :=
-  syncWithHandles dir path (returned (calls.getDirectory directory)) (returned (calls.getPending pending))
-    (fun entries => returned (calls.setPending pending entries)) (returned (calls.getActive active))
-    (fun name => returned (calls.openRead name)) (fun handle => calls.fsync handle)
+  calls.toRawSyncCacheCalls.syncPath returned calls.fsync dir path directory active pending
 
 abbrev CheckpointRawSyncCalls.group (calls : CheckpointRawSyncCalls heap) (dir path : FilePath)
     (directory : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
@@ -82,16 +75,6 @@ private theorem rawPendingSelection {before : heap} {cache : CensusDirectoryCach
     obtain ⟨⟨rfl, identity⟩, _⟩ := entries
     exact ⟨literal, by simp, identity⟩
 
-/-- Index the observation by the cache of the opened table. With these
-same references, `DiskTable.OpenSyncFiles.keeperCacheSchedules` gives
-the source equality for its singleton grouped synchronization. -/
-structure CheckpointRawSyncCache (files : DiskTable.OpenSyncFiles) (root : FilePath) where
-  directory : IO.Ref (Option IO.FS.Handle)
-  active : IO.Ref (Option (FilePath × IO.FS.Handle))
-  pending : IO.Ref (List (FilePath × IO.FS.Handle))
-  references : files.UsesCacheReferences active pending directory
-  atRoot : files.AtDirectory root
-
 /-- The run's stopped primitive consumes the pending ref before calling
 fsync on the literal handle selected by the source run. The primitive
 simulation relates that syscall's actual entry heap to the normalized
@@ -99,9 +82,9 @@ operation, which consumes its projected cache in a single step. -/
 theorem NativeCheckpointSourceStop.runFileIssuesRawSync {index : Nat}
     (stop : NativeCheckpointSourceStop current primitives fsync (.syncRun index) reason reached)
     (calls : CheckpointRawSyncCalls heap)
-    (cache : CheckpointRawSyncCache opened.files current.current.ready.state.session.directory.path)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
     (projected : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = stop.atIssue.1)
-    (load : calls.getPending cache.pending stop.atIssue.2 = .ok (view.pending stop.atIssue.2 cache.pending) stop.atIssue.2)
+    (load : calls.readPending cache.pending stop.atIssue.2 = .ok (view.pending stop.atIssue.2 cache.pending) stop.atIssue.2)
     {atFsync : heap}
     (store : calls.setPending cache.pending
       ((view.pending stop.atIssue.2 cache.pending).filter
@@ -155,9 +138,9 @@ It neither consumes a pending entry nor consults a fallback file open. -/
 theorem NativeCheckpointSourceStop.runsDirectoryIssuesRawSync
     (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached)
     (calls : CheckpointRawSyncCalls heap)
-    (cache : CheckpointRawSyncCache opened.files current.current.ready.state.session.directory.path)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
     (projected : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = stop.atIssue.1)
-    (load : calls.getDirectory cache.directory stop.atIssue.2 = .ok (view.directory stop.atIssue.2 cache.directory) stop.atIssue.2)
+    (load : calls.readDirectory cache.directory stop.atIssue.2 = .ok (view.directory stop.atIssue.2 cache.directory) stop.atIssue.2)
     (primitive : ∀ literal, view.directory stop.atIssue.2 cache.directory = some literal →
       fsync (view.handle stop.atIssue.2 literal) stop.atIssue.2 = calls.fsync literal stop.atIssue.2 ∧
         CheckpointFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal) :
