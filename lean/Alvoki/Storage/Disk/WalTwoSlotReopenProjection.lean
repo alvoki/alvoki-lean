@@ -289,6 +289,27 @@ theorem reopenWith_installsPrepared {image : Type} {directory : Storage.DiskDire
     runOpenWithInstallation_ready (unlock := unlock) liveRefs fresh acquisition report
   exact ⟨session, final, success, phase, files, owner, freshSession⟩
 
+/-- A failed file barrier returns exactly its reached file image through
+lock cleanup. It cannot run keeper repair or allocate a ready session. -/
+theorem reopenWith_markerSyncError {image : Type} {directory : Storage.DiskDirectory}
+    {descriptor nextRef : Nat} (unlock : UnlockReport)
+    {before : LockedFileState image} {prepared reached : image}
+    {prepare : EStateM IO.Error image (Plan × Reopened × Nat)}
+    {stabilize : EStateM IO.Error image Unit} {finish : Plan → Nat → EStateM IO.Error image Unit}
+    {plan : Plan} {opened : Reopened} {size : Nat} {cause : IO.Error}
+    (read : prepare before.image = .ok (plan, opened, size) prepared)
+    (barrier : stabilize prepared = .error cause reached) :
+    runOpenWithInstallation directory descriptor nextRef (.ok true) unlock
+      (reopenWith prepare stabilize finish) before =
+      match unlock with
+      | .success => .error cause ⟨reached, before.owners.set (directory.file .lock) none⟩
+      | .failure cleanup applied => .error cleanup
+          ⟨reached, before.owners.set (directory.file .lock) (if applied then none else some descriptor)⟩ := by
+  have report : reopenWith prepare stabilize finish before.image = .error cause reached := by
+    simp only [reopenWith_reports, read, barrier]
+  rw [runOpenWithInstallation_outcome, runOpenWithImage_acquired, report]
+  cases unlock <;> rfl
+
 /-- For an installed segmented replay of the selected frontier, the table
 behind a fresh snapshot agrees with the client history at that frontier. -/
 theorem installedSnapshot_reads

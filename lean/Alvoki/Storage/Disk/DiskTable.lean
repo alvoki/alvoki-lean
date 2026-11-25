@@ -1189,6 +1189,38 @@ def «open» (path : FilePath) : IO TwoSlotDiskTable := do
         pure (opened, marker, selection)
       return ⟨← installReopened dir lock files opened, ← IO.mkRef (some (marker, selection))⟩
 
+/-- Admission and ownership use the same schedule as rename-backed open.
+The native marker read, its recovery and session installation all run
+inside that acquisition. -/
+theorem open_admission (input : FilePath) :
+    «open» input = DiskTable.withOpenAdmission input IO.FS.realPath
+      (fun path => path.symlinkMetadata.toBaseIO) (IO.FS.Handle.mk · .append) (fun directory lock =>
+        DiskSession.openWithLock lock.tryLock
+          (fun _ => IO.userError s!"database already open: {directory.path}") (fun _ => lock.unlock) fun _ => do
+            rejectFlatWal directory
+            let files ← SyncFiles.open directory.path
+            let (opened, marker, selection) ← if (← optionalMetadata (directory.file .walBoundary)).isSome then do
+              let (marker, selection) ← openMarker directory
+              pure (← reopen directory files marker selection, marker, selection)
+            else do
+              let opened ← bootstrap directory files
+              let (marker, selection) ← openMarker directory
+              pure (opened, marker, selection)
+            return ⟨← installReopened directory lock files opened, ← IO.mkRef (some (marker, selection))⟩) := rfl
+
+/-- The native decoder observes the same open handle returned for the
+marker barrier. Reading one extra byte detects an oversized file. -/
+theorem openMarker_fileEffects (directory : DiskDirectory) :
+    openMarker directory = (do
+      let path := directory.file .walBoundary
+      checkPrivateRegular path (← path.symlinkMetadata)
+      let marker ← IO.FS.Handle.mk path .readWrite
+      let selection ← (do
+        marker.rewind
+        let bytes ← marker.read (WAL.TwoSlot.containerSize + 1).toUSize
+        IO.ofExcept (WAL.TwoSlot.decode bytes))
+      pure (marker, selection)) := rfl
+
 def close (db : TwoSlotDiskTable) : IO Unit := do
   db.table.close
   db.marker.set none

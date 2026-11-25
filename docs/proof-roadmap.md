@@ -106,15 +106,18 @@ poisons the session, and the old-or-whole selection feeds exact WAL bytes
 to replay. Reopen validates before its file barrier, then calls the shared
 keeper repair. The logical marker projection preserves an absent crash
 binding after a pending bootstrap rename until the directory barrier.
-After authorization, the shared repair proof keeps the selected marker
-through its crash prefixes.
+Before authorization, retries preserve the old-or-whole frontier choice.
+After authorization, repeated repair preserves the selected marker, sealed
+bytes and replay result. The shared installer allocates a fresh snapshot
+identity for the recovered table. Modeled marker-sync errors preserve the
+reached file image through lock cleanup. Native fault injection checks errors
+before and after the marker sync with a keeper tail still pending repair.
 
 The remaining native refinement derives the slot survivor from reached
 positional writes and syncs on the same held file. It needs successful sync
 to preserve the WAL prefix, an interrupted write to leave the active slot
-intact, and the target to decode only as old, new, or invalid. Connect
-failed stabilization, repeated admitted reopen attempts and the returned
-session to the common client ledger. Use the physical reports for checkpoint
+intact, and the target to decode only as old, new, or invalid. Derive the projected retry steps from reached native events and connect the
+returned session to the common client ledger. Use the physical reports for checkpoint
 selection and segmented extents from that same attempt.
 [Slot model](../lean/Alvoki/Storage/Disk/WalOrderedTwoSlot.lean) ·
 [Decoder and schedules](../lean/Alvoki/Storage/Disk/WalTwoSlot.lean) ·

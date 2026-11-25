@@ -2313,6 +2313,15 @@ private def checkTwoSlotMarker (root : FilePath) : IO Unit := do
   let damaged := (visible.extract 0 damageAt).push (visible.get! damageAt ^^^ 1) ++
     visible.extract (damageAt + 1) visible.size
   IO.FS.writeBinFile marker damaged
+  -- Both reported failure positions must leave the keeper tail untouched.
+  for mode in [SyncFailureMode.beforeSync, .afterSync] do
+    let (opened, syncs) ← probeDisk bin dir (some marker) "--two-slot-open-once" (failureMode := mode)
+    let expected := match mode with
+      | .afterSync => [marker.toString, s!"synced before error: {marker}"]
+      | _ => [marker.toString]
+    check (!opened && syncs == expected) "two-slot reopen repaired after failed marker sync"
+    check ((← IO.FS.readBinFile active) == payload && (← IO.FS.readBinFile marker) == damaged)
+      "failed two-slot marker sync changed the recovery inputs"
   let repaired ← TwoSlotDiskTable.open dir
   try
     let latest ← repaired.acquire
@@ -2330,6 +2339,7 @@ private def checkTwoSlotMarker (root : FilePath) : IO Unit := do
 
 def main (args : List String) : IO Unit := do
   match args with
+  | ["--two-slot-open-once", dir] => (← TwoSlotDiskTable.open ⟨dir⟩).close
   | ["--open-once", dir] => (← DiskTable.open ⟨dir⟩).close
   | ["--check-seal-size-before-payload", dir, mode] =>
     match ← (DiskTable.open ⟨dir⟩).toBaseIO with

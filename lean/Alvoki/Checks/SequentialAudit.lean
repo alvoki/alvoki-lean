@@ -2152,3 +2152,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.WAL.TwoSlot.SettledRetries.replayUnchanged
 #check_axioms Alvoki.WAL.TwoSlot.reopenWith_installsPrepared
 #check_axioms Alvoki.WAL.TwoSlot.installedSnapshot_reads
+#check_axioms Alvoki.Storage.TwoSlotDiskTable.open_admission
+#check_axioms Alvoki.Storage.TwoSlotDiskTable.openMarker_fileEffects
+#check_axioms Alvoki.WAL.TwoSlot.reopenWith_markerSyncError
