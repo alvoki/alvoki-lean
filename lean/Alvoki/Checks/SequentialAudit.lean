@@ -209,6 +209,7 @@ import Alvoki.Storage.Disk.NamedMaintenanceBudget
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
+import Alvoki.Storage.Disk.WalSegmentCollectionNames
 import Alvoki.Storage.Disk.SelectedRecoveryPayload
 import Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentRotationPowerLoss
@@ -1325,6 +1326,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.delayedKeeperPowerLossCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.collectedWalPayload
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.collectedWalPayload_checkpointCovered
+#check_axioms Alvoki.Storage.WalSegmentRepair.HealthyBoundedWalReports.canonicalWalNames
+#check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.nameCount_le
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.retainedSealedNames
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.retainedWalNameCount
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.retainedWalNames_keeperCovered
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.retainedWalNameCount_fromListing
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.singleObservedWalName
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.selectedRecoveryPayload
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.selectedRecoveryAcquisition
 #check_axioms Alvoki.Storage.WalSegmentRepair.ReopenLineage.reopensRetainedAppendWith

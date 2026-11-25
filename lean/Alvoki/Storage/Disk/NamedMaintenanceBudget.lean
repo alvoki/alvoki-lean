@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.RunRetentionCollection
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
+import Alvoki.Storage.Disk.WalSegmentCollectionNames
 
 namespace Alvoki.Storage.DiskSession
 
@@ -161,6 +162,8 @@ theorem SegmentedCheckpointReport.Installs.maintainedNamedPayload {directory des
     after.RetainedReady directory descriptor ∧ after.owners = before.owners ∧ after.history = before.history ∧
     runBytes = (table.runs.map (·.run.bytes.size)).sum + runs.visible.namedRunTotal ByteArray.size extra ∧
     walBytes = before.wal.active.bytes.size ∧ walBytes ≤ cap * frameSize ∧
+    after.wal.segments =
+      (before.wal.sealed.filter fun segment => decide (segment.first = segment.last)) ++ [before.wal.active] ∧
     ∀ extraBudget, runs.visible.namedRunTotal ByteArray.size extra ≤ extraBudget →
       runBytes + walBytes ≤
         16 * before.installed.table.runs.length +
@@ -217,8 +220,21 @@ theorem SegmentedCheckpointReport.Installs.maintainedNamedPayload {directory des
     change (WalSegment.concatenate after.wal.segments).size ≤ cap * frameSize
     rw [keeperPayload, ready.layout.activeBytes, WAL.encode_size, List.length_drop, ← ready.layout.activeEnd, Nat.mul_comm]
     exact Nat.mul_le_mul_right _ width
+  have keeperCovered : postRun.wal.active.first ≤ postRun.target.range.watermark := by
+    have member : postRun.wal.active ∈ postRun.wal.segments :=
+      List.mem_append_right _ (List.mem_singleton_self _)
+    have ends : postRun.wal.active.last = postRun.target.range.watermark :=
+      collectedReady.layout.activeEnd.trans (collectedReady.resumed.through.symm.trans full)
+    exact ends ▸ collectedReady.layout.forward _ member
+  have names : after.wal.segments =
+      (before.wal.sealed.filter fun segment => decide (segment.first = segment.last)) ++ [before.wal.active] := by
+    rw [walInstalled.retainedWalNames_keeperCovered collectedReady walComplete keeperCovered]
+    change (published.wal.sealed.filter fun segment => decide (segment.first = segment.last)) ++
+      [published.wal.active] = _
+    rw [installed.wal]
+    rfl
   refine ⟨returned, uniqueCatalog, ?_, nextReady, owners.trans installed.owners,
-    walInstalled.history.trans installed.history, namedRuns, congrArg ByteArray.size keeperPayload, namedWal, ?_⟩
+    walInstalled.history.trans installed.history, namedRuns, congrArg ByteArray.size keeperPayload, namedWal, names, ?_⟩
   · rw [runMap]
     exact catalogComplete
   · intro extraBudget extraLimit
