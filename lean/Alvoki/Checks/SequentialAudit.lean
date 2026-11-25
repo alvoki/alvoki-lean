@@ -2095,6 +2095,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawHeldLateGuardError.returnsFinalized
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.returns
 #check_axioms Alvoki.Storage.DiskSession.RawBeforeFlockRejection.returns
+#check_axioms Alvoki.Storage.DiskSession.RawFlockRejection.preserves
+#check_axioms Alvoki.Storage.DiskSession.RawFlockRejection.returns
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.preserves
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.reopensAligned
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensAfterRejectedOpensAt

@@ -213,6 +213,14 @@ theorem RawFinalizedOpenAttempts.keepsPhase {start reached : heap} {errors : Lis
     have kept := (admissionFrame.beforeFlock input) entry
     rw [refused.failed] at kept
     exact kept.trans prior
+  | @flockError _ entry _ input refused prior =>
+    have appended := (admissionFrame.beforeFlock input) entry
+    rw [refused.report.opened] at appended
+    have failed := admissionFrame.flock refused.report.handle refused.report.atFlock
+    rw [refused.report.flock] at failed
+    have closed := releaseLock refused.report.handle refused.report.reached
+    rw [refused.finalized.finalized] at closed
+    exact closed.trans (failed.trans (appended.trans prior))
   | attempt _ _ input seen prior =>
     exact (seen.keepsPhase admissionFrame (worker input _ seen) (dispose input _ seen) releaseLock).trans prior
 

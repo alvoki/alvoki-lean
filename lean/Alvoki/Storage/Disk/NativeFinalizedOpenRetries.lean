@@ -90,6 +90,121 @@ theorem RawBeforeFlockRejection.returns
     rw [calls.runsAfterPrefix, seen.failed]
   exact ⟨prefixFailed, returned, returned.symm ▸ .beforeFlock prefixFailed⟩
 
+/-- An ordinary flock error after a file-preserving append-open. The
+open allocates one fresh description and the caller finalizes that
+same slot. The existing lock owner, if any, is live in the census. -/
+structure RawFlockRejection (view : OpenCloseHeapView heap FileImage) (calls : RawOpenAdmissionCallbacks heap)
+    (directory : DiskDirectory) (release : IO.FS.Handle → heap → heap) (input : FilePath) (entry : heap) where
+  report : RawOpenFlockError calls view input entry
+  sameDirectory : report.directory = directory
+  free : ∀ old ∈ (view.descriptors entry).slots, old.address ≠ (view.handle report.atFlock report.handle).2.1.address
+  fresh : (view.descriptors entry).references (view.handle report.atFlock report.handle).2.1.description = []
+  appendCensus : view.descriptors report.atFlock =
+    (view.descriptors entry).insert (view.handle report.atFlock report.handle).2.1 free
+  appendFiles : view.files report.atFlock = view.files entry
+  ownerLive : ∀ description, (view.files entry).owners (directory.file .lock) = some description →
+    (view.descriptors entry).references description ≠ []
+  finalized : RawOpenErrorLockFinalization view directory release report.handle
+    (view.handle report.atFlock report.handle).2.1 report.reached
+
+namespace RawFlockRejection
+
+variable (seen : RawFlockRejection view calls directory release input entry)
+
+abbrev slot : DescriptorSlot := (view.handle seen.report.atFlock seen.report.handle).2.1
+
+def reached : heap := seen.finalized.reached
+
+private theorem closeInserted (before : DescriptorInventory) (slot : DescriptorSlot)
+    (free : ∀ old ∈ before.slots, old.address ≠ slot.address) :
+    (before.insert slot free).afterDrops [slot.closeEvent] = before := by
+  have closed := DescriptorInventory.insert_thenClose before slot free []
+  simp only [List.nil_append] at closed
+  have survives : ∀ old ∈ before.slots, (!slot.closeEvent.removes old.reference) = true := by
+    intro old live
+    cases removed : slot.closeEvent.removes old.reference with
+    | false => rfl
+    | true =>
+      exfalso
+      apply free old live
+      simpa [DescriptorSlot.address, DescriptorSlot.closeEvent, LockReferenceDrop.removes,
+        Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq] using removed
+  rw [closed]
+  cases before with
+  | mk slots distinct inode =>
+    simp only [DescriptorInventory.afterDrops, List.all_cons, List.all_nil, Bool.and_true,
+      List.filter_eq_self.mpr survives]
+
+/-- Closing the just-opened slot restores the original inventory and
+locked file projection. If the failed flock acquired the lock, that
+slot was its only reference and closing it restores prior vacancy. -/
+theorem preserves : view.descriptors seen.reached = view.descriptors entry ∧
+    view.files seen.reached = view.files entry := by
+  have census : view.descriptors seen.reached = view.descriptors entry := by
+    change view.descriptors seen.finalized.reached = _
+    rw [seen.finalized.census, seen.report.census, seen.appendCensus]
+    exact closeInserted _ _ seen.free
+  have live : (view.descriptors seen.report.reached).references seen.slot.description ≠ [] :=
+    List.ne_nil_of_mem ((view.descriptors seen.report.reached).mem_references.mpr
+      ⟨seen.slot, seen.finalized.live, rfl, rfl⟩)
+  refine ⟨census, ?_⟩
+  change view.files seen.finalized.reached = _
+  rw [seen.finalized.files, DescriptorInventory.dropLockState, dite_eq_left live]
+  cases effect : seen.report.tookEffect with
+  | false =>
+    have unowned : (view.files entry).owners (directory.file .lock) ≠ some seen.slot.description :=
+      fun owner => seen.ownerLive seen.slot.description owner seen.fresh
+    have files : view.files seen.report.reached = view.files entry := by
+      have owners : (view.files seen.report.reached).owners = (view.files entry).owners := by
+        simpa only [effect, Bool.false_eq_true, ↓reduceIte, seen.appendFiles] using seen.report.owners
+      exact (LockedFileState.mk.injEq _ _ _ _).mpr ⟨seen.report.files.trans (congrArg LockedFileState.image seen.appendFiles), owners⟩
+    exact (((view.descriptors seen.report.reached).held seen.slot.description live).afterFileDrops_unowned
+      (files.symm ▸ unowned)).trans files
+  | true =>
+    have vacant : (view.files entry).owners (directory.file .lock) = none := by
+      simpa only [seen.sameDirectory, seen.appendFiles] using seen.report.vacant effect
+    have owners : (view.files seen.report.reached).owners =
+        (view.files entry).owners.set (directory.file .lock) (some seen.slot.description) := by
+      simpa only [effect, ↓reduceIte, seen.sameDirectory, seen.appendFiles] using seen.report.owners
+    have held : (view.files seen.report.reached).owners.Owns directory seen.slot.description := by
+      simp [LockOwners.Owns, owners, LockOwners.set]
+    have refs : ((view.descriptors seen.report.reached).afterDrops [seen.slot.closeEvent]).references
+        seen.slot.description = [] := by
+      have finalCensus := seen.finalized.census
+      change view.descriptors seen.reached = _ at finalCensus
+      rw [← finalCensus, census]
+      exact seen.fresh
+    have last := (view.descriptors seen.report.reached).held_remaining seen.slot.description live [seen.slot.closeEvent]
+    rw [((view.descriptors seen.report.reached).held seen.slot.description live).afterFileDrops_released held (last.trans refs)]
+    have restored : ((view.files entry).owners.set (directory.file .lock) (some seen.slot.description)).set
+        (directory.file .lock) none = (view.files entry).owners := by
+      funext path
+      by_cases same : path = directory.file .lock
+      · simp [LockOwners.set, same, vacant]
+      · simp [LockOwners.set, same]
+    exact (LockedFileState.mk.injEq _ _ _ _).mpr
+      ⟨seen.report.files.trans (congrArg LockedFileState.image seen.appendFiles),
+        by rw [owners]; exact restored⟩
+
+/-- The actual flock result prevents cache initialization, recovery
+and explicit unlock. The reported finalizer closes the same handle
+without changing the source diagnostic. -/
+theorem returns (init : OpenSyncCacheCallbacks heap)
+    (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
+    (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α) :
+    RawOpenReturn calls input entry
+      (fun resolved => openSyncFilesWith (init.openDirectory resolved.path) init.newRef init.newRef init.newRef makeCache)
+      recover (calls.runOpen input init makeCache recover entry) ∧
+    finishFailedOpen (calls.runOpen input init makeCache recover) release seen.report.handle entry =
+      .error seen.report.cause seen.reached := by
+  have ran : calls.runOpen input init makeCache recover entry = .error seen.report.cause seen.report.reached := by
+    rw [calls.runsAfterFlock input seen.report.opened init makeCache recover, seen.report.flock]
+  refine ⟨ran.symm ▸ .flockError seen.report.opened seen.report.flock, ?_⟩
+  simp only [finishFailedOpen, ran, seen.finalized.finalized, reached]
+
+end RawFlockRejection
+
 /-- The next attempt receives the exact caller-visible heap of its
 predecessor. A surviving lock alias after failed unlock can stop an
 admitted retry at the current result. -/
@@ -101,6 +216,10 @@ inductive RawFinalizedOpenAttempts (view : OpenCloseHeapView heap FileImage) (di
       (prior : RawFinalizedOpenAttempts view directory calls init release start earlier entry)
       (input : FilePath) (seen : RawBeforeFlockRejection view calls input entry) :
       RawFinalizedOpenAttempts view directory calls init release start (earlier ++ [(input, seen.cause)]) seen.reached
+  | flockError {earlier : List (FilePath × IO.Error)} {entry : heap}
+      (prior : RawFinalizedOpenAttempts view directory calls init release start earlier entry)
+      (input : FilePath) (seen : RawFlockRejection view calls directory release input entry) :
+      RawFinalizedOpenAttempts view directory calls init release start (earlier ++ [(input, seen.report.cause)]) seen.reached
   | attempt {earlier : List (FilePath × IO.Error)} {entry : heap}
       (prior : RawFinalizedOpenAttempts view directory calls init release start earlier entry)
       (vacant : TryLockObserves (view.files entry).owners directory (.ok true))
@@ -119,6 +238,10 @@ theorem RawFinalizedOpenAttempts.preserves {start reached : heap} {returns : Lis
   | beforeFlock _ _ refused earlier =>
     exact ⟨(congrArg DescriptorInventory.inode refused.census).trans earlier.1,
       (congrArg LockedFileState.image refused.files).trans earlier.2⟩
+  | flockError _ _ refused earlier =>
+    obtain ⟨sameCensus, sameFiles⟩ := refused.preserves
+    exact ⟨(congrArg DescriptorInventory.inode sameCensus).trans earlier.1,
+      (congrArg LockedFileState.image sameFiles).trans earlier.2⟩
   | attempt _ _ _ attempt earlier =>
     obtain ⟨_, _, _, _, _, sameInodes, sameFiles, _⟩ := attempt.returns
     exact ⟨sameInodes.trans earlier.1, sameFiles.trans earlier.2⟩
