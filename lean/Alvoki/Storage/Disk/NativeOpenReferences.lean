@@ -49,12 +49,16 @@ theorem installs
 the two-slot opener's three reference allocations in order. -/
 theorem installsWithRecoveredMarker
     {handle plan : Type} {entry acquired afterMarker : heap}
+    (probe : EStateM IO.Error heap (Option IO.FS.Metadata))
+    (bootstrap : EStateM IO.Error heap (WalSegmentRepair.Reopened × handle × WAL.TwoSlot.Selection))
+    {metadata : IO.FS.Metadata} {probed : heap}
+    (found : probe entry = .ok (some metadata) probed)
     (acquire : EStateM IO.Error heap (handle × WAL.TwoSlot.Selection))
     (prepare : WAL.TwoSlot.Selection → EStateM IO.Error heap (plan × WalSegmentRepair.Reopened × Nat))
     (stabilize : handle → EStateM IO.Error heap Unit)
     (finish : plan → Nat → EStateM IO.Error heap Unit)
     {opened : WalSegmentRepair.Reopened} {marker : handle} {selected : WAL.TwoSlot.Selection}
-    (markerRead : acquire entry = .ok (marker, selected) acquired)
+    (markerRead : acquire probed = .ok (marker, selected) acquired)
     (recovered : WAL.TwoSlot.reopenWith (prepare selected) (stabilize marker) finish acquired =
       .ok opened before)
     (observed : OpenReferenceAllocations allocatePhase allocateToken phaseContents opened.installed before)
@@ -69,18 +73,20 @@ theorem installsWithRecoveredMarker
       Option (Option (handle × WAL.TwoSlot.Selection)))
     (initializedMarker : markerContents afterMarker cell = some (some (marker, selected))) :
     (do
-      let (reopened, marker, selected) ← WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish
+      let (reopened, marker, selected) ←
+        if (← probe).isSome then WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish
+        else bootstrap
       let table ← installReady reopened.installed allocatePhase allocateToken (fun phase token => pure (assemble phase token))
       let cell ← allocateMarker (some (marker, selected))
       pure (table, cell)) entry = .ok (assemble observed.phase observed.token, cell) afterMarker ∧
     (assemble observed.phase observed.token).UsesOpenReferences directory lock syncFiles observed.phase observed.token ∧
     phaseContents afterMarker observed.phase = some (.ready opened.installed) ∧
     markerContents afterMarker cell = some (some (marker, selected)) := by
-  have worker : WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish entry =
+  have worker : WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish probed =
       .ok (opened, marker, selected) before := by
     simp only [WAL.TwoSlot.reopenAcquiredWith_reports, markerRead, recovered]
   obtain ⟨_, references, ready⟩ := observed.installs constructor
-  exact ⟨by simp only [Bind.bind, EStateM.bind, worker, installReady, observed.phaseAllocated, observed.tokenAllocated, markerAllocated, Pure.pure, EStateM.pure],
+  exact ⟨by simp only [Bind.bind, EStateM.bind, found, Option.isSome_some, ↓reduceIte, worker, installReady, observed.phaseAllocated, observed.tokenAllocated, markerAllocated, Pure.pure, EStateM.pure],
     references, keepsPhase.trans ready, initializedMarker⟩
 
 end OpenReferenceAllocations
