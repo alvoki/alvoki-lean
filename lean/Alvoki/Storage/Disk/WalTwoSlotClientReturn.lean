@@ -2309,6 +2309,19 @@ theorem InterruptedBatchMarkerPublication.survivingKeeperOfMarkerChange
     rw [walPersists synced] at membership
     exact ⟨appended, durable, wrote, synced, by simpa [FileImage.syncKeeper] using membership⟩
 
+/-- Run the marker sync with its physical image and the reached recovery
+state together. The continuation uses the recovery state returned by
+that very call, on either success or error. -/
+def projectMarkerSync
+    (sync : KeeperDescriptorIdentity →
+      EStateM IO.Error (WalInodeImage × (CensusDirectoryCache × CensusOpenState)) Unit)
+    (marker : WalInodeImage) (handle : KeeperDescriptorIdentity) :
+    EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit :=
+  fun reached =>
+    match sync handle (marker, reached) with
+    | .ok () (_, after) => .ok () after
+    | .error cause (_, after) => .error cause after
+
 /-- The guarded marked opener returns a session whose reads use the
 same replay as the already selected client history. -/
 theorem installsAfterAcquiredRecovery_replays
@@ -2323,7 +2336,8 @@ theorem installsAfterAcquiredRecovery_replays
     (available : PrefixChunksAvailableUntilEof payload (markerReads.readChunk file.calls.slot.description))
     (rewind : Nat → EStateM IO.Error Nat Unit) (rewound : rewind file.calls.slot.description 0 = .ok () 0)
     {selection : Selection} (decoded : decode payload = .ok selection)
-    (stabilize : KeeperDescriptorIdentity → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
+    (syncMarker : KeeperDescriptorIdentity →
+      EStateM IO.Error (WalInodeImage × (CensusDirectoryCache × CensusOpenState)) Unit)
     (finish : DiskDirectory → Plan → Nat → EStateM IO.Error (CensusDirectoryCache × CensusOpenState) Unit)
     {after : CensusOpenState}
     (report : CapturedMarkedReadReports admission layout published false file.calls.inventory)
@@ -2371,8 +2385,9 @@ theorem installsAfterAcquiredRecovery_replays
       let reached := (admission.cache.captureKeeper (directory.file (.walSegment layout.keeper.first))
         (report.wal.keeper.calls.inventory, report.wal.keeper.calls.slot, 0)
         layout.keeper.bytes.size report.wal.keeper.calls.metadata.byteSize.toNat, keeper.afterRead, admission.held)
-      stabilize ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩ reached =
-        .ok () (reached.1, reached.2.1,
+      syncMarker ⟨file.calls.slot.description, file.calls.inventory.inode file.calls.slot.description⟩
+        (markerImage, reached) =
+        .ok () (settledMarker, reached.1, reached.2.1,
           { reached.2.2 with image := { reached.2.2.image with directory := reachedDirectory } }))
     (repair : CapturedFinalRepair calls checkpointSelected
       { admission.held with image := { retry.image with directory := settleMarker retry.image.directory selection } }
@@ -2438,6 +2453,7 @@ theorem installsAfterAcquiredRecovery_replays
         (fun _ => pure (some (Boundary.encode chosen.frontier)))
         (fun watermark length => readSelectedWithCachedExtents resolved watermark length report.scanWal
           report.inspectWal (readTemporarySeal report.reads released) keeper.readKeeperAt)
+    let stabilize := fun handle => projectMarkerSync syncMarker markerImage handle
     ∃ session,
       calls.runWithMarked (fun resolved cache before =>
         match reopenAcquiredWith (acquireMarkerInCensus markerReads (resolved.file .walBoundary) rewind)
@@ -2461,7 +2477,7 @@ theorem installsAfterAcquiredRecovery_replays
           (writeCut.syncSlot writeCut.markerHandle) (writeCut.install writeCut.markerHandle next))
         (.ready prior.installed, ⟨(prior.files, writeCut.initialMarker), prior.owners⟩) =
         .error writeCut.stopped (.poisoned, ⟨(interrupted, interruptedMarker), prior.owners⟩) := by
-  intro opened prepare
+  intro opened prepare stabilize
   obtain ⟨transferredAddresses, transfers⟩ := SlotWriteTransfers.ofCounts (next.slot * stride) 0
     (completedCounts ++ [inFlightCount]) (by simpa using transfersFit)
   simp only [Nat.zero_add, List.sum_append, List.sum_cons, List.sum_nil, Nat.add_zero] at transfers
@@ -2579,7 +2595,7 @@ theorem installsAfterAcquiredRecovery_replays
       (finish directory) (admission.cache, file.calls.inventory, admission.held) =
         .ok opened (admission.cache, after) := by
     have sameDirectory := Except.ok.inj (reachedDirectoryReport.symm.trans projected)
-    simp only [reopenWith_reports, prepare, opened, prepared, syncReturned, sameDirectory]
+    simp only [reopenWith_reports, prepare, opened, prepared, stabilize, projectMarkerSync, syncReturned, sameDirectory]
     erw [finished.1]
   have returned := installsAfterAcquiredRecovery calls marker
     (fun resolved => acquireMarkerInCensus markerReads (resolved.file .walBoundary) rewind)

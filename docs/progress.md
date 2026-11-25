@@ -1064,6 +1064,11 @@ the exact reached cache. The sync result identifies the descriptor
 whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
+The held marker sync now returns the physical inode image and the
+logical recovery state from one callback. The client theorem projects
+the latter from that exact return before repair. The former is the
+same settled image used to check the fsync effect and survivor bytes.
+
 The full sequential suite passed at `265f4e8b`, including the
 axiom audit, differential checks, native disk and process-death tests,
 and aligned and repaired replay smoke runs. The following proof change
