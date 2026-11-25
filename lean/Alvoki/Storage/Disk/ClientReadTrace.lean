@@ -269,6 +269,43 @@ theorem SegmentedClientReadTrace.reopenAfterManifestStageError {input : System.F
     bindings.reopens (trace.writes.preservesRetained initialReady).1 release retry attempts reports
   exact ⟨layout, opened, session, final, after, endpoint, trace.afterManifestStageError endpoint⟩
 
+/-- The replay justifies earlier read responses and future guarded
+acquisitions in the returned session, using the same submission log. -/
+abbrev GuardedClientReplay (log : List DatabaseSubmissions) (reads : List RecordedSnapshotRead)
+    (after : SegmentedWriterState) (session : SegmentedSession) : Prop :=
+  ∃ reference : SnapshotTable UInt64,
+    SnapshotWalReplay .empty after.history reference ∧
+    DatabaseBatchRetention log after.history ∧
+    log.flatMap DatabaseSubmissions.acknowledged <+ after.history ∧
+    after.history <+ log.flatMap DatabaseSubmissions.submitted ∧
+    (∀ read ∈ reads, read.agrees reference) ∧
+    ∀ snapshot, after.installed.table.pins.floor ≤ snapshot → snapshot ≤ after.installed.table.committed →
+      ∃ (issued : Nat × SnapshotPin) (pinned : PackedTable) (acquired : SegmentedSession),
+        SegmentedSession.runAcquireAt snapshot session = .ok (some issued) acquired ∧
+        acquired.phase = .ready { after.installed with table := pinned } ∧
+        issued.1 = acquired.sessionRef ∧ issued.2.sequence = snapshot ∧ issued.2 ∈ pinned.pins.active ∧
+        ∀ sameSession : Bool, sameSession = decide (issued.1 = acquired.sessionRef) →
+          (∀ key, withLocalHandle (m := Except IO.Error) acquired.phase.installed (.ok sameSession) none
+              (fun state => pure (state.table.lookup issued.2.handle key)) =
+            .ok (some (reference.table.lookup key snapshot))) ∧
+          ∀ start stop, withLocalHandle (m := Except IO.Error) acquired.phase.installed (.ok sameSession) none
+              (fun state => pure (state.table.range issued.2.handle start stop)) =
+            .ok (some (reference.table.range start stop snapshot))
+
+/-- Use one abstract replay for previously recorded responses and reads
+from every supported snapshot registered in the reached ready session. -/
+theorem SegmentedClientReadTrace.guardedReplay
+    {first : LockedFileState WalSegmentRotation.State}
+    (bootstrap : BootstrapReady first.image) (held : first.owners.Owns directory initialDescriptor)
+    (trace : SegmentedClientReadTrace directory initialDescriptor (bootstrap.writerState first.owners)
+      allowCollection log reads descriptor last)
+    {session : SegmentedSession} (ready : session.phase = .ready last.installed) :
+    GuardedClientReplay log reads last session := by
+  obtain ⟨reference, replay, retained, acknowledged, submitted, readsAfter⟩ :=
+    trace.writes.guardedAcquireReads bootstrap held ready
+  exact ⟨reference, replay, retained, acknowledged, submitted,
+    trace.responses (bootstrap.writerReady held).toRetained .start replay, readsAfter⟩
+
 /-- The same WAL replay explains all earlier recorded responses and
 guarded reads from newly acquired snapshots in the installed session.
 The unchanged log still accounts for acknowledgement and submission. -/
@@ -282,28 +319,7 @@ theorem SegmentedClientReadTrace.manifestStageErrorRefines
     {release : SegmentedFailureRelease writer}
     {opened : CheckpointHeldOpen input directory layout (report.reachedPublication manifest runs)} {session final}
     (endpoint : ManifestStageFailureReopened (report := report) release opened session final after) :
-    ∃ reference : SnapshotTable UInt64,
-      SnapshotWalReplay .empty after.history reference ∧
-      DatabaseBatchRetention log after.history ∧
-      log.flatMap DatabaseSubmissions.acknowledged <+ after.history ∧
-      after.history <+ log.flatMap DatabaseSubmissions.submitted ∧
-      (∀ read ∈ reads, read.agrees reference) ∧
-      ∀ snapshot, after.installed.table.pins.floor ≤ snapshot → snapshot ≤ after.installed.table.committed →
-        ∃ (issued : Nat × SnapshotPin) (pinned : PackedTable) (acquired : SegmentedSession),
-          SegmentedSession.runAcquireAt snapshot session = .ok (some issued) acquired ∧
-          acquired.phase = .ready { after.installed with table := pinned } ∧
-          issued.1 = acquired.sessionRef ∧ issued.2.sequence = snapshot ∧ issued.2 ∈ pinned.pins.active ∧
-          ∀ sameSession : Bool, sameSession = decide (issued.1 = acquired.sessionRef) →
-            (∀ key, withLocalHandle (m := Except IO.Error) acquired.phase.installed (.ok sameSession) none
-                (fun state => pure (state.table.lookup issued.2.handle key)) =
-              .ok (some (reference.table.lookup key snapshot))) ∧
-            ∀ start stop, withLocalHandle (m := Except IO.Error) acquired.phase.installed (.ok sameSession) none
-                (fun state => pure (state.table.range issued.2.handle start stop)) =
-              .ok (some (reference.table.range start stop snapshot)) := by
-  let continued := trace.afterManifestStageError endpoint
-  obtain ⟨reference, replay, retained, acknowledged, submitted, readsAfter⟩ :=
-    continued.writes.guardedAcquireReads bootstrap held endpoint.phase
-  exact ⟨reference, replay, retained, acknowledged, submitted,
-    continued.responses (bootstrap.writerReady held).toRetained .start replay, readsAfter⟩
+    GuardedClientReplay log reads after session :=
+  (trace.afterManifestStageError endpoint).guardedReplay bootstrap held endpoint.phase
 
 end Alvoki.Storage.DiskSession
