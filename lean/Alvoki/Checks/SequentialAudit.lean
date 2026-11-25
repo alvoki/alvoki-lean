@@ -864,6 +864,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.Physical.fileProjection
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.Physical.retrySupport
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensCheckpointSurvivor
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRebootContinuation.checkpointWatermark
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversStoppedCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.custody
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointDirectoryError.Physical.selects
