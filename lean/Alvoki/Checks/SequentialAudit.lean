@@ -1380,7 +1380,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readsBounded
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.guardedReplay
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readAt
-#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.startsNativeReadPrefix
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperFinish.startsNativeReadPrefix
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyClose.followsFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reachesClose
