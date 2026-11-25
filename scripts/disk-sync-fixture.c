@@ -357,8 +357,20 @@ int fsync(int fd) {
         log_marker_descriptor(log, "marker fsync: ", fd);
 
     static unsigned hold_hits;
-    // Both test targets are synced once during open, before the write barrier.
-    if (same(path, hold) && ++hold_hits == 2) return hold_sync(real_sync, fd);
+    const char *hold_mode = getenv("ALVOKI_CHECK_SYNC_HOLD_MODE");
+    int reopen_after = same(hold_mode, "reopen-after");
+    // Publication fixtures skip the first sync, which belongs to reopen.
+    unsigned hold_at = (same(hold_mode, "reopen-before") || reopen_after) ? 1 : 2;
+    if (same(path, hold) && ++hold_hits == hold_at) {
+        if (!reopen_after) return hold_sync(real_sync, fd);
+        const char *ready = getenv("ALVOKI_CHECK_SYNC_PID");
+        const char *release = getenv("ALVOKI_CHECK_SYNC_RELEASE");
+        if (ready == NULL || release == NULL) return fail_sync();
+        if (real_sync(fd) < 0) return -1;
+        log_sync(log, "synced before hold: ", path);
+        hold_owner(ready, release);
+        return 0;
+    }
 
     const char *mode = getenv("ALVOKI_CHECK_SYNC_FAIL_MODE");
     if (same(mode, "second-only")) {

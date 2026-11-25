@@ -367,12 +367,36 @@ def check_two_slot_batch_cut(binary, shim, database, cut, rotated, resume=False)
             if resume:
                 release.touch()
                 require(owner.wait(timeout=TIMEOUT) == 0, "two-slot writer failed after a short pwrite")
+                release.unlink()
                 new_marker = marker.read_bytes()
                 require(new_marker[:40] != old_marker[:40] and new_marker[40:] == old_marker[40:],
                         "resumed positional write changed bytes outside the inactive slot")
             else:
                 owner.kill()
                 require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "two-slot writer was not killed")
+        for effect in ("before", "after"):
+            ready = Path(scratch) / f"reopen-{effect}.pid"
+            sync_log = Path(scratch) / f"reopen-{effect}.log"
+            with native_process(binary, "--two-slot-open-once", database, sync_pid_file=ready, env={
+                **os.environ,
+                "LD_PRELOAD": str(shim),
+                "ALVOKI_CHECK_SYNC_LOG": str(sync_log),
+                "ALVOKI_CHECK_SYNC_HOLD": str(marker),
+                "ALVOKI_CHECK_SYNC_HOLD_MODE": f"reopen-{effect}",
+                "ALVOKI_CHECK_SYNC_PID": str(ready),
+                "ALVOKI_CHECK_SYNC_RELEASE": str(release),
+            }) as retry:
+                require(wait_for_cut(retry, ready, "reopen marker sync") == retry.pid,
+                        "reopen marker sync paused in the wrong process")
+                expected = [str(marker)]
+                if effect == "after":
+                    expected.append(f"synced before hold: {marker}")
+                require(sync_log.read_text().splitlines() == expected,
+                        "reopen reached another sync before the marker cut")
+                retry.kill()
+                require(retry.wait(timeout=TIMEOUT) == -signal.SIGKILL, "reopen was not killed")
+            require(marker.read_bytes() == new_marker and wal.read_bytes() == new_wal,
+                    "killed reopen changed the marker or trimmed the WAL")
         for failure in ("before", "after"):
             sync_log = Path(scratch) / f"retry-{failure}.log"
             status, stderr = run_probe(binary, "--two-slot-open-once", database, env={
@@ -579,5 +603,5 @@ if __name__ == "__main__":
     print("Read the manifest in two bounded phases and preserved its exact reopen and rejection outcomes.")
     print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
-    print("Recovered zero and rotated two-slot keepers after short writes, publication cuts, and two failed retries.")
+    print("Recovered zero and rotated two-slot keepers after short writes, publication and reopen cuts, and failed retries.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")
