@@ -367,6 +367,23 @@ def WriteRequest.runOnOpenPhase (request : WriteRequest) (directory : DiskDirect
   | .batch group => writeBatchSchedule group load DiskWriteError.rejected requireWritePreparation guard setPhase
       (fun current batch count => commit current (WAL.encodeBatch batch) count)
 
+/-- A phase error is returned before preparation, the empty-batch
+fast path, or any file operation in the original write schedule. -/
+theorem WriteRequest.runOnOpenPhase_rejectsPhase
+    (request : WriteRequest) (directory : DiskDirectory)
+    (calls : Calls (DescriptorInventory × DescriptorSlot × Nat)) (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    {before : heap} {atPhase : Phase Installed} {cause : IO.Error}
+    (loaded : get phase before = .ok atPhase before)
+    (rejected : (atPhase.installed : Except IO.Error Installed) = .error cause)
+    (files : OpenWriteFiles) :
+    request.runOnOpenPhase directory calls phase get set (before, files) =
+      .error (.rejected cause) (before, files) := by
+  cases request <;> simp [WriteRequest.runOnOpenPhase, withPreparedSingleWrite, writeBatchSchedule, heapEffect,
+    Bind.bind, EStateM.bind, loaded, rejected, Except.mapError, liftExcept, throw, throwThe, MonadExceptOf.throw,
+    EStateM.throw]
+
 /-- Read the actual opened cell and preserve its heap and file/cache
 projection when the fixed write callbacks return during preflight. -/
 theorem NativeReadPosition.interpretsOpenWritePreflight {history log}

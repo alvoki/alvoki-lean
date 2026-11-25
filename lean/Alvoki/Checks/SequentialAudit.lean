@@ -255,6 +255,7 @@ import Alvoki.Storage.Disk.NativeOpenCloseReopenTrace
 import Alvoki.Storage.Disk.NativeOpenCloseAdmissionTrace
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 import Alvoki.Storage.Disk.NativeInactiveOpenedSnapshots
+import Alvoki.Storage.Disk.NativeInactiveOpenedPublication
 import Alvoki.Storage.Disk.NativeOpenCheckpoint
 import Alvoki.Storage.Disk.NativeOpenedPosition
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
@@ -1956,6 +1957,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.releasePin
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.advanceFloor
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.snapshotAcquisitions
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnOpenPhase_rejectsPhase
+#check_axioms Alvoki.Storage.DiskSession.runCheckpointOnOpenPhase_rejectsPhase
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotRead
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotRelease
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotAcquire

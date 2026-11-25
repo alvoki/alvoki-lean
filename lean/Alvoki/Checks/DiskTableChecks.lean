@@ -571,6 +571,13 @@ private def checkSnapshotSessions (root : FilePath) : IO Unit := do
       rejects original.acquire "closed database accepted a latest snapshot"
       rejects (original.acquireAt 1) "closed database accepted an explicit snapshot"
       rejects (original.advanceFloor 1) "closed database accepted a retention floor update"
+      expectRejectedWrite original "database is closed"
+      let .error (.rejected (.userError batchCause)) ← (original.writeBatchWithOutcome []).toBaseIO
+        | throw (IO.userError "closed database accepted an empty batch")
+      check (batchCause == "database is closed") "closed database changed the empty-batch diagnostic"
+      let .error (.userError checkpointCause) ← original.checkpoint.toBaseIO
+        | throw (IO.userError "closed database accepted a checkpoint")
+      check (checkpointCause == "database is closed") "closed database changed the checkpoint diagnostic"
       check ((← first.lookup firstPin.handle 7) == some (some 70))
         "a call on the closed table changed the reopened table's snapshot"
     finally second.close
