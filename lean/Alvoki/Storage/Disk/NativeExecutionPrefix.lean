@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeExecutionTrace
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
+import Alvoki.Storage.Disk.NativeInactiveSessionCalls
 import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 import Alvoki.Storage.Disk.NativePendingRotation
 import Alvoki.Storage.Disk.NativePendingCheckpoint
@@ -23,10 +24,13 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
 
-inductive NativeExecutionEndInstruction where
+inductive NativeExecutionEndInstruction : Type 1 where
   | ready
   | write (request : WriteRequest)
   | writeThenClose (request : WriteRequest)
+  | writeThenInactiveCalls (request : WriteRequest) (calls : List NativeInactiveRequest)
+  | writeThenCloseThenInactiveCalls (request : WriteRequest) (calls : List NativeInactiveRequest)
+  | closeThenInactiveCalls (calls : List NativeInactiveRequest)
   | close
   | closeThenOpenAttempts (inputs : List FilePath)
   | checkpoint
@@ -54,6 +58,11 @@ The reached files and ownership remain available at each endpoint. -/
 inductive NativeExecutionEnd (current : NativeExecutionPosition) : Type 1 where
   | ready
   | uncertainWrite (pending : NativePendingWrite current.ready)
+  | callsAfterUncertainWrite (pending : NativePendingWrite current.ready) (calls : List NativeInactiveRequest)
+  | callsAfterPoisonedClose (pending : NativePendingWrite current.ready) (reported : NativePendingClose pending)
+      (unlocked : reported.report.result = .ok ()) (calls : List NativeInactiveRequest)
+  | callsAfterReadyClose (reported : NativeReadyClose current.ready.state) (unlocked : reported.report.result = .ok ())
+      (calls : List NativeInactiveRequest)
   | interruptedFirstAppend {prepared : NativeReadyWritePreparation current.ready.state}
       (stop : NativeFirstAppendStop prepared)
   | interruptedKeeperSync {prepared : NativeReadyWritePreparation current.ready.state}
@@ -102,6 +111,9 @@ namespace NativeExecutionEnd
 def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .ready => .ready
   | .uncertainWrite pending => .write pending.write.request
+  | .callsAfterUncertainWrite pending calls => .writeThenInactiveCalls pending.write.request calls
+  | .callsAfterPoisonedClose pending _ _ calls => .writeThenCloseThenInactiveCalls pending.write.request calls
+  | .callsAfterReadyClose _ _ calls => .closeThenInactiveCalls calls
   | .interruptedFirstAppend stop => .write stop.request
   | .interruptedKeeperSync stop => .write stop.request
   | .groupedKeeperSyncError seen => .write seen.request
@@ -124,7 +136,8 @@ def instruction : NativeExecutionEnd current → NativeExecutionEndInstruction
   | .rotationError _ _ => .rotateWal
 
 def uncertainBatch : NativeExecutionEnd current → Option (List WAL.Write)
-  | .uncertainWrite pending | .closeAfterUncertainWrite pending _ => some pending.write.failure.batch
+  | .uncertainWrite pending | .closeAfterUncertainWrite pending _ | .callsAfterUncertainWrite pending _
+  | .callsAfterPoisonedClose pending _ _ _ => some pending.write.failure.batch
   | .interruptedFirstAppend (prepared := prepared) _ | .interruptedKeeperSync (prepared := prepared) _
   | .groupedKeeperSyncError (prepared := prepared) _ | .interruptedMarkerRename (prepared := prepared) _
   | .groupedMarkerSyncError (prepared := prepared) _
@@ -145,6 +158,15 @@ def Reached : NativeExecutionEnd current → Prop
   | .ready => current.ready.opened =
       .ok current.ready.initial.session (current.ready.initial.census, current.ready.initial.files)
   | .uncertainWrite pending => pending.write.returnedAt pending.cache
+  | .callsAfterUncertainWrite pending calls =>
+      pending.write.returnedAt pending.cache ∧
+      NativeInactiveTrace pending.inactive calls (calls.map (NativeInactiveRequest.response .poisoned))
+  | .callsAfterPoisonedClose pending reported unlocked calls =>
+      pending.write.returnedAt pending.cache ∧ reported.report.run = .ok () reported.report.finished ∧
+      NativeInactiveTrace (reported.inactive unlocked) calls (calls.map (NativeInactiveRequest.response .closed))
+  | .callsAfterReadyClose reported unlocked calls =>
+      reported.report.run = .ok () reported.report.finished ∧
+      NativeInactiveTrace (reported.inactive unlocked) calls (calls.map (NativeInactiveRequest.response .closed))
   | .interruptedFirstAppend stop => NativePendingFirstAppend current.ready stop
   | .interruptedKeeperSync stop => NativePendingKeeperSync current.ready stop
   | .groupedKeeperSyncError seen => NativeReturnedGroupedKeeperError current.ready seen
@@ -228,6 +250,13 @@ theorem reached (ending : NativeExecutionEnd current) : ending.Reached := by
   cases ending with
   | ready => exact current.ready.readPrefix.frames.1
   | uncertainWrite pending => exact pending.returned
+  | callsAfterUncertainWrite pending calls => exact ⟨pending.returned, (pending.rejectsCalls calls).2.1⟩
+  | callsAfterPoisonedClose _ reported unlocked calls =>
+    obtain ⟨pending, closed, rejected, _⟩ := reported.rejectsCalls unlocked calls
+    exact ⟨pending, closed, rejected⟩
+  | callsAfterReadyClose reported unlocked calls =>
+    obtain ⟨closed, rejected, _⟩ := current.ready.rejectsCallsAfterClose reported unlocked calls
+    exact ⟨closed, rejected⟩
   | interruptedFirstAppend stop => exact current.ready.stopsAtFirstAppend stop
   | interruptedKeeperSync stop => exact current.ready.stopsAtKeeperSync stop
   | groupedKeeperSyncError seen => exact current.ready.returnsGroupedKeeperError seen
@@ -307,6 +336,12 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
   | uncertainWrite pending =>
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
+  | callsAfterUncertainWrite pending =>
+    obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
+    exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
+  | callsAfterPoisonedClose _ reported =>
+    obtain ⟨chosen, allowed, _, replay, bounded⟩ := reported.selectsAtReturn
+    exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
   | interruptedFirstAppend stop =>
     have reached := current.ready.stopsAtFirstAppend stop
     exact ⟨current.history, .inl rfl, reached.replay, reached.bounded⟩
@@ -341,7 +376,7 @@ theorem selectsAtEnd (ending : NativeExecutionEnd current) :
   | interruptedCloseAfterUncertainWrite pending =>
     obtain ⟨chosen, allowed, _, replay, bounded⟩ := pending.selectsAtReturn
     exact ⟨chosen, allowed.imp id (fun whole => ⟨_, rfl, whole⟩), replay, bounded⟩
-  | ready | close | rejectedOpensAfterClose | interruptedClose | checkpointError | interruptedCheckpoint
+  | ready | close | callsAfterReadyClose | rejectedOpensAfterClose | interruptedClose | checkpointError | interruptedCheckpoint
   | checkpointRunDirectoryError | collectionError | coveredWalUnlinkError | interruptedCoveredWalUnlink
   | interruptedObsoleteRunUnlink | interruptedRotation | rotationError =>
     refine ⟨current.history, .inl rfl, ?_, current.ready.readPrefix.readsBounded⟩
@@ -358,6 +393,18 @@ inductive NativeExecutionEndObservation (current : NativeExecutionPosition) :
   | uncertainWrite (write : NativeReadyWriteFailure current.ready.state)
       (inspect : ∀ cache, write.returnedAt cache → Nonempty (NativePendingWriteCensus current.ready.state cache)) :
       NativeExecutionEndObservation current (.write write.request)
+  | callsAfterUncertainWrite (failedWrite : NativeReadyWriteFailure current.ready.state)
+      (calls : List NativeInactiveRequest)
+      (inspect : ∀ cache, failedWrite.returnedAt cache → Nonempty (NativePendingWriteCensus current.ready.state cache)) :
+      NativeExecutionEndObservation current (.writeThenInactiveCalls failedWrite.request calls)
+  | callsAfterPoisonedClose (failedWrite : NativeReadyWriteFailure current.ready.state)
+      (calls : List NativeInactiveRequest)
+      (inspect : ∀ cache, failedWrite.returnedAt cache → Nonempty (NativePendingWriteCensus current.ready.state cache))
+      (close : ∀ pending : NativePendingWrite current.ready, pending.write = failedWrite →
+        ∃ reported : NativePendingClose pending, reported.report.result = .ok ()) :
+      NativeExecutionEndObservation current (.writeThenCloseThenInactiveCalls failedWrite.request calls)
+  | callsAfterReadyClose (reported : NativeReadyClose current.ready.state) (unlocked : reported.report.result = .ok ())
+      (calls : List NativeInactiveRequest) : NativeExecutionEndObservation current (.closeThenInactiveCalls calls)
   | interruptedFirstAppend {prepared : NativeReadyWritePreparation current.ready.state}
       (stop : NativeFirstAppendStop prepared) : NativeExecutionEndObservation current (.write stop.request)
   | interruptedKeeperSync {prepared : NativeReadyWritePreparation current.ready.state}
@@ -422,6 +469,19 @@ theorem NativeExecutionEndObservation.reaches (observed : NativeExecutionEndObse
     refine ⟨.uncertainWrite pending, ?_, pending.returned⟩
     change NativeExecutionEndInstruction.write pending.write.request = .write write.request
     rw [same]
+  | callsAfterUncertainWrite failedWrite calls inspect =>
+    obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite failedWrite inspect
+    refine ⟨.callsAfterUncertainWrite pending calls, ?_, NativeExecutionEnd.reached _⟩
+    change NativeExecutionEndInstruction.writeThenInactiveCalls pending.write.request calls = _
+    rw [same]
+  | callsAfterPoisonedClose failedWrite calls inspect close =>
+    obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite failedWrite inspect
+    obtain ⟨reported, unlocked⟩ := close pending same
+    refine ⟨.callsAfterPoisonedClose pending reported unlocked calls, ?_, NativeExecutionEnd.reached _⟩
+    change NativeExecutionEndInstruction.writeThenCloseThenInactiveCalls pending.write.request calls = _
+    rw [same]
+  | callsAfterReadyClose reported unlocked calls =>
+    exact ⟨.callsAfterReadyClose reported unlocked calls, rfl, NativeExecutionEnd.reached _⟩
   | interruptedFirstAppend stop => exact ⟨.interruptedFirstAppend stop, rfl, NativeExecutionEnd.reached _⟩
   | interruptedKeeperSync stop => exact ⟨.interruptedKeeperSync stop, rfl, NativeExecutionEnd.reached _⟩
   | groupedKeeperSyncError seen => exact ⟨.groupedKeeperSyncError seen, rfl, NativeExecutionEnd.reached _⟩
