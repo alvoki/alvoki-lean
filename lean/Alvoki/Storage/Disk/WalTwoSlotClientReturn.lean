@@ -2814,11 +2814,12 @@ theorem recoveredRetries_installedReads
     {visibleMarker : Option ByteArray} {crashMarkers : List (Option ByteArray)}
     (projectedVisible : projectMarkerBytes checkpoint visibleMarker = .ok initial.directory.active)
     (projectedCrash : crashMarkers.mapM (projectMarkerBytes checkpoint) = .ok initial.directory.crashImages)
-    {addresses : List Nat} {cursor : Nat}
-    (transferred : SlotWriteTransfers (next.slot * stride) 0 addresses cursor)
+    (completedCounts : List Nat) (inFlightCount : Nat)
+    (transfersFit : completedCounts.sum + inFlightCount ≤ 40)
     (slotOutcome : ∀ bytes, some bytes ∈ visibleMarker :: crashMarkers →
       bytes.size = containerSize ∧
-      (∀ position, bytes.get! position ≠ before.get! position → position ∈ addresses) ∧
+      (∀ position, bytes.get! position ≠ before.get! position → position < next.slot * stride + (completedCounts.sum + inFlightCount) ∧
+        next.slot * stride ≤ position) ∧
       (decodeSlot bytes (slotIndex active.other) = decodeSlot before (slotIndex active.other) ∨
         decodeSlot bytes (slotIndex active.other) = none ∨
         decodeSlot bytes (slotIndex active.other) = some next))
@@ -3055,6 +3056,9 @@ theorem recoveredRetries_installedReads
   have recovery : WalSegmentRecovery image after.directory.active target.range (history ++ batch)
       base layout.first table := ready.selected.symm ▸ selectedRecovery
   have retries : SettledRetries target after after := .start
+  obtain ⟨addresses, transferred⟩ := SlotWriteTransfers.ofCounts (next.slot * stride) 0
+    (completedCounts ++ [inFlightCount]) (by simpa using transfersFit)
+  simp only [Nat.zero_add, List.sum_append, List.sum_cons, List.sum_nil, Nat.add_zero] at transferred
   have observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
       pair = ⟨checkpoint, none⟩ ∨
       ∃ bytes, InterruptedSlotBytes before bytes active next ∧
@@ -3070,7 +3074,12 @@ theorem recoveredRetries_installedReads
     | none => exact .inl (Except.ok.inj projected).symm
     | some bytes =>
       obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes present
-      exact .inr ⟨bytes, transferred.interruptedBytes offset advanced size attributed decoded, projected⟩
+      have changedAddresses : ∀ position, bytes.get! position ≠ before.get! position → position ∈ addresses := by
+        intro position changed
+        apply (transferred.coversPrefix position).mpr
+        have span := attributed position changed
+        omega
+      exact .inr ⟨bytes, transferred.interruptedBytes offset advanced size changedAddresses decoded, projected⟩
   have ledger := recoveredRetries_retainUncertainBatch beforeBarrier.refines accepted offset advanced
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
   obtain ⟨_, _, reference, replayed, _⟩ := ledger.2.1
