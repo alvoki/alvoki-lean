@@ -752,6 +752,18 @@ def DiskTable.advanceFloor (db : DiskTable) (floor : UInt64) : IO Bool := do
   db.phase.set (.ready { state with table })
   return true
 
+/-- Update only the ready phase, and only when the current pins permit the new floor. -/
+@[macro_inline] def DiskSession.advanceFloorWith [Monad m]
+    (installed : m DiskSession.Installed) (record : DiskSession.Phase DiskSession.Installed → m Unit)
+    (floor : UInt64) : m Bool := do
+  let state ← installed
+  let some table := state.table.advanceFloor floor | return false
+  record (.ready { state with table })
+  return true
+
+theorem DiskTable.advanceFloor_schedule (db : DiskTable) (floor : UInt64) :
+    db.advanceFloor floor = DiskSession.advanceFloorWith (m := IO) db.installed db.phase.set floor := rfl
+
 def DiskTable.compact (db : DiskTable) (index : Nat) : IO Bool := do
   let state ← db.installed
   let some table := state.table.compact index | return false

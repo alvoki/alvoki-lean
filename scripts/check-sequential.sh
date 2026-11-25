@@ -134,6 +134,7 @@ lake env leanchecker Alvoki.Storage.Disk.BoundedReopenFailure
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentBoundedRetry
 lake env leanchecker Alvoki.Storage.Disk.DiskSession
 lake env leanchecker Alvoki.Storage.Disk.SessionReadGuards
+lake env leanchecker Alvoki.Storage.Disk.SessionRetentionFloor
 lake env leanchecker Alvoki.Storage.Disk.MarkedOpenControl
 lake env leanchecker Alvoki.Storage.Disk.DiskLockLifecycle
 lake env leanchecker Alvoki.Storage.Disk.LockDescriptionLifetime
