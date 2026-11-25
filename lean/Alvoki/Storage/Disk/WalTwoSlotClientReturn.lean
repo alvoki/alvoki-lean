@@ -2420,6 +2420,29 @@ private theorem projectedMarker_member {checkpoint : Option ByteArray}
         · obtain ⟨bytes, present, projected⟩ := ih tail later
           exact ⟨bytes, List.mem_cons_of_mem _ present, projected⟩
 
+/-- Both reopen routes project the same visible and surviving marker images
+before handing the selected WAL boundary to shared recovery. -/
+private theorem interruptedMarker_observations
+    {directory : DirectoryPublication.Image} {checkpoint visible : Option ByteArray}
+    {crash : List (Option ByteArray)} {before : ByteArray} {active : Slot} {next : Selection}
+    (live : projectMarkerBytes checkpoint visible = .ok directory.active)
+    (survived : crash.mapM (projectMarkerBytes checkpoint) = .ok directory.crashImages)
+    (bytesReport : ∀ bytes, some bytes ∈ visible :: crash → InterruptedSlotBytes before bytes active next) :
+    ∀ pair ∈ directory.active :: directory.crashImages,
+      pair = ⟨checkpoint, none⟩ ∨
+      ∃ bytes, InterruptedSlotBytes before bytes active next ∧
+        projectBinding ⟨checkpoint, none⟩ bytes = .ok pair := by
+  intro pair member
+  have candidate : ∃ raw ∈ visible :: crash, projectMarkerBytes checkpoint raw = .ok pair := by
+    rcases List.mem_cons.mp member with rfl | selected
+    · exact ⟨visible, List.mem_cons_self .., live⟩
+    · obtain ⟨raw, present, projected⟩ := projectedMarker_member survived selected
+      exact ⟨raw, List.mem_cons_of_mem _ present, projected⟩
+  obtain ⟨raw, present, projected⟩ := candidate
+  cases raw with
+  | none => exact .inl (Except.ok.inj projected).symm
+  | some bytes => exact .inr ⟨bytes, bytesReport bytes present, projected⟩
+
 /-- After the WAL barrier, marker-only operations preserve the keeper
 image left by that barrier, even if the marker callback is interrupted. -/
 theorem InterruptedBatchMarkerPublication.keeperUnchangedOrWalSynced
@@ -2672,25 +2695,15 @@ theorem installsAfterAcquiredRecovery_replays
   have newer : current.toRecord.epoch < next.toRecord.epoch := by
     change current.epoch.toNat < next.epoch.toNat
     omega
-  have observations : ∀ pair ∈ interrupted.directory.active :: interrupted.directory.crashImages,
-      pair = ⟨checkpoint, none⟩ ∨
-        ∃ bytes, InterruptedSlotBytes (writeCut.initialMarker.visible writeCut.initialMarker.active) bytes active next ∧
-          projectBinding ⟨checkpoint, none⟩ bytes = .ok pair := by
-    intro pair member
-    have candidate : ∃ raw, projectMarkerBytes checkpoint raw = .ok pair ∧
-        ∀ bytes, raw = some bytes →
-          bytes ∈ interruptedMarker.visible interruptedMarker.active :: interruptedMarker.crashBytes interruptedMarker.active := by
-      rcases List.mem_cons.mp member with live | crash
-      · subst pair
-        exact ⟨liveMarker, projectedLive, fun bytes raw => (liveBytes bytes raw).symm ▸ List.mem_cons_self ..⟩
-      · obtain ⟨raw, present, projection⟩ := projectedMarker_member projectedCrash crash
-        exact ⟨raw, projection, fun bytes eq => List.mem_cons_of_mem _ (crashBytes bytes (eq ▸ present))⟩
-    obtain ⟨raw, projection, source⟩ := candidate
-    cases raw with
-    | none => exact .inl (Except.ok.inj projection).symm
-    | some bytes =>
-      obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes (source bytes rfl)
-      exact .inr ⟨bytes, interruptedBytes_ofCounts offset advanced transfersFit size attributed decoded, projection⟩
+  have observations := interruptedMarker_observations (active := active) projectedLive projectedCrash
+    (fun bytes present => by
+      have physical : bytes ∈ interruptedMarker.visible interruptedMarker.active ::
+          interruptedMarker.crashBytes interruptedMarker.active := by
+        rcases List.mem_cons.mp present with live | crash
+        · exact List.mem_cons.mpr (.inl (liveBytes bytes live.symm))
+        · exact List.mem_cons_of_mem _ (crashBytes bytes crash)
+      obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes physical
+      exact interruptedBytes_ofCounts offset advanced transfersFit size attributed decoded)
   have choicesBefore := interruptedMarker_retryChoices accepted offset newer observations
   have choice := (beforeBarrier.selectsOldOrNew checkpoint current.frontier next.frontier choicesBefore observedFirst).2
   have bytes := choice.imp (fun old => old ▸ oldSize) (fun all => all ▸ newSize)
@@ -3199,26 +3212,14 @@ theorem recoveredRetries_installedReads
   have recovery : WalSegmentRecovery image after.directory.active target.range (history ++ batch)
       base layout.first table := ready.selected.symm ▸ sameFirst ▸ shared
   have retries : SettledRetries target after after := .start
-  have observations : ∀ pair ∈ initial.directory.active :: initial.directory.crashImages,
-      pair = ⟨checkpoint, none⟩ ∨
-      ∃ bytes, InterruptedSlotBytes before bytes active next ∧
-        projectBinding ⟨checkpoint, none⟩ bytes = .ok pair := by
-    intro pair member
-    have candidate : ∃ raw ∈ visibleMarker :: crashMarkers, projectMarkerBytes checkpoint raw = .ok pair := by
-      rcases List.mem_cons.mp member with rfl | survived
-      · exact ⟨visibleMarker, List.mem_cons_self .., projectedVisible⟩
-      · obtain ⟨raw, present, projected⟩ := projectedMarker_member projectedCrash survived
-        exact ⟨raw, List.mem_cons_of_mem _ present, projected⟩
-    obtain ⟨raw, present, projected⟩ := candidate
-    cases raw with
-    | none => exact .inl (Except.ok.inj projected).symm
-    | some bytes =>
+  have observations := interruptedMarker_observations (active := active) projectedVisible projectedCrash
+    (fun bytes present => by
       have physical : bytes = interruptedMarker.visible interruptedMarker.active ∨
           ∃ inode ∈ interruptedMarker.crashBindings, bytes ∈ interruptedMarker.crashBytes inode :=
         (List.mem_cons.mp present).imp (visibleBytes bytes ∘ Eq.symm) (crashBytes bytes)
       obtain ⟨size, attributed, decoded⟩ := slotOutcome bytes physical
-      exact .inr ⟨bytes, interruptedBytes_ofCounts offset advanced transfersFit size
-        (fun position changed => (attributed position changed).symm) decoded, projected⟩
+      exact interruptedBytes_ofCounts offset advanced transfersFit size
+        (fun position changed => (attributed position changed).symm) decoded)
   have metadataSurvived : survivingBindings ∈ initial.directory.crashImages := by
     have forward {source : List (Option ByteArray)} {bindings : List DirectoryPublication.Bindings}
         (mapped : source.mapM (projectMarkerBytes checkpoint) = .ok bindings)
