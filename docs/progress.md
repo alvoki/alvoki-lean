@@ -87,6 +87,11 @@ and guarded no-follow extents. Those operands determine the exact selected offse
 owned directory show that every selected offset is eligible. A rejected plan returns the original error and leaves
 the phase, cache, files, owner and client replay intact before any unlink or sync. [WAL collection preflight](../lean/Alvoki/Storage/Disk/WalCollectionPreflight.lean)
 
+For a nonempty WAL collection plan, the collector issues the first unlink at the canonical path with the poisoned
+phase and original files and owner. The plan's exact no-follow metadata identifies the eligible seal. A primitive
+report for that invocation's lookup in the same parent under a stable binding identifies the same device and inode.
+The lookup report and unlink effects come from the native observation contract. [First WAL unlink](../lean/Alvoki/Storage/Disk/WalCollectionFirstUnlink.lean)
+
 `DiskTable.collectCoveredWal` executes that preflight and the shared canonical unlink and directory-sync schedule under one lock. A failed preflight leaves the writer ready. The adapter poisons the session on a mutation error until it closes; a successful pass keeps the installed table and pins. Native tests inject errors before and after the real directory sync and check reopened data, the next append and the required barrier on an empty retry. Physical effect and descriptor reports remain the trusted boundary. [Native collector](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Fault tests](../lean/Alvoki/Checks/DiskTableChecks.lean)
 
 A reported collection error keeps its pending crash choices through the poisoned session's close. The mixed trace carries exact owner transitions through rejected acquisitions, failed read-only preparations, observed reference drops and reported directory barrier failures. Once an observed barrier settles the list, subsequent failures preserve that settlement. A healthy final bounded open preserves the loaded checkpoint and determines the exact returned writer. [Collection lock handoff](../lean/Alvoki/Storage/Disk/SegmentedCollectionLockHandoff.lean) · [Mixed reopen report](../lean/Alvoki/Storage/Disk/SegmentedCollectionLiveReopen.lean)
