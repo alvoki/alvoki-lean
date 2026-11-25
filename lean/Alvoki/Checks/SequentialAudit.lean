@@ -200,6 +200,7 @@ import Alvoki.Storage.Disk.CachedCheckpointExtentRetry
 import Alvoki.Storage.Disk.SegmentedRunRetentionReopen
 import Alvoki.Storage.Disk.RunRetentionCheckpoint
 import Alvoki.Storage.Disk.RunRetentionCollection
+import Alvoki.Storage.Disk.NamedMaintenanceBudget
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
@@ -282,6 +283,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.retainedRunPayload
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.collectRetainedRunPayload
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterRetainedRunCollection
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.finishedNamedBytes
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointReport.Installs.maintainedNamedPayload
 #check_axioms Alvoki.Storage.PackedTable.restore_rowBounds
 #check_axioms Alvoki.Storage.PackedTable.RowBounds.write
 #check_axioms Alvoki.Storage.PackedTable.RowBounds.acquireAt
@@ -1312,6 +1315,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.powerLossCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.delayedKeeperPowerLossCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.collectedWalPayload
+#check_axioms Alvoki.Storage.DiskSession.SegmentedCollectionReport.Installs.collectedWalPayload_checkpointCovered
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.selectedRecoveryPayload
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.selectedRecoveryAcquisition
 #check_axioms Alvoki.Storage.WalSegmentRepair.ReopenLineage.reopensRetainedAppendWith

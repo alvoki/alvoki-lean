@@ -123,6 +123,7 @@ lake env leanchecker Alvoki.Storage.Disk.SegmentedRunRetentionReopen
 lake env leanchecker Alvoki.Storage.Table.RunRetentionPass
 lake env leanchecker Alvoki.Storage.Disk.RunRetentionCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.RunRetentionCollection
+lake env leanchecker Alvoki.Storage.Disk.NamedMaintenanceBudget
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionBarrierError
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionKeeperError
 lake env leanchecker Alvoki.Storage.Disk.SegmentedCollectionRetryPowerLoss

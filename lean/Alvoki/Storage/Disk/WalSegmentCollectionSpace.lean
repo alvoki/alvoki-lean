@@ -73,6 +73,26 @@ private theorem collectedPayload_selected {directory : DiskDirectory} {before af
     simp [WalSegmentImage.readDescriptors, WalSegmentImage.segments, needed, watermark, concatenate_append,
       ← empty]
 
+/-- When the checkpoint covers the complete marked history, the remaining
+named WAL payload is exactly the active segment. Empty sealed segments can
+contribute names, with zero payload. -/
+theorem SegmentedCollectionReport.Installs.collectedWalPayload_checkpointCovered
+    {directory descriptor} {before after : SegmentedWriterState}
+    {report : SegmentedCollectionReport directory before} (installed : report.Installs after)
+    (ready : before.RetainedReady directory descriptor) (complete : report.offsets = before.wal.collectionOffsets)
+    (covered : before.target.range.through = before.target.range.watermark) :
+    WalSegment.concatenate after.wal.segments = before.wal.active.bytes := by
+  obtain ⟨nextReady, _, keeper, _, _, _, _, _⟩ := installed.outcome ready
+  have keeperEnd : after.wal.active.last = before.target.range.watermark := by
+    calc
+      after.wal.active.last = after.history.length := nextReady.layout.activeEnd
+      _ = before.history.length := congrArg List.length installed.history
+      _ = before.target.range.through := ready.resumed.through.symm
+      _ = before.target.range.watermark := covered
+  rw [collectedPayload_selected installed ready complete, WalSegmentImage.readDescriptors, keeperEnd,
+    ite_eq_right (Nat.lt_irrefl _), keeper]
+  simp [WalSegment.concatenate]
+
 /-- After a healthy complete collection, the ordered payload under the
 remaining WAL names equals the selected recovery payload. A later healthy
 cached read of the same marker returns that exact payload. -/
