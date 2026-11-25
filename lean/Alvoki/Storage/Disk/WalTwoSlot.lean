@@ -37,6 +37,37 @@ private def decodeSlot (bytes : ByteArray) (slot : Nat) : Option Selection := do
   else
     none
 
+/-- A complete, well-formed encoding at the reported byte offset is
+accepted as that exact record. The bytes of the other slot are irrelevant. -/
+theorem decodeSlot_exact {bytes : ByteArray} (selected : Selection)
+    (inside : selected.slot * stride + 40 ≤ bytes.size)
+    (written : bytes.extract (selected.slot * stride) (selected.slot * stride + 40) = selected.encode)
+    (parity : selected.epoch.toNat % 2 = selected.slot)
+    (aligned : selected.frontier.toNat % frameSize = 0)
+    (counts : selected.epoch.toNat ≤ selected.frontier.toNat / frameSize) :
+    decodeSlot bytes selected.slot = some selected := by
+  let fields := [magic, selected.slot.toUInt64, selected.epoch, selected.frontier]
+  let words := fields ++ [checksumWords fields]
+  have lane (i : Nat) (small : i < 5) :
+      word bytes (selected.slot * stride + 8 * i) = words[i]! := by
+    have exactWord := word_extract bytes (selected.slot * stride)
+      (selected.slot * stride + 40) (8 * i) (by omega) inside
+    rw [written] at exactWord
+    have bounded : i < words.length := by simpa [words, fields] using small
+    rw [getElem!_pos words i bounded]
+    exact exactWord.symm.trans (word_encodeWords words i bounded)
+  have tag : word bytes (selected.slot * stride) = magic := by simpa [words, fields] using lane 0 (by decide)
+  have slot : word bytes (selected.slot * stride + 8) = selected.slot.toUInt64 := by
+    simpa [words, fields] using lane 1 (by decide)
+  have epoch : word bytes (selected.slot * stride + 16) = selected.epoch := by
+    simpa [words, fields] using lane 2 (by decide)
+  have frontier : word bytes (selected.slot * stride + 24) = selected.frontier := by
+    simpa [words, fields] using lane 3 (by decide)
+  have checksum : word bytes (selected.slot * stride + 32) = checksumWords fields := by
+    simpa [words, fields] using lane 4 (by decide)
+  cases selected
+  simp_all [decodeSlot, fields, pure]
+
 /-- A positional write in the other slot's range preserves every byte
 observed by the active decoder. This is the byte-range consequence of the
 write report. Crash failure isolation remains a storage premise. -/
@@ -125,7 +156,8 @@ def advance (before : Selection) (frontier : Nat) : Except String Selection := d
 theorem advance_fields {before next : Selection} {frontier : Nat}
     (step : advance before frontier = .ok next) :
     next.slot = 1 - before.slot ∧ next.epoch.toNat = before.epoch.toNat + 1 ∧
-      next.frontier.toNat = frontier ∧ before.frontier < next.frontier := by
+      next.frontier.toNat = frontier ∧ before.frontier < next.frontier ∧
+      next.frontier.toNat % frameSize = 0 := by
   by_cases room : before.epoch.toNat + 1 < UInt64.size
   · by_cases bounds : before.frontier.toNat < frontier ∧ frontier < UInt64.size ∧
         frontier % frameSize = 0
@@ -138,11 +170,25 @@ theorem advance_fields {before next : Selection} {frontier : Nat}
       have increasesWord : before.frontier < frontier.toUInt64 := by
         change before.frontier.toNat < frontier.toUInt64.toNat
         rwa [lengthExact]
-      exact ⟨rfl, epochExact, lengthExact, increasesWord⟩
+      exact ⟨rfl, epochExact, lengthExact, increasesWord, by simpa [lengthExact] using aligned⟩
     · simp [advance, room, bounds, and_assoc, throw, throwThe,
         MonadExceptOf.throw, Bind.bind, Except.bind] at step
   · simp [advance, room, throw, throwThe,
       MonadExceptOf.throw, Bind.bind, Except.bind] at step
+
+/-- Advancing a valid marker gives a valid slot index and an epoch bounded
+by the number of frames. The absolute frontier grows by at least one frame. -/
+theorem advance_valid {before next : Selection} {frontier : Nat}
+    (step : advance before frontier = .ok next)
+    (parity : before.epoch.toNat % 2 = before.slot)
+    (aligned : before.frontier.toNat % frameSize = 0)
+    (counts : before.epoch.toNat ≤ before.frontier.toNat / frameSize) :
+    next.epoch.toNat % 2 = next.slot ∧ next.frontier.toNat % frameSize = 0 ∧
+      next.epoch.toNat ≤ next.frontier.toNat / frameSize := by
+  obtain ⟨slot, epoch, _, increases, nextAligned⟩ := advance_fields step
+  change before.frontier.toNat < next.frontier.toNat at increases
+  unfold frameSize at *
+  exact ⟨by omega, nextAligned, by omega⟩
 
 /-- A complete successor and the preserved older slot admit the complete new
 frontier, regardless of which offset was updated. -/
