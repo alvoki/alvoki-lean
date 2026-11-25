@@ -66,20 +66,20 @@ Each next edge acquires a local pin and records the read at that reached
 session. Neither operation changes the files or descriptor inventory. -/
 inductive NativeReadyReadPrefix
     (opened : EStateM.Result IO.Error CensusOpenState SegmentedSession)
-    (history : List WAL.Write) (log : List DatabaseSubmissions) :
+    (initial : NativeReadyState) (history : List WAL.Write) (log : List DatabaseSubmissions) :
     List RecordedSnapshotRead → NativeReadyState → Prop where
-  | installed {reads state} (returned : opened = .ok state.session (state.census, state.files))
-      (valid : state.Valid) (sameHistory : state.writer.history = history)
-      (replay : PendingClientReplay log reads history) : NativeReadyReadPrefix opened history log reads state
+  | installed {reads} (returned : opened = .ok initial.session (initial.census, initial.files))
+      (valid : initial.Valid) (sameHistory : initial.writer.history = history)
+      (replay : PendingClientReplay log reads history) : NativeReadyReadPrefix opened initial history log reads initial
   | acquireRead {reads : List RecordedSnapshotRead} {state : NativeReadyState} {snapshot : UInt64} {pin : SnapshotPin} {table : PackedTable}
       {α : Type} {request : SnapshotReadRequest α} {response : α}
-      (prior : NativeReadyReadPrefix opened history log reads state)
+      (prior : NativeReadyReadPrefix opened initial history log reads state)
       (acquired : state.writer.installed.table.acquireAt snapshot = some (pin, table))
       (returned : state.session.runAcquireAt snapshot =
         .ok (some (state.session.sessionRef, pin)) (state.withTable table).session)
       (read : (state.withTable table).session.runSnapshotRead true (request.read pin.handle) =
         .ok (some response) (state.withTable table).session) :
-      NativeReadyReadPrefix opened history log (reads ++ [request.record snapshot response]) (state.withTable table)
+      NativeReadyReadPrefix opened initial history log (reads ++ [request.record snapshot response]) (state.withTable table)
 
 private theorem readReplay (request : SnapshotReadRequest α) (reference : SnapshotTable UInt64)
     (snapshot : UInt64) : (request.record snapshot (request.replay reference snapshot)).agrees reference := by
@@ -106,19 +106,19 @@ private theorem NativeReadyState.Valid.exactRead {state : NativeReadyState} (val
 /-- The returned files, cache and census remain the ones from the same
 restart, and the local token stays with this session throughout. -/
 theorem NativeReadyReadPrefix.frames
-    (observed : NativeReadyReadPrefix opened history log reads state) :
-    ∃ initial : NativeReadyState, opened = .ok initial.session (initial.census, initial.files) ∧
-      state.files = initial.files ∧ state.census = initial.census ∧ state.cache = initial.cache ∧
-      state.session.sessionRef = initial.session.sessionRef ∧ state.session.phaseRef = initial.session.phaseRef ∧
-      state.owner = initial.owner ∧ state.directorySlot = initial.directorySlot := by
+    (observed : NativeReadyReadPrefix opened initial history log reads state) :
+    opened = .ok initial.session (initial.census, initial.files) ∧
+    state.files = initial.files ∧ state.census = initial.census ∧ state.cache = initial.cache ∧
+    state.session.sessionRef = initial.session.sessionRef ∧ state.session.phaseRef = initial.session.phaseRef ∧
+    state.owner = initial.owner ∧ state.directorySlot = initial.directorySlot := by
   induction observed with
-  | installed returned _ _ _ => exact ⟨_, returned, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  | installed returned _ _ _ => exact ⟨returned, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   | acquireRead _ _ _ _ ih => exact ih
 
 /-- The ledger and exact native read results are preserved by induction
 over an arbitrary supported read prefix. -/
 theorem NativeReadyReadPrefix.refines
-    (observed : NativeReadyReadPrefix opened history log reads state) :
+    (observed : NativeReadyReadPrefix opened initial history log reads state) :
     state.Valid ∧ state.writer.history = history ∧ PendingClientReplay log reads history := by
   induction observed with
   | installed _ valid history replay => exact ⟨valid, history, replay⟩
@@ -136,7 +136,7 @@ theorem NativeReadyReadPrefix.refines
 /-- The same replay already observed by the prefix still explains every
 supported local snapshot in the reached ready session. -/
 theorem NativeReadyReadPrefix.guardedReplay
-    (observed : NativeReadyReadPrefix opened history log reads state) :
+    (observed : NativeReadyReadPrefix opened initial history log reads state) :
     InstalledClientReplay log reads history state.writer.installed state.session := by
   obtain ⟨valid, history, reference, replayed, retained, acknowledged, submitted, prior⟩ := observed.refines
   obtain ⟨_, refined, represented⟩ := valid.retained.resumed.canonical
@@ -148,7 +148,7 @@ theorem NativeReadyReadPrefix.guardedReplay
 acquisition and the local point or range read supply the next prefix
 at the exact reached state, still under the same owner and directory. -/
 theorem NativeReadyReadPrefix.readAt
-    (observed : NativeReadyReadPrefix opened history log reads state) (snapshot : UInt64)
+    (observed : NativeReadyReadPrefix opened initial history log reads state) (snapshot : UInt64)
     (floor : state.writer.installed.table.pins.floor ≤ snapshot) (committed : snapshot ≤ state.writer.installed.table.committed)
     (request : SnapshotReadRequest α) :
     ∃ (reference : SnapshotTable UInt64) (pin : SnapshotPin) (table : PackedTable),
@@ -156,7 +156,7 @@ theorem NativeReadyReadPrefix.readAt
       state.session.runAcquireAt snapshot = .ok (some (state.session.sessionRef, pin)) (state.withTable table).session ∧
       (state.withTable table).session.runSnapshotRead true (request.read pin.handle) =
         .ok (some (request.replay reference snapshot)) (state.withTable table).session ∧
-      NativeReadyReadPrefix opened history log (reads ++ [request.record snapshot (request.replay reference snapshot)])
+      NativeReadyReadPrefix opened initial history log (reads ++ [request.record snapshot (request.replay reference snapshot)])
         (state.withTable table) ∧ (state.withTable table).files = state.files ∧
       (state.withTable table).census = state.census ∧ (state.withTable table).cache = state.cache := by
   obtain ⟨valid, history, reference, replayed, _, _, _, _⟩ := observed.refines
@@ -206,7 +206,8 @@ theorem CapturedLongKeeperFinish.startsNativeReadPrefix
     (active : wal.directory.active = layout.target.pair) (keeper : layout.target.first = wal.active.first)
     (kept : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept)
     (pending : PendingClientReplay log reads history) :
-    ∃ state, NativeReadyReadPrefix (finish.runFromCensus metadataRelease runs.released released) history log reads state ∧
+    ∃ state, NativeReadyReadPrefix (finish.runFromCensus metadataRelease runs.released released)
+      state history log reads state ∧
       state.cache = admission.cache ∧ state.census = finish.census ∧ state.files = finish.settled ∧
       state.writer.published.durable = published.durable ∧ state.writer.checkpoint = checkpoint := by
   obtain ⟨session, returned, _, ownerLive, directoryLive, installed⟩ := finish.installsFromCensus manifest runs markerRead
