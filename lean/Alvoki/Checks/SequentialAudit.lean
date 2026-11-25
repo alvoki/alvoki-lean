@@ -446,6 +446,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDirectoryFailure.closes
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDirectoryFailure.CloseReopenCensus.captured
 #check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDirectoryFailure.reopensAfterCachedClose
+#check_axioms Alvoki.Storage.DiskSession.CachedCloseFailureTrace.unchanged
+#check_axioms Alvoki.Storage.DiskSession.ObservedCheckpointRunDirectoryFailure.reopensAfterCachedCloseRetries
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.executeVersioned_atManifestRename
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.atManifestRename
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPowerCut.plannedManifestBytes

@@ -19,6 +19,34 @@ theorem finishedDescriptors {handle image : Type} {directory : DiskDirectory} {w
 
 end CachedCloseReports
 
+/-- A caller may catch a failed explicit close and call close again. Each
+step records the actual returned error and state of the shared schedule. -/
+inductive CachedCloseFailureTrace {handle image : Type} (directory : DiskDirectory) (writer : Nat) :
+    CachedCloseState handle image → List IO.Error → CachedCloseState handle image → Prop where
+  | nil : CachedCloseFailureTrace directory writer before [] before
+  | cons (report : CachedCloseReports directory writer before)
+      (returned : report.run = .error cause reached)
+      (rest : CachedCloseFailureTrace directory writer reached causes after) :
+      CachedCloseFailureTrace directory writer before (cause :: causes) after
+
+/-- An unlock error stops close before every cache clear. Repeating only
+such attempts leaves the precise input to a later successful close. -/
+theorem CachedCloseFailureTrace.unchanged (trace : CachedCloseFailureTrace directory writer before causes after)
+    (openPhase : before.phase ≠ .closed) : after = before := by
+  induction trace with
+  | nil => rfl
+  | cons report returned _ ih =>
+    rw [report.outcome_open openPhase] at returned
+    cases result : report.result with
+    | ok value =>
+      cases value
+      simp [result] at returned
+    | error cause =>
+      rw [result] at returned
+      have same := (EStateM.Result.error.inj returned).2
+      subst same
+      exact ih openPhase
+
 namespace ObservedCheckpointRunDirectoryFailure
 
 variable {directory : DiskDirectory} {before : SegmentedWriterState}
@@ -147,6 +175,32 @@ theorem reopensAfterCachedClose (report : ObservedCheckpointRunDirectoryFailure 
   obtain ⟨poisoned, released, _⟩ := report.poisonsAndReleases ready (.closed : SegmentedFailureRelease writer)
   obtain ⟨closed, _, _, _, projected⟩ := report.closes close ready unlocked
   exact ⟨closed, projected, layout, opened, session, final, after, ⟨installed, poisoned, released, .empty⟩, census⟩
+
+/-- After any finite list of observed failed closes, the successful
+close starts from the checkpoint error's exact cache, files, phase and
+descriptor census. Its reached state supplies the next admitted open. -/
+theorem reopensAfterCachedCloseRetries (report : ObservedCheckpointRunDirectoryFailure cut) {input : FilePath}
+    (ready : before.RetainedReady directory writer) {causes : List IO.Error}
+    {retry : CachedCloseState Handle (WalInodeImage × Image)}
+    (failed : CachedCloseFailureTrace directory writer report.closeState causes retry)
+    (close : CachedCloseReports directory writer retry) (unlocked : close.result = .ok ())
+    (reads : ∀ (same : retry = report.closeState) (layout : CanonicalKeeperLayout report.released.image before.history),
+      layout.keeper = before.wal.active → layout.tail = ByteArray.empty →
+      layout.sealed ++ [layout.keeper] =
+        (report.publication.segmentedCheckpointView before.wal).readDescriptors layout.range.watermark →
+      ∃ opened : CheckpointHeldOpen input directory layout report.publication,
+        Nonempty (CloseReopenCensus (same ▸ close) opened)) :
+    ∃ same : retry = report.closeState, close.run = .ok () close.finished ∧
+      (⟨CheckpointPowerCut.physical before close.finished.files.image.2.2, close.finished.files.owners⟩ :
+        LockedFileState FileImage) = report.released ∧
+      ∃ (layout : CanonicalKeeperLayout report.released.image before.history)
+        (opened : CheckpointHeldOpen input directory layout report.publication)
+        (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState),
+        report.Reopened (.closed : SegmentedFailureRelease writer) opened session final after ∧
+        Nonempty (CloseReopenCensus (same ▸ close) opened) := by
+  have same := failed.unchanged (by simp [closeState])
+  subst retry
+  exact ⟨rfl, report.reopensAfterCachedClose ready close unlocked (reads rfl)⟩
 
 end ObservedCheckpointRunDirectoryFailure
 
