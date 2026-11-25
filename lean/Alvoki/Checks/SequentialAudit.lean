@@ -183,6 +183,7 @@ import Alvoki.Storage.Disk.CheckedDirectoryRead
 import Alvoki.Storage.Disk.HeldDirectoryReadObservations
 import Alvoki.Storage.Disk.ListedDirectoryAuthorization
 import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
+import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
 import Alvoki.Storage.Disk.HeldMetadataReadObservations
 import Alvoki.Storage.Disk.HeldWalPayloadObservations
 import Alvoki.Storage.Disk.WalInventoryWork
@@ -1355,6 +1356,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.settles
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.installs
 #check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.continuesAfterError
+#check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.barrierCensus
+#check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.keeperCustody
+#check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.keeperBarriers
+#check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.syncResult
+#check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.finishResult
+#check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.installs
 #check_axioms Alvoki.Storage.readOptionalCachedOpenFile_fileEffects
 #check_axioms Alvoki.Storage.DiskSession.runCachedMetadataRead_missing
 #check_axioms Alvoki.Storage.DiskSession.HeldMetadataFile.manifestPrefix
