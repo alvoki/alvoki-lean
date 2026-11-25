@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.ListedStagedKeeperRepair
+import Alvoki.Storage.Disk.StagedHandleCustody
 
 namespace Alvoki.Storage.DiskSession
 
@@ -8,8 +9,8 @@ private abbrev Handle := DescriptorInventory × DescriptorSlot × Nat
 private abbrev Files := LockedFileState FileImage
 private abbrev Staging := EStateM IO.Error Files
 
-/-- The primitive reports for the same exclusive-create, stale cleanup,
-write and flush schedule used by the native staged-file callback. -/
+/-- Reports for the native staged-file callback. A write or flush error
+drops the unretained handle and preserves the original error. -/
 structure StageWriteCallbacks where
   tryCreate : FilePath → Staging (Except IO.Error Handle)
   stat : FilePath → Staging (Except IO.Error IO.FS.Metadata)
@@ -17,6 +18,7 @@ structure StageWriteCallbacks where
   create : FilePath → Staging Handle
   write : Handle → ByteArray → Staging Unit
   flush : Handle → Staging Unit
+  drop : Handle → Staging Unit
 
 namespace StageWriteCallbacks
 
@@ -24,7 +26,9 @@ noncomputable def detach (callbacks : StageWriteCallbacks) : FilePath → Stagin
   removeStaleStagingWith callbacks.stat callbacks.unlink
 
 noncomputable def run (callbacks : StageWriteCallbacks) : FilePath → ByteArray → Staging Handle :=
-  writeFreshStagedWith callbacks.tryCreate callbacks.detach callbacks.create callbacks.write callbacks.flush
+  writeFreshStagedWith callbacks.tryCreate callbacks.detach callbacks.create
+    (fun handle bytes => withDataErrorDrop callbacks.drop handle (callbacks.write handle bytes))
+    (fun handle => withDataErrorDrop callbacks.drop handle (callbacks.flush handle))
 
 /-- The opening phase is reached through the first exclusive create, or
 through the exact EEXIST branch and its stale-name cleanup. -/
@@ -85,33 +89,35 @@ inductive FailedStageOpening (callbacks : StageWriteCallbacks) (path : FilePath)
   | created (opening : callbacks.Opening path initial (.error cause (stagePrefix initial ByteArray.empty 0))) :
       FailedStageOpening callbacks path initial cause (stagePrefix initial ByteArray.empty 0)
 
-/-- The reached write and flush report the same description that was
-opened for staging. The reported visible contents may be any written
-prefix, and the staged-file sync has yet to take place. -/
+/-- Write, flush and the local `fclose` use the same unretained handle.
+The report identifies the scratch bytes after finalization, which can
+still flush buffered data. The staged-file sync has yet to take place. -/
 inductive StageWriteFailure (callbacks : StageWriteCallbacks) (path : FilePath) (bytes : ByteArray)
     (initial : Files) (cause : IO.Error) : Files → Prop where
   | opening (failed : FailedStageOpening callbacks path initial cause reached) :
       StageWriteFailure callbacks path bytes initial cause reached
   | write
       (opening : callbacks.Opening path initial (.ok handle (stagePrefix initial bytes 0)))
-      (bounded : count ≤ bytes.size)
       (failed : callbacks.write handle bytes (stagePrefix initial bytes 0) =
-        .error cause (stagePrefix initial bytes count)) :
+        .error cause stopped)
+      (bounded : count ≤ bytes.size)
+      (finalized : dataErrorDropState callbacks.drop handle stopped = stagePrefix initial bytes count) :
       StageWriteFailure callbacks path bytes initial cause (stagePrefix initial bytes count)
   | flush
       (opening : callbacks.Opening path initial (.ok handle (stagePrefix initial bytes 0)))
       (buffered : bufferedCount ≤ bytes.size)
       (written : callbacks.write handle bytes (stagePrefix initial bytes 0) =
         .ok () (stagePrefix initial bytes bufferedCount))
-      (bounded : count ≤ bytes.size)
       (failed : callbacks.flush handle (stagePrefix initial bytes bufferedCount) =
-        .error cause (stagePrefix initial bytes count)) :
+        .error cause stopped)
+      (bounded : count ≤ bytes.size)
+      (finalized : dataErrorDropState callbacks.drop handle stopped = stagePrefix initial bytes count) :
       StageWriteFailure callbacks path bytes initial cause (stagePrefix initial bytes count)
 
 namespace StageWriteFailure
 
-/-- The fresh-write schedule returns the error at the first failed
-operation with that operation's reached image. -/
+/-- The fresh-write schedule returns the original error with the reached
+image after any reported local handle finalization. -/
 theorem returns {callbacks : StageWriteCallbacks} {path : FilePath} {bytes : ByteArray}
     {initial reached : Files} {cause : IO.Error} (failure : StageWriteFailure callbacks path bytes initial cause reached) :
     callbacks.run path bytes initial = .error cause reached := by
@@ -119,12 +125,12 @@ theorem returns {callbacks : StageWriteCallbacks} {path : FilePath} {bytes : Byt
   cases failure with
   | opening failed =>
     cases failed <;> exact StageWriteCallbacks.Opening.uses ‹_› _
-  | write opening bounded failed =>
+  | write opening failed bounded finalized =>
     rw [opening.uses]
-    simp [Bind.bind, EStateM.bind, failed]
-  | flush opening buffered written bounded failed =>
+    simp [Bind.bind, EStateM.bind, withDataErrorDrop, failed, finalized]
+  | flush opening buffered written failed bounded finalized =>
     rw [opening.uses]
-    simp [Bind.bind, EStateM.bind, written, failed]
+    simp [Bind.bind, EStateM.bind, withDataErrorDrop, written, failed, finalized]
 
 /-- Failed staging changes at most the reserved scratch field and
 keeps the reached owner map. -/
