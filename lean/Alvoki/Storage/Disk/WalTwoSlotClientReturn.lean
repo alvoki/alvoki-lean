@@ -325,6 +325,33 @@ private theorem syncedInode_survivor {image reached : WalInodeImage}
   have state : reached = image.completeFileSync image.active := by injection completed
   exact completeFileSync_survivor state binding survived
 
+/-- Any crash survivor of the routed, successful WAL barrier contains
+the bytes flushed by the append, even if sync chose a pending handle. -/
+theorem routedWalSync_survivor
+    {cache resolved : SyncHandleRouting.Cache KeeperDescriptorIdentity}
+    {directory keeper : System.FilePath}
+    {bindings : System.FilePath → Option Nat}
+    {openRead : System.FilePath → EStateM IO.Error WalInodeImage KeeperDescriptorIdentity}
+    {appended durable : WalInodeImage} {file synced : KeeperDescriptorIdentity}
+    (notDirectory : keeper ≠ directory)
+    (active : cache.active = some (keeper, file))
+    (owned : cache.Agrees directory KeeperDescriptorIdentity.inode bindings)
+    (live : bindings keeper = some appended.active)
+    (selected : cache.resolve directory keeper openRead appended = .ok synced (resolved, appended))
+    (sync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      synced appended (fun inode files => files.completeFileSync inode) (.ok () durable))
+    (binding : ∀ inode ∈ appended.crashBindings, inode = appended.active)
+    {bytes : ByteArray} (survived : ∃ inode ∈ durable.crashBindings, bytes ∈ durable.crashBytes inode) :
+    bytes = appended.visible file.inode := by
+  obtain ⟨captured, _, lookup, same, _⟩ :=
+    resolveAfterAppend_sameInode (openRead := openRead) (appended := appended)
+      (bindings := fun _ => bindings) notDirectory active owned
+  have sameHandle := (EStateM.Result.ok.inj (lookup.symm.trans selected)).1
+  have appendInode := Option.some.inj ((owned.active active).symm.trans live)
+  have syncInode := (congrArg KeeperDescriptorIdentity.inode sameHandle).symm.trans (same.trans appendInode)
+  rw [appendInode]
+  exact syncedInode_survivor sync syncInode binding survived
+
 /-- An error after the marker file has reached durable storage does not
 undo that effect. Every surviving binding to the marker inode reads the
 complete successor, even though the write returned commit-unknown. -/
