@@ -928,6 +928,32 @@ theorem recoveredAcknowledgedBatch_retains {image : WalSegmentImage} {pair : Dir
   refine ⟨DatabaseBatchRetention.append (entry := .acknowledgedBatch batch) prior rfl, ?_⟩
   simpa only [count, List.take_length] using recovery.refines
 
+/-- Carry a successful publication through recovery of its reported
+durable frontier into the acknowledged client ledger. -/
+theorem acknowledgedReturn_retainsBatch {α σ : Type}
+    (nextTable : α) (sequence : UInt64) (phase : DiskSession.Phase α)
+    (append syncWal writeSlot syncSlot install : EStateM IO.Error σ Unit)
+    {files reached : σ}
+    (returned : DiskSession.publishPreparedWrite nextTable sequence setPhase
+      (commitReports (publish append syncWal writeSlot syncSlot install)) (phase, files) =
+        .ok sequence (.ready nextTable, reached))
+    {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
+    {range : MarkedWalRange} {history batch : List Write} {base table : PackedTable} {first : Nat}
+    {log : List DatabaseSubmissions} (prior : DatabaseBatchRetention log history)
+    (recovery : WalSegmentRecovery image pair range (history ++ batch) base first table)
+    {frontier : UInt64} (bound : pair.walBoundary = some (Boundary.encode frontier))
+    (durable : ∀ appended walSynced written slotSynced,
+      append files = .ok () appended → syncWal appended = .ok () walSynced →
+      writeSlot walSynced = .ok () written → syncSlot written = .ok () slotSynced →
+      install slotSynced = .ok () reached →
+      frontier.toNat = (WAL.encode (history ++ batch)).size) :
+    DatabaseBatchRetention (log ++ [.acknowledgedBatch batch]) (history ++ batch) ∧
+    ∃ model, table.Refines model ∧ RepresentsWalHistory (history ++ batch) model := by
+  obtain ⟨appended, walSynced, written, slotSynced, wrote, walBarrier, slotWrite, markerBarrier, installed⟩ :=
+    prepared_write_acknowledged nextTable sequence phase append syncWal writeSlot syncSlot install returned
+  exact recoveredAcknowledgedBatch_retains prior recovery bound
+    (durable appended walSynced written slotSynced wrote walBarrier slotWrite markerBarrier installed)
+
 /-- A reached slot survivor determines the history retained by the
 segmented recovery of that same decoded marker. Only a synced slot can
 account for an acknowledged batch. -/
