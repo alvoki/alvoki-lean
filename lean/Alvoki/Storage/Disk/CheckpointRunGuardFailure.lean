@@ -115,23 +115,12 @@ theorem reopens {input : FilePath} {writer : Nat}
       release.Observed (directory := directory) (.poisoned, ⟨reached, before.owners⟩)
         ⟨reached, before.owners.set (directory.file .lock) none⟩ ∧
       PriorCheckpointReopened opened session final after := by
-  intro reached publication attempts reads
-  let frames : RunPrefixManifestFrames runs reached manifest := ⟨entryManifest, earlierManifest, rfl⟩
-  have unchanged : publication.manifest = before.published.manifest := frames.preserves
-  have active : publication.manifest.active = before.wal.directory.active.manifest := by
-    rw [unchanged, ready.manifestFiles, ready.directoryFiles]
-    rfl
-  have choices : publication.manifest.crashImages = [before.wal.directory.active.manifest] := by
-    rw [unchanged, ready.manifestFiles, ready.directoryFiles]
-    simp [DirectoryPublication.Image.project, DirectoryPublication.Bindings.get, ready.walDirectorySettled]
-  have selected : SelectedRunsAgree before.wal.directory.active.manifest publication.durable before.published.durable := by
+  have selected : SelectedRunsAgree before.wal.directory.active.manifest (runs.runs (runs.atRun runs.index)).guaranteed
+      before.published.durable := by
     intro bytes metadata visible decoded index inside
     obtain ⟨_, _, stored, stable, _⟩ := runs.priorStable ready entry visible decoded inside
     exact stable.guaranteed.trans stored.symm
-  obtain ⟨layout, opened, session, final, after, installed⟩ :=
-    ready.reopensPriorCheckpointLive publication active choices selected retry attempts reads
-  obtain ⟨poisoned, released, _⟩ := runs.poisonsAndReleases failure.returns ready.held release
-  exact ⟨layout, opened, session, final, after, poisoned, released, installed⟩
+  exact runs.reopensPrior failure.returns ready ⟨entryManifest, earlierManifest, rfl⟩ selected release retry
 
 end ObservedCheckpointRunGuardFailure
 

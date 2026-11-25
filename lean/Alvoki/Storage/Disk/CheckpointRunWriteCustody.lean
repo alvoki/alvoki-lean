@@ -27,6 +27,14 @@ theorem knownSyncedRunBytes_ofFileSync {directory : DiskDirectory} {bindings : F
   simp [knownSyncedRunBytes, bound, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync,
     visible, Bind.bind, Option.bind]
 
+/-- The no-follow guard leaves the state unchanged and admits either
+an absent name or a regular file with exactly one link. -/
+def AcceptedRunGuard {state : Type}
+    (lookup : FilePath → EStateM IO.Error state (Except IO.Error IO.FS.Metadata))
+    (path : FilePath) (before : state) : Prop :=
+  (∃ name message, lookup path before = .ok (.error (.noFileOrDirectory name 2 message)) before) ∨
+  ∃ metadata, lookup path before = .ok (.ok metadata) before ∧ metadata.type = .file ∧ metadata.numLinks = 1
+
 /-- The open, write and flush observations for one reached checkpoint run.
 The optional no-follow lookup admits an absent or private regular name.
 Each subsequent callback uses the description returned by the actual open. -/
@@ -36,9 +44,7 @@ structure RunWriteReports {handle state : Type} (path : FilePath) (bytes : ByteA
   openWrite : FilePath → EStateM IO.Error state handle
   write : handle → ByteArray → EStateM IO.Error state Unit
   flush : handle → EStateM IO.Error state Unit
-  binding :
-    (∃ name message, lookup path before = .ok (.error (.noFileOrDirectory name 2 message)) before) ∨
-    ∃ metadata, lookup path before = .ok (.ok metadata) before ∧ metadata.type = .file ∧ metadata.numLinks = 1
+  binding : AcceptedRunGuard lookup path before
   afterOpen : state
   afterWrite : state
   opened : openWrite path before = .ok descriptor afterOpen

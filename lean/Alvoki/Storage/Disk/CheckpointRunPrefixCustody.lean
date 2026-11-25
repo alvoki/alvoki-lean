@@ -92,25 +92,24 @@ theorem RunDirectoryInodeView.Stable.guaranteed {directory : DiskDirectory} {ima
 same inode namespace. For an absent path, the returned inode has no
 entry-visible aliases. A present path is among the counted links. The link
 census includes paths outside the database directory. -/
-structure RunOpenLinkReports {handle : Type} {path : FilePath} {bytes : ByteArray}
-    {before flushed : WalInodeImage} {descriptor : handle}
-    (writes : RunWriteReports path bytes before flushed descriptor)
+structure RunOpenLinkCensus {path : FilePath} {before : WalInodeImage}
+    (lookup : FilePath → EStateM IO.Error WalInodeImage (Except IO.Error IO.FS.Metadata))
     (entry : FilePath → Option Nat) (inode : Nat) where
   links : List FilePath
   complete : ∀ other, other ∈ links ↔ entry other = some inode
   fresh : ∀ name message,
-    writes.lookup path before = .ok (.error (.noFileOrDirectory name 2 message)) before → links = []
-  counted : ∀ metadata, writes.lookup path before = .ok (.ok metadata) before →
+    lookup path before = .ok (.error (.noFileOrDirectory name 2 message)) before → links = []
+  counted : ∀ metadata, lookup path before = .ok (.ok metadata) before →
     path ∈ links ∧ links.length = metadata.numLinks.toNat
 
-theorem RunOpenLinkReports.privateBinding {handle : Type} {path : FilePath} {bytes : ByteArray}
-    {before flushed : WalInodeImage} {descriptor : handle}
-    {writes : RunWriteReports path bytes before flushed descriptor}
-    {entry : FilePath → Option Nat} {inode : Nat} (observed : RunOpenLinkReports writes entry inode) :
+theorem RunOpenLinkCensus.privateBinding {path : FilePath} {before : WalInodeImage}
+    {lookup : FilePath → EStateM IO.Error WalInodeImage (Except IO.Error IO.FS.Metadata)}
+    {entry : FilePath → Option Nat} {inode : Nat} (observed : RunOpenLinkCensus (path := path) (before := before) lookup entry inode)
+    (guard : AcceptedRunGuard lookup path before) :
     ∀ other, entry other = some inode → other = path := by
   intro other bound
   have alias := (observed.complete other).mpr bound
-  rcases writes.binding with ⟨name, message, absent⟩ | ⟨metadata, found, _, privateLink⟩
+  rcases guard with ⟨name, message, absent⟩ | ⟨metadata, found, _, privateLink⟩
   · rw [observed.fresh name message absent] at alias
     exact False.elim (List.not_mem_nil alias)
   · obtain ⟨canonical, count⟩ := observed.counted metadata found
@@ -118,6 +117,19 @@ theorem RunOpenLinkReports.privateBinding {handle : Type} {path : FilePath} {byt
     obtain ⟨only, single⟩ := List.length_eq_one_iff.mp one
     rw [single] at alias canonical
     exact (List.mem_singleton.mp alias).trans (List.mem_singleton.mp canonical).symm
+
+abbrev RunOpenLinkReports {handle : Type} {path : FilePath} {bytes : ByteArray}
+    {before flushed : WalInodeImage} {descriptor : handle}
+    (writes : RunWriteReports path bytes before flushed descriptor)
+    (entry : FilePath → Option Nat) (inode : Nat) :=
+  RunOpenLinkCensus (path := path) (before := before) writes.lookup entry inode
+
+theorem RunOpenLinkReports.privateBinding {handle : Type} {path : FilePath} {bytes : ByteArray}
+    {before flushed : WalInodeImage} {descriptor : handle}
+    {writes : RunWriteReports path bytes before flushed descriptor}
+    {entry : FilePath → Option Nat} {inode : Nat} (observed : RunOpenLinkReports writes entry inode) :
+    ∀ other, entry other = some inode → other = path :=
+  RunOpenLinkCensus.privateBinding observed writes.binding
 
 /-- Effects of the run write and completed file sync. Other names retain
 their visible binding, and each surviving binding map agrees with a prior
