@@ -216,6 +216,7 @@ import Alvoki.Storage.Disk.PendingFirstAppendReopen
 import Alvoki.Storage.Disk.SnapshotReadHistoryBounds
 import Alvoki.Storage.Disk.NativeReadyReadPrefix
 import Alvoki.Storage.Disk.NativeMarkedReadPrefix
+import Alvoki.Storage.Disk.NativeOpenChoice
 import Alvoki.Storage.Disk.NativeReadyUncertainWrite
 import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeReadyWalCollectionError
@@ -1396,6 +1397,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.guardedReplay
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.readAt
 #check_axioms Alvoki.Storage.DiskSession.CapturedKeeperFinish.startsNativeReadPrefix
+#check_axioms Alvoki.Storage.DiskSession.CensusOpenAdmissionReports.recoverWithMarked_selects
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.readsMarker
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.selects
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenSuccessReports.returnsReady
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensUncertainWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.reachesBarrier
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWalCollection.censusPreserved
