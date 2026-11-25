@@ -453,49 +453,76 @@ def SegmentedBatchAppendReport.files {directory before} (report : SegmentedBatch
     FileImage :=
   resumedAppendFiles before.files before.history before.installed.activeFirst report.written
 
+/-- Extend the selected view while carrying the retained segments and owner
+from the original writer. Both publication interpreters use this state. -/
+def SegmentedWriterState.afterAppend (before : SegmentedWriterState) (installed : Installed)
+    (batch : List WAL.Write) (written : WriteFiles) (target : Target) : SegmentedWriterState :=
+  let history := before.history ++ batch
+  let files := resumedAppendFiles before.files before.history before.installed.activeFirst written
+  let wal := before.wal.appendSelectedView files.directory.active history
+  SegmentedWriterState.ofReopen installed wal history before.published target before.checkpoint
+    ⟨files, before.owners⟩
+
+def SegmentedWriterState.SelectsAppend (before : SegmentedWriterState) (batch : List WAL.Write)
+    (written : WriteFiles) (target : Target) : Prop :=
+  let files := resumedAppendFiles before.files before.history before.installed.activeFirst written
+  target.pair = files.directory.active ∧ target.first = before.installed.activeFirst ∧
+    target.trimmed = WAL.encode ((before.history ++ batch).drop target.first)
+
 def SegmentedBatchAppendReport.next {directory before} (report : SegmentedBatchAppendReport directory before)
     (target : Target) : SegmentedWriterState :=
-  let history := before.history ++ report.batch
-  let wal := before.wal.appendSelectedView report.files.directory.active history
-  SegmentedWriterState.ofReopen report.nextInstalled wal history before.published target before.checkpoint
-    ⟨report.files, before.owners⟩
+  before.afterAppend report.nextInstalled report.batch report.written target
 
 def SegmentedBatchAppendReport.Selects {directory before} (report : SegmentedBatchAppendReport directory before)
     (target : Target) : Prop :=
-  target.pair = report.files.directory.active ∧ target.first = before.installed.activeFirst ∧
-    target.trimmed = WAL.encode ((before.history ++ report.batch).drop target.first)
+  before.SelectsAppend report.batch report.written target
 
-/-- A successful publication leaves the exact table and a single selected
-keeper, including when collection has removed earlier sealed files. -/
-theorem SegmentedBatchAppendReport.preservesRetained {directory descriptor before}
-    (report : SegmentedBatchAppendReport directory before)
-    (ready : before.RetainedReady directory descriptor) :
-    ∃ target, report.Selects target ∧ (report.next target).RetainedReady directory descriptor := by
-  let history := before.history ++ report.batch
-  let installed := report.nextInstalled
+private theorem retainedAppendStart {directory : DiskDirectory} {descriptor : Nat} {before : SegmentedWriterState}
+    (ready : before.RetainedReady directory descriptor) : before.installed.activeFirst ≤ before.history.length := by
+  rw [ready.resumed.keeper, ← ready.resumed.through]
+  exact before.target.firstCovered
+
+/-- The prepared batch and its settled recovery image determine the next
+retained writer. The publication callbacks establish settlement separately. -/
+theorem SegmentedWriterState.RetainedReady.advanceSettled {directory : DiskDirectory} {descriptor : Nat}
+    {before : SegmentedWriterState}
+    (ready : before.RetainedReady directory descriptor)
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch before.installed.table rows = some (batch, table))
+    (fits : before.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {written : WriteFiles}
+    (settled :
+      let count := before.installed.walBytes + WAL.frameSize * rows.length
+      let files := resumedAppendFiles before.files before.history before.installed.activeFirst written
+      files.directory.active = ⟨before.files.directory.active.manifest, some (WAL.Boundary.encode count.toUInt64)⟩ ∧
+      files.directory.crashImages = [files.directory.active] ∧
+      files.keeper.active = some (WAL.encode ((before.history ++ batch).drop before.installed.activeFirst)) ∧
+      files.keeper.crashImages = [files.keeper.active]) :
+    let count := before.installed.walBytes + WAL.frameSize * rows.length
+    let installed : Installed := { before.installed with table, walBytes := count }
+    ∃ target, before.SelectsAppend batch written target ∧
+      (before.afterAppend installed batch written target).RetainedReady directory descriptor := by
+  intro count
+  let history := before.history ++ batch
+  let installed : Installed := { before.installed with table, walBytes := count }
   let bytes := installed.walBytes
-  let files := report.files
-  let wal := before.wal.appendSelectedView files.directory.active history
+  let files := resumedAppendFiles before.files before.history before.installed.activeFirst written
   obtain ⟨model, refines, represents⟩ := ready.resumed.canonical
   have clock : before.history.length = before.installed.table.committed.toNat :=
     represents.committed_count.symm.trans (congrArg UInt64.toNat refines.committed).symm
-  obtain ⟨_, ordered, _, size⟩ := prepareBatch_extends_history ready.resumed.ordered clock report.prepared
-  have count : bytes = (WAL.encode history).size := by
-    change before.installed.walBytes + WAL.frameSize * report.rows.length = _
+  obtain ⟨_, ordered, _, size⟩ := prepareBatch_extends_history ready.resumed.ordered clock prepared
+  have measured : bytes = (WAL.encode history).size := by
+    change before.installed.walBytes + WAL.frameSize * rows.length = _
     rw [ready.resumed.bytes, size]
-  have starts : before.installed.activeFirst ≤ before.history.length := by
-    rw [ready.resumed.keeper, ← ready.resumed.through]
-    exact before.target.firstCovered
-  have settled := report.reports.settled_of_success count starts report.committed before.files.directory.active.manifest
-  rw [← count] at settled
+  have starts := retainedAppendStart ready
   obtain ⟨target, pair, range, first, contents, filesReady⟩ :=
-    resumedAppendTarget ready.resumed.ready ready.resumed.through starts report.batch bytes count report.fits settled
-  have replayed := (prepareBatch_spec report.prepared).2.1
+    resumedAppendTarget ready.resumed.ready ready.resumed.through starts batch bytes measured fits settled
+  have replayed := (prepareBatch_spec prepared).2.1
   obtain ⟨nextModel, replay, refined⟩ := replay_refines refines replayed
-  have historyFits : (WAL.encode history).size < UInt64.size := count ▸ report.fits
-  have accepted := before.published.acceptsVersioned_extend_history (suffix := report.batch) ready.resumed.accepted historyFits
+  have historyFits : (WAL.encode history).size < UInt64.size := measured ▸ fits
+  have accepted := before.published.acceptsVersioned_extend_history (suffix := batch) ready.resumed.accepted historyFits
   have resumed : ResumedAppendReady installed files target history before.published before.checkpoint := by
-    refine ⟨filesReady, congrArg MarkedWalRange.through range, first.symm, count, ?_,
+    refine ⟨filesReady, congrArg MarkedWalRange.through range, first.symm, measured, ?_,
       ready.resumed.generation, ?_, ?_, ordered, replay_rowBounds ready.resumed.bounds replayed,
       nextModel, refined, represents.append replay⟩
     · rw [contents, first]
@@ -513,9 +540,8 @@ theorem SegmentedBatchAppendReport.preservesRetained {directory descriptor befor
     rw [visible, ← range]
     exact target.decoded
   obtain ⟨layout, valid, _, _⟩ :=
-    ready.layout.afterRetainedSuffix ready.valid oldRange files.directory.active report.batch newRange
-  let after := SegmentedWriterState.ofReopen installed wal history before.published target before.checkpoint
-    ⟨files, before.owners⟩
+    ready.layout.afterRetainedSuffix ready.valid oldRange files.directory.active batch newRange
+  let after := before.afterAppend installed batch written target
   have nextReady : ResumedAppendReady after.installed after.files after.target after.history
       after.published after.checkpoint :=
     ⟨resumed.ready, resumed.through, resumed.keeper, resumed.bytes, resumed.contents, resumed.generation,
@@ -531,5 +557,70 @@ theorem SegmentedBatchAppendReport.preservesRetained {directory descriptor befor
     change candidate ∈ files.directory.active :: [files.directory.active]
     rwa [durable] at chosen
   · exact first.trans (ready.resumed.keeper.trans ready.active)
+
+/-- The normalized append endpoint stores just the appended bytes. The
+keeper was read as a whole, and the settled marker has no staged payload. -/
+def _root_.Alvoki.WAL.Boundary.WriteFiles.ofPublishedPayloads (prior keeper marker : ByteArray) : WriteFiles :=
+  let tail := keeper.extract prior.size keeper.size
+  ⟨tail, [tail], Publication.Image.settled (some marker), by simp⟩
+
+private theorem extractAppendedTail {prior keeper tail : ByteArray} (added : keeper = prior ++ tail) :
+    keeper.extract prior.size keeper.size = tail := by
+  rw [added, ByteArray.extract_append]
+  have empty : prior.extract prior.size (prior.size + tail.size) = ByteArray.empty :=
+    ByteArray.extract_eq_empty_iff.mpr (Nat.min_le_right ..)
+  simp [empty]
+
+/-- Rebuild retained readiness from the exact keeper and marker payloads
+of a settled publication. The local file effects supply those observations. -/
+theorem SegmentedWriterState.RetainedReady.advancePublished {directory : DiskDirectory} {descriptor : Nat}
+    {before : SegmentedWriterState} (ready : before.RetainedReady directory descriptor)
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch before.installed.table rows = some (batch, table))
+    (fits : before.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {keeperBytes markerBytes : ByteArray}
+    (keeper : keeperBytes = before.wal.active.bytes ++ WAL.encodeBatch batch)
+    (marker : markerBytes = WAL.Boundary.encode (before.installed.walBytes + WAL.frameSize * rows.length).toUInt64) :
+    let count := before.installed.walBytes + WAL.frameSize * rows.length
+    let installed : Installed := { before.installed with table, walBytes := count }
+    let written := WriteFiles.ofPublishedPayloads before.wal.active.bytes keeperBytes markerBytes
+    ∃ target, let after := before.afterAppend installed batch written target
+      target.pair = ⟨before.target.pair.manifest, some markerBytes⟩ ∧
+      target.first = before.installed.activeFirst ∧ after.wal.active.bytes = keeperBytes ∧
+      after.RetainedReady directory descriptor := by
+  intro count installed written
+  let files := resumedAppendFiles before.files before.history before.installed.activeFirst written
+  have starts := retainedAppendStart ready
+  have suffix : WAL.encode ((before.history ++ batch).drop before.installed.activeFirst) =
+      WAL.encode (before.history.drop before.installed.activeFirst) ++ WAL.encodeBatch batch := by
+    rw [List.drop_append_of_le_length starts, WAL.encode_append, WAL.encodeBatch_eq]
+  have actual : WAL.encode ((before.history ++ batch).drop before.installed.activeFirst) = keeperBytes := by
+    rw [suffix, keeper, ready.layout.activeBytes, ← ready.active, ← ready.resumed.keeper]
+  have contents : files.keeper.active = some (WAL.encode ((before.history ++ batch).drop before.installed.activeFirst)) := by
+    change some (WAL.encode (before.history.drop before.installed.activeFirst) ++
+      keeperBytes.extract before.wal.active.bytes.size keeperBytes.size) = _
+    rw [extractAppendedTail keeper, suffix]
+  have pair : files.directory.active = ⟨before.files.directory.active.manifest, some markerBytes⟩ := rfl
+  obtain ⟨target, selects, next⟩ := ready.advanceSettled (written := written) prepared fits
+    ⟨by rw [pair, marker], rfl, contents, rfl⟩
+  refine ⟨target, ?_, selects.2.1, ?_, next⟩
+  · rw [selects.1, pair, ready.resumed.ready.selected]
+  · change WAL.encode ((before.history ++ batch).drop before.wal.active.first) = _
+    rw [← ready.active, ← ready.resumed.keeper]
+    exact actual
+
+/-- A successful publication leaves the exact table and a single selected
+keeper, including when collection has removed earlier sealed files. -/
+theorem SegmentedBatchAppendReport.preservesRetained {directory descriptor before}
+    (report : SegmentedBatchAppendReport directory before)
+    (ready : before.RetainedReady directory descriptor) :
+    ∃ target, report.Selects target ∧ (report.next target).RetainedReady directory descriptor := by
+  have starts := retainedAppendStart ready
+  have measured : report.nextInstalled.walBytes = (WAL.encode (before.history ++ report.batch)).size := by
+    simp [SegmentedBatchAppendReport.nextInstalled, ready.resumed.bytes, WAL.encode_size, List.length_append, Nat.mul_add,
+      (prepareBatch_spec report.prepared).1]
+  have settled := report.reports.settled_of_success measured starts report.committed before.files.directory.active.manifest
+  rw [← measured] at settled
+  exact ready.advanceSettled report.prepared report.fits settled
 
 end Alvoki.Storage.DiskSession
