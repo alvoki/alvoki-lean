@@ -316,9 +316,9 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       {selected : SelectedIntegrityCheckpoint current.ready.state.writer.published.durable
         crash.observed.retry.image.directory.active.manifest current.ready.state.writer.checkpoint}
       (seen : NativeReadyRestartReads crash.observed input layout selected) (state : NativeReadyState)
-      (reached : NativeReadyReadPrefix seen.run state current.history current.submissions current.ready.reads state) :
+      (reached : seen.ReachedSession state current.history current.submissions current.ready.reads) :
       NativeExecutionStep current (.interruptedCoveredWalUnlinkRecovered input)
-        ⟨current.history, current.submissions, ⟨seen.run, state, state, current.ready.reads, reached⟩⟩
+        ⟨current.history, current.submissions, ⟨seen.run, state, state, current.ready.reads, reached.1⟩⟩
   | recoverInterruptedRunUnlink (current : NativeExecutionPosition) {input : FilePath}
       {cut : NativeObsoleteRunUnlinkCut current.ready.state} (stop : NativeObsoleteRunUnlinkStop cut)
       (crash : NativeObsoleteRunUnlinkCrash cut) (next : NativeReadPosition current.history current.submissions)
@@ -780,7 +780,7 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     exact ⟨_, _, step, trivial⟩
   | interruptedCoveredWalUnlinkThenReopen _ crash observe =>
     have recovery := current.ready.recoversInterruptedCoveredWalUnlink _ crash observe
-    obtain ⟨_, _, layout, selected, seen, state, reached, _⟩ := recovery.reopened
+    obtain ⟨_, _, layout, selected, seen, state, reached⟩ := recovery.reopened
     exact ⟨_, _, .recoverInterruptedCoveredWalUnlink current crash recovery seen state reached, rfl⟩
   | closeAndReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.closesAndReopens observed

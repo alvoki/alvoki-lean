@@ -261,6 +261,42 @@ theorem readsSeal (observed : NativeReadyRestartReads crash input layout selecte
 
 end NativeReadyRestartReads
 
+/-- The returned session, its cache and live slots, and all selected
+file observations belong to this particular chronological reopen. -/
+abbrev NativeReadyRestartReads.ReachedSession {state : NativeReadyState} {crash : NativeReadyQuietCrash state}
+    {input : FilePath} {layout : CanonicalKeeperLayout crash.retry.image state.writer.history}
+    {selected : SelectedIntegrityCheckpoint state.writer.published.durable
+      crash.retry.image.directory.active.manifest state.writer.checkpoint}
+    (observed : NativeReadyRestartReads crash input layout selected) (next : NativeReadyState)
+    (history : List WAL.Write) (log : List DatabaseSubmissions) (reads : List RecordedSnapshotRead) : Prop :=
+  NativeReadyReadPrefix observed.run next history log reads next ∧
+  next.session.directory = state.session.directory ∧
+  next.owner = observed.opening.admission.owner ∧ next.directorySlot = observed.opening.admission.cached ∧
+  next.cache = observed.opening.admission.cache ∧ next.census = observed.opening.finish.census ∧
+  next.session.sessionRef ≠ state.session.sessionRef ∧ next.session.phaseRef ≠ state.session.phaseRef ∧
+  next.census.inode next.owner.description = state.census.inode state.owner.description ∧
+  next.census.inode next.directorySlot.description = state.census.inode state.directorySlot.description ∧
+  next.files.image.directory.active = state.writer.target.pair ∧
+  next.writer.target = state.writer.target ∧
+  next.writer.checkpoint = state.writer.checkpoint ∧ next.writer.published.durable = state.writer.published.durable ∧
+  (state.writer.target.pair.manifest = none → crash.names (state.session.directory.file .manifest) = none) ∧
+  (∀ bytes, state.writer.target.pair.manifest = some bytes →
+    observed.ReadsSurvivor (state.session.directory.file .manifest) bytes) ∧
+  (∀ bytes metadata, state.writer.target.pair.manifest = some bytes →
+    Manifest.IntegrityCheckpoint.decode bytes = .ok metadata → ∀ index < metadata.header.runCount.toNat,
+    ∀ payload, state.writer.published.durable metadata.header.generation index = some payload →
+    observed.ReadsSurvivor (state.session.directory.file (.run metadata.header.generation index)) payload) ∧
+  observed.ReadsSurvivor (state.session.directory.file .walBoundary)
+    (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) ∧
+  observed.ReadsSurvivor (state.session.directory.file (.walSegment layout.keeper.first)) layout.keeper.bytes ∧
+  (∀ segment ∈ layout.sealed,
+    observed.ReadsSurvivor (state.session.directory.file (.walSegment segment.first)) segment.bytes) ∧
+  ∃ reference : Sequential.SnapshotTable UInt64,
+    SnapshotWalReplay .empty history reference ∧
+    (∀ read ∈ reads, read.agrees reference) ∧
+    GuardedAcquireReads state.writer.installed state.session reference ∧
+    GuardedAcquireReads next.writer.installed next.session reference
+
 /-- The exact next aligned session and protected file observations
 after a reported crash image. -/
 abbrev NativeReadyQuietCrash.Reopened {state : NativeReadyState} (crash : NativeReadyQuietCrash state)
@@ -272,33 +308,7 @@ abbrev NativeReadyQuietCrash.Reopened {state : NativeReadyState} (crash : Native
       (selected : SelectedIntegrityCheckpoint state.writer.published.durable
         crash.retry.image.directory.active.manifest state.writer.checkpoint)
       (observed : NativeReadyRestartReads crash input layout selected) (next : NativeReadyState),
-      NativeReadyReadPrefix observed.run next history log reads next ∧
-      next.session.directory = state.session.directory ∧
-      next.owner = observed.opening.admission.owner ∧ next.directorySlot = observed.opening.admission.cached ∧
-      next.cache = observed.opening.admission.cache ∧ next.census = observed.opening.finish.census ∧
-      next.session.sessionRef ≠ state.session.sessionRef ∧ next.session.phaseRef ≠ state.session.phaseRef ∧
-      next.census.inode next.owner.description = state.census.inode state.owner.description ∧
-      next.census.inode next.directorySlot.description = state.census.inode state.directorySlot.description ∧
-      next.files.image.directory.active = state.writer.target.pair ∧
-      next.writer.target = state.writer.target ∧
-      next.writer.checkpoint = state.writer.checkpoint ∧ next.writer.published.durable = state.writer.published.durable ∧
-      (state.writer.target.pair.manifest = none → crash.names (state.session.directory.file .manifest) = none) ∧
-      (∀ bytes, state.writer.target.pair.manifest = some bytes →
-        observed.ReadsSurvivor (state.session.directory.file .manifest) bytes) ∧
-      (∀ bytes metadata, state.writer.target.pair.manifest = some bytes →
-        Manifest.IntegrityCheckpoint.decode bytes = .ok metadata → ∀ index < metadata.header.runCount.toNat,
-        ∀ payload, state.writer.published.durable metadata.header.generation index = some payload →
-        observed.ReadsSurvivor (state.session.directory.file (.run metadata.header.generation index)) payload) ∧
-      observed.ReadsSurvivor (state.session.directory.file .walBoundary)
-        (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) ∧
-      observed.ReadsSurvivor (state.session.directory.file (.walSegment layout.keeper.first)) layout.keeper.bytes ∧
-      (∀ segment ∈ layout.sealed,
-        observed.ReadsSurvivor (state.session.directory.file (.walSegment segment.first)) segment.bytes) ∧
-      ∃ reference : Sequential.SnapshotTable UInt64,
-        SnapshotWalReplay .empty history reference ∧
-        (∀ read ∈ reads, read.agrees reference) ∧
-        GuardedAcquireReads state.writer.installed state.session reference ∧
-        GuardedAcquireReads next.writer.installed next.session reference
+      observed.ReachedSession next history log reads
 
 /-- Start from a reached phase with bounded client replay. The retained
 selection may have come from an operation that stopped before returning. -/
