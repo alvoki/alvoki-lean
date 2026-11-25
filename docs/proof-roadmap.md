@@ -123,7 +123,7 @@ Reported successful `DiskTable.writeBatch` now composes with the mixed trace fro
 
 Each selected checkpoint run's guarded write and flush now carry the same live description into the adjacent file sync. A reported effective sync establishes the selected bytes on that inode. The next composition step joins this result to directory settlement and manifest publication across the entire checkpoint schedule. [Checkpoint run custody](../lean/Alvoki/Storage/Disk/CheckpointRunWriteCustody.lean)
 
-Share the successful admitted-reopen result across the checkpoint, batch and clean paths so each uses the same session, files, owner and freshness proof. Keep post-lock selection and writer reconstruction beside their shared proofs, and use one cached read projection for preparation and failure paths. This keeps changes to native read routing consistent across the proof entry points. [Admission](../lean/Alvoki/Storage/Disk/DiskOpenAdmission.lean) · [Cached preparation](../lean/Alvoki/Storage/Disk/WalSegmentCachedRetryCompletion.lean)
+Cached preparation, completion and authorization failures now share one reader callback projection. Share the successful admitted-reopen result across the checkpoint, batch and clean paths so each uses the same session, files, owner and freshness proof. Keep post-lock selection and writer reconstruction beside their shared proofs. [Admission](../lean/Alvoki/Storage/Disk/DiskOpenAdmission.lean) · [Cached preparation](../lean/Alvoki/Storage/Disk/WalSegmentCachedRetryCompletion.lean)
 
 ### Garbage collection contract
 
