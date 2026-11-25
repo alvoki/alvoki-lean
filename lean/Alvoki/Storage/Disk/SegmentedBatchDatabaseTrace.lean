@@ -8,6 +8,7 @@ import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
 import Alvoki.Storage.Disk.BatchAppendReopenAdmission
 import Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
 import Alvoki.Storage.Disk.WalBatchSession
+import Alvoki.Storage.Disk.RotationReopenAdmission
 
 namespace Alvoki.Storage.DiskSession
 
@@ -169,6 +170,12 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       {reports : SegmentedRunCollectionReports directory before runs} (loss : SegmentedRunCollectionPowerLoss reports)
       (installed : loss.Installs (files := files) input retry descriptor after) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
+  | rotationPowerLossAdmitted {files : Type} {input : System.FilePath} {retry : LockedFileState FileImage}
+      {pair : DirectoryPublication.Bindings} {present : Bool}
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      (cut : RotationInFlightCut directory before)
+      (installed : cut.AdmittedReopen (files := files) pair present input retry descriptor after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
 
 private theorem appendUncertainBatch {initial before after batch retained : List WAL.Write}
     {log : List DatabaseSubmissions} (retention : DatabaseBatchRetention log retained)
@@ -225,6 +232,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
     obtain ⟨ready, retained, history, retention⟩ := ih
     exact ⟨(reports.preservesRetained ready).1, retained, history, retention⟩
   | collectRunsPowerLoss _ _ _ installed ih =>
+    obtain ⟨_, retained, history, retention⟩ := ih
+    exact ⟨installed.retained, retained, installed.history.trans history, retention⟩
+  | rotationPowerLossAdmitted _ _ installed ih =>
     obtain ⟨_, retained, history, retention⟩ := ih
     exact ⟨installed.retained, retained, installed.history.trans history, retention⟩
 
@@ -484,6 +494,24 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterBatchAppendWithAdmission {files :
         (log ++ [.uncertainBatch report.batch]) descriptor after := by
   obtain ⟨descriptor, after, installed⟩ := stop.reopensAdmitted observed (trace.preservesRetained ready).1 attempts reads
   exact ⟨descriptor, after, installed, .batchAppendAdmitted trace report installed⟩
+
+/-- Continue at the exact admitted reopen after power loss interrupted
+rotation. The survivor changes the keeper layout while the submission log
+and retained history carry over to the reopened writer. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterRotationWithAdmission {files : Type}
+    {input : System.FilePath} {retry : LockedFileState FileImage}
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (ready : initial.RetainedReady directory initialDescriptor) (cut : RotationInFlightCut directory before)
+    {pair : DirectoryPublication.Bindings} {present : Bool}
+    (metadata : pair ∈ cut.image.metadata.crashImages) (survives : cut.image.successor.MaySurvive present)
+    (attempts : BoundedReopenTrace directory (CheckpointRetryTarget before.history (cut.survivingWal pair present).active.first)
+      (cut.crashedFiles pair present) retry)
+    (reads : cut.ReopenObservations pair present files input retry) :
+    ∃ descriptor after, cut.AdmittedReopen (files := files) pair present input retry descriptor after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after := by
+  obtain ⟨descriptor, after, installed⟩ :=
+    cut.reopensAdmitted (trace.preservesRetained ready).1 metadata survives retry attempts reads
+  exact ⟨descriptor, after, installed, .rotationPowerLossAdmitted trace cut installed⟩
 
 /-- Reads through active snapshot pins in the current session agree with
 replay of the retained history, including after an uncertain batch. -/

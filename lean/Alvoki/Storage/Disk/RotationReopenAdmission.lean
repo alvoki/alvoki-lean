@@ -16,6 +16,45 @@ def RotationInFlightCut.crashedFiles {directory : DiskDirectory} {before : Segme
   let crashed := cut.released pair present
   ⟨crashed.image.settledReopenImage before.wal, crashed.owners⟩
 
+/-- The WAL selected by the observed presence or absence of the successor. -/
+def RotationInFlightCut.survivingWal {directory : DiskDirectory} {before : SegmentedWriterState}
+    (cut : RotationInFlightCut directory before) (pair : DirectoryPublication.Bindings) (present : Bool) : WalSegmentImage :=
+  (cut.released pair present).image.settleForReopen.visible before.wal
+
+abbrev RotationInFlightCut.ReopenObservations {directory : DiskDirectory} {before : SegmentedWriterState}
+    (cut : RotationInFlightCut directory before) (pair : DirectoryPublication.Bindings) (present : Bool)
+    (files : Type) (input : FilePath) (retry : LockedFileState FileImage) : Prop :=
+  let wal := cut.survivingWal pair present
+  ∀ layout : CanonicalKeeperLayout retry.image before.history,
+    layout.keeper = wal.active → layout.target.pair = before.target.pair →
+    layout.sealed ++ [layout.keeper] = wal.readDescriptors layout.range.watermark →
+    ∃ observed : MarkedRetryChunkReports files directory layout before.published,
+      Nonempty (OpenAdmissionReports input directory observed.slot)
+
+/-- The observed power-loss choice and later retries yield an exact
+admitted marked return for the next writer. -/
+structure RotationInFlightCut.AdmittedReopen {directory : DiskDirectory} {before : SegmentedWriterState} {files : Type}
+    (cut : RotationInFlightCut directory before) (pair : DirectoryPublication.Bindings) (present : Bool)
+    (input : FilePath) (retry : LockedFileState FileImage) (descriptor : Nat) (after : SegmentedWriterState) : Prop where
+  metadata : pair ∈ cut.image.metadata.crashImages
+  successor : cut.image.successor.MaySurvive present
+  retries : BoundedReopenTrace directory (CheckpointRetryTarget before.history (cut.survivingWal pair present).active.first)
+    (cut.crashedFiles pair present) retry
+  reopened : ∃ (layout : CanonicalKeeperLayout retry.image before.history)
+    (observed : MarkedRetryChunkReports files directory layout before.published)
+    (admission : OpenAdmissionReports input directory observed.slot)
+    (session : SegmentedSession) (final : LockedFileState FileImage),
+    observed.slot.description = descriptor ∧ observed.runWithAdmission admission = .ok session final ∧
+    session.directory = directory ∧ session.descriptor = descriptor ∧ session.phase = .ready after.installed ∧
+    final.owners.Owns directory session.descriptor ∧ after.files = final.image ∧ after.owners = final.owners ∧
+    after.wal = { cut.survivingWal pair present with directory := final.image.directory }
+  pairPreserved : after.target.pair = before.target.pair
+  history : after.history = before.history
+  checkpoint : after.checkpoint = before.checkpoint
+  generation : after.installed.generation = before.installed.generation
+  durable : after.published.durable = before.published.durable
+  retained : after.RetainedReady directory descriptor
+
 private theorem rotationRetryEffects {directory : DiskDirectory} {history : List WAL.Write} {first : Nat}
     {initial retry : LockedFileState FileImage} {target : Target} {plan : Plan}
     (attempts : BoundedReopenTrace directory (CheckpointRetryTarget history first) initial retry)
@@ -37,35 +76,20 @@ private theorem rotationRetryEffects {directory : DiskDirectory} {history : List
 
 /-- An observed rotation crash chooses the old keeper or the empty
 successor before any fixed-keeper retry. Healthy admission and chunk
-reports at the reached retry install that exact layout under a new lock
-owner while preserving the original checkpoint and retained history. -/
+reports at the reached retry install that exact layout under the acquired
+description and preserve the original checkpoint and retained history. -/
 theorem RotationInFlightCut.reopensAdmitted {directory : DiskDirectory} {before : SegmentedWriterState}
     {files : Type} {writer : Nat} {input : FilePath}
     (cut : RotationInFlightCut directory before) (ready : before.RetainedReady directory writer)
     {pair : DirectoryPublication.Bindings} {present : Bool} (metadata : pair ∈ cut.image.metadata.crashImages)
-    (survives : cut.image.successor.MaySurvive present) (retry : LockedFileState FileImage) :
-    let crashed := cut.released pair present
-    let source := cut.crashedFiles pair present
-    let wal := crashed.image.settleForReopen.visible before.wal
-    BoundedReopenTrace directory (CheckpointRetryTarget before.history wal.active.first) source retry →
-    (∀ layout : CanonicalKeeperLayout retry.image before.history,
-      layout.keeper = wal.active → layout.target.pair = before.target.pair →
-      layout.sealed ++ [layout.keeper] = wal.readDescriptors layout.range.watermark →
-      ∃ observed : MarkedRetryChunkReports files directory layout before.published,
-        Nonempty (OpenAdmissionReports input directory observed.slot)) →
-    ∃ (layout : CanonicalKeeperLayout retry.image before.history)
-      (observed : MarkedRetryChunkReports files directory layout before.published)
-      (admission : OpenAdmissionReports input directory observed.slot)
-      (session : SegmentedSession) (final : LockedFileState FileImage) (after : SegmentedWriterState),
-      observed.runWithAdmission admission = .ok session final ∧
-      session.directory = directory ∧ session.descriptor = observed.slot.description ∧
-      session.phase = .ready after.installed ∧ final.owners.Owns directory session.descriptor ∧
-      after.files = final.image ∧ after.owners = final.owners ∧
-      after.wal = { wal with directory := final.image.directory } ∧ after.target.pair = before.target.pair ∧
-      after.history = before.history ∧ after.checkpoint = before.checkpoint ∧
-      after.installed.generation = before.installed.generation ∧
-      after.published.durable = before.published.durable ∧ after.RetainedReady directory observed.slot.description := by
-  intro crashed source wal attempts reads
+    (survives : cut.image.successor.MaySurvive present) (retry : LockedFileState FileImage)
+    (attempts : BoundedReopenTrace directory (CheckpointRetryTarget before.history (cut.survivingWal pair present).active.first)
+      (cut.crashedFiles pair present) retry)
+    (reads : cut.ReopenObservations pair present files input retry) :
+    ∃ descriptor after, cut.AdmittedReopen (files := files) pair present input retry descriptor after := by
+  let crashed := cut.released pair present
+  let source := cut.crashedFiles pair present
+  let wal := crashed.image.settleForReopen.visible before.wal
   have loss : WalSegmentRotation.Trace before.wal crashed.image := .crash cut.trace pair metadata survives
   have oldPair := cut.trace.selectsOriginal (List.mem_cons_of_mem _ metadata)
   have oldBinding : pair = before.wal.directory.active := by
@@ -128,7 +152,9 @@ theorem RotationInFlightCut.reopensAdmitted {directory : DiskDirectory} {before 
   have checkpoint := selectedCheckpoint.uniqueResult ready.resumed.selected
   have generation : after.installed.generation = before.installed.generation := by
     rw [retained.resumed.generation, checkpoint, ← ready.resumed.generation]
-  exact ⟨selected, observed, admission, session, final, after, returned, path, slot.trans observed.inventoryDescription,
-    phase, slot ▸ (owners ▸ next.held), files, owners, nextWal, afterPair, history, checkpoint, generation, durable, retained⟩
+  exact ⟨observed.slot.description, after, metadata, survives, attempts,
+    ⟨selected, observed, admission, session, final, rfl, returned, path, slot.trans observed.inventoryDescription,
+      phase, slot ▸ (owners ▸ next.held), files, owners, nextWal⟩,
+    afterPair, history, checkpoint, generation, durable, retained⟩
 
 end Alvoki.Storage.DiskSession

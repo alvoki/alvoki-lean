@@ -1046,6 +1046,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ObservedRotation.rotates
 #check_axioms Alvoki.Storage.DiskSession.ObservedRotation.reopensAfterClose
 #check_axioms Alvoki.Storage.DiskSession.RotationInFlightCut.reopensAdmitted
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterRotationWithAdmission
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedCheckpointFailure.installsRetainedCached
 #check_axioms Alvoki.Storage.DiskSession.SegmentedDatabaseTrace.checkpointErrorCached
