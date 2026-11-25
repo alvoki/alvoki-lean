@@ -140,6 +140,7 @@ import Alvoki.Storage.Disk.SegmentedWriterTrace
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedRunCollection
 import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
+import Alvoki.Storage.Disk.ObsoleteRunInodeLifetime
 import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.SegmentedCollectionInventory
@@ -959,6 +960,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.crashAtCut
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.completeAfterRetries
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.reclaimsAfterEffectiveBarrier
+#check_axioms Alvoki.Storage.DiskSession.RunInodeLinkReports.noLinks
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.selectedInodeSlotsDropped
+#check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionReports.selectedInodeNoLinksOrSlots
 #check_axioms Alvoki.Storage.DiskSession.SegmentedRunCollectionPowerLoss.reopensAdmitted
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.collectObsoleteRunsPowerLoss
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.collectObsoleteRuns
