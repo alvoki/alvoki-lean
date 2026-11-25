@@ -181,7 +181,7 @@ private def snapshotControlResult : SnapshotUpdate.Outcome α → Except IO.Erro
 
 /-- A successful maintenance operation continues the same committed
 history and read ledger from its exact reached ready state. -/
-private def NativeReadPosition.afterMaintenance (current : NativeReadPosition history log) (next : NativeReadyState)
+def NativeReadPosition.afterMaintenance (current : NativeReadPosition history log) (next : NativeReadyState)
     (valid : next.Valid) (historyEq : next.writer.history = history) : NativeReadPosition history log :=
   ⟨.ok next.session (next.census, next.files), next, next, current.reads,
     .installed rfl valid historyEq current.readPrefix.refines.2.2 current.readPrefix.readsBounded⟩

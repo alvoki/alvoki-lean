@@ -165,6 +165,34 @@ theorem runs (reported : NativeReadyWalCollection state) (valid : state.Valid)
   simpa only [completed, next, NativeReadyState.files, SegmentedWriterState.afterWalCollection] using
     reported.returned valid
 
+/-- Execute exactly the approved physical publication steps. The phase
+stores belong to the public caller, before and after this schedule. -/
+def publicationFiles (reported : NativeReadyWalCollection state) (offsets : List Nat) :
+    EStateM IO.Error CollectionFiles Unit :=
+  WalCollectionReads.publicationFiles state.session.directory (removeWithCache reported.remove)
+    reported.barrier.group offsets
+
+theorem publicationFiles_returns (reported : NativeReadyWalCollection state) (valid : state.Valid)
+    (completed : reported.barrier.outcome = .completed) :
+    reported.publicationFiles state.writer.wal.collectionOffsets (state.cache, .start state.writer.wal) =
+      .ok () (state.cache, reported.barrier.after) := by
+  have plan := valid.retained.completeObservedWalPlan
+    reported.calls reported.inventory reported.manifest reported.marker
+  have interpreted := reported.runs valid completed
+  rw [run, WalCollectionReads.collectWithCache, valid.phase,
+    WalCollectionReads.collectWithEffects_plan _ _ _ _ _ _ plan,
+    WalCollectionReads.continueWithEffects_publicationFiles] at interpreted
+  unfold publicationFiles
+  cases returned : WalCollectionReads.publicationFiles state.session.directory
+    (removeWithCache reported.remove) reported.barrier.group state.writer.wal.collectionOffsets
+    (state.cache, .start state.writer.wal) with
+  | error cause reached => simp only [returned, reduceCtorEq] at interpreted
+  | ok value reached =>
+    cases value
+    rw [returned] at interpreted
+    exact congrArg (EStateM.Result.ok ()) (congrArg (fun next => next.2.image)
+      (EStateM.Result.ok.inj interpreted).2)
+
 /-- The final fsync uses the exact cached description for the root.
 The writer and directory slots are live in the reached returned census. -/
 theorem retainsCustody (reported : NativeReadyWalCollection state) (valid : state.Valid) :

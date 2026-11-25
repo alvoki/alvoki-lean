@@ -52,6 +52,62 @@ theorem collectWithEffects_plan (calls : WalCollectionReads) (directory : DiskDi
     publishPrepared, modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet]
   rfl
 
+/-- The ordered file operations of covered-WAL collection. This is the
+same unlink and directory sync schedule without the surrounding phase stores. -/
+def publicationFiles (directory : DiskDirectory)
+    (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
+    (syncDirectory : FilePath → EStateM IO.Error image Unit)
+    (offsets : List Nat) : EStateM IO.Error image Unit :=
+  RunCollection.run offsets (RunCollection.performPaths removeFile syncDirectory throw
+    (fun offset => directory.file (.walSegment offset)) directory.path)
+
+theorem continueWithEffects_publicationFiles (directory : DiskDirectory)
+    (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
+    (syncDirectory : FilePath → EStateM IO.Error image Unit)
+    (installed : Installed) (offsets : List Nat) (before : LockedFileState image) :
+    continueWithEffects directory removeFile syncDirectory installed offsets (.poisoned, before) =
+      match publicationFiles directory removeFile syncDirectory offsets before.image with
+      | .ok () after => .ok () (.ready installed, { before with image := after })
+      | .error cause after => .error cause (.poisoned, { before with image := after }) := by
+  let raw := RunCollection.performPaths removeFile syncDirectory throw
+    (fun offset => directory.file (.walSegment offset)) directory.path
+  let modeled := RunCollection.performPaths (fun path => walCollectionFileCall (removeFile path))
+    (fun path => walCollectionFileCall (syncDirectory path)) throw
+    (fun offset => directory.file (.walSegment offset)) directory.path
+  have step (operation : RunCollection.Step Nat) (files : LockedFileState image) :
+      modeled operation (.poisoned, files) = walCollectionFileCall (raw operation) (.poisoned, files) := by
+    cases operation with
+    | syncDirectory => rfl
+    | unlink offset =>
+      cases removed : removeFile (directory.file (.walSegment offset)) files.image with
+      | error cause reached =>
+        simp [raw, modeled, RunCollection.performPaths, Bind.bind, EStateM.bind, walCollectionFileCall, removed]
+      | ok result reached =>
+        cases accepted : RunCollection.ownedUnlinkResult result <;>
+          simp [raw, modeled, RunCollection.performPaths, Bind.bind, EStateM.bind, walCollectionFileCall,
+            removed, accepted, Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+  have list (operations : List (RunCollection.Step Nat)) (files : LockedFileState image) :
+      operations.forM modeled (.poisoned, files) =
+        walCollectionFileCall (operations.forM raw) (.poisoned, files) := by
+    induction operations generalizing files with
+    | nil => rfl
+    | cons first remaining ih =>
+      simp only [List.forM_eq_forM, List.forM_cons, Bind.bind, EStateM.bind, step first]
+      cases result : raw first files.image with
+      | error cause reached => simp [walCollectionFileCall, EStateM.bind, result]
+      | ok value reached =>
+        cases value
+        simpa only [walCollectionFileCall, EStateM.bind, result, List.forM_eq_forM]
+          using (ih { files with image := reached })
+  unfold continueWithEffects publicationFiles RunCollection.run
+  change (do
+    (RunCollection.steps offsets).forM modeled
+    modify (fun state => (.ready installed, state.2)) : EStateM IO.Error _ Unit) (.poisoned, before) = _
+  simp only [Bind.bind, EStateM.bind, list, walCollectionFileCall]
+  cases result : (RunCollection.steps offsets).forM raw before.image with
+  | error cause reached => rfl
+  | ok value reached => cases value; rfl
+
 theorem continueWithEffects_unlink (directory : DiskDirectory)
     (removeFile : FilePath → EStateM IO.Error image (Except IO.Error Unit))
     (syncDirectory : FilePath → EStateM IO.Error image Unit)

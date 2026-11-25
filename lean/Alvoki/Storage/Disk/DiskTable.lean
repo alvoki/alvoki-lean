@@ -605,6 +605,26 @@ theorem DiskTable.collectCoveredWal_fileEffects (db : DiskTable) :
         (fun path => db.files.syncPaths #[path]) throw (fun first => db.dir.file (.walSegment first)) db.dir.path)
       db.phase.set (.ready state)) := rfl
 
+/-- The collector issues the native planner and collection callbacks
+on the original opened directory, synchronization cache and phase. -/
+def DiskTable.UsesOpenWalCollectionSchedule (db : DiskTable) (directory : DiskDirectory)
+    (files : DiskTable.OpenSyncFiles) (phase : IO.Ref Phase) : Prop :=
+  db.collectCoveredWal = (do
+    let state ← (← phase.get).installed
+    let selected ← planWalCollectionWith directory state.generation state.walBytes state.activeFirst
+      readOptionalFile readDirectoryChecked inspectWalSegment
+    phase.set .poisoned
+    RunCollection.run selected (RunCollection.performPaths (fun path => (IO.FS.removeFile path).toBaseIO)
+      (fun path => files.syncPaths #[path]) throw (fun first => directory.file (.walSegment first)) directory.path)
+    phase.set (.ready state))
+
+theorem DiskTable.UsesOpenReferences.collectCoveredWal {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token) :
+    db.UsesOpenWalCollectionSchedule directory files phase := by
+  obtain ⟨sameDirectory, _, sameFiles, samePhase, _⟩ := uses
+  unfold DiskTable.UsesOpenWalCollectionSchedule
+  rw [db.collectCoveredWal_fileEffects, sameDirectory, sameFiles, samePhase]
+
 private def checkActiveSegment (dir : DiskDirectory) (state : Installed) : IO Unit := do
   let path := dir.file (.walSegment state.activeFirst)
   let metadata ← path.symlinkMetadata
