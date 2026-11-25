@@ -35,6 +35,7 @@ import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
 import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeContendedOpen
+import Alvoki.Storage.Disk.NativeUncertainStageRetry
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
@@ -96,6 +97,8 @@ inductive NativeExecutionEvent : Type 1 where
       (attempted retained : List WAL.Write)
   | uncertainWriteCrashRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (attempted retained : List WAL.Write)
+  | uncertainWriteStageRetryRecovered (request : WriteRequest) (failedInput input : FilePath)
+      (writeCause openDiagnostic : IO.Error) (attempted : List WAL.Write)
   | uncertainWriteInterruptedCloseRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (attempted retained : List WAL.Write)
   | uncertainWriteCloseRetriesRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
@@ -130,6 +133,7 @@ def submissions : NativeExecutionEvent → List DatabaseSubmissions
   | .uncertainWriteRecovered _ _ _ attempted _ | .uncertainWriteCrashRecovered _ _ _ attempted _
   | .uncertainWriteInterruptedCloseRecovered _ _ _ attempted _ | .interruptedAppendRecovered _ _ attempted
   | .interruptedMarkerRecovered _ _ attempted _ | .interruptedAppendCrashRecovered _ _ attempted
+  | .uncertainWriteStageRetryRecovered _ _ _ _ _ attempted
   | .uncertainWriteCloseRetriesRecovered _ _ _ _ _ attempted _
   | .uncertainWriteClientCallsRecovered _ _ _ _ attempted _
   | .uncertainWriteExitRecovered _ _ _ _ _ attempted _ =>
@@ -410,6 +414,14 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
         (.uncertainWriteCrashRecovered observed.write.request input observed.write.failure.cause
           observed.write.failure.batch retained)
         ⟨current.history ++ retained, current.submissions ++ [.uncertainBatch observed.write.failure.batch], next⟩
+  | recoverUncertainWriteStageRetry (current : NativeExecutionPosition) {failedInput input : FilePath}
+      (pending : NativePendingWrite current.ready) (observed : NativeUncertainStageRetryObservation pending failedInput input)
+      (next : NativeReadPosition current.history pending.submissions)
+      (reopened : NativeUncertainStageRetryContinuation pending observed next) :
+      NativeExecutionStep current
+        (.uncertainWriteStageRetryRecovered pending.write.request failedInput input pending.write.failure.cause
+          (reopened.failedOpen.failure.diagnostic reopened.failedOpen.unlock) pending.write.failure.batch)
+        ⟨current.history, pending.submissions, next⟩
   | recoverUncertainWriteInterruptedClose (current : NativeExecutionPosition) {input : FilePath}
       (pending : NativePendingWrite current.ready) (observed : NativePoisonedCloseReopenObservation pending input)
       (retained : List WAL.Write) (next : NativeReadPosition (current.history ++ retained) pending.submissions)
@@ -630,6 +642,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWriteCrash reopened =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverUncertainWriteStageRetry reopened =>
+    exact ⟨by simp [NativeExecutionEvent.writes], rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWriteInterruptedClose reopened =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case obsoleteRunUnlinkError returned => exact ⟨by simp [NativeExecutionEvent.writes],
@@ -764,6 +778,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | interruptedCheckpointThenReopen (input : FilePath)
   | writeThenCloseAndReopen (request : WriteRequest) (input : FilePath)
   | writeThenPowerLossAndReopen (request : WriteRequest) (input : FilePath)
+  | writeThenPowerLossStageRetryAndReopen (request : WriteRequest) (failedInput input : FilePath)
   | writeThenInterruptedCloseAndReopen (request : WriteRequest) (input : FilePath)
   | interruptedAppendThenReopen (request : WriteRequest) (input : FilePath)
   | interruptedAppendThenPowerLossAndReopen (request : WriteRequest) (input : FilePath)
@@ -827,6 +842,9 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
     submitted = request ∧ opened = input
   | .writeThenPowerLossAndReopen request input, .uncertainWriteCrashRecovered submitted opened _ _ _ =>
     submitted = request ∧ opened = input
+  | .writeThenPowerLossStageRetryAndReopen request failedInput input,
+      .uncertainWriteStageRetryRecovered submitted failed opened _ _ _ =>
+    submitted = request ∧ failed = failedInput ∧ opened = input
   | .writeThenInterruptedCloseAndReopen request input, .uncertainWriteInterruptedCloseRecovered submitted opened _ _ _ =>
     submitted = request ∧ opened = input
   | .interruptedAppendThenReopen request input, .interruptedAppendRecovered submitted opened _ =>
@@ -893,6 +911,10 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
   | interruptedCheckpointThenReopen (input : FilePath) (observed : NativePendingCheckpointCrashObservation current.state input)
   | writeThenCloseAndReopen (observed : NativeUncertainWriteObservation current.state)
   | writeThenPowerLossAndReopen (input : FilePath) (observed : NativeUncertainWriteCrashObservation current.state input)
+  | writeThenPowerLossStageRetryAndReopen (failedInput input : FilePath) (write : NativeReadyWriteFailure current.state)
+      (inspect : ∀ cache, write.returnedAt cache → Nonempty (NativePendingWriteCensus current.state cache))
+      (observe : ∀ pending : NativePendingWrite current, pending.write = write →
+        Nonempty (NativeUncertainStageRetryObservation pending failedInput input))
   | writeThenInterruptedCloseAndReopen (input : FilePath) (write : NativeReadyWriteFailure current.state)
       (inspect : ∀ cache, write.returnedAt cache → Nonempty (NativePendingWriteCensus current.state cache))
       (observe : ∀ pending : NativePendingWrite current, pending.write = write →
@@ -1013,6 +1035,8 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .interruptedCheckpointThenReopen input _ => .interruptedCheckpointThenReopen input
   | .writeThenCloseAndReopen observed => .writeThenCloseAndReopen observed.write.request observed.input
   | .writeThenPowerLossAndReopen input observed => .writeThenPowerLossAndReopen observed.write.request input
+  | .writeThenPowerLossStageRetryAndReopen failedInput input failedWrite _ _ =>
+    .writeThenPowerLossStageRetryAndReopen failedWrite.request failedInput input
   | .writeThenInterruptedCloseAndReopen input failedWrite _ _ =>
     .writeThenInterruptedCloseAndReopen failedWrite.request input
   | .interruptedAppendThenReopen input stop _ _ => .interruptedAppendThenReopen stop.request input
@@ -1103,6 +1127,12 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | writeThenPowerLossAndReopen _ observed =>
     obtain ⟨retained, next, reopened⟩ := current.ready.recoversUncertainWriteAfterPowerLoss observed
     exact ⟨_, _, .recoverUncertainWriteCrash current observed retained next reopened, rfl, rfl⟩
+  | writeThenPowerLossStageRetryAndReopen _ _ failedWrite inspect observe =>
+    obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite failedWrite inspect
+    obtain ⟨seen⟩ := observe pending same
+    obtain ⟨next, ⟨reopened⟩⟩ := pending.reopensAfterOldMarkerStageError seen
+    exact ⟨_, _, .recoverUncertainWriteStageRetry current pending seen next reopened,
+      congrArg NativeReadyWriteFailure.request same, rfl, rfl⟩
   | writeThenInterruptedCloseAndReopen _ write inspect observe =>
     obtain ⟨pending, same, _⟩ := current.ready.stopsAtUncertainWrite write inspect
     obtain ⟨seen⟩ := observe pending same

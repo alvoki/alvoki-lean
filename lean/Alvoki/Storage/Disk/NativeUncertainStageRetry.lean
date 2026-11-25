@@ -183,45 +183,66 @@ theorem readsSameWal (first : report.ReadsWal) : next.ReadsSameWal := by
 
 end RebootStageRetryReports
 
+/-- The reboot and the two reported attempts belong to one reached
+uncertain return. The first selects a long keeper at the old marker.
+The second starts only after the same failed opener's reported disposal. -/
+structure NativeUncertainStageRetryObservation (pending : NativePendingWrite before) (input nextInput : FilePath) where
+  crash : NativeUncertainWriteCrash pending.write pending.observed
+  oldMarker : crash.retry.image.directory.active.walBoundary = before.state.writer.wal.directory.active.walBoundary
+  first : ∀ layout : CanonicalKeeperLayout crash.retry.image before.state.writer.history,
+    Prepared crash.retry.image layout.target layout.plan → Nonempty (RebootLongStageErrorReports crash input layout)
+  retry : ∀ layout (report : RebootLongStageErrorReports crash input layout)
+    (selected : SelectedIntegrityCheckpoint before.state.writer.published.durable crash.retry.image.directory.active.manifest
+      before.state.writer.checkpoint),
+    ∃ disposal : RebootStageErrorDisposal report, Nonempty (RebootStageRetryReports disposal nextInput selected)
+
+/-- The exposed ready state is the successful primitive result of the
+second call. It uses the original submission ledger extended once. -/
+structure NativeUncertainStageRetryContinuation (pending : NativePendingWrite before)
+    (observed : NativeUncertainStageRetryObservation pending input nextInput)
+    (ready : NativeReadPosition history pending.submissions) where
+  layout : CanonicalKeeperLayout observed.crash.retry.image before.state.writer.history
+  failedOpen : RebootLongStageErrorReports observed.crash input layout
+  disposal : RebootStageErrorDisposal failedOpen
+  selected : SelectedIntegrityCheckpoint before.state.writer.published.durable
+    observed.crash.retry.image.directory.active.manifest before.state.writer.checkpoint
+  next : RebootStageRetryReports disposal nextInput selected
+  failed : ∀ bootstrap install, failedOpen.failure.run failedOpen.chronology bootstrap install =
+    .error (failedOpen.failure.diagnostic failedOpen.unlock) (failedOpen.failure.atStage.1, failedOpen.cleanup.files)
+  disposalInodes : disposal.reached.1.inode = failedOpen.failure.atStage.1.inode
+  disposalFiles : disposal.reached.2.image = observed.crash.retry.image
+  observedOpen : ready.opened = next.opening.finish.run next.opening.chronology
+  returned : ready.opened = .ok ready.state.session (ready.state.census, ready.state.files)
+  installed : ready.initial = ready.state
+  census : ready.state.census = next.opening.finish.census
+  cache : ready.state.cache = next.opening.admission.cache
+  owner : ready.state.owner = next.opening.admission.owner
+  directorySlot : ready.state.directorySlot = next.opening.admission.cached
+  directory : ready.state.session.directory = before.state.session.directory
+  checkpoint : ready.state.writer.checkpoint = before.state.writer.checkpoint
+  durable : ready.state.writer.published.durable = before.state.writer.published.durable
+  bindings : ready.state.files.image.directory.active = observed.crash.retry.image.directory.active
+  reads : ready.reads = before.reads
+  directoryInode : next.opening.reads.bindings before.state.session.directory.path =
+    some (before.state.census.inode before.state.directorySlot.description)
+  lockInode : next.opening.reads.bindings (before.state.session.directory.file .lock) =
+    some (before.state.census.inode before.state.owner.description)
+  readsCheckpoint : next.ReadsSameCheckpoint
+  readsWal : next.ReadsSameWal
+  replay : InstalledClientReplay pending.submissions before.reads history ready.state.writer.installed ready.state.session
+
 /-- The old-marker reboot, returned long-keeper stage error and reported
 local disposal can lead into an actual healthy marked retry. The retry
 acquires the reached vacant lock, reads the same survivor, and installs
 the earlier committed table with the same bounded read ledger. -/
 theorem NativePendingWrite.reopensAfterOldMarkerStageError
-    (pending : NativePendingWrite before) (crash : NativeUncertainWriteCrash pending.write pending.observed)
-    {input nextInput : FilePath}
-    (oldMarker : crash.retry.image.directory.active.walBoundary = before.state.writer.wal.directory.active.walBoundary)
-    (observe : ∀ layout : CanonicalKeeperLayout crash.retry.image before.state.writer.history,
-      Prepared crash.retry.image layout.target layout.plan → Nonempty (RebootLongStageErrorReports crash input layout))
-    (retry : ∀ layout (report : RebootLongStageErrorReports crash input layout)
-      (selected : SelectedIntegrityCheckpoint before.state.writer.published.durable crash.retry.image.directory.active.manifest
-        before.state.writer.checkpoint),
-      ∃ disposal : RebootStageErrorDisposal report, Nonempty (RebootStageRetryReports disposal nextInput selected)) :
-    ∃ (layout : CanonicalKeeperLayout crash.retry.image before.state.writer.history)
-      (report : RebootLongStageErrorReports crash input layout) (disposal : RebootStageErrorDisposal report)
-      (selected : SelectedIntegrityCheckpoint before.state.writer.published.durable crash.retry.image.directory.active.manifest
-        before.state.writer.checkpoint)
-      (next : RebootStageRetryReports disposal nextInput selected) (ready : NativeReadPosition history pending.submissions),
-      (∀ bootstrap install, report.failure.run report.chronology bootstrap install =
-        .error (report.failure.diagnostic report.unlock) (report.failure.atStage.1, report.cleanup.files)) ∧
-      disposal.reached.1.inode = report.failure.atStage.1.inode ∧ disposal.reached.2.image = crash.retry.image ∧
-      ready.opened = next.opening.finish.run next.opening.chronology ∧
-      ready.opened = .ok ready.state.session (ready.state.census, ready.state.files) ∧
-      ready.state.census = next.opening.finish.census ∧ ready.state.cache = next.opening.admission.cache ∧
-      ready.state.owner = next.opening.admission.owner ∧ ready.state.directorySlot = next.opening.admission.cached ∧
-      ready.state.session.directory = before.state.session.directory ∧
-      ready.state.writer.checkpoint = before.state.writer.checkpoint ∧
-      ready.state.writer.published.durable = before.state.writer.published.durable ∧
-      ready.state.files.image.directory.active = crash.retry.image.directory.active ∧
-      ready.reads = before.reads ∧
-      next.opening.reads.bindings before.state.session.directory.path = some (before.state.census.inode before.state.directorySlot.description) ∧
-      next.opening.reads.bindings (before.state.session.directory.file .lock) = some (before.state.census.inode before.state.owner.description) ∧
-      next.ReadsSameCheckpoint ∧ next.ReadsSameWal ∧
-      InstalledClientReplay pending.submissions before.reads history ready.state.writer.installed ready.state.session := by
+    (pending : NativePendingWrite before) (observed : NativeUncertainStageRetryObservation pending input nextInput) :
+    ∃ next, Nonempty (NativeUncertainStageRetryContinuation pending observed next) := by
+  let crash := observed.crash
   obtain ⟨layout, report, failure, _, _, _, _, _, directory, lock, firstCheckpoint, firstWal, replay, bounded, seed, same⟩ :=
-    pending.rejectsOldMarkerStageAfterPowerLoss crash oldMarker observe
+    pending.rejectsOldMarkerStageAfterPowerLoss crash observed.oldMarker observed.first
   subst layout
-  obtain ⟨disposal, ⟨next⟩⟩ := retry seed.layout report seed.selected
+  obtain ⟨disposal, ⟨next⟩⟩ := observed.retry seed.layout report seed.selected
   have accepted : before.state.writer.published.AcceptsVersioned before.state.writer.history.length.toUInt64
       (CheckpointRepresentsPrefix before.state.writer.history) disposal.reached.2.image.directory.active.manifest := by
     rw [disposal.events.preserves.2]
@@ -242,11 +263,11 @@ theorem NativePendingWrite.reopensAfterOldMarkerStageError
       state rows submissions before.reads state) historyEq) started
   let ready : NativeReadPosition history pending.submissions :=
     ⟨next.opening.finish.run next.opening.chronology, state, state, before.reads, exactPrefix⟩
-  refine ⟨seed.layout, report, disposal, seed.selected, next, ready, ?_, disposal.events.preserves.1, disposal.events.preserves.2,
-    rfl, started.frames.1, census, cache, owner, slot, directoryPath, checkpoint, durable,
+  refine ⟨ready, ⟨seed.layout, report, disposal, seed.selected, next, ?_, disposal.events.preserves.1, disposal.events.preserves.2,
+    rfl, started.frames.1, rfl, census, cache, owner, slot, directoryPath, checkpoint, durable,
     active.trans (congrArg (fun image : FileImage => image.directory.active) disposal.events.preserves.2), rfl,
     next.directory.trans directory, next.lock.trans lock, next.readsSameCheckpoint firstCheckpoint, next.readsSameWal firstWal,
-    ready.readPrefix.guardedReplay⟩
+    ready.readPrefix.guardedReplay⟩⟩
   intro bootstrap install
   rw [report.cleanupFiles]
   exact failure bootstrap install
