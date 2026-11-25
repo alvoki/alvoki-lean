@@ -94,3 +94,34 @@ engine order. The aligned, torn-tail and missing-acknowledged-frame cases
 passed, as did the unchanged, unwritten and torn-checksum slot images.
 Raw samples and crash checks are in
 `work/alvoki-performance/two-slot-ledger-rerun`.
+
+### Working-set and sync diagnostics
+
+At `824e719`, paired trials against RocksDB 9.10.0 reproduced the
+individually durable, closed-loop mixed workload with 256 and 4,096
+possible keys. Slots reached 4,700 versus 9,807 operations/s with 256 keys
+and 4,439 versus 8,973 with 4,096. The corresponding write p99 ratios
+were 1.92× and 2.48×. Read p99 was 4.0 and 4.2 µs for slots and 4.0
+and 5.1 µs for RocksDB. Under maintenance with an old snapshot, the
+write p99 ratios were 2.09× and 2.30×. The larger keyspace changes
+hit rate as well as the number of distinct written keys.
+
+A traced 256-key control counted 12,004, 8,004 and 4,008 fsync calls
+for rename, slots and RocksDB respectively across 4,000 writes.
+RocksDB also issued three fdatasync calls. These are syscall counts.
+The trace does not measure physical blocks or device barriers.
+A separate paired probe replaced only the marker fsync with fdatasync
+on an already established inode. Commit p99 improved in five of ten
+pairs and median commit p50 rose from 324 to 341 µs. The engine keeps
+fsync.
+
+Aligned reopen with slots took 0.88–0.95 ms across 16, 128 and 512
+acknowledged suffix entries, versus 6.51–8.23 ms for RocksDB. With a
+16-entry suffix and a torn tail, slots took 1.29 ms versus 1.19 ms for
+rename. Both Alvoki adapters rejected missing acknowledged WAL bytes
+without modifying the inputs. The full sequential suite passed on
+the measured revision.
+
+Workspace raw samples and harnesses are under
+`work/alvoki-performance/two-slot-keyspace-4096` and
+`work/alvoki-performance/two-slot-marker-data-sync`.
