@@ -82,6 +82,38 @@ theorem resolveAfterAppend_sameInode {handle state : Type}
     exact ⟨captured, cache.consume keeper, by simp [SyncHandleRouting.Cache.resolve, notDirectory, pending],
       Option.some.inj ((owned.pending pending).symm.trans appendBinding)⟩
 
+/-- The executed append and cache-routed barrier use descriptions for
+one inode. The result preserves the exact reached cache and syscall result. -/
+theorem appendThenSync_sameInode {handle state : Type}
+    (cache : SyncHandleRouting.Cache handle) (before : state)
+    (directory keeper : System.FilePath) (frame : ByteArray)
+    (openAppend openRead : System.FilePath → EStateM IO.Error state handle)
+    (write : handle → ByteArray → EStateM IO.Error state Unit)
+    (flush fsync : handle → EStateM IO.Error state Unit)
+    (bindings : state → System.FilePath → Option Nat) (inode : handle → Nat)
+    {file : handle} {opened written appended : state}
+    (notDirectory : keeper ≠ directory)
+    (owned : cache.Agrees directory inode (bindings before))
+    (fresh : ∀ {captured after}, openAppend keeper before = .ok captured after →
+      bindings after keeper = some (inode captured))
+    (selected : SyncHandleRouting.selectAppendHandle cache.active openAppend keeper before = .ok file opened)
+    (wrote : write file frame opened = .ok () written)
+    (flushed : flush file written = .ok () appended)
+    (bindingsPreserved : bindings appended = bindings before)
+    (selectedPreserved : bindings appended keeper = bindings opened keeper) :
+    ∃ synced resolved,
+      inode synced = inode file ∧
+      ((SyncHandleRouting.runAppendWithCache keeper frame openAppend write flush >>= fun _ =>
+        SyncHandleRouting.sync directory openRead fsync keeper) (cache, before)) =
+        SyncHandleRouting.withCache resolved (fsync synced appended) := by
+  obtain ⟨appendResult, activeOwned⟩ := SyncHandleRouting.runAppendWithCache_owned
+    frame openAppend write flush bindings inode owned fresh selected wrote flushed
+    bindingsPreserved selectedPreserved
+  obtain ⟨synced, resolved, lookup, same⟩ :=
+    resolveAfterAppend_sameInode (openRead := openRead) notDirectory rfl activeOwned
+  exact ⟨synced, resolved, same, by
+    simp only [Bind.bind, EStateM.bind, appendResult, SyncHandleRouting.sync, lookup]⟩
+
 /-- If the slot write or marker barrier fails after the WAL barrier, the
 client receives commit-unknown with exactly the reached file state.
 The marker barrier runs only after a successful slot write. Installation
