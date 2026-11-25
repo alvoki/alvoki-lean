@@ -146,6 +146,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativePendingFirstAppend
 lake env leanchecker Alvoki.Storage.Disk.NativeExecutionPendingClose
 lake env leanchecker Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 lake env leanchecker Alvoki.Storage.Disk.NativeInterruptedCloseReopen
+lake env leanchecker Alvoki.Storage.Disk.NativePoisonedCloseReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWalCollection
 lake env leanchecker Alvoki.Storage.Disk.NativeWalPlanningQuery
 lake env leanchecker Alvoki.Storage.Disk.NativeObsoleteRunCollection
