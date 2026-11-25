@@ -38,7 +38,9 @@ private theorem Target.eq_of_fields {left right : Target} (pair : left.pair = ri
   cases trimmed
   rfl
 
-private theorem SegmentedWriterState.RetainedReady.powerLossLayout {directory : DiskDirectory} {descriptor : Nat}
+/-- Recover the canonical keeper and sealed read plan at a settled writer's
+power-loss image, before admitting any reopen effects. -/
+theorem SegmentedWriterState.RetainedReady.powerLossLayout {directory : DiskDirectory} {descriptor : Nat}
     {state : SegmentedWriterState} (ready : state.RetainedReady directory descriptor) :
     let files := (state.powerLossFiles directory).image
     ∃ selected : CanonicalKeeperLayout files state.history,

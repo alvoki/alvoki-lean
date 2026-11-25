@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
+import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
 import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
 import Alvoki.Storage.Disk.SessionReadGuards
@@ -154,6 +155,13 @@ inductive SegmentedBatchDatabaseTrace (directory : DiskDirectory) (initialDescri
       (reports : SegmentedRunCollectionReports directory before runs) :
       SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer
         (before.afterRunCollection reports.reached.guaranteed)
+  | collectRunsPowerLoss {files : Type} {input : System.FilePath} {retry : LockedFileState FileImage}
+      {runs : CheckpointPublication.RunUnlinkImage}
+      (enabled : allowCollection = true)
+      (prior : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+      {reports : SegmentedRunCollectionReports directory before runs} (loss : SegmentedRunCollectionPowerLoss reports)
+      (installed : loss.Installs (files := files) input retry descriptor after) :
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after
 
 private theorem appendUncertainBatch {initial before after batch retained : List WAL.Write}
     {log : List DatabaseSubmissions} (retention : DatabaseBatchRetention log retained)
@@ -206,6 +214,9 @@ theorem SegmentedBatchDatabaseTrace.preservesRetained
   | collectRuns _ _ reports ih =>
     obtain ⟨ready, retained, history, retention⟩ := ih
     exact ⟨(reports.preservesRetained ready).1, retained, history, retention⟩
+  | collectRunsPowerLoss _ _ _ installed ih =>
+    obtain ⟨_, retained, history, retention⟩ := ih
+    exact ⟨installed.retained, retained, installed.history.trans history, retention⟩
 
 /-- Keep the submission log, installed table and lock across a reported
 run collection outcome. A crash run map retains the same strict checkpoint
@@ -220,6 +231,20 @@ theorem SegmentedBatchDatabaseTrace.collectObsoleteRuns
     ∀ survived ∈ reports.reached.crashImages,
       SelectedIntegrityCheckpoint survived before.target.pair.manifest before.checkpoint :=
   ⟨.collectRuns enabled trace reports, (reports.preservesRetained (trace.preservesRetained initialReady).1).2⟩
+
+/-- Continue at the exact marked open after a crash during obsolete-run
+collection. Surviving run bytes and the unchanged WAL determine replay. -/
+theorem SegmentedBatchDatabaseTrace.collectObsoleteRunsPowerLoss {files : Type} {input : System.FilePath}
+    {retry : LockedFileState FileImage} {runs : CheckpointPublication.RunUnlinkImage}
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor) (enabled : allowCollection = true)
+    {reports : SegmentedRunCollectionReports directory before runs} (loss : SegmentedRunCollectionPowerLoss reports)
+    (attempts : BoundedReopenTrace directory (fun target => target = before.target) loss.crashed retry)
+    (reads : loss.ReopenObservations files input retry) :
+    ∃ descriptor after, loss.Installs (files := files) input retry descriptor after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log descriptor after := by
+  obtain ⟨descriptor, after, installed⟩ := loss.reopensAdmitted (trace.preservesRetained initialReady).1 attempts reads
+  exact ⟨descriptor, after, installed, .collectRunsPowerLoss enabled trace loss installed⟩
 
 /-- Continue the mixed history at the exact reported clean reopen. Explicit
 unlock and reacquisition change the session while the checkpoint binding
