@@ -137,6 +137,39 @@ theorem priorRunAtEnd (report : NativeCheckpointRunObservations (image := image)
     runPath_ne state.session.directory (fun equal => different (congrArg Prod.fst equal))
   exact ⟨inode, entry, report.stablePath entry apart _ (Nat.le_refl _)⟩
 
+/-- Each completed run remains on the inode that its successful file
+barrier synced, through all later writes to distinct run paths. -/
+theorem freshRunAtEnd (report : NativeCheckpointRunObservations (image := image) state cut count)
+    {index : Nat} (within : index < count) :
+    ∃ (run : Compaction.CheckedRun) (inode : Nat), cut.checkpoint.table.runs.toArray[index]? = some run ∧
+      (report.views count).visible (state.session.directory.file (.run cut.checkpoint.prepared.generation index)) = some inode ∧
+      (report.inodes (report.atRun count)).visible inode = run.run.bytes ∧
+      (report.inodes (report.atRun count)).crashBytes inode = [run.run.bytes] := by
+  let generation := cut.checkpoint.prepared.generation
+  have reached (through : Nat) (bounded : through ≤ count) : ∀ index < through,
+      ∃ (run : Compaction.CheckedRun) (inode : Nat), cut.checkpoint.table.runs.toArray[index]? = some run ∧
+        (report.views through).visible (state.session.directory.file (.run generation index)) = some inode ∧
+        (report.inodes (report.atRun through)).visible inode = run.run.bytes ∧
+        (report.inodes (report.atRun through)).crashBytes inode = [run.run.bytes] := by
+    induction through with
+    | zero => intro index inside; omega
+    | succ prior earlier =>
+      intro index inside
+      obtain ⟨run, selected, observed, synced, bound, bytes, privateBinding, frame⟩ := report.runReports prior bounded
+      by_cases same : index = prior
+      · subst index
+        refine ⟨run, _, selected, bound, synced.symm ▸ bytes, ?_⟩
+        rw [synced]
+        simp [WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, bytes]
+      · obtain ⟨earlierRun, inode, selected, bound, bytes, crash⟩ := earlier (Nat.le_of_lt bounded) index (by omega)
+        have apart : state.session.directory.file (.run generation index) ≠ state.session.directory.file (.run generation prior) :=
+          runPath_ne state.session.directory (fun equal => same (congrArg Prod.snd equal))
+        obtain ⟨different, named, visible⟩ := frame.keepsVisible synced privateBinding apart bound bytes
+        refine ⟨earlierRun, inode, selected, named, visible, ?_⟩
+        rw [synced]
+        simp [WalInodeImage.completeFileSync, WalInodeImage.reportFileSync, different, frame.crashBytes _ different, crash]
+  exact reached _ (Nat.le_refl _) index within
+
 theorem filesAtRun (report : NativeCheckpointRunObservations (image := image) state cut count) (index : Nat)
     (within : index ≤ count) : report.files (report.atRun index) = state.files.image := by
   induction index with
@@ -330,23 +363,7 @@ theorem freshRunBytes (report : NativeCheckpointRunDirectoryError (image := imag
     (cut.tookEffect = true →
       (report.runs report.after).guaranteed cut.checkpoint.prepared.generation index = cut.checkpoint.plan.files[index]?) := by
   let generation := cut.checkpoint.prepared.generation
-  have reached (through : Nat) (bounded : through ≤ cut.checkpoint.table.runs.length) : ∀ index < through,
-      ∃ (run : Compaction.CheckedRun) (inode : Nat), cut.checkpoint.table.runs.toArray[index]? = some run ∧
-        (report.views through).visible (state.session.directory.file (.run generation index)) = some inode ∧
-        (report.inodes (report.atRun through)).visible inode = run.run.bytes := by
-    induction through with
-    | zero => intro index inside; omega
-    | succ prior earlier =>
-      intro index inside
-      obtain ⟨run, selected, observed, synced, bound, bytes, privateBinding, frame⟩ := report.runReports prior bounded
-      by_cases same : index = prior
-      · subst index
-        exact ⟨run, _, selected, bound, synced.symm ▸ bytes⟩
-      · obtain ⟨earlierRun, inode, selected, bound, bytes⟩ := earlier (Nat.le_of_lt bounded) index (by omega)
-        have apart : state.session.directory.file (.run generation index) ≠ state.session.directory.file (.run generation prior) :=
-          runPath_ne state.session.directory (fun equal => same (congrArg Prod.snd equal))
-        exact ⟨earlierRun, inode, selected, (frame.keepsVisible synced privateBinding apart bound bytes).2⟩
-  obtain ⟨run, inode, selected, bound, bytes⟩ := reached _ (Nat.le_refl _) index within
+  obtain ⟨run, inode, selected, bound, bytes, _⟩ := report.freshRunAtEnd within
   have visible : (report.runs report.atBarrier).visible generation index = cut.checkpoint.plan.files[index]? := by
     rw [(report.views cut.checkpoint.table.runs.length).visibleProjects _ _ _ bound, bytes]
     change some run.run.bytes = (cut.checkpoint.table.runs.map (·.run.bytes))[index]?

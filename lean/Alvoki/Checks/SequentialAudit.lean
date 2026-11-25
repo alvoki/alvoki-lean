@@ -101,6 +101,7 @@ import Alvoki.Storage.Disk.NativeEarlyCheckpointReopen
 import Alvoki.Storage.Disk.NativeCheckpointRunFileError
 import Alvoki.Storage.Disk.NativeCheckpointRunFileReopen
 import Alvoki.Storage.Disk.NativeCheckpointRunDataError
+import Alvoki.Storage.Disk.NativeCheckpointManifestSyncError
 import Alvoki.Storage.Disk.NativePendingCheckpoint
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeCheckpointErrorReopen
@@ -729,6 +730,18 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDataError.manifestAtReturn
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunDataError.selectedCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointRunDataError
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunObservations.freshRunAtEnd
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunsSynced.runPrefix
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointRunsSynced.directoryCustody
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSyncError.issues
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSyncError.returns
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSyncError.custody
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSyncError.stagedBytes
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSyncError.freshRunBytes
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSyncError.priorRunBytes
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSyncError.manifestAtReturn
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestSyncError.selectedCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.checkpointManifestSyncError
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.issues
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.routes
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointFinalBarrier.custody
