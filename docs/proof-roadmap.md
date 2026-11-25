@@ -422,6 +422,8 @@ For an interrupted marker rename on the public opened-table schedule, the same r
 
 The final WAL directory fsync can also stop after the marker rename has returned on the original opened schedule. The append, stage and grouped file sync leave the same keeper and staged inode. The returned rename moves that inode and leaves the original cached directory for the next callback. A reported effect of the stopped fsync settles the new marker. Without that effect the reported reboot can select either marker. Both choices use the same exact raw reopen proof, including the measured keeper repair and a single uncertain submission with no write response. [Opened phase at final WAL fsync](../lean/Alvoki/Storage/Disk/NativePendingMarkerDirectoryOpenPhase.lean) · [Returned table after a stopped marker publication](../lean/Alvoki/Storage/Disk/NativeStoppedMarkerTableOpen.lean)
 
+A Linux process-exit reproduction exercised the original cached directory sync immediately before the syscall and immediately after its successful return. Both process exits kept the already renamed marker visible. Reopening each directory restored the full batch and every intermediate snapshot from the same checkpoint inodes and bytes, and a subsequent append succeeded. The proof's additional power-loss choices before directory sync follow the reported filesystem model.
+
 Extend the invariant to every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and
