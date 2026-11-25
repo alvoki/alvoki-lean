@@ -149,6 +149,39 @@ theorem readsWal (seen : NativeCloseAlignedReads files input inventory layout se
 
 end NativeCloseAlignedReads
 
+/-- The aligned return and physical reads for one selected report. -/
+def NativeCloseAlignedReads.SelectedResult {state : NativeReadyState} {files : NativeCloseFiles state}
+    {input : FilePath} {inventory : DescriptorInventory}
+    {layout : CanonicalKeeperLayout state.releasedFiles.image state.writer.history}
+    {selected : SelectedIntegrityCheckpoint state.writer.published.durable
+      state.releasedFiles.image.directory.active.manifest state.writer.checkpoint}
+    (seen : NativeCloseAlignedReads files input inventory layout selected) (history : List WAL.Write)
+    (log : List DatabaseSubmissions) (reads : List RecordedSnapshotRead) : Prop :=
+  ∃ (next : NativeReadyState),
+    NativeReadyReadPrefix seen.run next history log reads next ∧
+    next.session.directory = state.session.directory ∧ next.owner = seen.opening.admission.owner ∧
+    next.directorySlot = seen.opening.admission.cached ∧ next.cache = seen.opening.admission.cache ∧
+    next.census = seen.opening.finish.census ∧
+    next.session.sessionRef ≠ state.session.sessionRef ∧ next.session.phaseRef ≠ state.session.phaseRef ∧
+    next.census.inode next.owner.description = state.census.inode state.owner.description ∧
+    next.census.inode next.directorySlot.description = state.census.inode state.directorySlot.description ∧
+    next.files.image.directory.active = state.files.image.directory.active ∧
+    next.files.image.kept = state.files.image.kept ∧
+    next.writer.target = state.writer.target ∧ next.writer.checkpoint = state.writer.checkpoint ∧
+    next.writer.published.durable = state.writer.published.durable ∧
+    (state.writer.target.pair.manifest = none → files.names (state.session.directory.file .manifest) = none ∧
+      ∃ name message, seen.opening.reads.reads.stat (state.session.directory.file .manifest) =
+        .error (.noFileOrDirectory name 2 message)) ∧
+    (∀ bytes, state.writer.target.pair.manifest = some bytes → seen.ReadsOriginal (state.session.directory.file .manifest) bytes) ∧
+    (∀ bytes manifest, state.writer.target.pair.manifest = some bytes → IntegrityCheckpoint.decode bytes = .ok manifest →
+      ∀ index < manifest.header.runCount.toNat, ∀ payload, state.writer.published.durable manifest.header.generation index = some payload →
+      seen.ReadsOriginal (state.session.directory.file (.run manifest.header.generation index)) payload) ∧
+    seen.ReadsOriginal (state.session.directory.file .walBoundary)
+      (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) ∧
+    (∀ segment ∈ layout.sealed ++ [layout.keeper],
+      seen.ReadsOriginal (state.session.directory.file (.walSegment segment.first)) segment.bytes) ∧
+    InstalledClientReplay log reads history next.writer.installed next.session
+
 /-- The exact return and selected-object observations for a healthy
 aligned reopen on the released writer's files and reached census. -/
 def NativeCloseAlignedResult {state : NativeReadyState} (files : NativeCloseFiles state)
@@ -157,31 +190,56 @@ def NativeCloseAlignedResult {state : NativeReadyState} (files : NativeCloseFile
     ∃ (plan : ClosedReadyReopenLayout state.writer state.releasedFiles)
       (selected : SelectedIntegrityCheckpoint state.writer.published.durable
         state.releasedFiles.image.directory.active.manifest state.writer.checkpoint)
-      (seen : NativeCloseAlignedReads files input inventory plan.layout selected)
-      (next : NativeReadyState),
-      NativeReadyReadPrefix seen.run next history log reads next ∧
-      next.session.directory = state.session.directory ∧ next.owner = seen.opening.admission.owner ∧
-      next.directorySlot = seen.opening.admission.cached ∧ next.cache = seen.opening.admission.cache ∧
-      next.census = seen.opening.finish.census ∧
-      next.session.sessionRef ≠ state.session.sessionRef ∧ next.session.phaseRef ≠ state.session.phaseRef ∧
-      next.census.inode next.owner.description = state.census.inode state.owner.description ∧
-      next.census.inode next.directorySlot.description = state.census.inode state.directorySlot.description ∧
-      next.files.image.directory.active = state.files.image.directory.active ∧
-      next.files.image.kept = state.files.image.kept ∧
-      next.writer.target = state.writer.target ∧ next.writer.checkpoint = state.writer.checkpoint ∧
-      next.writer.published.durable = state.writer.published.durable ∧
-      (state.writer.target.pair.manifest = none → files.names (state.session.directory.file .manifest) = none ∧
-        ∃ name message, seen.opening.reads.reads.stat (state.session.directory.file .manifest) =
-          .error (.noFileOrDirectory name 2 message)) ∧
-      (∀ bytes, state.writer.target.pair.manifest = some bytes → seen.ReadsOriginal (state.session.directory.file .manifest) bytes) ∧
-      (∀ bytes manifest, state.writer.target.pair.manifest = some bytes → IntegrityCheckpoint.decode bytes = .ok manifest →
-        ∀ index < manifest.header.runCount.toNat, ∀ payload, state.writer.published.durable manifest.header.generation index = some payload →
-        seen.ReadsOriginal (state.session.directory.file (.run manifest.header.generation index)) payload) ∧
-      seen.ReadsOriginal (state.session.directory.file .walBoundary)
-        (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) ∧
-      (∀ segment ∈ plan.layout.sealed ++ [plan.layout.keeper],
-        seen.ReadsOriginal (state.session.directory.file (.walSegment segment.first)) segment.bytes) ∧
-      InstalledClientReplay log reads history next.writer.installed next.session
+      (seen : NativeCloseAlignedReads files input inventory plan.layout selected),
+      seen.SelectedResult history log reads
+
+/-- Reopen the released writer using this one physical read report.
+The retained writer and selected manifest determine the replay. -/
+theorem NativeCloseFiles.reopensReleasedAlignedAt
+    {state : NativeReadyState} {history : List WAL.Write} {log : List DatabaseSubmissions}
+    {reads : List RecordedSnapshotRead}
+    (files : NativeCloseFiles state) (ready : state.writer.RetainedReady state.session.directory state.session.descriptor)
+    (originalHistory : state.writer.history = history) (pending : PendingClientReplay log reads history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy history.length)
+    {input : FilePath} {inventory : DescriptorInventory}
+    (plan : ClosedReadyReopenLayout state.writer state.releasedFiles)
+    (selected : SelectedIntegrityCheckpoint state.writer.published.durable
+      state.releasedFiles.image.directory.active.manifest state.writer.checkpoint)
+    (seen : NativeCloseAlignedReads files input inventory plan.layout selected) :
+    seen.SelectedResult history log reads := by
+  have pair := plan.prepared.pair.trans (congrArg Target.pair plan.target)
+  have accepted : state.writer.published.AcceptsVersioned state.writer.history.length.toUInt64
+      (CheckpointRepresentsPrefix state.writer.history) state.releasedFiles.image.directory.active.manifest :=
+    (congrArg DirectoryPublication.Bindings.manifest pair).symm ▸ ready.resumed.accepted
+  let opening := seen.opening
+  let finish := opening.finish
+  let keeperFinish : CapturedKeeperFinish opening.callbacks opening.reads state.releasedVacant selected := .aligned finish
+  have following := opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors
+  obtain ⟨next, seeded, cache, census, owner, cached, finalPair, durable, checkpoint, path, target,
+    kept, phaseFresh, sessionFresh⟩ := keeperFinish.startsNativeReadPrefix seen.chronology opening.markerFound
+      plan.prepared following accepted ready.resumed.ordered ready.layout ready.valid ready.spans
+      (ready.walPair.trans (congrArg Target.pair plan.target).symm) (congrArg WalSegment.first plan.keeper)
+      ready.sealedFiles (originalHistory.symm ▸ pending) (originalHistory.symm ▸ bounded)
+  have continued : NativeReadyReadPrefix seen.run next history log reads next :=
+    originalHistory ▸ seeded
+  have sameCensus : next.census.inode = opening.admission.reached.inode := by
+    change next.census = finish.census at census
+    rw [census, CapturedAlignedFinish.census, finish.repair.opened]
+    rfl
+  have marker : state.writer.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) :=
+    (congrArg DirectoryPublication.Bindings.walBoundary ready.resumed.ready.selected).symm.trans
+      (congrArg Publication.Image.active ready.resumed.markerImage)
+  refine ⟨next, continued, path, owner, cached, cache, census,
+    fun same => sessionFresh (same.symm ▸ seen.earlierTokens.2),
+    fun same => phaseFresh (same.symm ▸ seen.earlierTokens.1), ?_, ?_, finalPair, kept, target.trans plan.target,
+    checkpoint, durable, seen.manifestMissing pair,
+    fun _ present => seen.readsManifest pair present, fun _ _ present decoded _ within _ stored =>
+      seen.readsRun pair present decoded within stored,
+    seen.readsMarker pair marker, seen.readsWal plan.aligned plan.descriptors, continued.guardedReplay⟩
+  · rw [owner, sameCensus]
+    exact seen.admission.lockObject
+  · rw [cached, sameCensus]
+    exact opening.admission.opened.captures.2.2.2.2.1.symm.trans seen.admission.directoryObject
 
 /-- Reopen the retained writer's selected files after release. The
 caller supplies the actual closure or owner drop separately, so the
@@ -203,39 +261,8 @@ theorem NativeCloseFiles.reopensReleasedAligned
   have binding := congrArg DirectoryPublication.Bindings.manifest pair
   let selected : SelectedIntegrityCheckpoint state.writer.published.durable
       state.releasedFiles.image.directory.active.manifest state.writer.checkpoint := binding.symm ▸ ready.resumed.selected
-  have accepted : state.writer.published.AcceptsVersioned state.writer.history.length.toUInt64
-      (CheckpointRepresentsPrefix state.writer.history) state.releasedFiles.image.directory.active.manifest :=
-    binding.symm ▸ ready.resumed.accepted
   obtain ⟨seen⟩ := observe plan selected
-  let opening := seen.opening
-  let finish := opening.finish
-  let keeperFinish : CapturedKeeperFinish opening.callbacks opening.reads state.releasedVacant selected := .aligned finish
-  have following := opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors
-  obtain ⟨next, seeded, cache, census, owner, cached, finalPair, durable, checkpoint, path, target,
-    kept, phaseFresh, sessionFresh⟩ := keeperFinish.startsNativeReadPrefix seen.chronology opening.markerFound
-      plan.prepared following accepted ready.resumed.ordered ready.layout ready.valid ready.spans
-      (ready.walPair.trans (congrArg Target.pair plan.target).symm) (congrArg WalSegment.first plan.keeper)
-      ready.sealedFiles (originalHistory.symm ▸ pending) (originalHistory.symm ▸ bounded)
-  have continued : NativeReadyReadPrefix seen.run next history log reads next :=
-    originalHistory ▸ seeded
-  have sameCensus : next.census.inode = opening.admission.reached.inode := by
-    change next.census = finish.census at census
-    rw [census, CapturedAlignedFinish.census, finish.repair.opened]
-    rfl
-  have marker : state.writer.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) :=
-    (congrArg DirectoryPublication.Bindings.walBoundary ready.resumed.ready.selected).symm.trans
-      (congrArg Publication.Image.active ready.resumed.markerImage)
-  refine ⟨plan, selected, seen, next, continued, path, owner, cached, cache, census,
-    fun same => sessionFresh (same.symm ▸ seen.earlierTokens.2),
-    fun same => phaseFresh (same.symm ▸ seen.earlierTokens.1), ?_, ?_, finalPair, kept, target.trans plan.target,
-    checkpoint, durable, seen.manifestMissing pair,
-    fun _ present => seen.readsManifest pair present, fun _ _ present decoded _ within _ stored =>
-      seen.readsRun pair present decoded within stored,
-    seen.readsMarker pair marker, seen.readsWal plan.aligned plan.descriptors, continued.guardedReplay⟩
-  · rw [owner, sameCensus]
-    exact seen.admission.lockObject
-  · rw [cached, sameCensus]
-    exact opening.admission.opened.captures.2.2.2.2.1.symm.trans seen.admission.directoryObject
+  exact ⟨plan, selected, seen, files.reopensReleasedAlignedAt ready originalHistory pending bounded plan selected seen⟩
 
 /-- The ready read prefix supplies the retained writer and bounded ledger. -/
 theorem NativeReadyReadPrefix.reopensReleasedAligned

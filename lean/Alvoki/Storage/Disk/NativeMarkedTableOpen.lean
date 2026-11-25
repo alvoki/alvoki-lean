@@ -57,6 +57,29 @@ theorem MarkedHeapInstallation.opensFromAdmission
   rw [sameConstructor]
   simp only [MonadExceptOf.tryCatch, tryCatchThe, EStateM.tryCatch, held]
 
+/-- The marked recovery portion of the native schedule uses the original
+cache references for the keeper read and subsequent repair. -/
+def RawOpenAdmissionCallbacks.recoverMarkedWithCacheRefs (calls : RawOpenAdmissionCallbacks heap)
+    (fileCalls : MarkedTemporaryReadCalls heap) (directoryCalls : MarkedDirectoryReadCalls heap stream)
+    (callbacks : AlignedKeeperCacheCallbacks heap)
+    (directoryRef : IO.Ref (Option IO.FS.Handle))
+    (activeRef : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pendingRef : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (resolved : DiskDirectory) (cache : DiskTable.OpenSyncFiles) : EStateM IO.Error heap Reopened :=
+  let keeper := callbacks.withFileReads fileCalls
+  recoverSegmentedWalWith
+    (rejectFlatWalWith resolved (optionalMetadataWith (calls.lookup (resolved.file .wal))))
+    (optionalMetadataWith (calls.lookup (resolved.file .walBoundary)))
+    (reopenMarkedBoundedWithCachedExtents resolved (fileCalls.readOptional resolved)
+      fileCalls.runSize fileCalls.runPrefix directoryCalls.run (MarkedWalExtentReports.inspect fileCalls)
+      fileCalls.seal (keeper.readKeeper pendingRef) remove write
+      (keeper.syncPaths resolved.path directoryRef activeRef pendingRef) rename)
+    (bootstrap resolved cache)
+
 section
 
 variable {inventory : DescriptorInventory} {retry : LockedFileState FileImage}
@@ -126,16 +149,8 @@ theorem MarkedOpenSuccessReports.opensAlignedFromAdmission
         CacheAllocationFrame view seed.directoryRef seed.activeRef seed.pendingRef allocation.afterPhase
           allocation.afterToken) :
     let lockIdentity := fun handle => (view.handle raw.afterFlock handle).2.1.description
-    let recovery := fun (resolved : DiskDirectory) (cache : DiskTable.OpenSyncFiles) =>
-      recoverSegmentedWalWith
-        (rejectFlatWalWith resolved (optionalMetadataWith (calls.lookup (resolved.file .wal))))
-        (optionalMetadataWith (calls.lookup (resolved.file .walBoundary)))
-        (reopenMarkedBoundedWithCachedExtents resolved (fileCalls.readOptional resolved)
-          fileCalls.runSize fileCalls.runPrefix directoryCalls.run (MarkedWalExtentReports.inspect fileCalls)
-          fileCalls.seal ((callbacks.withFileReads fileCalls).readKeeper seed.pendingRef) remove write
-          ((callbacks.withFileReads fileCalls).syncPaths resolved.path seed.directoryRef seed.activeRef seed.pendingRef)
-          rename)
-        (bootstrap resolved cache)
+    let recovery := calls.recoverMarkedWithCacheRefs fileCalls directoryCalls callbacks seed.directoryRef
+      seed.activeRef seed.pendingRef remove write rename bootstrap
     ∃ (installed : MarkedHeapInstallation report view init raw.afterFlock seed raw.lock lockIdentity
           phaseIdentity tokenIdentity allocatePhase allocateToken keeper.reached)
       (cacheOpen : IO DiskTable.OpenSyncFiles)
@@ -165,7 +180,7 @@ theorem MarkedOpenSuccessReports.opensAlignedFromAdmission
     raw.lock lockIdentity locked phaseIdentity tokenIdentity allocatePhase allocateToken ⟨opened, matched⟩
     capturedCache observe
   have returned : recovery directory installed.files seed.afterPending = .ok opened keeper.reached := by
-    dsimp only [recovery]
+    dsimp only [recovery, RawOpenAdmissionCallbacks.recoverMarkedWithCacheRefs]
     rw [← sameLookup]
     simpa only [recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind, flat, marker,
       Option.isSome_none, Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure] using rawRecovered

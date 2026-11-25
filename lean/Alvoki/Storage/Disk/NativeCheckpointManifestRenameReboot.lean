@@ -384,20 +384,22 @@ structure NativeCheckpointManifestRenameReopened (current : NativeReadPosition h
     next.state.writer.published.durable = crash.publication.durable ∧ seen.SelectedReads
   replay : InstalledClientReplay log current.reads history next.state.writer.installed next.state.session
 
-/-- Use the exact admission inventory supplied by the restart route. -/
-theorem NativeReadPosition.reopensCheckpointManifestRenameAt (current : NativeReadPosition history log)
+/-- The supplied reader of this survivor starts the next ready session.
+Expose its exact return and custody for the raw opened-table proof. -/
+theorem NativeReadPosition.reopensCheckpointManifestRenameWith (current : NativeReadPosition history log)
     {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
     {report : NativeCheckpointManifestRenameError (image := image) current.state cut}
     (crash : NativeCheckpointManifestRenameCrash report) {input : FilePath} {inventory : DescriptorInventory}
-    (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointManifestRenameReads crash input plan inventory)) :
-    ∃ next, NativeCheckpointManifestRenameReopened current crash input next inventory := by
+    {plan : crash.Plan} (seen : NativeCheckpointManifestRenameReads crash input plan inventory) :
+    ∃ next, NativeCheckpointManifestRenameReopened current crash input next inventory ∧
+      seen.run = next.opened ∧ next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
+      next.state.owner = seen.opening.admission.owner ∧ next.state.directorySlot = seen.opening.admission.cached ∧
+      next.state.cache = seen.opening.admission.cache := by
   obtain ⟨valid, sameHistory, replay⟩ := current.readPrefix.refines
   have failed := current.checkpointManifestRenameError report
   have pending : PendingClientReplay log current.reads current.state.writer.history := sameHistory.symm ▸ replay
   have bounded : ∀ read ∈ current.reads, read.BoundedBy current.state.writer.history.length :=
     sameHistory.symm ▸ current.readPrefix.readsBounded
-  obtain ⟨plan⟩ := crash.plans valid pending
-  obtain ⟨seen⟩ := observe plan
   let opening := seen.opening
   let finish : CapturedKeeperFinish opening.callbacks opening.reads crash.vacant plan.selected := .aligned opening.finish
   let prior := valid.retained.layout
@@ -428,11 +430,12 @@ theorem NativeReadPosition.reopensCheckpointManifestRenameAt (current : NativeRe
   have recoveredSeals : state.files.image.kept = current.state.files.image.kept :=
     seals.trans (congrArg CheckpointWalView.kept failed.wal)
   have root := failed.directoryObject.trans (congrArg some report.synced.settled.runs.capturedInode)
-  refine ⟨next, failed, crash.losesPower valid, rfl, rfl,
+  refine ⟨next, ⟨failed, crash.losesPower valid, rfl, rfl,
     directory, ?_, ?_, fun same => phaseFresh (same.symm ▸ seen.earlierTokens.1),
     fun same => sessionFresh (same.symm ▸ seen.earlierTokens.2), settled,
     ?_, recoveredSeals, ⟨plan, seen, continued.frames.1, rfl, rfl, owner, directorySlot, cache, census, target,
-      checkpoint, runs, seen.readsSelected valid⟩, continued.guardedReplay⟩
+      checkpoint, runs, seen.readsSelected valid⟩, continued.guardedReplay⟩,
+    rfl, continued.frames.1, owner, directorySlot, cache⟩
   · change state.census.inode state.directorySlot.description = _
     rw [inodes, directorySlot]
     exact Option.some.inj (objects.1.symm.trans (seen.directoryObject.trans (crash.directory.trans root)))
@@ -441,6 +444,20 @@ theorem NativeReadPosition.reopensCheckpointManifestRenameAt (current : NativeRe
     exact Option.some.inj (objects.2.1.symm.trans (seen.lockObject.trans (crash.lock.trans failed.lockObject)))
   · exact plan.generations.imp (fun old => ⟨generation.trans old.1, old.2⟩)
       (fun fresh => ⟨generation.trans fresh.1, fresh.2⟩)
+
+/-- Use the exact admission inventory supplied by the restart route. -/
+theorem NativeReadPosition.reopensCheckpointManifestRenameAt (current : NativeReadPosition history log)
+    {cut : CheckpointPowerCut current.state.session.directory current.state.writer}
+    {report : NativeCheckpointManifestRenameError (image := image) current.state cut}
+    (crash : NativeCheckpointManifestRenameCrash report) {input : FilePath} {inventory : DescriptorInventory}
+    (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointManifestRenameReads crash input plan inventory)) :
+    ∃ next, NativeCheckpointManifestRenameReopened current crash input next inventory := by
+  obtain ⟨valid, sameHistory, replay⟩ := current.readPrefix.refines
+  have pending : PendingClientReplay log current.reads current.state.writer.history := sameHistory.symm ▸ replay
+  obtain ⟨plan⟩ := crash.plans valid pending
+  obtain ⟨seen⟩ := observe plan
+  obtain ⟨next, reopened, _⟩ := current.reopensCheckpointManifestRenameWith crash seen
+  exact ⟨next, reopened⟩
 
 /-- The direct restart begins with the empty reboot inventory. -/
 theorem NativeReadPosition.recoversCheckpointManifestRenamePowerLoss (current : NativeReadPosition history log)

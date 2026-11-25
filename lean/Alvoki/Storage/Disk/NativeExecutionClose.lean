@@ -115,18 +115,37 @@ structure NativeCloseReopenStep (current : NativeReadPosition history log) {inpu
     next.state.cache = seen.opening.admission.cache ∧ next.state.census = seen.opening.finish.census ∧
     NativeCloseSelectedReads seen
 
+/-- Build the common edge using the very reader supplied for this open.
+The result exposes that reader's exact return and its captured custody. -/
+theorem NativeCloseReopenStep.fromSelectedOpen (current : NativeReadPosition history log) {input : FilePath}
+    (observed : NativeCloseReopenObservation current.state input) (closed : observed.CloseReturned)
+    {plan : ClosedReadyReopenLayout current.state.writer current.state.releasedFiles}
+    {selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+      current.state.releasedFiles.image.directory.active.manifest current.state.writer.checkpoint}
+    (seen : NativeCloseAlignedReads observed.files input observed.inventory plan.layout selected)
+    (recovered : seen.SelectedResult history log current.reads) :
+    ∃ next, NativeCloseReopenStep current observed next ∧ seen.run = next.opened ∧
+      next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
+      next.state.owner = seen.opening.admission.owner ∧ next.state.directorySlot = seen.opening.admission.cached ∧
+      next.state.cache = seen.opening.admission.cache ∧ NativeCloseSelectedReads seen := by
+  obtain ⟨state, continued, directory, owner, directorySlot, cache, census, sessionFresh,
+    phaseFresh, lockInode, directoryInode, pair, kept, target, checkpoint, durable, manifestMissing, manifest,
+    runs, marker, wal, _⟩ := recovered
+  let next : NativeReadPosition history log := ⟨seen.run, state, state, current.reads, continued⟩
+  let reads : NativeCloseSelectedReads seen := ⟨manifestMissing, manifest, runs, marker, wal⟩
+  exact ⟨next,
+    ⟨closed, rfl, ⟨directory, directoryInode, lockInode, target, checkpoint, durable⟩, sessionFresh,
+      phaseFresh, pair, kept, plan, selected, seen, continued.frames.1, rfl, rfl, owner, directorySlot, cache, census, reads⟩,
+    rfl, continued.frames.1, owner, directorySlot, cache, reads⟩
+
 /-- The reported close or final reference drop flows into the actual
 aligned open and supplies its fresh position for the next instruction. -/
 theorem NativeReadPosition.closesAndReopens (current : NativeReadPosition history log) {input : FilePath}
     (observed : NativeCloseReopenObservation current.state input) :
     ∃ next, NativeCloseReopenStep current observed next := by
-  obtain ⟨closed, reopened⟩ := observed.reopens current.readPrefix
-  obtain ⟨plan, selected, seen, state, continued, directory, owner, directorySlot, cache, census, sessionFresh,
-    phaseFresh, lockInode, directoryInode, pair, kept, target, checkpoint, durable, manifestMissing, manifest,
-    runs, marker, wal, _⟩ := reopened
-  let next : NativeReadPosition history log := ⟨seen.run, state, state, current.reads, continued⟩
-  exact ⟨next, closed, rfl, ⟨directory, directoryInode, lockInode, target, checkpoint, durable⟩, sessionFresh,
-    phaseFresh, pair, kept, plan, selected, seen, continued.frames.1, rfl, rfl, owner, directorySlot, cache, census,
-    ⟨manifestMissing, manifest, runs, marker, wal⟩⟩
+  obtain ⟨closed, plan, selected, seen, recovered⟩ := observed.reopens current.readPrefix
+  obtain ⟨next, step, _⟩ := NativeCloseReopenStep.fromSelectedOpen current observed closed
+    (plan := plan) (selected := selected) seen recovered
+  exact ⟨next, step⟩
 
 end Alvoki.Storage.DiskSession

@@ -1011,28 +1011,46 @@ theorem DiskTable.range_schedule (db : DiskTable) (handle : DiskSnapshotHandle) 
     db.range handle lo hi = DiskSession.readSnapshotWith (m := IO) db.installed
       (handle.session.ptrEq db.session) (fun table => table.range handle.localHandle lo hi) := rfl
 
-/-- The actual lookup uses the same cell and compares the table's
-token to itself when given a pin issued by that table. -/
+/-- The supplied handle retains its issuer's token even when a different
+table reads it. The current table contributes the phase and comparison token. -/
+theorem DiskTable.UsesOpenReferences.lookupIssuedPin {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token)
+    {pin : DiskSnapshotPin} {issuer : IO.Ref Unit} {issued : Alvoki.Sequential.SnapshotPin}
+    (owns : pin.UsesOpenToken issuer issued)
+    (key : UInt64) :
+    db.lookup pin.handle key = DiskSession.readSnapshotWith (m := IO) (do (← phase.get).installed)
+      (issuer.ptrEq token) (fun table => table.lookup issued.handle key) := by
+  obtain ⟨_, _, _, cell, session⟩ := uses
+  obtain ⟨tokenOfPin, handle, _⟩ := owns
+  simp only [DiskTable.lookup_schedule, DiskTable.installed, cell, session, tokenOfPin, handle]
+
+/-- Range reads use the same issuer/current-token guard as point reads. -/
+theorem DiskTable.UsesOpenReferences.rangeIssuedPin {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token)
+    {pin : DiskSnapshotPin} {issuer : IO.Ref Unit} {issued : Alvoki.Sequential.SnapshotPin}
+    (owns : pin.UsesOpenToken issuer issued)
+    (lo hi : UInt64) :
+    db.range pin.handle lo hi = DiskSession.readSnapshotWith (m := IO) (do (← phase.get).installed)
+      (issuer.ptrEq token) (fun table => table.range issued.handle lo hi) := by
+  obtain ⟨_, _, _, cell, session⟩ := uses
+  obtain ⟨tokenOfPin, handle, _⟩ := owns
+  simp only [DiskTable.range_schedule, DiskTable.installed, cell, session, tokenOfPin, handle]
+
 theorem DiskTable.UsesOpenReferences.lookupPin {db : DiskTable} {directory lock files phase token}
     (uses : db.UsesOpenReferences directory lock files phase token)
     {pin : DiskSnapshotPin} {issued : Alvoki.Sequential.SnapshotPin} (owns : pin.UsesOpenToken token issued)
     (key : UInt64) :
     db.lookup pin.handle key = DiskSession.readSnapshotWith (m := IO) (do (← phase.get).installed)
-      (token.ptrEq token) (fun table => table.lookup issued.handle key) := by
-  obtain ⟨_, _, _, cell, session⟩ := uses
-  obtain ⟨tokenOfPin, handle, _⟩ := owns
-  simp only [DiskTable.lookup_schedule, DiskTable.installed, cell, session, tokenOfPin, handle]
+      (token.ptrEq token) (fun table => table.lookup issued.handle key) :=
+  uses.lookupIssuedPin owns key
 
-/-- The public range follows the same phase-cell and token guard. -/
 theorem DiskTable.UsesOpenReferences.rangePin {db : DiskTable} {directory lock files phase token}
     (uses : db.UsesOpenReferences directory lock files phase token)
     {pin : DiskSnapshotPin} {issued : Alvoki.Sequential.SnapshotPin} (owns : pin.UsesOpenToken token issued)
     (lo hi : UInt64) :
     db.range pin.handle lo hi = DiskSession.readSnapshotWith (m := IO) (do (← phase.get).installed)
-      (token.ptrEq token) (fun table => table.range issued.handle lo hi) := by
-  obtain ⟨_, _, _, cell, session⟩ := uses
-  obtain ⟨tokenOfPin, handle, _⟩ := owns
-  simp only [DiskTable.range_schedule, DiskTable.installed, cell, session, tokenOfPin, handle]
+      (token.ptrEq token) (fun table => table.range issued.handle lo hi) :=
+  uses.rangeIssuedPin owns lo hi
 
 def DiskTable.advanceFloor (db : DiskTable) (floor : UInt64) : IO Bool := do
   let state ← db.installed

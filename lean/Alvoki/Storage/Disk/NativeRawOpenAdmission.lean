@@ -69,8 +69,29 @@ private theorem RawOpenAdmissionReport.reachesHeldLock
   simp only [openWithLock, Bind.bind, EStateM.bind, seen.acquired, ↓reduceIte,
     MonadExcept.tryCatch, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch]
 
-/-- Pass a specific cache allocation to the held worker on the exact
-lock and heap reached by this admission. -/
+/-- Pass the actual returned cache and heap to the held worker. The
+cached-open report may come from the marked or the bootstrap model. -/
+theorem RawOpenAdmissionReport.startsInitializedWorker
+    (seen : RawOpenAdmissionReport admission view calls entry)
+    (init : OpenSyncCacheCallbacks heap)
+    {cache : DiskTable.OpenSyncFiles} {afterPending : heap}
+    {makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles}
+    (initialized : openSyncFilesWith (init.openDirectory directory.path)
+      init.newRef init.newRef init.newRef makeCache seen.afterFlock = .ok cache afterPending)
+    (recovery : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α) :
+    calls.runOpen input init makeCache recovery entry =
+      (tryCatchThe IO.Error (recovery directory seen.lock cache) fun cause => do
+        calls.unlock seen.lock
+        throw cause) afterPending := by
+  unfold RawOpenAdmissionCallbacks.runOpen
+  rw [DiskTable.withOpenAdmission_lockOpen calls.realPath calls.lookup calls.openAppend _
+    seen.resolved seen.flat seen.lockProbe admission.safe, seen.appended]
+  simp only [openWithLock, Bind.bind, EStateM.bind, seen.acquired, ↓reduceIte, initialized,
+    MonadExcept.tryCatch, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch]
+
+/-- Pass the reported marked cache allocation to the worker on
+the exact lock and heap reached by this admission. -/
 theorem RawOpenAdmissionReport.startsHeldWorker
     (seen : RawOpenAdmissionReport admission view calls entry)
     (init : OpenSyncCacheCallbacks heap)
@@ -84,11 +105,8 @@ theorem RawOpenAdmissionReport.startsHeldWorker
     calls.runOpen input init makeCache recovery entry =
       (tryCatchThe IO.Error (recovery directory seen.lock cache) fun cause => do
         calls.unlock seen.lock
-        throw cause) seed.afterPending := by
-  unfold RawOpenAdmissionCallbacks.runOpen
-  rw [seen.reachesHeldLock]
-  simp only [Bind.bind, EStateM.bind, initialized,
-    tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch]
+        throw cause) seed.afterPending :=
+  seen.startsInitializedWorker init initialized recovery
 
 /-- Run the shared native admission, then the raw cache initialization
 from the lock acquisition's reached heap. Use the exact opened lock

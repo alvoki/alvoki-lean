@@ -12,6 +12,62 @@ variable {heap : Type} {opened : NativeOpenedHandle heap}
   {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
   {directory : IO.Ref (Option IO.FS.Handle)}
 
+/-- Read the actual close result through the same phase and cache cells.
+A successful unlock and the observed cache clears yield the exact next heap. -/
+theorem NativeOpenedPosition.closesOnOpenedReferences
+    (current : NativeOpenedPosition opened)
+    (references : opened.files.UsesCacheReferences active pending directory)
+    (view : OpenCloseHeapView heap FileImage) (callbacks : OpenCloseCallbacks heap)
+    (samePhase : view.phase = opened.contents) (sameGet : callbacks.getPhase = opened.get)
+    (sameSet : @callbacks.set (Phase Installed) = opened.set)
+    (observed : NativeCloseReopenObservation current.current.ready.state input)
+    (seen : OpenCloseObservation observed.close.report view callbacks opened.lock opened.phase
+      active pending directory current.reached)
+    (closed : observed.CloseReturned) :
+    let state := current.current.ready.state
+    let close := closeSchedule (opened.get opened.phase) (fun _ => callbacks.unlock opened.lock)
+      (callbacks.set active none) (callbacks.set pending []) (callbacks.set directory none) (opened.set opened.phase .closed)
+    opened.table.close = closeSchedule opened.phase.get (fun _ => opened.lock.unlock)
+      (active.set none) (pending.set []) (directory.set none) (opened.phase.set .closed) ∧
+    match observed.close.report.result with
+      | .error cause => close current.reached = .error cause seen.afterUnlock ∧
+        view.Matches opened.phase active pending directory seen.afterUnlock state.closeState
+      | .ok () => ∃ after,
+        close current.reached = .ok () after ∧ opened.contents after opened.phase = some .closed ∧
+        view.cacheAt after directory active pending = ⟨none, none, []⟩ ∧
+        view.files after = state.releasedFiles ∧ view.descriptors after = observed.inventory := by
+  intro state close
+  obtain ⟨rawActive, rawPending, rawDirectory, uses, source⟩ := current.uses.close
+  have sameActive := uses.1.symm.trans references.1
+  have samePending := uses.2.1.symm.trans references.2.1
+  have sameDirectory := uses.2.2.symm.trans references.2.2
+  subst rawActive rawPending rawDirectory
+  refine ⟨source, ?_⟩
+  have notClosed : state.closeState.phase ≠ .closed := by
+    simp [state, NativeReadyState.closeState, current.current.ready.readPrefix.refines.1.phase]
+  have raw := seen.returns notClosed
+  unfold OpenCloseObservation.Reached at raw
+  dsimp only at raw
+  rw [sameGet, sameSet] at raw
+  cases result : observed.close.report.result with
+  | error cause =>
+    rw [result] at raw
+    exact raw
+  | ok value =>
+    cases value
+    rw [result] at raw
+    obtain ⟨clears, returned, projected⟩ := raw
+    have closure := closed
+    simp only [NativeCloseReopenObservation.CloseReturned, result] at closure
+    obtain ⟨_, phase, files, census, _⟩ := closure
+    refine ⟨clears.afterPhase, returned, ?_, ?_, ?_, projected.2.2.2.trans census.symm⟩
+    · rw [← samePhase, ← phase]
+      exact projected.1
+    · simpa only [files] using projected.2.1
+    · have physical := projected.2.2.1
+      rw [files] at physical
+      exact physical
+
 /-- Follow a finite ready trace with the public close of its exact
 table, then an aligned open from the same reported release. The
 closed heap supplies the next admission census on ordinary success.
@@ -43,37 +99,10 @@ theorem NativeOpenedTrace.closesAndReopens
         view.cacheAt after directory active pending = ⟨none, none, []⟩ ∧
         view.files after = state.releasedFiles ∧ view.descriptors after = observed.inventory := by
   intro state close
-  obtain ⟨rawActive, rawPending, rawDirectory, uses, source⟩ := current.uses.close
-  have sameActive := uses.1.symm.trans references.1
-  have samePending := uses.2.1.symm.trans references.2.1
-  have sameDirectory := uses.2.2.symm.trans references.2.2
-  subst rawActive rawPending rawDirectory
   obtain ⟨next, reopened⟩ := current.current.ready.closesAndReopens observed
-  refine ⟨source, next, reopened, .step prior.common (.closeAndReopen current.current observed next reopened), ?_⟩
-  have notClosed : state.closeState.phase ≠ .closed := by
-    simp [state, NativeReadyState.closeState, current.current.ready.readPrefix.refines.1.phase]
-  have raw := seen.returns notClosed
-  unfold OpenCloseObservation.Reached at raw
-  dsimp only at raw
-  rw [sameGet, sameSet] at raw
-  cases result : observed.close.report.result with
-  | error cause =>
-    rw [result] at raw
-    exact raw
-  | ok value =>
-    cases value
-    rw [result] at raw
-    obtain ⟨clears, returned, projected⟩ := raw
-    have closure := reopened.closed
-    simp only [NativeCloseReopenObservation.CloseReturned, result] at closure
-    obtain ⟨_, phase, files, census, _⟩ := closure
-    refine ⟨clears.afterPhase, returned, ?_, ?_, ?_, projected.2.2.2.trans census.symm⟩
-    · rw [← samePhase, ← phase]
-      exact projected.1
-    · simpa only [files] using projected.2.1
-    · have physical := projected.2.2.1
-      rw [files] at physical
-      exact physical
+  obtain ⟨source, physical⟩ := current.closesOnOpenedReferences references view callbacks samePhase sameGet sameSet
+    observed seen reopened.closed
+  exact ⟨source, next, reopened, .step prior.common (.closeAndReopen current.current observed next reopened), physical⟩
 
 /-- The close/reopen reader is a marked-opening report with the already
 selected checkpoint, retained WAL and chronological callbacks. Its

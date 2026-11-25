@@ -1,4 +1,5 @@
-import Alvoki.Storage.Disk.NativeOpenReadyTrace
+import Alvoki.Storage.Disk.NativeOpenedPosition
+import Alvoki.Storage.Disk.NativeOpenCheckpoint
 
 namespace Alvoki.Storage.DiskSession
 
