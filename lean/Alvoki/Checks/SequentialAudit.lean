@@ -215,6 +215,7 @@ import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
 import Alvoki.Storage.Disk.ListedPrunedAlignedKeeper
 import Alvoki.Storage.Disk.ListedPrunedAlignedKeeperFailure
 import Alvoki.Storage.Disk.ListedStagedKeeperRepair
+import Alvoki.Storage.Disk.ListedMarkedFinish
 import Alvoki.Storage.Disk.ListedStagedKeeperFailure
 import Alvoki.Storage.Disk.ListedAlignedKeeperFailure
 import Alvoki.Storage.Disk.ListedStagedWriteFailure
@@ -1590,6 +1591,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStageAt.continuesAfterSyncError
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperRename.continuesAfterError
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperSettlement.continuesAfterError
+#check_axioms Alvoki.Storage.SyncHandleRouting.FsyncResult.completed_of_return
+#check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.healthyFinish
 #check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.installs
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.barrierCensus
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.barriers
@@ -1597,6 +1600,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.syncResult
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.finishResult
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.healthyFinish
+#check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.healthyFinishOfKeeperReturn
+#check_axioms Alvoki.Storage.DiskSession.ListedDirectoryAuthorization.finishAlternatives
+#check_axioms Alvoki.Storage.DiskSession.ListedMarkedFinish.authorized
+#check_axioms Alvoki.Storage.DiskSession.ListedMarkedFinish.healthyFinish
+#check_axioms Alvoki.Storage.DiskSession.PrimitiveCheckpointHeldOpen.toHeldOpen
+#check_axioms Alvoki.Storage.DiskSession.CheckpointHeldOpen.reportsFromPrimitives
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.installs
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.finishError
 #check_axioms Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper.continuesAfterError

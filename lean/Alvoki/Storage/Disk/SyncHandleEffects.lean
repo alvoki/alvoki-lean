@@ -15,6 +15,15 @@ inductive FsyncResult {state : Type} (before persisted : state) :
   | errorBefore (cause : IO.Error) : FsyncResult before persisted false (.error cause before)
   | errorAfter (cause : IO.Error) : FsyncResult before persisted true (.error cause persisted)
 
+/-- A raw successful return and the effect report determine the exact
+settled state. The caller need only observe that the syscall succeeded. -/
+theorem FsyncResult.completed_of_return {state : Type} {before persisted : state}
+    {effective : Bool} {returned : EStateM.Result IO.Error state Unit}
+    (observed : FsyncResult before persisted effective returned)
+    (succeeded : ∃ reached, returned = .ok () reached) :
+    returned = .ok () persisted := by
+  cases observed <;> simp_all
+
 /-- The native report for one reached fsync. The captured description and
 object identities must come from the same stable namespace as the binding
 observation. A live slot retains the description through the reported drops.

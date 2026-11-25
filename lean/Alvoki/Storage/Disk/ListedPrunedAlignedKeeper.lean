@@ -282,6 +282,18 @@ theorem healthyFinish (repair : ListedPrunedAlignedKeeper prune)
   have size := congrArg List.length ordered
   simp at size
 
+/-- The raw keeper fsync after settling the reported later-name removals. -/
+abbrev keeperFsyncReturn (_repair : ListedPrunedAlignedKeeper prune) :
+    EStateM.Result IO.Error (LockedFileState FileImage) Unit :=
+  authorization.fsync (captured authorization)
+    (owned before directory operations.slot before.image.unlinkVisibleSuffix.syncDirectory)
+
+/-- The raw keeper return determines its settled state after this prune. -/
+theorem healthyFinishOfKeeperReturn (repair : ListedPrunedAlignedKeeper prune)
+    (succeeded : ∃ reached, repair.keeperFsyncReturn = .ok () reached) :
+    operations.HealthyFinish :=
+  repair.healthyFinish (repair.outcome.completed_of_return succeeded)
+
 /-- The exact kept bytes are installed by the admitted marked opener
 after the ordered suffix removal and the retained keeper's sync. -/
 theorem installs {input : FilePath} (repair : ListedPrunedAlignedKeeper prune) (metadata : HeldMarkedMetadata held)

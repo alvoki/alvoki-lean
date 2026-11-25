@@ -278,6 +278,23 @@ theorem finishResult (repair : ListedAlignedKeeperRepair authorization) :
     authorization.settles repair.completed]
   rfl
 
+/-- The raw keeper fsync chosen by the captured pending entry. -/
+abbrev keeperFsyncReturn (_repair : ListedAlignedKeeperRepair authorization) :
+    EStateM.Result IO.Error (LockedFileState FileImage) Unit :=
+  authorization.fsync (authorization.keeper.inventory, authorization.keeper.slot, 0)
+    (authorizeFiles (acquiredState before directory operations.slot))
+
+/-- The native keeper return and effect report supply the entire aligned
+finish schedule. No separate modeled success state is required. -/
+theorem healthyFinish (repair : ListedAlignedKeeperRepair authorization)
+    (succeeded : ∃ reached, repair.keeperFsyncReturn = .ok () reached) :
+    operations.HealthyFinish := by
+  have keeperSync := repair.syncResult
+  dsimp only at keeperSync
+  rw [repair.outcome.completed_of_return succeeded] at keeperSync
+  exact finishActions_aligned_success repair.hasAlignedPlan
+    operations.removeFile (operations.write operations.cache) operations.renameFile keeperSync
+
 /-- The shared opener installs after the two reached syncs. The exact
 projected keeper callback supplies the whole aligned finish contract. -/
 theorem installs {input : FilePath} (repair : ListedAlignedKeeperRepair authorization)
@@ -294,13 +311,9 @@ theorem installs {input : FilePath} (repair : ListedAlignedKeeperRepair authoriz
       before.image.directory.active.manifest)
     (ordered : WAL.OrdinalsFrom 1 history) :
     CachedRetryInstalled (before := before) operations.reported operations.descriptors operations.slot operations.bindings
-      published operations.liveRefs (operations.runWithAdmission admission) := by
-  have keeperSync := repair.syncResult
-  dsimp only at keeperSync
-  rw [succeeded] at keeperSync
-  have healthy : operations.HealthyFinish := finishActions_aligned_success repair.hasAlignedPlan
-    operations.removeFile (operations.write operations.cache) operations.renameFile keeperSync
-  exact authorization.installs metadata repair.completed healthy admission keeperValid laterValid following accepted ordered
+      published operations.liveRefs (operations.runWithAdmission admission) :=
+  authorization.installs metadata repair.completed (repair.healthyFinish ⟨_, succeeded⟩) admission keeperValid
+    laterValid following accepted ordered
 
 end ListedAlignedKeeperRepair
 end Alvoki.Storage.DiskSession
