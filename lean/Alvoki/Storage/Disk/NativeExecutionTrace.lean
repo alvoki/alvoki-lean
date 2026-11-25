@@ -21,9 +21,11 @@ import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
+import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
 import Alvoki.Storage.Disk.NativeInterruptedCloseReopen
 import Alvoki.Storage.Disk.NativePoisonedCloseReopen
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
+import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkPowerLoss
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
 import Alvoki.Storage.Disk.NativeRotationErrorReopen
 import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
@@ -53,8 +55,10 @@ inductive NativeExecutionEvent : Type 1 where
   | rotatedWal
   | rotationErrorRecovered (input : FilePath) (error : IO.Error)
   | rotationCrashRecovered (input : FilePath) (error : IO.Error) (activeFirst : Nat)
+  | interruptedRotationRecovered (input : FilePath) (activeFirst : Nat)
   | collectedObsoleteRuns (held : List UInt64)
   | obsoleteRunCollectionError (held : List UInt64) (error : IO.Error)
+  | interruptedRunUnlinkRecovered (held : List UInt64) (input : FilePath)
   | collectedObsoleteRunsAfterRetries (held : List UInt64) (errors : List IO.Error)
   | rejectedOpenSequenceRecovered (inputs : List FilePath) (input : FilePath) (errors : List IO.Error)
   | rewroteRun (request : RunMaintenance) (result : Bool)
@@ -66,6 +70,7 @@ inductive NativeExecutionEvent : Type 1 where
       (attempted retained : List WAL.Write)
   | uncertainWriteInterruptedCloseRecovered (request : WriteRequest) (input : FilePath) (cause : IO.Error)
       (attempted retained : List WAL.Write)
+  | interruptedAppendRecovered (request : WriteRequest) (input : FilePath) (attempted : List WAL.Write)
   | collectionErrorRecovered (input : FilePath) (error : IO.Error)
   | writePreflight (request : WriteRequest) (result : Except IO.Error UInt64)
   | snapshotControl (request : SnapshotUpdate α) (result : Except IO.Error α)
@@ -83,7 +88,7 @@ def writes : NativeExecutionEvent → List WAL.Write
 def submissions : NativeExecutionEvent → List DatabaseSubmissions
   | .acknowledged _ batch => [.acknowledgedBatch batch]
   | .uncertainWriteRecovered _ _ _ attempted _ | .uncertainWriteCrashRecovered _ _ _ attempted _
-  | .uncertainWriteInterruptedCloseRecovered _ _ _ attempted _ =>
+  | .uncertainWriteInterruptedCloseRecovered _ _ _ attempted _ | .interruptedAppendRecovered _ _ attempted =>
     [.uncertainBatch attempted]
   | _ => []
 
@@ -281,6 +286,19 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       (returned : NativeObsoleteRunUnlinkErrorStep current.ready cut error next) :
       NativeExecutionStep current (.obsoleteRunCollectionError cut.plan.reports.held error.cause)
         ⟨current.history, current.submissions, next⟩
+  | recoverInterruptedRunUnlink (current : NativeExecutionPosition) {input : FilePath}
+      {cut : NativeObsoleteRunUnlinkCut current.ready.state} (stop : NativeObsoleteRunUnlinkStop cut)
+      (crash : NativeObsoleteRunUnlinkCrash cut) (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeObsoleteRunUnlinkCrashReopen current.ready next stop crash input) :
+      NativeExecutionStep current (.interruptedRunUnlinkRecovered cut.plan.reports.held input)
+        ⟨current.history, current.submissions, next⟩
+  | recoverInterruptedAppend (current : NativeExecutionPosition) {input : FilePath}
+      {prepared : NativeReadyWritePreparation current.ready.state} (stop : NativeFirstAppendStop prepared)
+      (exited : NativeFirstAppendExit stop)
+      (next : NativeReadPosition current.history (current.submissions ++ [.uncertainBatch prepared.batch]))
+      (reopened : NativeFirstAppendExitContinuation current.ready stop exited input next) :
+      NativeExecutionStep current (.interruptedAppendRecovered stop.request input prepared.batch)
+        ⟨current.history, current.submissions ++ [.uncertainBatch prepared.batch], next⟩
   | collectsObsoleteRunsAfterRetries (current : NativeExecutionPosition) {held errors initial before}
       {retryAt : NativeReadPosition current.history current.submissions}
       (prior : NativeObsoleteRunUnlinkRetries current.ready initial held retryAt before errors)
@@ -305,6 +323,12 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
       NativeExecutionStep current
         (.rotationCrashRecovered input (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}")
           next.state.writer.installed.activeFirst)
+        ⟨current.history, current.submissions, next⟩
+  | recoverInterruptedRotation (current : NativeExecutionPosition) {input : FilePath}
+      {stop : NativeRotationDirectoryStop current.ready.state} (crash : NativeRotationErrorCrash stop)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeInterruptedRotationCrashReopen current.ready next crash input) :
+      NativeExecutionStep current (.interruptedRotationRecovered input next.state.writer.installed.activeFirst)
         ⟨current.history, current.submissions, next⟩
 
 /-- Interpret the submitted single or batch write with the reported
@@ -388,6 +412,10 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case obsoleteRunUnlinkError returned => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.reads⟩
+  case recoverInterruptedRunUnlink reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverInterruptedAppend reopened =>
+    exact ⟨by simp [NativeExecutionEvent.writes], rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case collectsObsoleteRunsAfterRetries prior _ _ _ _ returned =>
     obtain ⟨_, _, _, _, _, _, _, _, _, reads⟩ := prior.frames
     exact ⟨by simp [NativeExecutionEvent.writes], by simp [NativeExecutionEvent.submissions],
@@ -395,6 +423,8 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
   case recoverRotationError reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverRotationCrash reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case recoverInterruptedRotation reopened => exact ⟨by simp [NativeExecutionEvent.writes],
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
 
 theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep before event after) :
@@ -464,7 +494,9 @@ inductive NativeExecutionInstruction : Type 1 where
   | rotateWal
   | rotateThenCloseAndReopen (input : FilePath)
   | rotateThenPowerLossAndReopen (input : FilePath)
+  | interruptedRotationThenReopen (input : FilePath)
   | collectObsoleteRuns (held : List UInt64)
+  | interruptedRunUnlinkThenReopen (held : List UInt64) (input : FilePath)
   | retryObsoleteRunCollection (held : List UInt64) (failedAttempts : Nat)
   | rewriteRun (request : RunMaintenance)
   | closeThenRetryAndReopen (inputs : List FilePath) (input : FilePath)
@@ -474,6 +506,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | writeThenCloseAndReopen (request : WriteRequest) (input : FilePath)
   | writeThenPowerLossAndReopen (request : WriteRequest) (input : FilePath)
   | writeThenInterruptedCloseAndReopen (request : WriteRequest) (input : FilePath)
+  | interruptedAppendThenReopen (request : WriteRequest) (input : FilePath)
   | collectThenCloseAndReopen (input : FilePath)
   | snapshotControl (request : SnapshotUpdate α)
   | snapshotHandleRead (issuer : Nat) (handle : SnapshotHandle) (request : SnapshotReadRequest α)
@@ -495,8 +528,11 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .rotateWal, .rotatedWal => True
   | .rotateThenCloseAndReopen input, .rotationErrorRecovered opened _ => opened = input
   | .rotateThenPowerLossAndReopen input, .rotationCrashRecovered opened _ _ => opened = input
+  | .interruptedRotationThenReopen input, .interruptedRotationRecovered opened _ => opened = input
   | .collectObsoleteRuns held, .collectedObsoleteRuns issued => issued = held
   | .collectObsoleteRuns held, .obsoleteRunCollectionError issued _ => issued = held
+  | .interruptedRunUnlinkThenReopen held input, .interruptedRunUnlinkRecovered issued opened =>
+    issued = held ∧ opened = input
   | .closeThenRetryAndReopen inputs input, .rejectedOpenSequenceRecovered attempted opened _ =>
     attempted = inputs ∧ opened = input
   | .retryObsoleteRunCollection held failedAttempts, .collectedObsoleteRunsAfterRetries issued errors =>
@@ -510,6 +546,8 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .writeThenPowerLossAndReopen request input, .uncertainWriteCrashRecovered submitted opened _ _ _ =>
     submitted = request ∧ opened = input
   | .writeThenInterruptedCloseAndReopen request input, .uncertainWriteInterruptedCloseRecovered submitted opened _ _ _ =>
+    submitted = request ∧ opened = input
+  | .interruptedAppendThenReopen request input, .interruptedAppendRecovered submitted opened _ =>
     submitted = request ∧ opened = input
   | .collectThenCloseAndReopen input, .collectionErrorRecovered opened _ => opened = input
   | .snapshotControl request, .snapshotControl issued _ => HEq issued request
@@ -552,6 +590,13 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
       (inspect : ∀ cache, write.returnedAt cache → Nonempty (NativePendingWriteCensus current.state cache))
       (observe : ∀ pending : NativePendingWrite current, pending.write = write →
         Nonempty (NativePoisonedCloseReopenObservation pending input))
+  | interruptedAppendThenReopen (input : FilePath) {prepared : NativeReadyWritePreparation current.state}
+      (stop : NativeFirstAppendStop prepared) (exited : NativeFirstAppendExit stop)
+      (observe : ∀ layout : CanonicalKeeperLayout exited.retry.image current.state.writer.history,
+        BatchAppendInterruption.PreparedRetry current.state.writer layout →
+        ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+          exited.retry.image.directory.active.manifest current.state.writer.checkpoint,
+        Nonempty (NativeFirstAppendExitReads exited input layout selected))
   | collectThenCloseAndReopen (input : FilePath) (observed : NativeCollectionReopenObservation current.state input)
   | writePreflight (request : WriteRequest) (observed : NativeWritePreflightObservation current.state request)
   | snapshotControl (observed : NativeSnapshotUpdateObservation current.state α)
@@ -572,8 +617,21 @@ inductive NativeExecutionObservation (current : NativeReadPosition history log) 
         ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
           crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
         Nonempty (NativeRotationCrashReads crash input plan selected))
+  | interruptedRotationThenReopen (input : FilePath) {stop : NativeRotationDirectoryStop current.state}
+      (crash : NativeRotationErrorCrash stop)
+      (observe : ∀ plan : crash.Plan current.readPrefix.refines.1,
+        ∀ selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+          crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
+        Nonempty (NativeRotationCrashReads crash input plan selected))
   | checkpointThenPowerLossAndReopen (input : FilePath) (observed : NativeCheckpointCrashObservation current.state input)
   | collectObsoleteRuns (observed : NativeObsoleteRunCollection current.state)
+  | interruptedRunUnlinkThenReopen (input : FilePath) {cut : NativeObsoleteRunUnlinkCut current.state}
+      (stop : NativeObsoleteRunUnlinkStop cut) (crash : NativeObsoleteRunUnlinkCrash cut)
+      (observe : ∀ layout : CanonicalKeeperLayout crash.observed.retry.image current.state.writer.history,
+        layout.target = current.state.writer.target → Prepared crash.observed.retry.image layout.target layout.plan →
+        ∀ selected : SelectedIntegrityCheckpoint crash.runs
+          crash.observed.retry.image.directory.active.manifest current.state.writer.checkpoint,
+        Nonempty (NativeReadyRestartReads crash.observed input layout selected))
   | retryObsoleteRunCollection {held errors initial before}
       {retryAt : NativeReadPosition history log}
       (prior : NativeObsoleteRunUnlinkRetries current initial held retryAt before errors)
@@ -598,6 +656,7 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .writeThenPowerLossAndReopen input observed => .writeThenPowerLossAndReopen observed.write.request input
   | .writeThenInterruptedCloseAndReopen input failedWrite _ _ =>
     .writeThenInterruptedCloseAndReopen failedWrite.request input
+  | .interruptedAppendThenReopen input stop _ _ => .interruptedAppendThenReopen stop.request input
   | .collectThenCloseAndReopen input _ => .collectThenCloseAndReopen input
   | .writePreflight request _ => .write request
   | .snapshotControl observed => .snapshotControl observed.update
@@ -608,8 +667,10 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation current 
   | .rotateCreated _ | .rotateExisting _ | .rotateEmpty _ => .rotateWal
   | .rotateThenCloseAndReopen input _ _ _ => .rotateThenCloseAndReopen input
   | .rotateThenPowerLossAndReopen input _ _ => .rotateThenPowerLossAndReopen input
+  | .interruptedRotationThenReopen input _ _ => .interruptedRotationThenReopen input
   | .checkpointThenPowerLossAndReopen input _ => .checkpointThenPowerLossAndReopen input
   | .collectObsoleteRuns observed => .collectObsoleteRuns observed.reports.held
+  | .interruptedRunUnlinkThenReopen (cut := cut) input _ _ _ => .interruptedRunUnlinkThenReopen cut.plan.reports.held input
   | .retryObsoleteRunCollection (held := held) (errors := errors) _ _ _ _ => .retryObsoleteRunCollection held errors.length
   | .rewriteRun request => .rewriteRun request
   | .obsoleteRunCollectionError observed => .collectObsoleteRuns observed.reports.held
@@ -656,6 +717,9 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     obtain ⟨retained, next, reopened⟩ := pending.recoversInterruptedClose seen
     exact ⟨_, _, .recoverUncertainWriteInterruptedClose current pending seen retained next reopened,
       congrArg NativeReadyWriteFailure.request same, rfl⟩
+  | interruptedAppendThenReopen input stop exited observe =>
+    obtain ⟨next, reopened⟩ := current.ready.recoversFirstAppendAfterExit stop exited input observe
+    exact ⟨_, _, .recoverInterruptedAppend current stop exited next reopened, rfl, rfl⟩
   | collectThenCloseAndReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.recoversCollectionBarrier observed
     exact ⟨_, _, .recoverCollectionError current observed next reopened, rfl⟩
@@ -693,12 +757,18 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | rotateThenPowerLossAndReopen _ crash observe =>
     obtain ⟨next, reopened⟩ := current.ready.recoversRotationPowerLoss crash observe
     exact ⟨_, _, .recoverRotationCrash current crash next reopened, rfl⟩
+  | interruptedRotationThenReopen _ crash observe =>
+    obtain ⟨next, reopened⟩ := current.ready.recoversInterruptedRotation crash observe
+    exact ⟨_, _, .recoverInterruptedRotation current crash next reopened, rfl⟩
   | checkpointThenPowerLossAndReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.recoversCheckpointCrash observed
     exact ⟨_, _, .recoverCheckpointCrash current observed next reopened, rfl⟩
   | collectObsoleteRuns observed =>
     obtain ⟨next, returned⟩ := current.ready.collectsObsoleteRuns observed
     exact ⟨_, _, .collectObsoleteRuns current observed next returned, rfl⟩
+  | interruptedRunUnlinkThenReopen _ stop crash observe =>
+    obtain ⟨next, reopened⟩ := current.ready.recoversInterruptedRunUnlink stop crash observe
+    exact ⟨_, _, .recoverInterruptedRunUnlink current stop crash next reopened, rfl, rfl⟩
   | retryObsoleteRunCollection prior retry sameImage sameHolds =>
     obtain ⟨next, returned, _⟩ := prior.completes retry sameImage sameHolds
     exact ⟨_, _, .collectsObsoleteRunsAfterRetries current prior retry sameImage sameHolds next returned, rfl, rfl⟩
