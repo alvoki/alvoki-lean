@@ -45,6 +45,14 @@ private def bootstrapUntilDirectory {heap : Type} (calls : FreshBootstrapCacheCa
     (calls.createPending pending) (fun path => calls.sync directory cached active pending #[path]))
   publishUntilDirectory calls directory cached active pending
 
+/-- The markerless worker interpreted through its final directory
+sync issue, for use at the start of a multi-session proof. -/
+abbrev FreshBootstrapCacheCalls.untilMarkerDirectory {heap : Type} (calls : FreshBootstrapCacheCalls heap)
+    (directory : DiskDirectory) (cached : IO.Ref (Option IO.FS.Handle))
+    (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : StoppedOpen heap Reopened :=
+  bootstrapUntilDirectory calls directory cached active pending
+
 /-- Interpret the native open callbacks with separate returned errors
 and a terminal observation of the final bootstrap directory fsync. -/
 def RawOpenAdmissionCallbacks.runUntilBootstrapDirectory {heap : Type} (calls : RawOpenAdmissionCallbacks heap)
