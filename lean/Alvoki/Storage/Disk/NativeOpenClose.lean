@@ -77,11 +77,10 @@ theorem OpenCloseClears.emptyCache {report : CachedCloseReports directory writer
 references of the same table. The error projection is local to this
 reported unlock. A successful unlock supplies the observed clears. -/
 structure OpenCloseObservation (report : CachedCloseReports directory writer start)
+    (view : OpenCloseHeapView heap image) (calls : OpenCloseCallbacks heap)
     (lock : IO.FS.Handle) (phase : IO.Ref (Phase Installed)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
-    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cachedDirectory : IO.Ref (Option IO.FS.Handle)) where
-  view : OpenCloseHeapView heap image
-  calls : OpenCloseCallbacks heap
-  before : heap
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cachedDirectory : IO.Ref (Option IO.FS.Handle))
+    (before : heap) where
   afterUnlock : heap
   reached : view.Matches phase active pending cachedDirectory before start
   loaded : calls.getPhase phase before = .ok start.phase before
@@ -98,22 +97,23 @@ structure OpenCloseObservation (report : CachedCloseReports directory writer sta
 
 namespace OpenCloseObservation
 
-variable {report : CachedCloseReports directory writer start}
+variable {report : CachedCloseReports directory writer start} {view : OpenCloseHeapView heap image}
+  {calls : OpenCloseCallbacks heap} {before : heap}
 
-def Reached (seen : OpenCloseObservation (heap := heap) report lock phase active pending cachedDirectory) : Prop :=
-  let run := closeSchedule (seen.calls.getPhase phase) (fun _ => seen.calls.unlock lock)
-    (seen.calls.set active none) (seen.calls.set pending []) (seen.calls.set cachedDirectory none)
-    (seen.calls.set phase .closed) seen.before
+def Reached (seen : OpenCloseObservation report view calls lock phase active pending cachedDirectory before) : Prop :=
+  let run := closeSchedule (calls.getPhase phase) (fun _ => calls.unlock lock)
+    (calls.set active none) (calls.set pending []) (calls.set cachedDirectory none)
+    (calls.set phase .closed) before
   match report.result with
   | .error cause => run = .error cause seen.afterUnlock ∧
-    seen.view.Matches phase active pending cachedDirectory seen.afterUnlock start
-  | .ok () => ∃ clears : OpenCloseClears report seen.view seen.calls phase active pending cachedDirectory seen.afterUnlock,
-    run = .ok () clears.afterPhase ∧ seen.view.Matches phase active pending cachedDirectory clears.afterPhase report.finished
+    view.Matches phase active pending cachedDirectory seen.afterUnlock start
+  | .ok () => ∃ clears : OpenCloseClears report view calls phase active pending cachedDirectory seen.afterUnlock,
+    run = .ok () clears.afterPhase ∧ view.Matches phase active pending cachedDirectory clears.afterPhase report.finished
 
 /-- Evaluate the production close schedule with the reported concrete
 phase/cache references and raw effects. An unlock error returns before
 the first clear. Successful unlock reaches all four setters in order. -/
-theorem returns (seen : OpenCloseObservation (heap := heap) report lock phase active pending cachedDirectory)
+theorem returns (seen : OpenCloseObservation report view calls lock phase active pending cachedDirectory before)
     (openPhase : start.phase ≠ .closed) : seen.Reached := by
   unfold Reached
   intro run
@@ -142,14 +142,15 @@ production schedule and to the old cached close contract. -/
 theorem CachedCloseReports.closesViaOpenReferences
     (report : CachedCloseReports directory writer start) {db : DiskTable} {files : DiskTable.OpenSyncFiles}
     {token : IO.Ref Unit} (uses : db.UsesOpenReferences directory lock files phase token)
-    (held : start.files.owners.Owns directory writer) (openPhase : start.phase ≠ .closed)
+    (held : start.files.owners.Owns directory writer) (openPhase : start.phase ≠ .closed) {before : heap}
+    (view : OpenCloseHeapView heap image) (calls : OpenCloseCallbacks heap)
     (observe : ∀ active pending cachedDirectory, files.UsesCacheReferences active pending cachedDirectory →
-      Nonempty (OpenCloseObservation (heap := heap) report lock phase active pending cachedDirectory)) :
+      Nonempty (OpenCloseObservation report view calls lock phase active pending cachedDirectory before)) :
     report.Reached ∧
     ∃ active pending cachedDirectory, files.UsesCacheReferences active pending cachedDirectory ∧
       db.close = closeSchedule phase.get (fun _ => lock.unlock) (active.set none) (pending.set [])
         (cachedDirectory.set none) (phase.set .closed) ∧
-      ∃ seen : OpenCloseObservation (heap := heap) report lock phase active pending cachedDirectory, seen.Reached := by
+      ∃ seen : OpenCloseObservation report view calls lock phase active pending cachedDirectory before, seen.Reached := by
   obtain ⟨active, pending, cachedDirectory, references, source⟩ := uses.close
   obtain ⟨seen⟩ := observe active pending cachedDirectory references
   exact ⟨report.reaches openPhase held, active, pending, cachedDirectory, references, source, seen, seen.returns openPhase⟩
