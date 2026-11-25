@@ -182,4 +182,52 @@ theorem HeldDirectoryMarkedRetryReports.metadataReads {directory : DiskDirectory
     held.checkedListing.2.mem_iff.trans report.manifestListed,
     held.checkedListing.2.mem_iff.mpr (report.markerListed layout.decoded)⟩
 
+/-- The first WAL.commit stat chooses the route before the bounded reads.
+The primitive report includes the object observed at that earlier call.
+Its canonical child is resolved in the same held directory as the later reads. -/
+structure HeldMarkedMetadata {directory : DiskDirectory} {before : LockedFileState FileImage}
+    {history : List WAL.Write} {layout : CanonicalKeeperLayout before.image history}
+    {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
+    {published : CheckpointPublication.Image} (held : HeldDirectoryMarkedRetryReports operations published) where
+  reads : DirectoryMetadataReadReports directory held.lifetime.namespaceView held.lifetime.root
+    operations.reads operations.reported.inventory.reports.readOptional before.image.directory.active
+  route : RunChildLookup held.lifetime.root "WAL.commit" held.lifetime.namespaceView
+  routeStat : Except IO.Error (IO.FS.Metadata × Nat)
+  routeIdentified : ∃ result, routeStat = .ok (result, held.lifetime.namespaceView.modelObject route.child)
+  routeProjected : operations.lookup (directory.file .walBoundary) before.image =
+    .ok (routeStat.map Prod.fst) before.image
+
+namespace HeldMarkedMetadata
+
+variable {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
+  {layout : CanonicalKeeperLayout before.image history}
+  {operations : MarkedRetryChunkOperations (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
+  {published : CheckpointPublication.Image} {held : HeldDirectoryMarkedRetryReports operations published}
+
+/-- The separate route stat and payload open resolve to the same canonical
+child. The earlier metadata itself need only establish that the marker exists. -/
+theorem routeMatchesOpenedMarker (observed : HeldMarkedMetadata held) {payload : ByteArray}
+    (file : HeldMetadataFile operations.reads (directory.file .walBoundary) "WAL.commit"
+      held.lifetime.namespaceView held.lifetime.root payload) :
+    ∃ result, observed.routeStat = .ok (result, file.observesFile.inventory.inode file.observesFile.slot.description) := by
+  obtain ⟨result, identified⟩ := observed.routeIdentified
+  have same : observed.route.child = file.calls.openLookup.child :=
+    (observed.route.child_eq file.bound).trans (file.calls.openLookup.child_eq file.bound).symm
+  refine ⟨result, ?_⟩
+  change observed.routeStat = .ok (result, file.calls.inventory.inode file.calls.slot.description)
+  simpa only [same, file.calls.identifiedOpen] using identified
+
+/-- The operation packet receives the actual branch and payload equations
+from the shared held-directory observations. -/
+theorem callbackMetadata (observed : HeldMarkedMetadata held) : operations.MarkedMetadata := by
+  obtain ⟨_, _, payload, _, selected, _, _⟩ := DirectoryPublication.Bindings.walRange_accounting layout.decoded
+  obtain ⟨file, _⟩ := observed.reads.markerFile payload selected
+  obtain ⟨result, route⟩ := observed.routeMatchesOpenedMarker file
+  obtain ⟨manifest, marker, _, _⟩ := held.metadataReads observed.reads
+  refine ⟨⟨result, ?_⟩, manifest, marker⟩
+  rw [observed.routeProjected, route]
+  rfl
+
+end HeldMarkedMetadata
+
 end Alvoki.Storage.DiskSession

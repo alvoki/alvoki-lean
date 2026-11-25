@@ -36,9 +36,10 @@ private def MarkedRetryChunkOperations.cachedAttempt
 
 private theorem MarkedRetryChunkOperations.runWithAdmission_eq_cached
     (operations : MarkedRetryChunkOperations files directory layout) {input : FilePath}
-    (admission : OpenAdmissionReports input directory operations.slot) (localUnlock : operations.unlock.LocalFlock) :
+    (admission : OpenAdmissionReports input directory operations.slot) (localUnlock : operations.unlock.LocalFlock)
+    (markerPresent : operations.MarkerPresent) :
     operations.runWithAdmission admission = (operations.cachedAttempt localUnlock).run := by
-  rw [operations.runWithAdmission_eq admission, operations.run_selectsMarked]
+  rw [operations.runWithAdmission_eq admission, operations.run_selectsMarked markerPresent]
   simp only [MarkedRetryChunkOperations.markedAt, operations.keeperReads]
   rfl
 
@@ -50,7 +51,8 @@ determines the reached image before cleanup. Cleanup can replace the
 reported sync error with its own error and retain the acquired owner.
 This same failed attempt extends the retry lineage. -/
 theorem continuesAfterError {input : FilePath} {source : LockedFileState FileImage} {admits : Target → Prop}
-    (observed : ListedDirectoryAuthorization report) (failed : observed.outcome ≠ .completed)
+    (observed : ListedDirectoryAuthorization report) (metadata : HeldMarkedMetadata report)
+    (failed : observed.outcome ≠ .completed)
     (admission : OpenAdmissionReports input directory operations.slot)
     (localUnlock : operations.unlock.LocalFlock)
     (keeperValid : before.image.keeper.Valid layout.target.Accepts)
@@ -80,9 +82,10 @@ theorem continuesAfterError {input : FilePath} {source : LockedFileState FileIma
     selectedCheckpoint_replays watermark accepted (byteCount ▸ count.toNat_lt_size) ordered
   let sizes := SizedCheckpointRunReports.ofChunkReads (checkpoint := checkpoint) selected operations.reads
     operations.metadata report.chunkReads
+  have reads := metadata.callbackMetadata
   obtain ⟨opened, _, _, prepared, _⟩ :=
-    operations.reported.prepares before.image laterValid following accepted ordered sizes operations.manifestRead
-      operations.markerRead
+    operations.reported.prepares before.image laterValid following accepted ordered sizes reads.manifestRead
+      reads.markerRead
   let attempt := operations.cachedAttempt localUnlock
   have preparedRead : attempt.prepare before.image = .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size)
       before.image := prepared
@@ -103,7 +106,7 @@ theorem continuesAfterError {input : FilePath} {source : LockedFileState FileIma
       exact metadata
     let failure : CachedOpenAuthorizationFailure directory before :=
       ⟨attempt, layout.target, layout.plan, opened, valid, preparedRead, cause, reached, edge, reported⟩
-    exact ⟨failure, (operations.runWithAdmission_eq_cached admission localUnlock).trans failure.run_error,
+    exact ⟨failure, (operations.runWithAdmission_eq_cached admission localUnlock reads.markerPresent).trans failure.run_error,
       rfl, rfl, .cachedAuthorizationFailed prior failure admitted, rfl, attempt.cleanupError_keepsFiles cause reached⟩
   have sync := observed.syncResult
   change attempt.sync #[directory.path] before.image = _ at sync

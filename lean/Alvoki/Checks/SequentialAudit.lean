@@ -1363,6 +1363,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.manifestListed
 #check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.markerListed
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryMarkedRetryReports.metadataReads
+#check_axioms Alvoki.Storage.DiskSession.RunChildLookup.child_eq
+#check_axioms Alvoki.Storage.DiskSession.HeldMarkedMetadata.routeMatchesOpenedMarker
+#check_axioms Alvoki.Storage.DiskSession.HeldMarkedMetadata.callbackMetadata
 #check_axioms Alvoki.Storage.mergeSortWithComparisonWork_spec
 #check_axioms Alvoki.Storage.readWalSegmentExtentsWithWork_spec
 #check_axioms Alvoki.Storage.readWalSegmentExtentsWithWork_bound

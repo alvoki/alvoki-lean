@@ -154,8 +154,8 @@ theorem HeldDirectoryScan.sameDirectoryObject {initial owner} {lifetime : HeldDi
   change initial.inode report.stream.description = initial.inode lifetime.directorySlot.description
   rw [← report.identifiesStream, report.sameRoot, lifetime.identifiesDirectory]
 
-/-- Native resolution of an absolute run path at one operation. Stat and
-open resolve the parent independently in the current adapter. -/
+/-- Native resolution of an absolute child path at one operation. Stat
+and open resolve the parent independently in the current adapter. -/
 structure RunChildLookup (root : DeviceInode) (name : String) (view : DirectoryReadNamespace) where
   parent : DeviceInode
   basename : String
@@ -163,6 +163,12 @@ structure RunChildLookup (root : DeviceInode) (name : String) (view : DirectoryR
   atRoot : parent = root
   atName : basename = name
   binds : view.child parent basename = some child
+
+theorem RunChildLookup.child_eq {root name view} (lookup : RunChildLookup root name view)
+    {object : DeviceInode} (bound : view.child root name = some object) : lookup.child = object := by
+  have actual := lookup.binds
+  rw [lookup.atRoot, lookup.atName] at actual
+  exact Option.some.inj (actual.symm.trans bound)
 
 /-- The per-run stat and open results and their actual path resolutions.
 The observed reads of the opened description use the existing exact
@@ -191,14 +197,10 @@ def RunChunkPathReport.observesFile {reads path name root view}
     (report : RunChunkPathReport reads path name root view) {object : DeviceInode} {bytes : ByteArray}
     (bound : view.child root name = some object)
     (contents : reads.objectBytes (view.modelObject object) = some bytes) : reads.ObservesFile path bytes := by
-  have same {lookup : RunChildLookup root name view} : lookup.child = object := by
-    have binds := lookup.binds
-    rw [lookup.atRoot, lookup.atName] at binds
-    exact Option.some.inj (binds.symm.trans bound)
   have statObject : view.modelObject object = report.statObject :=
-    (congrArg view.modelObject (same (lookup := report.statLookup))).symm.trans report.identifiedStat
+    (congrArg view.modelObject (report.statLookup.child_eq bound)).symm.trans report.identifiedStat
   have openedObject : view.modelObject object = report.inventory.inode report.slot.description :=
-    (congrArg view.modelObject (same (lookup := report.openLookup))).symm.trans report.identifiedOpen
+    (congrArg view.modelObject (report.openLookup.child_eq bound)).symm.trans report.identifiedOpen
   have statContents : reads.objectBytes report.statObject = some bytes := statObject ▸ contents
   exact ⟨report.metadata, report.statObject, report.inventory, report.slot,
     report.stat, report.regular, report.extent bytes statContents, report.opened, report.live,
@@ -270,9 +272,10 @@ theorem chunkReads (report : HeldDirectoryMarkedRetryReports operations publishe
 
 def toChunkReports (report : HeldDirectoryMarkedRetryReports operations published)
     (settles : operations.sync operations.cache #[directory.path] before.image = .ok () before.image.syncDirectory)
-    (healthy : operations.HealthyFinish) :
+    (metadataReads : operations.MarkedMetadata) (healthy : operations.HealthyFinish) :
     MarkedRetryChunkReports (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout published where
   toMarkedRetryChunkOperations := operations
+  metadataReads := metadataReads
   settles := settles
   healthy := healthy
   chunks := report.chunkReads
@@ -336,7 +339,7 @@ theorem keeperRead_syncListedDirectory (report : HeldDirectoryMarkedRetryReports
 the same observed directory lifetime as the checked listing. -/
 theorem installs {input : FilePath} (report : HeldDirectoryMarkedRetryReports operations published)
     (settles : operations.sync operations.cache #[directory.path] before.image = .ok () before.image.syncDirectory)
-    (healthy : operations.HealthyFinish)
+    (metadataReads : operations.MarkedMetadata) (healthy : operations.HealthyFinish)
     (admission : OpenAdmissionReports input directory operations.slot)
     (keeperValid : before.image.keeper.Valid layout.target.Accepts)
     (laterValid : before.image.later.Beyond layout.range.through)
@@ -351,9 +354,9 @@ theorem installs {input : FilePath} (report : HeldDirectoryMarkedRetryReports op
     operations.reported.entries = report.listing.scan.entries directory.path ∧
     operations.reported.inventory.names.Perm (report.lifetime.namespaceView.names report.lifetime.root) ∧
     CachedRetryInstalled (before := before) operations.reported operations.descriptors operations.slot operations.bindings
-      published operations.liveRefs ((report.toChunkReports settles healthy).runWithAdmission admission) :=
+      published operations.liveRefs ((report.toChunkReports settles metadataReads healthy).runWithAdmission admission) :=
   ⟨report.initializedCache, report.listing.custody, report.checkedListing.1, report.checkedListing.2,
-    runOpenWithAdmission_markedRetryFromChunks (report.toChunkReports settles healthy) admission keeperValid laterValid
+    runOpenWithAdmission_markedRetryFromChunks (report.toChunkReports settles metadataReads healthy) admission keeperValid laterValid
       following accepted ordered⟩
 
 end HeldDirectoryMarkedRetryReports

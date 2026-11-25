@@ -37,14 +37,8 @@ structure MarkedRetryChunkOperations (files : Type) (directory : DiskDirectory)
   flatMessage : String
   flatAbsent : lookup (directory.file .wal) before.image =
     .ok (.error (.noFileOrDirectory flatName 2 flatMessage)) before.image
-  markerMetadata : IO.FS.Metadata
-  markedPath : lookup (directory.file .walBoundary) before.image = .ok (.ok markerMetadata) before.image
   reads : CheckpointRunChunkReads
   metadata : ∀ path, reported.inventory.reports.lstat path = (reads.stat path).map Prod.fst
-  manifestRead : reported.inventory.reports.readOptional (directory.file .manifest) =
-    .ok before.image.directory.active.manifest
-  markerRead : reported.inventory.reports.readOptional (directory.file .walBoundary) =
-    .ok before.image.directory.active.walBoundary
   readKeeper : files → FilePath → Nat → Nat → Except IO.Error ByteArray
   keeperReads : readKeeper cache = reported.readKeeper
   removeFile : FilePath → EStateM IO.Error FileImage (Except IO.Error Unit)
@@ -56,6 +50,17 @@ namespace MarkedRetryChunkOperations
 
 variable {files : Type} {directory : DiskDirectory} {before : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout before.image history}
+
+abbrev MarkerPresent (observed : MarkedRetryChunkOperations files directory layout) : Prop :=
+  ∃ markerMetadata, observed.lookup (directory.file .walBoundary) before.image = .ok (.ok markerMetadata) before.image
+
+/-- The earlier route lookup and the later bounded reads of the selected pair. -/
+structure MarkedMetadata (observed : MarkedRetryChunkOperations files directory layout) : Prop where
+  markerPresent : observed.MarkerPresent
+  manifestRead : observed.reported.inventory.reports.readOptional (directory.file .manifest) =
+    .ok before.image.directory.active.manifest
+  markerRead : observed.reported.inventory.reports.readOptional (directory.file .walBoundary) =
+    .ok before.image.directory.active.walBoundary
 
 /-- The later effects needed only for a completed open. -/
 abbrev HealthyFinish (observed : MarkedRetryChunkOperations files directory layout) : Prop :=
@@ -97,15 +102,17 @@ def run (observed : MarkedRetryChunkOperations files directory layout) :
 
 /-- A successfully acquired, initialized open with observed marker metadata
 uses the same marked worker regardless of the outcome of recovery. -/
-theorem run_selectsMarked (observed : MarkedRetryChunkOperations files directory layout) :
+theorem run_selectsMarked (observed : MarkedRetryChunkOperations files directory layout)
+    (present : observed.MarkerPresent) :
     observed.run = runOpenWithInstallation directory observed.slot.description observed.nextRef (.ok true)
       observed.unlock (observed.markedAt directory observed.cache) before := by
+  obtain ⟨markerMetadata, markedPath⟩ := present
   have checkedMarker : optionalMetadataWith (observed.lookup (directory.file .walBoundary)) before.image =
-      .ok (some observed.markerMetadata) before.image := by
-    simp only [optionalMetadataWith, Bind.bind, EStateM.bind, observed.markedPath, Pure.pure, EStateM.pure]
+      .ok (some markerMetadata) before.image := by
+    simp only [optionalMetadataWith, Bind.bind, EStateM.bind, markedPath, Pure.pure, EStateM.pure]
   have branch := runOpenWithInstallation_recoveryBranch directory observed.slot.description observed.nextRef before
     observed.unlock observed.openFiles observed.lookup (observed.markedAt directory) observed.bootstrap observed.cache
-    observed.initialized observed.flatName observed.flatMessage observed.flatAbsent (some observed.markerMetadata) checkedMarker
+    observed.initialized observed.flatName observed.flatMessage observed.flatAbsent (some markerMetadata) checkedMarker
   rw [run, runAt, recoverAt, observed.acquired, branch]
   rfl
 
@@ -116,6 +123,7 @@ structure MarkedRetryChunkReports (files : Type) (directory : DiskDirectory)
     {before : LockedFileState FileImage} {history : List WAL.Write}
     (layout : CanonicalKeeperLayout before.image history) (published : CheckpointPublication.Image)
     extends MarkedRetryChunkOperations files directory layout where
+  metadataReads : toMarkedRetryChunkOperations.MarkedMetadata
   chunks : reads.ObservesSelected directory before.image.directory.active.manifest published.durable
   settles : sync cache #[directory.path] before.image = .ok () before.image.syncDirectory
   healthy : toMarkedRetryChunkOperations.HealthyFinish
@@ -169,11 +177,12 @@ theorem runOpenWithInstallation_markedRetryFromChunks {files : Type}
     simp only [MarkedRetryChunkOperations.markedAt, observed.keeperReads, cachedRetryRecovery, sizes,
       SizedCheckpointRunReports.ofChunkReads]
   unfold MarkedRetryChunkReports.run
-  rw [observed.toMarkedRetryChunkOperations.run_selectsMarked, sameWorker]
+  rw [observed.toMarkedRetryChunkOperations.run_selectsMarked observed.metadataReads.markerPresent, sameWorker]
   have completed := runOpenWithInstallation_cachedRetryCompletes observed.reported observed.descriptors observed.slot
     observed.live observed.bindings observed.lockObject observed.flock observed.acquired observed.acquisition
     observed.inventoryDescription observed.inventoryOwners observed.nextRef observed.liveRefs observed.fresh
-    observed.unlock keeperValid laterValid following accepted ordered sizes observed.manifestRead observed.markerRead
+    observed.unlock keeperValid laterValid following accepted ordered sizes observed.metadataReads.manifestRead
+    observed.metadataReads.markerRead
     observed.removeFile (observed.write observed.cache) (observed.sync observed.cache) observed.renameFile
     observed.settles observed.healthy
   simpa only [observed.acquired] using completed
