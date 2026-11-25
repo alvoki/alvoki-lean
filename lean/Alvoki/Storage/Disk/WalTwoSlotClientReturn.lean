@@ -1464,7 +1464,9 @@ theorem preparesFromHeldMarker
         (admission.cache, file.calls.inventory, admission.held) =
       .ok (layout.boundedPlan, ⟨table, (checkpoint.getD (.empty, 0)).2, selection.frontier, layout.keeper.first⟩,
           report.wal.keeper.calls.metadata.byteSize.toNat) (cache, captured.afterRead, admission.held) ∧
-    file.calls.slot ∈ captured.afterRead.slots := by
+    file.calls.slot ∈ captured.afterRead.slots ∧
+    captured.afterRead.inode file.calls.slot.description =
+      file.calls.inventory.inode file.calls.slot.description := by
   intro handle cache
   have watermark := Option.some.inj (selected.watermark.symm.trans
     (DirectoryPublication.Bindings.walRange_accounting layout.decoded).1)
@@ -1486,7 +1488,8 @@ theorem preparesFromHeldMarker
   have through : selection.frontier.toNat / WAL.frameSize = layout.range.through := by
     rw [count, Nat.mul_div_cancel _ (by decide : 0 < WAL.frameSize)]
   rw [through] at prepared
-  exact ⟨acquireMarkerInCensus_returns file privateFile available decoded _, prepared, live⟩
+  exact ⟨acquireMarkerInCensus_returns file privateFile available decoded _, prepared, live,
+    congrFun (captured.afterRead_inode.trans report.objectMap.symm) file.calls.slot.description⟩
 
 /-- Construct the marker barrier from the prepared keeper census and
 derive the exact directory image that enters repair. -/
@@ -1496,7 +1499,7 @@ theorem stabilizesAfterKeeperRead
     (captured : CapturedKeeperOpenReports report)
     {marker settled : WalInodeImage} {slot : DescriptorSlot}
     (live : slot ∈ captured.afterRead.slots)
-    (current : admission.reached.inode slot.description = marker.active)
+    (current : captured.afterRead.inode slot.description = marker.active)
     (effect : Storage.SyncHandleRouting.FsyncResult marker
       (marker.completeFileSync marker.active) true (.ok () settled))
     (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
@@ -1511,7 +1514,7 @@ theorem stabilizesAfterKeeperRead
       .ok (settleMarker retry.image.directory selection) := by
   let handle : KeeperDescriptorIdentity := ⟨slot.description, marker.active⟩
   have inode : captured.afterRead.inode handle.description = handle.inode :=
-    (congrFun captured.afterRead_inode slot.description).trans current
+    current
   have liveReference : slot.reference ∈ (captured.afterRead.afterDrops []).references handle.description := by
     rw [DescriptorInventory.references_afterDrops]
     exact List.mem_filter.mpr ⟨(captured.afterRead.mem_references).mpr ⟨slot, live, rfl, rfl⟩, rfl⟩
@@ -1542,7 +1545,7 @@ theorem reopensAfterCapturedPreparation
     (captured : CapturedKeeperOpenReports report)
     {marker settled : WalInodeImage} {slot : DescriptorSlot}
     (live : slot ∈ captured.afterRead.slots)
-    (current : admission.reached.inode slot.description = marker.active)
+    (current : captured.afterRead.inode slot.description = marker.active)
     (effect : Storage.SyncHandleRouting.FsyncResult marker
       (marker.completeFileSync marker.active) true (.ok () settled))
     (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
@@ -1589,7 +1592,7 @@ theorem reopensAlignedAfterCapturedPreparation
     (captured : CapturedKeeperOpenReports report)
     {marker settled : WalInodeImage} {slot : DescriptorSlot}
     (live : slot ∈ captured.afterRead.slots)
-    (current : admission.reached.inode slot.description = marker.active)
+    (current : captured.afterRead.inode slot.description = marker.active)
     (effect : Storage.SyncHandleRouting.FsyncResult marker
       (marker.completeFileSync marker.active) true (.ok () settled))
     (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
@@ -1669,7 +1672,7 @@ theorem reopensLongAfterCapturedPreparation
     (finish : CapturedLongKeeperFinish calls report vacant selected)
     {marker settled : WalInodeImage} {slot : DescriptorSlot}
     (live : slot ∈ finish.reader.afterRead.slots)
-    (current : admission.reached.inode slot.description = marker.active)
+    (current : finish.reader.afterRead.inode slot.description = marker.active)
     (effect : Storage.SyncHandleRouting.FsyncResult marker
       (marker.completeFileSync marker.active) true (.ok () settled))
     (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)
@@ -1715,7 +1718,7 @@ theorem reopensPrunedAfterCapturedPreparation
     (finish : CapturedPrunedAlignedFinish calls report vacant selected)
     {marker settled : WalInodeImage} {slot : DescriptorSlot}
     (live : slot ∈ finish.reader.afterRead.slots)
-    (current : admission.reached.inode slot.description = marker.active)
+    (current : finish.reader.afterRead.inode slot.description = marker.active)
     (effect : Storage.SyncHandleRouting.FsyncResult marker
       (marker.completeFileSync marker.active) true (.ok () settled))
     (sameBinding : ∀ inode ∈ marker.crashBindings, inode = marker.active)

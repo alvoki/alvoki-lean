@@ -868,7 +868,9 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 ## Ordered two-slot WAL marker
 
 The aligned repair lemmas accept the actual marker-open descriptor census
-while retaining the directory handle recorded at admission. The guarded
+while retaining the directory handle recorded at admission. Each repair
+variant identifies the synced marker inode in the census reached by its
+keeper read. The guarded
 marked-open schedule now has a checked handoff from successful marker
 acquisition and recovery to the exact installed session. This handoff
 still takes the reached recovery result as a premise. The longer and
