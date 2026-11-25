@@ -1061,6 +1061,8 @@ whose persistence report yields the surviving bytes of the appended
 inode, including when the cache routes sync through a pending handle.
 
 The two-slot installer now has a shared reference-allocation proof.
+It derives the complete worker return from the marker acquisition
+and the recovery result on that same handle and selected frontier.
 The marked worker's returned table and marker determine the arguments
 of the three allocations. The marker reference is allocated after the
 existing phase and token, and the phase still contains the recovered

@@ -48,27 +48,35 @@ theorem installs
 /-- The marked worker supplies the recovered table and the marker to
 the two-slot opener's three reference allocations in order. -/
 theorem installsWithRecoveredMarker
-    {marker : Type} {entry afterMarker : heap}
-    {recover : EStateM IO.Error heap (WalSegmentRepair.Reopened × marker)}
-    {opened : WalSegmentRepair.Reopened}
-    {selected : marker} (recovered : recover entry = .ok (opened, selected) before)
+    {handle plan : Type} {entry acquired afterMarker : heap}
+    (acquire : EStateM IO.Error heap (handle × WAL.TwoSlot.Selection))
+    (prepare : WAL.TwoSlot.Selection → EStateM IO.Error heap (plan × WalSegmentRepair.Reopened × Nat))
+    (stabilize : handle → EStateM IO.Error heap Unit)
+    (finish : plan → Nat → EStateM IO.Error heap Unit)
+    {opened : WalSegmentRepair.Reopened} {marker : handle} {selected : WAL.TwoSlot.Selection}
+    (markerRead : acquire entry = .ok (marker, selected) acquired)
+    (recovered : WAL.TwoSlot.reopenWith (prepare selected) (stabilize marker) finish acquired =
+      .ok opened before)
     (observed : OpenReferenceAllocations allocatePhase allocateToken phaseContents opened.installed before)
     {directory : DiskDirectory} {lock : IO.FS.Handle} {syncFiles : DiskTable.OpenSyncFiles}
     {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
     (constructor : DiskTable.OpenReferenceAssembly directory lock syncFiles assemble)
-    (allocateMarker : Option marker → EStateM IO.Error heap (IO.Ref (Option marker)))
-    {cell : IO.Ref (Option marker)}
-    (markerAllocated : allocateMarker (some selected) observed.afterToken = .ok cell afterMarker)
+    (allocateMarker : Option (handle × WAL.TwoSlot.Selection) → EStateM IO.Error heap (IO.Ref (Option (handle × WAL.TwoSlot.Selection))))
+    {cell : IO.Ref (Option (handle × WAL.TwoSlot.Selection))}
+    (markerAllocated : allocateMarker (some (marker, selected)) observed.afterToken = .ok cell afterMarker)
     (keepsPhase : phaseContents afterMarker observed.phase = phaseContents observed.afterToken observed.phase) :
     (do
-      let (reopened, selected) ← recover
+      let (reopened, marker, selected) ← WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish
       let table ← installReady reopened.installed allocatePhase allocateToken (fun phase token => pure (assemble phase token))
-      let cell ← allocateMarker (some selected)
+      let cell ← allocateMarker (some (marker, selected))
       pure (table, cell)) entry = .ok (assemble observed.phase observed.token, cell) afterMarker ∧
     (assemble observed.phase observed.token).UsesOpenReferences directory lock syncFiles observed.phase observed.token ∧
     phaseContents afterMarker observed.phase = some (.ready opened.installed) := by
+  have worker : WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish entry =
+      .ok (opened, marker, selected) before := by
+    simp only [WAL.TwoSlot.reopenAcquiredWith_reports, markerRead, recovered]
   obtain ⟨_, references, ready⟩ := observed.installs constructor
-  exact ⟨by simp only [Bind.bind, EStateM.bind, recovered, installReady, observed.phaseAllocated, observed.tokenAllocated, markerAllocated, Pure.pure, EStateM.pure],
+  exact ⟨by simp only [Bind.bind, EStateM.bind, worker, installReady, observed.phaseAllocated, observed.tokenAllocated, markerAllocated, Pure.pure, EStateM.pure],
     references, keepsPhase.trans ready⟩
 
 end OpenReferenceAllocations
