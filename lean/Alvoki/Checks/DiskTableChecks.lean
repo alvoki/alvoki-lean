@@ -2375,6 +2375,54 @@ private def checkTwoSlotMarker (root : FilePath) : IO Unit := do
       "two-slot append after repair did not survive reopen"
   finally final.close
 
+private def checkMarkerStrategyParity (root : FilePath) : IO Unit := do
+  let renamePath := root / "rename"
+  let slotsPath := root / "slots"
+  IO.FS.createDir renamePath
+  IO.FS.createDir slotsPath
+  let rename ← DiskTable.open renamePath
+  try
+    let slots ← TwoSlotDiskTable.open slotsPath
+    try
+      let mut expected : UInt64 := 0
+      for cycle in List.range 4 do
+        let beforeRename ← rename.acquire
+        let beforeSlots ← slots.acquire
+        try
+          let rows : List (UInt64 × Option UInt64) :=
+            [(1, some cycle.toUInt64), (2, none), (3, some (cycle + 1).toUInt64)]
+          expected := expected + 3
+          check ((← rename.writeBatch rows) == expected && (← slots.writeBatch rows) == expected)
+            "marker strategies returned different batch ordinals"
+          rename.checkpoint
+          slots.checkpoint
+          rename.rotateWal
+          slots.rotateWal
+          rename.collectCoveredWal
+          slots.collectCoveredWal
+          check ((← rename.range beforeRename.handle 0 5) == (← slots.range beforeSlots.handle 0 5))
+            "marker strategies disagreed on the snapshot held across maintenance"
+        finally
+          discard (rename.release beforeRename.handle)
+          discard (slots.release beforeSlots.handle)
+      check ((← rename.write 4 (some 42)) == 13 && (← slots.write 4 (some 42)) == 13)
+        "marker strategies disagreed on the final WAL append"
+    finally slots.close
+  finally rename.close
+  let rename ← DiskTable.open renamePath
+  try
+    let slots ← TwoSlotDiskTable.open slotsPath
+    try
+      let left ← rename.acquire
+      let right ← slots.acquire
+      check (left.sequence == 13 && right.sequence == 13) "marker strategies disagreed on the recovered ordinal"
+      check ((← rename.range left.handle 0 5) == (← slots.range right.handle 0 5))
+        "marker strategies disagreed on recovered rows"
+      check ((← slots.lookup right.handle 4) == some (some 42)) "two-slot reopen lost the final WAL append"
+    finally slots.close
+  finally rename.close
+
+
 def main (args : List String) : IO Unit := do
   match args with
   | ["--two-slot-open-once", dir] => (← TwoSlotDiskTable.open ⟨dir⟩).close
@@ -2583,6 +2631,7 @@ def main (args : List String) : IO Unit := do
     checkCodecs
     checkPublicationCuts
     IO.FS.withTempDir checkTwoSlotMarker
+    IO.FS.withTempDir checkMarkerStrategyParity
     IO.FS.withTempDir checkSegmentedCheckpointOpen
     IO.FS.withTempDir checkReopen
     IO.FS.withTempDir checkInterruptedPublication
