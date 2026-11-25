@@ -2054,3 +2054,10 @@ frontier result independently of table replay. The client retention
 proof consumes it. The same result is available before replay to
 select a canonical WAL history for the crash image, which is the
 input needed by the shared segment layout construction.
+
+Both marker strategies now have a common construction of the canonical
+WAL read layout. The rename recovery proof uses it directly. For the
+two-slot strategy, the old-or-new frontier and the surviving keeper
+prefix imply the canonical layout for the same selected batch history.
+The installed-read theorem still needs the native reports to supply
+that keeper prefix and the matching checkpoint and read inventory.

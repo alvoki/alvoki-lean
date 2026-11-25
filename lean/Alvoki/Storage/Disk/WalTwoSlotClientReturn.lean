@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.WalBatchCommitEffects
 import Alvoki.Storage.Disk.PendingClientReplay
 import Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
@@ -1754,6 +1755,40 @@ theorem recoveredRetries_frontier
     choices selected observed authorizedRepair authorized.pair authorized.keeperPrefix
     authorized.newer retries (List.mem_cons_self ..)
   exact choice
+
+/-- A two-slot selection and a surviving keeper prefix produce the same
+canonical segment plan used by the rename-backed opener. -/
+theorem canonicalLayout_of_twoSlotFrontier
+    {oldWal : WalSegmentImage} {history batch : List Write} {watermark : Nat}
+    (layout : oldWal.ReadLayout history) (valid : oldWal.Valid history)
+    (oldRange : oldWal.directory.active.walRange = some ⟨watermark, history.length⟩)
+    {retry : FileImage} {through : Nat} {selected current next : Selection}
+    (choice : selected.frontier = current.frontier ∨ selected.frontier = next.frontier)
+    (oldSize : current.frontier.toNat = (WAL.encode history).size)
+    (newSize : next.frontier.toNat = (WAL.encode (history ++ batch)).size)
+    (counted : selected.frontier.toNat = through * frameSize)
+    (decoded : retry.directory.active.walRange = some ⟨watermark, through⟩)
+    (visible : ∃ tail, retry.keeper.active = some
+      (WAL.encode (((history ++ batch).take through).drop oldWal.active.first) ++ tail)) :
+    ∃ plan : DiskSession.CanonicalKeeperLayout retry ((history ++ batch).take through),
+      plan.range.watermark = watermark ∧ plan.keeper.first = oldWal.active.first := by
+  have count : through = history.length ∨ through = (history ++ batch).length := by
+    have sizes := choice.imp (fun same => same ▸ oldSize) (fun same => same ▸ newSize)
+    rw [counted, WAL.encode_size, WAL.encode_size] at sizes
+    unfold frameSize at sizes
+    omega
+  have throughWithin : through ≤ (history ++ batch).length := by
+    rcases count with old | all
+    · simp [old]
+    · exact Nat.le_of_eq all
+  have prefixLength : ((history ++ batch).take through).length = through := by
+    rw [List.length_take, Nat.min_eq_left throughWithin]
+  have allowed := recoveredBatch_history (range := ⟨watermark, through⟩) (batch := batch) counted
+    (choice.imp (fun same => same ▸ oldSize) (fun same => same ▸ newSize))
+  obtain ⟨_, _, plan, covers, keeper, _, _⟩ :=
+    DiskSession.canonicalLayout_of_selectedBatch layout valid oldRange allowed
+      (by rw [prefixLength]; exact decoded) visible
+  exact ⟨plan, covers, (congrArg WalSegment.first keeper).trans rfl⟩
 
 /-- The retry trace supplies the actual frontier used by the recovered
 table. The retained client history follows from that retry-selected marker. -/

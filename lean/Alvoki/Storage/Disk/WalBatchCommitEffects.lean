@@ -430,6 +430,52 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentCommit WalSegmentRepair WAL.Boundary
 
+/-- Reconstruct the physical read layout after either marker strategy has
+selected a history and the active keeper has supplied its durable prefix. -/
+theorem canonicalLayout_of_selectedBatch
+    {oldWal : WalSegmentImage} {before batch history : List WAL.Write} {watermark : Nat}
+    (layout : oldWal.ReadLayout before) (valid : oldWal.Valid before)
+    (oldRange : oldWal.directory.active.walRange = some ⟨watermark, before.length⟩)
+    (allowed : history = before ∨ history = before ++ batch)
+    {retry : FileImage}
+    (decoded : retry.directory.active.walRange = some ⟨watermark, history.length⟩)
+    (visible : ∃ tail, retry.keeper.active = some (WAL.encode (history.drop oldWal.active.first) ++ tail)) :
+    let wal := oldWal.appendSelectedView retry.directory.active history
+    wal.ReadLayout history ∧ wal.Valid history ∧
+    ∃ selected : CanonicalKeeperLayout retry history,
+      selected.range.watermark = watermark ∧ selected.keeper = wal.active ∧
+      selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark ∧
+      selectWalSegmentReads (wal.segments.map WalSegment.first) selected.range.watermark =
+        some (selected.first, (wal.readDescriptors selected.range.watermark).map WalSegment.first) := by
+  let wal := oldWal.appendSelectedView retry.directory.active history
+  have layoutValid : wal.ReadLayout history ∧ wal.Valid history := by
+    rcases allowed with rfl | rfl
+    · have same := layout.afterRetainedSuffix valid oldRange retry.directory.active []
+        (by simpa only [List.append_nil] using decoded)
+      exact ⟨by simpa only [List.append_nil] using same.1, by simpa only [List.append_nil] using same.2.1⟩
+    · have same := layout.afterRetainedSuffix valid oldRange retry.directory.active batch decoded
+      exact ⟨same.1, same.2.1⟩
+  obtain ⟨ideal, range, sameKeeper, _, descriptors, offsets, _, _, _, _⟩ :=
+    layoutValid.1.checkpointReopenLayout layoutValid.2 .visible decoded rfl none
+  have keeperBytes : ideal.keeper.bytes = WAL.encode (history.drop oldWal.active.first) := by
+    rw [sameKeeper] <;> rfl
+  obtain ⟨tail, exactVisible⟩ := visible
+  let selected : CanonicalKeeperLayout retry history :=
+    ⟨ideal.range, range.symm ▸ decoded, ideal.through, ideal.first, ideal.sealed, ideal.keeper,
+      ideal.chain, ideal.covers, tail, keeperBytes.symm ▸ exactVisible⟩
+  have exactDescriptors : selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark := by
+    change ideal.sealed ++ [ideal.keeper] = wal.readDescriptors ideal.range.watermark
+    rw [range]
+    exact descriptors
+  have exactOffsets : selectWalSegmentReads (wal.segments.map WalSegment.first) selected.range.watermark =
+      some (selected.first, (wal.readDescriptors selected.range.watermark).map WalSegment.first) := by
+    change selectWalSegmentReads (wal.segments.map WalSegment.first) ideal.range.watermark =
+      some (ideal.first, (wal.readDescriptors ideal.range.watermark).map WalSegment.first)
+    rw [range]
+    exact offsets
+  exact ⟨layoutValid.1, layoutValid.2, selected, congrArg MarkedWalRange.watermark range,
+    sameKeeper, exactDescriptors, exactOffsets⟩
+
 /-- A bounded retry lineage from an interrupted batch selects one actual
 marked layout before any new opener reads the files. -/
 theorem BoundedReopenTrace.selectsAfterBatchCut {directory : DiskDirectory}
@@ -482,24 +528,15 @@ theorem BoundedReopenTrace.selectsAfterBatchCut {directory : DiskDirectory}
     rw [pair]
     exact DirectoryPublication.Bindings.walRange_of_counts (sameManifest ▸ watermarkRead)
       marker (decode_encode _) count newCovered
-  let wal := oldWal.appendSelectedView retry.image.directory.active history
-  have layoutValid : wal.ReadLayout history ∧ wal.Valid history := by
-    rcases allowed with rfl | rfl
-    · have same := layout.afterRetainedSuffix valid oldRange retry.image.directory.active []
-        (by simpa only [List.append_nil] using decoded)
-      exact ⟨by simpa only [List.append_nil] using same.1, by simpa only [List.append_nil] using same.2.1⟩
-    · have same := layout.afterRetainedSuffix valid oldRange retry.image.directory.active batch decoded
-      exact ⟨same.1, same.2.1⟩
-  obtain ⟨ideal, range, sameKeeper, _, descriptors, offsets, _, _, _, _⟩ :=
-    layoutValid.1.checkpointReopenLayout layoutValid.2 .visible decoded rfl none
-  have trimmedKeeper : target.trimmed = ideal.keeper.bytes := by
+  have visible : ∃ tail, retry.image.keeper.active = some (WAL.encode (history.drop oldWal.active.first) ++ tail) := by
+    obtain ⟨tail, exactVisible⟩ := keeper.activeValid
+    exact ⟨tail, trimmed ▸ exactVisible⟩
+  obtain ⟨readLayout, walValid, selected, watermarkEq, sameKeeper, exactDescriptors, exactOffsets⟩ :=
+    canonicalLayout_of_selectedBatch layout valid oldRange allowed decoded visible
+  have trimmedKeeper : target.trimmed = selected.keeper.bytes := by
     rw [trimmed, sameKeeper] <;> rfl
-  obtain ⟨tail, visible⟩ := keeper.activeValid
-  let selected : CanonicalKeeperLayout retry.image history :=
-    ⟨ideal.range, range.symm ▸ decoded, ideal.through, ideal.first, ideal.sealed, ideal.keeper,
-      ideal.chain, ideal.covers, tail, trimmedKeeper ▸ visible⟩
   have selectedFirst : selected.target.first = oldWal.active.first := by
-    change ideal.keeper.first = oldWal.active.first
+    change selected.keeper.first = oldWal.active.first
     rw [sameKeeper] <;> rfl
   have selectedTrimmed : selected.target.trimmed = WAL.encode (history.drop oldWal.active.first) := by
     rw [← selectedFirst]
@@ -541,18 +578,8 @@ theorem BoundedReopenTrace.selectsAfterBatchCut {directory : DiskDirectory}
       obtain ⟨parsed, parsedOk, _⟩ := selectedCheckpointWatermark_present_iff.mp selectedWatermark
       exact ⟨parsed.header.generation, by rw [Option.mapM, parsedOk]; rfl⟩
   obtain ⟨generation, generationRead⟩ := generationRead
-  have exactDescriptors : selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark := by
-    change ideal.sealed ++ [ideal.keeper] = wal.readDescriptors ideal.range.watermark
-    rw [range]
-    exact descriptors
-  have exactOffsets : selectWalSegmentReads (wal.segments.map WalSegment.first) selected.range.watermark =
-      some (selected.first, (wal.readDescriptors selected.range.watermark).map WalSegment.first) := by
-    change selectWalSegmentReads (wal.segments.map WalSegment.first) ideal.range.watermark =
-      some (ideal.first, (wal.readDescriptors ideal.range.watermark).map WalSegment.first)
-    rw [range]
-    exact offsets
-  exact ⟨sealed, pair ▸ sameManifest, history, allowed, selectedMarker, layoutValid.1, layoutValid.2,
-    selected, congrArg MarkedWalRange.watermark range, selectedFirst, sameKeeper, exactDescriptors,
+  exact ⟨sealed, pair ▸ sameManifest, history, allowed, selectedMarker, readLayout, walValid,
+    selected, watermarkEq, selectedFirst, sameKeeper, exactDescriptors,
     exactOffsets, plan, noLater, accepted, consecutive, generation, generationRead⟩
 
 /-- After a physical batch cut and any admitted finite retry trace, the
