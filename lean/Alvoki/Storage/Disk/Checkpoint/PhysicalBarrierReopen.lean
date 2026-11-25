@@ -25,7 +25,7 @@ def CheckpointCrashChild (names : FilePath → Option Nat) (admission : CensusOp
     (path : FilePath) (name : String) : Prop :=
   (admission.view.child admission.root name).map admission.view.modelObject = names path
 
-private theorem CheckpointCrashChild.sameObject {input directory inventory retry names path name}
+theorem CheckpointCrashChild.sameObject {input directory inventory retry names path name}
     {admission : CensusOpenAdmissionReports input directory inventory retry} {reads object payload}
     (child : CheckpointCrashChild names admission path name)
     (file : RunChunkPathReport reads path name admission.root admission.view)
