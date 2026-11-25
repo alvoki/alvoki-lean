@@ -48,7 +48,7 @@ theorem installs
 /-- The marked worker supplies the recovered table and the marker to
 the two-slot opener's three reference allocations in order. -/
 theorem installsWithRecoveredMarker
-    {handle plan : Type} {entry acquired prepared settled afterMarker : heap}
+    {handle plan : Type} {entry afterMarker : heap}
     (probe : EStateM IO.Error heap (Option IO.FS.Metadata))
     (bootstrap : EStateM IO.Error heap (WalSegmentRepair.Reopened × handle × WAL.TwoSlot.Selection))
     {metadata : IO.FS.Metadata} {probed : heap}
@@ -58,11 +58,8 @@ theorem installsWithRecoveredMarker
     (stabilize : handle → EStateM IO.Error heap Unit)
     (finish : plan → Nat → EStateM IO.Error heap Unit)
     {opened : WalSegmentRepair.Reopened} {marker : handle} {selected : WAL.TwoSlot.Selection}
-    (markerRead : acquire probed = .ok (marker, selected) acquired)
-    {repairPlan : plan} {keeperSize : Nat}
-    (readWal : prepare selected acquired = .ok (repairPlan, opened, keeperSize) prepared)
-    (markerSynced : stabilize marker prepared = .ok () settled)
-    (repaired : finish repairPlan keeperSize settled = .ok () before)
+    (worker : WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish probed =
+      .ok (opened, marker, selected) before)
     (observed : OpenReferenceAllocations allocatePhase allocateToken phaseContents opened.installed before)
     {directory : DiskDirectory} {lock : IO.FS.Handle} {syncFiles : DiskTable.OpenSyncFiles}
     {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
@@ -84,9 +81,6 @@ theorem installsWithRecoveredMarker
     (assemble observed.phase observed.token).UsesOpenReferences directory lock syncFiles observed.phase observed.token ∧
     phaseContents afterMarker observed.phase = some (.ready opened.installed) ∧
     markerContents afterMarker cell = some (some (marker, selected)) := by
-  have worker : WAL.TwoSlot.reopenAcquiredWith acquire prepare stabilize finish probed =
-      .ok (opened, marker, selected) before := by
-    simp only [WAL.TwoSlot.reopenAcquiredWith_reports, markerRead, WAL.TwoSlot.reopenWith_reports, readWal, markerSynced, repaired]
   obtain ⟨_, references, ready⟩ := observed.installs constructor
   exact ⟨by simp only [TwoSlotDiskTable.installWithMarker, Bind.bind, EStateM.bind, found, Option.isSome_some, ↓reduceIte, worker, installReady, observed.phaseAllocated, observed.tokenAllocated, markerAllocated, Pure.pure, EStateM.pure],
     references, keepsPhase.trans ready, initializedMarker⟩
