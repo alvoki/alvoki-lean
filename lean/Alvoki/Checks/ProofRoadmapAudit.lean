@@ -24,6 +24,7 @@ import CompactionProofs
 #check_axioms Alvoki.Compaction.Model.winner_latest
 #check_axioms Alvoki.Compaction.Model.winner_union
 #check_axioms Alvoki.Compaction.Model.retain_key
+#check_axioms Alvoki.Compaction.Model.retain_length_le
 #check_axioms Alvoki.Compaction.Model.versions_unique
 #check_axioms Alvoki.Compaction.Model.winner_retain_in_context
 #check_axioms Alvoki.Compaction.Model.winner_advanceFloor

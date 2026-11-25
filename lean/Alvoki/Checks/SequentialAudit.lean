@@ -239,8 +239,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Sequential.replaceSuffix_at_prefix
 #check_axioms Alvoki.Sequential.replaceSuffix_spec_at
 #check_axioms Alvoki.Compaction.CheckedRun.retainVersions_spec
+#check_axioms Alvoki.Compaction.CheckedRun.retainVersions_byteSize_le
+#check_axioms Alvoki.Compaction.CheckedRun.compact_byteSize_le
 #check_axioms Alvoki.Compaction.CheckedRun.retainVersions_complete
 #check_axioms Alvoki.Storage.PackedTable.retainRunVersions_spec
+#check_axioms Alvoki.Storage.PackedTable.retainRunVersions_byteSize_le
 #check_axioms Alvoki.Storage.PackedTable.RowBounds.retainRunVersions
 #check_axioms Alvoki.Storage.PackedTable.retainRunVersions_visibleEntry
 #check_axioms Alvoki.Storage.PackedTable.retainRunVersions_reads

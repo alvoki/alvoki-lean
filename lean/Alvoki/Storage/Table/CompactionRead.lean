@@ -21,6 +21,11 @@ def CheckedRun.history (checked : CheckedRun) : Sequential.History UInt64 :=
 theorem CheckedRun.fits (checked : CheckedRun) : checked.run.bytes.size < USize.size :=
   (parse_spec checked.accepted).2.2.1
 
+theorem CheckedRun.byteSize_eq_history (checked : CheckedRun) :
+    checked.run.bytes.size = 16 + 32 * checked.history.rows.length := by
+  rw [checked.run.size_eq]
+  simp only [CheckedRun.history, Run.history, Run.decodeV3, List.length_map, rawRows_length]
+
 @[inline] def CheckedRun.lowerBoundKey (checked : @& CheckedRun) (target : UInt64) : USize :=
   searchMachine checked.run.keyOrZero target checked.run.count
 
@@ -384,6 +389,24 @@ theorem CheckedRun.retainVersions_spec {run out : CheckedRun} {floor : UInt64}
     apply Sequential.History.ext_rows
     simp [Sequential.compactPair, Sequential.History.union, Sequential.History.retain,
       Sequential.History.empty, Model.union_nil_right]
+
+/-- Bound the actual packed file by the retained history's input rows.
+The fixed v3 header and row width also account for retained tombstones. -/
+theorem CheckedRun.byteSize_le_of_retainedHistory {source : Sequential.History UInt64} {out : CheckedRun}
+    {floor : UInt64} (retained : out.history = source.retain floor) :
+    out.run.bytes.size ≤ 16 + 32 * Model.retentionRowBound source.rows floor := by
+  rw [out.byteSize_eq_history, retained]
+  exact Nat.add_le_add_left (Nat.mul_le_mul_left 32 (Model.retain_length_le source.ordered floor)) 16
+
+theorem CheckedRun.retainVersions_byteSize_le {run out : CheckedRun} {floor : UInt64}
+    (retained : run.retainVersions floor = .ok out) :
+    out.run.bytes.size ≤ 16 + 32 * Model.retentionRowBound run.history.rows floor :=
+  byteSize_le_of_retainedHistory (retainVersions_spec retained)
+
+theorem CheckedRun.compact_byteSize_le {left right out : CheckedRun} {floor : UInt64}
+    (compacted : left.compact right floor = .ok out) :
+    out.run.bytes.size ≤ 16 + 32 * Model.retentionRowBound (left.history.union right.history).rows floor :=
+  byteSize_le_of_retainedHistory (compact_spec compacted)
 
 theorem CheckedRun.retainVersions_complete (run : CheckedRun) (floor : UInt64) :
     ∃ out, run.retainVersions floor = .ok out := by

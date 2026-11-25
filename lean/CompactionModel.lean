@@ -374,6 +374,56 @@ theorem retain_key {rows : List (Entry α)} (ordered : Ordered rows) (key floor 
       rows.filter (above key floor) ++ (winner rows key floor).toList :=
   retain_key_from ordered key floor 0 false (Or.inl rfl)
 
+/-- Rows newer than the floor and one possible anchor for each key with
+a version at or below it. Tombstones count as versions. -/
+abbrev retentionRowBound (rows : List (Entry α)) (floor : UInt64) : Nat :=
+  (rows.filter (fun row => decide (floor < row.sequence))).length +
+    ((rows.filter (fun row => decide (row.sequence ≤ floor))).map Entry.key).eraseDups.length
+
+/-- The per-key retention rule gives an aggregate bound on the whole run. -/
+theorem retain_length_le {rows : List (Entry α)} (ordered : Ordered rows) (floor : UInt64) :
+    (retain rows floor).length ≤ retentionRowBound rows floor := by
+  let atFloor (row : Entry α) := decide (row.sequence ≤ floor)
+  let retained := retain rows floor
+  have anchorsUnique : ((retained.filter atFloor).map Entry.key).Nodup := by
+    apply List.nodup_iff_count.mpr
+    intro key
+    rw [List.count_eq_countP, List.countP_map, List.countP_eq_length_filter]
+    change ((retained.filter atFloor).filter (hasKey key)).length ≤ 1
+    have commute : (retained.filter atFloor).filter (hasKey key) =
+        (retained.filter (hasKey key)).filter atFloor := by
+      simp only [List.filter_filter, Bool.and_comm]
+    rw [commute, retain_key ordered, List.filter_append]
+    have disjoint : (rows.filter (above key floor)).filter atFloor = [] := by
+      apply List.filter_eq_nil_iff.mpr
+      intro row member
+      have newer : floor < row.sequence := by
+        exact (by simpa only [above, Bool.and_eq_true, decide_eq_true_eq] using (List.mem_filter.mp member).2 :
+          hasKey key row = true ∧ floor < row.sequence).2
+      simp [atFloor, UInt64.not_le.mpr newer]
+    rw [disjoint, List.nil_append]
+    exact Nat.le_trans (List.length_filter_le ..) (by cases winner rows key floor <;> simp)
+  have anchors : (retained.filter atFloor).length ≤ ((rows.filter atFloor).map Entry.key).eraseDups.length := by
+    rw [← List.length_map (f := Entry.key)]
+    apply anchorsUnique.length_le_of_subset
+    intro key member
+    rw [List.mem_eraseDups]
+    exact ((retainFrom_sublist rows floor 0 false).filter atFloor |>.map Entry.key).subset member
+  have newer := ((retainFrom_sublist rows floor 0 false).filter (fun row => decide (floor < row.sequence))).length_le
+  have partition := (List.filter_append_perm atFloor retained).length_eq
+  rw [List.length_append] at partition
+  have newerOnly : (fun row => !atFloor row) = (fun row : Entry α => decide (floor < row.sequence)) := by
+    funext row
+    by_cases old : row.sequence ≤ floor
+    · simp [atFloor, old, UInt64.not_lt.mpr old]
+    · simp [atFloor, old, UInt64.not_le.mp old]
+  rw [newerOnly] at partition
+  change (retained.filter (fun row => decide (floor < row.sequence))).length ≤
+    (rows.filter (fun row => decide (floor < row.sequence))).length at newer
+  change retained.length ≤ (rows.filter (fun row => decide (floor < row.sequence))).length +
+    ((rows.filter atFloor).map Entry.key).eraseDups.length
+  omega
+
 theorem winner_retainFrom (rows : List (Entry α)) {floor snapshot key previous : UInt64}
     {covered : Bool} (live : floor ≤ snapshot) (available : covered = false ∨ previous ≠ key) :
     winner (retainFrom floor previous covered rows) key snapshot = winner rows key snapshot := by

@@ -47,8 +47,9 @@ private theorem SegmentedCheckpointReport.Valid.reachedRunWrite
 /-- An explicit run rewrite and successful checkpoint, followed by a healthy
 cached close and reopen, load the rewritten run's exact bytes at its original
 index. The selected manifest already covers the complete WAL history.
-The retention floor is preserved, and every earlier active pin can be
-reacquired at the same sequence. -/
+The exact published and reread bytes are bounded by newer rows and one floor
+anchor per key. The retention floor is preserved, and every earlier active
+pin can be reacquired at the same sequence. -/
 theorem SegmentedDatabaseTrace.retainRunVersionsCheckpointCloseCached
     {directory initialDescriptor initial allowCollection log writer nextDescriptor before published}
     (prior : SegmentedDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
@@ -64,6 +65,8 @@ theorem SegmentedDatabaseTrace.retainRunVersionsCheckpointCloseCached
       SegmentedDatabaseTrace directory initialDescriptor initial allowCollection (log ++ [⟨[], none⟩]) nextDescriptor after ∧
       before.installed.table.runs[index]? = some source ∧
       output.history = source.history.retain before.installed.table.pins.floor ∧
+      output.run.bytes.size ≤
+        16 + 32 * Compaction.Model.retentionRowBound source.history.rows before.installed.table.pins.floor ∧
       let generation := SegmentedCheckpointReport.generation before
       runOpenWithInstallation directory nextDescriptor reopen.nextRef (.ok true) reopen.unlock
         (reopen.raw.reopenCached sizes cached reopen.removeFile reopen.write reopen.sync reopen.renameFile)
@@ -140,8 +143,9 @@ theorem SegmentedDatabaseTrace.retainRunVersionsCheckpointCloseCached
   have kept : after.published.durable generation index = some output.run.bytes := by
     obtain ⟨_, _, _, _, _, _, rfl⟩ := endpoint.openEffect
     exact durable
-  refine ⟨after, session, final, source, output, trace, sourceAt, retainedRows, ran, phase, files, owners, gen, history,
-    emitted, kept, readExact, loadedRun, floor, ?_⟩
+  have bytes := Compaction.CheckedRun.byteSize_le_of_retainedHistory retainedRows
+  refine ⟨after, session, final, source, output, trace, sourceAt, retainedRows, bytes, ran, phase, files, owners, gen,
+    history, emitted, kept, readExact, loadedRun, floor, ?_⟩
   intro oldPin active
   exact ready.reacquireReadsStable afterReady (suffix := []) (by simpa using history) active
     (floor.symm ▸ before.installed.table.pins.safe oldPin active)

@@ -567,6 +567,19 @@ theorem PackedTable.retainRunVersions_spec {before after : PackedTable} {index :
       exact ⟨rfl, rfl, rfl, older, source, output, newer, length, original,
         updated.trans (congrArg (older ++ ·) replaced.symm), written, CheckedRun.retainVersions_spec written⟩
 
+theorem PackedTable.retainRunVersions_byteSize_le {before after : PackedTable} {index : Nat}
+    (retained : before.retainRunVersions index = some after) :
+    ∃ source output,
+      before.runs[index]? = some source ∧ after.runs[index]? = some output ∧
+      output.run.bytes.size ≤ 16 + 32 * retentionRowBound source.history.rows before.pins.floor := by
+  obtain ⟨_, _, _, older, source, output, newer, length, original, updated, written, _⟩ :=
+    PackedTable.retainRunVersions_spec retained
+  have atIndex (run : CheckedRun) : (older ++ run :: newer)[index]? = some run := by
+    rw [List.getElem?_append_right (Nat.le_of_eq length), ← length, Nat.sub_self]
+    rfl
+  exact ⟨source, output, original.symm ▸ atIndex source, updated.symm ▸ atIndex output,
+    CheckedRun.retainVersions_byteSize_le written⟩
+
 theorem PackedTable.RowBounds.retainRunVersions {before after : PackedTable} {index : Nat}
     (bounded : before.RowBounds) (retained : before.retainRunVersions index = some after) :
     after.RowBounds := by
