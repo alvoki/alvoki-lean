@@ -867,6 +867,12 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The interrupted batch report covers stops during WAL append and WAL
+sync as well as during the inactive slot write and marker sync. A stop
+at either early callback leaves its exact reached state before the
+marker callbacks are issued. This uses the same client recovery proof
+under the reported marker-survival contract.
+
 The interrupted-writer client theorem now covers a stop during either
 the inactive slot write or the subsequent marker fsync. Both cases
 derive the poisoned writer return after the successful WAL barrier
