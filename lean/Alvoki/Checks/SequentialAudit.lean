@@ -256,6 +256,7 @@ import Alvoki.Storage.Disk.NativeOpenedPosition
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointRunFsync
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointRenameError
+import Alvoki.Storage.Disk.NativeCheckpointManifestRenameTableOpen
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
 import Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
 import Alvoki.Storage.Disk.NativeOpenReadyTrace
@@ -877,6 +878,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameCrash.plans
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameReads.readsSelected
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensCheckpointManifestRenameAt
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensCheckpointManifestRenameWith
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointManifestRenameReopened.checkpointWatermark
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCheckpointManifestRenamePowerLoss
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.retriesCheckpointManifestRenamePowerLoss
@@ -1129,6 +1131,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rejectsCheckpointFromReturn
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.checkpointRunFsyncErrorFromReturn
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversManifestRenameErrorFromReturn
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.checkpointManifestRenameErrorFromReturn
+#check_axioms Alvoki.Storage.DiskSession.RawManifestRenameReboot.readsSurvivingFile
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.opensAfterManifestRenameError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.checkpointsFromReturn
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.reachesIssue
 #check_axioms Alvoki.Storage.DiskSession.CheckpointCacheCalls.stepCache
