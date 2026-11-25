@@ -21,6 +21,8 @@ import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeInterruptedCloseReopen
+import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
+import Alvoki.Storage.Disk.NativeRotationErrorReopen
 
 namespace Alvoki.Storage.DiskSession
 
@@ -45,6 +47,7 @@ inductive NativeExecutionEvent : Type 1 where
   | collectCoveredWal
   | walCollectionPlan (result : Except IO.Error (List Nat))
   | rotatedWal
+  | rotationErrorRecovered (input : FilePath) (error : IO.Error)
   | collectedObsoleteRuns (held : List UInt64)
   | obsoleteRunCollectionError (held : List UInt64) (error : IO.Error)
   | rejectedOpenSequenceRecovered (inputs : List FilePath) (input : FilePath) (errors : List IO.Error)
@@ -254,6 +257,19 @@ inductive NativeExecutionStep : NativeExecutionPosition → NativeExecutionEvent
         (.uncertainWriteCrashRecovered observed.write.request input observed.write.failure.cause
           observed.write.failure.batch retained)
         ⟨current.history ++ retained, current.submissions ++ [.uncertainBatch observed.write.failure.batch], next⟩
+  | obsoleteRunUnlinkError (current : NativeExecutionPosition) (cut : NativeObsoleteRunUnlinkCut current.ready.state)
+      (error : NativeObsoleteRunUnlinkError cut) (next : NativeReadPosition current.history current.submissions)
+      (returned : NativeObsoleteRunUnlinkErrorStep current.ready cut error next) :
+      NativeExecutionStep current (.obsoleteRunCollectionError cut.plan.reports.held error.cause)
+        ⟨current.history, current.submissions, next⟩
+  | recoverRotationError (current : NativeExecutionPosition) {input : FilePath} {cause : IO.Error}
+      {failure : NativeRotationDirectoryFailure current.ready.state (some cause)}
+      (observed : NativeRotationErrorReopenObservation failure current.ready.readPrefix.refines.1 input)
+      (next : NativeReadPosition current.history current.submissions)
+      (reopened : NativeRotationErrorReopenContinuation current.ready next observed) :
+      NativeExecutionStep current
+        (.rotationErrorRecovered input (IO.userError s!"sync failed for '{current.ready.state.session.directory.path}': {cause}"))
+        ⟨current.history, current.submissions, next⟩
 
 /-- Interpret the submitted single or batch write with the reported
 primitive effects and start the next position from its actual result. -/
@@ -332,6 +348,10 @@ theorem NativeExecutionStep.ledgers (step : NativeExecutionStep before event aft
       by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
   case recoverUncertainWriteCrash reopened =>
     exact ⟨rfl, rfl, by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
+  case obsoleteRunUnlinkError returned => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using returned.reads⟩
+  case recoverRotationError reopened => exact ⟨by simp [NativeExecutionEvent.writes],
+      by simp [NativeExecutionEvent.submissions], by simpa [NativeExecutionEvent.reads] using reopened.reads⟩
 
 theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep before event after) :
     event.uncertainBatchWhole := by
@@ -397,6 +417,7 @@ inductive NativeExecutionInstruction : Type 1 where
   | collectCoveredWal
   | planWalCollection
   | rotateWal
+  | rotateThenCloseAndReopen (input : FilePath)
   | collectObsoleteRuns (held : List UInt64)
   | rewriteRun (request : RunMaintenance)
   | closeThenRetryAndReopen (inputs : List FilePath) (input : FilePath)
@@ -424,6 +445,7 @@ def NativeExecutionInstruction.Matches : NativeExecutionInstruction → NativeEx
   | .collectCoveredWal, .collectCoveredWal => True
   | .planWalCollection, .walCollectionPlan _ => True
   | .rotateWal, .rotatedWal => True
+  | .rotateThenCloseAndReopen input, .rotationErrorRecovered opened _ => opened = input
   | .collectObsoleteRuns held, .collectedObsoleteRuns issued => issued = held
   | .collectObsoleteRuns held, .obsoleteRunCollectionError issued _ => issued = held
   | .closeThenRetryAndReopen inputs input, .rejectedOpenSequenceRecovered attempted opened _ =>
@@ -483,10 +505,14 @@ inductive NativeExecutionObservation (state : NativeReadyState) : Type 1 where
   | rotateCreated (reported : NativeReadyCreatedRotation state)
   | rotateExisting (reported : NativeReadyExistingRotation state)
   | rotateEmpty (empty : state.writer.installed.walBytes / WAL.frameSize ≤ state.writer.installed.activeFirst)
+  | rotateThenCloseAndReopen (input : FilePath) (cause : IO.Error)
+      (failure : NativeRotationDirectoryFailure state (some cause))
+      (observe : ∀ valid : state.Valid, Nonempty (NativeRotationErrorReopenObservation failure valid input))
   | checkpointThenPowerLossAndReopen (input : FilePath) (observed : NativeCheckpointCrashObservation state input)
   | collectObsoleteRuns (observed : NativeObsoleteRunCollection state)
   | rewriteRun (request : RunMaintenance)
   | obsoleteRunCollectionError (observed : NativeObsoleteRunBarrierError state)
+  | obsoleteRunUnlinkError (cut : NativeObsoleteRunUnlinkCut state) (error : NativeObsoleteRunUnlinkError cut)
   | closeThenRetryAndReopen (inputs : List FilePath) (input : FilePath)
       (observed : NativeRejectedOpenReopenObservation state inputs input)
 
@@ -509,10 +535,12 @@ def NativeExecutionObservation.instruction : NativeExecutionObservation state �
   | .checkpointThenCloseAndReopen input _ => .checkpointThenCloseAndReopen input
   | .planWalCollection _ => .planWalCollection
   | .rotateCreated _ | .rotateExisting _ | .rotateEmpty _ => .rotateWal
+  | .rotateThenCloseAndReopen input _ _ _ => .rotateThenCloseAndReopen input
   | .checkpointThenPowerLossAndReopen input _ => .checkpointThenPowerLossAndReopen input
   | .collectObsoleteRuns observed => .collectObsoleteRuns observed.reports.held
   | .rewriteRun request => .rewriteRun request
   | .obsoleteRunCollectionError observed => .collectObsoleteRuns observed.reports.held
+  | .obsoleteRunUnlinkError cut _ => .collectObsoleteRuns cut.plan.reports.held
   | .closeThenRetryAndReopen inputs input _ => .closeThenRetryAndReopen inputs input
 
 theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
@@ -579,6 +607,10 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
     dsimp only
     rw [current.ready.readPrefix.refines.1.phase]
     exact runObservedRotationWithReset_empty _ _ _ lookup read create sync release empty
+  | rotateThenCloseAndReopen _ _ _ observe =>
+    obtain ⟨observed⟩ := observe current.ready.readPrefix.refines.1
+    obtain ⟨next, reopened⟩ := current.ready.recoversRotationError observed
+    exact ⟨_, _, .recoverRotationError current observed next reopened, rfl⟩
   | checkpointThenPowerLossAndReopen _ observed =>
     obtain ⟨next, reopened⟩ := current.ready.recoversCheckpointCrash observed
     exact ⟨_, _, .recoverCheckpointCrash current observed next reopened, rfl⟩
@@ -591,6 +623,9 @@ theorem NativeExecutionPosition.observesStep (current : NativeExecutionPosition)
   | obsoleteRunCollectionError observed =>
     obtain ⟨next, returned⟩ := current.ready.reachesObsoleteRunBarrierError observed
     exact ⟨_, _, .obsoleteRunCollectionError current observed next returned, rfl⟩
+  | obsoleteRunUnlinkError cut error =>
+    obtain ⟨next, returned⟩ := current.ready.reachesObsoleteRunUnlinkError cut error
+    exact ⟨_, _, .obsoleteRunUnlinkError current cut error next returned, rfl⟩
   | closeThenRetryAndReopen _ _ observed =>
     obtain ⟨closed, count, next, reopened⟩ := current.ready.retriesAndReopens observed
     exact ⟨_, _, .recoverRejectedOpenSequence current observed next closed count reopened, rfl, rfl⟩
@@ -697,12 +732,12 @@ theorem BootstrapZeroCreateError.executesAfterCreateError
         ∃ events last, NativeExecutionInstructions instructions events ∧ NativeExecutionTrace start events last ∧
           InstalledClientReplay last.submissions last.ready.reads last.history
             last.ready.state.writer.installed last.ready.state.session := by
-  obtain ⟨failed, _, _, _, _, _, boot, returned, _, _, _, _, _, _, prefix⟩ :=
+  obtain ⟨failed, _, _, _, _, _, boot, returned, _, _, _, _, _, _, readyPrefix⟩ :=
     failure.reopensAfterCreateError cleanup admission disposed acquired namespaceView root publication effects
   let state : NativeReadyState :=
     ⟨boot.session, boot.writer, effects.reached, nextCapture.cache, nextCalls.slot, nextCapture.cached⟩
   let start : NativeExecutionPosition :=
-    ⟨[], [], ⟨.ok state.session (state.census, state.files), state, state, [], prefix⟩⟩
+    ⟨[], [], ⟨.ok state.session (state.census, state.files), state, state, [], readyPrefix⟩⟩
   exact ⟨boot, start, failed, returned, rfl, rfl, rfl, rfl, NativeExecutionTrace.executes start⟩
 
 end Alvoki.Storage.DiskSession
