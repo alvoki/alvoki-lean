@@ -172,6 +172,35 @@ theorem readIntegrityRunBytesSized_prefix_of_reports {state : Type} (dir : DiskD
     (fun index within => reported index (count ▸ within))
   simpa only [count] using exact
 
+/-- A failed indexed callback has no suffix. The successful prefix
+uses the same manifest stamps and its actual reached state. -/
+private theorem readIntegrityRunBytesSized_stopsAt {state : Type} (dir : DiskDirectory)
+    (manifest : IntegrityCheckpoint) (readSize : FilePath → EStateM IO.Error state Nat)
+    (readPrefix : FilePath → Nat → EStateM IO.Error state ByteArray)
+    {index : Nat} {initial prior observed : state} {previous : List ByteArray} {cause : IO.Error}
+    (within : index < manifest.header.runCount.toNat)
+    (earlier : readIntegrityRunBytesSized dir
+        { manifest with header := { manifest.header with runCount := index.toUInt64 } }
+        readSize readPrefix initial = .ok previous prior)
+    (failed : readStampedRun dir manifest.runs.toArray readSize readPrefix manifest.header.generation index prior =
+      .error cause observed) :
+    readIntegrityRunBytesSized dir manifest readSize readPrefix initial = .error cause observed := by
+  have countFits := Nat.lt_trans within manifest.header.runCount.toNat_lt_size
+  have countExact : index.toUInt64.toNat = index := UInt64.toNat_ofNat_of_lt' countFits
+  have countSplit : index + 1 + (manifest.header.runCount.toNat - (index + 1)) =
+      manifest.header.runCount.toNat := Nat.add_sub_of_le within
+  have indices : List.range manifest.header.runCount.toNat = List.range index ++ index ::
+      (List.range (manifest.header.runCount.toNat - (index + 1))).map ((index + 1) + ·) := by
+    calc
+      List.range manifest.header.runCount.toNat =
+          List.range (index + 1 + (manifest.header.runCount.toNat - (index + 1))) :=
+        congrArg List.range countSplit.symm
+      _ = _ := by rw [List.range_add, List.range_succ]; simp
+  simp only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, countExact] at earlier
+  change (readIntegrityRunBytesSized dir manifest readSize readPrefix) initial = .error cause observed
+  simp [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, indices, List.mapM_append, List.mapM_cons,
+    Bind.bind, EStateM.bind, earlier, failed]
+
 /-- A run with a rejected extent stops the ordered reader after the size
 callback. The shortened loop supplies the actual reached state for the
 preceding indices and uses the same stamps as the complete loop. -/
@@ -187,23 +216,10 @@ theorem readIntegrityRunBytesSized_rejectsExtent {state : Type} (dir : DiskDirec
     (wrong : ¬ (actual = stamp.byteCount.toNat ∧ stamp.byteCount.toNat < USize.size)) :
     readIntegrityRunBytesSized dir manifest readSize readPrefix initial =
       .error (IO.userError checkpointIntegrityMismatch) observed := by
-  have countFits := Nat.lt_trans within manifest.header.runCount.toNat_lt_size
-  have countExact : index.toUInt64.toNat = index := UInt64.toNat_ofNat_of_lt' countFits
-  have countSplit : index + 1 + (manifest.header.runCount.toNat - (index + 1)) =
-      manifest.header.runCount.toNat := Nat.add_sub_of_le within
-  have indices : List.range manifest.header.runCount.toNat = List.range index ++ index ::
-      (List.range (manifest.header.runCount.toNat - (index + 1))).map ((index + 1) + ·) := by
-    calc
-      List.range manifest.header.runCount.toNat =
-          List.range (index + 1 + (manifest.header.runCount.toNat - (index + 1))) :=
-        congrArg List.range countSplit.symm
-      _ = _ := by rw [List.range_add, List.range_succ]; simp
+  apply readIntegrityRunBytesSized_stopsAt dir manifest readSize readPrefix within earlier
   have reject := readExactRecoveryFileWith_rejectsSize (dir.file (.run manifest.header.generation index))
     stamp.byteCount.toNat runExtentError readSize readPrefix sized wrong
-  simp only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, countExact] at earlier
-  change (readIntegrityRunBytesSized dir manifest readSize readPrefix) initial = .error runExtentError observed
-  simp [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, indices, List.mapM_append, List.mapM_cons,
-    Bind.bind, EStateM.bind, earlier, readStampedRun, stampAt, reject]
+  simpa [readStampedRun, stampAt, runExtentError] using reject
 
 /-- Size rejection returns from checkpoint acquisition with the reached
 state before opening that run's payload or restoring the table. -/
@@ -225,6 +241,33 @@ theorem readIntegrityCheckpointSized_rejectsExtent {state : Type} (dir : DiskDir
       .error (IO.userError checkpointIntegrityMismatch) observed := by
   have rejected := readIntegrityRunBytesSized_rejectsExtent dir manifest readSize readPrefix within stampAt
     earlier sized wrong
+  simp [readIntegrityCheckpointSized, Bind.bind, EStateM.bind, liftExcept, Except.mapError,
+    Pure.pure, EStateM.pure, manifestRead, decoded, rejected]
+
+/-- A reported payload error on the admitted run propagates through the
+same ordered reader before opening another run or restoring the table. -/
+theorem readIntegrityCheckpointSized_rejectsRead {state : Type} (dir : DiskDirectory)
+    (readManifest : EStateM IO.Error state (Option ByteArray))
+    (readSize : FilePath → EStateM IO.Error state Nat)
+    (readPrefix : FilePath → Nat → EStateM IO.Error state ByteArray)
+    {bytes : ByteArray} {manifest : IntegrityCheckpoint} {index : Nat} {stamp : RunIntegrity}
+    {initial listed prior measured released : state} {previous : List ByteArray} {cause : IO.Error}
+    (manifestRead : readManifest initial = .ok (some bytes) listed)
+    (decoded : IntegrityCheckpoint.decode bytes = .ok manifest)
+    (within : index < manifest.header.runCount.toNat) (stampAt : manifest.runs[index]? = some stamp)
+    (earlier : readIntegrityRunBytesSized dir
+        { manifest with header := { manifest.header with runCount := index.toUInt64 } }
+        readSize readPrefix listed = .ok previous prior)
+    (fits : stamp.byteCount.toNat < USize.size)
+    (sized : readSize (dir.file (.run manifest.header.generation index)) prior =
+      .ok stamp.byteCount.toNat measured)
+    (failed : readPrefix (dir.file (.run manifest.header.generation index)) stamp.byteCount.toNat measured =
+      .error cause released) :
+    readIntegrityCheckpointSized dir readManifest readSize readPrefix initial = .error cause released := by
+  have stopped : readStampedRun dir manifest.runs.toArray readSize readPrefix manifest.header.generation index prior =
+      .error cause released := by
+    simp [readStampedRun, readExactRecoveryFileWith, stampAt, Bind.bind, EStateM.bind, sized, fits, failed]
+  have rejected := readIntegrityRunBytesSized_stopsAt dir manifest readSize readPrefix within earlier stopped
   simp [readIntegrityCheckpointSized, Bind.bind, EStateM.bind, liftExcept, Except.mapError,
     Pure.pure, EStateM.pure, manifestRead, decoded, rejected]
 

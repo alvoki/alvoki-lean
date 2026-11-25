@@ -45,13 +45,29 @@ private theorem appendPrefixChunk (bytes chunk : ByteArray) :
     rw [ByteArray.size_eq_zero_iff.mp zero, ByteArray.empty_append]
   · rfl
 
-theorem readExactPrefixWith_readError (mismatch : IO.Error)
-    (read : USize → EStateM IO.Error Nat ByteArray) {remaining offset next : Nat} {bytes : ByteArray}
+theorem readExactPrefixWith_readError {state : Type} (mismatch : IO.Error)
+    (read : USize → EStateM IO.Error state ByteArray) {remaining : Nat} {offset next : state} {bytes : ByteArray}
     {cause : IO.Error} (pending : remaining ≠ 0)
     (reported : read remaining.toUSize offset = .error cause next) :
     readExactPrefixWith mismatch read remaining bytes offset = .error cause next := by
   rw [readExactPrefixWith]
   simp only [pending, ↓reduceIte, Bind.bind, EStateM.bind, reported]
+
+/-- A positive short chunk continues on the same callback with the
+remaining byte count. A later read error keeps its own diagnostic. -/
+theorem readExactPrefixWith_shortThenError {state : Type} (mismatch : IO.Error)
+    (read : USize → EStateM IO.Error state ByteArray) {count : Nat} {before afterChunk failed : state}
+    {chunk : ByteArray} {cause : IO.Error}
+    (positive : 0 < chunk.size) (short : chunk.size < count)
+    (first : read count.toUSize before = .ok chunk afterChunk)
+    (second : read (count - chunk.size).toUSize afterChunk = .error cause failed) :
+    readExactPrefixWith mismatch read count ByteArray.empty before = .error cause failed := by
+  rw [readExactPrefixWith]
+  have remaining : count - chunk.size ≠ 0 := by omega
+  have valid : 0 < chunk.size ∧ chunk.size ≤ count := ⟨positive, Nat.le_of_lt short⟩
+  have nonzero : count ≠ 0 := by omega
+  simp only [nonzero, ↓reduceIte, Bind.bind, EStateM.bind, first, valid]
+  exact readExactPrefixWith_readError mismatch read remaining second
 
 theorem readExactPrefixWith_badChunk (mismatch : IO.Error)
     (read : USize → EStateM IO.Error Nat ByteArray) {remaining offset next : Nat} {bytes chunk : ByteArray}

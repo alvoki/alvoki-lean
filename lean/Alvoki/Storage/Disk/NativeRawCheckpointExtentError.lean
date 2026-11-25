@@ -12,10 +12,9 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {in
   {seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock}
   {fileCalls : MarkedTemporaryReadCalls heap}
 
-/-- Every run before the wrong extent supplies its selected bytes and
-closes its temporary descriptor. The bad run's no-follow stat reaches
-the selected child without opening a payload handle. -/
-structure RawCheckpointExtentRead
+/-- Every earlier run supplies its selected bytes and closes its
+temporary descriptor. The next no-follow stat reaches the selected child. -/
+structure RawSelectedCheckpointRunStat
     (seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock)
     (fileCalls : MarkedTemporaryReadCalls heap) where
   index : Nat
@@ -30,13 +29,11 @@ structure RawCheckpointExtentRead
     .ok (metadata, admission.view.modelObject child.child)
   statRaw : let path := directory.file (.run reads.manifest.header.generation index)
     calls.lookup path (reads.atRun index) = .ok ((reads.reads.stat path).map Prod.fst) (reads.atRun index)
-  wrong : metadata.byteSize.toNat ≠ stamp.byteCount.toNat
-
-namespace RawCheckpointExtentRead
+namespace RawSelectedCheckpointRunStat
 
 /-- The stat is read-only. The selected run's size is measured at the
 heap reached by the earlier reads and releases. -/
-theorem measures (seen : RawCheckpointExtentRead (admitted := admitted) seed fileCalls) :
+theorem measures (seen : RawSelectedCheckpointRunStat (admitted := admitted) seed fileCalls) :
     fileCalls.runSize (directory.file (.run seen.reads.manifest.header.generation seen.index))
       (seen.reads.atRun seen.index) = .ok seen.metadata.byteSize.toNat (seen.reads.atRun seen.index) := by
   have stat := seen.statRaw
@@ -48,6 +45,30 @@ theorem measures (seen : RawCheckpointExtentRead (admitted := admitted) seed fil
   simp [MarkedTemporaryReadCalls.runSize, seen.reads.sameLookup, stat, seen.regular, liftExcept, Except.map,
     show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
 
+theorem readsEarlier (seen : RawSelectedCheckpointRunStat (admitted := admitted) seed fileCalls) :
+    readIntegrityRunBytesSized directory
+      { seen.reads.manifest with header := { seen.reads.manifest.header with runCount := seen.index.toUInt64 } }
+      fileCalls.runSize fileCalls.runPrefix (seen.reads.atRun 0) =
+      .ok ((List.range seen.index).map seen.reads.payload) (seen.reads.atRun seen.index) := by
+  have fits := Nat.lt_trans seen.within seen.reads.manifest.header.runCount.toNat_lt_size
+  exact seen.reads.readsPrefix rfl rfl (UInt64.toNat_ofNat_of_lt' fits)
+
+end RawSelectedCheckpointRunStat
+
+/-- A bad extent rejects the selected run before opening its payload. -/
+structure RawCheckpointExtentRead
+    (seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock)
+    (fileCalls : MarkedTemporaryReadCalls heap)
+    extends RawSelectedCheckpointRunStat (admitted := admitted) seed fileCalls where
+  wrong : metadata.byteSize.toNat ≠ stamp.byteCount.toNat
+
+namespace RawCheckpointExtentRead
+
+theorem measures (seen : RawCheckpointExtentRead (admitted := admitted) seed fileCalls) :
+    fileCalls.runSize (directory.file (.run seen.reads.manifest.header.generation seen.index))
+      (seen.reads.atRun seen.index) = .ok seen.metadata.byteSize.toNat (seen.reads.atRun seen.index) :=
+  seen.toRawSelectedCheckpointRunStat.measures
+
 /-- The exact production reader returns before reading the bad run's
 payload, visiting a later run or loading the checkpoint table. -/
 theorem rejects (seen : RawCheckpointExtentRead (admitted := admitted) seed fileCalls) :
@@ -56,12 +77,9 @@ theorem rejects (seen : RawCheckpointExtentRead (admitted := admitted) seed file
         .error (IO.userError checkpointIntegrityMismatch) (seen.reads.atRun seen.index) ∧
     MarkedReadCacheFrame seed seed.afterPending (seen.reads.atRun seen.index) ∧
     (view.descriptors (seen.reads.atRun seen.index)).inode = admission.reached.inode := by
-  have fits := Nat.lt_trans seen.within seen.reads.manifest.header.runCount.toNat_lt_size
-  let earlier := { seen.reads.manifest with header := { seen.reads.manifest.header with runCount := seen.index.toUInt64 } }
-  have ran := seen.reads.readsPrefix (manifest := earlier) rfl rfl (UInt64.toNat_ofNat_of_lt' fits)
   refine ⟨?_, seen.reads.frames (Nat.le_refl _)⟩
   exact readIntegrityCheckpointSized_rejectsExtent directory _ _ _ seen.reads.readsManifest seen.reads.decoded
-    seen.within seen.stamped ran seen.measures (fun accepted => seen.wrong accepted.1)
+    seen.within seen.stamped seen.toRawSelectedCheckpointRunStat.readsEarlier seen.measures (fun accepted => seen.wrong accepted.1)
 
 end RawCheckpointExtentRead
 

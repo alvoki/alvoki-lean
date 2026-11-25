@@ -74,8 +74,8 @@ theorem readsSelected (seen : RawAbsentManifestMarkerPrefix (admitted := admitte
     seen.sameSlot.trans (congrArg (fun handle : CheckpointOpenHandle => handle.2.1) opened), ?_, after,
     ?_⟩
   · simp only [optionalMetadataWith, Bind.bind, EStateM.bind, stat, Pure.pure, EStateM.pure]
-  · simp only [MarkedTemporaryReadCalls.readWith, Bind.bind, EStateM.bind, seen.openedRaw, seen.readRaw,
-      seen.releasedRaw, Pure.pure, EStateM.pure]
+  · simp only [MarkedTemporaryReadCalls.readWith, seen.openedRaw, seen.readRaw, SyncHandleRouting.dataErrorDropState,
+      seen.releasedRaw]
   · rw [opened]
     exact seen.marker.calls.identifiedOpen.symm.trans
       (congrArg admission.view.modelObject (seen.marker.calls.openLookup.child_eq seen.marker.bound))

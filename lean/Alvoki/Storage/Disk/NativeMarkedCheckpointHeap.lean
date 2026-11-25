@@ -1,8 +1,9 @@
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
+import Alvoki.Storage.Disk.StagedHandleCustody
 
 namespace Alvoki.Storage.DiskSession
 
-open System Manifest WalSegmentRepair
+open System Manifest WalSegmentRepair SyncHandleRouting
 
 structure MarkedTemporaryReadCalls (heap : Type) where
   stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)
@@ -10,14 +11,26 @@ structure MarkedTemporaryReadCalls (heap : Type) where
   readChunk : IO.FS.Handle → USize → EStateM IO.Error heap ByteArray
   release : IO.FS.Handle → EStateM IO.Error heap Unit
 
-/-- Successful read scope with the observed release of its temporary
-handle. The native adapter releases this handle when its scope exits. -/
+/-- The returned read drops the unretained handle on either outcome.
+The pinned runtime ignores the finalizer status. No handle was acquired
+when the open itself fails. -/
 def MarkedTemporaryReadCalls.readWith (calls : MarkedTemporaryReadCalls heap) (path : FilePath)
-    (read : IO.FS.Handle → EStateM IO.Error heap ByteArray) : EStateM IO.Error heap ByteArray := do
-  let file ← calls.openRead path
-  let bytes ← read file
-  calls.release file
-  pure bytes
+    (read : IO.FS.Handle → EStateM IO.Error heap ByteArray) : EStateM IO.Error heap ByteArray := fun before =>
+  match calls.openRead path before with
+  | .error cause reached => .error cause reached
+  | .ok file opened =>
+    match read file opened with
+    | .ok bytes reached => .ok bytes (dataErrorDropState calls.release file reached)
+    | .error cause reached => .error cause (dataErrorDropState calls.release file reached)
+
+theorem MarkedTemporaryReadCalls.readWith_error (calls : MarkedTemporaryReadCalls heap)
+    (path : FilePath) (read : IO.FS.Handle → EStateM IO.Error heap ByteArray)
+    {before opened failed : heap} {file : IO.FS.Handle} {cause : IO.Error}
+    (openedRaw : calls.openRead path before = .ok file opened)
+    (readRaw : read file opened = .error cause failed) :
+    calls.readWith path read before =
+      .error cause (dataErrorDropState calls.release file failed) := by
+  simp only [readWith, openedRaw, readRaw]
 
 private def MarkedTemporaryReadCalls.readMetadata (calls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
     (path : FilePath) (metadata : IO.FS.Metadata) (file : IO.FS.Handle) : EStateM IO.Error heap ByteArray :=
@@ -152,8 +165,7 @@ theorem RawTemporaryReadReport.returns {observations : CheckpointRunChunkReads} 
     (report : RawTemporaryReadReport observations seed calls path drops read bytes before after) :
     calls.readWith path read before = .ok bytes after ∧ MarkedReadCacheFrame seed before after := by
   refine ⟨?_, (report.openFrame.trans report.readFrame).trans report.releaseFrame⟩
-  simp [MarkedTemporaryReadCalls.readWith, Bind.bind, EStateM.bind, report.openedRaw, report.readRaw,
-    report.releasedRaw, Pure.pure, EStateM.pure]
+  simp only [MarkedTemporaryReadCalls.readWith, report.openedRaw, report.readRaw, dataErrorDropState, report.releasedRaw]
 
 theorem RawTemporaryReadReport.censusAfter {observations : CheckpointRunChunkReads} {calls : MarkedTemporaryReadCalls heap}
     {read : IO.FS.Handle → EStateM IO.Error heap ByteArray}

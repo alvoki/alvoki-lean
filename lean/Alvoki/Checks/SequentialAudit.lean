@@ -316,6 +316,7 @@ import Alvoki.Storage.Disk.NativeFinalizedListingRetry
 import Alvoki.Storage.Disk.NativeRawPresentManifestListing
 import Alvoki.Storage.Disk.NativeRawCheckpointDigestError
 import Alvoki.Storage.Disk.NativeRawCheckpointExtentError
+import Alvoki.Storage.Disk.NativeRawCheckpointChunkError
 import Alvoki.Storage.Disk.NativeRawFinalizedManifestError
 import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
 import Alvoki.Storage.Disk.NativeRawFlatWalOpenError
@@ -1834,6 +1835,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.selectedRun
 #check_axioms Alvoki.Storage.WalSegmentRepair.readIntegrityCheckpointSized_fromSelectedReads
 #check_axioms Alvoki.Storage.DiskSession.RawTemporaryReadReport.returns
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readWith_error
 #check_axioms Alvoki.Storage.DiskSession.RawTemporaryReadReport.censusAfter
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.measuresRun
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperReadHeap.readsBeforeRelease
@@ -1972,6 +1974,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointExtentRead.measures
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointExtentRead.rejects
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointExtentRead.finalizedAttempt
+#check_axioms Alvoki.Storage.DiskSession.RawSelectedCheckpointRunStat.measures
+#check_axioms Alvoki.Storage.DiskSession.RawSelectedCheckpointRunStat.readsEarlier
+#check_axioms Alvoki.Storage.DiskSession.RawCheckpointChunkReadError.releasesSelected
+#check_axioms Alvoki.Storage.DiskSession.RawCheckpointChunkReadError.rejects
+#check_axioms Alvoki.Storage.DiskSession.RawCheckpointChunkReadError.finalizedAttempt
 #check_axioms Alvoki.Storage.DiskSession.RawAbsentManifestMarkerPrefix.readsSelected
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.stops
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.sameStream
@@ -2819,6 +2826,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.HeldCheckpointDigestFailure.reachesCleanup
 #check_axioms Alvoki.Storage.DiskSession.HeldCheckpointDigestFailure.continues
 #check_axioms Alvoki.Storage.readExactPrefixWith_readError
+#check_axioms Alvoki.Storage.readExactPrefixWith_shortThenError
 #check_axioms Alvoki.Storage.readExactPrefixWith_badChunk
 #check_axioms Alvoki.Storage.readExactPrefixWith_success
 #check_axioms Alvoki.Storage.readExactPrefixWith_completes
@@ -3408,6 +3416,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_reportedEffects
 #check_axioms Alvoki.Storage.readIntegrityRunBytesSized_rejectsExtent
 #check_axioms Alvoki.Storage.readIntegrityCheckpointSized_rejectsExtent
+#check_axioms Alvoki.Storage.readIntegrityCheckpointSized_rejectsRead
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_acquiredRecoveryError
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_checkpointError
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedCheckpointError
