@@ -1381,8 +1381,10 @@ theorem recoveredRetries_installedReads
     {marker settledMarker : WalInodeImage} {markerHandle : KeeperDescriptorIdentity}
     (markerInventory : DiskSession.DescriptorInventory)
     (markerDrops : List DiskSession.LockReferenceDrop)
-    (markerIssuer : DiskSession.LockReference)
-    (markerLive : markerIssuer ∈ (markerInventory.afterDrops markerDrops).references markerHandle.description)
+    (markerSlot : DiskSession.DescriptorSlot)
+    (markerFree : ∀ slot ∈ markerInventory.slots, slot.address ≠ markerSlot.address)
+    (markerDescription : markerSlot.description = markerHandle.description)
+    (markerRetained : ∀ event ∈ markerDrops, event.removes markerSlot.reference = false)
     (markerInode : markerInventory.inode markerHandle.description = markerHandle.inode)
     (markerEffect : Storage.SyncHandleRouting.FsyncResult marker
       (marker.completeFileSync (markerInventory.inode markerHandle.description)) true (.ok () settledMarker))
@@ -1456,9 +1458,16 @@ theorem recoveredRetries_installedReads
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
   have logicalMarker : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
-  let markerSync := FsyncObservation.ofInventory markerInventory markerDrops
+  let acquiredInventory := markerInventory.insert markerSlot markerFree
+  have markerLive : markerSlot.reference ∈
+      (acquiredInventory.afterDrops markerDrops).references markerHandle.description := by
+    rw [DiskSession.DescriptorInventory.references_afterDrops,
+      DiskSession.DescriptorInventory.references_insert, ite_eq_left markerDescription]
+    exact List.mem_filter.mpr ⟨List.mem_cons_self, List.all_eq_true.mpr (by simpa using markerRetained)⟩
+  let markerSync := FsyncObservation.ofInventory acquiredInventory markerDrops
     KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode markerHandle
-    markerIssuer markerLive markerInode marker (fun inode (files : WalInodeImage) => files.completeFileSync inode) markerEffect
+    markerSlot.reference markerLive markerInode marker
+    (fun inode (files : WalInodeImage) => files.completeFileSync inode) markerEffect
   obtain ⟨manifestWatermark, checkpointCovered, marker, length, binding, decoded, absolute⟩ :=
     DirectoryPublication.Bindings.walRange_accounting target.decoded
   have sameMarker := Option.some.inj (binding.symm.trans logicalMarker)

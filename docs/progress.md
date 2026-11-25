@@ -789,3 +789,8 @@ The client replay theorem derives the successful marker sync observation
 from the reached inventory's live issuing slot, its description-to-inode
 map and the syscall effect. The inventory at that call is still a report
 to be threaded from the earlier native recovery callbacks.
+
+The successful retry proof now inserts the observed marker slot into the
+pre-acquisition descriptor census. It derives the issuing reference
+from that allocation and the intervening drop reports. The caller
+still supplies those reports and the reached WAL and repair effects.
