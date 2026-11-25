@@ -2467,9 +2467,11 @@ def main (args : List String) : IO Unit := do
         "rotation did not preserve its sync error"
       expectRejectedWrite db "publication failed; reopen the database"
     finally db.close
-  | ["--two-slot-seed", path] =>
+  | ["--two-slot-seed", path, layout] =>
     let db ← TwoSlotDiskTable.open ⟨path⟩
-    try check ((← db.write 7 (some 99)) == 1) "wrong seeded sequence"
+    try
+      check ((← db.write 7 (some 99)) == 1) "wrong seeded sequence"
+      if layout == "rotated" then db.rotateWal
     finally db.close
   | ["--two-slot-submit-batch", path] =>
     let db ← TwoSlotDiskTable.open ⟨path⟩

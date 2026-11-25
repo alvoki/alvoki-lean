@@ -325,12 +325,14 @@ def check_batch_append_cut(binary, shim, root):
             "the fresh batch changed the checkpoint or sealed prefix")
 
 
-def check_two_slot_batch_cut(binary, shim, database, cut):
+def check_two_slot_batch_cut(binary, shim, database, cut, rotated):
     database.mkdir()
-    status, stderr = run_probe(binary, "--two-slot-seed", database)
+    status, stderr = run_probe(binary, "--two-slot-seed", database, "rotated" if rotated else "zero")
     require(status == 0, f"could not seed the two-slot database: {stderr}")
     marker = database / "WAL.commit"
-    wal = database / "WAL-segment-0"
+    sealed = database / "WAL-segment-0"
+    seed_bytes = sealed.read_bytes()
+    wal = database / f"WAL-segment-{int(rotated)}"
     old_marker = marker.read_bytes()
     old_wal = wal.read_bytes()
     with tempfile.TemporaryDirectory() as scratch:
@@ -357,7 +359,7 @@ def check_two_slot_batch_cut(binary, shim, database, cut):
                         "the interrupted positional write did not leave just its strict prefix")
             else:
                 require(new_marker == old_marker, "marker changed before the WAL sync")
-            require(new_wal.startswith(old_wal) and len(new_wal) == 3 * len(old_wal),
+            require(new_wal.startswith(old_wal) and len(new_wal) == len(old_wal) + 2 * len(seed_bytes),
                     "the complete batch was not visible at marker sync")
             status, stderr = run_probe(binary, "--two-slot-open-once", database)
             require(status != 0 and "database already open:" in stderr,
@@ -385,8 +387,10 @@ def check_two_slot_batch_cut(binary, shim, database, cut):
     require(status == 0, f"could not recover and extend the two-slot batch: {stderr}")
     retained = new_wal if cut == "marker-sync" else old_wal
     recovered_wal = wal.read_bytes()
-    require(recovered_wal.startswith(retained) and len(recovered_wal) == len(retained) + len(old_wal),
+    require(recovered_wal.startswith(retained) and len(recovered_wal) == len(retained) + len(seed_bytes),
             "recovery did not preserve the exact prefix and append one frame")
+    if rotated:
+        require(sealed.read_bytes() == seed_bytes, "two-slot retries modified the sealed WAL segment")
 
 
 def check_process_death(binary, shim, root, after_rename, rotated, detached, batch):
@@ -550,8 +554,9 @@ if __name__ == "__main__":
         check_manifest_acquisition(binary, shim, root / "manifest-acquisition")
         check_fork_exec_lock(binary, shim, root / "fork-exec")
         check_batch_append_cut(binary, shim, root / "batch-append-cut")
-        for cut in ("wal-sync", "slot-write", "marker-sync"):
-            check_two_slot_batch_cut(binary, shim, root / f"two-slot-{cut}", cut)
+        for rotated in (False, True):
+            for cut in ("wal-sync", "slot-write", "marker-sync"):
+                check_two_slot_batch_cut(binary, shim, root / f"two-slot-{int(rotated)}-{cut}", cut, rotated)
         for batch in (False, True):
             for rotated in (False, True):
                 for after_rename in (False, True):
@@ -564,5 +569,5 @@ if __name__ == "__main__":
     print("Read the manifest in two bounded phases and preserved its exact reopen and rejection outcomes.")
     print("Forked lock holder blocked reopen after owner exit and released the lock on exec.")
     print("Recovered the exact prior table after writer exit during a partial native batch append.")
-    print("Recovered the appropriate two-slot prefix after native publication cuts and two failed retries.")
+    print("Recovered and extended zero and rotated two-slot keepers after publication cuts and two failed retries.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")
