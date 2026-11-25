@@ -71,6 +71,46 @@ theorem Image.executeVersioned_exists (initial : Image) (next : VersionedRunSet)
     (Publication.successful_replace written.manifest next.manifest.encode) (cut - (runBarrier next.files.length).length)
   exact ⟨{ written with manifest }, by simp [Image.executeVersioned, runPrefix, Publication.Image.execute, manifestPrefix]⟩
 
+/-- An interruption at the first directory barrier may settle the new
+run names. Neither outcome reaches any manifest step. Before the effect,
+the publication model still omits the new generation's orphan files. -/
+theorem Image.executeVersioned_atRunDirectory (initial : Image) (next : VersionedRunSet) (effective : Bool) :
+    ∃ after, initial.executeVersioned next
+        ((runSteps next.files.length).length + (if effective then 1 else 0)) = some after ∧
+      after.manifest = initial.manifest ∧
+      (effective = false → after = initial) ∧
+      (effective = true → ∀ index, after.durable next.manifest.header.generation index = next.files[index]?) ∧
+      (∀ generation, generation ≠ next.manifest.header.generation →
+        ∀ index, after.durable generation index = initial.durable generation index) := by
+  obtain ⟨written, ran, unchanged, exactRuns, older⟩ := checkpoint_runs_complete initial next.runSet
+  have barrierLength : (runBarrier next.files.length).length = (runSteps next.files.length).length + 1 := by
+    simp [runBarrier]
+  cases effective with
+  | false =>
+    obtain ⟨prior, prefixRan⟩ := Image.execute_take_exists ran (runSteps next.files.length).length
+    change initial.execute next.runSet ((runBarrier next.files.length).take (runSteps next.files.length).length) =
+      some prior at prefixRan
+    have onlyRuns : (runBarrier next.files.length).take (runSteps next.files.length).length =
+        (runSteps next.files.length).take (runSteps next.files.length).length := by
+      simp [runBarrier]
+    rw [onlyRuns] at prefixRan
+    have same := Image.execute_run_cut_unchanged prefixRan
+    subst prior
+    rw [List.take_length] at prefixRan
+    have computed : initial.executeVersioned next ((runSteps next.files.length).length + 0) = some initial := by
+      simp [Image.executeVersioned, barrierLength, onlyRuns, prefixRan, Publication.Image.execute]
+    exact ⟨initial, computed, rfl, fun _ => rfl, by simp, fun _ _ _ => rfl⟩
+  | true =>
+    have computed : initial.executeVersioned next ((runSteps next.files.length).length + 1) = some written := by
+      rw [← barrierLength, Image.executeVersioned, List.take_length, Nat.sub_self, List.take_zero]
+      change (do
+        let after ← initial.execute next.runSet (runBarrier next.files.length)
+        let manifest ← after.manifest.execute next.manifest.encode []
+        return { after with manifest }) = some written
+      rw [show initial.execute next.runSet (runBarrier next.files.length) = some written from ran]
+      rfl
+    exact ⟨written, computed, unchanged, by simp, fun _ => exactRuns, older⟩
+
 /-- A complete integrity checkpoint publishes the exact ordered runs and the
 v2 manifest built from their fingerprints. WAL coverage and the caller's
 semantic checkpoint witness are explicit. -/

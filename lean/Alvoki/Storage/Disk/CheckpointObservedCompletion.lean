@@ -8,7 +8,9 @@ open System
 open DiskSession SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
-private theorem runSteps_returned {state : Type} (perform : Step → EStateM IO.Error state Unit)
+/-- Every reached write and file-sync pair composes into the exact run
+prefix, before the first directory barrier is called. -/
+theorem runSteps_returned {state : Type} (perform : Step → EStateM IO.Error state Unit)
     (count : Nat) (atRun : Nat → state)
     (pairs : ∀ index < count,
       (perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (atRun index) =
@@ -61,6 +63,28 @@ theorem SuccessfulCheckpointSteps.returns {state : Type} {perform : Step → ESt
     Bind.bind, observed.syncRunsDirectory, observed.stageManifest, observed.syncManifest, observed.renameManifest,
     observed.syncManifestDirectory, Pure.pure, EStateM.pure]
 
+/-- The completed run pairs retain the exact bytes at every earlier
+selected run address before any directory barrier. -/
+theorem visibleSyncedRunPrefix {state : Type} (atRun : Nat → state) (count : Nat)
+    (runs : state → RunUnlinkImage) (generation : UInt64) (files : List ByteArray)
+    (synced : ∀ index < count, (runs (atRun (index + 1))).visible generation index = files[index]?)
+    (preserved : ∀ index < count, ∀ prior < index,
+      (runs (atRun (index + 1))).visible generation prior = (runs (atRun index)).visible generation prior) :
+    ∀ index < count, (runs (atRun count)).visible generation index = files[index]? := by
+  have syncedPrefix (through : Nat) (within : through ≤ count) :
+      ∀ index < through, (runs (atRun through)).visible generation index = files[index]? := by
+    induction through with
+    | zero => omega
+    | succ count ih =>
+      intro index inside
+      by_cases same : index = count
+      · subst index
+        exact synced count within
+      · have prior : index < count := by omega
+        rw [preserved count within index prior]
+        exact ih (Nat.le_trans (Nat.le_succ _) within) index prior
+  exact syncedPrefix count (Nat.le_refl _)
+
 /-- Synced run bytes accumulate before the run directory barrier. That
 barrier settles the run names. The subsequent manifest callbacks preserve
 the run view until the final directory barrier, which settles it again. -/
@@ -78,18 +102,7 @@ theorem SuccessfulCheckpointSteps.durableRuns {state : Type}
     (rename : runs observed.renamed = runs observed.stagedSynced)
     (manifestNames : runs observed.completed = (runs observed.renamed).syncDirectory) :
     ∀ index < count, (runs observed.completed).guaranteed generation index = files[index]? := by
-  have syncedPrefix (through : Nat) (within : through ≤ count) :
-      ∀ index < through, (runs (observed.atRun through)).visible generation index = files[index]? := by
-    induction through with
-    | zero => omega
-    | succ count ih =>
-      intro index inside
-      by_cases same : index = count
-      · subst index
-        exact synced count within
-      · have prior : index < count := by omega
-        rw [preserved count within index prior]
-        exact ih (Nat.le_trans (Nat.le_succ _) within) index prior
+  have syncedPrefix := visibleSyncedRunPrefix observed.atRun count runs generation files synced preserved
   have settled : runs observed.completed = .settled (runs (observed.atRun count)).visible := by
     rw [manifestNames, rename, manifestData, stage, runNames]
     rfl
@@ -97,7 +110,7 @@ theorem SuccessfulCheckpointSteps.durableRuns {state : Type}
   rw [settled]
   exact congrFun (congrFun (congrArg Image.durable
     (RunUnlinkImage.project_settled (runs (observed.atRun count)).visible (.settled none))) generation) index
-    |>.trans (syncedPrefix count (Nat.le_refl _) index inside)
+    |>.trans (syncedPrefix index inside)
 
 /-- The manifest's own four reached effects settle the new manifest bytes
 at the same physical endpoint as the run guarantees. -/
@@ -140,30 +153,32 @@ structure CheckpointBindingReports {state : Type} {perform : Step → EStateM IO
 exact run-pair returns and the observed inode bindings. The file sync
 preserves the pathname binding. The run namespace at the same returned
 state uses the known synced inode bytes at that address. -/
-theorem SuccessfulCheckpointSteps.syncedRunsFromInodes {handle : Type}
+theorem syncedRunsFromInodes {handle : Type}
     {perform : Step → EStateM IO.Error (Cache handle × WalInodeImage) Unit}
     (directory : DiskDirectory) (generation : UInt64) (table : PackedTable)
-    (observed : SuccessfulCheckpointSteps perform table.runs.length)
+    (atRun : Nat → Cache handle × WalInodeImage)
+    (pairs : ∀ index < table.runs.length,
+      (perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (atRun index) = .ok () (atRun (index + 1)))
     (runs : Cache handle × WalInodeImage → RunUnlinkImage)
     (bindings : WalInodeImage → FilePath → Option Nat)
     (projects : ∀ index < table.runs.length,
-      let endpoint := observed.atRun (index + 1)
+      let endpoint := atRun (index + 1)
       (runs endpoint).visible generation index =
         knownSyncedRunBytes directory (bindings endpoint.2) endpoint.2 generation index)
     (reported : ∀ index < table.runs.length,
       ∃ (run : Compaction.CheckedRun) (cache : Cache handle) (flushed : WalInodeImage) (inode : Nat),
       let pathname := directory.file (.run generation index)
       table.runs.toArray[index]? = some run ∧
-      (perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (observed.atRun index) =
+      (perform (.writeRun index) >>= fun _ => perform (.syncRun index)) (atRun index) =
         .ok () (cache, flushed.completeFileSync inode) ∧
       bindings flushed pathname = some inode ∧
       bindings (flushed.completeFileSync inode) pathname = bindings flushed pathname ∧
       flushed.visible inode = run.run.bytes) :
     ∀ index < table.runs.length,
-      (runs (observed.atRun (index + 1))).visible generation index = (table.runs.map (·.run.bytes))[index]? := by
+      (runs (atRun (index + 1))).visible generation index = (table.runs.map (·.run.bytes))[index]? := by
   intro index within
   obtain ⟨run, cache, flushed, inode, selected, returned, bound, unchanged, contents⟩ := reported index within
-  have endpoint := (EStateM.Result.ok.inj ((observed.pairs index within).symm.trans returned)).2
+  have endpoint := (EStateM.Result.ok.inj ((pairs index within).symm.trans returned)).2
   have atIndex : table.runs[index]? = some run := by simpa only [List.getElem?_toArray] using selected
   rw [projects index within, endpoint]
   rw [knownSyncedRunBytes_ofFileSync (unchanged.trans bound) contents]
