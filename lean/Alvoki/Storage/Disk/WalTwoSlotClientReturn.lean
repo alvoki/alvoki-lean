@@ -2884,7 +2884,6 @@ theorem recoveredRetries_installedReads
         decodeSlot bytes (slotIndex active.other) = none ∨
         decodeSlot bytes (slotIndex active.other) = some next))
     (selected : Selection)
-    (observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier))
     {plan : WalSegmentRepair.Plan} (preparedPlan : WalSegmentRepair.Prepared prepared target plan)
     {image : WalSegmentImage}
     {table : PackedTable} {log : List DatabaseSubmissions}
@@ -2966,6 +2965,8 @@ theorem recoveredRetries_installedReads
     (markerAvailable : PrefixChunksAvailableUntilEof (marker.visible markerHandle.inode)
       (markerReads.readChunk markerFile.calls.slot.description))
     (markerAccepted : decode (marker.visible markerHandle.inode) = .ok selected)
+    (markerProjects : projectBinding openedFrom.image.directory.active
+      (marker.visible markerHandle.inode) = .ok openedFrom.image.directory.active)
     {stabilize : KeeperDescriptorIdentity → EStateM IO.Error FileImage Unit}
     (markerChoices : List (DirectoryPublication.Bindings × Option ByteArray))
     (enumerated : markerChoices.map Prod.fst = prepared.directory.crashImages)
@@ -3044,6 +3045,11 @@ theorem recoveredRetries_installedReads
   let base := (checkpointResult.getD (.empty, 0)).1
   let readWal := fun start length =>
     WalSegmentRepair.readSelectedWithCachedExtents directory start length list lstat readSeal readKeeper
+  have observed : prepared.directory.active.walBoundary = some (Boundary.encode selected.frontier) := by
+    rw [projectBinding_decodes markerAccepted] at markerProjects
+    exact congrArg DirectoryPublication.Bindings.walBoundary
+      (congrArg (fun image : FileImage => image.directory.active) preparationPreservesFiles |>.trans
+        (Except.ok.inj markerProjects).symm)
   have logicalMarker : target.pair.walBoundary = some (Boundary.encode selected.frontier) :=
     congrArg DirectoryPublication.Bindings.walBoundary preparedPlan.pair.symm |>.trans observed
   have markerDescription : markerFile.calls.slot.description = markerHandle.description :=
