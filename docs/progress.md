@@ -107,6 +107,16 @@ approval derives which offsets in the ordered tail still name eligible seals aft
 error returns the reached files under the same poisoned owner before any tail callback or directory sync. The
 native contract supplies the local effects and the reported crash choices. [First unlink effect](../lean/Alvoki/Storage/Disk/WalCollectionFirstEffect.lean)
 
+The same proof now covers any finite sequence of returned callbacks in the original WAL collection plan.
+Each unlink uses the exact namespace reached by its predecessor. The callbacks preserve other inode bindings
+and carry the reported sealed crash choices into the ordered trace. A reported unlink error returns the reached
+files and diagnostic under the poisoned owner. An unchanged failure can stop before a lookup is observed.
+A prefix whose callbacks all succeed leaves the original pending
+suffix, or the directory barrier once all names were visited. The remaining eligible offsets equal that pending
+suffix with the detached names filtered out. An accepted ENOENT keeps the effect of an earlier removal. The
+proof takes local lookup, detach and survivor reports and reaches the directory barrier without interpreting its
+result. [Ordered unlink prefix](../lean/Alvoki/Storage/Disk/WalCollectionOrderedPrefix.lean)
+
 `DiskTable.collectCoveredWal` executes that preflight and the shared canonical unlink and directory-sync schedule under one lock. A failed preflight leaves the writer ready. The adapter poisons the session on a mutation error until it closes; a successful pass keeps the installed table and pins. Native tests inject errors before and after the real directory sync and check reopened data, the next append and the required barrier on an empty retry. Physical effect and descriptor reports remain the trusted boundary. [Native collector](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Fault tests](../lean/Alvoki/Checks/DiskTableChecks.lean)
 
 A reported collection error keeps its pending crash choices through the poisoned session's close. The mixed trace carries exact owner transitions through rejected acquisitions, failed read-only preparations, observed reference drops and reported directory barrier failures. Once an observed barrier settles the list, subsequent failures preserve that settlement. A healthy final bounded open preserves the loaded checkpoint and determines the exact returned writer. [Collection lock handoff](../lean/Alvoki/Storage/Disk/SegmentedCollectionLockHandoff.lean) · [Mixed reopen report](../lean/Alvoki/Storage/Disk/SegmentedCollectionLiveReopen.lean)
