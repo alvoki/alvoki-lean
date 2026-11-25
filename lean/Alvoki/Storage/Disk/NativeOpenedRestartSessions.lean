@@ -159,9 +159,6 @@ inductive NativeOpenedSessionAction : Type 1 where
       (inputs : List FilePath) (input : FilePath)
   | stoppedObsoleteRunUnlink (held : List UInt64) (input : FilePath)
 
-abbrev NativeOpenedSessionAction.stoppedCheckpointRunDirectoryReboot (input : FilePath) : NativeOpenedSessionAction :=
-  .stoppedCheckpointEarlyReboot .syncRunsDirectory input
-
 /-- Same-handle calls and the supported reopen routes compose at
 the exact handle and ready position reached by the preceding segment. -/
 inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
