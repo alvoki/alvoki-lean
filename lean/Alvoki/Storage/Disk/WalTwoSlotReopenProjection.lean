@@ -405,6 +405,26 @@ theorem prepareSelected_reported (directory : Storage.DiskDirectory) (selection 
   prepareBoundedMarkedFromReaders_reported directory readCheckpoint _ readWal checkpointRead
     rfl (Boundary.decode_encode selection.frontier) walRead replayed keeperRead
 
+/-- Reported cached reads satisfy the replay span check when their
+requested extents all start at or before the marker. -/
+theorem cachedPayloads_checkSpans {directory : Storage.DiskDirectory} {through : Nat}
+    {readSeal : System.FilePath → Nat → Except IO.Error ByteArray}
+    {readKeeper : System.FilePath → Nat → Nat → Except IO.Error ByteArray}
+    {required : List (Nat × IO.FS.Metadata)} {files : List (Nat × ByteArray)} {fileSize : Nat}
+    (reports : CachedWalPayloadReports directory through readSeal readKeeper required files fileSize)
+    (covered : ∀ entry ∈ required, entry.1 ≤ through) :
+    Storage.checkSelectedWalSegmentSpans through files = true := by
+  induction reports with
+  | @keeper first metadata bytes size _ _ =>
+    have within := covered (first, metadata) (by simp)
+    rw [Storage.checkSelectedWalSegmentSpans, Bool.and_eq_true, Storage.checkWalSegmentSpans_iff]
+    exact ⟨by simp [within], ⟨_, _, rfl, within⟩, .active (Nat.le_of_eq size.symm)⟩
+  | @sealed first next metadata nextMetadata bytes nextBytes rest later fileSize forward size _ _ _ _ ih =>
+    have within := covered (first, metadata) (by simp)
+    have tail := ih (fun entry member => covered entry (List.mem_cons_of_mem _ member))
+    rw [Storage.checkSelectedWalSegmentSpans, Bool.and_eq_true, Storage.checkWalSegmentSpans_iff] at tail ⊢
+    exact ⟨by simpa [within] using tail.1, ⟨_, _, rfl, within⟩, .sealed forward size tail.2.2⟩
+
 /-- The bounded read vector for the selected marker can omit bytes after
 its keeper. Given the retained replay from the same bytes, preparation
 returns that table and the physical keeper prefix for repair. -/
@@ -418,7 +438,12 @@ theorem prepareSelected_of_retainedReplay
     {firstBytes : ByteArray} {rest : List (Nat × ByteArray)}
     (files : reads.files = (first, firstBytes) :: rest)
     (aligned : selection.frontier.toNat % frameSize = 0)
-    (checked : Storage.checkSelectedWalSegmentSpans (selection.frontier.toNat / frameSize) reads.files = true)
+    {readSeal : System.FilePath → Nat → Except IO.Error ByteArray}
+    {readKeeper : System.FilePath → Nat → Nat → Except IO.Error ByteArray}
+    {required : List (Nat × IO.FS.Metadata)}
+    (reports : CachedWalPayloadReports directory (selection.frontier.toNat / frameSize)
+      readSeal readKeeper required reads.files fileSize)
+    (covered : ∀ entry ∈ required, entry.1 ≤ selection.frontier.toNat / frameSize)
     {physical tail payload : ByteArray} {table : Storage.PackedTable}
     (exactBytes : physical = Storage.walSegmentPayloadBytes reads.files ++ tail)
     (replayed : Boundary.recoverRetainedMarked (checkpoint.getD (.empty, 0)).1
@@ -430,6 +455,7 @@ theorem prepareSelected_of_retainedReplay
       .ok (⟨selection.frontier.toNat / frameSize, keeper, reads.newer, bytes⟩,
         ⟨table, (checkpoint.getD (.empty, 0)).2, selection.frontier, keeper⟩, fileSize) := by
   refine prepareSelected_reported (payload := payload) directory selection readCheckpoint readWal checkpointRead walRead ?_ keeperRead
+  have checked := cachedPayloads_checkSpans reports covered
   rw [files] at checked exactBytes ⊢
   rw [Storage.recoverMarkedWalSegments_eq_retained _ _ _ _ _ tail aligned checked, ← exactBytes]
   exact replayed
