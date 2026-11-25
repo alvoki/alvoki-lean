@@ -655,4 +655,43 @@ theorem reopenAcquiredWith_reports {ε σ handle plan opened : Type}
     cases second : reopenWith (prepare selection) (stabilize marker) finish acquired <;>
       simp [reopenAcquiredWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, first, second]
 
+/-- A successful marked reopen fixes the state handed to each callback,
+including the exact acquired marker and the repaired final state. -/
+theorem reopenAcquiredWith_success {ε σ handle plan opened : Type}
+    (acquire : EStateM ε σ (handle × Selection))
+    (prepare : Selection → EStateM ε σ (plan × opened × Nat))
+    (stabilize : handle → EStateM ε σ Unit) (finish : plan → Nat → EStateM ε σ Unit)
+    {initial after : σ} {table : opened} {marker : handle} {selection : Selection} :
+    reopenAcquiredWith acquire prepare stabilize finish initial = .ok (table, marker, selection) after ↔
+      ∃ acquired prepared settled work size,
+        acquire initial = .ok (marker, selection) acquired ∧
+        prepare selection acquired = .ok (work, table, size) prepared ∧
+        stabilize marker prepared = .ok () settled ∧
+        finish work size settled = .ok () after := by
+  constructor
+  · intro returned
+    rw [reopenAcquiredWith_reports] at returned
+    cases first : acquire initial with
+    | error => simp [first] at returned
+    | ok pair acquired =>
+      obtain ⟨held, selected⟩ := pair
+      simp only [first, reopenWith_reports] at returned
+      cases second : prepare selected acquired with
+      | error => simp [second] at returned
+      | ok result prepared =>
+        obtain ⟨work, recovered, size⟩ := result
+        cases third : stabilize held prepared with
+        | error => simp [second, third] at returned
+        | ok resultUnit settled =>
+          cases resultUnit
+          cases last : finish work size settled with
+          | error => simp [second, third, last] at returned
+          | ok resultUnit reached =>
+            cases resultUnit
+            simp only [second, third, last, EStateM.Result.ok.injEq, Prod.mk.injEq] at returned
+            rcases returned with ⟨⟨rfl, rfl, rfl⟩, rfl⟩
+            exact ⟨acquired, prepared, settled, work, size, rfl, second, third, last⟩
+  · rintro ⟨acquired, prepared, settled, work, size, first, second, third, last⟩
+    simp [reopenAcquiredWith_reports, reopenWith_reports, first, second, third, last]
+
 end Alvoki.WAL.TwoSlot

@@ -2720,6 +2720,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.TwoSlotDiskTable.openMarker_fileEffects
 #check_axioms Alvoki.Storage.TwoSlotDiskTable.reopen_fileEffects
 #check_axioms Alvoki.WAL.TwoSlot.reopenAcquiredWith_reports
+#check_axioms Alvoki.WAL.TwoSlot.reopenAcquiredWith_success
 #check_axioms Alvoki.WAL.TwoSlot.decode_markerFromHeldDirectory
 #check_axioms Alvoki.WAL.TwoSlot.reopenWith_markerSyncError
 #check_axioms Alvoki.WAL.TwoSlot.uncertainSurvivor_of_bytes

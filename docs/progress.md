@@ -865,3 +865,9 @@ preparation and repair reports.
 The merged zero-keeper creation failure proof unfolds the shared
 bootstrap worker with its selected marker encoder. This preserves the
 rename path's early-error proof on the two-slot experiment branch.
+
+A successful `reopenAcquiredWith` return now gives the exact state
+between marker acquisition, preparation, marker fsync and repair.
+The converse takes those four callback reports to the same returned
+table, marker and state. The native reports for the middle states
+still need to be connected to the client replay theorem.
