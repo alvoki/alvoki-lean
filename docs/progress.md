@@ -976,3 +976,9 @@ read proves that its reached census preserves the admitted object map.
 The enclosing chronological witness still needs to join that census to
 the marker acquisition and feed the sync and repair effects back into
 the installed session.
+
+Two-slot preparation now composes the shared checkpoint and bounded WAL
+read reports with replay of the selected history. It returns the exact
+plan and table at the reached keeper cache and descriptor census, and
+proves the marker slot is live there. The next composition must use
+this state directly for marker stabilization and keeper repair.
