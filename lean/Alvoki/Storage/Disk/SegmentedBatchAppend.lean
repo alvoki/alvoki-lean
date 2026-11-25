@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.WalBatchCommitReports
 import Alvoki.Storage.Disk.RetainedWriterState
 import Alvoki.Storage.Disk.AppendGroupedReports
+import Alvoki.Storage.Disk.WalBatchSession
 
 namespace Alvoki.Storage.DiskSession
 
@@ -87,6 +88,82 @@ theorem runBatchWrite_empty {image : Type} (directory : DiskDirectory) (installe
     runBatchWrite directory [] lookup append stage sync rename (.ready installed, before) =
       .ok installed.table.committed (.ready installed, before) := rfl
 
+private theorem activeGuard_readOnly {image : Type} (directory : DiskDirectory) (installed : Installed)
+    (lookup : FilePath → Except IO.Error IO.FS.Metadata) (before : image) :
+    checkActiveSegmentWith (m := EStateM IO.Error image) directory installed
+      (fun path => liftExcept (lookup path)) before =
+      match checkActiveSegmentWith directory installed lookup with
+      | .ok () => .ok () before
+      | .error cause => .error cause before := by
+  unfold checkActiveSegmentWith
+  cases found : lookup (directory.file (.walSegment installed.activeFirst)) with
+  | error cause =>
+    simp [found, liftExcept, Bind.bind, Except.bind, EStateM.bind] <;> rfl
+  | ok metadata =>
+    by_cases privateFile : (metadata.type == .file) = true ∧ metadata.numLinks = 1
+    · by_cases extent : metadata.byteSize.toNat = installed.walBytes - installed.activeFirst * WAL.frameSize <;>
+        simp [found, liftExcept, checkPrivateRegularWith, Bind.bind, Except.bind, EStateM.bind,
+          Pure.pure, Except.pure, EStateM.pure, privateFile, extent] <;> rfl
+    · simp [found, liftExcept, checkPrivateRegularWith, Bind.bind, Except.bind, EStateM.bind,
+        Pure.pure, EStateM.pure, privateFile] <;> rfl
+
+/-- A rejected batch returns the original phase, files, cache and owner.
+Its error is independent of every WAL publication callback. -/
+theorem runBatchWrite_rejected {image : Type} {directory : DiskDirectory}
+    {rows : List (UInt64 × Option UInt64)} {lookup : FilePath → Except IO.Error IO.FS.Metadata}
+    {append stage : FilePath → ByteArray → EStateM IO.Error image Unit}
+    {sync : Array FilePath → EStateM IO.Error image Unit}
+    {rename : FilePath → FilePath → EStateM IO.Error image Unit}
+    {phase : Phase Installed} {before : LockedFileState image}
+    {after : Phase Installed × LockedFileState image} {cause : IO.Error}
+    (rejected : runBatchWrite directory rows lookup append stage sync rename (phase, before) =
+      .error (.rejected cause) after)
+    (append' stage' : FilePath → ByteArray → EStateM IO.Error image Unit)
+    (sync' : Array FilePath → EStateM IO.Error image Unit)
+    (rename' : FilePath → FilePath → EStateM IO.Error image Unit) :
+    after = (phase, before) ∧
+    runBatchWrite directory rows lookup append' stage' sync' rename' (phase, before) =
+      .error (.rejected cause) (phase, before) := by
+  cases phase with
+  | poisoned =>
+    cases rejected
+    exact ⟨rfl, rfl⟩
+  | closed =>
+    cases rejected
+    exact ⟨rfl, rfl⟩
+  | ready installed =>
+    simp only [runBatchWrite, writeBatchSchedule, Phase.installed, Pure.pure, Except.pure,
+      Bind.bind, EStateM.bind] at rejected ⊢
+    by_cases empty : rows.isEmpty = true
+    · simp [empty, EStateM.pure] at rejected
+    simp only [ite_eq_right empty] at rejected ⊢
+    by_cases fits : installed.walBytes + WAL.frameSize * rows.length < UInt64.size
+    · simp only [ite_eq_left fits] at rejected ⊢
+      cases prepared : prepareBatch installed.table rows with
+      | none =>
+        rw [prepared] at rejected
+        cases rejected
+        exact ⟨rfl, rfl⟩
+      | some result =>
+        obtain ⟨events, table⟩ := result
+        simp only [prepared, EStateM.bind, EStateM.pure, observeWriteFiles, activeGuard_readOnly]
+          at rejected ⊢
+        cases checked : checkActiveSegmentWith directory installed lookup with
+        | error cause =>
+          rw [checked] at rejected
+          cases rejected
+          exact ⟨rfl, rfl⟩
+        | ok value =>
+          cases value
+          rw [checked] at rejected
+          cases ran : commitBytesAt directory installed.activeFirst (WAL.encodeBatch events)
+            (installed.walBytes + WAL.frameSize * rows.length) append stage sync rename before.image <;>
+            simp [publishPreparedWrite, publishPrepared, modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet,
+              Pure.pure, Bind.bind, EStateM.bind, EStateM.pure, observeWriteFiles, ran] at rejected
+    · simp only [ite_eq_right fits] at rejected ⊢
+      cases rejected
+      exact ⟨rfl, rfl⟩
+
 private theorem runBatchWrite_acknowledges {image : Type} {directory : DiskDirectory}
     {before : LockedFileState image} {written : image} {installed : Installed}
     (guard : BatchActiveGuard directory installed)
@@ -108,31 +185,65 @@ private theorem runBatchWrite_acknowledges {image : Type} {directory : DiskDirec
     publishPreparedWrite, publishPrepared, modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet,
     Pure.pure, Except.pure, EStateM.pure, committed]
 
-/-- Reports project the actual reached append and marker callbacks to the
-file effects used by the retained-writer proof. The reached cache is
-threaded through all callbacks, including the two consecutive file syncs. -/
-structure ObservedBatchWrite {directory before} (report : SegmentedBatchAppendReport directory before)
+private theorem runBatchWrite_commitUnknown {image : Type} {directory : DiskDirectory}
+    {before : LockedFileState image} {reached : image} {installed : Installed}
+    (guard : BatchActiveGuard directory installed)
+    {rows : List (UInt64 × Option UInt64)} (nonempty : rows ≠ [])
+    {batch : List WAL.Write} {table : PackedTable} (prepared : prepareBatch installed.table rows = some (batch, table))
+    (fits : installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {append stage : FilePath → ByteArray → EStateM IO.Error image Unit}
+    {sync : Array FilePath → EStateM IO.Error image Unit}
+    {rename : FilePath → FilePath → EStateM IO.Error image Unit} {cause : IO.Error}
+    (failed : commitBytesAt directory installed.activeFirst (WAL.encodeBatch batch)
+      (installed.walBytes + WAL.frameSize * rows.length) append stage sync rename before.image = .error cause reached) :
+    runBatchWrite directory rows guard.lookup append stage sync rename (.ready installed, before) =
+      .error (.commitUnknown cause) (.poisoned, { before with image := reached }) := by
+  have rowsPresent : rows.isEmpty = false := List.isEmpty_eq_false_iff.mpr nonempty
+  simp [runBatchWrite, writeBatchSchedule, Phase.installed, Bind.bind, EStateM.bind,
+    rowsPresent, fits, prepared, observeWriteFiles, guard.checked before.image,
+    publishPreparedWrite, publishPrepared, modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet,
+    Pure.pure, Except.pure, EStateM.pure, failed]
+
+/-- Project the reported native callbacks while retaining their reached cache.
+Only the append and marker steps actually reached need a report. -/
+structure ObservedBatchPublication (directory : DiskDirectory) (first : Nat) (bytes : ByteArray)
+    (count : Nat) (initial : WriteFiles)
+    (appendFiles stageFiles : FilePath → ByteArray → EStateM IO.Error WriteFiles Unit)
+    (syncFiles : Array FilePath → EStateM IO.Error WriteFiles Unit)
+    (renameFiles : FilePath → FilePath → EStateM IO.Error WriteFiles Unit)
     (handle : Type) where
-  guard : BatchActiveGuard directory before.installed
   cache : Cache handle
   append : FilePath → ByteArray → EStateM IO.Error (Cache handle × WriteFiles) Unit
   stage : FilePath → ByteArray → EStateM IO.Error (Cache handle × WriteFiles) Unit
   sync : Array FilePath → EStateM IO.Error (Cache handle × WriteFiles) Unit
   rename : FilePath → FilePath → EStateM IO.Error (Cache handle × WriteFiles) Unit
   appendProjects :
-    let files := WriteFiles.initial before.history (before.files.directory.staged .walBoundary)
-    let keeper := directory.file (.walSegment before.installed.activeFirst)
-    withoutWriteGroupCache (append keeper (WAL.encodeBatch report.batch) (cache, files)) =
-      report.append keeper (WAL.encodeBatch report.batch) files
+    let keeper := directory.file (.walSegment first)
+    withoutWriteGroupCache (append keeper bytes (cache, initial)) = appendFiles keeper bytes initial
   markerProjects : ∀ appended : Cache handle × WriteFiles,
-    append (directory.file (.walSegment before.installed.activeFirst)) (WAL.encodeBatch report.batch)
-      (cache, WriteFiles.initial before.history (before.files.directory.staged .walBoundary)) = .ok () appended →
+    append (directory.file (.walSegment first)) bytes (cache, initial) = .ok () appended →
     ∀ (prior : List Publication.Step) step remaining reached, Publication.steps = prior ++ step :: remaining →
-      let native := performMarkerAt directory before.installed.activeFirst report.nextInstalled.walBytes stage sync rename
+      let native := performMarkerAt directory first count stage sync rename
       (prior.forM native) appended = .ok () reached →
       withoutWriteGroupCache (native step reached) =
-        performMarkerAt directory before.installed.activeFirst report.nextInstalled.walBytes
-          report.stage report.sync report.rename step reached.2
+        performMarkerAt directory first count stageFiles syncFiles renameFiles step reached.2
+
+/-- The successful batch also reached the native private-keeper preflight. -/
+structure ObservedBatchWrite {directory before} (report : SegmentedBatchAppendReport directory before)
+    (handle : Type) extends
+      ObservedBatchPublication directory before.installed.activeFirst (WAL.encodeBatch report.batch)
+        report.nextInstalled.walBytes (WriteFiles.initial before.history (before.files.directory.staged .walBoundary))
+        report.append report.stage report.sync report.rename handle where
+  guard : BatchActiveGuard directory before.installed
+
+/-- The failed publication uses the same cache and callback projection as a
+successful batch after the active-file preflight. -/
+structure ObservedBatchFailure {directory before} (failure : SegmentedBatchFailure directory before)
+    (handle : Type) extends
+      ObservedBatchPublication directory before.installed.activeFirst (WAL.encodeBatch failure.batch)
+        failure.proposed.walBytes (WriteFiles.initial before.history (before.wal.directory.staged .walBoundary))
+        failure.append failure.stage failure.sync failure.rename handle where
+  guard : BatchActiveGuard directory before.installed
 
 private theorem markerRun_projects {handle : Type}
     (actual : Publication.Step → EStateM IO.Error (Cache handle × WriteFiles) Unit)
@@ -161,26 +272,21 @@ private theorem markerRun_projects {handle : Type}
       change EStateM.bind (actual step) (fun _ => prior.forM actual) initial = .ok () reached
       simpa only [EStateM.bind, next] using recorded
 
-private theorem ObservedBatchWrite.publisherProjects {handle : Type} {directory before}
-    {report : SegmentedBatchAppendReport directory before} (observed : ObservedBatchWrite report handle) :
-    let first := before.installed.activeFirst
-    let bytes := WAL.encodeBatch report.batch
-    let count := report.nextInstalled.walBytes
-    let initial := WriteFiles.initial before.history (before.files.directory.staged .walBoundary)
+private theorem ObservedBatchPublication.publisherProjects {handle : Type}
+    {directory first bytes count initial append stage sync rename}
+    (observed : ObservedBatchPublication directory first bytes count initial append stage sync rename handle) :
     withoutWriteGroupCache (commitBytesAt directory first bytes count
       observed.append observed.stage observed.sync observed.rename (observed.cache, initial)) =
-      commitBytesAt directory first bytes count report.append report.stage report.sync report.rename initial := by
-  let initial := WriteFiles.initial before.history (before.files.directory.staged .walBoundary)
-  let keeper := directory.file (.walSegment before.installed.activeFirst)
-  change withoutWriteGroupCache (EStateM.bind (observed.append keeper (WAL.encodeBatch report.batch)) (fun _ =>
-      Publication.run (performMarkerAt directory before.installed.activeFirst report.nextInstalled.walBytes
-        observed.stage observed.sync observed.rename)) (observed.cache, initial)) =
-    EStateM.bind (report.append keeper (WAL.encodeBatch report.batch)) (fun _ =>
-      Publication.run (performMarkerAt directory before.installed.activeFirst report.nextInstalled.walBytes
-        report.stage report.sync report.rename)) initial
+      commitBytesAt directory first bytes count append stage sync rename initial := by
+  let keeper := directory.file (.walSegment first)
+  change withoutWriteGroupCache (EStateM.bind (observed.append keeper bytes) (fun _ =>
+      Publication.run (performMarkerAt directory first count observed.stage observed.sync observed.rename))
+      (observed.cache, initial)) =
+    EStateM.bind (append keeper bytes) (fun _ =>
+      Publication.run (performMarkerAt directory first count stage sync rename)) initial
   unfold EStateM.bind
   rw [← observed.appendProjects]
-  cases ran : observed.append keeper (WAL.encodeBatch report.batch) (observed.cache, initial) with
+  cases ran : observed.append keeper bytes (observed.cache, initial) with
   | error cause reached => rfl
   | ok value appended =>
     cases value
@@ -196,8 +302,7 @@ theorem ObservedBatchWrite.acknowledges {handle : Type} {directory before}
       (.ready before.installed, ⟨(observed.cache, WriteFiles.initial before.history
         (before.files.directory.staged .walBoundary)), before.owners⟩) =
       .ok report.table.committed (.ready report.nextInstalled, ⟨(cacheAfter, report.written), before.owners⟩) := by
-  have projected := observed.publisherProjects
-  dsimp only at projected
+  have projected := observed.toObservedBatchPublication.publisherProjects
   rw [show commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch report.batch)
       report.nextInstalled.walBytes report.append report.stage report.sync report.rename
       (WriteFiles.initial before.history (before.files.directory.staged .walBoundary)) = .ok () report.written from
@@ -214,6 +319,34 @@ theorem ObservedBatchWrite.acknowledges {handle : Type} {directory before}
       simpa [committed, withoutWriteGroupCache] using projected
     subst written
     exact ⟨cacheAfter, runBatchWrite_acknowledges observed.guard report.nonempty report.prepared report.fits committed⟩
+
+/-- The reached batch publication error keeps the original diagnostic and
+poisons the phase. The cache and failed file cut come from that same
+callback run under the original owner. -/
+theorem ObservedBatchFailure.commitUnknown {handle : Type} {directory before}
+    {failure : SegmentedBatchFailure directory before} (observed : ObservedBatchFailure failure handle) :
+    ∃ cacheAfter, runBatchWrite directory failure.rows observed.guard.lookup observed.append
+      observed.stage observed.sync observed.rename
+      (.ready before.installed, ⟨(observed.cache, WriteFiles.initial before.history
+        (before.wal.directory.staged .walBoundary)), before.owners⟩) =
+      .error (.commitUnknown failure.cause) (.poisoned, ⟨(cacheAfter, failure.failed), before.owners⟩) := by
+  have projected := observed.toObservedBatchPublication.publisherProjects
+  have ran : commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch failure.batch)
+      failure.proposed.walBytes failure.append failure.stage failure.sync failure.rename
+      (WriteFiles.initial before.history (before.wal.directory.staged .walBoundary)) = .error failure.cause failure.failed :=
+    failure.ran
+  rw [ran] at projected
+  cases failed : commitBytesAt directory before.installed.activeFirst (WAL.encodeBatch failure.batch)
+      failure.proposed.walBytes observed.append observed.stage observed.sync observed.rename
+      (observed.cache, WriteFiles.initial before.history (before.wal.directory.staged .walBoundary)) with
+  | ok value reached =>
+    simp [failed, withoutWriteGroupCache] at projected
+  | error cause reached =>
+    obtain ⟨cacheAfter, files⟩ := reached
+    have same : cause = failure.cause ∧ files = failure.failed := by
+      simpa [failed, withoutWriteGroupCache] using projected
+    obtain ⟨rfl, rfl⟩ := same
+    exact ⟨cacheAfter, runBatchWrite_commitUnknown observed.guard failure.nonempty failure.prepared failure.fits failed⟩
 
 /-- The publication tail acknowledges the last ordinal after installing
 the prepared table under the same owner. -/

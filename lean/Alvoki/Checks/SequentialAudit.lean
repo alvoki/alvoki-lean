@@ -943,11 +943,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchAppendReport.preservesRetained
 #check_axioms Alvoki.Storage.DiskSession.runBatchWrite_empty
 #check_axioms Alvoki.Storage.DiskSession.ObservedBatchWrite.acknowledges
+#check_axioms Alvoki.Storage.DiskSession.runBatchWrite_rejected
+#check_axioms Alvoki.Storage.DiskSession.ObservedBatchFailure.commitUnknown
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.acknowledgeObservedBatch
 #check_axioms Alvoki.Storage.DiskSession.BatchCommitReports.run
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchFailure.retainedCut
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchRecoveryReport.installsRetained
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterBatchError
+#check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.reopenAfterObservedBatchError
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.pinnedReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.acquireReads
 #check_axioms Alvoki.Storage.DiskSession.SegmentedBatchDatabaseTrace.keyValueRefinement

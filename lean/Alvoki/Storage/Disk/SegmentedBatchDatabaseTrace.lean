@@ -336,6 +336,37 @@ theorem SegmentedBatchDatabaseTrace.reopenAfterBatchError
   obtain ⟨after, installed, _⟩ := report.installsRetained (trace.preservesRetained ready).1
   exact ⟨after, installed, .batchError trace report installed⟩
 
+/-- The batch schedule returns the exact poisoned state that is released.
+The healthy retry continues from the same projected file cut and records
+one uncertain submission. -/
+theorem SegmentedBatchDatabaseTrace.reopenAfterObservedBatchError {handle : Type}
+    (trace : SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection log writer before)
+    (initialReady : initial.RetainedReady directory initialDescriptor)
+    (report : SegmentedBatchRecoveryReport directory before writer descriptor)
+    (observed : ObservedBatchFailure report.failure handle) :
+    ∃ cacheAfter after,
+      let poisoned : Phase Installed × LockedFileState (SyncHandleRouting.Cache handle × WriteFiles) :=
+        (.poisoned, ⟨(cacheAfter, report.failure.failed), before.owners⟩)
+      runBatchWrite directory report.failure.rows observed.guard.lookup observed.append observed.stage
+        observed.sync observed.rename (.ready before.installed, ⟨(observed.cache, WriteFiles.initial
+          before.history (before.wal.directory.staged .walBoundary)), before.owners⟩) =
+        .error (.commitUnknown report.failure.cause) poisoned ∧
+      report.release.Observed (directory := directory) poisoned
+        ⟨poisoned.2.image, report.failure.released.owners⟩ ∧
+      report.Installs after ∧
+      SegmentedBatchDatabaseTrace directory initialDescriptor initial allowCollection
+        (log ++ [.uncertainBatch report.failure.batch]) descriptor after := by
+  obtain ⟨cacheAfter, returned⟩ := observed.commitUnknown
+  obtain ⟨after, installed, continued⟩ := trace.reopenAfterBatchError initialReady report
+  have held := (trace.preservesRetained initialReady).1.held
+  obtain ⟨closed, dropped, _⟩ := runCloseWithFiles_handoff
+    (phase := (.poisoned : Phase Installed)) (before := ⟨(cacheAfter, report.failure.failed), before.owners⟩)
+    (by simp) held
+  refine ⟨cacheAfter, after, returned, ?_, installed, continued⟩
+  cases report.release with
+  | closed => exact closed
+  | references held drops last => exact dropped held drops last
+
 /-- Extend the mixed trace through a batch interrupted by machine power
 loss and the next healthy cached installation. The batch contributes one
 uncertain submission even when none of its frames survive selection. -/
