@@ -867,6 +867,13 @@ Run `bash scripts/reproduce.sh` for the baseline and `bash scripts/check-sequent
 
 ## Ordered two-slot WAL marker
 
+The retry ledger theorem now exposes the exact history selected by
+recovery: the prior history or that history with the whole uncertain
+batch appended. This is the input to the shared pending client replay
+lemma that accounts for the earlier read responses. The remaining
+end-to-end composition still needs to supply that client trace alongside
+the native repair return.
+
 The acquired-marker client theorem now takes the canonical segmented
 recovery of the exact installed table at the returned directory image.
 It derives the guarded reads directly from that recovery and uses the

@@ -910,6 +910,22 @@ private theorem recoveredFrontier_count {image : WalSegmentImage} {pair : Direct
     Except.ok.inj ((Boundary.decode_encode frontier).symm.trans (sameMarker ▸ decoded))
   exact sameLength ▸ bytes
 
+private theorem recoveredBatch_history {image : WalSegmentImage} {pair : DirectoryPublication.Bindings}
+    {range : MarkedWalRange} {history batch : List Write} {base table : PackedTable} {first : Nat}
+    (recovery : WalSegmentRecovery image pair range (history ++ batch) base first table)
+    {frontier : UInt64} (selected : pair.walBoundary = some (Boundary.encode frontier))
+    (whole : frontier.toNat = (WAL.encode history).size ∨
+      frontier.toNat = (WAL.encode (history ++ batch)).size) :
+    (history ++ batch).take range.through = history ∨
+      (history ++ batch).take range.through = history ++ batch := by
+  have count : range.through = history.length ∨ range.through = (history ++ batch).length := by
+    rw [recoveredFrontier_count recovery selected, WAL.encode_size, WAL.encode_size] at whole
+    unfold frameSize at whole
+    omega
+  rcases count with old | all
+  · exact .inl (by rw [old, List.take_append_of_le_length (Nat.le_refl _), List.take_length])
+  · exact .inr (all.symm ▸ List.take_length)
+
 /-- The client ledger accounts for a recovered uncertain submission as
 one whole batch or no batch. The retained history is exactly the prefix
 represented by the recovered table. -/
@@ -922,16 +938,12 @@ theorem recoveredBatch_retains {image : WalSegmentImage} {pair : DirectoryPublic
       frontier.toNat = (WAL.encode (history ++ batch)).size) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
     ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
-  have count : range.through = history.length ∨ range.through = (history ++ batch).length := by
-    rw [recoveredFrontier_count recovery selected, WAL.encode_size, WAL.encode_size] at whole
-    unfold frameSize at whole
-    omega
   refine ⟨?_, recovery.refines⟩
-  rcases count with old | new
-  · rw [old, List.take_append_of_le_length (Nat.le_refl _), List.take_length]
+  rcases recoveredBatch_history recovery selected whole with old | all
+  · rw [old]
     simpa using (DatabaseBatchRetention.append (entry := .uncertainBatch batch)
       (suffix := []) prior (Or.inl rfl))
-  · rw [new, List.take_length]
+  · rw [all]
     exact DatabaseBatchRetention.append (entry := .uncertainBatch batch) prior (Or.inr rfl)
 
 /-- Connect the observed commit-unknown return to the recovered client
@@ -1293,7 +1305,9 @@ theorem recoveredRetries_retainUncertainBatch
     (oldSize : current.frontier.toNat = (WAL.encode history).size)
     (recovery : WalSegmentRecovery image after.directory.active range (history ++ batch) base first table) :
     DatabaseBatchRetention (log ++ [.uncertainBatch batch]) ((history ++ batch).take range.through) ∧
-    ∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model := by
+    (∃ model, table.Refines model ∧ RepresentsWalHistory ((history ++ batch).take range.through) model) ∧
+    ((history ++ batch).take range.through = history ∨
+      (history ++ batch).take range.through = history ++ batch) := by
   obtain ⟨_, epoch, newSize, _, _⟩ := advance_fields advanced
   have newer : current.toRecord.epoch < next.toRecord.epoch := by
     change current.epoch.toNat < next.epoch.toNat
@@ -1304,9 +1318,10 @@ theorem recoveredRetries_retainUncertainBatch
     current.frontier next.frontier
     choices selected observed authorizedRepair authorized.pair authorized.keeperPrefix
     authorized.newer retries (List.mem_cons_self ..)
-  rcases choice with oldFrontier | newFrontier
-  · exact recoveredBatch_retains prior recovery binding (.inl (oldFrontier ▸ oldSize))
-  · exact recoveredBatch_retains prior recovery binding (.inr (newFrontier ▸ newSize))
+  have whole : _ ∨ _ := choice.imp
+    (fun oldFrontier => oldFrontier ▸ oldSize) (fun newFrontier => newFrontier ▸ newSize)
+  obtain ⟨retained, represented⟩ := recoveredBatch_retains prior recovery binding whole
+  exact ⟨retained, represented, recoveredBatch_history recovery binding whole⟩
 
 private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × ByteArray)}
     (offsets : left.map Prod.fst = right.map Prod.fst)
@@ -2055,7 +2070,7 @@ theorem recoveredRetries_installedReads
   have retries : SettledRetries target after after := .start
   have ledger := recoveredRetries_retainUncertainBatch beforeBarrier accepted offset advanced
     observations selected observed authorizedRepair preparedPlan retries prior oldSize recovery
-  obtain ⟨_, _, reference, replayed, _⟩ := ledger.2
+  obtain ⟨_, _, reference, replayed, _⟩ := ledger.2.1
   obtain ⟨pin, pinned, acquired, points, ranges⟩ := recovery.acquireReads replayed retained within
   have liveMarker := (retries.preservesSelectedMarker prepared selected observed authorizedRepair
     authorized.pair authorized.keeperPrefix authorized.newer (List.mem_cons_self ..)).1
