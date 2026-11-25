@@ -39,9 +39,26 @@ def NativeReadRecoveryEvent.responses : NativeReadRecoveryEvent → List Recorde
   | .read response => [response]
   | .restart => []
 
+/-- The directory, lock object and selected checkpoint stay fixed
+through local reads and each admitted quiet restart. -/
+structure NativeReadRecoveryFrame (before after : NativeReadyState) : Prop where
+  directory : after.session.directory = before.session.directory
+  directoryInode : after.census.inode after.directorySlot.description =
+    before.census.inode before.directorySlot.description
+  lockInode : after.census.inode after.owner.description = before.census.inode before.owner.description
+  target : after.writer.target = before.writer.target
+  checkpoint : after.writer.checkpoint = before.writer.checkpoint
+  durable : after.writer.published.durable = before.writer.published.durable
+
+private theorem NativeReadRecoveryFrame.trans (earlier : NativeReadRecoveryFrame first middle)
+    (later : NativeReadRecoveryFrame middle last) : NativeReadRecoveryFrame first last :=
+  ⟨later.directory.trans earlier.directory, later.directoryInode.trans earlier.directoryInode,
+    later.lockInode.trans earlier.lockInode, later.target.trans earlier.target,
+    later.checkpoint.trans earlier.checkpoint, later.durable.trans earlier.durable⟩
+
 /-- A read uses the exact local session and adds its observed response.
 A restart uses the selected checkpoint/WAL image from one crash and the
-same chronological installer that supplies the fresh ready readPrefix. -/
+same chronological installer that supplies the fresh ready prefix. -/
 inductive NativeReadRecoveryStep : NativeReadPosition history log → NativeReadRecoveryEvent → NativeReadPosition history log → Prop where
   | read (current : NativeReadPosition history log) (request : SnapshotReadRequest α)
       (snapshot : UInt64) (pin : SnapshotPin) (table : PackedTable) (response : α)
@@ -60,9 +77,7 @@ inductive NativeReadRecoveryStep : NativeReadPosition history log → NativeRead
         crash.retry.image.directory.active.manifest current.state.writer.checkpoint)
       (observed : NativeReadyRestartReads crash input layout selected) (next : NativeReadyState)
       (readPrefix : NativeReadyReadPrefix observed.run next history log current.reads next)
-      (target : next.writer.target = current.state.writer.target)
-      (checkpoint : next.writer.checkpoint = current.state.writer.checkpoint)
-      (durable : next.writer.published.durable = current.state.writer.published.durable) :
+      (frame : NativeReadRecoveryFrame current.state next) :
       NativeReadRecoveryStep current .restart (current.afterRestart observed.run next readPrefix)
 
 /-- The next supported acquisition and read derive an actual result and
@@ -87,19 +102,18 @@ theorem NativeReadPosition.restart (current : NativeReadPosition history log) (c
         crash.retry.image.directory.active.manifest current.state.writer.checkpoint,
       Nonempty (NativeReadyRestartReads crash input layout selected)) :
     ∃ next, NativeReadRecoveryStep current .restart next := by
-  obtain ⟨lost, _, layout, selected, observed, next, readPrefix, _, _, _, _, _, _, _, _, _, _, target, checkpoint, durable, _⟩ :=
-    current.readPrefix.restartsAfterPowerLoss crash observe
-  exact ⟨_, .restart current crash lost layout selected observed next readPrefix target checkpoint durable⟩
+  obtain ⟨lost, _, layout, selected, observed, next, readPrefix, directory, _, _, _, _, _, _, lockObject,
+    directoryObject, _, target, checkpoint, durable, _⟩ := current.readPrefix.restartsAfterPowerLoss crash observe
+  exact ⟨_, .restart current crash lost layout selected observed next readPrefix
+    ⟨directory, directoryObject, lockObject, target, checkpoint, durable⟩⟩
 
 theorem NativeReadRecoveryStep.frames
     (step : NativeReadRecoveryStep (history := history) (log := log) before event after) :
-    after.reads = before.reads ++ event.responses ∧ after.state.writer.target = before.state.writer.target ∧
-    after.state.writer.checkpoint = before.state.writer.checkpoint ∧
-    after.state.writer.published.durable = before.state.writer.published.durable := by
+    after.reads = before.reads ++ event.responses ∧ NativeReadRecoveryFrame before.state after.state := by
   cases step with
-  | read => exact ⟨rfl, rfl, rfl, rfl⟩
-  | restart _ _ _ _ _ _ _ _ target checkpoint durable => exact ⟨by simp [NativeReadRecoveryEvent.responses,
-      NativeReadPosition.afterRestart], target, checkpoint, durable⟩
+  | read => exact ⟨rfl, ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩⟩
+  | restart _ _ _ _ _ _ _ _ frame =>
+    exact ⟨by simp [NativeReadRecoveryEvent.responses, NativeReadPosition.afterRestart], frame⟩
 
 /-- Arbitrary finite interleavings in this scoped execution share one
 history and accumulate one ordered read ledger across all sessions. -/
@@ -112,14 +126,12 @@ inductive NativeReadRecoveryTrace (start : NativeReadPosition history log) :
 theorem NativeReadRecoveryTrace.frames
     (run : NativeReadRecoveryTrace (history := history) (log := log) start events last) :
     last.reads = start.reads ++ events.flatMap NativeReadRecoveryEvent.responses ∧
-    last.state.writer.target = start.state.writer.target ∧
-    last.state.writer.checkpoint = start.state.writer.checkpoint ∧
-    last.state.writer.published.durable = start.state.writer.published.durable := by
+    NativeReadRecoveryFrame start.state last.state := by
   induction run with
-  | empty => exact ⟨by simp, rfl, rfl, rfl⟩
+  | empty => exact ⟨by simp, ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩⟩
   | step _ reached ih =>
-    obtain ⟨observedReads, target, checkpoint, durable⟩ := reached.frames
-    refine ⟨?_, target.trans ih.2.1, checkpoint.trans ih.2.2.1, durable.trans ih.2.2.2⟩
+    obtain ⟨observedReads, frame⟩ := reached.frames
+    refine ⟨?_, ih.2.trans frame⟩
     rw [observedReads, ih.1]
     simp [List.append_assoc]
 
@@ -128,7 +140,8 @@ and supported reads in the last returned session. -/
 theorem NativeReadRecoveryTrace.keyValueRefinement
     (run : NativeReadRecoveryTrace (history := history) (log := log) start events last) :
     last.reads = start.reads ++ events.flatMap NativeReadRecoveryEvent.responses ∧
+    NativeReadRecoveryFrame start.state last.state ∧
     InstalledClientReplay log last.reads history last.state.writer.installed last.state.session :=
-  ⟨run.frames.1, last.readPrefix.guardedReplay⟩
+  ⟨run.frames.1, run.frames.2, last.readPrefix.guardedReplay⟩
 
 end Alvoki.Storage.DiskSession
