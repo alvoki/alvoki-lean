@@ -302,6 +302,44 @@ noncomputable def run (finish : CapturedLongKeeperFinish calls report vacant sel
     EStateM.Result IO.Error CensusOpenState SegmentedSession :=
   calls.runWithFinish report finish.finishAt
 
+/-- The long replacement starts after a reported vacant admission. Its
+directory barriers preserve the selected manifest and marker while the
+final barrier settles the newly staged keeper. -/
+theorem installsAfterVacancy (finish : CapturedLongKeeperFinish calls report vacant selected)
+    {metadata : IO.FS.Metadata}
+    (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
+      .ok (.ok metadata) (admission.reached, admission.held))
+    (keeperValid : retry.image.keeper.Valid layout.target.Accepts)
+    (laterValid : retry.image.later.Beyond layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ session, finish.run = .ok session (finish.census, finish.settled) ∧
+      finish.settled.image.directory.active = retry.image.directory.active ∧
+      CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
+        published calls.liveRefs (.ok session finish.settled) := by
+  have effects := finish.settlement.toListedLongKeeperDirectoryIssue.stoppedEffects true
+  have prepared : Prepared retry.image layout.target layout.plan :=
+    ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
+  have safe := effects.valid prepared.pair prepared.keeperPrefix prepared.newer
+  have pruned := (LongKeeperPruning.empty finish.prune).stageInputEffects.2
+  have ready : finish.settled.image.Ready layout.target := by
+    refine ⟨safe.selected, safe.settled, rfl, rfl, ?_⟩
+    exact pruned
+  have reached (opened : Reopened) : finish.finishAt directory admission.owner admission.cache
+      (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) =
+      .ok opened (finish.census, { admission.held with image := finish.settled.image }) := by
+    have repaired := finish.readRepair_returns
+    simp only [readRepair, Bind.bind, EStateM.bind, finish.readAndClose.1] at repaired
+    rw [finishAt, repaired]
+    rfl
+  obtain ⟨session, returned, installed⟩ :=
+    CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := report) vacant marker laterValid
+      following accepted ordered selected finish.finishAt reached ready effects
+  exact ⟨session, returned, safe.selected, installed⟩
+
 /-- The actual selected read, staged replacement and successful final
 directory barrier lead to the installed session. The new canonical keeper
 is the staged inode and the original selected checkpoint supplies replay. -/
@@ -340,27 +378,10 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
     ∃ session, finish.run = .ok session (finish.census, finish.settled) ∧
       CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
         published calls.liveRefs (.ok session finish.settled) := by
-  have effects := finish.settlement.toListedLongKeeperDirectoryIssue.stoppedEffects true
-  have prepared : Prepared retry.image layout.target layout.plan :=
-    ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
-  have safe := effects.valid prepared.pair prepared.keeperPrefix prepared.newer
-  have pruned := (LongKeeperPruning.empty finish.prune).stageInputEffects.2
-  have ready : finish.settled.image.Ready layout.target := by
-    refine ⟨safe.selected, safe.settled, rfl, rfl, ?_⟩
-    exact pruned
-  have reached (opened : Reopened) : finish.finishAt directory admission.owner admission.cache
-      (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) =
-      .ok opened (finish.census, { admission.held with image := finish.settled.image }) := by
-    have repaired := finish.readRepair_returns
-    simp only [readRepair, Bind.bind, EStateM.bind, finish.readAndClose.1] at repaired
-    rw [finishAt, repaired]
-    rfl
-  obtain ⟨prefixReached, vacant, _, _, _, oldObject, _, _⟩ :=
+  obtain ⟨prefixReached, _, _, _, _, oldObject, _, _⟩ :=
     trace.capturesAfterAdmission earlier last admission distinct distinctCached lockObject (calls.recoverWithFinish report finish.finishAt)
   have sameLock := report.sameObjects.2.1.trans (congrArg some oldObject)
-  obtain ⟨session, returned, installed⟩ :=
-    CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := report) vacant marker laterValid
-      following accepted ordered selected finish.finishAt reached ready effects
+  obtain ⟨session, returned, _, installed⟩ := finish.installsAfterVacancy marker keeperValid laterValid following accepted ordered
   exact ⟨prefixReached, sameLock, finish.readAndClose.1, finish.readAndClose.2, finish.lockRetained,
     finish.directoryRetained, finish.sameCensusObjects, finish.settlement.settledInode.1,
     finish.settlement.toListedLongKeeperDirectoryIssue.projectsStoppedInodes true,

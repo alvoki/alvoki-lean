@@ -2218,6 +2218,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.replacementInodes
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.repairAt_returns
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.readRepair_returns
+#check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.installsAfterVacancy
 #check_axioms Alvoki.Storage.DiskSession.CapturedLongKeeperFinish.installs
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.sameKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.rawTail_returns
