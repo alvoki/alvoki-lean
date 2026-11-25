@@ -454,7 +454,7 @@ theorem prepareSelected_of_retainedReplay
     {reads : Storage.WalSegmentMarkerReads} {fileSize first : Nat}
     {firstBytes : ByteArray} {rest : List (Nat × ByteArray)}
     (files : reads.files = (first, firstBytes) :: rest)
-    (aligned : selection.frontier.toNat % frameSize = 0)
+    {markerBytes : ByteArray} (accepted : decode markerBytes = .ok selection)
     {readSeal : System.FilePath → Nat → Except IO.Error ByteArray}
     {readKeeper : System.FilePath → Nat → Nat → Except IO.Error ByteArray}
     {entries : Array IO.FS.DirEntry} (listed : list directory.path = .ok entries)
@@ -476,6 +476,7 @@ theorem prepareSelected_of_retainedReplay
         (fun start frontier => readSelectedWithCachedExtents directory start frontier list lstat readSeal readKeeper) =
         .ok (⟨selection.frontier.toNat / frameSize, keeper, reads.newer, bytes⟩,
           ⟨table, (checkpoint.getD (.empty, 0)).2, selection.frontier, keeper⟩, fileSize) := by
+  obtain ⟨_, _, _, aligned, _⟩ := decode_valid accepted
   have readWal := readSelectedWithCachedExtents_reported directory _ _ list lstat readSeal readKeeper
     ⟨aligned, watermark⟩ listed scanned selected reports
   have walRead : readSelectedWithCachedExtents directory (checkpoint.getD (.empty, 0)).1.committed.toNat
