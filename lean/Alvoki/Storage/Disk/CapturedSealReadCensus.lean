@@ -1,0 +1,219 @@
+import Alvoki.Storage.Disk.CapturedKeeperCustody
+
+namespace Alvoki.Storage.DiskSession
+
+open System SyncHandleRouting WalSegmentRepair
+
+private abbrev ReadState := CensusDirectoryCache × CensusOpenState
+
+/-- A temporary opened description is inserted into the reached census.
+The observed finalizer releases its slot after the read. This projection
+accounts for intervening drops and assumes no alias of the temporary slot
+is created. -/
+structure TemporaryPrefixCustody {reads : CheckpointRunChunkReads} {path : FilePath} {name : String}
+    {root : DeviceInode} {view : DirectoryReadNamespace}
+    (opened : RunChunkPathReport reads path name root view) (initial : DescriptorInventory)
+    (released : List LockReferenceDrop) where
+  beforeOpen : List LockReferenceDrop
+  free : ∀ slot ∈ (initial.afterDrops beforeOpen).slots, slot.address ≠ opened.slot.address
+  fresh : (initial.afterDrops beforeOpen).references opened.slot.description = []
+  allocated : opened.inventory = (initial.afterDrops beforeOpen).insert opened.slot free
+  beforeClose : List LockReferenceDrop
+  closing : released = beforeClose ++ [opened.slot.closeEvent]
+  keptWhileReading : ∀ event ∈ beforeClose, event.removes opened.slot.reference = false
+
+/-- Interpret the native bounded seal callback on the observed handle.
+The successful projection carries the slot drops reported before the next
+open can be issued. -/
+def readTemporarySeal (reads : CheckpointRunChunkReads) (released : FilePath → List LockReferenceDrop)
+    (path : FilePath) (count : Nat) : EStateM IO.Error ReadState ByteArray := fun (cache, census, files) =>
+  match reads.openRead path with
+  | .error cause => .error cause (cache, census, files)
+  | .ok handle =>
+    match reads.readOpenedPrefix selectedWalSpanError handle count with
+    | .error cause => .error cause (cache, handle.1, files)
+    | .ok bytes => .ok bytes (cache, handle.1.afterDrops (released path), files)
+
+namespace TemporaryPrefixCustody
+
+variable {reads : CheckpointRunChunkReads} {path : FilePath} {name : String} {root : DeviceInode}
+  {view : DirectoryReadNamespace} {opened : RunChunkPathReport reads path name root view}
+  {initial : DescriptorInventory} {released : FilePath → List LockReferenceDrop}
+
+/-- The temporary slot is live at every reported read, including after
+any prefix of the observed drops before its finalizer. -/
+theorem liveAtRead (custody : TemporaryPrefixCustody opened initial (released path))
+    {earlier remaining : List LockReferenceDrop} (ordered : custody.beforeClose = earlier ++ remaining) :
+    opened.slot ∈ (opened.inventory.afterDrops earlier).slots := by
+  refine List.mem_filter.mpr ⟨opened.live, List.all_eq_true.mpr fun event member => ?_⟩
+  have observed : event ∈ custody.beforeClose := ordered ▸ List.mem_append_left _ member
+  rw [custody.keptWhileReading event observed]
+  rfl
+
+/-- Allocate and release the actual opened slot. The reached census is
+the original census with precisely the observed drops applied. -/
+theorem closes (custody : TemporaryPrefixCustody opened initial (released path)) :
+    opened.inventory.afterDrops (released path) = initial.afterDrops (custody.beforeOpen ++ released path) ∧
+    (opened.inventory.afterDrops (released path)).references opened.slot.description = [] := by
+  have reduced : opened.inventory.afterDrops (released path) = initial.afterDrops (custody.beforeOpen ++ released path) := by
+    let before := initial.afterDrops custody.beforeOpen
+    let installed := before.insert opened.slot custody.free
+    calc
+      opened.inventory.afterDrops (released path) = installed.afterDrops (released path) :=
+        congrArg (fun census => census.afterDrops (released path)) custody.allocated
+      _ = installed.afterDrops (custody.beforeClose ++ [opened.slot.closeEvent]) :=
+        congrArg installed.afterDrops custody.closing
+      _ = before.afterDrops (custody.beforeClose ++ [opened.slot.closeEvent]) :=
+        DescriptorInventory.insert_thenClose before opened.slot custody.free custody.beforeClose
+      _ = before.afterDrops (released path) := congrArg before.afterDrops custody.closing.symm
+      _ = _ := DescriptorInventory.afterDrops_append _ _ _
+  refine ⟨reduced, ?_⟩
+  rw [reduced, ← DescriptorInventory.afterDrops_append, DescriptorInventory.references_afterDrops, custody.fresh]
+  rfl
+
+/-- The held stat and actual chunk callback produce the complete seal
+bytes. The reached file image and cache are unchanged and the descriptor
+census records the exact temporary lifetime. -/
+theorem readSeal (custody : TemporaryPrefixCustody opened initial (released path))
+    {object : DeviceInode} {bytes : ByteArray} (bound : view.child root name = some object)
+    (contents : reads.objectBytes (view.modelObject object) = some bytes) (fits : bytes.size < USize.size)
+    (cache : CensusDirectoryCache) (files : LockedFileState FileImage) :
+    readTemporarySeal reads released path bytes.size (cache, initial, files) =
+      .ok bytes (cache, initial.afterDrops (custody.beforeOpen ++ released path), files) := by
+  let observed := opened.observesFile bound contents
+  have exact := observed.readOpenedExactPrefix selectedWalSpanError bytes.size fits (Nat.le_refl _)
+  change reads.readOpenedPrefix selectedWalSpanError (opened.inventory, opened.slot, 0) bytes.size =
+      .ok (bytes.extract 0 bytes.size) at exact
+  have read : reads.readOpenedPrefix selectedWalSpanError (opened.inventory, opened.slot, 0) bytes.size = .ok bytes := by
+    simpa only [ByteArray.extract_zero_size] using exact
+  simp only [readTemporarySeal, opened.opened, read, custody.closes.1]
+
+end TemporaryPrefixCustody
+
+variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
+  {retry : LockedFileState FileImage} {admission : CensusOpenAdmissionReports input directory inventory retry}
+  {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
+  {published : CheckpointPublication.Image}
+
+/-- Read the selected seal extents in their worker order. Each report
+starts from the previous temporary reader's reached census. The last
+selected extent is the actual keeper from the held stat/open reports. -/
+inductive CapturedSealReadChain (report : CapturedMarkedReadReports admission layout published)
+    (released : FilePath → List LockReferenceDrop) :
+    List (Nat × IO.FS.Metadata) → DescriptorInventory → List LockReferenceDrop → Prop where
+  | keeper {initial} : CapturedSealReadChain report released
+      [(layout.keeper.first, report.wal.keeper.calls.metadata)] initial []
+  | sealed {initial segment next nextMetadata rest drops} (member : segment ∈ layout.sealed)
+      (forward : segment.first < next) (size : segment.bytes.size = (next - segment.first) * WAL.frameSize)
+      (custody : TemporaryPrefixCustody (report.wal.sealedFile segment member).calls initial
+        (released (directory.file (.walSegment segment.first))))
+      (remaining : CapturedSealReadChain report released ((next, nextMetadata) :: rest)
+        (initial.afterDrops (custody.beforeOpen ++ released (directory.file (.walSegment segment.first)))) drops) :
+      CapturedSealReadChain report released ((segment.first, (report.wal.sealedFile segment member).calls.metadata) ::
+        (next, nextMetadata) :: rest) initial (custody.beforeOpen ++ released (directory.file (.walSegment segment.first)) ++ drops)
+
+namespace CapturedSealReadChain
+
+variable {report : CapturedMarkedReadReports admission layout published} {released : FilePath → List LockReferenceDrop}
+  {required : List (Nat × IO.FS.Metadata)} {initial : DescriptorInventory} {drops : List LockReferenceDrop}
+
+/-- The actual extent-checked seal loop reaches the keeper in the census
+left by the ordered temporary reads. -/
+theorem reaches (chain : CapturedSealReadChain report released required initial drops)
+    (cache : CensusDirectoryCache) (files : LockedFileState FileImage) :
+    CachedWalKeeperReached directory (readTemporarySeal report.reads released) layout.keeper.first
+      report.wal.keeper.calls.metadata required (cache, initial, files) (cache, initial.afterDrops drops, files) := by
+  induction chain with
+  | @keeper current =>
+    have same : current.afterDrops [] = current := by
+      cases current with
+      | mk slots distinct inode =>
+        simp only [DescriptorInventory.afterDrops, List.all_nil, List.filter_eq_self.mpr (fun _ _ => rfl)]
+    rw [same]
+    exact .noSeals
+  | @sealed initial segment next nextMetadata rest drops member forward size custody remaining ih =>
+    let file := report.wal.sealedFile segment member
+    have extent := file.observesFile.extent.trans size
+    have fits := size ▸ report.wal.sealFits segment member
+    have read := custody.readSeal file.bound file.contents (report.wal.sealFits segment member) cache files
+    rw [size] at read
+    rw [← DescriptorInventory.afterDrops_append]
+    exact .sealed forward extent fits read size ih
+
+end CapturedSealReadChain
+
+namespace CapturedMarkedReadReports
+
+/-- Interpret the successful checked scan at the reached census. The
+stream opens, reads and closes in the same captured parent. -/
+def scanWal (report : CapturedMarkedReadReports admission layout published) (path : FilePath) :
+    EStateM IO.Error ReadState (Array IO.FS.DirEntry) := fun (cache, census, files) =>
+  match (CheckedDirectoryReadReport.scanned report.listing.scan).result path with
+  | .ok entries => .ok entries (cache, census.afterDrops report.lifetime.drops, files)
+  | .error cause => .error cause (cache, census, files)
+
+theorem scanWal_closed (report : CapturedMarkedReadReports admission layout published) :
+    report.scanWal directory.path (admission.cache, admission.reached, admission.held) =
+      .ok (report.listing.scan.entries directory.path) (admission.cache, report.listing.afterClose, admission.held) := by
+  have listing := (CheckedDirectoryReadReport.scan_complete directory.path report.listing.eof report.listing.closed
+    report.listing.complete).1
+  rw [scanWal, listing, report.listing.afterClose_eq]
+  rfl
+
+/-- Use the real selected WAL worker with the observed checked listing and
+temporary seal effects. It begins the keeper subloop at the exact census
+after the listing has closed and every selected seal read has released its
+temporary slot. The keeper still uses the original cache and file image. -/
+theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission layout published)
+    (captured : CapturedKeeperOpenReports report)
+    {count : UInt64} (aligned : count.toNat % WAL.frameSize = 0)
+    (covers : layout.range.watermark ≤ count.toNat / WAL.frameSize)
+    {extents required : List (Nat × IO.FS.Metadata)} {newer : List Nat}
+    (scanned : readWalSegmentExtentsWith (m := Except IO.Error) directory
+      (fun path => .ok (report.catalog.inventory.reports.lstat path))
+      ((report.listing.scan.entries directory.path).toList.map (·.fileName)) = .ok extents)
+    (selected : selectWalExtentsThrough extents layout.range.watermark (count.toNat / WAL.frameSize) =
+      some (required, newer))
+    {released : FilePath → List LockReferenceDrop}
+    (seals : CapturedSealReadChain report released required report.listing.afterClose captured.beforeOpen)
+    (retained : ∀ event ∈ captured.beforeOpen,
+      event.removes admission.owner.reference = false ∧ event.removes admission.cached.reference = false)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error ReadState ByteArray) :
+    admission.owner ∈ captured.atOpen.slots ∧ admission.cached ∈ captured.atOpen.slots ∧
+    ∃ earlier : List (Nat × ByteArray), earlier.map Prod.fst = required.dropLast.map Prod.fst ∧
+      readSelectedWithCachedExtents directory layout.range.watermark count report.scanWal
+        (fun path => liftExcept (.ok (report.catalog.inventory.reports.lstat path) : Except IO.Error _))
+        (readTemporarySeal report.reads released) readKeeper (admission.cache, admission.reached, admission.held) =
+      (do
+        let (last, size) ← readCachedWalPayloads directory (count.toNat / WAL.frameSize)
+          (readTemporarySeal report.reads released) readKeeper [(layout.keeper.first, report.wal.keeper.calls.metadata)]
+        pure (⟨earlier ++ last, newer⟩, size) : EStateM IO.Error ReadState (WalSegmentMarkerReads × Nat))
+        (admission.cache, captured.atOpen, admission.held) := by
+  have lives {slot : DescriptorSlot} (live : slot ∈ report.listing.afterClose.slots)
+      (kept : ∀ event ∈ captured.beforeOpen, event.removes slot.reference = false) : slot ∈ captured.atOpen.slots := by
+    refine List.mem_filter.mpr ⟨live, List.all_eq_true.mpr fun event member => ?_⟩
+    rw [kept event member]
+    rfl
+  obtain ⟨earlier, offsets, payloads⟩ := (seals.reaches admission.cache admission.held).reachesRead
+    (count.toNat / WAL.frameSize) readKeeper
+  refine ⟨lives report.listing.custody.lockRetained (fun event member => (retained event member).1),
+    lives report.listing.custody.cacheRetained (fun event member => (retained event member).2), earlier, offsets, ?_⟩
+  have scannedState : (readWalSegmentExtentsWith directory
+      (fun path => liftExcept (.ok (report.catalog.inventory.reports.lstat path) : Except IO.Error _))
+      ((report.listing.scan.entries directory.path).toList.map (·.fileName)) :
+      EStateM IO.Error ReadState _) (admission.cache, report.listing.afterClose, admission.held) =
+      .ok extents (admission.cache, report.listing.afterClose, admission.held) := by
+    rw [readWalSegmentExtentsWith_liftReports, scanned]
+    rfl
+  simp only [readSelectedWithCachedExtents, aligned, covers, and_self, ↓reduceIte, Bind.bind, EStateM.bind,
+    report.scanWal_closed, scannedState, selected, Pure.pure, EStateM.pure]
+  rw [payloads]
+  simp only [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, CapturedKeeperOpenReports.atOpen]
+  cases readCachedWalPayloads directory (count.toNat / WAL.frameSize) (readTemporarySeal report.reads released)
+      readKeeper [(layout.keeper.first, report.wal.keeper.calls.metadata)]
+      (admission.cache, report.listing.afterClose.afterDrops captured.beforeOpen, admission.held) with
+  | error cause after => rfl
+  | ok value after => cases value; rfl
+
+end CapturedMarkedReadReports
+end Alvoki.Storage.DiskSession

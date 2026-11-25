@@ -53,6 +53,7 @@ import Alvoki.Storage.Disk.DelayedKeeperInventory
 import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.KeeperReadCustody
 import Alvoki.Storage.Disk.CapturedKeeperCustody
+import Alvoki.Storage.Disk.CapturedSealReadCensus
 import Alvoki.Storage.Disk.WriteGroupFsync
 import Alvoki.Storage.Disk.AppendGroupedReports
 import Alvoki.Storage.Disk.RetainedWriterReopen
@@ -1612,6 +1613,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedSealExtentError
 #check_axioms Alvoki.Storage.SyncHandleRouting.readKeeperWith_rejectsExtent
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.read_error
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.reachesRead
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.keeperReached_eq_of_readonly
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenSelection.reopen_keeperExtentError
 #check_axioms Alvoki.Storage.DiskSession.runOpenWithInstallation_cachedKeeperExtentError
@@ -1913,6 +1915,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckedDirectoryReadReport.listedWalNames_le_materialized
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryReadLifetime.liveAtPrefix
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.afterClose_eq
+#check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.liveAtRead
+#check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.closes
+#check_axioms Alvoki.Storage.DiskSession.TemporaryPrefixCustody.readSeal
+#check_axioms Alvoki.Storage.DiskSession.CapturedSealReadChain.reaches
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.scanWal_closed
+#check_axioms Alvoki.Storage.DiskSession.CapturedMarkedReadReports.selectedWalReachesKeeper
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.liveAtRead
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.closedDescription
 #check_axioms Alvoki.Storage.DiskSession.HeldDirectoryScan.custody

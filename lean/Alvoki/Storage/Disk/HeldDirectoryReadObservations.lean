@@ -51,7 +51,7 @@ theorem HeldDirectoryReadLifetime.liveAtPrefix {initial owner} (lifetime : HeldD
     owner ∈ (initial.afterDrops earlier).slots ∧ lifetime.directorySlot ∈ (initial.afterDrops earlier).slots :=
   ⟨slotLiveAtPrefix (reached ▸ lifetime.ownerRetained), slotLiveAtPrefix (reached ▸ lifetime.directoryRetained)⟩
 
-private def DescriptorSlot.closeEvent (slot : DescriptorSlot) : LockReferenceDrop :=
+def DescriptorSlot.closeEvent (slot : DescriptorSlot) : LockReferenceDrop :=
   .closed slot.reference.process slot.reference.fd
 
 /-- The checked listing's `opendir` inserts a fresh private descriptor
@@ -89,7 +89,7 @@ theorem DescriptorInventory.afterDrops_append (inventory : DescriptorInventory)
   cases inventory
   simp [DescriptorInventory.afterDrops, List.all_append, List.filter_filter, Bool.and_comm]
 
-private theorem DescriptorInventory.insert_thenClose (beforeOpen : DescriptorInventory)
+theorem DescriptorInventory.insert_thenClose (beforeOpen : DescriptorInventory)
     (stream : DescriptorSlot) (free : ∀ slot ∈ beforeOpen.slots, slot.address ≠ stream.address)
     (duringScan : List LockReferenceDrop) :
     (beforeOpen.insert stream free).afterDrops (duringScan ++ [stream.closeEvent]) =

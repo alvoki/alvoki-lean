@@ -245,6 +245,44 @@ inductive CachedWalKeeperReached {state : Type} (dir : DiskDirectory)
       CachedWalKeeperReached dir readSeal keeper keeperMetadata
         ((first, metadata) :: (next, nextMetadata) :: rest) initial reached
 
+/-- The actual selected payload loop reaches the keeper callback with
+the state produced by the preceding seal reads. The returned seal payloads
+keep their order and the keeper's own length checks still run. -/
+theorem CachedWalKeeperReached.reachesRead {state : Type} {dir : DiskDirectory} (through : Nat)
+    {readSeal : FilePath → Nat → EStateM IO.Error state ByteArray}
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error state ByteArray)
+    {keeper : Nat} {metadata : IO.FS.Metadata} {required : List (Nat × IO.FS.Metadata)}
+    {initial reached : state} (seals : CachedWalKeeperReached dir readSeal keeper metadata required initial reached) :
+    ∃ earlier : List (Nat × ByteArray), earlier.map Prod.fst = required.dropLast.map Prod.fst ∧
+      readCachedWalPayloads dir through readSeal readKeeper required initial =
+        (do
+          let (last, size) ← readCachedWalPayloads dir through readSeal readKeeper [(keeper, metadata)]
+          pure (earlier ++ last, size) : EStateM IO.Error state (List (Nat × ByteArray) × Nat)) reached := by
+  suffices loop : ∃ earlier : List (Nat × ByteArray), earlier.map Prod.fst = required.dropLast.map Prod.fst ∧
+      ∀ acc, readCachedWalPayloadsFrom dir through readSeal readKeeper required acc initial =
+        (do
+          let (last, size) ← readCachedWalPayloads dir through readSeal readKeeper [(keeper, metadata)]
+          pure (acc.reverse ++ earlier ++ last, size) :
+          EStateM IO.Error state (List (Nat × ByteArray) × Nat)) reached by
+    obtain ⟨earlier, offsets, read⟩ := loop
+    exact ⟨earlier, offsets, by simpa [readCachedWalPayloads] using read []⟩
+  induction seals with
+  | noSeals =>
+    refine ⟨[], rfl, fun acc => ?_⟩
+    simp [readCachedWalPayloads, readCachedWalPayloadsFrom, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+    cases readKeeper (dir.file (.walSegment keeper)) ((through - keeper) * frameSize) metadata.byteSize.toNat _ with
+    | error cause after => rfl
+    | ok bytes after =>
+      by_cases valid : bytes.size = (through - keeper) * frameSize ∧ (through - keeper) * frameSize ≤ metadata.byteSize.toNat <;>
+        simp [valid, throw, throwThe, MonadExceptOf.throw] <;> rfl
+  | @sealed first next extent nextExtent rest initial observed reached bytes forward span fits reported size remaining ih =>
+    obtain ⟨tail, offsets, read⟩ := ih
+    refine ⟨(first, bytes) :: tail, by simpa using offsets, ?_⟩
+    intro acc
+    rw [readCachedWalPayloadsFrom_afterSealed dir through readSeal readKeeper first next extent nextExtent rest
+      acc forward span fits reported size, read]
+    simp [List.reverse_cons, List.append_assoc]
+
 /-- The keeper error is returned at its reached state after the earlier seals. -/
 theorem CachedWalKeeperReached.read_error {state : Type} {dir : DiskDirectory} (through : Nat)
     {readSeal : FilePath → Nat → EStateM IO.Error state ByteArray}
@@ -255,16 +293,9 @@ theorem CachedWalKeeperReached.read_error {state : Type} {dir : DiskDirectory} (
     (failed : readKeeper (dir.file (.walSegment keeper)) ((through - keeper) * frameSize)
       metadata.byteSize.toNat reached = .error cause after) :
     readCachedWalPayloads dir through readSeal readKeeper required initial = .error cause after := by
-  have loop (read : List (Nat × ByteArray)) :
-      readCachedWalPayloadsFrom dir through readSeal readKeeper required read initial = .error cause after := by
-    induction seals generalizing read with
-    | noSeals => simp [readCachedWalPayloadsFrom, Bind.bind, EStateM.bind, failed]
-    | @sealed first next metadata nextMetadata rest initial observed reached bytes
-        forward extent fits reported size remaining ih =>
-      rw [readCachedWalPayloadsFrom_afterSealed dir through readSeal readKeeper first next metadata nextMetadata rest
-        read forward extent fits reported size]
-      exact ih failed _
-  exact loop []
+  obtain ⟨_, _, read⟩ := seals.reachesRead through readKeeper
+  rw [read]
+  simp only [readCachedWalPayloads, readCachedWalPayloadsFrom, Bind.bind, EStateM.bind, failed]
 
 /-- Read-only seal observations preserve the state until the keeper read. -/
 theorem CachedWalKeeperReached.reached_eq_of_readonly {state : Type} {dir : DiskDirectory}
