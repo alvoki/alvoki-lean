@@ -2452,6 +2452,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.HeldMetadataFile.manifestPrefix
 #check_axioms Alvoki.Storage.DiskSession.HeldMetadataFile.markerPrefix
 #check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.manifestRead
+#check_axioms Alvoki.Storage.DiskSession.DirectoryManifestReadReports.read
 #check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.markerRead
 #check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.manifestListed
 #check_axioms Alvoki.Storage.DiskSession.DirectoryMetadataReadReports.markerListed

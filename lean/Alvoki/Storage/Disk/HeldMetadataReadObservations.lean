@@ -87,6 +87,19 @@ theorem HeldMetadataFile.markerPrefix {reads directory view root payload}
     seen.stat, seen.opened, seen.regular, exactRead, Except.map,
     show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, Pure.pure, EStateM.bind, EStateM.pure]
 
+/-- Manifest observations shared by both WAL marker formats. -/
+structure DirectoryManifestReadReports (directory : DiskDirectory) (view : DirectoryReadNamespace)
+    (root : DeviceInode) (reads : CheckpointRunChunkReads)
+    (readOptional : FilePath → Except IO.Error (Option ByteArray)) (manifest : Option ByteArray) where
+  projected : readOptional (directory.file .manifest) =
+    cachedMetadataReadResult (runCachedMetadataRead reads directory (directory.file .manifest) 0)
+  manifestMissing : manifest = none →
+    view.child root "MANIFEST" = none ∧
+    ∃ name message, reads.stat (directory.file .manifest) = .error (.noFileOrDirectory name 2 message)
+  manifestFile : ∀ payload, manifest = some payload →
+    Nonempty (HeldMetadataFile reads (directory.file .manifest) "MANIFEST" view root payload) ∧
+    IntegrityCheckpoint.acquisitionSize payload < USize.size
+
 /-- Identify the optional metadata callbacks with the reached native reader.
 The selected pair's payloads come from the stable objects at the captured
 root. These premises do not require an installation or its read equations. -/
@@ -105,30 +118,42 @@ structure DirectoryMetadataReadReports (directory : DiskDirectory) (view : Direc
     ∃ file : HeldMetadataFile reads (directory.file .walBoundary) "WAL.commit" view root payload,
       PrefixChunksAvailableUntilEof payload (reads.readChunk file.observesFile.slot.description)
 
-namespace DirectoryMetadataReadReports
-
-variable {directory : DiskDirectory} {view : DirectoryReadNamespace} {root : DeviceInode}
-  {reads : CheckpointRunChunkReads} {readOptional : FilePath → Except IO.Error (Option ByteArray)}
-  {pair : DirectoryPublication.Bindings}
-
-/-- The valid marked layout supplies decoder acceptance. A missing manifest
-comes only from the reported no-follow ENOENT at its canonical child. -/
-theorem manifestRead (report : DirectoryMetadataReadReports directory view root reads readOptional pair)
-    {range : MarkedWalRange} (accepted : pair.walRange = some range) :
-    readOptional (directory.file .manifest) = .ok pair.manifest := by
-  rw [report.projected _ (.inl rfl)]
-  cases selected : pair.manifest with
+/-- A checked manifest selection supplies decoder acceptance independently
+of the marker representation. -/
+theorem DirectoryManifestReadReports.read
+    {directory view root reads readOptional manifest}
+    (report : DirectoryManifestReadReports directory view root reads readOptional manifest)
+    {sequence : Nat} (watermark : selectedCheckpointWatermark manifest = some sequence) :
+    readOptional (directory.file .manifest) = .ok manifest := by
+  rw [report.projected]
+  cases selected : manifest with
   | none =>
     obtain ⟨_, name, message, missing⟩ := report.manifestMissing selected
     rw [runCachedMetadataRead_missing _ _ _ name message missing]
     rfl
   | some payload =>
     obtain ⟨⟨file⟩, fits⟩ := report.manifestFile payload selected
-    have watermark := (DirectoryPublication.Bindings.walRange_accounting accepted).1
     rw [selected] at watermark
     obtain ⟨_, decoded, _⟩ := selectedCheckpointWatermark_present_iff.mp watermark
     rw [file.manifestPrefix fits, IntegrityCheckpoint.acquisitionPrefix_eq_of_decode decoded]
     rfl
+
+namespace DirectoryMetadataReadReports
+
+variable {directory : DiskDirectory} {view : DirectoryReadNamespace} {root : DeviceInode}
+  {reads : CheckpointRunChunkReads} {readOptional : FilePath → Except IO.Error (Option ByteArray)}
+  {pair : DirectoryPublication.Bindings}
+
+theorem manifestReports (report : DirectoryMetadataReadReports directory view root reads readOptional pair) :
+    DirectoryManifestReadReports directory view root reads readOptional pair.manifest :=
+  ⟨report.projected _ (.inl rfl), report.manifestMissing, report.manifestFile⟩
+
+/-- The valid marked layout supplies decoder acceptance. A missing manifest
+comes only from the reported no-follow ENOENT at its canonical child. -/
+theorem manifestRead (report : DirectoryMetadataReadReports directory view root reads readOptional pair)
+    {range : MarkedWalRange} (accepted : pair.walRange = some range) :
+    readOptional (directory.file .manifest) = .ok pair.manifest :=
+  report.manifestReports.read (DirectoryPublication.Bindings.walRange_accounting accepted).1
 
 /-- The selected layout's marker was accepted, so the bounded EOF reader
 returns that whole marker from the held directory's canonical child. -/

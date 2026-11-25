@@ -925,3 +925,9 @@ outer witness, the existing captured marked-read report still bundles
 the rename-format boundary read with the checkpoint and WAL reports.
 The two-slot opener needs those common reports independently of that
 boundary read to compose the native chronology.
+
+The held manifest-read proof now has a format-independent report. It
+uses manifest selection, the canonical child and its bounded callback.
+The rename-backed metadata report projects to that same proof. This
+allows a two-slot preparation report to supply manifest evidence without
+also asserting a rename-format marker read.
