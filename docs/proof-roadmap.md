@@ -166,6 +166,8 @@ In the marked route, a checked `readdir` failure after the reported successful c
 
 The same prefix also permits an interruption at the issued unlock, from a ready session or the exact poisoned write return. It keeps the reached census and distinguishes a stopped call from a returned diagnostic. The reported effect and later descriptor drops determine when the same lock becomes available. Earlier reads remain valid for the retained marker-selected history. [Interrupted close in the execution prefix](../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean)
 
+After a successful ordinary close, any finite sequence of these admitted route errors can use the exact prior cleanup state. The close supplies the first released image and descriptor inventory. Each attempt records the exact input and diagnostic, opens the same physical lock and directory objects and passes its reached inventory and files to the next step. A successful explicit unlock permits the next attempt. An unsuccessful unlock needs reported events that end the old description's last reference. The prefix can also stop at either error with no further attempt. The stored checkpoint and WAL image, replay history and bounded earlier read responses are preserved throughout. [Repeated early open errors](../lean/Alvoki/Storage/Disk/NativeRejectedOpenLineage.lean)
+
 Extend the invariant to every finite execution prefix. It relates the reached directory, files and
 descriptor inventory to the client history. For a ready session it also relates the exact returned session,
 installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and
