@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeOpenAcquire
 import Alvoki.Storage.Disk.NativeExecutionPendingWrite
+import Alvoki.Storage.Disk.NativeWritePreflight
 
 namespace Alvoki.Storage.DiskSession
 
@@ -242,5 +243,89 @@ theorem NativePendingWrite.returnsViaOpenReferences {history log}
     (commit before.writer.installed (WAL.encodeBatch failure.batch) failure.proposed.walBytes)
     (entry, before.cache, initial) = _
   simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, setPhase, heapEffect, exclude, committed]
+
+/-- A checked rejection or an empty batch reads this table's phase
+cell and leaves the reached heap and file projection unchanged.
+The first phase setter and the publication callbacks are arbitrary
+because neither branch reaches them. -/
+theorem NativeReadPosition.preflightsViaOpenReferences {history log}
+    (current : NativeReadPosition history log) (db : DiskTable)
+    {lock : IO.FS.Handle} {files : DiskTable.OpenSyncFiles} {phase : IO.Ref (Phase Installed)} {token : IO.Ref Unit}
+    (uses : db.UsesOpenReferences current.state.session.directory lock files phase token)
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)} {entry : heap}
+    (read : get phase entry = .ok current.state.session.phase entry)
+    {request : WriteRequest} (seen : NativeWritePreflightObservation current.state request)
+    (atEntry : OpenWriteFiles)
+    (setPhase : Phase Installed → EStateM DiskWriteError (heap × OpenWriteFiles) Unit)
+    (commit : Installed → ByteArray → Nat → EStateM DiskWriteError (heap × OpenWriteFiles) Unit) :
+    let directory := current.state.session.directory
+    let load : EStateM DiskWriteError (heap × OpenWriteFiles) Installed := do
+      let state ← heapEffect .rejected (get phase)
+      liftExcept ((state.installed : Except IO.Error Installed).mapError DiskWriteError.rejected)
+    let guard := fun state => liftExcept ((checkActiveSegmentWith directory state seen.lookup :
+      Except IO.Error Unit).mapError DiskWriteError.rejected)
+    db.UsesOpenWriteSchedules directory files phase ∧
+    NativeWritePreflightStep current seen current ∧
+    (match request with
+      | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected requireWritePreparation guard
+          (fun state event next bytes => publishPreparedWrite { state with table := next, walBytes := bytes }
+            event.sequence setPhase (commit state (WAL.encodeFrame event) bytes))
+      | .batch group => writeBatchSchedule group load DiskWriteError.rejected requireWritePreparation guard setPhase
+          (fun state batch count => commit state (WAL.encodeBatch batch) count))
+      (entry, atEntry) = seen.resultAt (entry, atEntry) := by
+  intro directory load guard
+  refine ⟨uses.writeSchedules, current.preflightsWrite seen, ?_⟩
+  have valid := current.readPrefix.refines.1
+  have loaded : load (entry, atEntry) = .ok current.state.writer.installed (entry, atEntry) := by
+    simp [load, heapEffect, read, valid.phase, Phase.installed, Bind.bind, EStateM.bind, liftExcept, Pure.pure,
+      EStateM.pure, Except.pure, Except.mapError]
+  obtain ⟨lookup, response, reported⟩ := seen
+  cases request with
+  | single key value =>
+    obtain ⟨next, prepared⟩ := valid.retained.preparesSingleWrite key value
+    cases reported with
+    | empty rows => simp [WriteRequest.rows] at rows
+    | rejected rejected =>
+      cases rejected with
+      | byteCount _ overflow =>
+        have tooLarge : ¬ current.state.writer.installed.walBytes + WAL.frameSize < UInt64.size := by
+          simpa [WriteRequest.rows] using Nat.not_lt.mpr overflow
+        simp [withPreparedSingleWrite, loaded, prepared, requireWritePreparation, tooLarge, Bind.bind, EStateM.bind,
+          Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+          NativeWritePreflightObservation.resultAt]
+      | sequence _ _ exhausted =>
+        simp [WriteRequest.rows, prepareBatch_singleton, prepared] at exhausted
+      | active _ room _ checked =>
+        have fits : current.state.writer.installed.walBytes + WAL.frameSize < UInt64.size := by
+          simpa [WriteRequest.rows] using room
+        simp [withPreparedSingleWrite, loaded, prepared, requireWritePreparation, fits, guard, directory, checked,
+          Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, Except.mapError, liftExcept,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw, NativeWritePreflightObservation.resultAt]
+  | batch rows =>
+    cases reported with
+    | empty nil =>
+      change rows = [] at nil
+      subst rows
+      simp [writeBatchSchedule, loaded, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+        NativeWritePreflightObservation.resultAt]
+    | rejected rejected =>
+      have nonempty (present : (WriteRequest.batch rows).rows ≠ []) : rows.isEmpty = false :=
+        List.isEmpty_eq_false_iff.mpr present
+      cases rejected with
+      | byteCount present overflow =>
+        simp only [WriteRequest.rows] at overflow
+        simp [writeBatchSchedule, loaded, nonempty present, Nat.not_lt.mpr overflow, Bind.bind, EStateM.bind,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+          NativeWritePreflightObservation.resultAt]
+      | sequence present room exhausted =>
+        simp only [WriteRequest.rows] at room exhausted
+        simp [writeBatchSchedule, loaded, nonempty present, room, exhausted, requireWritePreparation,
+          Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+          NativeWritePreflightObservation.resultAt]
+      | active present room prepared checked =>
+        simp only [WriteRequest.rows] at room prepared
+        simp [writeBatchSchedule, loaded, nonempty present, room, prepared, requireWritePreparation, guard, directory,
+          checked, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, Except.mapError, liftExcept,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw, NativeWritePreflightObservation.resultAt]
 
 end Alvoki.Storage.DiskSession

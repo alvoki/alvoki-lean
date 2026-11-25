@@ -1545,6 +1545,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.prepareBatch_singleton
 #check_axioms Alvoki.WAL.encodeBatch_singleton
 #check_axioms Alvoki.Storage.DiskSession.runSingleWrite_eq_runBatchWrite_singleton
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.preparesSingleWrite
 #check_axioms Alvoki.Storage.DiskSession.BatchPreflightRejection.run
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runReported_eq_batch
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.ReturnedReports.refinesClient
@@ -1619,6 +1620,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativePendingWrite.returnsViaOpenReferences
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.installsReachedPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.acquiresAndReadsOpenPin
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preflightsViaOpenReferences
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorUnlock.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenErrorUnlock.admitsAfterFailedUnlock
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerRouteError.stopsBeforeRecovery
