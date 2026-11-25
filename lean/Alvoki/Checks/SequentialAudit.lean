@@ -293,6 +293,7 @@ import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
 import Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
 import Alvoki.Storage.Disk.FailedMarkerReadCensus
+import Alvoki.Storage.Disk.FailedCheckpointDigestCensus
 import Alvoki.Storage.Disk.CachedWalExtentRetry
 import Alvoki.Storage.Disk.CachedCheckpointExtentRetry
 import Alvoki.Storage.Disk.SegmentedRunRetentionReopen
@@ -1708,6 +1709,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.HeldMarkerChunkFailure.reachesCleanup
 #check_axioms Alvoki.Storage.DiskSession.HeldMarkerChunkFailure.certifies
 #check_axioms Alvoki.Storage.DiskSession.HeldMarkerChunkFailure.continues
+#check_axioms Alvoki.Storage.DiskSession.CensusOpenAdmissionReports.run_reachesReadCleanup
+#check_axioms Alvoki.Storage.DiskSession.ReportedReadCleanup.matchesRejection
+#check_axioms Alvoki.Storage.DiskSession.HeldCheckpointDigestFailure.readsRuns
+#check_axioms Alvoki.Storage.DiskSession.HeldCheckpointDigestFailure.corruptRunCustody
+#check_axioms Alvoki.Storage.DiskSession.HeldCheckpointDigestFailure.rejectsDigest
+#check_axioms Alvoki.Storage.DiskSession.HeldCheckpointDigestFailure.reachesCleanup
+#check_axioms Alvoki.Storage.DiskSession.HeldCheckpointDigestFailure.continues
 #check_axioms Alvoki.Storage.readExactPrefixWith_readError
 #check_axioms Alvoki.Storage.readExactPrefixWith_badChunk
 #check_axioms Alvoki.Storage.readExactPrefixWith_success

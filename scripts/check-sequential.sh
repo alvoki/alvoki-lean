@@ -352,6 +352,7 @@ lake env leanchecker Alvoki.Storage.Disk.CachedWalOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
 lake env leanchecker Alvoki.Storage.Disk.FailedMarkerReadCensus
+lake env leanchecker Alvoki.Storage.Disk.FailedCheckpointDigestCensus
 lake env leanchecker Alvoki.Storage.Disk.CachedOpenRejection
 lake env leanchecker Alvoki.Storage.Disk.CachedWalExtentRetry
 lake env leanchecker Alvoki.Storage.Disk.CachedCheckpointExtentRetry
