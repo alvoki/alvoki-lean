@@ -890,3 +890,7 @@ The acquisition projection now constructs the handle identity from
 the raw open report's slot and inode map. The bounded read starts at
 the reported cursor. The client theorem no longer takes a separate
 successful marker-open equation.
+
+The acquisition projection now checks the no-follow stat before opening
+the marker. Its successful branch uses the native private-regular-file
+guard, including the one-link requirement, before reading any bytes.

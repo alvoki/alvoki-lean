@@ -1328,18 +1328,21 @@ private theorem sealedReads_eq {files : FileImage} {left right : List (Nat × By
 /-- Project the marked acquisition onto the file image. The open callback
 supplies the rewound description; the bounded read only advances its cursor. -/
 def acquireMarkerFromReports (reads : WalSegmentRepair.CheckpointRunChunkReads) (path : System.FilePath) :
-    EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) := fun files =>
-  match reads.openRead path with
-  | .error cause => .error cause files
-  | .ok (inventory, slot, cursor) =>
-    let handle : KeeperDescriptorIdentity := ⟨slot.description, inventory.inode slot.description⟩
-    match readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
-        (reads.readChunk handle.description) acquisitionLimit ByteArray.empty cursor with
-    | .error cause _ => .error cause files
-    | .ok bytes _ =>
-      match decode bytes with
-      | .error cause => .error (IO.userError cause) files
-      | .ok selected => .ok (handle, selected) files
+    EStateM IO.Error FileImage (KeeperDescriptorIdentity × Selection) := do
+  let (metadata, _) ← liftExcept (reads.stat path)
+  checkPrivateRegularWith path metadata
+  fun files =>
+    match reads.openRead path with
+    | .error cause => .error cause files
+    | .ok (inventory, slot, cursor) =>
+      let handle : KeeperDescriptorIdentity := ⟨slot.description, inventory.inode slot.description⟩
+      match readPrefixUntilEofWith (IO.userError "invalid two-slot WAL marker length")
+          (reads.readChunk handle.description) acquisitionLimit ByteArray.empty cursor with
+      | .error cause _ => .error cause files
+      | .ok bytes _ =>
+        match decode bytes with
+        | .error cause => .error (IO.userError cause) files
+        | .ok selected => .ok (handle, selected) files
 
 /-- The same retry-selected recovery explains the retained submissions and
 fresh snapshot reads on the session installed by the shared open schedule. -/
@@ -1417,6 +1420,7 @@ theorem recoveredRetries_installedReads
     {markerView : DiskSession.DirectoryReadNamespace} {markerRoot : DiskSession.DeviceInode}
     (markerFile : DiskSession.HeldMetadataFile markerReads (directory.file .walBoundary)
       "WAL.commit" markerView markerRoot (marker.visible markerHandle.inode))
+    (markerPrivate : markerFile.calls.metadata.numLinks = 1)
     (markerInventory : DiskSession.DescriptorInventory)
     (markerDrops : List DiskSession.LockReferenceDrop)
     (markerFree : ∀ slot ∈ markerInventory.slots, slot.address ≠ markerFile.calls.slot.address)
@@ -1697,7 +1701,10 @@ theorem recoveredRetries_installedReads
       cases markerHandle
       simp only [KeeperDescriptorIdentity.mk.injEq]
       exact ⟨markerDescription, markerDescription ▸ reachedInode⟩
-    simp [acquireMarkerFromReports, markerFile.calls.opened, markerRead,
+    simp [acquireMarkerFromReports, checkPrivateRegularWith, markerFile.calls.stat,
+      markerFile.calls.regular, markerPrivate, markerFile.calls.opened, markerRead,
+      show (IO.FS.FileType.file == .file) = true from rfl,
+      Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, liftExcept,
       markerDecode.trans markerAccepted, held]
   have fullReopen := (reopenAcquiredWith_success (acquireMarkerFromReports markerReads (directory.file .walBoundary))
     (fun selection => WalSegmentRepair.prepareBoundedMarkedFromReaders directory readCheckpoint
