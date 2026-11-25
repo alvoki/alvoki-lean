@@ -425,6 +425,7 @@ lake env leanchecker Alvoki.Storage.Disk.LockCensusTrace
 lake env leanchecker Alvoki.Storage.Disk.LockCensusOpenAdmission
 lake env leanchecker Alvoki.Storage.Disk.CapturedMarkedReads
 lake env leanchecker Alvoki.Storage.Disk.CapturedAlignedInstallation
+lake env leanchecker Alvoki.Storage.Disk.CapturedPrunedAlignedInstallation
 lake env leanchecker Alvoki.Storage.Disk.CapturedLongKeeperInstallation
 lake env leanchecker Alvoki.Storage.Disk.DelayedKeeperInventory
 lake env leanchecker Alvoki.Storage.Disk.AppendHandleCustody

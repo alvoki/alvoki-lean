@@ -49,6 +49,7 @@ import Alvoki.Storage.Disk.LockCensusTrace
 import Alvoki.Storage.Disk.LockCensusOpenAdmission
 import Alvoki.Storage.Disk.CapturedMarkedReads
 import Alvoki.Storage.Disk.CapturedAlignedInstallation
+import Alvoki.Storage.Disk.CapturedPrunedAlignedInstallation
 import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
 import Alvoki.Storage.Disk.DelayedKeeperInventory
 import Alvoki.Storage.Disk.AppendHandleCustody
@@ -2282,6 +2283,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.finishAt_returns
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.installsAfterVacancy
 #check_axioms Alvoki.Storage.DiskSession.CapturedAlignedFinish.installsFromCensus
+#check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.keeperReleased
+#check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.keeperAtSync
+#check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.repairAt_returns
+#check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.installsFromCensus
 #check_axioms Alvoki.Storage.DiskSession.DescriptorInventory.delayedKeeperSync
 #check_axioms Alvoki.Storage.DiskSession.KeeperRepairSlot.lockInode
 #check_axioms Alvoki.Storage.DiskSession.KeeperRepairSlot.openedCensus
