@@ -217,6 +217,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeRawFinalizedLateGuardError
 lake env leanchecker Alvoki.Storage.Disk.NativeFinalizedOpenRetries
 lake env leanchecker Alvoki.Storage.Disk.NativeFinalizedRetryAlignedOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeFinalizedListingRetry
+lake env leanchecker Alvoki.Storage.Disk.NativeRawPresentManifestListing
 lake env leanchecker Alvoki.Storage.Disk.NativeRawFinalizedManifestError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawAbsentManifestListing
 lake env leanchecker Alvoki.Storage.Disk.NativeRawFlatWalOpenError

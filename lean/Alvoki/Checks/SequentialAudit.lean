@@ -310,6 +310,7 @@ import Alvoki.Storage.Disk.NativeRawFinalizedLateGuardError
 import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
 import Alvoki.Storage.Disk.NativeFinalizedRetryAlignedOpen
 import Alvoki.Storage.Disk.NativeFinalizedListingRetry
+import Alvoki.Storage.Disk.NativeRawPresentManifestListing
 import Alvoki.Storage.Disk.NativeRawFinalizedManifestError
 import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
 import Alvoki.Storage.Disk.NativeRawFlatWalOpenError
@@ -1818,8 +1819,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.PrunedAlignedKeeperCacheReport.repairsAfterRead
 #check_axioms Alvoki.Storage.SelectedIntegrityCheckpoint.selectedRun
 #check_axioms Alvoki.Storage.WalSegmentRepair.readIntegrityCheckpointSized_fromSelectedReads
-#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadReport.returns
-#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadReport.censusAfter
+#check_axioms Alvoki.Storage.DiskSession.RawTemporaryReadReport.returns
+#check_axioms Alvoki.Storage.DiskSession.RawTemporaryReadReport.censusAfter
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.measuresRun
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperReadHeap.readsBeforeRelease
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperReadHeap.readsAndReleases
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperAuthorizationHeap.returns
@@ -1930,6 +1932,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.preserves
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.reopensAligned
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.finalizedAttempt
+#check_axioms Alvoki.Storage.DiskSession.RawPresentManifestCheckpointPrefix.reachesMarker
+#check_axioms Alvoki.Storage.DiskSession.RawPresentManifestMarkerPrefix.reachesScan
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.stopsAfterPresentManifest
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.returnsAfterPresentManifest
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.finalizedPresentAttempt
 #check_axioms Alvoki.Storage.DiskSession.RawAbsentManifestMarkerPrefix.readsSelected
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.stops
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedListingScanFailure.sameStream

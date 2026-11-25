@@ -76,6 +76,14 @@ def MarkedTemporaryReadCalls.runSize (calls : MarkedTemporaryReadCalls heap) (pa
     throw (IO.userError s!"expected a regular database file: '{path}'")
   pure metadata.byteSize.toNat
 
+theorem MarkedTemporaryReadCalls.measuresRun (calls : MarkedTemporaryReadCalls heap)
+    {path : FilePath} {before : heap} {metadata : IO.FS.Metadata} {bytes : ByteArray}
+    (stat : calls.stat path before = .ok (.ok metadata) before)
+    (regular : metadata.type = .file) (extent : metadata.byteSize.toNat = bytes.size) :
+    calls.runSize path before = .ok bytes.size before := by
+  simp [runSize, stat, regular, extent, liftExcept, show (IO.FS.FileType.file == .file) = true from rfl,
+    Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+
 private def MarkedTemporaryReadCalls.runRead (calls : MarkedTemporaryReadCalls heap) (count : Nat)
     (file : IO.FS.Handle) : EStateM IO.Error heap ByteArray :=
   readExactPrefixWith (IO.userError checkpointIntegrityMismatch) (calls.readChunk file) count ByteArray.empty
@@ -122,14 +130,15 @@ theorem MarkedReadCacheFrame.keepsInitialCache (frame : MarkedReadCacheFrame see
 /-- The raw open, bounded read and release all use the selected temporary
 handle. The release report connects its reached heap to the same census
 as the chronological descriptor model. -/
-structure MarkedTemporaryReadReport (seed : OpenSyncCacheAllocations admission.opened view init entry)
+structure RawTemporaryReadReport (observations : CheckpointRunChunkReads)
+    (seed : OpenSyncCacheAllocations admission.opened view init entry)
     (calls : MarkedTemporaryReadCalls heap) (path : FilePath) (drops : List LockReferenceDrop)
     (read : IO.FS.Handle → EStateM IO.Error heap ByteArray) (bytes : ByteArray) (before after : heap) where
   file : IO.FS.Handle
   opened : heap
   finished : heap
   openedRaw : calls.openRead path before = .ok file opened
-  sameOpened : reads.reads.openRead path = .ok (view.handle opened file)
+  sameOpened : observations.openRead path = .ok (view.handle opened file)
   readRaw : read file opened = .ok bytes finished
   sameSlot : (view.handle finished file).2.1 = (view.handle opened file).2.1
   releasedRaw : calls.release file finished = .ok () after
@@ -138,19 +147,19 @@ structure MarkedTemporaryReadReport (seed : OpenSyncCacheAllocations admission.o
   readFrame : MarkedReadCacheFrame seed opened finished
   releaseFrame : MarkedReadCacheFrame seed finished after
 
-theorem MarkedTemporaryReadReport.returns {calls : MarkedTemporaryReadCalls heap}
+theorem RawTemporaryReadReport.returns {observations : CheckpointRunChunkReads} {calls : MarkedTemporaryReadCalls heap}
     {read : IO.FS.Handle → EStateM IO.Error heap ByteArray}
-    (report : MarkedTemporaryReadReport (reads := reads) seed calls path drops read bytes before after) :
+    (report : RawTemporaryReadReport observations seed calls path drops read bytes before after) :
     calls.readWith path read before = .ok bytes after ∧ MarkedReadCacheFrame seed before after := by
   refine ⟨?_, (report.openFrame.trans report.readFrame).trans report.releaseFrame⟩
   simp [MarkedTemporaryReadCalls.readWith, Bind.bind, EStateM.bind, report.openedRaw, report.readRaw,
     report.releasedRaw, Pure.pure, EStateM.pure]
 
-theorem MarkedTemporaryReadReport.censusAfter {calls : MarkedTemporaryReadCalls heap}
+theorem RawTemporaryReadReport.censusAfter {observations : CheckpointRunChunkReads} {calls : MarkedTemporaryReadCalls heap}
     {read : IO.FS.Handle → EStateM IO.Error heap ByteArray}
-    {name : String} {file : RunChunkPathReport reads.reads path name admission.root admission.view}
+    {name : String} {file : RunChunkPathReport observations path name admission.root admission.view}
     {initial : DescriptorInventory} (custody : TemporaryPrefixCustody file initial drops)
-    (raw : MarkedTemporaryReadReport (reads := reads) seed calls path drops read bytes before after) :
+    (raw : RawTemporaryReadReport observations seed calls path drops read bytes before after) :
     view.descriptors after = initial.afterDrops (custody.beforeOpen ++ drops) ∧
     (view.descriptors after).references file.slot.description = [] ∧
     (view.handle raw.finished raw.file).2.1 = file.slot := by
@@ -159,6 +168,11 @@ theorem MarkedTemporaryReadReport.censusAfter {calls : MarkedTemporaryReadCalls 
   rw [raw.census, same]
   exact ⟨(custody.closes (released := fun _ => drops)).1,
     (custody.closes (released := fun _ => drops)).2, releaseSlot⟩
+
+abbrev MarkedTemporaryReadReport (seed : OpenSyncCacheAllocations admission.opened view init entry)
+    (calls : MarkedTemporaryReadCalls heap) (path : FilePath) (drops : List LockReferenceDrop)
+    (read : IO.FS.Handle → EStateM IO.Error heap ByteArray) (bytes : ByteArray) (before after : heap) :=
+  RawTemporaryReadReport reads.reads seed calls path drops read bytes before after
 
 private theorem MarkedTemporaryReadReport.readsOptional {calls : MarkedTemporaryReadCalls heap}
     {name : String} {file : RunChunkPathReport reads.reads path name admission.root admission.view}
@@ -261,9 +275,7 @@ private theorem readsRun (report : NativeMarkedCheckpointReadHeap seed chronolog
   · have stat := report.runStat bytes manifest bound decoded index within
     change calls.stat path (report.atRun index) = .ok ((reads.reads.stat path).map Prod.fst) (report.atRun index) at stat
     rw [file.stat] at stat
-    simp [MarkedTemporaryReadCalls.runSize, stat, file.regular, Except.map, liftExcept,
-      show (IO.FS.FileType.file == .file) = true from rfl, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
-    exact measured
+    exact calls.measuresRun (by simpa only [Except.map] using stat) file.regular measured
   · rw [runReadDrops, events, ← DescriptorInventory.afterDrops_append]
     exact (raw.censusAfter custody).1
 
