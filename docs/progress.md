@@ -976,9 +976,10 @@ then checks failed reopen attempts and the retained old or complete
 batch. These are Linux process-exit cases, outside the power-loss model.
 
 The interrupted writer's client theorem now derives the transfer trace
-from the reported successful positional-write byte counts. Filesystem
-assumptions still constrain the raw survivor: changed bytes lie in the
-reported prefix, and the inactive record decodes to the old record,
+from the reported successful positional-write byte counts and a separate
+filesystem bound for the effect of a call that has yet to return.
+Changed bytes in a survivor must lie in that combined prefix, and the
+inactive record must decode to the old record,
 the intended new record, or no record. The checksum check alone does
 not establish that last condition for arbitrary corruption.
 

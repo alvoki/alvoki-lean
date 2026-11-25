@@ -2134,12 +2134,13 @@ theorem installsAfterAcquiredRecovery_replays
     {interruptedMarker : WalInodeImage}
     (writeCut : InterruptedBatchMarkerPublication directory prior batch next (interrupted, interruptedMarker))
     (accepted : decode (writeCut.initialMarker.visible writeCut.initialMarker.active) = .ok current)
-    (transferCounts : List Nat) (transfersFit : transferCounts.sum ≤ 40)
+    (completedCounts : List Nat) (inFlightCount : Nat)
+    (transfersFit : completedCounts.sum + inFlightCount ≤ 40)
     (slotOutcome : ∀ bytes ∈ interruptedMarker.visible interruptedMarker.active ::
       interruptedMarker.crashBytes interruptedMarker.active,
       bytes.size = containerSize ∧
       (∀ position, bytes.get! position ≠ (writeCut.initialMarker.visible writeCut.initialMarker.active).get! position →
-        next.slot * stride ≤ position ∧ position < next.slot * stride + transferCounts.sum) ∧
+        next.slot * stride ≤ position ∧ position < next.slot * stride + (completedCounts.sum + inFlightCount)) ∧
       (decodeSlot bytes (slotIndex active.other) =
           decodeSlot (writeCut.initialMarker.visible writeCut.initialMarker.active) (slotIndex active.other) ∨
         decodeSlot bytes (slotIndex active.other) = none ∨ decodeSlot bytes (slotIndex active.other) = some next))
@@ -2183,8 +2184,9 @@ theorem installsAfterAcquiredRecovery_replays
         (.ready prior.installed, ⟨(prior.files, writeCut.initialMarker), prior.owners⟩) =
         .error writeCut.stopped (.poisoned, ⟨(interrupted, interruptedMarker), prior.owners⟩) := by
   intro opened prepare
-  obtain ⟨transferredAddresses, transfers⟩ := SlotWriteTransfers.ofCounts (next.slot * stride) 0 transferCounts (by simpa using transfersFit)
-  simp only [Nat.zero_add] at transfers
+  obtain ⟨transferredAddresses, transfers⟩ := SlotWriteTransfers.ofCounts (next.slot * stride) 0
+    (completedCounts ++ [inFlightCount]) (by simpa using transfersFit)
+  simp only [Nat.zero_add, List.sum_append, List.sum_cons, List.sum_nil, Nat.add_zero] at transfers
   have beforeBarrier := reportedBeforeBarrier.refines
   have finished := repair.returns
   have authorizedRepair : EffectTrace layout.target
