@@ -1495,11 +1495,15 @@ inductive ReportedMarkerRetries (initial : FileImage) : FileImage → Prop where
         { before with directory := settleMarker before.directory selection }) :
       ReportedMarkerRetries initial (match returned with
         | .ok _ after | .error _ after => project after)
-  | markerInterrupted {before reached : FileImage} (prior : ReportedMarkerRetries initial before)
+  | markerInterrupted {before : FileImage} (prior : ReportedMarkerRetries initial before)
+      {physical after : WalInodeImage} (handle : KeeperDescriptorIdentity)
+      (effect : after = physical ∨ after = physical.completeFileSync handle.inode)
+      (project : WalInodeImage → FileImage) (source : project physical = before)
       (selection : Selection)
       (observed : before.directory.active.walBoundary = some (Boundary.encode selection.frontier))
-      (effect : reached = before ∨ reached = { before with directory := settleMarker before.directory selection }) :
-      ReportedMarkerRetries initial reached
+      (persisted : after = physical.completeFileSync handle.inode →
+        project after = { before with directory := settleMarker before.directory selection }) :
+      ReportedMarkerRetries initial (project after)
   | powerLoss {before : FileImage} (prior : ReportedMarkerRetries initial before)
       {pair bytes names}
       (metadata : pair ∈ before.directory.crashImages)
@@ -1514,8 +1518,8 @@ theorem ReportedMarkerRetries.trans {initial middle final : FileImage}
   | start => exact earlier
   | markerSync _ report project source selection observed persisted ih =>
     exact .markerSync ih report project source selection observed persisted
-  | markerInterrupted _ selection observed effect ih =>
-    exact .markerInterrupted ih selection observed effect
+  | markerInterrupted _ handle effect project source selection observed persisted ih =>
+    exact .markerInterrupted ih handle effect project source selection observed persisted
   | powerLoss _ metadata keeper later ih => exact .powerLoss ih metadata keeper later
 
 theorem ReportedMarkerRetries.refines {initial after : FileImage}
@@ -1530,10 +1534,12 @@ theorem ReportedMarkerRetries.refines {initial after : FileImage}
     | completed => exact cast (congrArg (UnsettledRetries initial) persisted.symm) (ih.settle selection observed)
     | errorBefore => exact cast (congrArg (UnsettledRetries initial) source.symm) ih
     | errorAfter => exact cast (congrArg (UnsettledRetries initial) persisted.symm) (ih.settle selection observed)
-  | markerInterrupted _ selection observed effect ih =>
-    rcases effect with rfl | rfl
-    · exact ih
-    · exact ih.settle selection observed
+  | markerInterrupted _ _ effect _ source selection observed persisted ih =>
+    rcases effect with unchanged | completed
+    · rw [unchanged, source]
+      exact ih
+    · rw [persisted completed]
+      exact ih.settle selection observed
   | powerLoss _ metadata payload later ih => exact ih.crash metadata payload later
 
 /-- Run the marker sync with its physical image and the reached recovery
@@ -1596,17 +1602,17 @@ theorem reopenSyncInterrupted_preservesRetry {stop : Type}
     change prepare selected acquired = .ok (.ok (plan, opened, size)) prepared at read
     simp [reopenAcquiredWith, reopenWith, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
       EStateM.bind, openedMarker, read, projectMarkerSync, cut]
-  · have projectedEffect : reached = prepared ∨
-        reached = { prepared with directory := settleMarker prepared.directory selected } := by
-      rw [← reachedImage]
-      rw [captured, current] at effect
-      rcases effect with unchanged | completed
-      · exact Or.inl (unchanged.symm ▸ source)
-      · have bound : prepared.directory.active.walBoundary.isSome = true := by simp [observed]
-        have directory := completedMarkerSync_projectsRepairDirectory completed current sameBinding decoded
-          prepared.directory bound choices enumerated presence survivors
-        exact Or.inr (projection completed _ directory)
-    exact .powerLoss (.markerInterrupted prior selected observed projectedEffect) metadata keeper later
+  · rw [captured] at effect
+    have persisted (completed : after = physical.completeFileSync handle.inode) :
+        project after = { prepared with directory := settleMarker prepared.directory selected } := by
+      rw [current] at completed
+      have bound : prepared.directory.active.walBoundary.isSome = true := by simp [observed]
+      have directory := completedMarkerSync_projectsRepairDirectory completed current sameBinding decoded
+        prepared.directory bound choices enumerated presence survivors
+      exact projection completed _ directory
+    have reported : ReportedMarkerRetries initial reached :=
+      reachedImage ▸ .markerInterrupted prior handle effect project source selected observed persisted
+    exact .powerLoss reported metadata keeper later
 
 /-- The descriptor's error report determines which retry image is
 reachable. A reported error after persistence settles only the marker. -/
