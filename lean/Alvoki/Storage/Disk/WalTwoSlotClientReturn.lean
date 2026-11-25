@@ -32,4 +32,39 @@ theorem prepared_write_reports {α σ : Type}
   simp only [DiskSession.publishPreparedWrite, DiskSession.publishPrepared, setPhase,
     commitReports, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, result]
 
+open OrderedTwoSlot
+
+/-- An uncertain slot update selects the exact pre-write history or the
+complete batch from the same reported WAL image. Bytes beyond either
+accepted frontier do not enter the replay. -/
+theorem uncertain_batch_selects_prefix
+    {before after : Slots UInt64} {active : Slot} {old next : OrderedTwoSlot.Record UInt64}
+    (report : Survivor before active next .slotWriteUncertain after)
+    (present : before active = some old)
+    (older : ∀ stale, before active.other = some stale → stale.epoch < old.epoch)
+    (newer : old.epoch < next.epoch)
+    (history batch : List WAL.Write) (physical : ByteArray)
+    (oldCount : old.frontier = (WAL.encode history).size.toUInt64)
+    (nextCount : next.frontier = (WAL.encode (history ++ batch)).size.toUInt64)
+    (oldFits : (WAL.encode history).size < UInt64.size)
+    (nextFits : (WAL.encode (history ++ batch)).size < UInt64.size)
+    (oldBytes : ∃ tail, physical = WAL.encode history ++ tail)
+    (nextBytes : ∃ tail, physical = WAL.encode (history ++ batch) ++ tail) :
+    ∃ chosen events,
+      recover (fun frontier => (Boundary.select frontier physical).isOk) after = .ok chosen ∧
+      (events = history ∨ events = history ++ batch) ∧
+      Boundary.select chosen.frontier physical = .ok (WAL.encode events) := by
+  have readOld : Boundary.select old.frontier physical = .ok (WAL.encode history) := by
+    obtain ⟨tail, exactBytes⟩ := oldBytes
+    rw [oldCount, exactBytes]
+    exact Boundary.select_encoded history tail oldFits
+  have readNext : Boundary.select next.frontier physical = .ok (WAL.encode (history ++ batch)) := by
+    obtain ⟨tail, exactBytes⟩ := nextBytes
+    rw [nextCount, exactBytes]
+    exact Boundary.select_encoded (history ++ batch) tail nextFits
+  have selected := report.recovery (fun frontier => (Boundary.select frontier physical).isOk)
+    present older newer (by simp [readOld, Except.isOk, Except.toBool]) (fun _ => by simp [readNext, Except.isOk, Except.toBool])
+  exact selected.elim (fun accepted => ⟨old, history, accepted, .inl rfl, readOld⟩)
+    (fun accepted => ⟨next, history ++ batch, accepted, .inr rfl, readNext⟩)
+
 end Alvoki.WAL.TwoSlot
