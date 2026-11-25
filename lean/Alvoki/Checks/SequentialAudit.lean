@@ -276,6 +276,7 @@ import Alvoki.Storage.Disk.NativeBootstrapCacheChronology
 import Alvoki.Storage.Disk.NativeBootstrapKeeperPhysical
 import Alvoki.Storage.Disk.NativeBootstrapMarkerPhysical
 import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
+import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenEarlyError
 import Alvoki.Storage.Disk.NativeCacheOpenRejection
 import Alvoki.Storage.Disk.NativeContendedOpen
@@ -1720,6 +1721,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheAllocations.installs
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.admitsWithCache
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.startsHeldWorker
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.startsInitializedWorker
 #check_axioms Alvoki.Storage.DiskSession.MarkedHeapInstallation.opensFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.opensAlignedFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedReopenEffects.opens
@@ -1764,6 +1766,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapKeeperPhysical.settles
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapMarkerPhysical.settles
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.installs
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.opensFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseClears.emptyCache
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseObservation.returns
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.closesViaOpenReferences
