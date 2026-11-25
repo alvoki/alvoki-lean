@@ -2515,6 +2515,15 @@ def main (args : List String) : IO Unit := do
           (← db.lookup pin.handle 8) == some none) "recovered an unpublished batch"
       check ((← db.write 9 (some 81)) == expected + 1) "wrong next sequence after two-slot recovery"
     finally db.close
+  | ["--two-slot-check-unknown-batch", path] =>
+    let db ← TwoSlotDiskTable.open ⟨path⟩
+    try
+      let .error (.commitUnknown (.hardwareFault 5 _)) ←
+          (db.writeBatchWithOutcome [(7, none), (8, some 123)]).toBaseIO
+        | throw (IO.userError "two-slot batch did not preserve injected marker sync error")
+      let .error (.rejected _) ← (db.writeWithOutcome 9 (some 81)).toBaseIO
+        | throw (IO.userError "two-slot writer remained writable after failed batch publication")
+    finally db.close
   | ["--two-slot-check-unknown", path] =>
     let db ← TwoSlotDiskTable.open ⟨path⟩
     try
