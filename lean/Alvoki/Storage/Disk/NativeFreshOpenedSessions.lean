@@ -75,10 +75,10 @@ private theorem freshEmptyWAL {state : NativeReadyState} (valid : state.Valid)
     have order := (List.pairwise_append.mp layout.ordered).2.2 segment member wal.active (List.mem_singleton_self _)
     exact Nat.not_lt_zero _ (first ▸ order.1)
 
-/-- The fresh public open starts with settled physical storage on its
-returned heap. The keeper create frames the listed lock and absent
-manifest. The final directory barrier supplies the child bindings, and
-installing the phase and token keeps the same recovery footprint. -/
+/-- The fresh public open starts with settled storage and visible empty
+keeper bytes on its returned heap. The keeper create frames the listed
+lock and absent manifest. The final directory barrier supplies the child
+bindings, and installing the phase and token preserves those files. -/
 theorem readyStorage {input : FilePath} {directory : DiskDirectory}
     {report : EmptyOpenSuccessReports input directory}
     {view : OpenCloseHeapView heap WalSegmentRotation.State} {init : OpenSyncCacheCallbacks heap} {admitted : heap}
@@ -110,8 +110,16 @@ theorem readyStorage {input : FilePath} {directory : DiskDirectory}
     (phaseFrame : (observe raw.markerDirectory.reached).Frames opened.start.current.ready.state.crashPath
       (observe allocation.afterPhase))
     (tokenFrame : (observe allocation.afterPhase).Frames opened.start.current.ready.state.crashPath
-      (observe allocation.afterToken)) :
-    NativeReadyStorage opened.start.current.ready.state (observe opened.start.reached) := by
+      (observe allocation.afterToken))
+    (phaseInodes : seen.keeperPhysical.inodes allocation.afterPhase =
+      seen.keeperPhysical.inodes raw.markerDirectory.reached)
+    (tokenInodes : seen.keeperPhysical.inodes allocation.afterToken =
+      seen.keeperPhysical.inodes allocation.afterPhase) :
+    let state := opened.start.current.ready.state
+    NativeReadyStorage state (observe opened.start.reached) ∧
+    ∀ inode, (observe opened.start.reached).files.names
+      (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode →
+      (seen.keeperPhysical.inodes opened.start.reached).visible inode = state.writer.wal.active.bytes := by
   let state := opened.start.current.ready.state
   let stored := observe raw.markerDirectory.reached
   have directoryEq : state.session.directory = directory := opened.start.directory.trans resolved
@@ -154,12 +162,12 @@ theorem readyStorage {input : FilePath} {directory : DiskDirectory}
     obtain ⟨_, _, _, _, rootObject⟩ := report.captured.captures
     rw [rootNames.1, rootObject, census, directorySlot]
     rfl
-  obtain ⟨_, _, keeperBinding, keeperObject, _⟩ := report.handoff.preservesKeeper
+  obtain ⟨_, _, keeperBinding, keeperObject, _, _, _, _, _, _, _, visibleKeeper, _⟩ := report.handoff.preservesKeeper
   obtain ⟨_, _, _, _, _, _, markerBinding, _⟩ := report.marker.settledInode
   have markerObject : report.marker.renamedView.modelObject report.marker.stageChild.child = report.marker.inodeState.active := by
     rw [report.handoff.renameObjects, ← report.handoff.stageObjects]
     exact report.marker.stageInode.symm
-  obtain ⟨_, _, _, _, _, _, _, _, keeperBytes, markerBytes, _⟩ := seen.markerPhysical.settles
+  obtain ⟨_, _, _, _, _, finalInodes, _, _, keeperBytes, markerBytes, _⟩ := seen.markerPhysical.settles
   have keeperBound : stored.files.names (directory.file (.walSegment 0)) = some report.keeper.settledImage.active := by
     rw [directory.walSegment_path, (children (renderWalSegmentName 0) (by simp)).1, keeperBinding]
     exact congrArg some keeperObject
@@ -176,7 +184,18 @@ theorem readyStorage {input : FilePath} {directory : DiskDirectory}
     rw [visible]
     simpa only [report.handoff.markerSettlement name, List.map_singleton, List.mem_singleton] using surviving names allowed
   have reached : opened.start.reached = allocation.afterToken := congrArg (fun result => result.2.2) returnedAt
+  have keeperSelected : state.crashPath (state.session.directory.file (.walSegment state.writer.wal.active.first)) :=
+    NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
+  have visibleAtReturn (inode) (bound : (observe allocation.afterToken).files.names
+      (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode) :
+      (seen.keeperPhysical.inodes allocation.afterToken).visible inode = state.writer.wal.active.bytes := by
+    have sameName := ((phaseFrame.trans tokenFrame).visible _ keeperSelected).1
+    have beforeName := sameName.symm.trans bound
+    rw [directoryEq, first, keeperBound] at beforeName
+    rw [tokenInodes, phaseInodes, finalInodes, emptyKeeper, ← Option.some.inj beforeName]
+    exact visibleKeeper
   rw [reached]
+  refine ⟨?_, visibleAtReturn⟩
   apply NativeReadyStorage.frame _ (phaseFrame.trans tokenFrame)
   refine ⟨⟨?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_⟩
   · rw [directoryEq]
