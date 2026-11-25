@@ -2636,8 +2636,12 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
     {markerBytes : ByteArray}
     (markerSurvives : ∃ inode ∈ reached.2.crashBindings, markerBytes ∈ reached.2.crashBytes inode)
     (selectedBytes : decode markerBytes = .ok selected)
-    (initialFrontier : ∀ inode ∈ report.initialMarker.crashBindings, ∀ bytes ∈ report.initialMarker.crashBytes inode,
-      ∀ selection, decode bytes = .ok selection → selection.frontier = current.frontier) :
+    {previousMarker : WalInodeImage} {previousHandle : KeeperDescriptorIdentity}
+    (previousSync : FsyncObservation KeeperDescriptorIdentity.description KeeperDescriptorIdentity.inode
+      previousHandle previousMarker (fun inode files => files.completeFileSync inode) (.ok () report.initialMarker))
+    (previousInode : previousHandle.inode = previousMarker.active)
+    (previousBinding : ∀ inode ∈ previousMarker.crashBindings, inode = previousMarker.active)
+    (previousSelection : decode (previousMarker.visible previousMarker.active) = .ok current) :
     ∃ plan : DiskSession.CanonicalKeeperLayout retry ((prior.history ++ batch).take through),
       plan.range.watermark = watermark ∧ plan.keeper.first = prior.wal.active.first := by
   have visible : ∃ tail, retry.keeper.active = some
@@ -2653,7 +2657,9 @@ theorem InterruptedBatchMarkerPublication.layoutOfSurvivingKeeper
         intro unchanged
         obtain ⟨inode, binding, bytes⟩ := markerSurvives
         rw [unchanged] at binding bytes
-        exact old (initialFrontier inode binding markerBytes bytes selected selectedBytes)
+        have decodedOld := markerSyncBeforeInstall_preservesSelection previousSync previousInode
+          previousBinding rfl previousSelection ⟨inode, binding, bytes⟩
+        exact old (congrArg Selection.frontier (Except.ok.inj (selectedBytes.symm.trans decodedOld)))
       have newest := choice.resolve_left old
       have count := newest ▸ newSize
       rw [counted, WAL.encode_size] at count

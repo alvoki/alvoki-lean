@@ -2083,3 +2083,8 @@ only decode to the old frontier, a survivor decoding to a new frontier
 rules out the unchanged image. This supplies the premise of the WAL
 sync proof. The prior marker stability and old keeper prefix still
 need to be carried into the native reopen composition.
+
+The keeper layout proof now gets prior marker stability from the
+successful sync report on the previous marker inode. It reuses the
+same survivor lemma as the marker-before-install proof. The old WAL
+prefix and the connection to the native reopen still need to be shown.
