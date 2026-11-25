@@ -1188,6 +1188,23 @@ private def reopen (dir : DiskDirectory) (files : SyncFiles) (marker : IO.FS.Han
     (fun plan size => WalSegmentRepair.finishBoundedMarkedOpen dir plan size
       (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename)
 
+/-- A marked reopen validates the selected WAL and checkpoint, syncs
+the descriptor returned by marker acquisition, then repairs the WAL. -/
+theorem reopen_fileEffects (directory : DiskDirectory) (files : SyncFiles)
+    (marker : IO.FS.Handle) (selection : WAL.TwoSlot.Selection) :
+    reopen directory files marker selection = (do
+      let (plan, opened, size) ← WalSegmentRepair.prepareBoundedMarkedFromReaders directory
+        (readIntegrityCheckpointSized directory
+          (readOptionalCachedOpenFile directory (directory.file .manifest))
+          readCheckpointRunSize readCheckpointRunPrefix)
+        (fun _ => pure (some (WAL.Boundary.encode selection.frontier)))
+        (fun watermark frontier => WalSegmentRepair.readSelectedWithCachedExtents directory watermark frontier
+          readDirectoryChecked inspectWalSegment readSealedWalPrefix (readKeeperPrefix files))
+      fsyncHandle marker
+      WalSegmentRepair.finishBoundedMarkedOpen directory plan size
+        (fun path => (IO.FS.removeFile path).toBaseIO) files.stage files.syncPaths IO.FS.rename
+      return opened) := rfl
+
 /-- Open an existing experimental database or initialize a fresh one.
 A legacy marker is rejected under the same exclusive database lock. -/
 def «open» (path : FilePath) : IO TwoSlotDiskTable := do

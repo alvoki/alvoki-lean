@@ -112,9 +112,12 @@ keeper repair. The logical marker projection preserves an absent crash
 binding after a pending bootstrap rename until the directory barrier.
 Before authorization, retries preserve the old-or-whole frontier choice.
 After authorization, repeated repair preserves the selected marker, sealed
-bytes and replay result. The shared installer allocates a fresh snapshot
-identity for the recovered table. Modeled marker-sync errors preserve the
-reached file image through lock cleanup. Native fault injection checks errors
+bytes and replay result. The native reopen equation identifies the
+checkpoint and WAL readers, the sync of the acquired marker handle, and
+the subsequent repair in the same order as the shared schedule. The shared
+installer allocates a fresh snapshot identity for the recovered table.
+Modeled marker-sync errors preserve the reached file image through lock
+cleanup. Native fault injection checks errors
 before and after the marker sync with a keeper tail still pending repair.
 The native trace checks the descriptor, device and inode at reopen sync,
 slot write and publication sync. The engine assumes exclusive control of
