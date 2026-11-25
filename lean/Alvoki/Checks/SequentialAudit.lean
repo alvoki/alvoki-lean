@@ -382,6 +382,7 @@ import Alvoki.Storage.Disk.NativeOpenedManifestRenameReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
+import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
 import Alvoki.Storage.Disk.NativeOpenedRestartSessions
 import Alvoki.Storage.Disk.NativeOpenedSnapshotSessions
 import Alvoki.Storage.Disk.NativeFreshOpenedSessions
@@ -2199,6 +2200,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationStop.stopsOnOpenedPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationCrash.settledWhenEffective
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedStoppedMarkerReport.reaches
+#check_axioms Alvoki.Storage.DiskSession.NativeFirstAppendStop.stopsBeforeSuffix
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedFirstAppendReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.common
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.executes
