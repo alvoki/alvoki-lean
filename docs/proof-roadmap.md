@@ -92,29 +92,46 @@ The Linux adapter uses a shared exact-prefix loop for checkpoint runs, WAL seals
 
 ### Completion checklist for native key-value refinement
 
-- [ ] Interpret the actual `DiskTable` entry points through their shared schedules and file-effect equalities where available. Connect phase and
-  snapshot operations to the same installed session, including acquisition, release, floor changes, lookup and range. Derive
-  each client-trace step by induction over those executions, from initial admission through repeated crashes and new sessions.
-  Apply `SegmentedClientReadTrace` to explain the recorded responses and reads from each returned ready session. The execution
-  premise should describe the reached native calls and their outcomes independently of membership in the proved trace. Include
-  prefixes ending in error, with the reached state available for any later retry.
-  [Native entry points](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Client replay](../lean/Alvoki/Storage/Disk/ClientReadTrace.lean)
-- [ ] State the Linux boundary in terms of primitive facts. On the supported local filesystem, the owned directory and no-follow
-  guards relate each checked binding to the device and inode actually opened or affected. Record exact bytes and cursors,
-  complete stable enumeration at clean EOF, live open descriptions and lock reference events, and the visible and durable
-  effects of each reached mutation. Include errors after an effect and the possible survivors of a power loss. The Lean proof
-  must derive the chosen manifest and ordered run bytes, the marker-selected WAL, and the next phase and session from those
-  facts. The runtime and compiler must implement the recorded primitive behavior.
-  [Held directory observations](../lean/Alvoki/Storage/Disk/HeldDirectoryReadObservations.lean) · [Descriptor inventory](../lean/Alvoki/Storage/Disk/DescriptorInventory.lean) · [Linux sync binding](../lean/native/fsync.c)
+Begin with an engine-owned empty directory. An execution consists of the actual `DiskTable` calls, their
+arguments and returned values or errors, and the reached primitive events in order. A still-running call
+and a call interrupted by process exit or power loss have no returned value. Interpret each call using its production schedule and
+file-effect equality where available. A primitive report gives the reached bytes and cursors, the directory,
+inode and open-description identities, complete enumeration at clean EOF, lock-reference events, and the
+effects that occurred before a return or interruption. The owned canonical directory stays stable and
+managed data bindings change only through observed operations under its lock. Admission may create the lock
+file before acquisition. The filesystem contract determines which effects may survive power loss. The compiler and runtime must implement the reported primitive behavior.
+[Native entry points](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Held directory observations](../lean/Alvoki/Storage/Disk/HeldDirectoryReadObservations.lean) · [Descriptor inventory](../lean/Alvoki/Storage/Disk/DescriptorInventory.lean)
+
+Prove a single invariant for every finite execution prefix. It relates the reached directory, files and
+descriptor inventory to the client history. For a ready session it also relates the exact returned session,
+installed table and snapshot handles to that history. During a call, retain the issued primitive prefix and
+any pending submission. After close, a publication error, interruption or failed open, retain the reached
+physical state and the history choices still allowed by it.
+Every choice contains the acknowledged groups in order. An uncertain group can only survive in full.
+The invariant remains meaningful when the execution ends before any successful reopen.
+[Client replay](../lean/Alvoki/Storage/Disk/ClientReadTrace.lean) · [Recovery through retries](../lean/Alvoki/Storage/Disk/SegmentedRetryTrace.lean)
+
+Prove each operation preserves the invariant and explains its returned response from the reached schedule.
+In particular, derive the selected manifest and ordered run bytes, marker-selected WAL, ownership, and
+returned phase and table from the primitive events. A matching checkpoint, an admitted retry, a successfully
+installed writer and a continued client trace are conclusions of these steps. At a ready endpoint,
+`SegmentedClientReadTrace.keyValueRefinement` and `guardedReplay` give the one abstract replay that
+explains prior responses and the returned session's supported reads.
+
+The first composition should cover bootstrap, a write or batch, a publication interruption or returned
+error, any finite sequence of failed recoveries or crashes, and a healthy reopen followed by snapshot
+acquisition and a read. Prove this with the same per-prefix invariant that will carry checkpoint, rotation
+and collection. This gives the later proofs an exact interface for consuming the reached state and observation.
 
 Close the induction by operation family. Each row is complete when every reached branch under the stated contract constructs its successor from the same returned state and observations.
 
 | Entry points | Coverage to connect |
 |---|---|
-| `open` | Combine `open_admission` and `open_fileTargets` over one reported descriptor inventory. Join markerless bootstrap and all four marked finishes (aligned or longer keeper, with or without later names) to the client trace. Carry rejected input, failed bootstrap or repair, and repeated interrupted reopen through actual cleanup into the next admission. [Bootstrap](../lean/Alvoki/Storage/Disk/BootstrapClientTrace.lean) · [Marked finish](../lean/Alvoki/Storage/Disk/ListedMarkedFinish.lean) · [Failed reopen](../lean/Alvoki/Storage/Disk/BoundedReopenFailure.lean) |
-| Write and rotation | Lift the shared publication schedules for `write`, `writeBatch` and their `WithOutcome` variants to the same submission log. Explain the exact outcomes returned to the caller. Derive unchanged preflight rejection, acknowledged completion, and uncertain retention across errors, process exit and power loss. Select all or none of an uncertain batch. Thread `rotateWal` and its error and crash survivors into the next append on the exact keeper. [Single-write guard](../lean/Alvoki/Storage/Disk/SingleWritePreflight.lean) · [Observed batch](../lean/Alvoki/Storage/Disk/SegmentedBatchAppend.lean) · [Rotation handoff](../lean/Alvoki/Storage/Disk/RotationSessionHandoff.lean) |
-| Checkpoint | Route `checkpoint` preflight, successful publication and every reached run or manifest failure and crash cut through a common handoff. Derive the visible and durable bindings and selected run bytes at the next open, including a reachable nonempty WAL tail, without asking the caller for a matching checkpoint or a ready writer. [Completed checkpoint and held open](../lean/Alvoki/Storage/Disk/CheckpointCompletionHeldReopen.lean) · [Checkpoint cuts and recovery](../lean/Alvoki/Storage/Disk/CheckpointCutSession.lean) |
+| `open` | Combine `open_admission` and `open_fileTargets` over one reported descriptor inventory. Join markerless bootstrap and all four marked finishes (aligned or longer keeper, with or without later names) to the client trace. Carry rejected input, failed bootstrap or repair, and repeated interrupted reopen through actual cleanup into the next admission. Derive the retry target and selected bytes from the preceding reached state, including a physical keeper tail beyond the commit marker after an interrupted append. [Bootstrap](../lean/Alvoki/Storage/Disk/BootstrapClientTrace.lean) · [Marked finish](../lean/Alvoki/Storage/Disk/ListedMarkedFinish.lean) · [Failed reopen](../lean/Alvoki/Storage/Disk/BoundedReopenFailure.lean) |
+| Write and rotation | Lift the shared publication schedules for `write`, `writeBatch` and their `WithOutcome` variants to the same submission log. Explain the exact outcomes returned to the caller. Derive unchanged preflight rejection, acknowledged completion, and uncertain retention from the reached append, flush, file sync, rename and directory sync events, including effects before an error or interruption. Select all or none of an uncertain batch. Thread `rotateWal` and its error and crash survivors into the next append on the exact keeper. [Single-write guard](../lean/Alvoki/Storage/Disk/SingleWritePreflight.lean) · [Observed batch](../lean/Alvoki/Storage/Disk/SegmentedBatchAppend.lean) · [Rotation handoff](../lean/Alvoki/Storage/Disk/RotationSessionHandoff.lean) |
+| Checkpoint | Route `checkpoint` preflight, successful publication and every reached run or manifest failure and crash cut through a common handoff. Project each reached primitive prefix, including an interrupted run write or run sync, to the visible and durable bindings. Derive the exact selected run bytes at the next open. If the old manifest survives, replay the committed WAL suffix between its watermark and the marker. [Completed checkpoint and held open](../lean/Alvoki/Storage/Disk/CheckpointCompletionHeldReopen.lean) · [Checkpoint cuts and recovery](../lean/Alvoki/Storage/Disk/CheckpointCutSession.lean) |
 | Close and ownership | Apply `close_schedule` to ready, poisoned and repeated close. Carry the exact unlock result, cache and reference changes into later admission. Process death follows the observed description drops, including inherited slots. Power loss follows the filesystem survivor contract. [Close retries](../lean/Alvoki/Storage/Disk/CheckpointRunDirectoryClose.lean) · [Lock references](../lean/Alvoki/Storage/Disk/LockDescriptionLifetime.lean) |
+| Snapshot operations | Use the reached phase and session identity to derive acquisition, release, floor changes, and denied or successful reads. Recover the active local pin from a successful read and preserve the same session and WAL history across pin and floor updates. A reopened session gets its floor from the selected checkpoint (zero without a checkpoint). [Shared schedules](../lean/Alvoki/Storage/Disk/SessionReadGuards.lean) · [Client read observations](../lean/Alvoki/Storage/Disk/ClientReadTrace.lean) |
 | Collection and retention | Derive the result of the observable query `planWalCollection` from its checked inventory. Use that inventory and effect-time identities for `collectCoveredWal` and `collectObsoleteRuns`. Derive safety at every unlink and barrier cut, with the correct ready or poisoned state. Join `retainRunVersions` and compaction to checkpoint and reopen while preserving selected files and supported reads. [WAL error handoff](../lean/Alvoki/Storage/Disk/SegmentedCollectionLockHandoff.lean) · [Run collection](../lean/Alvoki/Storage/Disk/VersionedRunCollection.lean) · [Retention and reopen](../lean/Alvoki/Storage/Disk/RunRetentionCollection.lean) |
 
 Track healthy recovery and reclamation progress against eventual successful required I/O, adequate resources and scheduled
