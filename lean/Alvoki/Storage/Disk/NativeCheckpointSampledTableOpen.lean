@@ -45,7 +45,8 @@ theorem NativeReadyState.crashPath_forSelectedCheckpoint
 /-- Read the selected old or new checkpoint after the literal successful
 open acquires the sampled directory and LOCK. The same sample fixes the
 manifest, runs and WAL bytes. The live catalog also fixes which canonical
-WAL names are absent through the cutoff. -/
+WAL names are absent through the cutoff. The actual aligned repair and
+reference allocations can then supply the retained writer of that table. -/
 theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (prior : NativeCheckpointSourcePrefix current primitives fsync stage)
     (names : FilePath → Option Nat) (contents : Nat → ByteArray)
@@ -99,7 +100,8 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     let actual : RunFiles := fun generation index => (names (dir.file (.run generation index))).map contents
     let retry := wal.checkpointReopenFiles wal.directory none
     let selectedPath := checkpointSurvivorPath dir writer pair.manifest
-    ∃ (cache : HeldOpenCache heap) (layout : CanonicalKeeperLayout retry writer.history)
+    ∃ (cache : HeldOpenCache heap) (published : CheckpointPublication.Image)
+      (layout : CanonicalKeeperLayout retry writer.history)
       (checkpoint : Option (PackedTable × UInt64)),
       LiteralOpenAuthority view dir cache cache.ready ∧
       names dir.path = some (cache.captured.inode cache.rootSlot.description) ∧
@@ -109,7 +111,17 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
       SelectedIntegrityCheckpoint actual pair.manifest checkpoint ∧
       source.LiteralMarkedReturn dir layout checkpoint cache.lock cache.directoryRef cache.activeRef cache.pendingRef
         cache.ready view (fun atHeap => (observe atHeap).files.names) visible namespaceView root (managedPath dir)
-        (observedOpenReadFrame view dir selectedPath cache observe) entry returnedAt table := by
+        (observedOpenReadFrame view dir selectedPath cache observe) entry returnedAt table ∧
+      (source.LiteralAlignedFinishEffects (view := view) cache dir layout entry observe →
+        source.LiteralAllocationEffects view dir cache observe visible →
+        ∀ (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat),
+        (view.files entry).image.directory.active = pair →
+        (view.files entry).image.keeper.active = some wal.active.bytes →
+        (view.files entry).image.kept = retry.kept →
+        (∀ ordinal ∈ (view.files entry).image.later.visible, writer.history.length < ordinal ∧
+          ∃ object, namespaceView.child root (renderWalSegmentName ordinal) = some object) →
+        source.LiteralAlignedReturn dir layout { published with durable := actual } checkpoint wal cache view
+          phaseIdentity tokenIdentity returnedAt table) := by
   intro dir writer pair wal actual retry selectedPath
   let live := fun atHeap => (observe atHeap).files.names
   let filesAt : heap → CheckpointSurvivingFiles := fun atHeap => ⟨live atHeap, fun inode => [visible atHeap inode]⟩
@@ -124,8 +136,8 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (fun preceding inside failed => failureEffects preceding (by simpa only [List.nil_append] using inside) failed)
   have sampled := resetFiles.trans afterFiles
   have window := sampledWindow.frame (fun start _ bound => (afterWindow start bound).trans (resetWindow start bound))
-  obtain ⟨sampledAuthority, marker, segments, _, layout, _, _, _, keeper, aligned, descriptors, offsets,
-    _, _, _, _, _, _, checkpoint, _, _, selected, _, _, _, _, _⟩ := selectedSample
+  obtain ⟨sampledAuthority, marker, segments, published, layout, _, walLayout, walValid, keeper, aligned, descriptors, offsets,
+    _, _, accepted, _, _, _, checkpoint, _, _, selected, _, _, _, _, _⟩ := selectedSample
   have liveRoot := (sampled _ (.inl rfl)).1.trans sampledAuthority.directory
   have liveLock := (sampled _ (.inr (.inl rfl))).1.trans sampledAuthority.lock
   obtain ⟨cache, admitted, authority, rootNamed, lockNamed, emptyActive, emptyPending, worker⟩ :=
@@ -190,14 +202,23 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
       · exact segmentBytes segment (List.mem_filter.mp read).1
       · exact segmentBytes segment (List.mem_append_right _ read)
     · simpa [aligned, keeper] using segmentBytes writer.wal.active (by simp [WalSegmentImage.segments])
-  refine ⟨cache, layout, checkpoint, authority, heldRoot, heldLock, emptyActive, emptyPending, keeper, aligned, selected, ?_⟩
-  exact source.readsLiteralMarkedOpen dir layout selected cache.lock cache.directoryRef cache.activeRef cache.pendingRef
+  have literal := source.readsLiteralMarkedOpen dir layout selected cache.lock cache.directoryRef cache.activeRef cache.pendingRef
     cache.ready (fun atHeap => (observe atHeap).files.names) visible namespaceView root (managedPath dir)
     observedOpenReadFrame.refl observedOpenReadFrame.trans (admitted.entersReader authority) readEffects
     manifest runs markerBytes (.inr ⟨.manifest, rfl⟩)
     (fun _ metadata _ _ index _ => .inr ⟨.run metadata.header.generation index, rfl⟩)
     (.inr ⟨.walBoundary, rfl⟩) modeled.2 (fun start _ _ => .inr ⟨.walSegment start, rfl⟩)
     (fun start _ bound => child start (layout.through ▸ bound)) physical worker
+  refine ⟨cache, published, layout, checkpoint, authority, heldRoot, heldLock, emptyActive, emptyPending,
+    keeper, aligned, selected, literal, ?_⟩
+  intro repair allocate phaseId tokenId selectedPair selectedKeeper sealed suffix
+  have retained := current.current.ready.readPrefix.refines.1.retained
+  exact source.retainsLiteralAlignedReturn dir layout (published := { published with durable := actual })
+    selected accepted retained.resumed.ordered walLayout walValid retained.spans rfl (congrArg WalSegment.first keeper)
+    aligned cache authority observe visible namespaceView root selectedPath literal selectedPair
+    (by simpa only [CanonicalKeeperLayout.target, keeper] using selectedKeeper) sealed
+    (fun ordinal member => (suffix ordinal member).imp_left (fun after => layout.through.symm ▸ after))
+    repair allocate phaseId tokenId
 
 /-- A physical checkpoint selection and its subsequent calls share one
 client ledger across restart. The prefix can belong to a fresh caller or

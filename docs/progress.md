@@ -123,8 +123,10 @@ window to that image under local namespace effects. A later open carries
 both present and absent names through reboot and failed attempts using
 per-call frames. This matters because an extra canonical WAL segment can
 change the replay start even when the expected files have the correct bytes.
-The remaining installer obligation is to derive writable storage and handle
-custody after the repair actually performed by the opener.
+The successful aligned repair and its allocations now determine the installed
+writer, returned table, phase, token, cache and lock under local callback
+laws. The next write still needs the physical storage invariant, including
+the visible keeper bytes at the returned heap.
 [Sampled checkpoint reader](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and

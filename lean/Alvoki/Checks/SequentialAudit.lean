@@ -4212,7 +4212,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheCallbacks.reachedSuccess
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.reachesHeldCache
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.readsLiteralMarkedOpen
-#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
+#check_axioms Alvoki.Storage.DiskSession.AlignedRepairImageEffects.readyAfterReturn
+
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.retainsLiteralAlignedReturn
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheCallbacks.projectsHeldCache
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.HeldCacheFrames.throughProbes
