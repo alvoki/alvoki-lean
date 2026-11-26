@@ -673,7 +673,7 @@ theorem replaysFirstAcknowledgedWrite {stream : Type}
         (syncer.group directory.path seed.directoryRef seed.activeRef seed.pendingRef)
         rename opened.handle.phase opened.handle.get opened.handle.set opened.start.reached = .ok sequence reached ∧
       prepareBatch opened.start.current.ready.state.writer.installed.table request.rows = some (batch, preparedTable) ∧
-      sequence = preparedTable.committed ∧
+      sequence = preparedTable.committed ∧ sequence.toNat = batch.length ∧
       cache.directory = seed.directoryRef ∧ cache.active = seed.activeRef ∧ cache.pending = seed.pendingRef ∧
       next.reached = reached ∧ state.writer.history = batch ∧
       opened.start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
@@ -692,7 +692,14 @@ theorem replaysFirstAcknowledgedWrite {stream : Type}
     opened.acknowledgesFirstWrite used clientView resolved references atDirectory census cacheAt
       seen.keeperPhysical.inodes runs storage settled appender stager syncer inode buffered request lookup rename nonempty wrote
   rw [dirRef, activeRef, pendingRef, opened.start.directory.trans resolved] at write
-  refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, dirRef, activeRef, pendingRef,
+  obtain ⟨ready, initialHistory, _⟩ := opened.start.current.ready.readPrefix.refines
+  obtain ⟨_, refined, represented⟩ := ready.retained.resumed.canonical
+  have initialCount : opened.start.current.ready.state.writer.installed.table.committed.toNat = 0 := by
+    rw [refined.committed, represented.committed_count, initialHistory, opened.emptyHistory]
+    rfl
+  have count : sequence.toNat = batch.length := by
+    rw [number, replay_committed_count batch (prepareBatch_spec prepared).2.1, initialCount, Nat.zero_add]
+  refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, count, dirRef, activeRef, pendingRef,
     exactHeap, history, ledger, ?_⟩
   intro _ sampled reset nameEffects restore
   have finalWindow := carries request.rows.length (freshWindow.restrictUpper covered).2 nameEffects restore

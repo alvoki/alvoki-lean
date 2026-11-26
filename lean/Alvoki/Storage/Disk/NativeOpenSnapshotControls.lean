@@ -31,7 +31,7 @@ def _root_.Alvoki.Storage.DiskTable.LatestWalLookup
     (entry : heap) (history : List WAL.Write) (key : UInt64) : Prop :=
   ∃ (issue : SnapshotPin → DiskSnapshotPin) (pin : SnapshotPin) (after : heap) (reference : SnapshotTable UInt64),
     SnapshotWalReplay .empty history reference ∧ (issue pin).UsesOpenToken token pin ∧
-    (issue pin).sequence = reference.committed ∧
+    (issue pin).sequence = reference.committed ∧ (issue pin).sequence.toNat = history.length ∧
     db.acquire = acquireLatestWith (m := IO) (do (← phase.get).installed)
       (acquireSnapshotWith (do (← phase.get).installed) phase.set issue) ∧
     acquireLatestWith (m := EStateM IO.Error heap) (do (← get phase).installed)
@@ -82,8 +82,11 @@ theorem _root_.Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterWalR
   have loaded := effects.reads entry phase (.ready installed) stored
   have loadedPin := effects.reads after phase (.ready { installed with table := pinned }) pinnedAt
   have localToken := compares wrote
-  have sequence := (owns pin).2.2.trans ((PackedTable.acquireAt_spec acquired).sequence.trans refined.committed)
-  refine ⟨issue, pin, after, reference, replayed, owns pin, sequence, acquireSource, ?_, uses.lookupPin (owns pin) key, ?_⟩
+  have sequence := (owns pin).2.2.trans (PackedTable.acquireAt_spec acquired).sequence
+  have count : installed.table.committed.toNat = history.length := by
+    simpa only [show PackedTable.empty.committed.toNat = 0 from rfl, Nat.zero_add] using replay_committed_count history played
+  refine ⟨issue, pin, after, reference, replayed, owns pin, sequence.trans refined.committed,
+    (congrArg UInt64.toNat sequence).trans count, acquireSource, ?_, uses.lookupPin (owns pin) key, ?_⟩
   · simp only [acquireLatestWith, acquireSnapshotWith, Bind.bind, EStateM.bind, loaded, Phase.installed,
       Pure.pure, EStateM.pure, acquired, wrote]
   · simp only [readSnapshotWith, withLocalHandle, Bind.bind, EStateM.bind, loadedPin, Phase.installed,
