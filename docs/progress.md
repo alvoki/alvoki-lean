@@ -80,50 +80,29 @@ common cleanup carries the observed descriptor closes at that heap through
 unlock and final lock release to derive the public diagnostic and inventory.
 Several cache references may share a handle. The fsync may already have taken effect.
 
-On a fresh table, a first acknowledged batch, one sampled crash and a successful
-reopen now compose through a latest snapshot lookup for any key. The lookup
-uses the reopened table’s actual phase and token and returns the value obtained
-by replaying the prepared batch. Its pin carries the sequence returned by the write.
-For a subsequent late publication error after the file group succeeded, the
-selected old-or-whole history also feeds that same open and snapshot proof.
-Both reader paths accept retained sealed segments under the derived offset
-selection and the bounded directory observation.
+**Writes and rotation from fresh state.** The first acknowledged batch
+establishes the cache, bytes, WAL interval and client ledger on the returned
+heap. A between-call reboot preserves that batch. If a second write stops
+at the final directory fsync, the bootstrap interval must cover both batches.
+One sampled namespace then retains the first plus zero or all of the second,
+which has no client response. A barrier that took effect excludes the old
+marker. A late publication error also feeds this reader. On successful open,
+the latest pin and lookup extend the ledger with the observed sequence, key
+and value. [Fresh traces](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 
-If the write stops during the final directory fsync, the cached handle and its
-actual reached heap feed the same crash selection under scoped filesystem frames.
-A barrier that took effect rules out the old marker in the physical result.
-The guard, phase update and file calls preserve the protected paths and
-bounded WAL names locally. After rename the frame uses the actual cached
-root read and the outstanding sync.
+Rotating a nonempty WAL seals the old keeper and establishes the write entry
+and bounded name interval for the empty successor. Creating the successor
+and reusing an existing private empty file feed the same reader. The fresh
+create path uses the cache and storage established by the first write. If
+the final directory fsync returns an error, the same file prefix leads to
+the exact diagnostic and poisoned return heap under local callback effects.
+[Rotation boundaries](proofs/native-storage.md#refinement-boundaries)
 
-On a fresh table the first acknowledged batch now supplies the storage entry
-and cached handles for a second batch interrupted during the final directory
-fsync. The bootstrap name window covers both row counts. One reboot sample
-selects the first batch plus zero or all of the second. A successful literal
-open and latest lookup record the observed sequence, key and value on that
-same ledger. The second submission has no returned response.
-[Two-write trace](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
-
-A successful nonempty rotation now hands the next writer the literal returned
-cache, census and empty successor. The old keeper becomes a seal. Creating
-the successor and reusing an existing private empty file establish the same
-WAL interval and feed the same reboot and snapshot proof. This uses the
-local callback frames and the association between the observed child and
-the joint crash namespace. On the fresh create path, the first acknowledged
-batch supplies the storage entry and bounded name interval. The rotation uses
-the same cache references, and the rebooted lookup records that batch’s value.
-[Rotation through reopen](../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
-
-A rotation whose final directory fsync returns an error shares the same
-successor probe and file-sync proof. The cached root descriptor and its
-failed fsync determine the public diagnostic and exact return heap. Local
-callback frames carry the poisoned phase to that heap.
-[Returned root error](../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean)
-
-**Next obligation.** Carry that heap through close or power loss into the
-next admission. A live reopen sees the created successor. After an ineffective
-directory fsync, a reboot can also lose its binding. The selected keeper and
-the cleanup inventory must come from the same execution.
+**Next obligation.** Carry the error heap through close or power loss into
+the next admission. For a live reopen, prove that cleanup preserves the
+created successor. For reboot after an ineffective directory fsync, select
+the keeper from the surviving name map, which may omit the successor.
+Both continuations need the descriptor inventory reached on that execution.
 Further interruptions, mixed sessions and maintenance remain in the
 [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 

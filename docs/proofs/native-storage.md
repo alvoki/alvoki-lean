@@ -249,16 +249,16 @@ filesystem premise links the observed child and its bytes to live storage
 and constrains its binding in each admitted joint crash sample. For a freshly
 created successor, the initial acknowledged write supplies both the storage
 entry and the WAL name interval on the same heap and cache.
-[Fresh write, rotation and lookup](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) · [Physical storage](../../lean/Alvoki/Storage/Disk/NativeRotationReadyStorage.lean) ·
-[Name interval](../../lean/Alvoki/Storage/Disk/NativeRotationWalWindow.lean) ·
-[Returned handle and replay](../../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
+[Fresh write, rotation and lookup](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean#L771) · [Physical storage](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRotationReadyStorage.lean#L110) ·
+[Name interval](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRotationWalWindow.lean#L69) ·
+[Returned handle and replay](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean#L17)
 
 A returned directory-sync error uses the same successor file prefix as
 success. The root descriptor load and failed fsync fix the returned heap and
 diagnostic. The file callbacks preserve the poisoned phase there. A later
 close or reboot still has to supply the actual cleanup inventory and the
 chosen directory bindings to the opener.
-[Failed directory sync](../../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean)
+[Failed directory sync](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean#L38)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the
