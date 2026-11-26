@@ -43,6 +43,13 @@ def WalSegmentImage.appendSelectedView (before : WalSegmentImage) (pair : Direct
     (history : List WAL.Write) : WalSegmentImage :=
   ⟨.settled pair, before.sealed, before.active.atHistoryEnd history⟩
 
+/-- Extending the active segment preserves the complete segment catalog. -/
+theorem WalSegmentImage.appendSelectedView_starts (wal : WalSegmentImage) (pair : DirectoryPublication.Bindings)
+    (history : List WAL.Write) :
+    (wal.appendSelectedView pair history).segments.map WalSegment.first = wal.segments.map WalSegment.first := by
+  rw [WalSegmentImage.segments, List.map_append, WalSegmentImage.segments, List.map_append]
+  rfl
+
 private theorem chainAppend {before : List WAL.Write} {first : Nat}
     {sealed : List WalSegment} {active : WalSegment}
     (chain : WalSegment.Chain before first (sealed ++ [active]))

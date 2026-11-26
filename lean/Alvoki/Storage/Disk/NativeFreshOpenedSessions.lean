@@ -425,7 +425,7 @@ theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
         (observe next.reached) (inodes next.reached).visible := by
   obtain ⟨cache, sameDir, sameActive, samePending, writeEntry⟩ :=
     opened.writeStorageEntry used view resolved references atDirectory census cacheAt settled
-  obtain ⟨schedule, returned, batch, table, next, sameDirectory, prepared, number, atReturn, pins, ledger, physical⟩ :=
+  obtain ⟨schedule, returned, batch, table, next, sameDirectory, prepared, number, atReturn, pins, ledger, physical, _⟩ :=
     opened.start.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
       request lookup rename nonempty writeEntry (seen cache sameDir sameActive samePending)
   obtain ⟨history, submissions, reads, _⟩ := opened.refinesLedger ledger

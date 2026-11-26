@@ -44,7 +44,7 @@ theorem NativeOpenedPosition.acknowledgesAndReadsLatest
       before.LedgerSuffix (priorEvents ++ .acknowledged request batch :: events) last.current ∧
       SnapshotWalReplay .empty (current.current.history ++ batch) reference ∧
       (∀ observation ∈ last.current.ready.reads, observation.agrees reference) := by
-  obtain ⟨schedule, returned, batch, table, written, _, prepared, number, reachedWrite, _, wrote, _⟩ :=
+  obtain ⟨schedule, returned, batch, table, written, _, prepared, number, reachedWrite, _, wrote, _, _⟩ :=
     current.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
       request lookup rename nonempty entry seen
   obtain ⟨pin, acquired, last, reference, issued, compared, acquireReturned, readReturned, calls, _, replay, agrees⟩ :=

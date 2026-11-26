@@ -474,13 +474,6 @@ theorem NativeReadPosition.SelectedWritePlan.modeledWindow
       (List.mem_filter.mpr ⟨stored, decide_eq_true high⟩)
     exact (Nat.not_le_of_gt after) below
 
-
-theorem _root_.Alvoki.Storage.WalSegmentImage.appendSelectedView_starts (wal : WalSegmentImage) (pair : DirectoryPublication.Bindings)
-    (history : List WAL.Write) :
-    (wal.appendSelectedView pair history).segments.map WalSegment.first = wal.segments.map WalSegment.first := by
-  rw [WalSegmentImage.segments, List.map_append, WalSegmentImage.segments, List.map_append]
-  rfl
-
 /-- The actual marked scan identifies the later names independently of
 the retained catalog. Below the cutoff use the carried window, which
 can include older seals skipped by the checkpoint reader. Above it

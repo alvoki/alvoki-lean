@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeRawWriteCustody
 import Alvoki.Storage.Disk.NativeOpenedPosition
 import Alvoki.Storage.Disk.NativeWalFileFsyncEffects
+import Alvoki.Storage.Disk.NativeRawUncertainWrite
 
 namespace Alvoki.Storage.DiskSession
 
@@ -218,7 +219,9 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
       next.WriteStorageEntry view
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
-        (storage next.reached) (inodes next.reached).visible := by
+        (storage next.reached) (inodes next.reached).visible ∧
+      next.current.ready.state.writer.wal.segments.map WalSegment.first =
+        (before).writer.wal.segments.map WalSegment.first := by
   obtain ⟨entryCensus, entryCache, old, entryKeeper, root⟩ := entry
   obtain ⟨valid, history, _⟩ := current.current.ready.readPrefix.refines
   have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
@@ -330,19 +333,21 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     · intro event member
       obtain rfl := List.mem_singleton.mp member
       trivial
-  refine ⟨current.uses.writeSchedules, batch, table, next, rfl, prepared, number, rfl, rfl, ledger, rfl, rfl, afterStorage, ?_, ?_⟩
-  · intro namedInode named
-    change (observe reached).visible ((dir).file (.walSegment (before).writer.wal.active.first)) = some namedInode at named
-    rw [← selectedKeeper] at named
-    obtain rfl := Option.some.inj (named.symm.trans exactKeeper.1)
-    exact exactKeeper.2.trans nextKeeper.symm
-  · intro literal found
-    have cached := custody.cachedDirectory
-    change (view.directory reached cache.directory).map (view.handle reached) =
-      some (custody.cachedAt, (before).directorySlot, 0) at cached
-    rw [found] at cached
-    rw [Option.some.inj cached, custody.directoryInode]
-    exact afterStorage.directoryBound
+  refine ⟨current.uses.writeSchedules, batch, table, next, rfl, prepared, number, rfl, rfl, ledger, ?_, ?_⟩
+  · refine ⟨rfl, rfl, afterStorage, ?_, ?_⟩
+    · intro namedInode named
+      change (observe reached).visible ((dir).file (.walSegment (before).writer.wal.active.first)) = some namedInode at named
+      rw [← selectedKeeper] at named
+      obtain rfl := Option.some.inj (named.symm.trans exactKeeper.1)
+      exact exactKeeper.2.trans nextKeeper.symm
+    · intro literal found
+      have cached := custody.cachedDirectory
+      change (view.directory reached cache.directory).map (view.handle reached) =
+        some (custody.cachedAt, (before).directorySlot, 0) at cached
+      rw [found] at cached
+      rw [Option.some.inj cached, custody.directoryInode]
+      exact afterStorage.directoryBound
+  · exact (before).writer.wal.appendSelectedView_starts writer.wal.directory.active writer.history
 
 end RawWrite
 
@@ -369,7 +374,9 @@ def NativeOpenedPosition.ObservesPublishedWrite
         inode buffered request lookup rename batch)
 
 /-- Interpret the successful source return from the shared physical
-observation. The next writer uses that same observation and cache. -/
+observation. The next writer uses that same observation and cache. When
+the reached callbacks frame canonical names, it also keeps the incoming
+WAL namespace guarantee for any prospective next write. -/
 theorem NativeOpenedPosition.acknowledgesObservedWrite
     {heap image : Type} {opened : NativeOpenedHandle heap} (start : NativeOpenedPosition opened)
     (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
@@ -397,16 +404,35 @@ theorem NativeOpenedPosition.acknowledgesObservedWrite
       next.WriteStorageEntry view
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
-        (observe next.reached) (inodes next.reached).visible := by
+        (observe next.reached) (inodes next.reached).visible ∧
+      ∀ {firstOffset : Nat},
+        (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) →
+        (∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
+          directory firstOffset through (observe start.reached)) →
+        (∀ through, start.WalNameEffects appender stager syncer cache request lookup rename observe firstOffset through) →
+        (∀ {settled value}, opened.set opened.phase (.ready value) settled = .ok () reached →
+          ∀ through, WalNamePresenceFrame directory firstOffset through (observe settled) (observe reached)) →
+        (∀ offset ∈ next.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
+        ∀ through, next.current.ready.state.writer.wal.SettledNamespaceWindow
+          next.current.ready.state.session.directory firstOffset through (observe next.reached) := by
   obtain ⟨files, sameStorage, returned, effects⟩ := seen
   have atWrite : start.WriteStorageEntry view cache
       (files start.reached).storageObservation (inodes start.reached).visible := by
     rw [sameStorage start.reached]
     exact entry
-  obtain ⟨schedule, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, ledger, physical⟩ :=
+
+  obtain ⟨schedule, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, ledger, physical, sameStarts⟩ :=
     start.acknowledgesPublishedWrite appender stager syncer view cache inodes runs files inode buffered
       request lookup rename nonempty returned atWrite effects
-  refine ⟨schedule, returned, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, ledger, ?_⟩
-  rwa [← sameStorage next.reached]
+  refine ⟨schedule, returned, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, ledger, ?_, ?_⟩
+  · rwa [← sameStorage next.reached]
+  · intro firstOffset covers initial nameEffects restore
+    refine ⟨sameStarts.symm ▸ covers, fun through => ?_⟩
+    have framed := start.preservesWalNamesAfterAcknowledgement appender stager syncer cache request lookup rename
+      nonempty returned (nameEffects through) (fun installed => restore installed through)
+    obtain ⟨live, crash⟩ := framed.preservesNamespaceWindow (initial through)
+    rw [sameDirectory, nextHeap]
+    exact ⟨fun offset low high => sameStarts.symm ▸ live offset low high,
+      fun names survives offset low high => sameStarts.symm ▸ crash names survives offset low high⟩
 
 end Alvoki.Storage.DiskSession

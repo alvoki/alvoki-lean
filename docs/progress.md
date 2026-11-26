@@ -26,7 +26,7 @@ give the next attempt the same selected WAL catalog and no later names.
 The longer read releases its keeper before staging. The pending list is
 then empty. After staging, it contains only the new file handle. The
 actual lookup and filtered cache update select that handle for fsync.
-This derives the old keeper's live bytes and the new inode's durable
+This preserves the observed old keeper bytes and derives the new inode's durable
 prefix under the local rule that dropping this reference preserves other
 inodes' bytes. The failed open uses its actual cache disposal and unlock.
 On the next aligned attempt, a successful directory fsync can eliminate
@@ -44,6 +44,16 @@ The nonempty path settles the resulting names with a second directory
 fsync. Both paths sync the original keeper and carry the storage guarantee
 through the phase and token allocations of the actual returned table.
 Grouped-sync and late-publication recovery share this proof.
+
+An acknowledged write also carries the live and durable WAL namespace
+to its returned writer. The actual append preserves the segment starts.
+Given the incoming catalog and the name effects of the reached callbacks,
+the next call gets the same lower bound and a catalog for every prospective
+batch end. Grouped recovery and its subsequent write and snapshot accept
+the incoming client history, so an earlier acknowledged write can remain
+in the same ledger across the failed write and recovery.
+[Returned writer](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
+[Grouped recovery and snapshot](../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean)
 
 The exact table returned after aligned recovery now supplies the same
 WAL name guarantee as fresh bootstrap. From the carried lower offset to

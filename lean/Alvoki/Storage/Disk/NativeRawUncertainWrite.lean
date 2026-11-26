@@ -7,6 +7,36 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentCommit WalSegmentRepair CheckpointPublication
 
+/-- Presence of canonical WAL names in a given replay window. Older names
+may already have been collected. Names beyond the window belong to later
+repair. Inode identity and bytes have independent invariants. -/
+def _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow (wal : WalSegmentImage)
+    (directory : DiskDirectory) (first through : Nat) (names : FilePath → Option Nat) : Prop :=
+  ∀ start, first ≤ start → start ≤ through →
+    ((names (directory.file (.walSegment start))).isSome = true ↔ start ∈ wal.segments.map WalSegment.first)
+
+theorem _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow.frame
+    {wal : WalSegmentImage} {directory : DiskDirectory} {first through : Nat}
+    {before after : FilePath → Option Nat} (initial : wal.NamespaceWindow directory first through before)
+    (presence : ∀ start, first ≤ start → start ≤ through →
+      (after (directory.file (.walSegment start))).isSome = (before (directory.file (.walSegment start))).isSome) :
+    wal.NamespaceWindow directory first through after :=
+  fun start lower upper => presence start lower upper ▸ initial start lower upper
+
+theorem _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow.restrict
+    {wal : WalSegmentImage} {directory : DiskDirectory} {first through lower upper : Nat}
+    {names : FilePath → Option Nat} (initial : wal.NamespaceWindow directory first through names)
+    (starts : first ≤ lower) (ends : upper ≤ through) : wal.NamespaceWindow directory lower upper names :=
+  fun start after before => initial start (Nat.le_trans starts after) (Nat.le_trans before ends)
+
+/-- In the requested interval, the live directory and every joint crash
+map name exactly the modeled WAL segments, including the gaps. -/
+abbrev _root_.Alvoki.Storage.WalSegmentImage.SettledNamespaceWindow
+    (wal : WalSegmentImage) (directory : DiskDirectory) (first through : Nat)
+    (storage : CheckpointStorageObservation) : Prop :=
+  wal.NamespaceWindow directory first through storage.files.names ∧
+    ∀ names ∈ storage.crashNames, wal.NamespaceWindow directory first through names
+
 /-- Preserve canonical WAL name presence in the selected interval. A
 later crash map uses one earlier live or crash map for the whole interval.
 The frame does not constrain inode identity or file contents. -/
@@ -75,6 +105,18 @@ theorem ofRootSync {effective : Bool} (effect : WalRootSyncEffect directory effe
       ((effect.settled applied names possible (.walSegment start)).trans (effect.visible (.walSegment start)))⟩
 
 end WalNamePresenceFrame
+
+theorem WalNamePresenceFrame.preservesNamespaceWindow
+    {wal : WalSegmentImage} {directory : DiskDirectory} {first through : Nat}
+    {entry reached : CheckpointStorageObservation}
+    (frame : WalNamePresenceFrame directory first through entry reached)
+    (initial : wal.SettledNamespaceWindow directory first through entry) :
+    wal.SettledNamespaceWindow directory first through reached := by
+  refine ⟨initial.1.frame frame.live, ?_⟩
+  intro names survives
+  obtain ⟨prior, fromLive | fromCrash, same⟩ := frame.survivors names survives
+  · exact initial.1.frame (fromLive ▸ same)
+  · exact (initial.2 prior fromCrash).frame same
 
 /-- File callbacks preserve the original phase cell independently of
 their WAL effects. Keep authority and the protected files through the
