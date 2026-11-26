@@ -241,7 +241,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     (scope := (before).writeFramePath) fun _ kept => NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept))
   obtain ⟨appended, staged, grouped, renamed, issued, directoryHandle, wrote, stagedMarker, filesSynced, moved,
     loadedRoot, syncedRoot⟩ := syncer.publicationReturned cache appender stager rename committed
-  obtain ⟨keeperGrouped, markerGrouped, keeperName, keeperBytesAtGroup⟩ := syncer.groupedStorageFromPublication
+  obtain ⟨keeperGrouped, markerGrouped, keeperName, keeperBytesAtGroup, _⟩ := syncer.groupedStorageFromPublication
     cache view appender stager inodes observe inode buffered atPoison keeperAtPoison wrote stagedMarker filesSynced
     (appendEffects wrote atPoison) (fun named => stageEffects named stagedMarker) (barrierEffects filesSynced)
   obtain ⟨target, rootBound, loadedFiles, loadVisible⟩ := loadEffect loadedRoot

@@ -133,7 +133,8 @@ theorem RawSyncCalls.groupedReturnedStorage {heap image : Type} (calls : RawSync
 
 /-- The keeper handle used by the successful grouped barrier supplies
 the same live inode and bytes at its return. The two file fsyncs preserve
-visible bytes. Consuming the pending cell needs its own local frame. -/
+visible bytes and crash names. Consuming the pending cell needs its own
+local frame for the keeper path. -/
 theorem RawSyncCalls.groupedKeeperVisible {heap image : Type} (calls : RawSyncCalls heap)
     {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles}
     (cache : OpenSyncCacheRefs files directory.path) (view : OpenCloseHeapView heap image) {first : Nat}
@@ -153,20 +154,28 @@ theorem RawSyncCalls.groupedKeeperVisible {heap image : Type} (calls : RawSyncCa
       markerHandle consumed reached)
     (consumeKeeps : let inode := (view.descriptors staged).inode (view.handle staged keeperHandle).2.1.description
       let before := reachedState (calls.fsync keeperHandle staged)
-      (observe consumed).visible (directory.file (.walSegment first)) =
-        (observe before).visible (directory.file (.walSegment first)) ∧
+      (observe before).storageObservation.Frames (· = directory.file (.walSegment first))
+        (observe consumed).storageObservation ∧
       (inodes consumed).visible inode = (inodes before).visible inode) :
     let inode := (view.descriptors staged).inode (view.handle staged keeperHandle).2.1.description
     (observe reached).visible (directory.file (.walSegment first)) = some inode ∧
-    (inodes reached).visible inode = (inodes staged).visible inode := by
+    (inodes reached).visible inode = (inodes staged).visible inode ∧
+    ∀ names ∈ (observe reached).crashBindings, ∃ prior ∈ (observe staged).crashBindings,
+      names (directory.file (.walSegment first)) = prior (directory.file (.walSegment first)) := by
   intro inode
   obtain ⟨keeperReturned, markerReturned⟩ := calls.groupedFileReturns cache keeperRoute markerRoute grouped
-  obtain ⟨keeperNamed, keeperSynced, keeperNames, _⟩ := keeperEffect _ keeperReturned
-  obtain ⟨_, markerSynced, markerNames, _⟩ := markerEffect markerReturned
+  obtain ⟨keeperNamed, keeperSynced, keeperNames, keeperCrash⟩ := keeperEffect _ keeperReturned
+  obtain ⟨_, markerSynced, markerNames, markerCrash⟩ := markerEffect markerReturned
   have keeperVisible := congrArg (fun image => image.visible inode) keeperSynced
   have markerVisible := congrArg (fun image => image.visible inode) markerSynced
-  exact ⟨(congrFun markerNames _).trans (consumeKeeps.1.trans ((congrFun keeperNames _).trans keeperNamed)),
-    markerVisible.trans (consumeKeeps.2.trans keeperVisible)⟩
+  have sameName := (consumeKeeps.1.visible _ rfl).1
+  refine ⟨(congrFun markerNames _).trans (sameName.trans ((congrFun keeperNames _).trans keeperNamed)),
+    markerVisible.trans (consumeKeeps.2.trans keeperVisible), ?_⟩
+  intro names survives
+  have atConsumption : names ∈ (observe consumed).crashBindings := markerCrash ▸ survives
+  obtain ⟨prior, possible, same⟩ := consumeKeeps.1.survivors names atConsumption
+  change prior ∈ (observe (reachedState (calls.fsync keeperHandle staged))).crashBindings at possible
+  exact ⟨prior, keeperCrash ▸ possible, same _ rfl⟩
 
 /-- Use the actual cached routes after append and stage. The keeper
 payload is carried from the append return. The staged marker's payload
@@ -419,7 +428,9 @@ theorem RawSyncCalls.groupedStorageFromPublication {heap image : Type} (calls : 
     (observe reached).storageObservation.files.Stored (directory.file .stagedWalBoundary)
       (WAL.Boundary.encode count.toUInt64) ∧
     (observe reached).visible (directory.file (.walSegment first)) = some keeper ∧
-    (inodes reached).visible keeper = priorBytes ++ bytes := by
+    (inodes reached).visible keeper = priorBytes ++ bytes ∧
+    ∀ names ∈ (observe reached).crashBindings, ∃ prior ∈ (observe staged).crashBindings,
+      names (directory.file (.walSegment first)) = prior (directory.file (.walSegment first)) := by
   obtain ⟨_, _, keeperNamed, keeperIdentity, active, remembered, appendBytes, keptByStage, stagedBytes⟩ :=
     stagedPublicationTargets cache view appender stager inodes observe inode buffered priorBinding priorVisible
       wrote stagedMarker appendEffects stageEffects
@@ -435,10 +446,10 @@ theorem RawSyncCalls.groupedStorageFromPublication {heap image : Type} (calls : 
   have keeperInode := effects.keeperTarget.inode.trans effects.keeperSelected
   have consumedKeeps := effects.consumeKeeper.2
   rw [← keeperInode] at consumedKeeps
-  obtain ⟨named, liveBytes⟩ := calls.groupedKeeperVisible cache view keeperRoute markerRoute grouped inodes runs observe
-    effects.keeperEffect effects.markerEffect ⟨(effects.consumeKeeper.1.visible _ rfl).1, consumedKeeps⟩
+  obtain ⟨named, liveBytes, survivors⟩ := calls.groupedKeeperVisible cache view keeperRoute markerRoute grouped inodes runs observe
+    effects.keeperEffect effects.markerEffect ⟨effects.consumeKeeper.1, consumedKeeps⟩
   rw [keeperInode] at named liveBytes
-  exact ⟨keeperStored, markerStored, named, liveBytes.trans (keptByStage.trans appendBytes)⟩
+  exact ⟨keeperStored, markerStored, named, liveBytes.trans (keptByStage.trans appendBytes), survivors⟩
 
 /-- Local effects of one reached file fsync, including a reported
 failure. The actual return selects the heap. A successful call settles

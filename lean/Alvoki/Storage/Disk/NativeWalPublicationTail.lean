@@ -155,23 +155,6 @@ local notation "sync" => calls.group directory.path cache.directory cache.active
 local notation "source" => directory.file DiskFile.stagedWalBoundary
 local notation "marker" => directory.file DiskFile.walBoundary
 
-/-- A reported rename failure returns before the cached root sync. Its
-effect decides the live marker and which joint crash choices may select
-the already synced replacement. -/
-theorem failedMarkerRenameSelects {first count : Nat} {bytes : ByteArray} {entry appended staged grouped reached : heap}
-    {cause : IO.Error} {effective : Bool} (storage : heap → CheckpointStorageObservation)
-    (payloads : WalPublicationPayloads)
-    (wrote : append (directory.file (.walSegment first)) bytes entry = .ok () appended)
-    (remembered : stage source (WAL.Boundary.encode count.toUInt64) appended = .ok () staged)
-    (synced : sync #[directory.file (.walSegment first), source] staged = .ok () grouped)
-    (failed : rename source marker grouped = .error cause reached)
-    (selected : payloads.Grouped directory first (storage grouped))
-    (effect : WalMarkerRenameEffect directory payloads.newMarker effective (storage grouped) (storage reached)) :
-    commitBytesAt directory first bytes count append stage sync rename entry = .error cause reached ∧
-    payloads.Selections directory first (storage reached) effective (fun published => published = true → effective = true) := by
-  refine ⟨?_, effect.selects selected⟩
-  simp only [calls.commitAfterStaging cache appender stager rename wrote remembered, synced, failed]
-
 /-- The successful rename and original cached directory cell select
 one literal final fsync. A reported error can follow settlement, in
 which case each joint survivor has the new marker and full keeper. -/
