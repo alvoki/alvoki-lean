@@ -414,8 +414,8 @@ binding remains admissible on reboot. Once the directory effect settles the rena
 reported fsync error is compatible with a definite new marker. These results derive a
 bounded repair target from one chosen map and its selected manifest, marker and keeper
 bytes. The post-group payload observations and native effect laws remain explicit. The
-recovery worker must still consume the derived target and prove the exact returned table
-across all supported retries.
+grouped file-sync error now supplies its target directly to the recovery worker. The other
+publication cuts still need adapters to the common recovery fold.
 
 The selected batch target supplies the same repair plan after a reported reboot or live retry.
 The reboot bridge uses one joint map and the bytes sampled at its actual heap. In the grouped
@@ -429,6 +429,17 @@ snapshot observations for either selected history. The bridge still takes local 
 for the failed and healthy opens, with a vacant lock at the healthy entry.
 [Observed reboot](../../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean)
 · [Selected retry return](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
+
+For the grouped file-sync failure, the original ready phase supplies the prepared write. The
+actual guard, poison assignment, append, marker stage and failed group determine the literal
+`commitUnknown` return. Local frames carry the selected checkpoint across those reached
+heaps. One observed reboot supplies the old marker, and the fixed interpreter consumes that
+selection across the failed opens and successful installation. The replay ledger for the
+returned table retains the previous history and snapshot reads and records the uncertain
+submission with zero retained writes. The proof assumes the reported native callback effects,
+the joint Linux crash choice and the observations of the individual open attempts.
+[Grouped write and recovery](../../lean/Alvoki/Storage/Disk/NativeGroupedWriteRecovery.lean)
+· [Replay ledger](../../lean/Alvoki/Storage/Disk/NativeSourceLedger.lean)
 
 A marked repair that fails after changing files supplies its reached image through the same
 worker and finalizers as the read-only error path. The local stage-sync and final-directory

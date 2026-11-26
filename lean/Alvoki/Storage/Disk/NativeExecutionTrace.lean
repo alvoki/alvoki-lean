@@ -876,6 +876,41 @@ theorem NativeExecutionStep.uncertainBatchWhole (step : NativeExecutionStep befo
     rename_i pending seen next reopened
     exact (seen.frames reopened).1
 
+/-- Client observations of a reached source or modeled execution.
+The execution itself supplies the evidence for these equations. -/
+structure NativeExecutionPosition.LedgerSuffix
+    (start : NativeExecutionPosition) (events : List NativeExecutionEvent) (last : NativeExecutionPosition) : Prop where
+  history : last.history = start.history ++ events.flatMap NativeExecutionEvent.writes
+  submissions : last.submissions = start.submissions ++ events.flatMap NativeExecutionEvent.submissions
+  reads : last.ready.reads = start.ready.reads ++ events.flatMap NativeExecutionEvent.reads
+  whole : ∀ event ∈ events, event.uncertainBatchWhole
+
+namespace NativeExecutionPosition.LedgerSuffix
+
+variable {start middle last : NativeExecutionPosition} {earlier later : List NativeExecutionEvent}
+
+theorem empty (position : NativeExecutionPosition) : position.LedgerSuffix [] position := by
+  exact ⟨by simp, by simp, by simp, by simp⟩
+
+theorem append (first : start.LedgerSuffix earlier middle) (second : middle.LedgerSuffix later last) :
+    start.LedgerSuffix (earlier ++ later) last := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · simp only [second.history, first.history, List.flatMap_append, List.append_assoc]
+  · simp only [second.submissions, first.submissions, List.flatMap_append, List.append_assoc]
+  · simp only [second.reads, first.reads, List.flatMap_append, List.append_assoc]
+  · intro event member
+    exact (List.mem_append.mp member).elim (first.whole event) (second.whole event)
+
+end NativeExecutionPosition.LedgerSuffix
+
+theorem NativeExecutionStep.ledgerSuffix {start last : NativeExecutionPosition} {event : NativeExecutionEvent}
+    (step : NativeExecutionStep start event last) : start.LedgerSuffix [event] last := by
+  obtain ⟨history, submissions, reads⟩ := step.ledgers
+  refine ⟨by simpa using history, by simpa using submissions, by simpa using reads, ?_⟩
+  intro observed member
+  obtain rfl := List.mem_singleton.mp member
+  exact step.uncertainBatchWhole
+
 /-- A finite trace of supported reads, acknowledged native writes,
 healthy maintenance, and the covered close, write recovery, and quiet
 crash/reopen routes. Each step starts at the preceding reached state. -/
@@ -885,32 +920,21 @@ inductive NativeExecutionTrace (start : NativeExecutionPosition) :
   | step (prior : NativeExecutionTrace start events before) (next : NativeExecutionStep before event after) :
       NativeExecutionTrace start (events ++ [event]) after
 
+theorem NativeExecutionTrace.ledgerSuffix (observed : NativeExecutionTrace start events last) :
+    start.LedgerSuffix events last := by
+  induction observed with
+  | empty => exact .empty _
+  | step _ next ih => exact ih.append next.ledgerSuffix
+
 theorem NativeExecutionTrace.ledgers (observed : NativeExecutionTrace start events last) :
     last.history = start.history ++ events.flatMap NativeExecutionEvent.writes ∧
     last.submissions = start.submissions ++ events.flatMap NativeExecutionEvent.submissions ∧
-    last.ready.reads = start.ready.reads ++ events.flatMap NativeExecutionEvent.reads := by
-  induction observed with
-  | empty => simp
-  | step _ next ih =>
-    obtain ⟨writes, submissions, reads⟩ := next.ledgers
-    refine ⟨?_, ?_, ?_⟩
-    · rw [writes, ih.1]
-      simp [List.append_assoc]
-    · rw [submissions, ih.2.1]
-      simp [List.append_assoc]
-    · rw [reads, ih.2.2]
-      simp [List.append_assoc]
+    last.ready.reads = start.ready.reads ++ events.flatMap NativeExecutionEvent.reads :=
+  ⟨observed.ledgerSuffix.history, observed.ledgerSuffix.submissions, observed.ledgerSuffix.reads⟩
 
 theorem NativeExecutionTrace.uncertainBatchesWhole (observed : NativeExecutionTrace start events last) :
-    ∀ event ∈ events, event.uncertainBatchWhole := by
-  induction observed with
-  | empty => simp
-  | step _ next ih =>
-    intro event member
-    rcases List.mem_append.mp member with earlier | newest
-    · exact ih event earlier
-    · obtain rfl := List.mem_singleton.mp newest
-      exact next.uncertainBatchWhole
+    ∀ event ∈ events, event.uncertainBatchWhole :=
+  observed.ledgerSuffix.whole
 
 /-- Every acknowledged batch is present in order, all logged responses
 agree with one replay, and that same replay explains the returned table's

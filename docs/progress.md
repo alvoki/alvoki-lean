@@ -1,5 +1,18 @@
 # Current handoff
 
+A returned error in the WAL file-fsync group now composes with one observed joint reboot,
+any finite sequence of admitted marked open failures, and the exact successful return of the
+same open interpreter. The returned table keeps the old history and existing snapshot reads
+and records the uncertain batch with no retained writes. The checkpoint bytes and live keeper
+come from the successful attempt's reached namespace, including after an earlier repair replaces
+the keeper. The write frames compose across the guard and poison prefix, append, stage and group
+callback. The remaining write cuts still need to supply their selected reboot target to this
+common recovery proof. Continuing with a durable write needs the final open's physical ready
+storage facts. The existing modeled trace now uses the same ledger composition for writes,
+submissions, snapshot reads and batch atomicity.
+[Grouped error through recovery](../lean/Alvoki/Storage/Disk/NativeGroupedWriteRecovery.lean)
+· [Replay ledger](../lean/Alvoki/Storage/Disk/NativeSourceLedger.lean)
+
 The selected write retry proof now follows one fixed marked open interpreter from the first failed
 call to the successful installation. Each failure retains its exact diagnostic and returned heap.
 The file-effect proof is indexed by those endpoints and carries the valid selected plan, protected

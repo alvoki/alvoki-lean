@@ -248,23 +248,13 @@ local notation "dir" => current.state.session.directory
 local notation "retryFiles" => (view.files reached)
 local notation "census" => (view.descriptors reached)
 
-/-- The next successful open uses the actual last retry heap. Its native
-stat and open identify the live keeper, while the derived bounded plan
-carries the selected checkpoint and earlier client reads into the table. -/
-theorem NativeReadPosition.opensAfterWriteRetries
+/-- Primitive observations tying a healthy admission to this interpreter and
+to the actual names at the final retry heap. -/
+def NativeReadPosition.ObservesHealthyWriteRetry
     (source : RawMarkedOpenInterpreter heap stream)
-    {rows : List (UInt64 × Option UInt64)} {table : PackedTable}
-    (prepared : prepareBatch current.state.writer.installed.table rows = some (batch, table))
-    (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
-    (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
-    {first : heap} (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
-    {attempts : RawOpenRetryTrace view dir source.calls source.init source.release first returns reached}
-    (effects : RawOpenRetryTrace.SelectedEffects view dir source first target
-      (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) current.state.selectedRetryPath
-      (RawOpenRetryTrace.KeeperAt view dir target names visible) attempts)
-    (initial : RawOpenRetryTrace.SelectedEntry view current.state target names visible first)
-    (vacant : TryLockObserves (retryFiles).owners dir (.ok true))
-    (observe : ∀ plan : current.SelectedWritePlan batch target (retryFiles).image,
+    (names : heap → FilePath → Option Nat)
+    (vacant : TryLockObserves (retryFiles).owners dir (.ok true)) : Prop :=
+    ∀ plan : current.SelectedWritePlan batch target (retryFiles).image,
       ∃ (opening : MarkedReadyOpenObservations input dir census retryFiles plan.layout
           current.state.writer.published vacant plan.selected)
         (raw : RawHealthyMarkedOpenEffects opening view source.calls source.init reached phaseIdentity tokenIdentity
@@ -276,11 +266,18 @@ theorem NativeReadPosition.opensAfterWriteRetries
         names reached (dir).path = opening.reads.bindings (dir).path ∧
         names reached ((dir).file .lock) = opening.reads.bindings ((dir).file .lock) ∧
         ∀ path metadata inode, plan.layout.selectedFilePath dir path →
-          opening.reads.reads.stat path = .ok (metadata, inode) → names reached path = some inode)
-    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
-    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
-    (phase : OpenPhaseCellEffects view.phase get set)
-    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
+          opening.reads.reads.stat path = .ok (metadata, inode) → names reached path = some inode
+
+/-- The chronological failures and the successful source return share one
+interpreter. Every selected file is read through its reached name and inode. -/
+def NativeReadPosition.SelectedWriteRecovery
+    (source : RawMarkedOpenInterpreter heap stream)
+    (names : heap → FilePath → Option Nat)
+    (visible : heap → Nat → ByteArray) (first : heap)
+    (vacant : TryLockObserves (retryFiles).owners dir (.ok true))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) : Prop :=
     source.FailedCalls first returns reached ∧
     NativeReadyProtectedStorage current.state ⟨names reached, fun inode => [visible reached inode]⟩ ∧
     ∃ (plan : current.SelectedWritePlan batch target (retryFiles).image)
@@ -310,7 +307,34 @@ theorem NativeReadPosition.opensAfterWriteRetries
         ∀ payload, current.state.writer.published.durable metadata.header.generation index = some payload →
         ∃ run : opening.reads.reads.ObservesFile ((dir).file (.run metadata.header.generation index)) payload,
           names reached ((dir).file (.run metadata.header.generation index)) = some run.object ∧ visible reached run.object = payload) ∧
-      raw.SelectedReturn (log ++ [.uncertainBatch batch]) current.reads (fun _ => source.openTable input reached) get set ptrEq := by
+      raw.SelectedReturn (log ++ [.uncertainBatch batch]) current.reads (fun _ => source.openTable input reached) get set ptrEq
+
+/-- The next successful open uses the actual last retry heap. Its native
+stat and open identify the live keeper, while the derived bounded plan
+carries the selected checkpoint and earlier client reads into the table. -/
+theorem NativeReadPosition.opensAfterWriteRetries
+    (source : RawMarkedOpenInterpreter heap stream)
+    {rows : List (UInt64 × Option UInt64)} {table : PackedTable}
+    (prepared : prepareBatch current.state.writer.installed.table rows = some (batch, table))
+    (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
+    {first : heap} (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    {attempts : RawOpenRetryTrace view dir source.calls source.init source.release first returns reached}
+    (effects : RawOpenRetryTrace.SelectedEffects view dir source first target
+      (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) current.state.selectedRetryPath
+      (RawOpenRetryTrace.KeeperAt view dir target names visible) attempts)
+    (initial : RawOpenRetryTrace.SelectedEntry view current.state target names visible first)
+    (vacant : TryLockObserves (retryFiles).owners dir (.ok true))
+    (observe : current.ObservesHealthyWriteRetry
+        (input := input) (view := view) (batch := batch) (target := target) (reached := reached)
+      (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) source names vacant)
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (phase : OpenPhaseCellEffects view.phase get set)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
+    current.SelectedWriteRecovery (returns := returns)
+    (input := input) (view := view) (batch := batch) (target := target) (reached := reached)
+      (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) source names visible first vacant get set ptrEq := by
   obtain ⟨⟨plan⟩, kept, frame, carries, failures⟩ := current.preparesWriteRetry prepared fits admitted initial.manifest effects initial.valid
   obtain ⟨opening, raw, fileCalls, directoryCalls, keeperCallbacks, refs, root, lock, actualStat⟩ := observe plan
   let files (heap : heap) : CheckpointSurvivingFiles := ⟨names heap, fun inode => [visible heap inode]⟩

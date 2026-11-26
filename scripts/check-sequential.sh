@@ -401,6 +401,9 @@ lake env leanchecker Alvoki.Storage.Disk.NativeSelectedWriteReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeWalGroupedTail
 lake env leanchecker Alvoki.Storage.Disk.NativeWalPublicationTail
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedWalRetryTarget
+lake env leanchecker Alvoki.Storage.Disk.NativeGroupedWriteReboot
+lake env leanchecker Alvoki.Storage.Disk.NativeSourceLedger
+lake env leanchecker Alvoki.Storage.Disk.NativeGroupedWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedUncertainWrite
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
