@@ -368,9 +368,12 @@ immutable files to their durable contents, and later WAL names to the physical s
 An independent failure before flock also exposes its local file frame, including the keeper
 binding in place when the call began. For a second power loss after a replacement, one surviving
 directory map can still name the old inode. Its live bytes before the rename and the synced
-bytes of the replacement leave the old inode's durable contents undetermined. The first reboot
-supplies an accepted durable payload. The missing retry frame must carry accepted bytes for
-each keeper inode named by a surviving map through cleanup and resampling.
+bytes of the replacement leave the old inode's durable contents undetermined. The first reboot supplies an accepted durable payload. Through read-only failures,
+`CrashFileFrame` preserves the possible bytes of each keeper inode named by a surviving map.
+At another observed power loss, `selectsRetryAfterRepair` samples the keeper, marker,
+manifest, seals and runs through that one map and rebuilds the ordinary retry entry. It
+requires the selected immutable child names on that map to agree with the reached names.
+The repair still has to establish that agreement and the keeper invariant at its error return.
 The installation still uses reported healthy primitive callbacks. The fixed-source execution must derive those reports.
 [Recovery observations](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean) · [Reached raw open](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
 · [Final fsync effects](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)

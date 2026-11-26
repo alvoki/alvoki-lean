@@ -166,6 +166,45 @@ theorem RawWriteRebootEntry.startsDurableRetry
     exact (reset.crashBindings surviving possible directory.path (.inl rfl)).trans
       (reset.bindings directory.path (.inl rfl)).symm
 
+/-- After a repair, the next power loss selects a single directory map.
+The immutable files and marker keep their selected bindings on that map.
+The keeper may name a different inode, whose sampled bytes must retain
+the committed prefix. These facts re-establish the ordinary retry entry. -/
+theorem RawWriteRebootEntry.selectsRetryAfterRepair
+    (seen : RawWriteRebootEntry state view storage names visible failed rebooted)
+    {target : Target} (first : target.first = state.writer.wal.active.first)
+    (sameManifest : target.pair.manifest = state.writer.target.pair.manifest)
+    (durable : state.SelectedRetryDurability target (storage failed))
+    (bindings : ∀ path, state.selectedRetryPath path → path ≠ state.session.directory.path →
+      names rebooted path = (storage failed).files.names path)
+    (keeper : RawOpenRetryTrace.KeeperCrashChoices state.session.directory target (storage failed)) :
+    RawOpenRetryTrace.SelectedEntry view state target names visible rebooted ∧
+    TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
+    (view.descriptors rebooted).slots = [] := by
+  have selectedName (path : FilePath) (selected : state.selectedRetryPath path) :
+      names rebooted path = (storage failed).files.names path := by
+    by_cases root : path = state.session.directory.path
+    · exact root ▸ durable.rootSettled _ seen.chosen
+    · exact bindings path selected root
+  obtain ⟨protectedFiles, manifest⟩ := durable.protectedFiles.samplesRebootFiles (names rebooted) (visible rebooted)
+    (fun path inside => selectedName path (.inr inside)) seen.sampled
+  obtain ⟨_, _, marker, _, present, _, _⟩ := DirectoryPublication.Bindings.walRange_accounting target.decoded
+  let markerPath := state.session.directory.file .walBoundary
+  obtain ⟨inode, named, contents⟩ := (durable.marker marker present).samplesAtBinding (names rebooted)
+    (visible rebooted) (selectedName markerPath (.inl rfl)) (fun inode => seen.samplesWal markerPath inode (.inr (.inl rfl)))
+  have marked : (names rebooted markerPath).map (visible rebooted) = target.pair.walBoundary := by
+    rw [named, Option.map_some, contents, present]
+  have pair : target.pair = ⟨(names rebooted (state.session.directory.file .manifest)).map (visible rebooted),
+      (names rebooted markerPath).map (visible rebooted)⟩ := by
+    change DirectoryPublication.Bindings.mk target.pair.manifest target.pair.walBoundary = _
+    rw [sameManifest, manifest, marked]
+  obtain ⟨keeperInode, keeperName, accepts⟩ := keeper (names rebooted) seen.chosen
+  rw [first] at keeperName
+  have bytes := seen.samplesWal _ keeperInode (.inr (.inr rfl)) keeperName
+  apply seen.selectsSampledRetry first sameManifest protectedFiles pair
+  rw [keeperName, Option.map_some]
+  exact accepts _ bytes
+
 /-- Carry a frame across a block of actual failed calls. The premise
 sees each issued call's prefix in the full chronology and its actual
 error and reached heap. -/

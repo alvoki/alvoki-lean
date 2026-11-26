@@ -478,37 +478,6 @@ theorem NativeReadyStorage.selectedWriteManifest {state : NativeReadyState} {ent
     obtain ⟨_, _, bound, exactBytes⟩ := old.sampleWriteFile frame protectedPath manifest names chosen contents sample
     rw [bound, Option.map_some, exactBytes]
 
-/-- On the same chosen reboot map, the root and lock keep their inode
-identities and the selected runs and immutable seals keep both their names
-and bytes. The byte sampling law is scoped to the regular files used by
-recovery. -/
-theorem NativeReadyStorage.retainsWriteRebootFiles {state : NativeReadyState} {entry reached : CheckpointStorageObservation}
-    (old : NativeReadyStorage state entry) (frame : entry.Frames state.writeFramePath reached)
-    (names : FilePath → Option Nat) (chosen : names ∈ reached.crashNames) (contents : Nat → ByteArray)
-    (sample : ∀ path,
-      checkpointSurvivorPath state.session.directory state.writer state.writer.target.pair.manifest path →
-      ∀ inode, names path = some inode → contents inode ∈ reached.files.bytes inode) :
-    names state.session.directory.path = some (state.census.inode state.directorySlot.description) ∧
-    names (state.session.directory.file .lock) = some (state.census.inode state.owner.description) ∧
-    (∀ segment ∈ state.writer.wal.sealed,
-      let path := state.session.directory.file (.walSegment segment.first)
-      ∃ inode, entry.files.names path = some inode ∧ names path = some inode ∧ contents inode = segment.bytes) ∧
-    ∀ bytes metadata, state.writer.target.pair.manifest = some bytes →
-      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata → ∀ index < metadata.header.runCount.toNat,
-      ∀ payload, state.writer.published.durable metadata.header.generation index = some payload →
-        let path := state.session.directory.file (.run metadata.header.generation index)
-        ∃ inode, entry.files.names path = some inode ∧ names path = some inode ∧ contents inode = payload := by
-  refine ⟨(old.chosenWriteBinding frame names chosen (.inl rfl)).trans old.directoryBound,
-    (old.chosenWriteBinding frame names chosen (.inr (.inl rfl))).trans old.lockBound, ?_, ?_⟩
-  · intro segment member path
-    exact old.sampleWriteFile frame (.inr (.inr (.inr (.inl ⟨segment, member, rfl⟩))))
-      (old.sealedFiles segment member) names chosen contents
-      (sample path (.inr (.inl (.inr (.inr ⟨segment, member, rfl⟩)))))
-  · intro bytes metadata binding decoded index within payload durable path
-    exact old.sampleWriteFile frame (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, binding, decoded, within, rfl⟩))))
-      (old.runs bytes metadata binding decoded index within payload durable) names chosen contents
-      (sample path (.inr (.inr ⟨bytes, metadata, index, binding, decoded, within, rfl⟩)))
-
 /-- A recovery step chooses one joint map and samples its durable
 payloads. The returned write can use either of the publication-tail
 proofs to supply this same input to recovery. -/

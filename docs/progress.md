@@ -24,10 +24,13 @@ the replacement is live with exactly the trimmed bytes. If those bytes and the
 same binding reach the next successful open, the returned writer retains that
 inode. An error before flock supplies the frame for this handoff.
 
-**Next obligation.** Carry accepted durable keeper bytes through cleanup and failed opens
-for each namespace that could survive a second power loss. A surviving directory
-can still name the old inode after a final directory fsync error. A successful scan still needs the
+After a failed write or an interrupted recovery followed by power loss, the same
+rule constructs the retry entry from the files sampled in one namespace.
+
+**Next obligation.** Derive the inputs to that rule at the repair error. Each surviving
+namespace must retain the selected immutable child bindings, and every keeper it can name
+must retain the committed prefix. A surviving directory can still name the old inode. A successful scan still needs the
 local enumeration law covering every physically present later WAL name. The
 remaining mixed sessions and maintenance cases are listed in the roadmap.
 
-**Verification baseline.** See commit `28399f89` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
+**Verification baseline.** See commit `65eb2679` and the [verification commands](../README.md#reproduce-on-linux-x86-64).

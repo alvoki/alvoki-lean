@@ -4100,7 +4100,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.selectsWriteWal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.chosenWriteBinding
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.sampleWriteFile
-#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.retainsWriteRebootFiles
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.selectedWriteManifest
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesSelectedWrite
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.activePair
@@ -4267,6 +4266,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointSurvivingFiles.Frames.privateBindingOn
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.protectedPathNeWalFromActive
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsDurableRetry
+#check_axioms Alvoki.Storage.DiskSession.CheckpointSurvivingFiles.Stored.samplesAtBinding
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.samplesRebootFiles
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.selectsSampledRetry
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.selectsRetryAfterRepair
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.keeperCrashChoices
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.SelectedRetryDurability.frame
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preservesDurability

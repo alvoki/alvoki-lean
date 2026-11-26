@@ -201,15 +201,15 @@ theorem WalPublicationPayloads.Selections.retryTargetAtReboot
   selected.retryTargets valid prepared fits old frame sameKeeper oldMarker newMarker
     (names rebooted) seen.chosen (visible rebooted) seen.samplesWal
 
-/-- The same sampled manifest and protected inodes initialize the live
-retry state. The marker can select either earlier history or the entire
-uncertain batch, and a retained keeper may be longer than that marker. -/
-theorem RawWriteRebootEntry.selectsRetry
+/-- Assemble the retry entry from the exact sampled image. The
+immutable files and selected keeper can come from different local
+proofs about the same survivor, including a later reboot after repair. -/
+theorem RawWriteRebootEntry.selectsSampledRetry
     (seen : RawWriteRebootEntry state view storage names visible failed rebooted)
-    (old : NativeReadyStorage state (storage entry))
-    (frame : (storage entry).Frames state.writeFramePath (storage failed))
-    {batch : List WAL.Write} {target : Target}
-    (admitted : BatchRetryTarget state.writer.history batch state.writer.wal.active.first target)
+    {target : Target}
+    (start : target.first = state.writer.wal.active.first)
+    (sameManifest : target.pair.manifest = state.writer.target.pair.manifest)
+    (kept : NativeReadyProtectedStorage state ⟨names rebooted, fun inode => [visible rebooted inode]⟩)
     (pair : target.pair = ⟨(names rebooted (state.session.directory.file .manifest)).map (visible rebooted),
       (names rebooted (state.session.directory.file .walBoundary)).map (visible rebooted)⟩)
     (keeper : target.Accepts ((names rebooted (state.session.directory.file (.walSegment state.writer.wal.active.first))).map
@@ -217,28 +217,6 @@ theorem RawWriteRebootEntry.selectsRetry
     RawOpenRetryTrace.SelectedEntry view state target names visible rebooted ∧
     TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
     (view.descriptors rebooted).slots = [] := by
-  have start : target.first = state.writer.wal.active.first := admitted.1
-  have manifest := old.selectedWriteManifest frame _ seen.chosen _ (seen.sampled _ (.inl rfl))
-  have sameManifest := (congrArg DirectoryPublication.Bindings.manifest pair).trans manifest
-  obtain ⟨root, lock, sealedFiles, runs⟩ :=
-    old.retainsWriteRebootFiles frame _ seen.chosen _ seen.sampled
-  let dir := state.session.directory
-  have kept : NativeReadyProtectedStorage state ⟨names rebooted, fun inode => [visible rebooted inode]⟩ := by
-    refine ⟨root, lock, ?_, ?_, ?_⟩
-    · change (match state.writer.target.pair.manifest with
-        | none => names rebooted (dir.file .manifest) = none
-        | some bytes => ∃ inode, names rebooted (dir.file .manifest) = some inode ∧
-            [visible rebooted inode] = [bytes])
-      rw [← manifest]
-      cases named : names rebooted (dir.file .manifest) with
-      | none => rfl
-      | some inode => exact ⟨inode, rfl, rfl⟩
-    · intro segment member
-      obtain ⟨inode, _, bound, content⟩ := sealedFiles segment member
-      exact ⟨inode, bound, congrArg (fun bytes => [bytes]) content⟩
-    · intro bytes metadata present decoded index within payload stored
-      obtain ⟨inode, _, bound, content⟩ := runs bytes metadata present decoded index within payload stored
-      exact ⟨inode, bound, congrArg (fun bytes => [bytes]) content⟩
   obtain ⟨_, _, _, _, _, _, image⟩ := seen.image
   have selected : (view.files rebooted).image.directory.active = target.pair := seen.activePair.trans pair.symm
   have settled : (view.files rebooted).image.directory.crashImages = [target.pair] := by
@@ -267,5 +245,28 @@ theorem RawWriteRebootEntry.selectsRetry
   · rw [seen.released]
     intro path
     simp [LockOwners.set]
+
+/-- The same sampled manifest and protected inodes initialize the live
+retry state. The marker can select either earlier history or the entire
+uncertain batch, and a retained keeper may be longer than that marker. -/
+theorem RawWriteRebootEntry.selectsRetry
+    (seen : RawWriteRebootEntry state view storage names visible failed rebooted)
+    (old : NativeReadyStorage state (storage entry))
+    (frame : (storage entry).Frames state.writeFramePath (storage failed))
+    {batch : List WAL.Write} {target : Target}
+    (admitted : BatchRetryTarget state.writer.history batch state.writer.wal.active.first target)
+    (pair : target.pair = ⟨(names rebooted (state.session.directory.file .manifest)).map (visible rebooted),
+      (names rebooted (state.session.directory.file .walBoundary)).map (visible rebooted)⟩)
+    (keeper : target.Accepts ((names rebooted (state.session.directory.file (.walSegment state.writer.wal.active.first))).map
+      (visible rebooted))) :
+    RawOpenRetryTrace.SelectedEntry view state target names visible rebooted ∧
+    TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
+    (view.descriptors rebooted).slots = [] := by
+  have atFailure := old.toNativeReadyProtectedStorage.frame frame.visible
+  obtain ⟨kept, manifest⟩ := atFailure.samplesRebootFiles (names rebooted) (visible rebooted)
+    (fun path protectedPath => (old.chosenWriteBinding frame _ seen.chosen protectedPath).trans
+      (frame.visible path protectedPath).1.symm) seen.sampled
+  exact seen.selectsSampledRetry admitted.1 ((congrArg DirectoryPublication.Bindings.manifest pair).trans manifest)
+    kept pair keeper
 
 end Alvoki.Storage.DiskSession

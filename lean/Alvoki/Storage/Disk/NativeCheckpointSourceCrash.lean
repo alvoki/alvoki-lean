@@ -66,6 +66,59 @@ theorem NativeReadyProtectedStorage.frame {state : NativeReadyState} {first last
     exact frame.stored (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, manifest, decoded, within, rfl⟩))))
       (initial.runs bytes metadata manifest decoded index within payload bound)
 
+/-- An inode kept in the chosen map supplies its singleton durable payload. -/
+theorem CheckpointSurvivingFiles.Stored.samplesAtBinding {files : CheckpointSurvivingFiles}
+    {path : FilePath} {payload : ByteArray} (stored : files.Stored path payload)
+    (names : FilePath → Option Nat) (contents : Nat → ByteArray) (kept : names path = files.names path)
+    (sampled : ∀ inode, names path = some inode → contents inode ∈ files.bytes inode) :
+    ∃ inode, names path = some inode ∧ contents inode = payload := by
+  obtain ⟨inode, bound, durable⟩ := stored
+  have survived := kept.trans bound
+  exact ⟨inode, survived, List.mem_singleton.mp (durable ▸ sampled inode survived)⟩
+
+/-- Sample the immutable files through one namespace. The same scope
+retains a missing manifest, the root and lock, and the files that the
+selected manifest and sealed WAL reference. -/
+theorem NativeReadyProtectedStorage.samplesRebootFiles {state : NativeReadyState} {files : CheckpointSurvivingFiles}
+    (protectedFiles : NativeReadyProtectedStorage state files)
+    (names : FilePath → Option Nat) (contents : Nat → ByteArray)
+    (kept : ∀ path, state.writeFramePath path → names path = files.names path)
+    (sampled : ∀ path, checkpointSurvivorPath state.session.directory state.writer
+        state.writer.target.pair.manifest path →
+      ∀ inode, names path = some inode → contents inode ∈ files.bytes inode) :
+    NativeReadyProtectedStorage state ⟨names, fun inode => [contents inode]⟩ ∧
+      (names (state.session.directory.file .manifest)).map contents = state.writer.target.pair.manifest := by
+  let directory := state.session.directory
+  let rebootFiles : CheckpointSurvivingFiles := ⟨names, fun inode => [contents inode]⟩
+  have sample {path payload} (protectedPath : state.writeFramePath path)
+      (sourcePath : checkpointSurvivorPath directory state.writer state.writer.target.pair.manifest path)
+      (stored : files.Stored path payload) : rebootFiles.Stored path payload := by
+    obtain ⟨inode, bound, bytes⟩ := stored.samplesAtBinding names contents (kept path protectedPath) (sampled path sourcePath)
+    exact ⟨inode, bound, congrArg List.singleton bytes⟩
+  have manifest : (match state.writer.target.pair.manifest with
+        | none => names (directory.file .manifest) = none
+        | some payload => rebootFiles.Stored (directory.file .manifest) payload) ∧
+      (names (directory.file .manifest)).map contents = state.writer.target.pair.manifest := by
+    have original := protectedFiles.manifest
+    have binding := kept (directory.file .manifest) (.inr (.inr (.inl rfl)))
+    cases selected : state.writer.target.pair.manifest with
+    | none =>
+      rw [selected] at original
+      exact ⟨binding.trans original, by rw [binding, original]; rfl⟩
+    | some payload =>
+      rw [selected] at original
+      obtain ⟨inode, survives, bytes⟩ := original.samplesAtBinding names contents binding (sampled _ (.inl rfl))
+      exact ⟨⟨inode, survives, congrArg List.singleton bytes⟩, by rw [survives, Option.map_some, bytes]⟩
+  refine ⟨⟨(kept _ (.inl rfl)).trans protectedFiles.directoryBound,
+    (kept _ (.inr (.inl rfl))).trans protectedFiles.lockBound, manifest.1, ?_, ?_⟩, manifest.2⟩
+  · intro segment member
+    exact sample (.inr (.inr (.inr (.inl ⟨segment, member, rfl⟩))))
+      (.inr (.inl (.inr (.inr ⟨segment, member, rfl⟩)))) (protectedFiles.sealedFiles segment member)
+  · intro bytes metadata binding decoded index within payload stored
+    exact sample (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, binding, decoded, within, rfl⟩))))
+      (.inr (.inr ⟨bytes, metadata, index, binding, decoded, within, rfl⟩))
+      (protectedFiles.runs bytes metadata binding decoded index within payload stored)
+
 namespace NativeReadyStorage
 
 variable {state : NativeReadyState} {first last : CheckpointStorageObservation}
@@ -98,10 +151,11 @@ theorem sampleFile (initial : NativeReadyStorage state first) {scope : FilePath 
     (names : FilePath → Option Nat) (chosen : names ∈ last.crashNames) (contents : Nat → ByteArray)
     (sampled : ∀ inode, names path = some inode → contents inode ∈ last.files.bytes inode) :
     ∃ inode, first.files.names path = some inode ∧ names path = some inode ∧ contents inode = payload := by
-  obtain ⟨inode, reached, bytes⟩ := frame.visible.stored kept stored
-  have before := (frame.visible path kept).1.symm.trans reached
-  have survives := (initial.chosenBinding frame names chosen kept settled).trans before
-  exact ⟨inode, before, survives, List.mem_singleton.mp (bytes ▸ sampled inode survives)⟩
+  have binding := initial.chosenBinding frame names chosen kept settled
+  have retained := frame.visible.stored kept stored
+  obtain ⟨inode, survives, bytes⟩ := retained.samplesAtBinding names contents
+    (binding.trans (frame.visible path kept).1.symm) sampled
+  exact ⟨inode, binding.symm.trans survives, survives, bytes⟩
 
 theorem rebootDirectoryBindings (initial : NativeReadyStorage state first) {scope : FilePath → Prop}
     (frame : first.Frames scope last) (names : FilePath → Option Nat) (chosen : names ∈ last.crashNames)
