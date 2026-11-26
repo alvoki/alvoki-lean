@@ -605,7 +605,7 @@ private theorem NativeReadPosition.preparesVisibleWriteRetryFromEffects
     ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
       plan.layout.VisibleWal current.state.session.directory (names reached) (visible reached) ∧
       RawOpenRetryTrace.SelectedEntry view current.state target names visible reached ∧ keep reached := by
-  obtain ⟨valid, kept, protectedFrame, _, carries⟩ := effects.preserves initial.valid
+  obtain ⟨valid, kept, protectedFrame, carries⟩ := effects.preserves initial.valid
   obtain ⟨plan⟩ := current.preparesSelectedWrite prepared fits admitted valid initial.manifest
   have preserved := carries atEntry
   obtain ⟨reachedWindow, reachedKeeper⟩ := atReached preserved

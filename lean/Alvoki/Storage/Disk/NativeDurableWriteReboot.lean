@@ -207,7 +207,7 @@ theorem RawOpenRetryTrace.SelectedEffects.preservesDurability
       state.SelectedRetryDurability target (storage first)) :
     RawOpenRetryTrace.KeeperAt view state.session.directory target names visible reached ∧
       state.SelectedRetryDurability target (storage reached) :=
-  (effects.preserves initial.valid).2.2.2.2 physical
+  (effects.preserves initial.valid).2.2.2 physical
 
 open WAL (frameSize)
 

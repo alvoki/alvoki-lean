@@ -240,7 +240,6 @@ inductive RawOpenRetryTrace.SelectedEffects (view : OpenCloseHeapView heap FileI
       (image : (view.files reached).image = (view.files entry).image ∨
         EffectTrace target (view.files entry).image (view.files reached).image)
       (frame : (files entry).Frames protectedPaths (files reached))
-      (inodes : (view.descriptors reached).inode = (view.descriptors entry).inode)
       (carries : keep entry → keep reached) :
       SelectedEffects view source start target files protectedPaths keep (prior.append calls)
 
@@ -260,7 +259,7 @@ theorem readOnly (before : SelectedEffects view source start target files protec
     (carries : keep entry → keep reached)
     (executed : source.FailedCalls entry more reached) :
     SelectedEffects view source start target files protectedPaths keep (prior.append executed) :=
-  .append (calls := executed) before (.inl block.preserves.2) frame block.preserves.1 carries
+  .append (calls := executed) before (.inl block.preserves.2) frame carries
 
 /-- Add one failed repair at its returned heap. Cleanup preserves the
 image reached by the worker, including any replacement keeper. -/
@@ -272,8 +271,8 @@ theorem repair (before : SelectedEffects view source start target files protecte
     (carries : keep entry → keep failed.reached)
     (returned : source.openTable input entry = .error failed.diagnostic failed.reached) :
     SelectedEffects view source start target files protectedPaths keep (prior.next input returned) := by
-  obtain ⟨_, _, _, _, _, inodes, image, _⟩ := failed.returns
-  exact .append (calls := .next .empty input returned) before (.inr (image.symm ▸ repair)) frame inodes carries
+  obtain ⟨_, _, _, _, _, _, image, _⟩ := failed.returns
+  exact .append (calls := .next .empty input returned) before (.inr (image.symm ▸ repair)) frame carries
 
 /-- Fold the image, file frame and keeper observation over the same
 caller-visible endpoints as the actual failed calls. -/
@@ -284,17 +283,16 @@ theorem preserves {returns : List (FilePath × IO.Error)} {reached : heap}
     (view.files reached).image.Valid target ∧
       (view.files reached).image.kept = (view.files start).image.kept ∧
       (files start).Frames protectedPaths (files reached) ∧
-      (view.descriptors reached).inode = (view.descriptors start).inode ∧
       (keep start → keep reached) := by
   induction effects with
-  | empty => exact ⟨valid, rfl, fun _ _ => ⟨rfl, fun _ _ => rfl⟩, rfl, id⟩
-  | @append _ _ entry reached _ _ _ image frame sameInodes carries ih =>
-    obtain ⟨valid, kept, protectedFiles, inodes, keptObservation⟩ := ih
+  | empty => exact ⟨valid, rfl, fun _ _ => ⟨rfl, fun _ _ => rfl⟩, id⟩
+  | @append _ _ entry reached _ _ _ image frame carries ih =>
+    obtain ⟨valid, kept, protectedFiles, keptObservation⟩ := ih
     obtain ⟨next, sameSeals⟩ : (view.files reached).image.Valid target ∧
         (view.files reached).image.kept = (view.files entry).image.kept := image.elim
       (fun unchanged => ⟨unchanged.symm ▸ valid, congrArg FileImage.kept unchanged⟩)
       (fun repair => ⟨repair.valid valid.selected valid.keeper valid.later, repair.keepsSealed⟩)
-    exact ⟨next, sameSeals.trans kept, protectedFiles.trans frame, sameInodes.trans inodes,
+    exact ⟨next, sameSeals.trans kept, protectedFiles.trans frame,
       carries ∘ keptObservation⟩
 
 end RawOpenRetryTrace.SelectedEffects
@@ -317,7 +315,7 @@ theorem NativeReadPosition.preparesWriteRetry {stream : Type} {source : RawMarke
     Nonempty (current.SelectedWritePlan batch target (view.files reached).image) ∧
       (view.files reached).image.kept = (view.files start).image.kept ∧
       (files start).Frames protectedPaths (files reached) ∧ (keep start → keep reached) := by
-  obtain ⟨observed, sealed, frame, _, carries⟩ := effects.preserves initial
+  obtain ⟨observed, sealed, frame, carries⟩ := effects.preserves initial
   exact ⟨current.preparesSelectedWrite prepared fits admitted observed manifest, sealed, frame, carries⟩
 
 end Alvoki.Storage.DiskSession

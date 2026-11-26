@@ -8,7 +8,10 @@ use this projection to obtain the marker bound. Grouped and late recovery
 carry agreement between the model and live names through the failed-call
 prefix. Read-only frames and the actual accepted unlink loop each have a
 local preservation rule. A complete scan at the reached root then gives
-both directions of membership for the observed suffix. The failed-call
+both directions of membership for the observed suffix. The fold carries the selected file image, protected bindings and the
+facts needed by the next open. Descriptor identity is checked at the
+operations that need it. The fold itself no longer requires equality of
+the entire description-to-inode map across a failed call. The failed-call
 prefix still requires evidence for the effects of each reached repair.
 
 When the selected keeper already has the committed length, the same
