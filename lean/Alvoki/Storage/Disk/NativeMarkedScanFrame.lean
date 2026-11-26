@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.NativeCheckpointFsyncEffects
 import Alvoki.Storage.Disk.RetainedWriterReopen
+import Alvoki.Storage.Disk.NativeRawWriteReboot
 
 namespace Alvoki.Storage.DiskSession
 
@@ -400,6 +401,154 @@ private theorem chainStarts {history : List WAL.Write} {first : Nat} {segments :
   | endOfHistory => contradiction
   | cons => exact ⟨_, rfl⟩
 
+/-- The abstract writer's successful selector already identifies the
+whole logical suffix from the covering start. This gives the exact cut
+where separately framed native name agreement is needed. -/
+theorem NativeReadPosition.SelectedWritePlan.modeledWindow
+    {prior : List WAL.Write} {log : List DatabaseSubmissions}
+    {current : NativeReadPosition prior log} {batch : List WAL.Write} {target : Target} {image : FileImage}
+    (plan : current.SelectedWritePlan batch target image) :
+    let wal := current.state.writer.wal.appendSelectedView image.directory.active plan.history
+    (∀ start, plan.layout.first ≤ start →
+      (start ∈ wal.segments.map WalSegment.first ↔
+        start ∈ (plan.layout.sealed ++ [plan.layout.keeper]).map WalSegment.first)) ∧
+    (∀ start ∈ ((plan.layout.sealed ++ [plan.layout.keeper]).map WalSegment.first).drop 1,
+      plan.layout.range.watermark < start) := by
+  intro wal
+  have offsets := plan.offsets
+  change selectWalSegmentReads (wal.segments.map WalSegment.first) plan.layout.range.watermark =
+    some (plan.layout.first, (wal.readDescriptors plan.layout.range.watermark).map WalSegment.first) at offsets
+  rw [← plan.descriptors] at offsets
+  unfold selectWalSegmentReads at offsets
+  let selected := (plan.layout.sealed ++ [plan.layout.keeper]).map WalSegment.first
+  cases best : ((wal.segments.map WalSegment.first).filter
+      (fun start => decide (start ≤ plan.layout.range.watermark))).max? with
+  | none => simp [best, Bind.bind, Option.bind] at offsets
+  | some first =>
+    have details : first = plan.layout.first ∧
+        (wal.segments.map WalSegment.first).filter (fun start => decide (first ≤ start)) = selected := by
+      simpa only [best, Bind.bind, Option.bind, Pure.pure, Option.some.injEq, Prod.mk.injEq] using offsets
+    obtain ⟨rfl, exactOffsets⟩ := details
+    have membership (start : Nat) (cover : plan.layout.first ≤ start) :
+        start ∈ wal.segments.map WalSegment.first ↔ start ∈ selected := by
+      rw [← exactOffsets, List.mem_filter, decide_eq_true_eq, and_iff_left cover]
+    refine ⟨membership, ?_⟩
+    have shape : ∃ rest, selected = plan.layout.first :: rest :=
+      chainStarts plan.layout.chain (by simp)
+    obtain ⟨rest, shape⟩ := shape
+    have strict := List.pairwise_map.mpr plan.layout.chain.startsStrict
+    change selected.Pairwise (· < ·) at strict
+    rw [shape] at strict
+    intro start inRest
+    change start ∈ selected.drop 1 at inRest
+    rw [shape, List.drop_succ_cons, List.drop_zero] at inRest
+    have after := (List.pairwise_cons.mp strict).1 start inRest
+    apply Nat.lt_of_not_ge
+    intro high
+    have stored := (membership start (Nat.le_of_lt after)).mpr (shape.symm ▸ List.mem_cons_of_mem _ inRest)
+    have below := (List.max?_eq_some_iff.mp best).2 start
+      (List.mem_filter.mpr ⟨stored, decide_eq_true high⟩)
+    exact (Nat.not_le_of_gt after) below
+
+
+private theorem appendSelectedView_starts (wal : WalSegmentImage) (pair : DirectoryPublication.Bindings)
+    (history : List WAL.Write) :
+    (wal.appendSelectedView pair history).segments.map WalSegment.first = wal.segments.map WalSegment.first := by
+  rw [WalSegmentImage.segments, List.map_append, WalSegmentImage.segments, List.map_append]
+  rfl
+
+/-- The selected append changes the active bytes and end, while leaving
+the segment starts used by the native reader fixed. -/
+theorem NativeReadPosition.SelectedWritePlan.liveWalWindow
+    {prior : List WAL.Write} {log : List DatabaseSubmissions}
+    {current : NativeReadPosition prior log} {batch : List WAL.Write} {target : Target} {image : FileImage}
+    (plan : current.SelectedWritePlan batch target image) (names : FilePath → Option Nat)
+    (window : current.state.writer.wal.NamespaceWindow current.state.session.directory
+      plan.layout.first plan.layout.range.through names) :
+    ∀ start, plan.layout.first ≤ start → start ≤ plan.layout.range.through →
+      ((names (current.state.session.directory.file (.walSegment start))).isSome = true ↔
+        start ∈ (plan.layout.sealed ++ [plan.layout.keeper]).map WalSegment.first) := by
+  intro start lower upper
+  have selected := plan.modeledWindow.1 start lower
+  rw [appendSelectedView_starts] at selected
+  exact (window start lower upper).trans selected
+
+/-- At a recovery boundary, the live name map agrees with the selected
+window, the seal bytes, and the keeper including any uncommitted tail. -/
+structure CanonicalKeeperLayout.VisibleWal {files : FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout files history) (directory : DiskDirectory)
+    (names : FilePath → Option Nat) (visible : Nat → ByteArray) : Prop where
+  window : ∀ start, layout.first ≤ start → start ≤ layout.range.through →
+    ((names (directory.file (.walSegment start))).isSome = true ↔
+      start ∈ (layout.sealed ++ [layout.keeper]).map WalSegment.first)
+  sealed : ∀ segment ∈ layout.sealed,
+    (names (directory.file (.walSegment segment.first))).map visible = some segment.bytes
+  keeper : (names (directory.file (.walSegment layout.keeper.first))).map visible =
+    some (layout.keeper.bytes ++ layout.tail)
+
+/-- The entry of the next open combines the immutable seal footprint
+with the independently framed names and live keeper of that retry. -/
+theorem NativeReadPosition.SelectedWritePlan.visibleWal
+    {prior : List WAL.Write} {log : List DatabaseSubmissions}
+    {current : NativeReadPosition prior log} {batch : List WAL.Write} {target : Target}
+    {view : OpenCloseHeapView heap FileImage} {entry : heap}
+    (plan : current.SelectedWritePlan batch target (view.files entry).image)
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    (window : current.state.writer.wal.NamespaceWindow current.state.session.directory
+      plan.layout.first plan.layout.range.through (names entry))
+    (protectedFiles : NativeReadyProtectedStorage current.state ⟨names entry, fun inode => [visible entry inode]⟩)
+    (keeper : RawOpenRetryTrace.KeeperAt view current.state.session.directory target names visible entry) :
+    plan.layout.VisibleWal current.state.session.directory (names entry) (visible entry) := by
+  refine ⟨plan.liveWalWindow (names entry) window, ?_, ?_⟩
+  · intro segment selected
+    obtain ⟨inode, bound, bytes⟩ := protectedFiles.sealedFiles segment
+      (NativeReadPosition.SelectedWritePlan.retainsSeal current plan selected)
+    change names entry (current.state.session.directory.file (.walSegment segment.first)) = some inode at bound
+    rw [bound, Option.map_some]
+    exact congrArg some (List.cons.inj bytes).1
+  · have sameFirst : plan.layout.keeper.first = target.first := congrArg Target.first plan.targetEq
+    rw [sameFirst]
+    exact keeper.symm.trans plan.layout.visible
+
+/-- Carry the WAL window and the live keeper through the same failed
+calls as the protected checkpoint. The initial name bound reaches as
+far as either marker after the uncertain batch. -/
+theorem NativeReadPosition.preparesVisibleWriteRetry
+    {stream : Type} {source : RawMarkedOpenInterpreter heap stream}
+    {prior : List WAL.Write} {log : List DatabaseSubmissions} (current : NativeReadPosition prior log)
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch current.state.writer.installed.table rows = some (batch, table))
+    (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {target : Target} (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
+    {view : OpenCloseHeapView heap FileImage} {start reached : heap}
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    {first : Nat} (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, first ≤ offset)
+    (initial : RawOpenRetryTrace.SelectedEntry view current.state target names visible start)
+    (window : current.state.writer.wal.NamespaceWindow current.state.session.directory first
+      (prior ++ batch).length (names start))
+    {returns : List (FilePath × IO.Error)} {attempts : source.FailedCalls start returns reached}
+    (effects : RawOpenRetryTrace.SelectedEffects view source start target (visibleImage names visible)
+      current.state.selectedRetryPath (fun atHeap =>
+        current.state.writer.wal.NamespaceWindow current.state.session.directory first (prior ++ batch).length
+          (names atHeap) ∧ RawOpenRetryTrace.KeeperAt view current.state.session.directory target names visible atHeap)
+      attempts) :
+    ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
+      plan.layout.VisibleWal current.state.session.directory (names reached) (visible reached) := by
+  obtain ⟨⟨plan⟩, _, protectedFrame, carries⟩ := current.preparesWriteRetry prepared fits admitted initial.manifest
+    effects initial.valid
+  obtain ⟨reachedWindow, reachedKeeper⟩ := carries ⟨window, initial.keeper⟩
+  obtain ⟨rest, firstRead⟩ := chainStarts plan.layout.chain (by simp)
+  have firstInWal := (plan.modeledWindow.1 plan.layout.first (Nat.le_refl _)).mpr
+    (firstRead ▸ List.mem_cons_self (a := plan.layout.first) (l := rest))
+  rw [appendSelectedView_starts] at firstInWal
+  have upper : plan.layout.range.through ≤ (prior ++ batch).length := by
+    rw [plan.layout.through]
+    rcases plan.allowed with old | complete
+    · simp [old]
+    · simp [complete]
+  have keptFiles := initial.protectedFiles.frame (fun path keep => protectedFrame path (.inr keep))
+  exact ⟨plan, plan.visibleWal names visible (reachedWindow.restrict (covers _ firstInWal) upper) keptFiles reachedKeeper⟩
+
 /-- Refine the actual WAL return using only the held recovery window
 and reached file effects. Both the canonical replay bytes and the
 actual keeper route come from the same payload traversal. -/
@@ -411,8 +560,6 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
     {files : FileImage} {history : List WAL.Write} (layout : CanonicalKeeperLayout files history)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (scope : FilePath → Prop)
-    (scopedSegments : ∀ segment ∈ layout.sealed ++ [layout.keeper],
-      scope (directory.file (.walSegment segment.first)))
     (opens : fileCalls.OpensReadSlot view names visible) (reads : fileCalls.ReadsAtCursor view visible)
     (scopedReads : fileCalls.ScopeFrames (fun before after =>
       (visibleImage names visible before).Frames scope (visibleImage names visible after)))
@@ -439,13 +586,12 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
     (through : length.toNat / WAL.frameSize = layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
-    (catalog : ∀ start, layout.first ≤ start → start ≤ layout.range.through →
-      ((∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ↔
-        start ∈ (layout.sealed ++ [layout.keeper]).map WalSegment.first))
-    (sealed : ∀ segment ∈ layout.sealed,
-      (names initial (directory.file (.walSegment segment.first))).map (visible initial) = some segment.bytes)
-    (keeperContent : (names initial (directory.file (.walSegment layout.keeper.first))).map (visible initial) =
-      some (layout.keeper.bytes ++ layout.tail))
+    (physical : layout.VisibleWal directory (names initial) (visible initial))
+    (scopedWindow : ∀ start, layout.first ≤ start → start ≤ layout.range.through →
+      scope (directory.file (.walSegment start)))
+    (child : ∀ start, layout.first ≤ start → start ≤ layout.range.through →
+      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+        names entry (directory.file (.walSegment start)))
     (returned : readSelectedWithCachedExtents directory layout.range.watermark length directoryCalls.run
       (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal (fileCalls.readKeeperWithRelease remember) entry =
         .ok (payloads, extent) reached) :
@@ -477,17 +623,27 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
     have mapped : start ∈ segments.map WalSegment.first := by rw [first]; exact List.mem_cons_of_mem _ member
     obtain ⟨segment, part, rfl⟩ := List.mem_map.mp mapped
     exact ⟨afterCover, layout.through ▸ layout.chain.startsWithin segment part⟩
+  have heldWindow (start : Nat) (lower : layout.first ≤ start) (upper : start ≤ layout.range.through) :
+      ((∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ↔
+        start ∈ layout.first :: expected) := by
+    have atInitial := (child start lower upper).trans (starts _ (scopedWindow start lower upper)).1
+    change (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+      names initial (directory.file (.walSegment start)) at atInitial
+    have present := physical.window start lower upper
+    rw [← atInitial, Option.isSome_map, first] at present
+    exact Option.isSome_iff_exists.symm.trans present
   obtain ⟨need, laterNames⟩ :=
     MarkedWalExtentReports.selectsWindow fileCalls directory namespaceView root _ (listedNames listedCall) scan
       (absent listedCall) selected (orderedReads.successfulOrder rfl) canonical layout.covers
-      (through ▸ aligned.2) bounds (fun start lower upper => by simpa only [first] using catalog start lower upper)
+      (through ▸ aligned.2) bounds heldWindow
   have offsets : required.map Prod.fst = segments.map WalSegment.first := need.trans first.symm
   have protectedExtent : ∀ extent ∈ required, scope (directory.file (.walSegment extent.1)) := by
     intro extent member
     have selectedOffset : extent.1 ∈ required.map Prod.fst := List.mem_map.mpr ⟨extent, member, rfl⟩
-    rw [offsets] at selectedOffset
-    obtain ⟨segment, part, agrees⟩ := List.mem_map.mp selectedOffset
-    simpa only [agrees] using scopedSegments segment part
+    have within : extent.1 ∈ layout.first :: expected := need ▸ selectedOffset
+    rcases List.mem_cons.mp within with same | later
+    · exact scopedWindow extent.1 (Nat.le_of_eq same.symm) (same ▸ Nat.le_trans layout.covers (through ▸ aligned.2))
+    · exact scopedWindow extent.1 (Nat.le_trans layout.covers (Nat.le_of_lt (bounds _ later).1)) (bounds _ later).2
   let frame (before after : heap) := (visibleImage names visible before).Frames scope
     (visibleImage names visible after)
   have refl (atHeap : heap) : frame atHeap atHeap := fun _ _ => ⟨rfl, fun _ _ => rfl⟩
@@ -508,7 +664,7 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
         _ listedFrame scan selected member (protectedExtent (offset, metadata) member)
     exact (Option.some.inj (same.symm.trans name)) ▸ size
   obtain ⟨sameFiles, sameExtent⟩ := layout.matchesSelectedWalPayloads atName (visible initial) offsets last
-    sealReads truthfulExtent sealed named keeperContent exactPrefix
+    sealReads truthfulExtent physical.sealed named physical.keeper exactPrefix
   have keeperFirst : keeper = layout.keeper.first := by
     have seen := congrArg List.getLast? offsets
     simpa [segments, last] using seen

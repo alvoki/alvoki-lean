@@ -4,6 +4,28 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+/-- Presence of canonical WAL names in a given replay window. Older names
+may already have been collected. Names beyond the window belong to later
+repair. Inode identity and bytes have independent invariants. -/
+def _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow (wal : WalSegmentImage)
+    (directory : DiskDirectory) (first through : Nat) (names : FilePath → Option Nat) : Prop :=
+  ∀ start, first ≤ start → start ≤ through →
+    ((names (directory.file (.walSegment start))).isSome = true ↔ start ∈ wal.segments.map WalSegment.first)
+
+theorem _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow.frame
+    {wal : WalSegmentImage} {directory : DiskDirectory} {first through : Nat}
+    {before after : FilePath → Option Nat} (initial : wal.NamespaceWindow directory first through before)
+    (presence : ∀ start, first ≤ start → start ≤ through →
+      (after (directory.file (.walSegment start))).isSome = (before (directory.file (.walSegment start))).isSome) :
+    wal.NamespaceWindow directory first through after :=
+  fun start lower upper => presence start lower upper ▸ initial start lower upper
+
+theorem _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow.restrict
+    {wal : WalSegmentImage} {directory : DiskDirectory} {first through lower upper : Nat}
+    {names : FilePath → Option Nat} (initial : wal.NamespaceWindow directory first through names)
+    (starts : first ≤ lower) (ends : upper ≤ through) : wal.NamespaceWindow directory lower upper names :=
+  fun start after before => initial start (Nat.le_trans starts after) (Nat.le_trans before ends)
+
 /-- One reported reboot selects a joint durable map at the reached failed
 write. The new observations are made at the rebooted heap. The file
 projection records the settled pair, keeper and visible later names, with
@@ -26,6 +48,19 @@ structure RawWriteRebootEntry {heap : Type} (state : NativeReadyState) (view : O
 variable {heap : Type} {state : NativeReadyState} {view : OpenCloseHeapView heap FileImage}
   {storage : heap → CheckpointStorageObservation} {names : heap → FilePath → Option Nat}
   {visible : heap → Nat → ByteArray} {entry failed rebooted : heap}
+
+/-- Use the same joint survivor the reboot actually selected. Tracking
+positive files alone does not supply this frame for absent WAL names. -/
+theorem RawWriteRebootEntry.walNamespace
+    (seen : RawWriteRebootEntry state view storage names visible failed rebooted)
+    {first through : Nat}
+    (frame : WalNamePresenceFrame state.session.directory first through (storage entry) (storage failed))
+    (initial : state.writer.wal.NamespaceWindow state.session.directory first through (storage entry).files.names)
+    (settled : ∀ prior ∈ (storage entry).crashNames, ∀ start, first ≤ start → start ≤ through →
+      (prior (state.session.directory.file (.walSegment start))).isSome =
+        ((storage entry).files.names (state.session.directory.file (.walSegment start))).isSome) :
+    state.writer.wal.NamespaceWindow state.session.directory first through (names rebooted) :=
+  initial.frame (frame.chosen settled seen.chosen)
 
 /-- The manifest, marker and keeper are sampled through the same map.
 Recovery may also sample runs and seals without requiring byte choices

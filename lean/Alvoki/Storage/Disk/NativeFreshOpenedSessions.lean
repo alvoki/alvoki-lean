@@ -277,7 +277,7 @@ theorem writeStorageEntry {input : FilePath} {directory : DiskDirectory}
     rfl
   refine ⟨cache, rfl, rfl, rfl, census, cacheAt, settled.1, settled.2, ?_⟩
   intro literal found
-  exact settled.1.bindsOpenCacheDirectory view cacheAt (by rw [captured, slot]; rfl) sameObjects found
+  exact settled.1.bindsOpenCacheDirectory view cacheAt (by rw [captured, slot]; rfl) (congrFun sameObjects _) found
 
 /-- Start the first observed write at the actual returned heap of the
 fresh opener. Its local effects refer to the original cache references. -/

@@ -115,14 +115,14 @@ theorem NativeReadyStorage.bindsOpenCacheDirectory {heap image : Type}
     {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {captured : DescriptorInventory}
     (cache : view.cacheAt reached directory active pending = state.cache)
     (atOpen : state.cache.directory = some (captured, state.directorySlot, 0))
-    (inodes : captured.inode = state.census.inode)
+    (inode : captured.inode state.directorySlot.description = state.census.inode state.directorySlot.description)
     {literal : IO.FS.Handle} (found : view.directory reached directory = some literal) :
     storage.files.names state.session.directory.path =
       some ((view.handle reached literal).1.inode (view.handle reached literal).2.1.description) := by
   have same := (congrArg SyncHandleRouting.Cache.directory cache).trans atOpen
   change (view.directory reached directory).map (view.handle reached) = _ at same
   rw [found] at same
-  rw [Option.some.inj same, inodes]
+  rw [Option.some.inj same, inode]
   exact ready.directoryBound
 
 end Alvoki.Storage.DiskSession

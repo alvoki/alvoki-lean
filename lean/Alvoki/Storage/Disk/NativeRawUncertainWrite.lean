@@ -7,6 +7,86 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentCommit WalSegmentRepair CheckpointPublication
 
+/-- Preserve canonical WAL name presence in the selected interval. A
+later crash map uses one earlier live or crash map for the whole interval.
+The frame does not constrain inode identity or file contents. -/
+structure WalNamePresenceFrame (directory : DiskDirectory) (first through : Nat)
+    (entry reached : CheckpointStorageObservation) : Prop where
+  live : ∀ start, first ≤ start → start ≤ through →
+    (reached.files.names (directory.file (.walSegment start))).isSome =
+      (entry.files.names (directory.file (.walSegment start))).isSome
+  survivors : ∀ names ∈ reached.crashNames, ∃ prior, (prior = entry.files.names ∨ prior ∈ entry.crashNames) ∧
+    ∀ start, first ≤ start → start ≤ through →
+      (names (directory.file (.walSegment start))).isSome = (prior (directory.file (.walSegment start))).isSome
+
+namespace WalNamePresenceFrame
+
+variable {directory : DiskDirectory} {first through : Nat} {entry middle reached : CheckpointStorageObservation}
+
+theorem trans (earlier : WalNamePresenceFrame directory first through entry middle)
+    (later : WalNamePresenceFrame directory first through middle reached) :
+    WalNamePresenceFrame directory first through entry reached := by
+  refine ⟨fun start low high => (later.live start low high).trans (earlier.live start low high), ?_⟩
+  intro names possible
+  obtain ⟨prior, issued, same⟩ := later.survivors names possible
+  rcases issued with rfl | survived
+  · exact ⟨_, .inl rfl, fun start low high => (same start low high).trans (earlier.live start low high)⟩
+  · obtain ⟨original, priorAllowed, kept⟩ := earlier.survivors prior survived
+    exact ⟨original, priorAllowed, fun start low high => (same start low high).trans (kept start low high)⟩
+
+/-- If the earlier maps agree on this window, any one chosen later map
+agrees with the same original catalog there. -/
+theorem chosen (frame : WalNamePresenceFrame directory first through entry reached)
+    (settled : ∀ names ∈ entry.crashNames, ∀ start, first ≤ start → start ≤ through →
+      (names (directory.file (.walSegment start))).isSome =
+        (entry.files.names (directory.file (.walSegment start))).isSome)
+    {names : FilePath → Option Nat} (possible : names ∈ reached.crashNames) :
+    ∀ start, first ≤ start → start ≤ through →
+      (names (directory.file (.walSegment start))).isSome =
+        (entry.files.names (directory.file (.walSegment start))).isSome := by
+  obtain ⟨prior, earlier, same⟩ := frame.survivors names possible
+  rcases earlier with rfl | survived
+  · exact same
+  · exact fun start low high => (same start low high).trans (settled prior survived start low high)
+
+theorem ofStorageFrame {scope : FilePath → Prop} (frame : entry.Frames scope reached)
+    (includes : ∀ start, first ≤ start → start ≤ through → scope (directory.file (.walSegment start))) :
+    WalNamePresenceFrame directory first through entry reached := by
+  refine ⟨fun start low high => congrArg Option.isSome (frame.visible _ (includes start low high)).1, ?_⟩
+  intro names possible
+  obtain ⟨prior, earlier, kept⟩ := frame.survivors names possible
+  exact ⟨prior, .inr earlier, fun start low high => congrArg Option.isSome (kept _ (includes start low high))⟩
+
+theorem ofFileSync {inode : Nat} {bytes : List ByteArray} (effect : RegularFileSyncEffect inode bytes entry reached) :
+    WalNamePresenceFrame directory first through entry reached := by
+  refine ⟨fun start _ _ => congrArg Option.isSome (congrFun effect.names (directory.file (.walSegment start))), ?_⟩
+  intro names possible
+  exact ⟨names, .inr (effect.crashNames ▸ possible), fun _ _ _ => rfl⟩
+
+theorem ofMarkerRename {inode : Nat} {effective : Bool}
+    (effect : WalMarkerRenameEffect directory inode effective entry reached) :
+    WalNamePresenceFrame directory first through entry reached := by
+  refine ⟨fun start _ _ => congrArg Option.isSome ?_, ?_⟩
+  · simpa only [walMarkerRenameBinding, Function.comp_apply, ite_self] using effect.visible (.walSegment start)
+  · intro names possible
+    obtain ⟨prior, earlier, published, _, kept⟩ := effect.survivors names possible
+    refine ⟨prior, .inr earlier, fun start _ _ => congrArg Option.isSome ?_⟩
+    simpa only [walMarkerRenameBinding, Function.comp_apply, ite_self] using kept (.walSegment start)
+
+theorem ofRootSync {effective : Bool} (effect : WalRootSyncEffect directory effective entry reached) :
+    WalNamePresenceFrame directory first through entry reached := by
+  refine ⟨fun start _ _ => congrArg Option.isSome (effect.visible (.walSegment start)), ?_⟩
+  intro names possible
+  cases applied : effective with
+  | false =>
+    obtain ⟨prior, earlier, kept⟩ := effect.unchanged applied names possible
+    exact ⟨prior, .inr earlier, fun start _ _ => congrArg Option.isSome (kept (.walSegment start))⟩
+  | true =>
+    exact ⟨entry.files.names, .inl rfl, fun start _ _ => congrArg Option.isSome
+      ((effect.settled applied names possible (.walSegment start)).trans (effect.visible (.walSegment start)))⟩
+
+end WalNamePresenceFrame
+
 /-- File callbacks preserve the original phase cell independently of
 their WAL effects. Keep authority and the protected files through the
 same reached-state frame as for an acknowledged write. -/
@@ -64,6 +144,50 @@ theorem NativeOpenedPosition.classifiesCommitUnknown
     (count := (oldInstalled).walBytes + WAL.frameSize * request.rows.length) (bytes := WAL.encodeBatch batch) poisoned
   rw [failed] at outcome
   exact ⟨batch, table, guarded, poisoned, prepared, fits, guard, excluded, failed, outcome⟩
+
+/-- An ordinary uncertain return preserves the selected WAL name window.
+Each local effect is on the original write's callback, and the append
+law is used only after the reached guard and poison assignment. -/
+theorem NativeOpenedPosition.preservesWalNamesAfterCommitUnknown
+    (request : WriteRequest)
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    {cause : IO.Error} {reached : heap}
+    (nonempty : request.rows ≠ [])
+    (returned : request.runOnRawOpenPhase dir lookup append stage sync rename
+      opened.phase opened.get opened.set current.reached = .error (.commitUnknown cause) reached)
+    (storage : heap → CheckpointStorageObservation) (first through : Nat)
+    (guardFrame : ∀ {guarded}, checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded →
+      WalNamePresenceFrame dir first through (storage current.reached) (storage guarded))
+    (poisonFrame : ∀ {guarded poisoned}, opened.set opened.phase .poisoned guarded = .ok () poisoned →
+      WalNamePresenceFrame dir first through (storage guarded) (storage poisoned))
+    (appendFrame : ∀ {batch table guarded poisoned},
+      prepareBatch (oldInstalled).table request.rows = some (batch, table) →
+      checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded →
+      opened.set opened.phase .poisoned guarded = .ok () poisoned →
+      WalNamePresenceFrame dir first through (storage poisoned)
+        (storage (reachedState (append ((dir).file (.walSegment (oldInstalled).activeFirst)) (WAL.encodeBatch batch) poisoned))))
+    (stageFrame : ∀ entry, WalNamePresenceFrame dir first through (storage entry)
+      (storage (reachedState (stage ((dir).file .stagedWalBoundary)
+        (WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64) entry))))
+    (groupFrame : ∀ entry, WalNamePresenceFrame dir first through (storage entry)
+      (storage (reachedState (sync #[(dir).file (.walSegment (oldInstalled).activeFirst),
+        (dir).file .stagedWalBoundary] entry))))
+    (renameFrame : ∀ entry, WalNamePresenceFrame dir first through (storage entry)
+      (storage (reachedState (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry))))
+    (rootFrame : ∀ entry, WalNamePresenceFrame dir first through (storage entry)
+      (storage (reachedState (sync #[(dir).path] entry)))) :
+    WalNamePresenceFrame dir first through (storage current.reached) (storage reached) := by
+  obtain ⟨batch, table, guarded, poisoned, prepared, _, guardedCall, assigned, failed, _⟩ :=
+    current.classifiesCommitUnknown appender stager syncer cache request lookup rename nonempty returned
+  let frame entry reached := WalNamePresenceFrame dir first through (storage entry) (storage reached)
+  have reflexive (entry : heap) : frame entry entry :=
+    ⟨fun _ _ _ => rfl, fun names possible => ⟨names, .inr possible, fun _ _ _ => rfl⟩⟩
+  have publication := commitBytesAt_frames frame reflexive WalNamePresenceFrame.trans dir (oldInstalled).activeFirst
+    (WAL.encodeBatch batch) ((oldInstalled).walBytes + WAL.frameSize * request.rows.length)
+    append stage sync rename poisoned (appendFrame prepared guardedCall assigned) stageFrame groupFrame renameFrame rootFrame
+  rw [failed, reachedState] at publication
+  exact ((guardFrame guardedCall).trans (poisonFrame assigned)).trans publication
 
 /-- An ordinary uncertain write returns on the original opened phase
 and cache. Follow the reached guard, poison assignment and failed
@@ -129,7 +253,7 @@ theorem NativeOpenedPosition.returnsCommitUnknown
     ⟨⟨last.1.1.trans first.1.1, first.1.2.trans last.1.2⟩, last.2.trans first.2⟩
   have afterCommit := commitBytesAt_frames frame frameId frameTrans dir (oldInstalled).activeFirst
     (WAL.encodeBatch batch) ((oldInstalled).walBytes + WAL.frameSize * request.rows.length)
-    append stage sync rename (appendFrame batch table prepared) stageFrame groupFrame renameFrame rootFrame poisoned
+    append stage sync rename poisoned (appendFrame batch table prepared poisoned) stageFrame groupFrame renameFrame rootFrame
   rw [failed, reachedState] at afterCommit
   have afterPoison := poisonFrame excluded
   have authority := afterCommit.1.1.trans (afterPoison.1.trans afterGuard.1.1)

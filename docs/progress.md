@@ -1,5 +1,21 @@
 # Current handoff
 
+A returned uncertain write now has a separate frame for the presence
+of WAL names up to either possible marker. One earlier map supplies the
+whole name window of the selected reboot. Failed open attempts pass this
+window, the protected checkpoint files, and the live keeper to the next
+reader through the existing retry fold. The reader compares the same
+live names with the held root's child map. The two aligned fsyncs can
+now use the attached descriptors from the actual keeper read and cache
+calls. The final allocation proof seeds the next writer and ledger on
+the returned table and its exact cache, phase and token. Connecting
+these facts in the literal aligned retry still requires the initial
+namespace and the projected owner and storage effects at the repair
+return.
+[Namespace at reboot](../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean) ·
+[Next reader](../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean) ·
+[Next writer](../lean/Alvoki/Storage/Disk/NativeSourceLedger.lean)
+
 The table returned by the marked WAL replay now supplies the ordinary
 retained writer, including its checkpoint pin floor. This uses the same
 writer construction as the existing reported append reopen. For the

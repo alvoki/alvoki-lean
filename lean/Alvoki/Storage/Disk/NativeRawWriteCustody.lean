@@ -30,22 +30,23 @@ def OpenCloseHeapView.framesWrite {heap image : Type} (view : OpenCloseHeapView 
     (storage first).Frames state.writeFramePath (storage last)
 
 /-- Compose an independent frame across the original WAL commit. An
-ordinary callback error preserves the frame at its own reached heap. -/
+ordinary callback error preserves the frame at its own reached heap.
+The append effect is required only at the actual commit entry. -/
 theorem commitBytesAt_frames {heap : Type} (frames : heap → heap → Prop)
     (identity : ∀ heap, frames heap heap) (compose : ∀ {a b c}, frames a b → frames b c → frames a c)
     (directory : DiskDirectory) (first : Nat) (bytes : ByteArray) (count : Nat)
     (append stage : FilePath → ByteArray → EStateM IO.Error heap Unit)
     (sync : Array FilePath → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (appended : ∀ before, frames before (reachedState (append (directory.file (.walSegment first)) bytes before)))
+    (before : heap)
+    (appended : frames before (reachedState (append (directory.file (.walSegment first)) bytes before)))
     (staged : ∀ before, frames before (reachedState (stage (directory.file .stagedWalBoundary)
       (WAL.Boundary.encode count.toUInt64) before)))
     (grouped : ∀ before, frames before (reachedState (sync
       #[directory.file (.walSegment first), directory.file .stagedWalBoundary] before)))
     (renamed : ∀ before, frames before (reachedState (rename (directory.file .stagedWalBoundary)
       (directory.file .walBoundary) before)))
-    (settled : ∀ before, frames before (reachedState (sync #[directory.path] before)))
-    (before : heap) :
+    (settled : ∀ before, frames before (reachedState (sync #[directory.path] before))) :
     frames before (reachedState (commitBytesAt directory first bytes count append stage sync rename before)) := by
   have bind {α β : Type} {run : EStateM IO.Error heap α} {next : α → EStateM IO.Error heap β}
       (prefixFrame : ∀ start, frames start (reachedState (run start)))
@@ -61,8 +62,16 @@ theorem commitBytesAt_frames {heap : Type} (frames : heap → heap → Prop)
       simpa only [Bind.bind, EStateM.bind, returned] using compose first (suffixFrame value reached)
   have pureFrame : ∀ atHeap, frames atHeap (reachedState ((pure () : EStateM IO.Error heap Unit) atHeap)) := identity
   rw [commitBytesAt_fileEffects, WAL.Boundary.commit]
-  exact (bind appended fun _ => bind staged fun _ => bind grouped fun _ =>
-    bind renamed fun _ => bind settled fun _ => pureFrame) before
+  have rest := bind staged fun _ => bind grouped fun _ =>
+    bind renamed fun _ => bind settled fun _ => pureFrame
+  cases wrote : append (directory.file (.walSegment first)) bytes before with
+  | error cause reached =>
+    simpa only [Bind.bind, EStateM.bind, wrote, reachedState] using appended
+  | ok value reached =>
+    cases value
+    have firstEffect : frames before reached := by
+      simpa only [wrote, reachedState] using appended
+    simpa only [Bind.bind, EStateM.bind, wrote] using compose firstEffect (rest reached)
 
 /-- Recover the existing pending-write census from the raw returned
 heap. The original literal directory cell supplies the capture. Its

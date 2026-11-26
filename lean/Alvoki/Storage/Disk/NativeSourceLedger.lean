@@ -5,6 +5,80 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+/-- Assemble the next write entry from the table and references returned
+by the actual installer. The repaired writer and its physical storage
+already refer to the same heap. Only the two reached allocation effects
+are needed to carry that state to the caller. -/
+theorem OpenReferenceAllocations.opensReadyWriter
+    {heap : Type} {view : OpenCloseHeapView heap FileImage}
+    {state : NativeReadyState} (valid : state.Valid)
+    {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+    {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+    {repaired : heap}
+    (allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase state.writer.installed repaired)
+    {lock : IO.FS.Handle} {files : DiskTable.OpenSyncFiles}
+    {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+    (constructor : DiskTable.OpenReferenceAssembly state.session.directory lock files assemble)
+    (cache : OpenSyncCacheRefs files state.session.directory.path)
+    {outcome : EStateM.Result IO.Error heap DiskTable}
+    (returned : outcome = .ok (assemble allocation.phase allocation.token) allocation.afterToken)
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (phaseEffects : OpenPhaseCellEffects view.phase get set)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+    {log : List DatabaseSubmissions} {reads : List RecordedSnapshotRead}
+    (replay : PendingClientReplay log reads state.writer.history)
+    (bounded : ∀ read ∈ reads, read.BoundedBy state.writer.history.length)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (ready : NativeReadyStorage state (observe repaired))
+    (keeper : ∀ inode, (observe repaired).files.names
+      (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode →
+      visible repaired inode = state.writer.wal.active.bytes)
+    (censusAtRepair : view.descriptors repaired = state.census)
+    (ownerAtRepair : (view.handle repaired lock).2.1 = state.owner)
+    (cacheAtRepair : view.cacheAt repaired cache.directory cache.active cache.pending = state.cache)
+    (cachePhase : CacheAllocationFrame view cache.directory cache.active cache.pending repaired allocation.afterPhase)
+    (cacheToken : CacheAllocationFrame view cache.directory cache.active cache.pending allocation.afterPhase allocation.afterToken)
+    (rootInode : ∀ captured, state.cache.directory = some (captured, state.directorySlot, 0) →
+      captured.inode state.directorySlot.description = state.census.inode state.directorySlot.description)
+    (phaseFrame : (observe repaired).Frames state.crashPath (observe allocation.afterPhase))
+    (tokenFrame : (observe allocation.afterPhase).Frames state.crashPath (observe allocation.afterToken))
+    (phaseKeeper : ∀ inode, (observe repaired).files.names
+      (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode →
+      visible allocation.afterPhase inode = visible repaired inode)
+    (tokenKeeper : ∀ inode, (observe allocation.afterPhase).files.names
+      (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode →
+      visible allocation.afterToken inode = visible allocation.afterPhase inode) :
+    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
+      (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
+      outcome = .ok handle.table start.reached ∧
+      start.reached = allocation.afterToken ∧
+      (handle.phase, handle.token) = (allocation.phase, allocation.token) ∧
+      (nextCache.directory, nextCache.active, nextCache.pending) = (cache.directory, cache.active, cache.pending) ∧
+      start.current.history = state.writer.history ∧ start.current.submissions = log ∧
+      start.current.ready.state = state ∧ start.current.ready.reads = reads ∧
+      attachedReadSlot view handle.lock state.owner (state.census.inode state.owner.description) start.reached ∧
+      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) := by
+  obtain ⟨_, references, stored⟩ := allocation.installs constructor
+  let next : NativeReadPosition state.writer.history log :=
+    ⟨.ok state.session (state.census, state.files), state, state, reads, .installed rfl valid rfl replay bounded⟩
+  let handle : NativeOpenedHandle heap :=
+    ⟨_, _, lock, files, allocation.phase, allocation.token, references, view.phase, get, set, phaseEffects, ptrEq⟩
+  let start := NativeOpenedPosition.fromOpen handle ⟨state.writer.history, log, next⟩ allocation.afterToken
+    rfl (valid.phase.symm ▸ stored)
+  have census := cacheToken.census.trans (cachePhase.census.trans censusAtRepair)
+  have cacheAt := cacheToken.cache.trans (cachePhase.cache.trans cacheAtRepair)
+  have ownerHandle := (cacheToken.handles lock).trans (cachePhase.handles lock)
+  have owner : attachedReadSlot view lock state.owner (state.census.inode state.owner.description) allocation.afterToken :=
+    ⟨(congrArg (fun handle => handle.2.1) ownerHandle).trans ownerAtRepair,
+      census.symm ▸ valid.ownerLive, congrFun (congrArg DescriptorInventory.inode census) _⟩
+  obtain ⟨physical, live⟩ := allocation.framesReadyStorage observe visible ready keeper phaseFrame tokenFrame phaseKeeper tokenKeeper
+  refine ⟨handle, start, cache, returned, rfl, rfl, rfl, rfl, rfl, rfl, rfl, owner, census, cacheAt, physical, live, ?_⟩
+  intro literal found
+  change view.directory allocation.afterToken cache.directory = some literal at found
+  obtain ⟨captured, atOpen⟩ := valid.captured
+  exact physical.bindsOpenCacheDirectory view cacheAt atOpen (rootInode captured atOpen) found
+
 /-- The old target fixes the previously committed history even when
 the keeper's physical bytes extend past its marker. -/
 theorem NativeReadPosition.SelectedWritePlan.oldHistory

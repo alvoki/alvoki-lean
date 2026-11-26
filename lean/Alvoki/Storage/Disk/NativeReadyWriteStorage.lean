@@ -257,7 +257,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     ⟨last.1.trans first.1, first.2.trans last.2⟩
   have committedFrame := commitBytesAt_frames (view.framesWrite before cache.directory storage) frameId frameTrans dir
     (oldInstalled).activeFirst (WAL.encodeBatch batch) count append stage sync rename
-    appendFrame stageFrame groupFrame renameFrame rootFrame poisoned
+    poisoned (appendFrame poisoned) stageFrame groupFrame renameFrame rootFrame
   rw [committed] at committedFrame
   have authority := restoreAuthority.trans (committedFrame.1.trans (excludeAuthority.trans guardAuthority))
   have startFrame := (guardFrame.trans excludeFrame).weaken

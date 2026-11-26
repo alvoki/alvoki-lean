@@ -15,6 +15,82 @@ section LiteralRepair
 
 variable {heap image : Type}
 
+/-- An observed primitive can drop unrelated references. The literal
+handle's open slot and description are retained in the reached census. -/
+structure ReadSlotDrops (view : OpenCloseHeapView heap image) (file : IO.FS.Handle) (entry reached : heap) : Prop where
+  slot : (view.handle reached file).2.1 = (view.handle entry file).2.1
+  observed : ∃ drops : List LockReferenceDrop,
+    view.descriptors reached = (view.descriptors entry).afterDrops drops ∧
+    ∀ event ∈ drops, event.removes (view.handle entry file).2.1.reference = false
+
+theorem ReadSlotDrops.keepsAttachment {view : OpenCloseHeapView heap image}
+    {file : IO.FS.Handle} {entry reached : heap} {slot : DescriptorSlot} {inode : Nat}
+    (effect : ReadSlotDrops view file entry reached)
+    (attached : attachedReadSlot view file slot inode entry) :
+    attachedReadSlot view file slot inode reached := by
+  obtain ⟨drops, census, retained⟩ := effect.observed
+  refine ⟨effect.slot.trans attached.1, ?_, ?_⟩
+  · rw [census]
+    exact List.mem_filter.mpr ⟨attached.2.1, List.all_eq_true.mpr fun event member => by
+      rw [← attached.1, retained event member]
+      rfl⟩
+  · rw [census]
+    exact attached.2.2
+
+/-- For the kernel objects observed by open description, the preserved
+slot keeps the complete device and inode pair. -/
+theorem ReadSlotDrops.keepsDeviceInode {view : OpenCloseHeapView heap image}
+    {file : IO.FS.Handle} {entry reached : heap} (effect : ReadSlotDrops view file entry reached)
+    (objectOf : Nat → DeviceInode) :
+    objectOf (view.handle reached file).2.1.description =
+      objectOf (view.handle entry file).2.1.description :=
+  congrArg (fun slot : DescriptorSlot => objectOf slot.description) effect.slot
+
+/-- The pending insertion and cache accesses carry the actual handles
+to their issue heaps. Clearing this keeper path may close other matching
+references. Its selected handle is still locally retained for fsync. -/
+structure AlignedRepairHandleEffects (calls : AlignedKeeperCacheCallbacks heap)
+    (view : OpenCloseHeapView heap image) (path : FilePath) (root keeper : IO.FS.Handle) : Prop where
+  remember : ∀ {pending readHeap remembered},
+    calls.modifyPending pending (SyncHandleRouting.pushPending path keeper) readHeap = .ok () remembered →
+    ReadSlotDrops view root readHeap remembered ∧ ReadSlotDrops view keeper readHeap remembered
+  loadRoot : ∀ {cached remembered issued}, calls.getDirectory cached remembered = .ok (some root) issued →
+    ReadSlotDrops view root remembered issued ∧ ReadSlotDrops view keeper remembered issued
+  syncRoot : ∀ {issued reached}, calls.sync root issued = .ok () reached → ReadSlotDrops view keeper issued reached
+  loadPending : ∀ {pending entries entry loaded}, calls.getPending pending entry = .ok entries loaded →
+    ReadSlotDrops view keeper entry loaded
+  clearPending : ∀ {pending} {entries : List (FilePath × IO.FS.Handle)} {loaded consumed},
+    entries.find? (fun item => item.1 == path) = some (path, keeper) →
+    calls.setPending pending (entries.filter (fun item => item.1 != path)) loaded = .ok () consumed →
+    ReadSlotDrops view keeper loaded consumed
+
+/-- The root issue heap still has the cached directory's descriptor.
+The selected keeper's original read descriptor remains live at its own
+issue heap after removing the pending entries for that name. -/
+theorem AlignedRepairHandleEffects.issuedAttachments
+    {calls : AlignedKeeperCacheCallbacks heap} {view : OpenCloseHeapView heap image}
+    {path : FilePath} {root keeper : IO.FS.Handle} (effects : AlignedRepairHandleEffects calls view path root keeper)
+    {cached : IO.Ref (Option IO.FS.Handle)} {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
+    {rootSlot keeperSlot : DescriptorSlot} {rootInode keeperInode : Nat} {entries : List (FilePath × IO.FS.Handle)}
+    {readHeap remembered rootIssued afterDirectory loaded consumed : heap}
+    (rootAtRead : attachedReadSlot view root rootSlot rootInode readHeap)
+    (keeperAtRead : attachedReadSlot view keeper keeperSlot keeperInode readHeap)
+    (rememberedKeeper : calls.modifyPending pending (SyncHandleRouting.pushPending path keeper) readHeap = .ok () remembered)
+    (readRoot : calls.getDirectory cached remembered = .ok (some root) rootIssued)
+    (syncRoot : calls.sync root rootIssued = .ok () afterDirectory)
+    (readPending : calls.getPending pending afterDirectory = .ok entries loaded)
+    (selected : entries.find? (fun item => item.1 == path) = some (path, keeper))
+    (clearPending : calls.setPending pending (entries.filter (fun item => item.1 != path)) loaded = .ok () consumed) :
+    attachedReadSlot view root rootSlot rootInode rootIssued ∧
+    attachedReadSlot view keeper keeperSlot keeperInode consumed := by
+  obtain ⟨rootRemembered, keeperRemembered⟩ := effects.remember rememberedKeeper
+  obtain ⟨rootLoaded, keeperWithRoot⟩ := effects.loadRoot readRoot
+  have keeperAfterRoot := (effects.syncRoot syncRoot).keepsAttachment
+    (keeperWithRoot.keepsAttachment (keeperRemembered.keepsAttachment keeperAtRead))
+  exact ⟨rootLoaded.keepsAttachment (rootRemembered.keepsAttachment rootAtRead),
+    (effects.clearPending selected clearPending).keepsAttachment
+      ((effects.loadPending readPending).keepsAttachment keeperAfterRoot)⟩
+
 /-- Report effects only at the actual cache reads, pending update, and
 issued fsyncs of the aligned route. The active keeper's visible bytes
 pass through the directory barrier, and its own fsync establishes their
@@ -190,7 +266,7 @@ theorem RawAlignedCheckpointReopenEffects.ReturnedAt.writeStorageEntry
     exact bytes
   · intro literal found
     rw [stateAtReturn]
-    exact (reached.symm ▸ physical).bindsOpenCacheDirectory view returned.cache cached sameObjects.symm found
+    exact (reached.symm ▸ physical).bindsOpenCacheDirectory view returned.cache cached (congrFun sameObjects.symm _) found
 
 /-- The reopened writer's own selected map determines which physical
 payloads it keeps through a subsequent append. -/
@@ -455,7 +531,7 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterRepair
       rw [returnedState]
       have atStart : NativeReadyStorage next.state (observe start.reached) := reached.symm ▸ final.1
       exact atStart.bindsOpenCacheDirectory view cache (by rw [capturedCache, slot]; rfl)
-        (sameObjects.symm.trans (congrArg DescriptorInventory.inode modeledCensus).symm) found
+        (congrFun (sameObjects.symm.trans (congrArg DescriptorInventory.inode modeledCensus).symm) _) found
 
 /-- Recover the selected, durable retry footprint as the physical
 footprint of the actual returned writer. The remembered keeper is the
