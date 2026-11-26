@@ -6,9 +6,11 @@ proof. The selected marker determines the old history or the whole
 uncertain batch. The same failed-call prefix can carry a mutating
 repair and then reach the aligned opener. Its literal returned table,
 replay and physical write entry now follow with the actual write
-request and returned diagnostic. The reboot and local open effects
-remain explicit. The subsequent observed write and snapshot use this
-entry in the next composition.
+request and returned diagnostic. An observed write and snapshot on
+that same table now extend the recovered ledger. The checkpoint and
+grouped-write proofs also use this continuation to append to their
+existing ledgers. The reboot and the local open, write and snapshot
+effects remain explicit.
 [Late publication and ready recovery](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
 Both timings of the final keeper directory-fsync error now leave the

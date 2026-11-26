@@ -454,7 +454,10 @@ The reported reboot samples that exact failure heap. The selected
 history and ready replay follow through the same retry prefix, using
 the original write request and public diagnostic in the ledger. The
 source proof covers marker rename and final directory sync errors
-with one selected-recovery continuation.
+with one selected-recovery continuation. Its write entry and the new
+table's own pin carry an observed acknowledgement and snapshot into
+the same ledger. The continuation also extends the checkpoint and
+grouped-write ledgers.
 [Late write and ready recovery](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
 Read-only failures frame the keeper they enter with. A repair failure

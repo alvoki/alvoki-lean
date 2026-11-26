@@ -1,10 +1,13 @@
 import Alvoki.Storage.Disk.NativeWalGroupedTail
 import Alvoki.Storage.Disk.NativeRawWriteReboot
 import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
+import Alvoki.Storage.Disk.NativePublishedWriteSnapshot
 
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication SyncHandleRouting WalSegmentCommit WalSegmentRepair
+open WAL.Boundary (WalInodeImage)
+open Sequential (SnapshotTable)
 
 section
 
@@ -147,7 +150,8 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
 
 /-- A late publication error and its joint reboot reach the ready table
 through the same interpreter's failed opens. The recovery event uses
-the exact issued request and diagnostic of the failed source call. -/
+the exact issued request and diagnostic. A later observed write and
+snapshot on that table extend the same ledger. -/
 theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
@@ -212,7 +216,28 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
       current.current.LedgerSuffix [.uncertainWriteCrashRecovered request input cause batch retained] start.current ∧
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
-      start.WriteStorageEntry view nextCache (storage start.reached) (visible start.reached) := by
+      start.WriteStorageEntry view nextCache (storage start.reached) (visible start.reached) ∧
+      ∀ (α : Type) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+        (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+        (nextRequest : WriteRequest) (sequence : UInt64) (writeHeap : heap),
+        (inodes start.reached).visible = visible start.reached →
+        nextRequest.rows ≠ [] →
+        start.ObservesPublishedWrite appender stager syncer view nextCache inodes runs storage
+          inode buffered nextRequest lookup rename sequence writeHeap →
+        ∀ (read : SnapshotReadRequest α), handle.ObservesSnapshotToken writeHeap →
+        let directory := start.current.ready.state.session.directory
+        nextRequest.runOnRawOpenPhase directory lookup (appender.run nextCache.active) (stager.run nextCache.pending)
+          (syncer.group directory.path nextCache.directory nextCache.active nextCache.pending)
+          rename handle.phase handle.get handle.set start.reached = .ok sequence writeHeap ∧
+        ∃ (nextBatch : List WAL.Write) (written last : NativeOpenedPosition handle)
+          (events : List NativeExecutionEvent) (reference : SnapshotTable UInt64),
+          written.reached = writeHeap ∧
+          NativeOpenedTrace written [.acquire, .readAt written.pins.length read] events last ∧
+          current.current.LedgerSuffix
+            (.uncertainWriteCrashRecovered request input cause batch retained :: .acknowledged nextRequest nextBatch :: events)
+            last.current ∧
+          SnapshotWalReplay .empty (plan.history ++ nextBatch) reference ∧
+          (∀ observed ∈ last.current.ready.reads, observed.agrees reference) := by
   obtain ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected⟩ :=
     current.selectsAfterPublicationError view cache appender stager syncer storage request lookup rename
       nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reboot later
@@ -221,8 +246,14 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     (ready).opensReadyAfterAlignedRetries storage visible request cause prepared fits admitted effects selected
       (reboot.startsDurableRetry reset selected).2 exactKeeper noLater healthy phase ptrEq aligned
   have whole : retained = [] ∨ retained = batch := ledger.whole _ (List.mem_singleton_self _)
-  exact ⟨schedules, returned, rebootVacant, slots, target, plan, handle, start, nextCache, retained,
-    active, opened, history, whole, ledger, replay, physical⟩
+  refine ⟨schedules, returned, rebootVacant, slots, target, plan, handle, start, nextCache, retained,
+    active, opened, history, whole, ledger, replay, physical, ?_⟩
+  intro α inodes runs inode buffered nextRequest sequence writeHeap sameVisible nextNonempty seen read token
+  obtain ⟨_, writeReturn, nextBatch, _, written, last, reference, events, _, _, writtenAt, snapshots, ledger,
+    nextReplay, agrees⟩ :=
+    start.acknowledgesAndReadsLatest appender stager syncer view nextCache inodes runs storage inode buffered
+      nextRequest lookup rename ledger nextNonempty (sameVisible ▸ physical) seen read token
+  exact ⟨writeReturn, nextBatch, written, last, events, reference, writtenAt, snapshots, ledger, history ▸ nextReplay, agrees⟩
 
 end
 

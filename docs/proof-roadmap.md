@@ -174,8 +174,11 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   reboot and aligned ready-writer proof. The proof derives the old or
   whole batch from the one sampled marker, carries one prefix of failed
   opens, and derives the replay and write entry on the exact returned
-  table. The next observed write and snapshot remain to be composed
-  from this endpoint in the integrated trace.
+  table. One observed write and a snapshot on that same table extend
+  the recovered ledger through the continuation also used by
+  checkpoint recovery and grouped-write recovery. The global proof
+  still needs to derive the applicable transitions from one
+  independently admitted source execution.
   [Late write and ready recovery](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
   A short selected run read followed by an I/O error can now enter finalized cleanup and a healthy retry over the same selected names and bytes. The file frame includes the manifest and earlier runs already read, the failed descriptor's release and the cache and lock drops. A later aligned open starts at the exact caller-visible failure heap and uses the same production callbacks. The short run-read proof derives the exact crash child and bytes from the actual admission and read frames. The general retry theorem uses local read-only effects for each reached attempt and a later reported healthy alignment. [Selected run read retry](../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean)

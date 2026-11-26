@@ -131,11 +131,10 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     obtain ⟨schedules, writeReturn, nextBatch, _, written, last, reference, events, _, _, reachedWrite, snapshots,
       wrote, replay, agrees⟩ :=
       start.acknowledgesAndReadsLatest appender stager syncer view nextCache inodes runs storage inode buffered
-        nextRequest lookup rename nextNonempty physical write read token
-    have ledger := recoveredLedger.append wrote
-    rw [omitted] at ledger
+        nextRequest lookup rename recoveredLedger nextNonempty physical write read token
+    rw [omitted] at wrote
     exact ⟨handle, start, written, last, nextCache, nextBatch, events, reference, opened, schedules,
-      writeReturn, reachedWrite, snapshots, ledger, old ▸ replay, agrees⟩
+      writeReturn, reachedWrite, snapshots, wrote, old ▸ replay, agrees⟩
   · exact .inl elsewhere
 
 end
