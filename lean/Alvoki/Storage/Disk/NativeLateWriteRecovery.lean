@@ -27,6 +27,27 @@ local notation "stage" => stager.run cache.pending
 local notation "sync" => syncer.group current.current.ready.state.session.directory.path cache.directory cache.active cache.pending
 local notation "storageNames" => fun atHeap => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage atHeap))
 
+private theorem NativeOpenedPosition.selectsReachedWrite
+    {batch : List WAL.Write} {table : PackedTable} {rows : List (UInt64 × Option UInt64)}
+    (prepared : prepareBatch (installed).table rows = some (batch, table))
+    (fits : (installed).walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {failed rebooted : heap} (initial : NativeReadyStorage state (storage current.reached))
+    (frame : (storage current.reached).Frames (state).writeFramePath (storage failed))
+    {liveNew : Bool} {allows : Bool → Prop}
+    (published : WalPublicationPayloads.ReachedWrite state batch rows (storage failed) liveNew allows)
+    {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray}
+    (reboot : RawWriteRebootEntry state view storage names visible failed rebooted) :
+    TryLockObserves (view.files rebooted).owners dir (.ok true) ∧
+    (view.descriptors rebooted).slots = [] ∧
+    ∃ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target ∧
+      target.pair = (view.files rebooted).image.directory.active ∧
+      RawOpenRetryTrace.SelectedEntry view state target names visible rebooted := by
+  obtain ⟨_, sameKeeper, oldMarker, newMarker, selections⟩ := published
+  obtain ⟨target, admitted, pair, keeper⟩ :=
+    selections.retryTargetAtReboot (ready).readPrefix.refines.1 prepared fits initial frame sameKeeper oldMarker newMarker reboot
+  obtain ⟨selected, rebootVacant, slots⟩ := reboot.selectsRetry initial frame admitted pair keeper
+  exact ⟨rebootVacant, slots, target, admitted, pair.trans reboot.activePair.symm, selected⟩
+
 /-- Take one joint reboot sample at the exact heap of the failed write.
 The rename and final directory errors select a retry entry without
 assuming any subsequent open has returned. -/
@@ -64,11 +85,9 @@ theorem NativeOpenedPosition.selectsAfterPublicationError
   have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
   have protectedPrefix := prefixFrame.weaken fun _ kept => NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept))
   have frame := protectedPrefix.trans publishFrame
-  obtain ⟨failedCommit, payloads, sameKeeper, oldMarker, newMarker, selections⟩ := publication (initial.frame prefixFrame)
-  obtain ⟨target, admitted, pair, keeper⟩ :=
-    selections.retryTargetAtReboot valid prepared fits initial frame sameKeeper oldMarker newMarker reboot
-  have active : target.pair = (view.files rebooted).image.directory.active := pair.trans reboot.activePair.symm
-  obtain ⟨selected, rebootVacant, slots⟩ := reboot.selectsRetry initial frame admitted pair keeper
+  obtain ⟨failedCommit, physical⟩ := publication (initial.frame prefixFrame)
+  obtain ⟨rebootVacant, slots, target, admitted, active, selected⟩ :=
+    current.selectsReachedWrite view storage prepared fits initial frame physical reboot
   refine ⟨current.uses.writeSchedules, ?_, rebootVacant, slots, target, admitted, active, selected⟩
   · rw [request.runOnRawOpenPhase_afterPreparation dir lookup append stage sync rename opened.phase opened.get opened.set
       loaded nonempty prepared fits]
@@ -148,25 +167,18 @@ variable
     (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     {batch : List WAL.Write} {table : PackedTable}
-    {guarded poisoned failed rebooted reached : heap} {cause : IO.Error}
+    {failed rebooted reached : heap} {cause : IO.Error}
     (nonempty : request.rows ≠ [])
     (prepared : prepareBatch current.current.ready.state.writer.installed.table request.rows = some (batch, table))
-    (fits : current.current.ready.state.writer.installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size)
-    (guard : checkActiveSegmentWith current.current.ready.state.session.directory
-      current.current.ready.state.writer.installed lookup current.reached = .ok () guarded)
-    (assigned : opened.set opened.phase .poisoned guarded = .ok () poisoned)
+    (returned : request.runOnRawOpenPhase current.current.ready.state.session.directory lookup
+      (appender.run cache.active) (stager.run cache.pending)
+      (syncer.group current.current.ready.state.session.directory.path cache.directory cache.active cache.pending)
+      rename opened.phase opened.get opened.set current.reached = .error (.commitUnknown cause) failed)
     (initial : NativeReadyStorage current.current.ready.state (storage current.reached))
-    (prefixFrame : (storage current.reached).Frames (current.current.ready.state).crashPath (storage poisoned))
-    (publishFrame : (storage poisoned).Frames (current.current.ready.state).writeFramePath (storage failed))
+    (protectedFiles : (storage current.reached).Frames current.current.ready.state.writeFramePath (storage failed))
     {liveNew : Bool} {allows : Bool → Prop}
-    (publication :
-      NativeReadyStorage current.current.ready.state (storage poisoned) →
-      commitBytesAt current.current.ready.state.session.directory current.current.ready.state.writer.installed.activeFirst
-        (WAL.encodeBatch batch) (current.current.ready.state.writer.installed.walBytes + WAL.frameSize * request.rows.length)
-        (appender.run cache.active) (stager.run cache.pending)
-        (syncer.group current.current.ready.state.session.directory.path cache.directory cache.active cache.pending)
-        rename poisoned = .error cause failed ∧
-      WalPublicationPayloads.ReachedWrite current.current.ready.state batch request.rows (storage failed) liveNew allows)
+    (publication : WalPublicationPayloads.ReachedWrite current.current.ready.state batch request.rows
+      (storage failed) liveNew allows)
     (visible : heap → Nat → ByteArray)
     (reboot : RawWriteRebootEntry current.current.ready.state view storage
       (fun atHeap => (storage atHeap).files.names) visible failed rebooted)
@@ -178,15 +190,14 @@ variable
       (current.current.history.length + request.rows.length))
     (initialWindow : current.WalWindowAt storage firstOffset (current.current.history.length + request.rows.length))
 
-include nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reset nameEffects initialWindow
+include nonempty prepared returned initial protectedFiles publication reset nameEffects initialWindow
 
-/-- Both literal recovery endings start at the same sampled marker,
-canonical WAL namespace, and durable selected files. This proof stops
-before the first open attempt. -/
+/-- The public return fixes the prepared write's bound. Its separately
+observed publication payloads select one reboot before any open. -/
+
 theorem NativeOpenedPosition.selectsDurableAfterPublicationError :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
-    request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
-      .error (.commitUnknown cause) failed ∧
+    (installed).walBytes + WAL.frameSize * request.rows.length < UInt64.size ∧
     TryLockObserves (view.files rebooted).owners dir (.ok true) ∧
     (view.descriptors rebooted).slots = [] ∧
     ∃ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target ∧
@@ -194,14 +205,15 @@ theorem NativeOpenedPosition.selectsDurableAfterPublicationError :
       RawOpenRetryTrace.SelectedEntry view state target storageNames visible rebooted ∧
       RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset
         target.range.through rebooted := by
-  obtain ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected⟩ :=
-    current.selectsAfterPublicationError view cache appender stager syncer storage request lookup rename
-      nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reboot
+  obtain ⟨_, _, _, _, _, fits, _, _, _, _⟩ :=
+    current.classifiesCommitUnknown appender stager syncer cache request lookup rename nonempty returned
+  obtain ⟨rebootVacant, slots, target, admitted, active, selected⟩ :=
+    current.selectsReachedWrite view storage prepared fits initial protectedFiles publication reboot
   have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
     nonempty returned nameEffects
   have cutoff := current.current.ready.retryThrough_le prepared admitted
   have window := reboot.walNamespace nameFrame initialWindow.2
-  exact ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected,
+  exact ⟨current.uses.writeSchedules, fits, rebootVacant, slots, target, admitted, active, selected,
     reboot.startsRecoveryObservations reset selected (window.restrict (Nat.le_refl _) cutoff)⟩
 
 /-- A late publication error and its joint reboot reach the ready table
@@ -247,8 +259,6 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     (phase : OpenPhaseCellEffects view.phase get set)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
-    request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
-      .error (.commitUnknown cause) failed ∧
     TryLockObserves (view.files rebooted).owners dir (.ok true) ∧
     (view.descriptors rebooted).slots = [] ∧
     ∃ (target : Target) (plan : (ready).SelectedWritePlan batch target (view.files reached).image)
@@ -287,10 +297,9 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
             last.current ∧
           SnapshotWalReplay .empty (plan.history ++ nextBatch) reference ∧
           (∀ observed ∈ last.current.ready.reads, observed.agrees reference) := by
-  obtain ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected, recovery⟩ :=
+  obtain ⟨schedules, fits, rebootVacant, slots, target, admitted, active, selected, recovery⟩ :=
     current.selectsDurableAfterPublicationError view cache appender stager syncer storage request lookup rename
-      nonempty prepared fits guard assigned initial prefixFrame publishFrame publication visible reboot reset
-      nameEffects initialWindow
+      nonempty prepared returned initial protectedFiles publication visible reboot reset nameEffects initialWindow
   obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical, sameDirectory, coversNext,
     _, nextWindow⟩ :=
     (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
@@ -299,7 +308,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
       (alignedEffects target admitted active) (replacementEffects target admitted active)
       phaseIdentity tokenIdentity phase ptrEq openedTable
   have whole : retained = [] ∨ retained = batch := ledger.whole _ (List.mem_singleton_self _)
-  refine ⟨schedules, returned, rebootVacant, slots, target, plan, handle, start, nextCache, retained,
+  refine ⟨schedules, rebootVacant, slots, target, plan, handle, start, nextCache, retained,
     active, opened, history, whole, ledger, replay, physical, sameDirectory, coversNext, nextWindow, ?_⟩
   intro α inodes runs inode buffered nextRequest sequence writeHeap sameVisible nextNonempty seen read token
   obtain ⟨_, writeReturn, nextBatch, _, written, last, reference, events, _, _, writtenAt, snapshots, wrote,
@@ -323,8 +332,6 @@ theorem NativeOpenedPosition.stopsAfterPublicationErrorRetries
         (RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset
           target.range.through) attempts) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
-    request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
-      .error (.commitUnknown cause) failed ∧
     (∀ event ∈ events, event.uncertainBatchWhole) ∧
     ∃ (target : Target) (earlier : List (FilePath × IO.Error)) (lastInput : FilePath) (diagnostic : IO.Error) (issued : heap),
       target.pair = (view.files rebooted).image.directory.active ∧
@@ -341,16 +348,15 @@ theorem NativeOpenedPosition.stopsAfterPublicationErrorRetries
         let reads := origin.ready.reads ++ events.flatMap NativeExecutionEvent.reads
         (plan.history = history ∨ plan.history = history ++ batch) ∧
         PendingClientReplay submissions reads plan.history ∧ ∀ read ∈ reads, read.BoundedBy plan.history.length := by
-  obtain ⟨schedules, returned, _, _, target, admitted, active, selected, recovery⟩ :=
+  obtain ⟨schedules, fits, _, _, target, admitted, active, selected, recovery⟩ :=
     current.selectsDurableAfterPublicationError view cache appender stager syncer storage request lookup rename
-      nonempty prepared fits guard assigned initial prefixFrame publishFrame publication visible reboot reset
-      nameEffects initialWindow
+      nonempty prepared returned initial protectedFiles publication visible reboot reset nameEffects initialWindow
   obtain ⟨whole, earlier, lastInput, diagnostic, issued, reported, previous, call, plan, physical, last, settled,
     later, allowed, replay, bounds⟩ :=
     NativeExecutionPosition.refinesFailedOpenTerminalLedger (current := current.current) prior prepared fits admitted
       storage visible initialWindow.1 selected recovery attempts retried (retryEffects target admitted active)
   have through := (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through
-  exact ⟨schedules, returned, whole, target, earlier, lastInput, diagnostic, issued, active, reported, previous, call,
+  exact ⟨schedules, whole, target, earlier, lastInput, diagnostic, issued, active, reported, previous, call,
     plan, physical, last, settled, later, through, allowed, replay, bounds⟩
 
 end LiteralRetry
