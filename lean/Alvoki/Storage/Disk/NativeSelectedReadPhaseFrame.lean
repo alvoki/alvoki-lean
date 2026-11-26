@@ -166,12 +166,14 @@ private theorem filters (items : List α) {action : α → EStateM IO.Error heap
     | none => exact earlier
     | some value => exact earlier.bind trans fun values => .pure refl (value :: values)
 
-theorem readsWalExtents (directory : DiskDirectory) (names : List String)
+/-- Frame the extent probes in order. The whole scan sorts their
+returned extents without changing the heap. -/
+theorem readsWalExtentPrefix (directory : DiskDirectory) (names : List String)
     {stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)}
     (refl : ∀ atHeap, frame atHeap atHeap)
     (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
     (stats : ∀ path, KeepsReadFrame frame (stat path)) :
-    KeepsReadFrame frame (readWalSegmentExtentsWith directory stat names) := by
+    KeepsReadFrame frame (names.filterMapM (readWalSegmentExtentWith directory stat)) := by
   have readExtent (name : String) : KeepsReadFrame frame (readWalSegmentExtentWith directory stat name) := by
     unfold readWalSegmentExtentWith
     split
@@ -182,8 +184,16 @@ theorem readsWalExtents (directory : DiskDirectory) (names : List String)
       · exact .pure refl _
       · exact .pure refl _
     · exact .pure refl _
+  exact filters names refl trans readExtent
+
+theorem readsWalExtents (directory : DiskDirectory) (names : List String)
+    {stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)}
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (stats : ∀ path, KeepsReadFrame frame (stat path)) :
+    KeepsReadFrame frame (readWalSegmentExtentsWith directory stat names) := by
   unfold readWalSegmentExtentsWith
-  exact (filters names refl trans readExtent).bind trans fun _ => .pure refl _
+  exact (readsWalExtentPrefix directory names refl trans stats).bind trans fun _ => .pure refl _
 
 /-- The actual selected WAL reader carries the scope through the checked
 listing, extent probes and each reached payload callback. -/

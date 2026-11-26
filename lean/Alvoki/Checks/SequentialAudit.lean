@@ -2188,6 +2188,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesCheckpointReadError
 #check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsIntegrityCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsCachedWalPayloads
+#check_axioms Alvoki.Storage.DiskSession.KeepsReadFrame.readsWalExtentPrefix
 #check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsWalExtents
 #check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsSelectedWal
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveSnapshotRead
