@@ -41,12 +41,12 @@ variable {heap : Type} {opened : NativeOpenedHandle heap} {current : NativeOpene
 
 /-- The returned run pairs leave durable bytes at visible run names.
 A later directory barrier still has to settle those names. -/
-theorem NativeCheckpointSourceStop.returnedRunsStoreBytes
-    (stop : NativeCheckpointSourceStop current primitives fsync stage reason stoppedAt)
+theorem NativeCheckpointSourcePrefix.returnedRunsStoreBytes
+    (stop : NativeCheckpointSourcePrefix current primitives fsync stage)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
     (count : Nat)
-    (effects : ReturnedCheckpointRunEffects stop count inodes runs observe)
+    (effects : CheckpointRunPrefixEffects stop count inodes runs observe)
     (writtenPayload : ∀ index < count, ∀ before after payload handle,
       primitives.cached.writeRun (current.current.ready.state.session.directory.file (.run stop.next.generation index))
         payload before = .ok handle after →
@@ -130,30 +130,6 @@ theorem NativeCheckpointSourcePrefix.returnedRunsBarrier
   obtain ⟨handle, atSync, picked, returnedFsync⟩ := primitives.returnedFsync fsync directory.path directory.path actual
   exact ⟨afterRuns, handle, atSync, runCalls, picked, returnedFsync⟩
 
-abbrev NativeCheckpointSourceStop.returnedRunsBarrier
-    (stop : NativeCheckpointSourceStop current primitives fsync stage reason stoppedAt)
-    {afterBarrier : CheckpointWorld heap} :=
-  stop.toNativeCheckpointSourcePrefix.returnedRunsBarrier (afterBarrier := afterBarrier)
-
-/-- The final manifest barrier reaches past the successful run directory
-barrier. Extract its returned prefix and actual successful fsync. -/
-theorem NativeCheckpointSourceStop.manifestDirectoryReturnedRunsBarrier
-    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason stoppedAt) :
-    let directory := current.current.ready.state.session.directory
-    let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
-    ∃ (afterRuns afterBarrier : CheckpointWorld heap) (handle : CheckpointOpenHandle) (atSync : heap),
-      ((runSteps stop.next.table.runs.length).forM perform).run
-        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) afterRuns ∧
-      afterRuns.1.resolve directory.path directory.path primitives.openRead afterRuns.2 =
-        .ok handle (afterBarrier.1, atSync) ∧
-      fsync handle atSync = .ok (.ok ()) afterBarrier.2 ∧
-      ((runSteps stop.next.table.runs.length ++ [Step.syncRunsDirectory]).forM perform).run
-        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) afterBarrier := by
-  obtain ⟨_, _, _, beforeRename, _⟩ := stop.manifestDirectoryFollowsRename
-  obtain ⟨afterBarrier, _, _, throughBarrier, _⟩ := stop.manifestRenameFollowsStagedSync beforeRename
-  obtain ⟨afterRuns, handle, atSync, runCalls, picked, synced⟩ := stop.returnedRunsBarrier throughBarrier
-  exact ⟨afterRuns, afterBarrier, handle, atSync, runCalls, picked, synced, throughBarrier⟩
-
 /-- The cached directory selection cannot open a different description
 or change the raw syscall heap on a successful resolution. -/
 private theorem resolveDirectoryReceipt {directory : FilePath} {before selected : CheckpointWorld heap}
@@ -188,11 +164,15 @@ theorem CheckpointRunsDirectoryEffect.weaken {root : FilePath} {wide scope : Fil
 /-- The completed first directory barrier settles the new run names.
 Their bytes already survived the preceding successful file syncs.
 The directory's own name is governed by its parent's durability law. -/
-theorem NativeCheckpointSourceStop.newRunsSettledBeforeManifest
-    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason stoppedAt)
+theorem NativeCheckpointSourcePrefix.newRunsSettledAtBarrier
+    (stop : NativeCheckpointSourcePrefix current primitives fsync stage)
+    {afterBarrier : CheckpointWorld heap}
+    (through : let perform := primitives.checkpointStepUntilStop current.current.ready.state.session.directory fsync stop.next stop.manifest
+      ((runSteps stop.next.table.runs.length ++ [Step.syncRunsDirectory]).forM perform).run
+        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) afterBarrier)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
-    (effects : ReturnedCheckpointRunEffects stop stop.next.table.runs.length inodes runs observe)
+    (effects : CheckpointRunPrefixEffects stop stop.next.table.runs.length inodes runs observe)
     (writtenPayload : ∀ index < stop.next.table.runs.length, ∀ before after payload handle,
       primitives.cached.writeRun (current.current.ready.state.session.directory.file (.run stop.next.generation index))
         payload before = .ok handle after →
@@ -204,24 +184,18 @@ theorem NativeCheckpointSourceStop.newRunsSettledBeforeManifest
         (fun path => ∃ index < stop.next.table.runs.length, path = dir.file (.run stop.next.generation index))
         (observe atIssue.2).storageObservation (observe after.2).storageObservation) :
     let directory := current.current.ready.state.session.directory
-    let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
-    ∃ afterBarrier : CheckpointWorld heap,
-      ((runSteps stop.next.table.runs.length ++ [Step.syncRunsDirectory]).forM perform).run
-        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) afterBarrier ∧
-      ∀ index < stop.next.table.runs.length, ∀ run : Compaction.CheckedRun,
+    ∀ index < stop.next.table.runs.length, ∀ run : Compaction.CheckedRun,
         stop.next.table.runs.toArray[index]? = some run →
         let path := directory.file (.run stop.next.generation index)
         ∃ inode, (observe afterBarrier.2).visible path = some inode ∧
           (inodes afterBarrier.2).crashBytes inode = [run.run.bytes] ∧
           ∀ names ∈ (observe afterBarrier.2).crashBindings, names path = some inode := by
-  intro directory perform
-  obtain ⟨afterRuns, afterBarrier, handle, atSync, runCalls, resolved, synced, through⟩ :=
-    stop.manifestDirectoryReturnedRunsBarrier
+  intro directory
+  obtain ⟨afterRuns, handle, atSync, runCalls, resolved, synced⟩ := stop.returnedRunsBarrier through
   have stored := stop.returnedRunsStoreBytes inodes runs observe _ effects writtenPayload runCalls
   obtain ⟨cached, sameWorld⟩ := resolveDirectoryReceipt resolved
   have sameHeap : atSync = afterRuns.2 := congrArg Prod.snd sameWorld
   have effect := directoryEffect handle afterRuns afterBarrier cached (sameHeap ▸ synced)
-  refine ⟨afterBarrier, through, ?_⟩
   intro index within run expected path
   obtain ⟨inode, bound, durable⟩ := stored index within run expected
   have named : (observe afterBarrier.2).visible path = some inode := by
@@ -234,15 +208,15 @@ theorem NativeCheckpointSourceStop.newRunsSettledBeforeManifest
 
 /-- The previous selected files remain settled at the successful
 runs-directory barrier reached before staging the manifest. -/
-theorem NativeCheckpointSourceStop.priorStorageBeforeStaging
-    (stop : NativeCheckpointSourceStop current primitives fsync stage reason stoppedAt)
+theorem NativeCheckpointSourcePrefix.priorStorageBeforeStaging
+    (stop : NativeCheckpointSourcePrefix current primitives fsync stage)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView current.current.ready.state.session.directory
       (inodes atHeap) (runs atHeap))
     (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
     (phaseStorage : (observe current.reached).storageObservation.Frames current.current.ready.state.crashPath
       (observe stop.poisoned).storageObservation)
-    (effects : ReturnedCheckpointRunEffects stop stop.next.table.runs.length inodes runs observe)
+    (effects : CheckpointRunPrefixEffects stop stop.next.table.runs.length inodes runs observe)
     (directoryEffect : ∀ handle (atIssue after : CheckpointWorld heap),
       atIssue.1.directory = some handle → fsync handle atIssue.2 = .ok (.ok ()) after.2 →
       let state := current.current.ready.state
@@ -317,8 +291,8 @@ theorem NativeCheckpointSourceStop.manifestSyncPreservesSelected
   have separate : ∀ path, state.crashPath path → path ≠ state.session.directory.file .stagedManifest :=
     fun _ => state.crashPath_ne_stagedManifest
   obtain ⟨beforeWrite, handle, through, wrote, _, _, _⟩ := stop.manifestSyncUsesWrittenHandle
-  have stable := stop.priorStorageBeforeStaging inodes runs observe initial phaseStorage runEffects
-    runBarrier beforeWrite through
+  have stable := stop.toNativeCheckpointSourcePrefix.priorStorageBeforeStaging
+    inodes runs observe initial phaseStorage runEffects runBarrier beforeWrite through
   obtain ⟨writeFrame, privateBinding⟩ := stageWrite beforeWrite.2 handle wrote
   have staging := writeFrame.preservesCheckpointFootprint (fun _ _ => rfl) privateBinding separate
   obtain ⟨literal, _, _, target, _, stopped, _⟩ := stop.manifestSyncIssuesRawSync calls cache projected pending

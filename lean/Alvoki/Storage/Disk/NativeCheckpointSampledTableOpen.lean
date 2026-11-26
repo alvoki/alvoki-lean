@@ -13,7 +13,7 @@ open Sequential (SnapshotTable)
 
 variable {heap stream : Type} {opened : NativeOpenedHandle heap} {current : NativeOpenedPosition opened}
   {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
-  {reason : FilePath} {reached : CheckpointWorld heap}
+  {stage : CheckpointPublication.Step} {reason : FilePath} {cause : IO.Error} {reached : CheckpointWorld heap}
 
 local notation "dbDir" => current.current.ready.state.session.directory
 local notation "ready" => current.current.ready
@@ -172,19 +172,14 @@ def NativeOpenedPosition.SampledCheckpointRecovery (current : NativeOpenedPositi
               (request.replay reference returned.start.current.ready.state.writer.installed.table.committed)] ∧
           ∀ read ∈ last.current.ready.reads, read.agrees reference)
 
-/-- A reboot restores a sampled final checkpoint image. Scoped effects
-carry it across the actual failed calls to the healthy aligned opener,
-which reads the same files and returns the exact replayed table. With
-the durable effects, the same handle can publish a batch and read it. -/
-theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
-    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
+/-- An admitted physical checkpoint sample supplies the same aligned
+reader, failed-open lineage, and exact returned table for either exit. -/
+theorem NativeCheckpointSourcePrefix.reopensSampledCheckpoint
+    (prior : NativeCheckpointSourcePrefix current primitives fsync stage)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
-    (storage : FinalCheckpointStorageEffects stop inodes runs observe)
-    (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings)
-    (contents : Nat → ByteArray)
-    (sampled : ∀ path, path = (dbDir).file .manifest ∨ storage.scope path →
-      ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode)
+    (names : FilePath → Option Nat) (contents : Nat → ByteArray)
+    (selection : prior.SampledReplay names contents)
     (resetCensus : (view.descriptors rebooted).slots = [])
     (resetLock : (view.files rebooted).owners ((dbDir).file .lock) = none)
     {errors : List (FilePath × IO.Error)} (attempts : source.FailedCalls rebooted errors entry)
@@ -208,7 +203,7 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     exact (survivor path (authority.imp_right Or.inl)).1
   obtain ⟨authority, marker, segments, published, layout, _, walLayout, walValid, keeper, aligned,
     descriptors, offsets, prepared, _, accepted, _, _, _, checkpoint, _, _, selected, _, _, _, _, _⟩ :=
-    stop.replaysSampledFinalCheckpoint inodes runs observe storage names chosen contents sampled
+    selection
   obtain ⟨opening, chronology, raw, sameFiles, sameDirectory, sameKeeper, readsAtEntry⟩ :=
     observeReads published layout prepared selected
   have captures := raw.capturesRebootAuthority rfl (fun atHeap => (physical atHeap).files.names) names authority entryKeeps readsAtEntry
@@ -329,5 +324,59 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     refine ⟨last, _, reference, calls, ?_, sameHistory ▸ snapshotReplay, ?_, agrees⟩
     · exact afterRestart.append calls.common.ledgerSuffix
     · rwa [priorReads] at reads
+
+/-- A reboot restores a sampled final checkpoint image. Scoped effects
+carry it across the actual failed calls to the healthy aligned opener,
+which reads the same files and returns the exact replayed table. With
+the durable effects, the same handle can publish a batch and read it. -/
+theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
+    (storage : FinalCheckpointStorageEffects stop inodes runs observe)
+    (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings)
+    (contents : Nat → ByteArray)
+    (sampled : ∀ path, path = (dbDir).file .manifest ∨ storage.scope path →
+      ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode)
+    (resetCensus : (view.descriptors rebooted).slots = [])
+    (resetLock : (view.files rebooted).owners ((dbDir).file .lock) = none)
+    {errors : List (FilePath × IO.Error)} (attempts : source.FailedCalls rebooted errors entry)
+    (effects : OpenPhaseCellEffects view.phase get set)
+    {origin : NativeExecutionPosition} {earlier : List NativeExecutionEvent}
+    (prefixLedger : origin.LedgerSuffix earlier current.current) :
+    NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
+      (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
+      (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe names contents origin earlier errors := by
+  have selection := stop.replaysSampledFinalCheckpoint inodes runs observe storage names chosen contents sampled
+  exact stop.toNativeCheckpointSourcePrefix.reopensSampledCheckpoint inodes runs observe names contents selection
+    resetCensus resetLock attempts effects prefixLedger
+
+/-- A returned rename error supplies the exact selected files to the
+fixed opener. The caller supplies local rename effects and one allowed
+crash map. The same incoming ledger continues on the returned table. -/
+theorem NativeCheckpointSourceError.reopensSampledRenameError
+    (stop : NativeCheckpointSourceError current primitives fsync (.manifest .renameStaged) cause reached)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
+    (storage : CheckpointPublicationStorageEffects stop.toNativeCheckpointSourcePrefix inodes runs observe)
+    (effective : Bool)
+    (renameEffect : stop.ManifestRenameEffect inodes observe storage.scope effective)
+    (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings)
+    (contents : Nat → ByteArray)
+    (sampled : ∀ path, path = (dbDir).file .manifest ∨ storage.scope path →
+      ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode)
+    (resetCensus : (view.descriptors rebooted).slots = [])
+    (resetLock : (view.files rebooted).owners ((dbDir).file .lock) = none)
+    {errors : List (FilePath × IO.Error)} (attempts : source.FailedCalls rebooted errors entry)
+    (effects : OpenPhaseCellEffects view.phase get set)
+    {origin : NativeExecutionPosition} {earlier : List NativeExecutionEvent}
+    (prefixLedger : origin.LedgerSuffix earlier current.current) :
+    stop.SelectsManifest effective names contents ∧
+    NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
+      (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
+      (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe names contents origin earlier errors := by
+  obtain ⟨choice, selection⟩ := stop.replaysSampledRenameError inodes runs observe storage effective renameEffect names chosen contents sampled
+  exact ⟨choice, stop.toNativeCheckpointSourcePrefix.reopensSampledCheckpoint inodes runs observe names contents selection
+    resetCensus resetLock attempts effects prefixLedger⟩
 
 end Alvoki.Storage.DiskSession

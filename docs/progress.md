@@ -67,8 +67,12 @@ A returned checkpoint error identifies a preflight rejection, the first
 failed publication step, or failure to restore the ready phase after publication.
 For a failed manifest rename, the returned prefix identifies the prior staged
 write, the successful sync of its descriptor, and the cache and heap reached
-by the rename. Connecting that return to the old or new manifest selected at
-reboot still requires a local physical rename effect.
+by the rename. Under a local rename effect, a single sampled directory map
+and its inode bytes select the manifest, runs and WAL for the fixed opener.
+An error before the effect selects the old manifest. After the effect either
+version can survive before the directory barrier. The returned writer, next
+confirmed write and snapshot share the same replay as the final barrier path.
+The older session-trace constructor still requires its rename report.
 [Returned checkpoint errors](../lean/Alvoki/Storage/Disk/NativeOpenCheckpointScheduleStop.lean)
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and
