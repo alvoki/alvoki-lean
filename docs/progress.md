@@ -4,8 +4,13 @@ The selected marked reader now derives the measured keeper extent and the exact
 set of later starts in the observed directory for every successful bounded repair.
 The common finisher exposes the ordered unlink pass and the final keeper sync
 or staged replacement. The existing aligned writer consumes both results.
-For a nonempty suffix, the next obligation is to connect the scan to all later
-model names and carry their removal through the directory barrier.
+For a nonempty suffix, the successful unlink loop now yields the exact heap
+at the directory barrier. Local unlink and sync effects determine its file
+image. If the observed list covers the visible suffix, the barrier settles
+the later-name choices to the empty list in any scan order. The existing
+frame proof uses the same induction. The next obligation is to establish
+that coverage and the local effects for the selected recovery entry, then
+carry the actual keeper handle through the barrier to the returned writer.
 
 The grouped and late write proofs now derive the cache entry of their
 literal aligned reopen. The actual path and no-follow lookups supply

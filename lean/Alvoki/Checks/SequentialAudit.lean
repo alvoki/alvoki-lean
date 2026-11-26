@@ -2185,7 +2185,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.workerReturnsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFinalSyncError
+#check_axioms Alvoki.Storage.DiskSession.foldReturnedPrune
 #check_axioms Alvoki.Storage.DiskSession.framesReturnedPrune
+#check_axioms Alvoki.Storage.DiskSession.fileImageOfReturnedPrune
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preserves
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.readOnly
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.repair
@@ -3675,6 +3677,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.HeldLaterWalUnlinks.removesBinding
 #check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.catalog
 #check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.selectedBindings
+#check_axioms Alvoki.Storage.WalSegmentRepair.FileImage.syncAfterCoveringUnlinks
 #check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.settledImage
 #check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.suffixBarrier
 #check_axioms Alvoki.Storage.DiskSession.ListedLaterWalPrune.finishAfterPrune

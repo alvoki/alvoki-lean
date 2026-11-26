@@ -225,6 +225,22 @@ private theorem visibleAfter (initial : FileImage) (names : List Nat) (first : N
     change (first ∈ initial.later.visible.filter (fun offset => decide (offset ≠ name)) ∧ first ∉ rest) ↔ _
     simp [List.mem_filter, List.mem_cons, and_assoc]
 
+/-- Once the directory barrier returns, covering the visible suffix suffices
+in any unlink order. Before the barrier the crash choices can depend on
+the prefix that actually ran. -/
+theorem _root_.Alvoki.Storage.WalSegmentRepair.FileImage.syncAfterCoveringUnlinks
+    (initial : FileImage) (names : List Nat)
+    (covers : ∀ name ∈ initial.later.visible, name ∈ names) :
+    (names.foldl FileImage.unlinkLater initial).syncDirectory =
+      { initial.syncDirectory with later := LaterNames.settled [] } := by
+  have empty : (names.foldl FileImage.unlinkLater initial).later.visible = [] := by
+    apply List.eq_nil_iff_forall_not_mem.mpr
+    intro name present
+    obtain ⟨visible, missing⟩ := (visibleAfter initial names name).mp present
+    exact missing (covers name visible)
+  obtain ⟨directory, kept, keeper⟩ := preservesFileFields initial names
+  simp only [FileImage.syncDirectory, LaterNames.syncDirectory, directory, kept, keeper, empty]
+
 /-- The complete suffix barrier leaves only the empty later-name choice.
 The selected directory pair, sealed bytes and the keeper's old contents
 and staging choices are unchanged through pruning. -/
@@ -233,17 +249,9 @@ theorem settledImage (initial : FileImage) :
     (initial.unlinkVisibleSuffix).syncDirectory.directory = initial.syncDirectory.directory ∧
     (initial.unlinkVisibleSuffix).syncDirectory.kept = initial.kept ∧
     (initial.unlinkVisibleSuffix).syncDirectory.keeper = initial.keeper := by
-  have empty : (initial.unlinkVisibleSuffix).later.visible = [] := by
-    apply List.eq_nil_iff_forall_not_mem.mpr
-    intro first visible
-    obtain ⟨present, removed⟩ := (visibleAfter initial.syncDirectory initial.later.visible first).mp visible
-    exact removed present
-  obtain ⟨metadata, kept, keeper⟩ := preservesFileFields initial.syncDirectory initial.later.visible
-  have durable : (initial.unlinkVisibleSuffix).syncDirectory.later.DurablyEmpty := by
-    simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.DurablyEmpty, LaterNames.settled, empty]
-  refine ⟨durable, ?_, kept, keeper⟩
-  have twice := congrArg DirectoryPublication.Image.syncDirectory metadata
-  exact twice
+  unfold FileImage.unlinkVisibleSuffix
+  rw [FileImage.syncAfterCoveringUnlinks initial.syncDirectory initial.later.visible (fun _ present => present)]
+  exact ⟨⟨rfl, rfl⟩, rfl, rfl, rfl⟩
 
 /-- The directory and lock issuers remain live in the same reached census.
 The callback settles the suffix through the captured directory handle
