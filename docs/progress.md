@@ -146,7 +146,11 @@ The sampled checkpoint reader passes the installation and repair observations
 from that open directly to the ready-call proof. It derives the keeper bytes
 and WAL range from the selected sample. The resulting session uses the same
 table and references, starts with empty snapshot pins and extends the incoming
-ledger of the checkpoint's actual predecessor. The proof carries the selected
+ledger of the checkpoint's actual predecessor. The same induction carries the repaired WAL name inventory through these calls.
+For the next write, its upper bound is the reached history length plus the
+number of requested rows. This follows from local effects on WAL names over
+the range budgeted before the calls and covers rejected requests as well.
+The proof carries the selected
 durable files and marker from the reboot through the actual failed opens and
 the successful reader's preparation. It also preserves the root binding in
 each allowed crash namespace. It assumes that the reboot restores the sampled

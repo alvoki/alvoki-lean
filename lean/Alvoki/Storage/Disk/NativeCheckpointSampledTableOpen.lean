@@ -80,7 +80,11 @@ abbrev RawMarkedOpenInterpreter.AlignedReadyCalls
             events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
             origin.LedgerSuffix (earlier ++ events) last.current ∧
             InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
-              last.current.ready.state.writer.installed last.current.ready.state.session
+              last.current.ready.state.writer.installed last.current.ready.state.session ∧
+            ∀ extra, (∀ offset ∈ writer.wal.segments.map WalSegment.first, lower ≤ offset) →
+              writes.WalWindowEffects observe lower
+                (writer.history.length + (calls.map NativeReturnedCall.requestedRows).sum + extra) →
+              last.WalWindowAt observe lower (last.current.history.length + extra)
 
 /-- Start the common ready-call induction on the exact table returned by
 an aligned open. The previous client ledger survives the reopen, while
@@ -178,21 +182,35 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
     ⟨by simpa using startHistory.trans carriedHistory, by simpa using submissions, by simpa using reads, by simp⟩
   have across : origin.LedgerSuffix earlier start.current := by
     simpa only [List.append_nil] using priorLedger.append unchanged
-  refine ⟨handle, start, nextCache, opened, sameTable, sameHeap, references, emptyPins, cacheRefs, stateEq,
-    across, ?_, ?_, ?_⟩
-  · simpa only [← sameHeap] using writeEntry
-  · intro through
+  have installedWindow (through : Nat) :
+      start.current.ready.state.writer.wal.SettledNamespaceWindow start.current.ready.state.session.directory
+        lower through (observe returnedAt) := by
     have readyWindow := repairedWindow through
     rw [stateEq, ← tokenHeap]
     exact allocation.walWindowAfterAllocations observe writer.wal directory readyWindow.1 readyWindow.2
       (fun _ => WalNamePresenceFrame.ofStorageFrame phaseFiles (fun start _ _ => .inr ⟨.walSegment start, rfl⟩))
       (fun _ => WalNamePresenceFrame.ofStorageFrame tokenFiles (fun start _ _ => .inr ⟨.walSegment start, rfl⟩))
+  refine ⟨handle, start, nextCache, opened, sameTable, sameHeap, references, emptyPins, cacheRefs, stateEq,
+    across, ?_, installedWindow, ?_⟩
+  · simpa only [← sameHeap] using writeEntry
   · intro appender stager syncer lookup rename writes issuer inode buffered reported calls reached executed covered
     have initial : writes.StorageAt view observe (fun atHeap => (inodes atHeap).visible) start := writeEntry
-    obtain ⟨last, events, heap, pins, physical, length, records, ledger⟩ :=
-      executed.refinesReady covered view inodes runs observe inode buffered reported start sameHeap
+    obtain ⟨last, events, heap, pins, physical, length, records, ledger, budget, frames⟩ :=
+      executed.refinesReadyFramed covered view inodes runs observe inode buffered reported start sameHeap
         (by rw [emptyPins]; rfl) initial
-    exact ⟨last, events, heap, pins, physical, length, records, across.append ledger, last.current.ready.readPrefix.guardedReplay⟩
+    refine ⟨last, events, heap, pins, physical, length, records, across.append ledger,
+      last.current.ready.readPrefix.guardedReplay, ?_⟩
+    intro extra covers names
+    have fromOpen : start.WalWindowAt observe lower
+        (writer.history.length + (calls.map NativeReturnedCall.requestedRows).sum + extra) := by
+      constructor
+      · rw [stateEq]
+        exact covers
+      · rw [sameHeap]
+        exact installedWindow _
+    exact (frames names fromOpen).restrictUpper
+      (by simpa only [startHistory, OpenReferenceAllocations.readyState] using Nat.add_le_add_right budget extra)
+
 
 section
 
