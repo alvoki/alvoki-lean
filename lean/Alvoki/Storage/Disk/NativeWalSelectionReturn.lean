@@ -185,4 +185,30 @@ theorem SelectedWalReadReturn.classifies (directory : DiskDirectory) (watermark 
       (SelectedWalReadReturn.invalidMarker (directory := directory) (list := list) (lstat := lstat)
         (readSeal := readSeal) (readKeeper := readKeeper) (entry := entry) checked)
 
+/-- A successful selected read supplies the one reached listing and scan,
+the selected extents and later names, and the exact payload returns. -/
+theorem SelectedWalReadReturn.successfulPayloads
+    {directory : DiskDirectory} {watermark : Nat} {length : UInt64}
+    {list : FilePath → EStateM IO.Error heap (Array IO.FS.DirEntry)}
+    {lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)}
+    {readSeal : FilePath → Nat → EStateM IO.Error heap ByteArray}
+    {readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray}
+    {entry reached : heap} {reads : WalSegmentMarkerReads} {size : Nat}
+    (observed : SelectedWalReadReturn directory watermark length list lstat readSeal readKeeper entry
+      (.ok (reads, size) reached)) :
+    ∃ entries listed extents scanned required,
+      (length.toNat % frameSize = 0 ∧ watermark ≤ length.toNat / frameSize) ∧
+      list directory.path entry = .ok entries listed ∧
+      readWalSegmentExtentsWith directory lstat (entries.toList.map (·.fileName)) listed = .ok extents scanned ∧
+      selectWalExtentsThrough extents watermark (length.toNat / frameSize) = some (required, reads.newer) ∧
+      readCachedWalPayloads directory (length.toNat / frameSize) readSeal readKeeper required scanned =
+        .ok (reads.files, size) reached ∧
+      CachedWalPayloadReturn directory (length.toNat / frameSize) readSeal readKeeper required scanned
+        (.ok (reads.files, size) reached) := by
+  cases observed with
+  | scanned checked listed scan payload =>
+    cases payload with
+    | payloadReturned selected read ordered =>
+      exact ⟨_, _, _, _, _, checked, listed, scan, selected, read, ordered⟩
+
 end Alvoki.Storage

@@ -32,6 +32,28 @@ theorem MarkedTemporaryReadCalls.readWith_error (calls : MarkedTemporaryReadCall
       .error cause (dataErrorDropState calls.release file failed) := by
   simp only [readWith, openedRaw, readRaw]
 
+/-- A successful scoped read determines the opened handle, its actual
+read heap, and the heap reached after releasing that same handle. -/
+theorem MarkedTemporaryReadCalls.readWith_ok (calls : MarkedTemporaryReadCalls heap)
+    (path : FilePath) (read : IO.FS.Handle → EStateM IO.Error heap ByteArray)
+    {before reached : heap} {bytes : ByteArray}
+    (returned : calls.readWith path read before = .ok bytes reached) :
+    ∃ file opened readHeap,
+      calls.openRead path before = .ok file opened ∧
+      read file opened = .ok bytes readHeap ∧
+      dataErrorDropState calls.release file readHeap = reached := by
+  simp only [readWith] at returned
+  cases acquired : calls.openRead path before with
+  | error cause heap => simp [acquired] at returned
+  | ok file opened =>
+    simp only [acquired] at returned
+    cases observed : read file opened with
+    | error cause failed => simp [observed] at returned
+    | ok payload readHeap =>
+      simp only [observed, EStateM.Result.ok.injEq] at returned
+      obtain ⟨rfl, afterRelease⟩ := returned
+      exact ⟨file, opened, readHeap, rfl, observed, afterRelease⟩
+
 private def MarkedTemporaryReadCalls.readMetadata (calls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
     (path : FilePath) (metadata : IO.FS.Metadata) (file : IO.FS.Handle) : EStateM IO.Error heap ByteArray :=
   if path == directory.file .walBoundary then
@@ -45,6 +67,49 @@ def MarkedTemporaryReadCalls.readOptional (calls : MarkedTemporaryReadCalls heap
   readOptionalDatabaseFileWithMetadata (calls.stat path)
     (fun metadata => calls.readWith path (calls.readMetadata directory path metadata))
     (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
+
+/-- The manifest and marker return their observed bytes only after a
+successful regular-file check and read on the opened description. -/
+theorem MarkedTemporaryReadCalls.readOptionalPresent (calls : MarkedTemporaryReadCalls heap)
+    (directory : DiskDirectory) (path : FilePath)
+    {before reached : heap} {bytes : ByteArray}
+    (returned : calls.readOptional directory path before = .ok (some bytes) reached) :
+    ∃ metadata afterStat file opened readHeap,
+      calls.stat path before = .ok (.ok metadata) afterStat ∧ metadata.type = .file ∧
+      calls.openRead path afterStat = .ok file opened ∧
+      (if path == directory.file .walBoundary then
+        readPrefixUntilEofWith (IO.userError "invalid WAL boundary length") (calls.readChunk file)
+          WAL.Boundary.acquisitionLimit ByteArray.empty
+      else readIntegrityManifestPrefixWith (calls.readChunk file) metadata.byteSize.toNat) opened = .ok bytes readHeap ∧
+      dataErrorDropState calls.release file readHeap = reached := by
+  simp only [readOptional, readOptionalDatabaseFileWithMetadata, Bind.bind, EStateM.bind] at returned
+  cases stat : calls.stat path before with
+  | error cause heap => simp [stat] at returned
+  | ok observed afterStat =>
+    cases observed with
+    | error cause =>
+      cases cause <;> simp [stat, throw, throwThe, MonadExceptOf.throw, EStateM.throw, Pure.pure] at returned
+      split at returned <;> simp [EStateM.throw, EStateM.pure] at returned
+    | ok metadata =>
+      simp only [stat] at returned
+      have checked : (metadata.type == .file) = true := by
+        cases test : metadata.type == .file
+        · simp [test, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+        · rfl
+      have regular : metadata.type = .file := by
+        cases fileKind : metadata.type with
+        | file => rfl
+        | dir | symlink | other =>
+          rw [fileKind] at checked
+          exact False.elim (Bool.noConfusion checked)
+      simp only [checked, ↓reduceIte, EStateM.bind, Pure.pure, EStateM.pure] at returned
+      obtain ⟨file, opened, readHeap, acquired, read, dropped⟩ :=
+        calls.readWith_ok path (calls.readMetadata directory path metadata)
+          (show calls.readWith path (calls.readMetadata directory path metadata) afterStat = .ok bytes reached from by
+            cases result : calls.readWith path (calls.readMetadata directory path metadata) afterStat with
+            | error cause heap => simp [result] at returned
+            | ok payload heap => simpa only [result, EStateM.Result.ok.injEq, Option.some.injEq] using returned)
+      exact ⟨metadata, afterStat, file, opened, readHeap, rfl, regular, acquired, read, dropped⟩
 
 /-- Project either result of acquisition on the admitted manifest. -/
 theorem MarkedTemporaryReadCalls.readOptionalManifest_effects (calls : MarkedTemporaryReadCalls heap)

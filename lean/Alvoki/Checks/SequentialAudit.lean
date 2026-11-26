@@ -3979,6 +3979,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.reachedMarkedPreparation
 #check_axioms Alvoki.Storage.DiskSession.reachedMarkedReaders
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.reachesMarkedReadsAndRepair
+#check_axioms Alvoki.Storage.readIntegrityRunBytesSized_returnedAt
+#check_axioms Alvoki.Storage.readIntegrityCheckpointSized_restoredInputs
+#check_axioms Alvoki.Storage.SelectedWalReadReturn.successfulPayloads
+#check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalPayloadReturn.successfulKeeper
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readWith_ok
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readOptionalPresent
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.append
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsFixedAfterWorkerAgreement

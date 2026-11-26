@@ -121,4 +121,53 @@ theorem CachedWalPayloadReturn.classifies (directory : DiskDirectory) (through :
             (readKeeper := readKeeper) (metadata := metadata) (nextMetadata := nextMetadata) (rest := rest)
             (entry := entry) forward)
 
+/-- Recover the existing seal schedule from a successful payload return.
+The keeper read starts at the last seal's reached heap. The payloads in
+the result can be certified using any predicate on those exact seals. -/
+theorem CachedWalPayloadReturn.successfulKeeper
+    {directory : DiskDirectory} {through : Nat}
+    {readSeal : FilePath → Nat → EStateM IO.Error heap ByteArray}
+    {readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray}
+    {required : List (Nat × IO.FS.Metadata)} {entry : heap}
+    {result : EStateM.Result IO.Error heap (List (Nat × ByteArray) × Nat)}
+    (observed : CachedWalPayloadReturn directory through readSeal readKeeper required entry result)
+    {files : List (Nat × ByteArray)} {size : Nat} {reached : heap}
+    (returned : result = .ok (files, size) reached) :
+    ∃ (keeper : Nat) (metadata : IO.FS.Metadata) (issued : heap) (bytes : ByteArray)
+      (earlier : List (Nat × ByteArray))
+      (seals : CachedWalKeeperReached directory readSeal keeper metadata required entry issued),
+      required.getLast? = some (keeper, metadata) ∧
+      files = earlier ++ [(keeper, bytes)] ∧ earlier.map Prod.fst = required.dropLast.map Prod.fst ∧
+      size = metadata.byteSize.toNat ∧
+      readKeeper (directory.file (.walSegment keeper)) ((through - keeper) * frameSize)
+        metadata.byteSize.toNat issued = .ok bytes reached ∧
+      (bytes.size = (through - keeper) * frameSize ∧ (through - keeper) * frameSize ≤ metadata.byteSize.toNat) ∧
+      (∀ {selected : Nat → ByteArray → Prop},
+        (∀ payload ∈ earlier, selected payload.1 payload.2) → seals.HasPayloads selected) := by
+  induction observed generalizing files size reached with
+  | noKeeper _ | keeperError _ | invalidKeeper _ _ | invalidOrder _ | sealError _ _ | sealedThenError _ _ _ =>
+    cases returned
+  | @kept first metadata entry after bytes read checked =>
+    obtain ⟨payload, rfl⟩ := EStateM.Result.ok.inj returned
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj payload
+    exact ⟨first, metadata, entry, bytes, [], .noSeals, rfl, rfl, rfl, rfl, read, checked, fun _ => .noSeals⟩
+  | @sealed first next metadata nextMetadata rest entry afterSeal after bytes tailFiles fileSize forward read tail ih =>
+    obtain ⟨payload, rfl⟩ := EStateM.Result.ok.inj returned
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj payload
+    obtain ⟨keeper, keeperMetadata, issued, keeperBytes, earlier, seals, last, payloads, offsets, extent, readKeeper,
+      checked, certifies⟩ := ih rfl
+    cases read with
+    | accepted sized fits readSeal exactSize =>
+      obtain ⟨span, atEntry⟩ := EStateM.Result.ok.inj sized
+      subst atEntry
+      let schedule := CachedWalKeeperReached.sealed forward span fits readSeal exactSize seals
+      refine ⟨keeper, keeperMetadata, issued, keeperBytes, (first, bytes) :: earlier, schedule, ?_,
+        congrArg (List.cons (first, bytes)) payloads, ?_, extent, readKeeper, checked, ?_⟩
+      · simpa only [List.getLast?_cons_cons] using last
+      · simpa only [List.dropLast_cons_cons, List.map_cons] using congrArg (List.cons first) offsets
+      · intro selected exactPayloads
+        exact .sealed (forward := forward) (span := span) (fits := fits) (reported := readSeal) (size := exactSize)
+          (exactPayloads _ List.mem_cons_self)
+          (certifies (fun payload member => exactPayloads payload (List.mem_cons_of_mem _ member)))
+
 end Alvoki.Storage.WalSegmentRepair

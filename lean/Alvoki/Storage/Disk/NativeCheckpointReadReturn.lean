@@ -214,4 +214,111 @@ theorem SizedCheckpointReadReturn.classifies (directory : DiskDirectory)
             simpa only [restored, EStateM.pure] using
               (SizedCheckpointReadReturn.restored observed decoded runs restored)
 
+
+private theorem mapM_stepAt {α β : Type} (perform : α → EStateM IO.Error heap β)
+    (items : List α) {entry reached : heap} {found : List β} {index : Nat} {item : α}
+    (scheduled : items[index]? = some item)
+    (returned : (items.mapM perform) entry = .ok found reached) :
+    ∃ previous atIssue value afterFile,
+      ((items.take index).mapM perform) entry = .ok previous atIssue ∧
+      perform item atIssue = .ok value afterFile ∧ found[index]? = some value ∧
+      ((items.take (index + 1)).mapM perform) entry = .ok (previous ++ [value]) afterFile := by
+  induction items generalizing entry found index with
+  | nil => simp at scheduled
+  | cons first rest ih =>
+    simp only [List.mapM_cons, Bind.bind, EStateM.bind] at returned
+    cases head : perform first entry with
+    | error cause failed => simp [head] at returned
+    | ok value middle =>
+      cases tail : (rest.mapM perform) middle with
+      | error cause failed => simp [head, tail] at returned
+      | ok values final =>
+        simp only [head, tail, EStateM.Result.ok.injEq, Pure.pure, EStateM.pure] at returned
+        obtain ⟨rfl, rfl⟩ := returned
+        cases index with
+        | zero =>
+          simp at scheduled
+          subst item
+          exact ⟨[], entry, value, middle, rfl, head, rfl,
+            by simp [List.mapM_cons, Bind.bind, EStateM.bind, head, Pure.pure, EStateM.pure]⟩
+        | succ index =>
+          obtain ⟨previous, atIssue, next, afterFile, prefixRead, receipt, delivered, afterRead⟩ :=
+            ih (by simpa using scheduled) tail
+          exact ⟨value :: previous, atIssue, next, afterFile,
+            by simp [List.mapM_cons, Bind.bind, EStateM.bind, head, prefixRead, Pure.pure, EStateM.pure],
+            receipt, by simpa using delivered,
+            by simp [List.take_succ_cons, List.mapM_cons,
+              Bind.bind, EStateM.bind, head, afterRead, Pure.pure, EStateM.pure]⟩
+
+/-- A successful run loop exposes the exact prefix before each decoded
+run's extent and payload callbacks, and its entry in the restored list. -/
+theorem readIntegrityRunBytesSized_returnedAt (directory : DiskDirectory)
+    {manifest : IntegrityCheckpoint} {raw : ByteArray}
+    (decoded : IntegrityCheckpoint.decode raw = .ok manifest)
+    (readSize : FilePath → EStateM IO.Error heap Nat)
+    (readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray)
+    {entry reached : heap} {files : List ByteArray}
+    (returned : readIntegrityRunBytesSized directory manifest readSize readPrefix entry = .ok files reached)
+    {index : Nat} (within : index < manifest.header.runCount.toNat) :
+    ∃ (stamp : RunIntegrity) (previous : List ByteArray) (atIssue afterFile : heap) (bytes : ByteArray),
+      manifest.runs[index]? = some stamp ∧ files[index]? = some bytes ∧
+      readIntegrityRunBytesSized directory
+        { manifest with header := { manifest.header with runCount := index.toUInt64 } }
+        readSize readPrefix entry = .ok previous atIssue ∧
+      ExactRecoveryFileReturn (directory.file (.run manifest.header.generation index)) stamp.byteCount.toNat
+        (IO.userError checkpointIntegrityMismatch) readSize readPrefix atIssue (.ok bytes afterFile) ∧
+      readIntegrityRunBytesSized directory
+        { manifest with header := { manifest.header with runCount := (index + 1).toUInt64 } }
+        readSize readPrefix entry = .ok (previous ++ [bytes]) afterFile := by
+  simp only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM] at returned
+  have scheduled : (List.range manifest.header.runCount.toNat)[index]? = some index :=
+    List.getElem?_range within
+  obtain ⟨previous, atIssue, bytes, afterFile, prefixRead, receipt, delivered, afterRead⟩ :=
+    mapM_stepAt _ _ scheduled returned
+  have fits : index < manifest.runs.length :=
+    (IntegrityCheckpoint.decode_spec decoded).2.2.symm ▸ within
+  let stamp := manifest.runs[index]'fits
+  have found : manifest.runs[index]? = some stamp := List.getElem?_eq_getElem fits
+  have shortened : index.toUInt64.toNat = index :=
+    UInt64.toNat_ofNat_of_lt' (Nat.lt_trans within manifest.header.runCount.toNat_lt_size)
+  refine ⟨stamp, previous, atIssue, afterFile, bytes, found, delivered, ?_, ?_, ?_⟩
+  · rw [List.take_range, Nat.min_eq_left (Nat.le_of_lt within)] at prefixRead
+    simpa only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, shortened] using prefixRead
+  · have exactRead : readExactRecoveryFileWith (directory.file (.run manifest.header.generation index))
+        stamp.byteCount.toNat (IO.userError checkpointIntegrityMismatch) readSize readPrefix atIssue =
+        .ok bytes afterFile := by
+      change ((do
+        let some stamp := manifest.runs.toArray[index]? | throw (IO.userError checkpointIntegrityMismatch)
+        readExactRecoveryFileWith (directory.file (.run manifest.header.generation index))
+          stamp.byteCount.toNat (IO.userError checkpointIntegrityMismatch) readSize readPrefix) :
+        EStateM IO.Error heap ByteArray) atIssue = .ok bytes afterFile at receipt
+      simpa only [List.getElem?_toArray, found] using receipt
+    simpa only [exactRead] using
+      (ExactRecoveryFileReturn.classifies (directory.file (.run manifest.header.generation index))
+        stamp.byteCount.toNat (IO.userError checkpointIntegrityMismatch) readSize readPrefix atIssue)
+  · have withinNext : index + 1 ≤ manifest.header.runCount.toNat := Nat.succ_le_of_lt within
+    have shortenedNext : (index + 1).toUInt64.toNat = index + 1 :=
+      UInt64.toNat_ofNat_of_lt' (Nat.lt_of_le_of_lt withinNext manifest.header.runCount.toNat_lt_size)
+    rw [List.take_range, Nat.min_eq_left withinNext] at afterRead
+    simpa only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, shortenedNext] using afterRead
+
+/-- Invert a present return of the literal sized reader. The decoder and
+restore receive the bytes supplied by the original ordered callbacks. -/
+theorem readIntegrityCheckpointSized_restoredInputs (directory : DiskDirectory)
+    (readManifest : EStateM IO.Error heap (Option ByteArray))
+    (readSize : FilePath → EStateM IO.Error heap Nat)
+    (readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray)
+    {entry reached : heap} {table : PackedTable} {generation : UInt64}
+    (returned : readIntegrityCheckpointSized directory readManifest readSize readPrefix entry =
+      .ok (some (table, generation)) reached) :
+    ∃ raw manifest files afterManifest,
+      readManifest entry = .ok (some raw) afterManifest ∧
+      IntegrityCheckpoint.decode raw = .ok manifest ∧
+      readIntegrityRunBytesSized directory manifest readSize readPrefix afterManifest = .ok files reached ∧
+      loadIntegrityRunSet manifest files = .ok table ∧ manifest.header.generation = generation := by
+  have outcome := SizedCheckpointReadReturn.classifies directory readManifest readSize readPrefix entry
+  rw [returned] at outcome
+  cases outcome with
+  | restored read decoded runs loaded => exact ⟨_, _, _, _, read, decoded, runs, loaded, rfl⟩
+
 end Alvoki.Storage

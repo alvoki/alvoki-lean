@@ -174,9 +174,16 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   reference allocations that build its table. On the reached marked
   route that same return determines the actual checkpoint, marker and
   WAL callbacks, their replay, and the measured repair on the prepared
-  heap. The selected inode and durable-byte witness still needs to
-  follow from these exact reads and local primitive effects.
-  [Fixed open result](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
+  heap. Successful checkpoint reads now identify each selected run's
+  exact request and return heaps. Successful WAL reads identify the
+  selected seal payloads and the keeper read after the seal releases.
+  An optional file read that returns bytes identifies its reached stat,
+  opened descriptor and release. The remaining obligations are local
+  file identity at acquisition, exact bytes from the reached cursor,
+  and complete enumeration under the held directory.
+  [Fixed open result](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
+  [Checkpoint runs](../lean/Alvoki/Storage/Disk/NativeCheckpointReadReturn.lean) ·
+  [Selected WAL](../lean/Alvoki/Storage/Disk/NativeWalSelectionReturn.lean)
 
   The actual marker rename and final directory sync errors now supply
   the matching `commitUnknown` request and diagnostic to the selected

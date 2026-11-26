@@ -1,5 +1,16 @@
 # Current handoff
 
+The successful marked reader can now be inspected one file at a time.
+The checkpoint run read supplies the actual input and output heaps at
+its decoded index. The WAL selection supplies the ordered seal
+payloads and the keeper read after the seal releases. The optional
+file reader supplies its reached stat, opened descriptor and release.
+Local native identity and cursor effects still need to connect these
+reads to the durable recovery files.
+[Checkpoint runs](../lean/Alvoki/Storage/Disk/NativeCheckpointReadReturn.lean) ·
+[Selected WAL](../lean/Alvoki/Storage/Disk/NativeWalSelectionReturn.lean) ·
+[Optional files](../lean/Alvoki/Storage/Disk/NativeMarkedCheckpointHeap.lean)
+
 The literal successful marked open now determines the exact checkpoint,
 marker and WAL reader returns in order. Their replay supplies the
 actual repair plan and measured keeper extent, and the repaired heap
