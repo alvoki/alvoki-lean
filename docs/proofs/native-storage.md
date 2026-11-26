@@ -253,12 +253,20 @@ entry and the WAL name interval on the same heap and cache.
 [Name interval](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRotationWalWindow.lean#L69) ·
 [Returned handle and replay](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean#L17)
 
-A returned directory-sync error uses the same successor file prefix as
-success. The root descriptor load and failed fsync fix the returned heap and
-diagnostic. The file callbacks preserve the poisoned phase there. A later
-close or reboot still has to supply the actual cleanup inventory and the
-chosen directory bindings to the opener.
-[Failed directory sync](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean#L38)
+A returned directory-sync error leaves the original handle poisoned. On explicit
+close the new empty segment stays visible. Under power loss, one surviving
+directory map can omit it if the sync had no effect. The old active segment
+then stays active. If the map names the new inode, the old segment becomes
+the final seal. Both layouts encode the same history. The shared reader now
+installs the keeper offset from the selected layout. For a checkpoint-free
+writer the failed-barrier proof supplies the bounded WAL names from one
+surviving map. Given the local reset observation for that map, the old
+protected bytes and the synced successor supply the visible WAL and marker
+for the literal reader. The final file-to-inode projection, directory-sync
+effect and sampled reset remain filesystem assumptions.
+[Failed rotation to literal replay](../../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean) ·
+[Failed directory sync](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean#L38) ·
+[Selected layout to returned session](https://github.com/alvoki/alvoki-lean/blob/3896ad88fb1a3d514219202e817fb4a43bf61484/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L1851)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the

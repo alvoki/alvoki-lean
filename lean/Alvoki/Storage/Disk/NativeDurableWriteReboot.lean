@@ -230,6 +230,50 @@ theorem RawWriteRebootEntry.selectsRetryAfterRepair
   rw [keeperName, Option.map_some]
   exact accepts _ bytes
 
+/-- An exact keeper payload in the sampled namespace supplies the
+canonical layout for the retained writer, with any observed later files. -/
+theorem RawOpenRetryTrace.SelectedEntry.readyRebootLayout
+    (selected : RawOpenRetryTrace.SelectedEntry view state state.writer.target names visible rebooted)
+    (ready : state.writer.RetainedReady state.session.directory state.session.descriptor)
+    (payload : (names rebooted (state.session.directory.file (.walSegment state.writer.wal.active.first))).map
+      (visible rebooted) = some state.writer.target.trimmed) :
+    ∃ layout : CanonicalKeeperLayout (view.files rebooted).image state.writer.history,
+      layout.target = state.writer.target ∧ layout.keeper = state.writer.wal.active ∧
+      layout.tail = ByteArray.empty ∧
+      layout.sealed ++ [layout.keeper] = state.writer.wal.readDescriptors layout.range.watermark ∧
+      selectWalSegmentReads (state.writer.wal.segments.map WalSegment.first) layout.range.watermark =
+        some (layout.first, (layout.sealed ++ [layout.keeper]).map WalSegment.first) ∧
+      Prepared (view.files rebooted).image layout.target layout.plan := by
+  have active := selected.keeper
+  unfold RawOpenRetryTrace.KeeperAt at active
+  rw [ready.active] at active
+  have activeBytes := active.trans payload
+  obtain ⟨original, originalTarget, atKeeper, descriptors, offsets, _⟩ := ready.powerLossLayout
+  let layout : CanonicalKeeperLayout (view.files rebooted).image state.writer.history := {
+    range := original.range
+    decoded := by
+      rw [selected.valid.selected, ← originalTarget]
+      exact original.decoded
+    through := original.through
+    first := original.first
+    sealed := original.sealed
+    keeper := original.keeper
+    chain := original.chain
+    covers := original.covers
+    tail := .empty
+    visible := by
+      rw [ByteArray.append_empty]
+      exact activeBytes.trans (congrArg (fun target : Target => some target.trimmed) originalTarget.symm)
+  }
+  have sameTarget : layout.target = state.writer.target :=
+    (Target.eq_of_fields (selected.valid.selected.trans (congrArg Target.pair originalTarget).symm)
+      rfl rfl rfl : layout.target = original.target).trans originalTarget
+  have chosen : (view.files rebooted).image.Valid layout.target := sameTarget.symm ▸ selected.valid
+  have prepared := layout.prepared chosen.keeper.hasCrashImage chosen.keeper.crashValid chosen.later
+  refine ⟨layout, sameTarget, atKeeper, rfl, descriptors, ?_, prepared⟩
+  rw [descriptors]
+  exact offsets
+
 /-- A settled writer has no uncertain batch to select. One sampled
 reboot map carries its unchanged target and exact keeper into the next
 open, together with the bounded namespace and reset durability. -/
@@ -279,39 +323,10 @@ theorem RawWriteRebootEntry.startsReadyRecovery
       (NativeReadyState.crashPath_iff_write.mpr (selected.imp_right Or.inr))) choices
   have bound : names rebooted path = some inode := keeper _ seen.chosen
   have contents := exactPayload (seen.samplesWal path inode (.inr (.inr rfl)) bound)
-  have active := selected.keeper
-  unfold RawOpenRetryTrace.KeeperAt at active
-  rw [ready.active] at active
-  change _ = (names rebooted path).map (visible rebooted) at active
-  rw [bound, Option.map_some, contents] at active
-  obtain ⟨original, originalTarget, atKeeper, descriptors, offsets, _⟩ := ready.powerLossLayout
-  -- Use the original chain with the sampled marker and keeper. The
-  -- sampled image may also list later files, which repair can prune.
-  let layout : CanonicalKeeperLayout (view.files rebooted).image state.writer.history := {
-    range := original.range
-    decoded := by
-      rw [selected.valid.selected, ← originalTarget]
-      exact original.decoded
-    through := original.through
-    first := original.first
-    sealed := original.sealed
-    keeper := original.keeper
-    chain := original.chain
-    covers := original.covers
-    tail := .empty
-    visible := by
-      rw [ByteArray.append_empty]
-      exact active.trans (congrArg (fun target : Target => some target.trimmed) originalTarget.symm)
-  }
-  have sameTarget : layout.target = target :=
-    (Target.eq_of_fields (selected.valid.selected.trans (congrArg Target.pair originalTarget).symm)
-      rfl rfl rfl : layout.target = original.target).trans originalTarget
-  have chosen : (view.files rebooted).image.Valid layout.target := sameTarget.symm ▸ selected.valid
-  have prepared := layout.prepared chosen.keeper.hasCrashImage chosen.keeper.crashValid chosen.later
-  refine ⟨selected, seen.startsRecoveryObservations reset selected (catalog.2 _ seen.chosen), vacant, empty,
-    layout, sameTarget, atKeeper, rfl, descriptors, ?_, prepared⟩
-  rw [descriptors]
-  exact offsets
+  have payload : (names rebooted path).map (visible rebooted) = some target.trimmed := by
+    rw [bound, Option.map_some, contents]
+  exact ⟨selected, seen.startsRecoveryObservations reset selected (catalog.2 _ seen.chosen), vacant, empty,
+    selected.readyRebootLayout ready payload⟩
 
 /-- Carry a frame across a block of actual failed calls. The premise
 sees each issued call's prefix in the full chronology and its actual

@@ -405,6 +405,8 @@ import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeOpenedWalPlanning
 import Alvoki.Storage.Disk.NativeOpenRotation
 import Alvoki.Storage.Disk.NativeRawRotationDirectoryError
+import Alvoki.Storage.Disk.NativeRawRotationReboot
+import Alvoki.Storage.Disk.NativeRawRotationErrorClose
 import Alvoki.Storage.Disk.NativeRotationWriteEntry
 import Alvoki.Storage.Disk.NativeRotationReadyStorage
 import Alvoki.Storage.Disk.NativeRotationWalWindow
@@ -2128,6 +2130,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseClears.emptyCache
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseObservation.returns
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.closesViaOpenReferences
+#check_axioms Alvoki.Storage.DiskSession.OpenCloseClears.returnsAfterUnlock
+#check_axioms Alvoki.Storage.DiskSession.OpenCloseHeapView.Matches.closedFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.closesOnOpenedReferences
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.closesAndReopens
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.closesThenAdmitsAligned
@@ -2753,6 +2757,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationObservation.Reached.writeStorageEntryExisting
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationObservation.Reached.frames
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotationReturnsDirectoryError
+#check_axioms Alvoki.Storage.DiskSession.RotationRawSuccessor.observesSyncedSuccessor
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.samplesFailedRotationDirectory
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.replaysRotationSample
+#check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEntry.readyRebootLayout
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.protectedAfterRotation
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.rotationProtectedPaths
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.closesAfterRotationDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeCreatedRotationContinuation.writeStorageEntry
 #check_axioms Alvoki.Storage.DiskSession.NativeExistingRotationContinuation.writeStorageEntry
 #check_axioms Alvoki.Storage.WalSegmentImage.settlesRotatedNamespace

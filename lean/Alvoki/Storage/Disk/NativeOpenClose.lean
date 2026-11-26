@@ -49,9 +49,34 @@ variable {heap image : Type} {directory : DiskDirectory} {writer : Nat} {start :
   {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
   {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {cachedDirectory : IO.Ref (Option IO.FS.Handle)}
 
-/-- Each successful clear starts in the heap reached by the preceding
-operation and projects to its corresponding reported slot drops. -/
-structure OpenCloseClears (report : CachedCloseReports directory writer start)
+def CachedCloseState.finishClears (unlocked : CloseState image)
+    (drops : CloseCacheField → List LockReferenceDrop) : CloseState image :=
+  let afterActive := unlocked.drop .active (drops .active)
+  let afterPending := afterActive.drop .pending (drops .pending)
+  { afterPending.drop .directory (drops .directory) with phase := .closed }
+
+/-- A close's reached heap has the original live image, released lock,
+empty cache, and precisely the observed cache-clear drops. -/
+def OpenCloseHeapView.ClosedFrom (view : OpenCloseHeapView heap image)
+    (phase : IO.Ref (Phase Installed)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cachedDirectory : IO.Ref (Option IO.FS.Handle))
+    (directory : DiskDirectory) (drops : CloseCacheField → List LockReferenceDrop) (before after : heap) : Prop :=
+  view.Matches phase active pending cachedDirectory after
+    ⟨.closed, ⟨(⟨none, none, []⟩, (view.files before).image), (view.files before).owners.set (directory.file .lock) none⟩,
+      (view.descriptors before).afterDrops (drops .active ++ drops .pending ++ drops .directory)⟩
+
+/-- One reached cache setter clears its own field and records its slot
+drops. The phase and live file image are carried from its input heap. -/
+abbrev OpenCloseHeapView.ClearsCache (view : OpenCloseHeapView heap image)
+    (phase : IO.Ref (Phase Installed)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cachedDirectory : IO.Ref (Option IO.FS.Handle))
+    (field : CloseCacheField) (drops : List LockReferenceDrop) (before after : heap) : Prop :=
+  ∀ {prior : CloseState image}, view.Matches phase active pending cachedDirectory before prior →
+    view.Matches phase active pending cachedDirectory after (prior.drop field drops)
+
+/-- Each setter starts at the preceding callback's return. The last
+one stores the phase and frames the cache, files and descriptors. -/
+structure OpenCloseClears (drops : CloseCacheField → List LockReferenceDrop)
     (view : OpenCloseHeapView heap image) (calls : OpenCloseCallbacks heap)
     (phase : IO.Ref (Phase Installed)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cachedDirectory : IO.Ref (Option IO.FS.Handle))
@@ -61,28 +86,71 @@ structure OpenCloseClears (report : CachedCloseReports directory writer start)
   afterDirectory : heap
   afterPhase : heap
   activeCleared : calls.set active none unlocked = .ok () afterActive
-  activeView : view.Matches phase active pending cachedDirectory afterActive
-    ((start.release directory writer).drop .active (report.drops .active))
+  activeView : view.ClearsCache phase active pending cachedDirectory .active (drops .active) unlocked afterActive
   pendingCleared : calls.set pending [] afterActive = .ok () afterPending
-  pendingView : view.Matches phase active pending cachedDirectory afterPending
-    (((start.release directory writer).drop .active (report.drops .active)).drop .pending (report.drops .pending))
+  pendingView : view.ClearsCache phase active pending cachedDirectory .pending (drops .pending) afterActive afterPending
   directoryCleared : calls.set cachedDirectory none afterPending = .ok () afterDirectory
-  directoryView :
-    let afterActive := (start.release directory writer).drop .active (report.drops .active)
-    let afterPending := afterActive.drop .pending (report.drops .pending)
-    view.Matches phase active pending cachedDirectory afterDirectory (afterPending.drop .directory (report.drops .directory))
+  directoryView : view.ClearsCache phase active pending cachedDirectory .directory (drops .directory) afterPending afterDirectory
   closed : calls.set phase .closed afterDirectory = .ok () afterPhase
-  closedView : view.Matches phase active pending cachedDirectory afterPhase report.finished
+  closedPhase : view.phase afterPhase phase = some .closed
+  phaseFrame : view.cacheAt afterPhase cachedDirectory active pending = view.cacheAt afterDirectory cachedDirectory active pending ∧
+    view.files afterPhase = view.files afterDirectory ∧ view.descriptors afterPhase = view.descriptors afterDirectory
 
-theorem OpenCloseClears.emptyCache {report : CachedCloseReports directory writer start}
-    {view : OpenCloseHeapView heap image} {calls : OpenCloseCallbacks heap} {unlocked : heap}
-    (seen : OpenCloseClears report view calls phase active pending cachedDirectory unlocked) :
+namespace OpenCloseClears
+
+variable {view : OpenCloseHeapView heap image} {calls : OpenCloseCallbacks heap}
+  {drops : CloseCacheField → List LockReferenceDrop} {unlocked : heap}
+
+private theorem projectsClosed (seen : OpenCloseClears drops view calls phase active pending cachedDirectory unlocked)
+    (atUnlock : view.Matches phase active pending cachedDirectory unlocked start) :
+    view.Matches phase active pending cachedDirectory seen.afterPhase (start.finishClears drops) := by
+  have atDirectory := seen.directoryView (seen.pendingView (seen.activeView atUnlock))
+  exact ⟨seen.closedPhase, seen.phaseFrame.1.trans atDirectory.2.1,
+    seen.phaseFrame.2.1.trans atDirectory.2.2.1, seen.phaseFrame.2.2.trans atDirectory.2.2.2⟩
+
+theorem emptyCache (seen : OpenCloseClears drops view calls phase active pending cachedDirectory unlocked)
+    (atUnlock : view.Matches phase active pending cachedDirectory unlocked start) :
     view.phase seen.afterPhase phase = some .closed ∧ view.active seen.afterPhase active = none ∧
       view.pending seen.afterPhase pending = [] ∧ view.directory seen.afterPhase cachedDirectory = none := by
-  have cleared := seen.closedView.2.1
-  rw [show report.finished.files.image.1 = ⟨none, none, []⟩ from rfl] at cleared
+  have cleared := (seen.projectsClosed atUnlock).2.1
+  rw [show (start.finishClears drops).files.image.1 = ⟨none, none, []⟩ from rfl] at cleared
   simp only [OpenCloseHeapView.cacheAt, Cache.mk.injEq, Option.map_eq_none_iff, List.map_eq_nil_iff] at cleared
-  exact ⟨seen.closedView.1, cleared.2.1, cleared.2.2, cleared.1⟩
+  exact ⟨seen.closedPhase, cleared.2.1, cleared.2.2, cleared.1⟩
+
+/-- Compose the raw unlock and reached setters. The final file state
+and census follow from their projections and the phase setter's frame. -/
+theorem returnsAfterUnlock {before : heap}
+    (seen : OpenCloseClears drops view calls phase active pending cachedDirectory unlocked)
+    (loaded : calls.getPhase phase before = .ok start.phase before) (openPhase : start.phase ≠ .closed)
+    (returned : calls.unlock lock before = .ok () unlocked)
+    (atUnlock : view.Matches phase active pending cachedDirectory unlocked start) :
+    closeSchedule (calls.getPhase phase) (fun _ => calls.unlock lock)
+      (calls.set active none) (calls.set pending []) (calls.set cachedDirectory none)
+      (calls.set phase .closed) before = .ok () seen.afterPhase ∧
+    view.Matches phase active pending cachedDirectory seen.afterPhase (start.finishClears drops) := by
+  refine ⟨?_, seen.projectsClosed atUnlock⟩
+  cases opened : start.phase <;>
+    simp_all [closeSchedule, Phase.close, Bind.bind, EStateM.bind, seen.activeCleared,
+      seen.pendingCleared, seen.directoryCleared, seen.closed]
+
+end OpenCloseClears
+
+/-- Reindex the reported drops to the literal starting heap. An
+explicit unlock releases the old lock even if an alias remains live. -/
+theorem OpenCloseHeapView.Matches.closedFrom {view : OpenCloseHeapView heap image} {before after : heap}
+    {drops : CloseCacheField → List LockReferenceDrop}
+    (atStart : view.Matches phase active pending cachedDirectory before start)
+    (atClose : view.Matches phase active pending cachedDirectory after ((start.release directory writer).finishClears drops))
+    (held : start.files.owners.Owns directory writer) :
+    view.ClosedFrom phase active pending cachedDirectory directory drops before after := by
+  obtain ⟨phaseClosed, empty, files, inventory⟩ := atClose
+  refine ⟨phaseClosed, empty, ?_, ?_⟩
+  · rw [atStart.2.2.1]
+    simpa only [CachedCloseState.finishClears, CachedCloseState.drop, CachedCloseState.release,
+      LockOwners.release_owned held] using files
+  · rw [atStart.2.2.2]
+    simpa only [CachedCloseState.finishClears, CachedCloseState.drop, CachedCloseState.release,
+      DescriptorInventory.afterDrops_append, List.append_assoc] using inventory
 
 /-- The raw phase read and unlock, with the slot and three cache
 references of the same table. The error projection is local to this
@@ -104,7 +172,7 @@ structure OpenCloseObservation (report : CachedCloseReports directory writer sta
     | .ok () => start.release directory writer
     | .error _ => start)
   clears : report.result = .ok () →
-    Nonempty (OpenCloseClears report view calls phase active pending cachedDirectory afterUnlock)
+    Nonempty (OpenCloseClears report.drops view calls phase active pending cachedDirectory afterUnlock)
 
 namespace OpenCloseObservation
 
@@ -118,7 +186,7 @@ def Reached (seen : OpenCloseObservation report view calls lock phase active pen
   match report.result with
   | .error cause => run = .error cause seen.afterUnlock ∧
     view.Matches phase active pending cachedDirectory seen.afterUnlock start
-  | .ok () => ∃ clears : OpenCloseClears report view calls phase active pending cachedDirectory seen.afterUnlock,
+  | .ok () => ∃ clears : OpenCloseClears report.drops view calls phase active pending cachedDirectory seen.afterUnlock,
     run = .ok () clears.afterPhase ∧ view.Matches phase active pending cachedDirectory clears.afterPhase report.finished
 
 /-- Evaluate the production close schedule with the reported concrete
@@ -140,11 +208,11 @@ theorem returns (seen : OpenCloseObservation report view calls lock phase active
     cases value
     obtain ⟨clears⟩ := seen.clears outcome
     have returned := seen.returned
-    rw [outcome] at returned
-    refine ⟨clears, ?_, clears.closedView⟩
-    cases reached : start.phase <;>
-      simp_all [run, closeSchedule, Phase.close, Bind.bind, EStateM.bind, seen.loaded,
-        clears.activeCleared, clears.pendingCleared, clears.directoryCleared, clears.closed]
+    have projected := seen.unlockedView
+    rw [outcome] at returned projected
+    obtain ⟨schedule, finalView⟩ :=
+      clears.returnsAfterUnlock (start := start.release directory writer) seen.loaded openPhase returned projected
+    exact ⟨clears, schedule, finalView⟩
 
 end OpenCloseObservation
 

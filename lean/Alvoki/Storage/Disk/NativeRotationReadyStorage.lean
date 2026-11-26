@@ -38,6 +38,54 @@ private theorem RotationCreateFiles.ObservesWalChild.published
     obtain rfl := Option.some.inj (atPath.symm.trans bound)
     exact (atChild.bytes _ atPath).2.trans liveBytes⟩
 
+/-- The former active keeper becomes a seal. That change requires only
+the old keeper's already durable bytes. -/
+theorem NativeReadyStorage.protectedAfterRotation
+    {state next : NativeReadyState} {storage : CheckpointStorageObservation}
+    (old : NativeReadyStorage state storage) (valid : state.Valid)
+    (sameWriter : next.writer = state.writer.rotated valid.retained.rotationTarget)
+    (sameDirectory : next.session.directory = state.session.directory)
+    (sameRoot : next.census.inode next.directorySlot.description = state.census.inode state.directorySlot.description)
+    (sameLock : next.census.inode next.owner.description = state.census.inode state.owner.description) :
+    NativeReadyProtectedStorage next storage.files := by
+  have sameManifest : next.writer.target.pair.manifest = state.writer.target.pair.manifest := by rw [sameWriter]; rfl
+  have sameRuns : next.writer.published.durable = state.writer.published.durable := by rw [sameWriter]; rfl
+  have seals : next.writer.wal.sealed = state.writer.wal.sealed ++ [state.writer.wal.active] := by rw [sameWriter]; rfl
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · simpa only [sameDirectory, sameRoot] using old.directoryBound
+  · simpa only [sameDirectory, sameLock] using old.lockBound
+  · simpa only [sameManifest, sameDirectory] using old.manifest
+  · intro segment member
+    rw [seals, List.mem_append, List.mem_singleton] at member
+    rw [sameDirectory]
+    rcases member with sealed | rfl
+    · exact old.sealedFiles _ sealed
+    · exact old.keeper
+  · intro bytes metadata manifest decoded index inBounds payload durable
+    rw [sameManifest] at manifest
+    rw [sameRuns] at durable
+    exact sameDirectory.symm ▸ old.runs bytes metadata manifest decoded index inBounds payload durable
+
+/-- All protected paths after rotation were already covered, including
+the old active keeper now in the sealed list. -/
+theorem NativeReadyState.rotationProtectedPaths {state next : NativeReadyState}
+    (valid : state.Valid) (sameWriter : next.writer = state.writer.rotated valid.retained.rotationTarget)
+    (sameDirectory : next.session.directory = state.session.directory)
+    {path : FilePath} (immutable : next.writeFramePath path) : state.crashPath path := by
+  have sameManifest : next.writer.target.pair.manifest = state.writer.target.pair.manifest := by rw [sameWriter]; rfl
+  have seals : next.writer.wal.sealed = state.writer.wal.sealed ++ [state.writer.wal.active] := by rw [sameWriter]; rfl
+  simp only [NativeReadyState.writeFramePath, sameDirectory, sameManifest, seals, List.mem_append,
+    List.mem_singleton] at immutable
+  apply NativeReadyState.crashPath_iff_write.mpr
+  rcases immutable with root | lock | manifest | ⟨segment, member, same⟩ | run
+  · exact .inr (.inr (.inl root))
+  · exact .inr (.inr (.inr (.inl lock)))
+  · exact .inr (.inr (.inr (.inr (.inl manifest))))
+  · rcases member with sealed | rfl
+    · exact .inr (.inr (.inr (.inr (.inr (.inl ⟨segment, sealed, same⟩)))))
+    · exact .inr (.inl same)
+  · exact .inr (.inr (.inr (.inr (.inr (.inr run)))))
+
 /-- Rotation adds the new keeper to the old protected footprint. The old
 keeper's durable payload now supplies the final sealed descriptor. -/
 private theorem NativeReadyStorage.afterRotation
@@ -55,46 +103,15 @@ private theorem NativeReadyStorage.afterRotation
         after.files.names (next.session.directory.file (.walSegment next.writer.wal.active.first))) :
     NativeReadyStorage next after := by
   have old := initial.frame keeps
-  have sameManifest : next.writer.target.pair.manifest = state.writer.target.pair.manifest := by
-    rw [sameWriter]
-    rfl
   have sameHistory : next.writer.history = state.writer.history := by rw [sameWriter]; rfl
-  have sameRuns : next.writer.published.durable = state.writer.published.durable := by rw [sameWriter]; rfl
-  have seals : next.writer.wal.sealed = state.writer.wal.sealed ++ [state.writer.wal.active] := by
-    rw [sameWriter]
-    rfl
-  refine ⟨⟨?_, ?_, ?_, ?_, ?_⟩, ?_, keeper, ?_⟩
-  · simpa only [sameDirectory, sameRoot] using old.directoryBound
-  · simpa only [sameDirectory, sameLock] using old.lockBound
-  · simpa only [sameManifest, sameDirectory] using old.manifest
-  · intro segment member
-    rw [seals, List.mem_append, List.mem_singleton] at member
-    rw [sameDirectory]
-    rcases member with sealed | rfl
-    · exact old.sealedFiles _ sealed
-    · exact old.keeper
-  · intro bytes metadata manifest decoded index inBounds payload durable
-    rw [sameManifest] at manifest
-    rw [sameRuns] at durable
-    exact sameDirectory.symm ▸ old.runs bytes metadata manifest decoded index inBounds payload durable
+  refine ⟨old.protectedAfterRotation valid sameWriter sameDirectory sameRoot sameLock, ?_, keeper, ?_⟩
   · simpa only [sameDirectory, sameHistory] using old.marker
   · intro names chosen path inside
     rcases NativeReadyState.crashPath_iff_write.mp inside with marker | active | immutable
     · apply old.settled names chosen path
       exact NativeReadyState.crashPath_iff_write.mpr (.inl (sameDirectory ▸ marker))
     · exact active.symm ▸ settlesKeeper names chosen
-    · simp only [NativeReadyState.writeFramePath, sameDirectory, sameManifest, seals, List.mem_append,
-        List.mem_singleton] at immutable
-      apply old.settled names chosen path
-      apply NativeReadyState.crashPath_iff_write.mpr
-      rcases immutable with root | lock | manifest | ⟨segment, member, same⟩ | run
-      · exact .inr (.inr (.inl root))
-      · exact .inr (.inr (.inr (.inl lock)))
-      · exact .inr (.inr (.inr (.inr (.inl manifest))))
-      · rcases member with sealed | rfl
-        · exact .inr (.inr (.inr (.inr (.inr (.inl ⟨segment, sealed, same⟩)))))
-        · exact .inr (.inl same)
-      · exact .inr (.inr (.inr (.inr (.inr (.inr run)))))
+    · exact old.settled names chosen path (NativeReadyState.rotationProtectedPaths valid sameWriter sameDirectory immutable)
 
 section Reached
 

@@ -98,12 +98,17 @@ the final directory fsync returns an error, the same file prefix leads to
 the exact diagnostic and poisoned return heap under local callback effects.
 [Rotation boundaries](proofs/native-storage.md#refinement-boundaries)
 
-**Next obligation.** Carry the error heap through close or power loss into
-the next admission. For a live reopen, prove that cleanup preserves the
-created successor. For reboot after an ineffective directory fsync, select
-the keeper from the surviving name map, which may omit the successor.
-Both continuations need the descriptor inventory reached on that execution.
-Further interruptions, mixed sessions and maintenance remain in the
-[checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
+After a returned directory-sync error, explicit close uses the original lock.
+The observed cache clears preserve the live empty successor and determine
+which descriptor slots remain. On power loss a single sampled directory map
+chooses the former or the empty active segment. Under the local filesystem
+and reset effects, both feed the same checkpoint-free reader and recover the
+earlier history. [Close](../lean/Alvoki/Storage/Disk/NativeRawRotationErrorClose.lean)
+· [Reboot and replay](../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean)
+
+**Next obligation.** Derive the live WAL catalog for the next admission
+from the close heap. Connect the fresh rotation's callback prefix to the
+issued root's physical observation on the same execution. The remaining
+mixed calls, interruptions and maintenance are in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 
 **Verification baseline.** See the [verification commands](../README.md#reproduce-on-linux-x86-64).
