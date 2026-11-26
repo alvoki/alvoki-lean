@@ -472,12 +472,9 @@ private theorem groupedFailureReached {heap : Type} (calls : RawSyncCalls heap)
     (failed : calls.group directory.path cache.directory cache.active cache.pending
       #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .error cause reached) :
     reachedState (calls.fsync markerHandle consumed) = reached := by
-  unfold RawSyncCalls.group at failed
-  rw [SyncPathGroup.run_pair, keeper] at failed
-  cases firstCall : calls.fsync keeperHandle staged <;>
-    simp only [firstCall, reachedState] at marker <;>
-    cases secondCall : calls.fsync markerHandle consumed <;>
-    simp_all [reachedState]
+  rcases calls.groupedFileError cache keeper marker failed with ⟨_, _, _, reached, _⟩ | ⟨_, _, _, failed, _⟩
+  · exact reached
+  · rw [failed, reachedState]
 
 /-- The two issued fsync effects and the intervening pending store on
 the selected literal handles. On a keeper error the local filesystem

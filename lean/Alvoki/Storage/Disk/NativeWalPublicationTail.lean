@@ -60,7 +60,7 @@ def walMarkerRenameBinding (names : DiskFile → Option Nat) (staged : Nat) : Di
 
 /-- The physical rename either keeps the reached live names or moves
 the stage to the canonical name. Each crash map is related to one prior
-map for the entire directory, with or without the same replacement.
+map for all modeled database paths, with or without the same replacement.
 Bytes on a selected object are unchanged regardless of that choice. -/
 structure WalMarkerRenameEffect (directory : DiskDirectory) (staged : Nat) (effective : Bool)
     (entry reached : CheckpointStorageObservation) : Prop where

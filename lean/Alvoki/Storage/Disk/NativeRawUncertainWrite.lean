@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.NativeOpenWrite
 import Alvoki.Storage.Disk.NativeOpenedPosition
 import Alvoki.Storage.Disk.NativeRawWriteCustody
-import Alvoki.Storage.Disk.NativeWalStage
+import Alvoki.Storage.Disk.NativeWalPublicationTail
 
 namespace Alvoki.Storage.DiskSession
 
@@ -115,6 +115,16 @@ theorem NativeOpenedPosition.returnsCommitUnknown
 
 end
 
+/-- The prepared group has the byte count supplied to the actual
+commit marker schedule. -/
+theorem NativeReadyState.preparedWalCount {state : NativeReadyState} (valid : state.Valid)
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {next : PackedTable}
+    (prepared : prepareBatch state.writer.installed.table rows = some (batch, next)) :
+    (WAL.encode (state.writer.history ++ batch)).size = state.writer.installed.walBytes + WAL.frameSize * rows.length := by
+  have appendSize : (WAL.encode batch).size = WAL.frameSize * rows.length := by
+    rw [WAL.encode_size, (prepareBatch_spec prepared).1]
+  rw [WAL.encode_append, ByteArray.size_append, appendSize, valid.retained.resumed.bytes]
+
 /-- Read the marker and keeper from one namespace and inode-byte choice.
 The checkpoint binding is supplied separately by the protected-file frame. -/
 theorem NativeReadyState.selectsWriteWal {state : NativeReadyState} (valid : state.Valid)
@@ -144,5 +154,91 @@ theorem NativeReadyState.selectsWriteWal {state : NativeReadyState} (valid : sta
   obtain ⟨target, authorized, same, _, _, _, accepts⟩ :=
     BatchRetryTarget.ofSelected starts covers fits (pair := pair) checkpoint allowed markerCount keeperBytes
   exact ⟨target, authorized, same, by simpa only [bound, Option.map_some] using accepts⟩
+
+/-- A reported survivor samples the bytes of the exact inodes named
+by its one map. The same cutoff proof handles either surviving marker
+of an uncertain rename or directory sync. -/
+theorem WalPublicationPayloads.Selection.retryTarget {state : NativeReadyState} (valid : state.Valid)
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch state.writer.installed.table rows = some (batch, table))
+    (fits : state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {payloads : WalPublicationPayloads} {atHeap : CheckpointStorageObservation} {names : FilePath → Option Nat}
+    {published : Bool} (selected : payloads.Selection state.session.directory state.writer.wal.active.first
+      atHeap names published) (contents : Nat → ByteArray)
+    (keeper : contents payloads.keeper ∈ atHeap.files.bytes payloads.keeper)
+    (marker : contents (payloads.markerInode published) ∈ atHeap.files.bytes (payloads.markerInode published))
+    (sameKeeper : payloads.keeperBytes = state.writer.wal.active.bytes ++ WAL.encodeBatch batch)
+    (oldMarker : payloads.oldMarkerBytes = WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64)
+    (newMarker : payloads.newMarkerBytes =
+      WAL.Boundary.encode (state.writer.installed.walBytes + WAL.frameSize * rows.length).toUInt64) :
+    ∃ target, BatchRetryTarget state.writer.history batch state.writer.wal.active.first target ∧
+      target.pair = ⟨state.writer.target.pair.manifest, (names (state.session.directory.file .walBoundary)).map contents⟩ ∧
+      target.Accepts ((names (state.session.directory.file (.walSegment state.writer.wal.active.first))).map contents) := by
+  have keeperBytes : contents payloads.keeper = payloads.keeperBytes :=
+    List.mem_singleton.mp (selected.keeperStored ▸ keeper)
+  have markerBytes : contents (payloads.markerInode published) = payloads.markerBytes published :=
+    List.mem_singleton.mp (selected.markerStored ▸ marker)
+  have count := NativeReadyState.preparedWalCount valid prepared
+  rw [WAL.encodeBatch_eq] at sameKeeper
+  rw [← count] at newMarker
+  apply NativeReadyState.selectsWriteWal valid (count.symm ▸ fits) names contents selected.markerNamed selected.keeperNamed
+  cases published
+  · exact .inl ⟨markerBytes.trans oldMarker, WAL.encode batch, keeperBytes.trans sameKeeper⟩
+  · exact .inr ⟨markerBytes.trans newMarker, keeperBytes.trans sameKeeper⟩
+
+/-- The write's protected-file frame keeps the selected checkpoint
+binding and bytes in each reached joint map, independently of the WAL
+marker selected in that map. -/
+theorem NativeReadyStorage.selectedWriteManifest {state : NativeReadyState} {entry reached : CheckpointStorageObservation}
+    (old : NativeReadyStorage state entry) (frame : entry.Frames state.writeFramePath reached)
+    (names : FilePath → Option Nat) (chosen : names ∈ reached.crashNames) (contents : Nat → ByteArray)
+    (sample : ∀ inode, names (state.session.directory.file .manifest) = some inode →
+      contents inode ∈ reached.files.bytes inode) :
+    (names (state.session.directory.file .manifest)).map contents = state.writer.target.pair.manifest := by
+  have held := frame.settledFrom (fun names possible path kept =>
+    old.settled names possible path (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept))))
+    names chosen (state.session.directory.file .manifest) (.inr (.inr (.inl rfl)))
+  have manifest := (old.toNativeReadyProtectedStorage.frame frame.visible).manifest
+  cases present : state.writer.target.pair.manifest with
+  | none =>
+    rw [present] at manifest
+    rw [held, manifest]
+    rfl
+  | some bytes =>
+    rw [present] at manifest
+    obtain ⟨inode, named, durable⟩ := manifest
+    have bound := held.trans named
+    have exactBytes := List.mem_singleton.mp (durable ▸ sample _ bound)
+    rw [bound, Option.map_some, exactBytes]
+
+/-- A recovery step chooses one joint map and samples its durable
+payloads. The returned write can use either of the publication-tail
+proofs to supply this same input to recovery. -/
+theorem WalPublicationPayloads.Selections.retryTargets {state : NativeReadyState} (valid : state.Valid)
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch state.writer.installed.table rows = some (batch, table))
+    (fits : state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {payloads : WalPublicationPayloads} {entry atHeap : CheckpointStorageObservation}
+    (old : NativeReadyStorage state entry) (protectedFiles : entry.Frames state.writeFramePath atHeap)
+    {liveNew : Bool} {allows : Bool → Prop}
+    (selected : payloads.Selections state.session.directory state.writer.wal.active.first atHeap liveNew allows)
+    (sameKeeper : payloads.keeperBytes = state.writer.wal.active.bytes ++ WAL.encodeBatch batch)
+    (oldMarker : payloads.oldMarkerBytes = WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64)
+    (newMarker : payloads.newMarkerBytes =
+      WAL.Boundary.encode (state.writer.installed.walBytes + WAL.frameSize * rows.length).toUInt64)
+    (names : FilePath → Option Nat) (chosen : names ∈ atHeap.crashNames) (contents : Nat → ByteArray)
+    (sample : ∀ path inode,
+      (path = state.session.directory.file .manifest ∨ path = state.session.directory.file .walBoundary ∨
+        path = state.session.directory.file (.walSegment state.writer.wal.active.first)) →
+      names path = some inode → contents inode ∈ atHeap.files.bytes inode) :
+    ∃ target, BatchRetryTarget state.writer.history batch state.writer.wal.active.first target ∧
+      target.pair = ⟨(names (state.session.directory.file .manifest)).map contents,
+        (names (state.session.directory.file .walBoundary)).map contents⟩ ∧
+      target.Accepts ((names (state.session.directory.file (.walSegment state.writer.wal.active.first))).map contents) := by
+  obtain ⟨_, _, survivor⟩ := selected.survivors names chosen
+  have manifest := old.selectedWriteManifest protectedFiles names chosen contents (fun inode => sample _ inode (.inl rfl))
+  rw [manifest]
+  exact survivor.retryTarget valid prepared fits contents (sample _ _ (.inr (.inr rfl)) survivor.keeperNamed)
+    (sample _ _ (.inr (.inl rfl)) survivor.markerNamed) sameKeeper oldMarker newMarker
 
 end Alvoki.Storage.DiskSession
