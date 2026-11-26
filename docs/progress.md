@@ -1,5 +1,18 @@
 # Current handoff
 
+The aligned checkpoint and WAL proof consumes the successful held
+worker and a separate entry-to-cache frame. The selected checkpoint,
+marker, WAL replay, repair and phase and token allocations follow from
+that worker's actual return. The grouped and late write callers still
+establish its entry frame via their existing admission witness. Three
+worker-result wrappers that duplicated the reported admission were
+removed. The next step is to derive that frame and the cache and lock
+projections from the primitive admission calls, including the heaps
+returned by the first path and metadata observations.
+[Held marked worker](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
+[Checkpoint selection](../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean) ·
+[Aligned reader](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+
 A successful fixed open now determines its resolved directory, flat-WAL
 and lock probes, append-open, acquired lock, directory handle, three
 cache allocations and held worker return. The same aligned consumers

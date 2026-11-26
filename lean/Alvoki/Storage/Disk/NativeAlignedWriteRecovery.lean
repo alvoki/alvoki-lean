@@ -24,16 +24,14 @@ private def alignedReadFrame (names : heap → FilePath → Option Nat) (visible
   (CheckpointSurvivingFiles.mk (names before) fun inode => [visible before inode]).Frames scope
     ⟨names after, fun inode => [visible after inode]⟩ ∧ keeps before after
 
-/-- Effects of the actual admission, read and cache callbacks on a
-protected footprint. The checked directory stream lists the held root. -/
-structure RawOpenAdmissionReport.AlignedReadEffects {directory : DiskDirectory} {inventory : DescriptorInventory}
-    {admission : CensusOpenAdmissionReports input directory inventory (view.files reached)}
-    (raw : RawOpenAdmissionReport admission view source.calls reached)
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+/-- Effects of the actual read and cache callbacks on a protected
+footprint. The checked directory stream lists the held root. -/
+structure RawMarkedOpenInterpreter.AlignedReadEffects (source : RawMarkedOpenInterpreter heap stream)
+    (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
     (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (scope : FilePath → Prop)
     (keeps : heap → heap → Prop) where
-  admissionFrame : raw.CacheFrames seed (alignedReadFrame names visible scope keeps)
   guard : ∀ path before,
     alignedReadFrame names visible scope keeps before (reachedState (source.calls.lookup path before))
   markerMissing : ∀ {before after name message},
@@ -71,22 +69,23 @@ structure RawOpenAdmissionReport.AlignedReadEffects {directory : DiskDirectory} 
   absent : ∀ {before entries after}, source.directoryCalls.run directory.path before = .ok entries after →
     MarkedWalExtentReports.TruthfulAbsence source.fileCalls directory namespaceView root (entries.toList.map (·.fileName)) after
   remember : ∀ {path file before after},
-    (source.keeperCallbacks.withFileReads source.fileCalls).modifyPending seed.pendingRef
+    (source.keeperCallbacks.withFileReads source.fileCalls).modifyPending pending
       (pushPending path file) before = .ok () after → alignedReadFrame names visible scope keeps before after
 
 /-- Match the actual checkpoint, marker and selected WAL read of one
 open. The reader passes its exact handle to the pending callback.
 The phase installed after that repair contains the exact replay. -/
-theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory : DescriptorInventory}
-    {admission : CensusOpenAdmissionReports input current.state.session.directory inventory (view.files reached)}
+theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen
     (plan : current.SelectedWritePlan batch target (view.files reached).image)
-    (raw : RawOpenAdmissionReport admission view source.calls reached)
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    (lock : IO.FS.Handle) (cached : IO.Ref (Option IO.FS.Handle))
+    (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cacheReady : heap)
     (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (scope : FilePath → Prop)
     {keeps : heap → heap → Prop} (keepsRefl : ∀ atHeap, keeps atHeap atHeap)
     (keepsTrans : ∀ {before middle after}, keeps before middle → keeps middle after → keeps before after)
-    (effects : raw.AlignedReadEffects seed names visible namespaceView root scope keeps)
+    (admissionFrame : alignedReadFrame names visible scope keeps reached cacheReady)
+    (effects : source.AlignedReadEffects view dir pending names visible namespaceView root scope keeps)
     (protectedFiles : NativeReadyProtectedStorage current.state ⟨names reached, fun inode => [visible reached inode]⟩)
     (manifest : target.pair.manifest = current.state.writer.target.pair.manifest)
     (markerStored : ∀ marker, (view.files reached).image.directory.active.walBoundary = some marker →
@@ -103,11 +102,12 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
     (noLater : ∀ start, plan.layout.range.through < start →
       namespaceView.child root (renderWalSegmentName start) = none)
     {returnedAt : heap} {table : DiskTable}
-    (returned : source.openTable input reached = .ok table returnedAt) :
+    (returned : source.worker cached active pending dir lock
+      (RawMarkedOpenInterpreter.makeCache dir cached active pending) cacheReady = .ok table returnedAt) :
     let keeperCalls := source.keeperCallbacks.withFileReads source.fileCalls
     let segment := plan.layout.keeper
     let path := (dir).file (.walSegment segment.first)
-    let cache := RawMarkedOpenInterpreter.makeCache dir seed.directoryRef seed.activeRef seed.pendingRef
+    let cache := RawMarkedOpenInterpreter.makeCache dir cached active pending
     let files := (plan.layout.sealed ++ [segment]).map fun item => (item.first, item.bytes)
     ∃ (count : UInt64) (markerBytes patched : ByteArray) (logical : PackedTable)
       (keeper : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat)
@@ -117,21 +117,21 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
       count.toNat / WAL.frameSize = plan.layout.range.through ∧
       recoverMarkedWalSegments (current.state.writer.checkpoint.getD (.empty, 0)).1 count files = .ok (patched, logical) ∧
       names reached path = some inode ∧ attachedReadSlot view keeper slot inode readHeap ∧
-      keeperCalls.modifyPending seed.pendingRef (pushPending path keeper) readHeap = .ok () prepared ∧
+      keeperCalls.modifyPending pending (pushPending path keeper) readHeap = .ok () prepared ∧
       (CheckpointSurvivingFiles.mk (names reached) fun inode => [visible reached inode]).Frames scope
         ⟨names prepared, fun inode => [visible prepared inode]⟩ ∧
       (∀ other, scope other → (other = (dir).path ∨ ∃ file, other = (dir).file file) →
         names prepared other = some inode → other = path) ∧
-      keeps reached prepared ∧ keeps seed.afterPending prepared ∧
+      keeps reached prepared ∧ keeps cacheReady prepared ∧
       finishBoundedMarkedOpen dir ⟨plan.layout.range.through, segment.first, [], segment.bytes⟩ segment.bytes.size
-        source.remove (source.stage.stage seed.pendingRef keeperCalls.modifyPending)
-        (keeperCalls.syncPaths (dir).path seed.directoryRef seed.activeRef seed.pendingRef) source.rename prepared =
+        source.remove (source.stage.stage pending keeperCalls.modifyPending)
+        (keeperCalls.syncPaths (dir).path cached active pending) source.rename prepared =
         .ok () repaired ∧
       source.allocatePhase (.ready (Reopened.installed
         ⟨logical, (current.state.writer.checkpoint.getD (.empty, 0)).2, count, segment.first⟩))
         repaired = .ok phase afterPhase ∧
       source.allocateToken () afterPhase = .ok token returnedAt ∧
-      table = RawMarkedOpenInterpreter.assemble dir raw.lock cache phase token := by
+      table = RawMarkedOpenInterpreter.assemble dir lock cache phase token := by
   intro keeperCalls segment path cache files
   have selectedManifest := (congrArg (fun target : Target => target.pair.manifest) plan.targetEq).trans manifest
   have selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
@@ -149,23 +149,17 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
     exact (Option.some.inj (boundAtStat.symm.trans bound)) ▸ size
   let filesAt (atHeap : heap) : CheckpointSurvivingFiles := ⟨names atHeap, fun inode => [visible atHeap inode]⟩
   let visibleFrame before after := (filesAt before).Frames scope (filesAt after)
-  have admissionVisible : raw.CacheFrames seed visibleFrame :=
-    ⟨fun ran => (effects.admissionFrame.lockOpen ran).1, fun ran => (effects.admissionFrame.flock ran).1,
-      fun ran => (effects.admissionFrame.openDirectory ran).1, fun ran => (effects.admissionFrame.directoryRef ran).1,
-      fun ran => (effects.admissionFrame.activeRef ran).1, fun ran => (effects.admissionFrame.pendingRef ran).1⟩
   have markerScoped : scope ((dir).file .walBoundary) := includes _ (.inl rfl)
   obtain ⟨markerInode, markerNamed, _⟩ := markerStored _ markerName
-  have atCache := raw.framesThroughCache seed (frame := visibleFrame)
-    CheckpointSurvivingFiles.Frames.trans admissionVisible
-  have markerAtCache : names seed.afterPending ((dir).file .walBoundary) = some markerInode :=
-    (atCache _ markerScoped).1.trans markerNamed
+  have markerAtCache : names cacheReady ((dir).file .walBoundary) = some markerInode :=
+    (admissionFrame.1 _ markerScoped).1.trans markerNamed
   have flatKeepsMarker {checked name message}
-      (ran : source.calls.lookup ((dir).file .wal) seed.afterPending =
+      (ran : source.calls.lookup ((dir).file .wal) cacheReady =
         .ok (.error (.noFileOrDirectory name 2 message)) checked) :
-      names checked ((dir).file .walBoundary) = names seed.afterPending ((dir).file .walBoundary) := by
-    simpa only [ran, reachedState] using ((effects.guard ((dir).file .wal) seed.afterPending).1 _ markerScoped).1
+      names checked ((dir).file .walBoundary) = names cacheReady ((dir).file .walBoundary) := by
+    simpa only [ran, reachedState] using ((effects.guard ((dir).file .wal) cacheReady).1 _ markerScoped).1
   obtain ⟨checked, marked, metadata, flat, marker⟩ :=
-    raw.reachesMarkedGuards source seed names markerAtCache flatKeepsMarker effects.markerMissing returned
+    source.worker_reachesMarkedGuards dir lock cached active pending cacheReady names markerAtCache flatKeepsMarker effects.markerMissing returned
   have readsVisible : source.fileCalls.ScopeFrames visibleFrame :=
     effects.fileFrames.map (fun framed => framed.1)
   have listingVisible : source.directoryCalls.ScopeFrames dir visibleFrame :=
@@ -173,8 +167,9 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
       fun opened scanned closed => (effects.listingFrames.closeDir opened scanned closed).1⟩
   obtain ⟨afterCheckpoint, afterMarker, length, payloads, extent, prepared, repaired, patched, logical, first,
     bytes, phase, afterPhase, token, checkpointRead, markerRead, readMarker, wal, framed, replay, lastKeeper, finish, allocPhase, allocToken,
-    assembled⟩ := raw.selectsCheckpointAndMarkerFromActualOpen source seed names visible effects.opens effects.reads
-      selected protectedFiles (markerStored _ markerName) scope includes admissionVisible (fun path before => (effects.guard path before).1)
+    assembled⟩ := source.worker_selectsCheckpointAndMarker lock cached active pending cacheReady
+      names visible effects.opens effects.reads
+      selected protectedFiles (markerStored _ markerName) scope includes admissionFrame.1 (fun path before => (effects.guard path before).1)
       readsVisible (fun path before => (effects.statFrame path before).1) statExtent effects.statMissing effects.eof flat marker returned
   have countEq : length = count := Except.ok.inj (readMarker.symm.trans decoded)
   subst length
@@ -186,7 +181,7 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
   obtain ⟨payloadEq, extentEq, newer, file, slot, inode, _, _, readHeap, named, _, attached, route, preserved, privateAtReturn⟩ :=
     source.fileCalls.readsCanonicalWal source.directoryCalls dir view names visible plan.layout namespaceView root scope
       effects.opens effects.reads readsVisible listingVisible
-      (fun path file => keeperCalls.modifyPending seed.pendingRef (pushPending path file))
+      (fun path file => keeperCalls.modifyPending pending (pushPending path file))
       (fun ran => (effects.remember ran).1) effects.statObject effects.stat
       (fun path before => (effects.statFrame path before).1) framed
       (fun listed => source.directoryCalls.listedRootNames (dir).path namespaceView root effects.streamObject listed
@@ -197,7 +192,6 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
   have refl (atHeap : heap) : frame atHeap atHeap := ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, keepsRefl atHeap⟩
   have trans {before middle after : heap} (left : frame before middle) (right : frame middle after) : frame before after :=
     ⟨left.1.trans right.1, keepsTrans left.2 right.2⟩
-  have throughAdmission := raw.framesThroughCache seed (frame := frame) trans effects.admissionFrame
   have throughGuards := markedGuards_keepFrame (frame := frame) dir source.calls.lookup trans effects.guard flat marker
   have throughCheckpoint := source.fileCalls.framesCheckpointSuccess dir refl trans effects.fileFrames effects.statFrame checkpointRead
   have throughMarker := source.fileCalls.readOptionalFrames effects.fileFrames refl trans effects.statFrame
@@ -205,9 +199,9 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
   rw [markerRead, reachedState] at throughMarker
   have throughWal := source.fileCalls.selectedWalKeepsFrame source.directoryCalls dir refl trans effects.fileFrames
     effects.listingFrames effects.statFrame
-    (fun path file => keeperCalls.modifyPending seed.pendingRef (pushPending path file)) effects.remember wal
+    (fun path file => keeperCalls.modifyPending pending (pushPending path file)) effects.remember wal
   have fromCache := trans throughGuards (trans throughCheckpoint (trans throughMarker throughWal))
-  have throughReader : keeps reached prepared := (trans throughAdmission fromCache).2
+  have throughReader : keeps reached prepared := (trans admissionFrame fromCache).2
   have exact : (view.files reached).image.keeper.active = some segment.bytes :=
     exactKeeper.trans (congrArg some (congrArg Target.trimmed plan.targetEq).symm)
   have alignedBytes : segment.bytes ++ plan.layout.tail = segment.bytes :=
@@ -223,7 +217,7 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
     rw [payloadEq, List.map_append]
     simp [segment]
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj (lastKeeper.symm.trans last))
-  have remembered : keeperCalls.modifyPending seed.pendingRef (pushPending path file) readHeap = .ok () prepared := by
+  have remembered : keeperCalls.modifyPending pending (pushPending path file) readHeap = .ok () prepared := by
     rcases route with remembered | released
     · exact remembered.2
     · exact (Nat.lt_irrefl _ (size ▸ released.1)).elim
@@ -528,8 +522,10 @@ structure RawOpenAdmissionReport.LiteralAlignedEffects
     (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
     (plan : current.SelectedWritePlan batch target (view.files reached).image)
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) where
-  readEffects : raw.AlignedReadEffects seed (fun atHeap => (observe atHeap).files.names) visible admission.view
-    admission.root (managedPath dir) (literalOpenReadFrame seed observe)
+  admissionFrame : raw.CacheFrames seed
+    (alignedReadFrame (fun atHeap => (observe atHeap).files.names) visible (managedPath dir) (literalOpenReadFrame seed observe))
+  readEffects : source.AlignedReadEffects view dir seed.pendingRef (fun atHeap => (observe atHeap).files.names)
+    visible admission.view admission.root (managedPath dir) (literalOpenReadFrame seed observe)
   child : ∀ start, plan.layout.first ≤ start → start ≤ plan.layout.range.through →
     (admission.view.child admission.root (renderWalSegmentName start)).map admission.view.modelObject =
       (observe reached).files.names ((dir).file (.walSegment start))
@@ -622,13 +618,17 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
       have listed := effects.laterNames start beyond ⟨object, found⟩
       rw [noLater] at listed
       exact (List.not_mem_nil listed).elim
+  have admissionFrame := raw.framesThroughCache seed
+    (fun left right => ⟨left.1.trans right.1, literalReadFrame_trans left.2 right.2⟩) effects.admissionFrame
+  have workerReturn := (raw.returnsHealthyMarkedInterpreter source seed).mp returned
   obtain ⟨count, markerBytes, patched, logical, keeper, slot, inode, readHeap, prepared, repaired, phase, afterPhase,
     token, markerName, decoded, _, replay, named, attached, remembered, liveFrame, privateKeeper, readFrame, cacheFrame, finish,
     phaseReturn, tokenReturn, tableEq⟩ :=
-    plan.readsLiteralAlignedOpen raw seed (fun atHeap => (observe atHeap).files.names) visible admission.view admission.root
-      (managedPath dir) (literalReadFrame_refl seed observe) literalReadFrame_trans effects.readEffects entry.protectedFiles
+    plan.readsLiteralAlignedOpen raw.lock seed.directoryRef seed.activeRef seed.pendingRef seed.afterPending
+      (fun atHeap => (observe atHeap).files.names) visible admission.view admission.root
+      (managedPath dir) (literalReadFrame_refl seed observe) literalReadFrame_trans admissionFrame effects.readEffects entry.protectedFiles
       entry.manifest markerLive scope (fun first _ _ => .inr ⟨.walSegment first, rfl⟩) effects.child physical exactKeeper later
-      returned
+      workerReturn
   have authority := RawOpenAdmissionReport.literalAuthorityAtCache seed effects.openKeepsLock effects.newRefKeepsLock
   have preparedAuthority := cacheFrame.2.2 authority
   obtain ⟨retained, repairFrame, rootIssued, afterDirectory, entries, loaded, consumed,

@@ -381,18 +381,16 @@ theorem MarkedTemporaryReadCalls.acceptsMarkerFromProtectedFile
     (fun atHeap _ _ => ⟨rfl, fun _ _ => rfl⟩) CheckpointSurvivingFiles.Frames.trans statFrame directory path entry
   exact ⟨actualBytes.trans bytes, starts.trans (by simpa only [returned, reachedState] using resultFrame)⟩
 
-/-- Consume the literal successful marked open. Its protected manifest
-and WAL marker fix the checkpoint and the exact byte limit passed to the
-reached WAL reader. The frames are local to the actual admission,
-guards, checkpoint calls and marker read. -/
-theorem RawOpenAdmissionReport.selectsCheckpointAndMarkerFromActualOpen
-    {stream : Type} {state : NativeReadyState} {input : FilePath} {inventory : DescriptorInventory}
-    {retry : LockedFileState FileImage}
-    {admission : CensusOpenAdmissionReports input state.session.directory inventory retry}
+/-- The held worker reads the protected checkpoint and WAL boundary
+before passing the resulting watermark and byte limit to the WAL reader.
+The entry-to-cache frame comes from the admission that reached this worker. -/
+theorem RawMarkedOpenInterpreter.worker_selectsCheckpointAndMarker
+    {stream : Type} {state : NativeReadyState}
     {view : OpenCloseHeapView heap FileImage} {entry : heap}
     (source : RawMarkedOpenInterpreter heap stream)
-    (raw : RawOpenAdmissionReport admission view source.calls entry)
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    (lock : IO.FS.Handle) (cached : IO.Ref (Option IO.FS.Handle))
+    (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cacheReady : heap)
     (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
     (opens : source.fileCalls.OpensReadSlot view names visible)
     (reads : source.fileCalls.ReadsAtCursor view visible)
@@ -402,8 +400,7 @@ theorem RawOpenAdmissionReport.selectsCheckpointAndMarkerFromActualOpen
     (storedMarker : (observedFiles names visible entry).Stored (state.session.directory.file .walBoundary) chosenMarker)
     (scope : FilePath → Prop)
     (includes : ∀ path, state.selectedRetryPath path → scope path)
-    (admissionEffects : raw.CacheFrames seed (fun before after =>
-      (observedFiles names visible before).Frames scope (observedFiles names visible after)))
+    (admissionFrame : (observedFiles names visible entry).Frames scope (observedFiles names visible cacheReady))
     (guardFrame : ∀ path before, (observedFiles names visible before).Frames scope
       (observedFiles names visible (reachedState (source.calls.lookup path before))))
     (scopedReads : source.fileCalls.FileFrames (observedFiles names visible) scope)
@@ -420,19 +417,20 @@ theorem RawOpenAdmissionReport.selectsCheckpointAndMarkerFromActualOpen
       (visible before inode).size ≤ (view.handle before file).2.2)
     {checked marked reached : heap} {metadata : IO.FS.Metadata} {table : DiskTable}
     (flat : rejectFlatWalWith state.session.directory
-      (optionalMetadataWith (source.calls.lookup (state.session.directory.file .wal))) seed.afterPending = .ok () checked)
+      (optionalMetadataWith (source.calls.lookup (state.session.directory.file .wal))) cacheReady = .ok () checked)
     (marker : optionalMetadataWith (source.calls.lookup (state.session.directory.file .walBoundary)) checked =
       .ok (some metadata) marked)
-    (returned : source.openTable input entry = .ok table reached) :
+    (returned : source.worker cached active pending state.session.directory lock
+      (RawMarkedOpenInterpreter.makeCache state.session.directory cached active pending) cacheReady = .ok table reached) :
     let directory := state.session.directory
     let keeper := source.keeperCallbacks.withFileReads source.fileCalls
     let readWal := fun watermark length => readSelectedWithCachedExtents directory watermark length
       source.directoryCalls.run (MarkedWalExtentReports.inspect source.fileCalls) source.fileCalls.seal
       (source.fileCalls.readKeeperWithRelease
-        (fun path handle => keeper.modifyPending seed.pendingRef (SyncHandleRouting.pushPending path handle)))
-    let cache := RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef
-    let writeStage := source.stage.stage seed.pendingRef keeper.modifyPending
-    let syncPaths := keeper.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
+        (fun path handle => keeper.modifyPending pending (SyncHandleRouting.pushPending path handle)))
+    let cache := RawMarkedOpenInterpreter.makeCache directory cached active pending
+    let writeStage := source.stage.stage pending keeper.modifyPending
+    let syncPaths := keeper.syncPaths directory.path cached active pending
     ∃ (afterCheckpoint afterMarker : heap) (length : UInt64) (payloads : WalSegmentMarkerReads)
       (extent : Nat) (prepared repaired : heap) (patched : ByteArray) (logical : PackedTable)
       (first : Nat) (bytes : ByteArray) (phase : IO.Ref (Phase Installed)) (afterPhase : heap)
@@ -451,16 +449,14 @@ theorem RawOpenAdmissionReport.selectsCheckpointAndMarkerFromActualOpen
       source.allocatePhase (.ready (Reopened.installed ⟨logical, (expected.getD (.empty, 0)).2, length, first⟩))
         repaired = .ok phase afterPhase ∧
       source.allocateToken () afterPhase = .ok token reached ∧
-      table = RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token := by
+      table = RawMarkedOpenInterpreter.assemble directory lock cache phase token := by
   intro directory keeper readWal cache writeStage syncPaths
   obtain ⟨checkpoint, afterCheckpoint, markerBytes, afterMarker, length, payloads, extent, prepared, repaired,
     patched, logical, first, bytes, phase, afterPhase, token, selected, markerRead, decoded, walRead,
     replayed, lastKeeper, repairedWal, allocated, tokenAllocated, exactTable⟩ :=
-    raw.reachesMarkedReadsAndRepair source seed flat marker returned
+    source.worker_reachesMarkedReadsAndRepair directory lock cached active pending cacheReady flat marker returned
   let frame (before after : heap) :=
     (observedFiles names visible before).Frames scope (observedFiles names visible after)
-  have admissionFrame : frame entry seed.afterPending :=
-    raw.framesThroughCache seed (frame := frame) CheckpointSurvivingFiles.Frames.trans admissionEffects
   have guardSteps := markedGuards_keepFrame (frame := frame) directory source.calls.lookup
     CheckpointSurvivingFiles.Frames.trans guardFrame flat marker
   have markedFrame := admissionFrame.trans guardSteps

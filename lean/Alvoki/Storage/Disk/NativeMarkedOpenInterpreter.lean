@@ -367,34 +367,34 @@ theorem RawOpenAdmissionReport.returnsHealthyMarkedInterpreter
     | ok _ afterDisposal | error _ afterDisposal =>
       cases unlocked : source.calls.unlock raw.lock afterDisposal <;> simp [unlocked]
 
-/-- Recover the actual worker return and both allocation receipts from
-one literal open result. The second allocation uses the first heap and
-the assembled table uses those same references. -/
-theorem RawOpenAdmissionReport.reachesMarkedInstallation
-    (source : RawMarkedOpenInterpreter heap stream)
-    (raw : RawOpenAdmissionReport admission view source.calls entry)
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+/-- A successful held worker returns the recovered state through its own
+phase and token allocations to the table it assembled. -/
+theorem RawMarkedOpenInterpreter.worker_reachesMarkedInstallation
+    (source : RawMarkedOpenInterpreter heap stream) (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cacheReady : heap)
     {table : DiskTable} {reached : heap}
-    (returned : source.openTable input entry = .ok table reached) :
-    let cache := RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef
+    (workerReturn : source.worker cached active pending directory lock
+      (RawMarkedOpenInterpreter.makeCache directory cached active pending) cacheReady = .ok table reached) :
+    let cache := RawMarkedOpenInterpreter.makeCache directory cached active pending
     ∃ (opened : Reopened) (repaired : heap) (phase : IO.Ref (Phase Installed)) (afterPhase : heap) (token : IO.Ref Unit),
       recoverHealthyMarkedWithRefs source.fileCalls source.directoryCalls source.keeperCallbacks
-        seed.directoryRef seed.activeRef seed.pendingRef source.remove source.stage source.rename source.calls.lookup
-        directory (source.bootstrap directory cache) seed.afterPending = .ok opened repaired ∧
+        cached active pending source.remove source.stage source.rename source.calls.lookup
+        directory (source.bootstrap directory cache) cacheReady = .ok opened repaired ∧
       source.allocatePhase (.ready opened.installed) repaired = .ok phase afterPhase ∧
       source.allocateToken () afterPhase = .ok token reached ∧
-      table = RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token := by
+      table = RawMarkedOpenInterpreter.assemble directory lock cache phase token := by
   intro cache
-  have worker := (raw.returnsHealthyMarkedInterpreter source seed).1 returned
+  have worker := workerReturn
   let recover := recoverHealthyMarkedWithRefs source.fileCalls source.directoryCalls source.keeperCallbacks
-    seed.directoryRef seed.activeRef seed.pendingRef source.remove source.stage source.rename source.calls.lookup
+    cached active pending source.remove source.stage source.rename source.calls.lookup
     directory (source.bootstrap directory cache)
   change ((do
     let opened ← recover
     installReady opened.installed source.allocatePhase source.allocateToken fun phase token =>
-      pure (RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token)) seed.afterPending) = _ at worker
+      pure (RawMarkedOpenInterpreter.assemble directory lock cache phase token)) cacheReady) = _ at worker
   simp only [installReady, Bind.bind, EStateM.bind] at worker
-  cases prepared : recover seed.afterPending with
+  cases prepared : recover cacheReady with
   | error cause repaired => simp [prepared] at worker
   | ok opened repaired =>
     simp only [prepared] at worker
@@ -459,28 +459,30 @@ private theorem recoverSegmentedWal_successfulGuards (rejectFlat : EStateM IO.Er
 /-- A healthy return from the fixed worker executes both probes. If the
 selected marker binding survives the flat-WAL probe, truthful no-follow
 lookup rules out the markerless dispatch at that reached heap. -/
-theorem RawOpenAdmissionReport.reachesMarkedGuards
-    (source : RawMarkedOpenInterpreter heap stream)
-    (raw : RawOpenAdmissionReport admission view source.calls entry)
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+theorem RawMarkedOpenInterpreter.worker_reachesMarkedGuards
+    (source : RawMarkedOpenInterpreter heap stream) (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cacheReady : heap)
     (names : heap → FilePath → Option Nat) {inode : Nat}
-    (presentAtCache : names seed.afterPending (directory.file .walBoundary) = some inode)
+    (presentAtCache : names cacheReady (directory.file .walBoundary) = some inode)
     (flatKeepsMarker : ∀ {checked name message},
-      source.calls.lookup (directory.file .wal) seed.afterPending =
+      source.calls.lookup (directory.file .wal) cacheReady =
         .ok (.error (.noFileOrDirectory name 2 message)) checked →
-      names checked (directory.file .walBoundary) = names seed.afterPending (directory.file .walBoundary))
+      names checked (directory.file .walBoundary) = names cacheReady (directory.file .walBoundary))
     (lookupMissing : ∀ {before after name message},
       source.calls.lookup (directory.file .walBoundary) before =
         .ok (.error (.noFileOrDirectory name 2 message)) after →
       names before (directory.file .walBoundary) = none)
     {table : DiskTable} {reached : heap}
-    (returned : source.openTable input entry = .ok table reached) :
+    (workerReturn : source.worker cached active pending directory lock
+      (RawMarkedOpenInterpreter.makeCache directory cached active pending) cacheReady = .ok table reached) :
     ∃ checked marked metadata,
       rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
-        seed.afterPending = .ok () checked ∧
+        cacheReady = .ok () checked ∧
       optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
         .ok (some metadata) marked := by
-  obtain ⟨_, _, _, _, _, recovered, _, _, _⟩ := raw.reachesMarkedInstallation source seed returned
+  obtain ⟨_, _, _, _, _, recovered, _, _, _⟩ := source.worker_reachesMarkedInstallation
+    directory lock cached active pending cacheReady workerReturn
   unfold recoverHealthyMarkedWithRefs at recovered
   obtain ⟨checked, marked, found, flat, probe⟩ := recoverSegmentedWal_successfulGuards _ _ _ _ recovered
   cases found with
@@ -496,16 +498,17 @@ theorem RawOpenAdmissionReport.reachesMarkedGuards
 returns at adjoining heaps. Replay determines the plan passed to the
 repair, and the resulting table uses the references allocated after
 that same repair. -/
-theorem RawOpenAdmissionReport.reachesMarkedReadsAndRepair
-    (source : RawMarkedOpenInterpreter heap stream)
-    (raw : RawOpenAdmissionReport admission view source.calls entry)
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+theorem RawMarkedOpenInterpreter.worker_reachesMarkedReadsAndRepair
+    (source : RawMarkedOpenInterpreter heap stream) (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cacheReady : heap)
     {checked marked reached : heap} {metadata : IO.FS.Metadata} {table : DiskTable}
     (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
-      seed.afterPending = .ok () checked)
+      cacheReady = .ok () checked)
     (marker : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked = .ok (some metadata) marked)
-    (returned : source.openTable input entry = .ok table reached) :
-    let cache := RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef
+    (workerReturn : source.worker cached active pending directory lock
+      (RawMarkedOpenInterpreter.makeCache directory cached active pending) cacheReady = .ok table reached) :
+    let cache := RawMarkedOpenInterpreter.makeCache directory cached active pending
     let keeper := source.keeperCallbacks.withFileReads source.fileCalls
     let readOptional := source.fileCalls.readOptional directory
     let readCheckpoint := readIntegrityCheckpointSized directory (readOptional (directory.file .manifest))
@@ -513,9 +516,9 @@ theorem RawOpenAdmissionReport.reachesMarkedReadsAndRepair
     let readWal := fun watermark length => readSelectedWithCachedExtents directory watermark length
       source.directoryCalls.run (MarkedWalExtentReports.inspect source.fileCalls) source.fileCalls.seal
       (source.fileCalls.readKeeperWithRelease
-        (fun path handle => keeper.modifyPending seed.pendingRef (SyncHandleRouting.pushPending path handle)))
-    let writeStage := source.stage.stage seed.pendingRef keeper.modifyPending
-    let syncPaths := keeper.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
+        (fun path handle => keeper.modifyPending pending (SyncHandleRouting.pushPending path handle)))
+    let writeStage := source.stage.stage pending keeper.modifyPending
+    let syncPaths := keeper.syncPaths directory.path cached active pending
     ∃ (selected : Option (PackedTable × UInt64)) (afterCheckpoint : heap) (markerBytes : ByteArray)
       (afterMarker : heap) (length : UInt64) (reads : WalSegmentMarkerReads) (extent : Nat)
       (prepared repaired : heap) (patched : ByteArray) (logical : PackedTable) (first : Nat) (bytes : ByteArray)
@@ -531,13 +534,13 @@ theorem RawOpenAdmissionReport.reachesMarkedReadsAndRepair
       source.allocatePhase (.ready (Reopened.installed ⟨logical, (selected.getD (.empty, 0)).2, length, first⟩))
         repaired = .ok phase afterPhase ∧
       source.allocateToken () afterPhase = .ok token reached ∧
-      table = RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token := by
+      table = RawMarkedOpenInterpreter.assemble directory lock cache phase token := by
   intro cache keeper readOptional readCheckpoint readWal writeStage syncPaths
   obtain ⟨opened, repaired, phase, afterPhase, token, recovered, allocated, tokenAllocated, exactTable⟩ :=
-    raw.reachesMarkedInstallation source seed returned
+    source.worker_reachesMarkedInstallation directory lock cached active pending cacheReady workerReturn
   obtain ⟨plan, extent, prepared, preparedReads, repairedWal⟩ :=
     reachedMarkedPreparation source.fileCalls source.directoryCalls source.keeperCallbacks
-      seed.directoryRef seed.activeRef seed.pendingRef source.remove source.stage source.rename source.calls.lookup
+      cached active pending source.remove source.stage source.rename source.calls.lookup
       directory _ flat marker recovered
   obtain ⟨selected, afterCheckpoint, markerBytes, afterMarker, length, reads, patched, logical, first, bytes,
     checkpointReturned, markerReturned, decoded, walReturned, replayed, lastKeeper, exactPlan, exactOpened⟩ :=
