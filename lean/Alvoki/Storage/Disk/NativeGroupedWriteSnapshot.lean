@@ -120,10 +120,25 @@ theorem NativeOpenedPosition.groupedRetryAndReads
   refine ⟨schedules, attempts, retried, batch, table, guarded, poisoned, prepared, guard, assigned, ?_⟩
   rcases classified with ⟨group, _, _, footprint, recovered, _⟩ | elsewhere
   · refine .inr ⟨group, ?_⟩
-    obtain ⟨plan, opening, raw, writer⟩ :=
+    obtain ⟨plan, _, _, writer⟩ :=
       recovered.readyAlignedWriter storage visible footprint.2 (aligned prepared)
-    exact plan.acknowledgesAndReadsAfterOldTarget request cause inodes runs writer appender stager syncer
-      inode buffered nextRequest lookup rename nextSequence writeHeap nextNonempty read nextCall
+    obtain ⟨handle, start, nextCache, retained, opened, selected, recoveredLedger, _, physical⟩ :=
+      plan.ledgerAtReadyWriter writer request cause
+    have old := selected.trans plan.oldHistory
+    have appended : start.current.history = current.current.history ++ retained := by
+      simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using
+        recoveredLedger.history
+    have omitted : retained = [] := List.append_cancel_left (by
+      simpa only [List.append_nil] using appended.symm.trans old)
+    obtain ⟨write, token⟩ := nextCall handle start nextCache opened old physical
+    obtain ⟨schedules, writeReturn, nextBatch, _, written, last, reference, events, _, _, reachedWrite, snapshots,
+      wrote, replay, agrees⟩ :=
+      start.acknowledgesAndReadsLatest appender stager syncer view nextCache inodes runs storage inode buffered
+        nextRequest lookup rename nextNonempty physical write read token
+    have ledger := recoveredLedger.append wrote
+    rw [omitted] at ledger
+    exact ⟨handle, start, written, last, nextCache, nextBatch, events, reference, opened, schedules,
+      writeReturn, reachedWrite, snapshots, ledger, old ▸ replay, agrees⟩
   · exact .inl elsewhere
 
 end

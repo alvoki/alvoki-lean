@@ -424,7 +424,8 @@ through its callbacks, and shared admission and finalizers
 carry the frame to the exact error heap. The keeper has its own live
 binding and payload after replacement. The protected live and durable
 files and the root's binding in its parent survive separately. The same
-lemma accepts a target selected after different preceding operations.
+lemma accepts a WAL target selected after different operations, under
+the supplied writer's manifest and protected footprint.
 [Failed marked repair](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached

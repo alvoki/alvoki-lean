@@ -6,10 +6,16 @@ callbacks. The fixed worker and its cache disposal, unlock and lock
 release supply the exact returned heap and diagnostic. The next attempt
 inherits the live replacement keeper and the protected files. The durable
 binding of the root in its parent has its own frame. The repair lemma
-uses the selected target and local callback effects. Deriving those
-effects for every guarded stage and composing the raw mixed execution
-remain open.
+uses the selected WAL target, the protected footprint of the writer's
+manifest, and local callback effects. Deriving those effects for every
+guarded stage and composing the raw mixed execution remain open.
 [Failed repair and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+
+The grouped-write recovery proof now appends the post-open write and
+snapshot to the shared recovery ledger directly. The old-target
+specialization stays in that proof, where the surviving marker
+requires the uncertain batch to be omitted.
+[Grouped-write continuation](../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean)
 
 The fresh bootstrap return supplies the empty origin of the client ledger
 for the final checkpoint pilot. The opened-session trace starts the
