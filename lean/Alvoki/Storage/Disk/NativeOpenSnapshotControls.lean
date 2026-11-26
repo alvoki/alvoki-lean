@@ -3,7 +3,7 @@ import Alvoki.Storage.Disk.NativeOpenAcquire
 namespace Alvoki.Storage.DiskSession
 
 open System
-open Sequential (SnapshotPin)
+open Sequential (SnapshotPin SnapshotTable)
 
 /-- Both public acquisition schedules read the same phase reference
 and build the pin with the opened table's original token. -/
@@ -20,6 +20,74 @@ theorem _root_.Alvoki.Storage.DiskTable.UsesOpenReferences.snapshotAcquisitions
   exact ⟨_, fun _ => ⟨rfl, rfl, rfl⟩, db.acquireAt_schedule, db.acquire_schedule⟩
 
 variable {heap : Type}
+
+/-- Both public schedules act on the returned phase and token, with the
+lookup consuming the pin at the heap reached by acquisition. -/
+def _root_.Alvoki.Storage.DiskTable.LatestWalLookup
+    (db : DiskTable) (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit)
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+    (entry : heap) (history : List WAL.Write) (key : UInt64) : Prop :=
+  ∃ (issue : SnapshotPin → DiskSnapshotPin) (pin : SnapshotPin) (after : heap) (reference : SnapshotTable UInt64),
+    SnapshotWalReplay .empty history reference ∧ (issue pin).UsesOpenToken token pin ∧
+    (issue pin).sequence = reference.committed ∧
+    db.acquire = acquireLatestWith (m := IO) (do (← phase.get).installed)
+      (acquireSnapshotWith (do (← phase.get).installed) phase.set issue) ∧
+    acquireLatestWith (m := EStateM IO.Error heap) (do (← get phase).installed)
+      (acquireSnapshotWith (do (← get phase).installed) (set phase) issue) entry = .ok (issue pin) after ∧
+    db.lookup (issue pin).handle key = readSnapshotWith (m := IO) (do (← phase.get).installed)
+      (token.ptrEq token) (fun table => table.lookup pin.handle key) ∧
+    readSnapshotWith (m := EStateM IO.Error heap) (do (← get phase).installed) (ptrEq token token)
+      (fun table => table.lookup pin.handle key) after = .ok (some (reference.table.lookup key reference.committed)) after
+
+/-- Acquire the latest pin from a reopened phase containing the complete
+WAL replay, then look up a key through that pin on the same table. The
+callbacks report only phase-cell effects and token equality after the
+pin update. The replay and the answer follow from the recovered bytes. -/
+theorem _root_.Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterWalReplay
+    {db : DiskTable} {directory lock files phase token}
+    (uses : db.UsesOpenReferences directory lock files phase token)
+    {contents : heap → IO.Ref (Phase Installed) → Option (Phase Installed)}
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (effects : OpenPhaseCellEffects contents get set) {entry : heap} {installed : Installed}
+    (stored : contents entry phase = some (.ready installed)) {history : List WAL.Write}
+    (recovered : recoverSelected .empty (WAL.encode history) = .ok installed.table)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+    (compares : ∀ {pinned : PackedTable} {after},
+      set phase (.ready { installed with table := pinned }) entry = .ok () after →
+      ptrEq token token after = .ok true after) (key : UInt64) :
+    db.LatestWalLookup phase token get set ptrEq entry history key := by
+  obtain ⟨events, decoded, applied, _⟩ := recoverSelected_success recovered
+  have fullFrames : (WAL.encode history).size / WAL.frameSize * WAL.frameSize = (WAL.encode history).size := by
+    rw [WAL.encode_size, Nat.mul_div_cancel_left _ (by decide : 0 < WAL.frameSize), Nat.mul_comm]
+  have encoded := WAL.decodeOrdinals_reencode decoded
+  rw [fullFrames, ByteArray.extract_zero_size] at encoded
+  have sameEvents : events = history := Except.ok.inj ((WAL.decode_encode events).symm.trans
+    ((congrArg WAL.decode encoded).trans (WAL.decode_encode history)))
+  have played : replay .empty history = .ok installed.table := by
+    simpa only [show PackedTable.empty.committed.toNat = 0 from rfl, List.drop_zero, sameEvents] using applied
+  obtain ⟨reference, replayed, refined⟩ := replay_refines PackedTable.empty_refines played
+  have available : installed.table.pins.floor ≤ installed.table.committed := by
+    rw [refined.pins, refined.committed]
+    exact reference.floor_committed
+  have sameTable : installed.table.SameData installed.table := ⟨rfl, rfl, rfl, rfl⟩
+  obtain ⟨pin, pinned, acquired, lookups, _⟩ := sameTable.acquireAt_reads available (UInt64.le_refl _)
+  have answer : pinned.lookup pin.handle key = some (reference.table.lookup key reference.committed) := by
+    simpa only [refined.table, refined.committed] using lookups key
+  obtain ⟨issue, owns, _, acquireSource⟩ := uses.snapshotAcquisitions
+  obtain ⟨after, wrote, pinnedAt⟩ := effects.writes entry phase (.ready installed)
+    (.ready { installed with table := pinned }) stored
+  have loaded := effects.reads entry phase (.ready installed) stored
+  have loadedPin := effects.reads after phase (.ready { installed with table := pinned }) pinnedAt
+  have localToken := compares wrote
+  have sequence := (owns pin).2.2.trans ((PackedTable.acquireAt_spec acquired).sequence.trans refined.committed)
+  refine ⟨issue, pin, after, reference, replayed, owns pin, sequence, acquireSource, ?_, uses.lookupPin (owns pin) key, ?_⟩
+  · simp only [acquireLatestWith, acquireSnapshotWith, Bind.bind, EStateM.bind, loaded, Phase.installed,
+      Pure.pure, EStateM.pure, acquired, wrote]
+  · simp only [readSnapshotWith, withLocalHandle, Bind.bind, EStateM.bind, loadedPin, Phase.installed,
+      Pure.pure, EStateM.pure, localToken, ↓reduceIte, answer]
 
 /-- A foreign pin skips the setter. A local token always reaches the
 setter, even if the local handle is no longer registered. The raw

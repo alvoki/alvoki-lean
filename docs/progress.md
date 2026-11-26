@@ -80,12 +80,13 @@ common cleanup carries the observed descriptor closes at that heap through
 unlock and final lock release to derive the public diagnostic and inventory.
 Several cache references may share a handle. The fsync may already have taken effect.
 
-The first write now supplies the absent manifest, empty seal list, exact batch
-and marker cutoff on its actual return heap. The fresh directory barrier and
-write frames supply the bounded WAL names at that cutoff.
+On a fresh table, a first acknowledged batch, one sampled crash and a successful
+reopen now compose through a latest snapshot lookup for any key. The lookup
+uses the reopened table’s actual phase and token and returns the value obtained
+by replaying the prepared batch.
 
-**Next obligation.** Read a snapshot on the single-segment reopen using its
-actual phase and token, then admit a final interrupted batch. On the
+**Next obligation.** Admit a final interrupted batch on that segment and show
+that reopening reads either the previous history or the whole added batch. On the
 failed-barrier path, the surviving namespace and cleanup inventory still need
 to feed the next admission.
 Further interruptions, mixed sessions and maintenance remain in the

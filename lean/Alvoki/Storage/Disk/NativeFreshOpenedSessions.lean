@@ -4,11 +4,13 @@ import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 import Alvoki.Storage.Disk.NativeReadyCallRefinement
 import Alvoki.Storage.Disk.NativeRawWriteReboot
+import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
 import Alvoki.Storage.Disk.NativeCheckpointRunDurability
 
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication
+open WalSegmentRepair (FileImage)
 open WAL.Boundary (WalInodeImage)
 
 namespace NativeOpenedTrace
@@ -406,6 +408,89 @@ theorem readyCallStorage {input : FilePath} {directory : DiskDirectory}
   exact ⟨first.census, by rw [← directory, ← active, ← pending]; exact first.cacheAt,
     first.physical, first.keeper, fun literal named => first.root literal (directory ▸ named)⟩
 
+/-- Start the first observed write at the actual returned heap of the
+fresh opener. Its local effects refer to the original cache references.
+The acknowledged batch is the entire history of the checkpoint-free
+writer, which can carry the same finite WAL window forward. -/
+theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
+    {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
+    (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
+    {image : Type} (view : OpenCloseHeapView heap image)
+    {directoryRef : IO.Ref (Option IO.FS.Handle)}
+    {activeRef : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {pendingRef : IO.Ref (List (FilePath × IO.FS.Handle))}
+    (resolved : opened.handle.directory = directory)
+    (references : opened.handle.files.UsesCacheReferences activeRef pendingRef directoryRef)
+    (atDirectory : opened.handle.files.AtDirectory directory.path)
+    (census : view.descriptors opened.start.reached = opened.start.current.ready.state.census)
+    (cacheAt : view.cacheAt opened.start.reached directoryRef activeRef pendingRef = opened.start.current.ready.state.cache)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : heap → CheckpointStorageObservation)
+    (settled : let state := opened.start.current.ready.state
+      NativeReadyStorage state (observe opened.start.reached) ∧
+      ∀ inode, (observe opened.start.reached).files.names (state.session.directory.file
+        (.walSegment state.writer.wal.active.first)) = some inode →
+        (inodes opened.start.reached).visible inode = state.writer.wal.active.bytes)
+    (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {sequence : UInt64} {reached : heap}
+    (nonempty : request.rows ≠ [])
+    (seen : ∀ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path),
+      cache.directory = directoryRef → cache.active = activeRef → cache.pending = pendingRef →
+      opened.start.ObservesPublishedWrite appender stager syncer view cache inodes runs observe
+        inode buffered request lookup rename sequence reached) :
+    let handle := opened.handle
+    let start := opened.start
+    let dir := start.current.ready.state.session.directory
+    call entry = .ok handle.table start.reached ∧ handle.table.UsesOpenWriteSchedules dir handle.files handle.phase ∧
+    ∃ (cache : OpenSyncCacheRefs handle.files dir.path) (batch : List WAL.Write) (table : PackedTable)
+      (next : NativeOpenedPosition handle) (sameDirectory : next.current.ready.state.session.directory = dir),
+      cache.directory = directoryRef ∧ cache.active = activeRef ∧ cache.pending = pendingRef ∧
+      request.runOnRawOpenPhase dir lookup (appender.run cache.active) (stager.run cache.pending)
+        (syncer.group dir.path cache.directory cache.active cache.pending)
+        rename handle.phase handle.get handle.set start.reached = .ok sequence reached ∧
+      sequence = table.committed ∧ prepareBatch start.current.ready.state.writer.installed.table request.rows =
+        some (batch, table) ∧ next.reached = reached ∧ next.pins = [] ∧
+      start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
+      next.current.history = batch ∧ next.current.submissions = [.acknowledgedBatch batch] ∧
+      next.current.ready.reads = [] ∧
+      next.WriteStorageEntry view
+        ⟨cache.directory, cache.active, cache.pending, cache.references,
+          (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
+        (observe next.reached) (inodes next.reached).visible ∧
+      (let writer := next.current.ready.state.writer
+       writer.target.pair.manifest = none ∧ writer.wal.sealed = [] ∧ writer.history = batch ∧
+       writer.target.range.through = request.rows.length) ∧
+      ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow dir 0 through (observe start.reached) →
+        start.WalNameEffects appender stager syncer cache request lookup rename observe 0 through →
+        (∀ {settled value}, handle.set handle.phase (.ready value) settled = .ok () reached →
+          WalNamePresenceFrame dir 0 through (observe settled) (observe reached)) →
+        next.current.ready.state.writer.wal.SettledNamespaceWindow
+          next.current.ready.state.session.directory 0 through (observe next.reached) := by
+  obtain ⟨cache, sameDir, sameActive, samePending, writeEntry⟩ :=
+    opened.writeStorageEntry used view resolved references atDirectory census cacheAt settled
+  obtain ⟨schedule, returned, batch, table, next, sameDirectory, prepared, number, atReturn, pins, _, ledger, physical,
+    preserved, keepsNames⟩ :=
+    opened.start.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
+      request lookup rename nonempty writeEntry (seen cache sameDir sameActive samePending)
+  obtain ⟨history, submissions, reads, _⟩ := opened.refinesLedger ledger
+  have exactHistory : next.current.history = batch := by
+    simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using history
+  obtain ⟨beforeReady, beforeHistory, _⟩ := opened.start.current.ready.readPrefix.refines
+  have seals := (freshEmptyWAL beforeReady (beforeHistory.trans opened.emptyHistory)).2.2
+  obtain ⟨afterReady, afterHistory, _⟩ := next.current.ready.readPrefix.refines
+  have batchHistory := afterHistory.trans exactHistory
+  have cutoff := afterReady.retained.resumed.through.trans
+    ((congrArg List.length batchHistory).trans (prepareBatch_spec prepared).1)
+  refine ⟨opened.opened, schedule, cache, batch, table, next, sameDirectory, sameDir, sameActive, samePending, returned,
+    number, prepared, atReturn, pins.trans opened.emptyPins, ledger, exactHistory, ?_, ?_, physical,
+    ⟨preserved.1.trans (opened.freshManifestAbsent used), preserved.2.trans seals, batchHistory, cutoff⟩, ?_⟩
+  · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.submissions] using submissions
+  · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.reads] using reads
+  · intro through initial names restore
+    exact (keepsNames (fun offset _ => Nat.zero_le offset) initial names restore).2
+
 /-- The names checked to start a writer and bound its next WAL extent. -/
 def bootstrapWriteChild (through : Nat) (name : String) : Prop :=
   name ∈ ["LOCK", "MANIFEST", "WAL.commit"] ∨ ∃ start ≤ through, name = renderWalSegmentName start
@@ -552,6 +637,72 @@ theorem refinesReadyBeforeCommitUnknown
   refine ⟨opened.opened, current, events, ?_, length, records, ledger, uncertain⟩
   simpa only [opened.emptyPins, List.map_nil] using ran
 
+variable (modeledFiles : heap → FileImage)
+
+local notation "clientView" => OpenCloseHeapView.withFileProjection view
+  (fun h => LockedFileState.mk (modeledFiles h) (LockedFileState.owners (OpenCloseHeapView.files view h)))
+local notation "storage" => fun h => RunDirectoryInodeView.storageObservation (files h)
+local notation "visible" => fun h =>
+  WalInodeImage.visible (FreshBootstrapKeeperPhysical.inodes (FreshBootstrapOpenHeap.keeperPhysical seen) h)
+local notation "names" => fun h => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage h))
+
+/-- One fresh open, its first nonempty acknowledged write and one sampled
+restart determine the exact batch replayed by a successful public reopen.
+The write and reboot share the file observer and the actual write return heap. -/
+theorem replaysFirstAcknowledgedWrite {stream : Type}
+    (references : opened.handle.files.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef)
+    (atDirectory : opened.handle.files.AtDirectory directory.path)
+    (census : view.descriptors opened.start.reached = opened.start.current.ready.state.census)
+    (cacheAt : view.cacheAt opened.start.reached seed.directoryRef seed.activeRef seed.pendingRef =
+      opened.start.current.ready.state.cache)
+    (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {sequence : UInt64} {reached : heap}
+    (nonempty : request.rows ≠ []) (covered : request.rows.length ≤ through)
+    (wrote : ∀ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path),
+      cache.directory = seed.directoryRef → cache.active = seed.activeRef → cache.pending = seed.pendingRef →
+      opened.start.ObservesPublishedWrite appender stager syncer clientView cache seen.keeperPhysical.inodes runs storage
+        inode buffered request lookup rename sequence reached)
+    (source : RawMarkedOpenInterpreter heap stream) (namespaceView : DirectoryReadNamespace) (root : DeviceInode) :
+    ∃ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path)
+      (batch : List WAL.Write) (preparedTable : PackedTable) (next : NativeOpenedPosition opened.handle),
+      let state := next.current.ready.state
+      call entry = .ok opened.handle.table opened.start.reached ∧
+      request.runOnRawOpenPhase directory lookup (appender.run seed.activeRef) (stager.run seed.pendingRef)
+        (syncer.group directory.path seed.directoryRef seed.activeRef seed.pendingRef)
+        rename opened.handle.phase opened.handle.get opened.handle.set opened.start.reached = .ok sequence reached ∧
+      prepareBatch opened.start.current.ready.state.writer.installed.table request.rows = some (batch, preparedTable) ∧
+      sequence = preparedTable.committed ∧
+      cache.directory = seed.directoryRef ∧ cache.active = seed.activeRef ∧ cache.pending = seed.pendingRef ∧
+      next.reached = reached ∧ state.writer.history = batch ∧
+      opened.start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
+      ∀ {rebooted : heap} (sample : RawWriteRebootEntry state clientView storage names visible reached rebooted),
+        sample.DurableReset →
+        opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0 request.rows.length →
+        (∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
+          WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
+            (storage preReady) (storage reached)) →
+        source.ReplaysSingleSegmentAtOpen clientView state storage visible rebooted namespaceView root batch := by
+  obtain ⟨settled, freshWindow⟩ := opened.readyStorageAndWindow seen resolved used runs files through
+    createdKeeps createdWal rootNames liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame
+    phaseInodes tokenInodes
+  obtain ⟨initial, _, cache, batch, preparedTable, next, _, dirRef, activeRef, pendingRef, write, number, prepared, exactHeap, _,
+    ledger, _, _, _, physical, ⟨noManifest, noSeals, history, cutoff⟩, carries⟩ :=
+    opened.acknowledgesFirstWrite used clientView resolved references atDirectory census cacheAt
+      seen.keeperPhysical.inodes runs storage settled appender stager syncer inode buffered request lookup rename nonempty wrote
+  rw [dirRef, activeRef, pendingRef, opened.start.directory.trans resolved] at write
+  refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, dirRef, activeRef, pendingRef,
+    exactHeap, history, ledger, ?_⟩
+  intro _ sampled reset nameEffects restore
+  have finalWindow := carries request.rows.length (freshWindow.restrictUpper covered).2 nameEffects restore
+  rw [← cutoff, exactHeap] at finalWindow
+  have readyPhysical := physical.physical
+  rw [exactHeap] at readyPhysical
+  rw [← history]
+  exact @RawWriteRebootEntry.replaysSingleSegmentAtOpen _ _ _ _ source _ _ _ _ namespaceView root
+    sampled next.current.ready.readPrefix.refines.1 readyPhysical reset finalWindow noManifest noSeals
+
 end BootstrapWriteEntry
 
 /-- Consume a fixed sequence of observed public calls directly on the
@@ -641,89 +792,6 @@ theorem refinesReadyCalls {input : FilePath} {directory : DiskDirectory}
     opened.refinesReadyCallsFramed used resolved writes issuer view inodes runs storage inode buffered
       census cacheAt settled effects executed covered
   exact ⟨atOpen, last, events, heap, pins, stored, length, records, history, submissions, reads, replay⟩
-
-/-- Start the first observed write at the actual returned heap of the
-fresh opener. Its local effects refer to the original cache references.
-The acknowledged batch is the entire history of the checkpoint-free
-writer, which can carry the same finite WAL window forward. -/
-theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
-    {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
-    (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
-    {image : Type} (view : OpenCloseHeapView heap image)
-    {directoryRef : IO.Ref (Option IO.FS.Handle)}
-    {activeRef : IO.Ref (Option (FilePath × IO.FS.Handle))}
-    {pendingRef : IO.Ref (List (FilePath × IO.FS.Handle))}
-    (resolved : opened.handle.directory = directory)
-    (references : opened.handle.files.UsesCacheReferences activeRef pendingRef directoryRef)
-    (atDirectory : opened.handle.files.AtDirectory directory.path)
-    (census : view.descriptors opened.start.reached = opened.start.current.ready.state.census)
-    (cacheAt : view.cacheAt opened.start.reached directoryRef activeRef pendingRef = opened.start.current.ready.state.cache)
-    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
-    (observe : heap → CheckpointStorageObservation)
-    (settled : let state := opened.start.current.ready.state
-      NativeReadyStorage state (observe opened.start.reached) ∧
-      ∀ inode, (observe opened.start.reached).files.names (state.session.directory.file
-        (.walSegment state.writer.wal.active.first)) = some inode →
-        (inodes opened.start.reached).visible inode = state.writer.wal.active.bytes)
-    (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
-    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
-    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {sequence : UInt64} {reached : heap}
-    (nonempty : request.rows ≠ [])
-    (seen : ∀ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path),
-      cache.directory = directoryRef → cache.active = activeRef → cache.pending = pendingRef →
-      opened.start.ObservesPublishedWrite appender stager syncer view cache inodes runs observe
-        inode buffered request lookup rename sequence reached) :
-    let handle := opened.handle
-    let start := opened.start
-    let dir := start.current.ready.state.session.directory
-    call entry = .ok handle.table start.reached ∧ handle.table.UsesOpenWriteSchedules dir handle.files handle.phase ∧
-    ∃ (cache : OpenSyncCacheRefs handle.files dir.path) (batch : List WAL.Write) (table : PackedTable)
-      (next : NativeOpenedPosition handle) (sameDirectory : next.current.ready.state.session.directory = dir),
-      cache.directory = directoryRef ∧ cache.active = activeRef ∧ cache.pending = pendingRef ∧
-      request.runOnRawOpenPhase dir lookup (appender.run cache.active) (stager.run cache.pending)
-        (syncer.group dir.path cache.directory cache.active cache.pending)
-        rename handle.phase handle.get handle.set start.reached = .ok sequence reached ∧
-      sequence = table.committed ∧ prepareBatch start.current.ready.state.writer.installed.table request.rows =
-        some (batch, table) ∧ next.reached = reached ∧ next.pins = [] ∧
-      start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
-      next.current.history = batch ∧ next.current.submissions = [.acknowledgedBatch batch] ∧
-      next.current.ready.reads = [] ∧
-      next.WriteStorageEntry view
-        ⟨cache.directory, cache.active, cache.pending, cache.references,
-          (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
-        (observe next.reached) (inodes next.reached).visible ∧
-      (let writer := next.current.ready.state.writer
-       writer.target.pair.manifest = none ∧ writer.wal.sealed = [] ∧ writer.history = batch ∧
-       writer.target.range.through = request.rows.length) ∧
-      ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow dir 0 through (observe start.reached) →
-        start.WalNameEffects appender stager syncer cache request lookup rename observe 0 through →
-        (∀ {settled value}, handle.set handle.phase (.ready value) settled = .ok () reached →
-          WalNamePresenceFrame dir 0 through (observe settled) (observe reached)) →
-        next.current.ready.state.writer.wal.SettledNamespaceWindow
-          next.current.ready.state.session.directory 0 through (observe next.reached) := by
-  obtain ⟨cache, sameDir, sameActive, samePending, writeEntry⟩ :=
-    opened.writeStorageEntry used view resolved references atDirectory census cacheAt settled
-  obtain ⟨schedule, returned, batch, table, next, sameDirectory, prepared, number, atReturn, pins, _, ledger, physical,
-    preserved, keepsNames⟩ :=
-    opened.start.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
-      request lookup rename nonempty writeEntry (seen cache sameDir sameActive samePending)
-  obtain ⟨history, submissions, reads, _⟩ := opened.refinesLedger ledger
-  have exactHistory : next.current.history = batch := by
-    simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using history
-  obtain ⟨beforeReady, beforeHistory, _⟩ := opened.start.current.ready.readPrefix.refines
-  have seals := (freshEmptyWAL beforeReady (beforeHistory.trans opened.emptyHistory)).2.2
-  obtain ⟨afterReady, afterHistory, _⟩ := next.current.ready.readPrefix.refines
-  have batchHistory := afterHistory.trans exactHistory
-  have cutoff := afterReady.retained.resumed.through.trans
-    ((congrArg List.length batchHistory).trans (prepareBatch_spec prepared).1)
-  refine ⟨opened.opened, schedule, cache, batch, table, next, sameDirectory, sameDir, sameActive, samePending, returned,
-    number, prepared, atReturn, pins.trans opened.emptyPins, ledger, exactHistory, ?_, ?_, physical,
-    ⟨preserved.1.trans (opened.freshManifestAbsent used), preserved.2.trans seals, batchHistory, cutoff⟩, ?_⟩
-  · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.submissions] using submissions
-  · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.reads] using reads
-  · intro through initial names restore
-    exact (keepsNames (fun offset _ => Nat.zero_le offset) initial names restore).2
 
 /-- End at the checkpoint issued on the heap of the preceding returned
 call. Both the prior replay and the stop use the same opened position. -/

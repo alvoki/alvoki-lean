@@ -205,7 +205,11 @@ and its bytes determine the read plan. Given a successful public open, the
 phase on its returned table contains the replay of that history. The physical
 premises include a settled WAL name interval through the cutoff, truthful
 directory and file reads, and reference allocation that preserves the phase.
-[First write](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+The fresh-table composition also identifies the acknowledged sequence. Under
+the phase-cell and same-token laws, a latest snapshot on the reopened handle
+reads the replayed batch at its latest sequence for any key.
+[Fresh writer through reopen](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+· [Snapshot lookup](../../lean/Alvoki/Storage/Disk/NativeOpenSnapshotControls.lean)
 · [Reopen theorem](https://github.com/alvoki/alvoki-lean/blob/069be1e6d09dd3eba01b87d8756d454126d4ca8f/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L1755)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener

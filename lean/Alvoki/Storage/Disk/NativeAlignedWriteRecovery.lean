@@ -1738,12 +1738,61 @@ theorem NativeReadPosition.opensLiteralRepairedAfterWriteRetries
 
 end LiteralContinuation
 
+/-- Local effects needed to interpret a successful single-segment open
+from a chosen reboot heap. The returned table and initialized phase
+implement the given history. -/
+abbrev RawMarkedOpenInterpreter.ReplaysSingleSegmentAtOpen
+    {heap stream : Type} (source : RawMarkedOpenInterpreter heap stream)
+    (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
+    (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (rebooted : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (history : List WAL.Write) : Prop :=
+  let directory := state.session.directory
+  let names := fun h => (storage h).files.names
+  let samples := fun h => CheckpointSurvivingFiles.mk (names h) (fun inode => [visible h inode])
+  ∀ {input : FilePath} {returnedAt : heap} {table : DiskTable}
+    (_admission : source.ObservedAdmissionEffects view directory (fun _ => False) input rebooted storage visible)
+    (_reads : ∀ held : HeldOpenCache heap, LiteralOpenAuthority view directory held held.ready →
+      source.AlignedReadEffects view directory held.pendingRef names visible namespaceView root
+        (managedPath directory) (fun _ _ => True))
+    (_child : ∀ start ≤ state.writer.target.range.through,
+      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+        names rebooted (directory.file (.walSegment start)))
+    (_laterAbsent : ∀ {before entries listed}, source.directoryCalls.run directory.path before = .ok entries listed →
+      (samples rebooted).Frames (managedPath directory) (samples listed) →
+      MarkedWalExtentReports.TruthfulAbsenceOn (state.writer.target.range.through < ·) source.fileCalls directory
+        namespaceView root (entries.toList.map (·.fileName)) listed)
+    (_initializesPhase : ∀ {value before ref after}, source.allocatePhase (.ready value) before = .ok ref after →
+      view.phase after ref = some (.ready value))
+    (_tokenKeepsPhase : ∀ {before token after}, source.allocateToken () before = .ok token after →
+      ∀ ref, view.phase after ref = view.phase before ref)
+    (_returned : source.openTable input rebooted = .ok table returnedAt),
+    ∃ (logical : PackedTable) (count : UInt64) (held : HeldOpenCache heap)
+      (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit) (repaired afterPhase : heap),
+      recoverSelected .empty (WAL.encode history) = .ok logical ∧
+      logical.committed.toNat = history.length ∧
+      source.allocatePhase (.ready (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩))
+        repaired = .ok phase afterPhase ∧
+      source.allocateToken () afterPhase = .ok token returnedAt ∧
+      view.phase returnedAt phase =
+        some (.ready (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩)) ∧
+      table = RawMarkedOpenInterpreter.assemble directory held.lock
+        (RawMarkedOpenInterpreter.makeCache directory held.directoryRef held.activeRef held.pendingRef) phase token ∧
+      ∀ {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+        {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+        (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool),
+        OpenPhaseCellEffects view.phase get set →
+        (∀ {pinned : PackedTable} {after},
+          set phase (.ready { (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩)
+            with table := pinned }) returnedAt = .ok () after → ptrEq token token after = .ok true after) →
+        ∀ key, table.LatestWalLookup phase token get set ptrEq returnedAt history key
+
 section SingleSegment
 
 variable {heap stream : Type} {view : OpenCloseHeapView heap FileImage}
   {state : NativeReadyState} {source : RawMarkedOpenInterpreter heap stream}
   {storage : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
-  {acknowledged rebooted returnedAt : heap} {table : DiskTable}
+  {acknowledged rebooted : heap}
   {namespaceView : DirectoryReadNamespace} {root : DeviceInode}
 
 local notation "directory" => state.session.directory
@@ -1758,34 +1807,9 @@ theorem RawWriteRebootEntry.replaysSingleSegmentAtOpen
     (reset : seen.DurableReset)
     (catalog : state.writer.wal.SettledNamespaceWindow directory 0 state.writer.target.range.through (storage acknowledged))
     (noManifest : state.writer.target.pair.manifest = none)
-    (single : state.writer.wal.sealed = [])
-    (admission : source.ObservedAdmissionEffects view directory (fun _ => False) input rebooted storage visible)
-    (effects : ∀ held : HeldOpenCache heap, LiteralOpenAuthority view directory held held.ready →
-      source.AlignedReadEffects view directory held.pendingRef names visible namespaceView root
-        (managedPath directory) (fun _ _ => True))
-    (child : ∀ start ≤ state.writer.target.range.through,
-      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
-        names rebooted ((directory).file (.walSegment start)))
-    (laterAbsent : ∀ {before entries listed}, source.directoryCalls.run (directory).path before = .ok entries listed →
-      (samples rebooted).Frames (managedPath directory) (samples listed) →
-      MarkedWalExtentReports.TruthfulAbsenceOn (state.writer.target.range.through < ·) source.fileCalls directory
-        namespaceView root (entries.toList.map (·.fileName)) listed)
-    (initializesPhase : ∀ {value before ref after}, source.allocatePhase (.ready value) before = .ok ref after →
-      view.phase after ref = some (.ready value))
-    (tokenKeepsPhase : ∀ {before token after}, source.allocateToken () before = .ok token after →
-      ∀ ref, view.phase after ref = view.phase before ref)
-    (returned : source.openTable input rebooted = .ok table returnedAt) :
-    ∃ (logical : PackedTable) (count : UInt64) (held : HeldOpenCache heap)
-      (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit) (repaired afterPhase : heap),
-      recoverSelected .empty (WAL.encode state.writer.history) = .ok logical ∧
-      logical.committed.toNat = state.writer.history.length ∧
-      source.allocatePhase (.ready (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩))
-        repaired = .ok phase afterPhase ∧
-      source.allocateToken () afterPhase = .ok token returnedAt ∧
-      view.phase returnedAt phase =
-        some (.ready (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩)) ∧
-      table = RawMarkedOpenInterpreter.assemble directory held.lock
-        (RawMarkedOpenInterpreter.makeCache directory held.directoryRef held.activeRef held.pendingRef) phase token := by
+    (single : state.writer.wal.sealed = []) :
+    source.ReplaysSingleSegmentAtOpen view state storage visible rebooted namespaceView root state.writer.history := by
+  intro input returnedAt table admission effects child laterAbsent initializesPhase tokenKeepsPhase returned
   obtain ⟨selected, recovery, _, _, layout, target, sameKeeper, _, descriptors, offsets, _⟩ :=
     seen.startsReadyRecovery valid physical reset catalog
   have through : layout.range.through = state.writer.target.range.through :=
@@ -1834,9 +1858,16 @@ theorem RawWriteRebootEntry.replaysSingleSegmentAtOpen
       (by simp [List.map_append])
   have equal : logical = replayed := congrArg Prod.snd (Except.ok.inj (applied.symm.trans sameRows))
   subst replayed
-  exact ⟨logical, count, held, phase, token, repaired, afterPhase, full, committed,
-    sameKeeper ▸ allocation, tokenReturn, (tokenKeepsPhase tokenReturn phase).trans
-      (initializesPhase (sameKeeper ▸ allocation)), assembled⟩
+  let installed := Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩
+  have stored : view.phase returnedAt phase = some (.ready installed) :=
+    (tokenKeepsPhase tokenReturn phase).trans (initializesPhase (sameKeeper ▸ allocation))
+  refine ⟨logical, count, held, phase, token, repaired, afterPhase, full, committed,
+    sameKeeper ▸ allocation, tokenReturn, stored, assembled, ?_⟩
+  intro get set ptrEq cells compare key
+  have uses := (RawMarkedOpenInterpreter.assembles directory held.lock
+    (RawMarkedOpenInterpreter.makeCache directory held.directoryRef held.activeRef held.pendingRef)).usesReferences phase token
+  rw [← assembled] at uses
+  exact uses.lookupLatestAfterWalReplay cells stored full ptrEq compare key
 
 end SingleSegment
 

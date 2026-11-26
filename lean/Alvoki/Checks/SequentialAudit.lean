@@ -2153,6 +2153,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.releasePin
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.advanceFloor
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.snapshotAcquisitions
+#check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterWalReplay
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnOpenPhase_rejectsPhase
 #check_axioms Alvoki.Storage.DiskSession.runCheckpointOnOpenPhase_rejectsPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveWrite
@@ -2690,6 +2691,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesReadyBeforeCommitUnknown
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.writeStorageEntry
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.acknowledgesFirstWrite
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.replaysFirstAcknowledgedWrite
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.survivorValid
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrash.kept
