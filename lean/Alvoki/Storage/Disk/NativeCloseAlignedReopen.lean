@@ -217,7 +217,7 @@ theorem NativeCloseFiles.reopensReleasedAlignedAt
   have following := opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors
   obtain ⟨next, seeded, cache, census, owner, cached, finalPair, durable, checkpoint, path, target,
     kept, _, _, phaseFresh, sessionFresh⟩ := keeperFinish.startsNativeReadPrefix seen.chronology opening.markerFound
-      plan.prepared following accepted ready.resumed.ordered ready.layout ready.valid ready.spans
+      plan.prepared.newer following accepted ready.resumed.ordered ready.layout ready.valid ready.spans
       (ready.walPair.trans (congrArg Target.pair plan.target).symm) (congrArg WalSegment.first plan.keeper)
       ready.sealedFiles (originalHistory.symm ▸ pending) (originalHistory.symm ▸ bounded)
   have continued : NativeReadyReadPrefix seen.run next history log reads next :=

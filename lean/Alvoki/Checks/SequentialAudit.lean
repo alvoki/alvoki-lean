@@ -1974,10 +1974,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.replaysSelected
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.retainedFromActualReplay
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_reachedSuccess
+#check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_replacementReached
 #check_axioms Alvoki.Storage.DiskSession.returnedWalUnlinksAndBarrier
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.rootGroupReturned
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.pendingGroupReturned
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.alignedRepairSyncsWithSuffix
+#check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.rememberedPendingReturned
 #check_axioms Alvoki.Storage.SelectedWalReadReturn.classifies
 #check_axioms Alvoki.Storage.WalSegmentRepair.MarkedPreparationReturn.classifies
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_classifies
@@ -2016,6 +2018,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperSuffixHeap.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperFreshStageHeap.returns
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.stageReturns
+#check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.finishedReplacement
+#check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.reachedStage
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.stageKeeps
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.AcquisitionFrames.keeps
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperFreshStageHeap.reachesStageSync
@@ -3943,6 +3947,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.removeStaleStagingWith_keeps
 #check_axioms Alvoki.Storage.withFreshStaging_acquireKeeps
 #check_axioms Alvoki.Storage.withFreshStaging_acquireProvides
+#check_axioms Alvoki.Storage.withFreshStaging_acquireReached
 #check_axioms Alvoki.Storage.writeFreshStagedWith_keeps
 #check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.acquireBinds
 #check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.fresh_effect
@@ -4134,6 +4139,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.AlignedRepairHandleEffects.issuedAttachmentsWithPrune
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.afterAlignedBarriers
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperSettlementHeap.readyStorage
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.afterKeeperReplacement
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperStagedSyncHeap.preservesSelectedStage
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperRenameHeap.preservesSelectedReplacement
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterRepair

@@ -8,6 +8,91 @@ namespace Alvoki.Storage.DiskSession
 open System SyncHandleRouting WalSegmentRepair CheckpointPublication
 open WAL.Boundary (WalInodeImage)
 
+section Replacement
+
+variable {heap : Type}
+
+/-- An already synced staging inode becomes the keeper at the successful
+rename. Loading the cached root carries the selected paths and scratch
+name to the actual directory issue heap. That barrier settles the
+children; the root's own name stays settled in its parent separately. -/
+theorem NativeReadyStorage.afterKeeperReplacement
+    (state : NativeReadyState)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    {stageIssued stageSynced renamed rootIssued reached : heap} {old replacement : Nat}
+    (stageBinding : (observe stageIssued).files.names (state.session.directory.file .stagedWal) = some replacement)
+    (stagedPrefix : visible stageIssued replacement = state.writer.wal.active.bytes)
+    (fileSync : RegularFileSyncEffect replacement [visible stageIssued replacement]
+      (observe stageIssued) (observe stageSynced))
+    (fileSyncVisible : visible stageSynced replacement = visible stageIssued replacement)
+    (oldBinding : (observe stageSynced).files.names
+      (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some old)
+    (distinct : replacement ≠ old)
+    (moved : (observe renamed).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
+      (observe stageSynced).files.names (state.session.directory.file .stagedWal))
+    (detached : (observe renamed).files.names (state.session.directory.file .stagedWal) = none)
+    (renameBytes : (observe renamed).files.bytes replacement = (observe stageSynced).files.bytes replacement)
+    (renameVisible : visible renamed replacement = visible stageSynced replacement)
+    (protectedFiles : NativeReadyProtectedStorage state (observe renamed).files)
+    (marker : (observe renamed).files.Stored (state.session.directory.file .walBoundary)
+      (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64))
+    (rootSettled : ∀ names ∈ (observe renamed).crashNames,
+      names state.session.directory.path = (observe renamed).files.names state.session.directory.path)
+    (load : (observe renamed).Frames (fun path => state.crashPath path ∨ path = state.session.directory.file .stagedWal)
+      (observe rootIssued))
+    (loadVisible : visible rootIssued replacement = visible renamed replacement)
+    (children : WalRootSyncEffect state.session.directory true (observe rootIssued) (observe reached))
+    (parent : (observe rootIssued).Frames (· = state.session.directory.path) (observe reached))
+    (directoryVisible : visible reached replacement = visible rootIssued replacement) :
+    let directory := state.session.directory
+    let keeper := directory.file (.walSegment state.writer.wal.active.first)
+    let scratch := directory.file .stagedWal
+    NativeReadyStorage state (observe reached) ∧
+      (observe reached).files.names keeper = some replacement ∧
+      (observe reached).files.names keeper ≠ (observe stageSynced).files.names keeper ∧
+      (observe reached).files.names scratch = none ∧
+      (∀ names ∈ (observe reached).crashNames, names keeper = some replacement ∧ names scratch = none) ∧
+      ∀ inode, (observe reached).files.names keeper = some inode → visible reached inode = state.writer.wal.active.bytes := by
+  intro directory keeper scratch
+  have rootScope : state.crashPath directory.path := .inl rfl
+  have markerScope : state.crashPath (directory.file .walBoundary) :=
+    NativeReadyState.crashPath_iff_write.mpr (.inl rfl)
+  have keeperScope : state.crashPath keeper := NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
+  have rootAtIssue := (load.weaken (scope := (· = directory.path)) (fun path equal => .inl (equal.symm ▸ rootScope))).settledFrom
+    (fun names member path equal => equal.symm ▸ rootSettled names member)
+  have childFiles : (observe rootIssued).files.Frames
+      (fun path => ∃ file, path = directory.file file) (observe reached).files := by
+    rintro _ ⟨file, rfl⟩
+    exact ⟨children.visible file, fun inode named =>
+      children.bytes _ (.inl rfl) file inode ((children.visible file).trans named)⟩
+  obtain ⟨directoryFrame, settled⟩ := NativeReadyState.framesByDirectory rfl parent childFiles
+    (fun names member => rootAtIssue names member _ rfl) (children.settled rfl)
+  have selected := (load.weaken (fun _ kept => Or.inl kept)).visible.trans directoryFrame
+  have syncedBinding : (observe stageSynced).files.names scratch = some replacement :=
+    (congrFun fileSync.names scratch).trans stageBinding
+  have renamedBinding : (observe renamed).files.names keeper = some replacement := moved.trans syncedBinding
+  have persisted : (observe stageSynced).files.bytes replacement = [state.writer.wal.active.bytes] := by
+    simpa [stagedPrefix] using fileSync.bytes replacement
+  have keeperAtRename : (observe renamed).files.Stored keeper state.writer.wal.active.bytes :=
+    ⟨replacement, renamedBinding, renameBytes.trans persisted⟩
+  have named : (observe reached).files.names keeper = some replacement :=
+    (selected keeper keeperScope).1.trans renamedBinding
+  have gone : (observe reached).files.names scratch = none :=
+    (children.visible .stagedWal).trans ((load.visible scratch (.inr rfl)).1.trans detached)
+  refine ⟨⟨protectedFiles.frame (fun path kept => selected path
+    (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept)))), selected.stored markerScope marker,
+    selected.stored keeperScope keeperAtRename, settled⟩, named, ?_, gone, ?_, ?_⟩
+  · intro unchanged
+    exact distinct (Option.some.inj (named.symm.trans (unchanged.trans oldBinding)))
+  · intro names member
+    exact ⟨(children.settled rfl names member (.walSegment state.writer.wal.active.first)).trans named,
+      (children.settled rfl names member .stagedWal).trans gone⟩
+  · intro inode held
+    obtain rfl := Option.some.inj (held.symm.trans named)
+    exact directoryVisible.trans (loadVisible.trans (renameVisible.trans (fileSyncVisible.trans stagedPrefix)))
+
+end Replacement
+
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout retry.image history} {published : CheckpointPublication.Image}
@@ -264,44 +349,27 @@ theorem NativeLongKeeperSettlementHeap.readyStorage
   have ran := seen.returns
   obtain ⟨_, stagedHandle, stagedLive, _, _⟩ := synced.syncs
   obtain ⟨persisted, stagedContents⟩ := stageEffect synced.synced (by rw [stagedHandle]; exact stagedLive)
-  rw [stagedHandle, stageLive] at persisted
-  change RegularFileSyncEffect replacement [layout.keeper.bytes] (observe synced.consumed) (observe synced.reached) at persisted
-  obtain ⟨staging, _, _, _, keeper, _⟩ := renamed.movesStagedInode
+  rw [stagedHandle] at persisted
+  change RegularFileSyncEffect replacement [visible synced.consumed replacement]
+    (observe synced.consumed) (observe synced.reached) at persisted
+  obtain ⟨staging, oldBinding, differentBindings, detached, keeper, _⟩ := renamed.movesStagedInode
   obtain ⟨movedBytes, movedContents⟩ := renameEffect renamed.renamed staging
   have root := protectedFiles.directoryBound
   rw [sameDirectory, sameCensus, sameSlot, finish.sameCensusObjects] at root
   obtain ⟨children, parent, keptContents⟩ := directoryEffect seen.synced
     (by rw [ran.directoryAtIssue]; exact ran.directoryLive)
     (by rw [ran.directoryAtIssue]; exact root)
-  have childFiles : (observe renamed.reached).files.Frames
-      (fun path => ∃ file, path = directory.file file) (observe seen.reached).files := by
-    rintro _ ⟨file, rfl⟩
-    exact ⟨children.visible file, fun inode named =>
-      children.bytes _ (.inl rfl) file inode ((children.visible file).trans named)⟩
-  obtain ⟨wholeFrame, settled⟩ := NativeReadyState.framesByDirectory sameDirectory parent childFiles rootSettled
-    (by simpa only [sameDirectory] using children.settled rfl)
-  have activeBytes := sameBytes.symm
-  have keeperAtRename : (observe renamed.reached).files.Stored
-      (state.session.directory.file (.walSegment state.writer.wal.active.first)) state.writer.wal.active.bytes := by
-    refine ⟨replacement, ?_, ?_⟩
-    · rw [sameDirectory, sameFirst]
-      exact keeper
-    · have bytes : (observe synced.reached).files.bytes replacement = [layout.keeper.bytes] := by
-        simpa using persisted.bytes replacement
-      exact movedBytes.trans (bytes.trans (congrArg (fun bytes => [bytes]) activeBytes))
-  have protectedFrame (path) (scope : state.writeFramePath path) :=
-    wholeFrame path (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr scope)))
-  have markerPath : state.crashPath (state.session.directory.file .walBoundary) :=
-    NativeReadyState.crashPath_iff_write.mpr (.inl rfl)
-  have keeperPath : state.crashPath (state.session.directory.file (.walSegment state.writer.wal.active.first)) :=
-    NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
-  refine ⟨(congrArg (fun observed => observed.2.1) ran.final).trans sameCensus.symm, ⟨protectedFiles.frame protectedFrame, wholeFrame.stored markerPath marker,
-    wholeFrame.stored keeperPath keeperAtRename, settled⟩, ?_⟩
-  intro inode bound
-  have sameInode : (observe seen.reached).files.names (directory.file (.walSegment layout.keeper.first)) = some replacement :=
-    ran.keeperBound
-  rw [sameDirectory, sameFirst, sameInode] at bound
-  obtain rfl := Option.some.inj bound
-  exact keptContents.trans (movedContents.trans (stagedContents.trans (stageLive.trans activeBytes)))
+  have sourceAtIssue := (congrFun persisted.names (directory.file .stagedWal)).symm.trans staging
+  have distinct : replacement ≠ finish.rename.original.active := by
+    intro same
+    exact differentBindings (staging.trans ((congrArg some same).trans oldBinding.symm))
+  have ⟨ready, _, _, _, _, live⟩ := NativeReadyStorage.afterKeeperReplacement state observe visible
+    (by simpa only [sameDirectory] using sourceAtIssue) (stageLive.trans sameBytes.symm)
+    persisted stagedContents
+    (by rw [sameDirectory, sameFirst]; exact oldBinding) distinct
+    (by rw [sameDirectory, sameFirst]; exact keeper.trans staging.symm)
+    (by rw [sameDirectory]; exact detached) movedBytes movedContents protectedFiles marker rootSettled
+    (.refl _ _) rfl (sameDirectory.symm ▸ children) parent keptContents
+  exact ⟨(congrArg (fun observed => observed.2.1) ran.final).trans sameCensus.symm, ready, live⟩
 
 end Alvoki.Storage.DiskSession

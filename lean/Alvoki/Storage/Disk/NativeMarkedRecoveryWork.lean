@@ -175,7 +175,7 @@ theorem installsWithWork
       countBoundedRepairCallbacks directory layout.boundedPlan reported.reads.wal.keeper.calls.metadata.byteSize.toNat =
         .ok repairs ∧ repairs ≤ retry.image.later.visible.length + 6 := by
   obtain ⟨session, final, returned, pair, _, _, installed⟩ := reported.finish.installsFromCensus reported.chronology
-    reported.markerFound prepared following accepted ordered
+    reported.markerFound prepared.newer following accepted ordered
   obtain ⟨opened, read, closed, _⟩ := reported.directoryWork_exact
   obtain ⟨names, repairs⟩ := reported.repairWork_exact prepared
   refine ⟨session, final, _, returned, pair, installed,

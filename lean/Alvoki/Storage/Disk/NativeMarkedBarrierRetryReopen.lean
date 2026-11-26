@@ -127,7 +127,7 @@ theorem reopensWithWork
   have following := seed.following
   have kept := ready.preserves.2.2.1.trans seed.kept
   obtain ⟨state, started, cache, census, owner, directorySlot, active, durable, checkpointEq, path, target, seals, _, _, phaseFresh, sessionFresh⟩ :=
-    opened.finish.startsNativeReadPrefix opened.chronology opened.markerFound prepared following accepted seed.ordered
+    opened.finish.startsNativeReadPrefix opened.chronology opened.markerFound prepared.newer following accepted seed.ordered
       seed.readLayout seed.valid seed.spans (seed.active.trans (congrArg Target.pair (ready.target seed)).symm)
       seed.keeper kept pending bounded
   obtain ⟨session, final, requests, returned, _, installed, chunks, listed, counted, repairs⟩ :=

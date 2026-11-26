@@ -146,7 +146,7 @@ theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
   }
   obtain ⟨next, seeded, cache, census, owner, slot, _, durable, checkpoint, directory, target, seals, _, _, freshRefs⟩ :=
     opening.finish.startsNativeReadPrefix opening.chronology opening.markerFound
-      prepared following accepted ordered walLayout walValid spans active keeper kept pending bounded
+      prepared.newer following accepted ordered walLayout walValid spans active keeper kept pending bounded
   let position : NativeReadPosition history log :=
     ⟨opening.finish.run opening.chronology, next, next, reads, seeded⟩
   obtain ⟨measured, installed, cacheOpen, makeCache, action, source, cacheUses, ran⟩ :=

@@ -379,7 +379,7 @@ theorem NativeReadyReadPrefix.reopensCheckpointDirectoryError
   have following := opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors
   obtain ⟨next, seeded, nextCache, nextCensus, nextOwner, nextDirectory, nextPair, nextRuns,
     nextCheckpoint, nextPath, nextTarget, nextKept, _, _, phaseFresh, sessionFresh⟩ :=
-    finish.startsNativeReadPrefix seen.chronology opening.markerFound plan.prepared following plan.accepted
+    finish.startsNativeReadPrefix seen.chronology opening.markerFound plan.prepared.newer following plan.accepted
       ready.resumed.ordered plan.walLayout plan.walValid ready.spans pair (congrArg WalSegment.first plan.keeper) kept
       (exactHistory.symm ▸ pending) (exactHistory.symm ▸ prior.readsBounded)
   have continued : NativeReadyReadPrefix seen.run next history log reads next := exactHistory ▸ seeded

@@ -314,7 +314,7 @@ theorem reopens
   have following := previous.following
   obtain ⟨state, started, _, _, _, _, _, durable, sameCheckpoint, path, target, _, _, _, _, _⟩ :=
     opened.opening.finish.startsNativeReadPrefix opened.opening.chronology opened.opening.markerFound
-      prepared following accepted seed.ordered seed.readLayout seed.valid seed.spans
+      prepared.newer following accepted seed.ordered seed.readLayout seed.valid seed.spans
       (by rw [sameTarget, ← previous.original]; exact seed.active)
       (by rw [sameTarget, ← previous.original]; exact seed.keeper)
       ((previous.keepsSealed drops).trans seed.kept) pending bounded

@@ -219,6 +219,39 @@ theorem LongKeeperStageCallbacks.stageReturns (calls : LongKeeperStageCallbacks 
   simp only [Bind.bind, EStateM.bind, acquired, written, flushed, Pure.pure, EStateM.pure]
   exact recorded
 
+/-- A successful staging callback exposes the obtained descriptor and
+the adjoining write, flush and pending insertion returns. -/
+theorem LongKeeperStageCallbacks.reachedStage (calls : LongKeeperStageCallbacks heap)
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
+    {modifyPending : IO.Ref (List (FilePath × IO.FS.Handle)) →
+      (List (FilePath × IO.FS.Handle) → List (FilePath × IO.FS.Handle)) → EStateM IO.Error heap Unit}
+    {path : FilePath} {bytes : ByteArray} {entry reached : heap}
+    (returned : calls.stage pending modifyPending path bytes entry = .ok () reached) :
+    ∃ (descriptor : IO.FS.Handle) (opened written flushed : heap),
+      calls.acquire path entry = .ok descriptor opened ∧
+      calls.write descriptor bytes opened = .ok () written ∧
+      calls.flush descriptor written = .ok () flushed ∧
+      modifyPending pending (pushPending path descriptor) flushed = .ok () reached := by
+  unfold stage writeFreshStagedWith at returned
+  rw [withFreshStaging_bind] at returned
+  change ((calls.acquire path >>= fun file => do
+    calls.write file bytes
+    calls.flush file
+    pure file) >>= fun file => modifyPending pending (pushPending path file)) entry = _ at returned
+  cases acquired : calls.acquire path entry with
+  | error cause failed => simp [Bind.bind, EStateM.bind, acquired] at returned
+  | ok descriptor opened =>
+    cases wrote : calls.write descriptor bytes opened with
+    | error cause failed => simp [Bind.bind, EStateM.bind, acquired, wrote] at returned
+    | ok value written =>
+      cases value
+      cases didFlush : calls.flush descriptor written with
+      | error cause failed => simp [Bind.bind, EStateM.bind, acquired, wrote, didFlush] at returned
+      | ok value flushed =>
+        cases value
+        exact ⟨descriptor, opened, written, flushed, rfl, wrote, didFlush,
+          by simpa only [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, acquired, wrote, didFlush] using returned⟩
+
 section StageFrames
 
 open NativeFileEffectProjection (reached)

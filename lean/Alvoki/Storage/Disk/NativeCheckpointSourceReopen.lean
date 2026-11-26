@@ -225,7 +225,7 @@ theorem RawAlignedCheckpointReopenEffects.returnsSelectedFromFixedInterpreter
       pending := pending
       bounded := bounded }
   obtain ⟨state, seeded, cache, _, owner, slot, _, durableAtReturn, selectedAtReturn, _, targetAtReturn, _, retainedWal, exactReplay, _, _⟩ :=
-    finish.startsNativeReadPrefix chronology opening.markerFound prepared following accepted ordered walLayout walValid
+    finish.startsNativeReadPrefix chronology opening.markerFound prepared.newer following accepted ordered walLayout walValid
       spans active keeper kept pending bounded
   let next : NativeReadPosition history log := ⟨finish.run chronology, state, state, recorded, seeded⟩
   obtain ⟨returned⟩ := raw.installsAtReportedPosition (report := report) next source.remove write source.rename

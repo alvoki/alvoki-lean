@@ -95,7 +95,7 @@ private theorem NativeCloseAlignedReads.replayTable
     (plan.prepared.pair.trans (congrArg Target.pair plan.target))
   have accepted := manifest.symm ▸ ready.resumed.accepted
   obtain ⟨session, final, returned, _, _, _, installed⟩ := finish.installsFromCensus seen.chronology opening.markerFound
-    plan.prepared (opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors)
+    plan.prepared.newer (opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors)
     accepted ready.resumed.ordered
   obtain ⟨reopened, loaded, _, installedSession, installedFinal, actual, _, _, phase, _, _, _, _, _, _, _, _, _,
     _, loadedSelected, replayed, _⟩ := installed

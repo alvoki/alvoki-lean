@@ -39,7 +39,7 @@ theorem CapturedKeeperFinish.startsNativeReadPrefix
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
-    (prepared : Prepared retry.image layout.target layout.plan)
+    (laterValid : retry.image.later.Beyond layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
     (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
@@ -61,7 +61,7 @@ theorem CapturedKeeperFinish.startsNativeReadPrefix
       recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok state.writer.installed.table ∧
       state.session.phaseRef ∉ calls.liveRefs ∧ state.session.sessionRef ∉ calls.liveRefs := by
   obtain ⟨session, final, returned, pair, ownerLive, directoryLive, installed⟩ :=
-    finish.installsFromCensus chronology marker prepared following accepted ordered
+    finish.installsFromCensus chronology marker laterValid following accepted ordered
   obtain ⟨_, appendReady⟩ := installed.readyForAppend accepted ordered
   obtain ⟨sameSession, sameFinal, writer, indexed, path, description, phase, files, owners, retainedWal, target,
     exactHistory, _, durable, ready⟩ := appendReady.writerRetained walLayout walValid spans active keeper kept

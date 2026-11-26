@@ -180,7 +180,7 @@ theorem returnsReady (report : NativeOpenSuccessReports input directory history 
   | marked observed =>
     let opening := observed.opening
     obtain ⟨state, seed, cache, census, owner, directorySlot, _, _, _, path, _, _, _, _, phaseFresh, sessionFresh⟩ :=
-      opening.finish.startsNativeReadPrefix opening.chronology opening.markerFound observed.prepared
+      opening.finish.startsNativeReadPrefix opening.chronology opening.markerFound observed.prepared.newer
         observed.following observed.accepted observed.ordered observed.walLayout observed.walValid observed.spans
         observed.active observed.keeper observed.kept observed.pending observed.bounded
     have returned := seed.frames.1

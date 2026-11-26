@@ -145,6 +145,64 @@ theorem returnedWalUnlinksAndBarrier {heap : Type}
       cases value
       simpa only [status] using returned
 
+/-- A longer keeper reaches the common prune pass and then replaces the
+old keeper with exactly its selected prefix. These are issue and return
+heaps of the literal successful schedule. -/
+theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_replacementReached {heap : Type}
+    (directory : DiskDirectory) (plan : Plan) (physicalSize : Nat)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {entry reached : heap}
+    (longer : plan.keeperSize < physicalSize)
+    (returned : finishBoundedMarkedOpen directory plan physicalSize remove write sync rename entry = .ok () reached) :
+    ∃ authorized unlinked pruned staged synced renamed,
+      sync #[directory.path] entry = .ok () authorized ∧
+      ((plan.newer.map Step.unlink).forM (performPaths directory plan remove throw write sync rename)) authorized =
+        .ok () unlinked ∧
+      sync #[directory.path] unlinked = .ok () pruned ∧
+      write (directory.file .stagedWal) (plan.keeperBytes.extract 0 plan.keeperSize) pruned = .ok () staged ∧
+      sync #[directory.file .stagedWal] staged = .ok () synced ∧
+      rename (directory.file .stagedWal) (directory.file (.walSegment plan.keeper)) synced = .ok () renamed ∧
+      sync #[directory.path] renamed = .ok () reached := by
+  obtain ⟨_, _, _, authorized, authorizedRoot, tail⟩ :=
+    finishBoundedMarkedOpen_reachedSuccess directory plan physicalSize remove write sync rename returned
+  have different : physicalSize ≠ plan.keeperSize := fun same => Nat.lt_irrefl _ (same ▸ longer)
+  have slow : (plan.newer.isEmpty && (physicalSize == plan.keeperSize)) = false := by
+    simp [different]
+  simp only [slow, Bool.false_eq_true, ite_false, ite_eq_left longer] at tail
+  obtain ⟨pruned, prune, replaced⟩ := tail
+  obtain ⟨unlinked, unlinks, pruneBarrier⟩ :=
+    returnedWalUnlinksAndBarrier directory plan remove write sync rename prune
+  simp only [Publication.steps, List.map_cons, List.map_nil, List.forM_eq_forM, List.forM_cons,
+    List.forM_nil, performPaths, Publication.performReplacement] at replaced
+  change (do
+    write (directory.file .stagedWal) (plan.keeperBytes.extract 0 plan.keeperSize)
+    sync #[directory.file .stagedWal]
+    rename (directory.file .stagedWal) (directory.file (.walSegment plan.keeper))
+    sync #[directory.path]
+    pure () : EStateM IO.Error heap Unit) pruned = .ok () reached at replaced
+  cases stagedCall : write (directory.file .stagedWal) (plan.keeperBytes.extract 0 plan.keeperSize) pruned with
+  | error cause failed => simp [Bind.bind, EStateM.bind, stagedCall] at replaced
+  | ok value staged =>
+    cases value
+    cases stageBarrier : sync #[directory.file .stagedWal] staged with
+    | error cause failed => simp [Bind.bind, EStateM.bind, stagedCall, stageBarrier] at replaced
+    | ok value synced =>
+      cases value
+      cases renameCall : rename (directory.file .stagedWal) (directory.file (.walSegment plan.keeper)) synced with
+      | error cause failed => simp [Bind.bind, EStateM.bind, stagedCall, stageBarrier, renameCall] at replaced
+      | ok value renamed =>
+        cases value
+        refine ⟨authorized, unlinked, pruned, staged, synced, renamed, authorizedRoot, unlinks, pruneBarrier,
+          stagedCall, stageBarrier, renameCall, ?_⟩
+        simp only [Bind.bind, EStateM.bind, stagedCall, stageBarrier, renameCall, Pure.pure, EStateM.pure] at replaced
+        cases final : sync #[directory.path] renamed with
+        | error cause failed => simp [final] at replaced
+        | ok value after =>
+          cases value
+          simpa only [final] using replaced
+
 /-- Each selected name is absent after the actual checked unlink pass.
 Only paths in the caller's canonical scope need the off-target frame. -/
 theorem namesOfReturnedWalUnlinks {heap : Type}
@@ -251,6 +309,31 @@ theorem syncsPendingKeeper {dir path cached active pending before consumed after
     calls.syncPaths dir cached active pending #[path] before = .ok () after := by
   rw [syncPaths, SyncPathGroup.run_single]
   simp [syncWithHandles, Bind.bind, EStateM.bind, separate, loaded, cleared, synced, Pure.pure, EStateM.pure]
+
+/-- A pending insertion selects the same handle even with other entries
+in the cell. The actual singleton sync consumes all matches before fsync. -/
+theorem rememberedPendingReturned {image : Type} (view : OpenCloseHeapView heap image)
+    {directory path : FilePath}
+    {cached : IO.Ref (Option IO.FS.Handle)} {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {before reached : heap}
+    {handle : IO.FS.Handle} {previous : List (FilePath × IO.FS.Handle)}
+    (separate : path ≠ directory)
+    (remembered : view.pending before pending = pushPending path handle previous)
+    (readsPending : ∀ {entries loaded}, calls.getPending pending before = .ok entries loaded →
+      entries = view.pending before pending)
+    (returned : calls.syncPaths directory cached active pending #[path] before = .ok () reached) :
+    ∃ (entries : List (FilePath × IO.FS.Handle)) (loaded consumed : heap),
+      calls.getPending pending before = .ok entries loaded ∧
+      entries.find? (fun item => item.1 == path) = some (path, handle) ∧
+      calls.setPending pending (entries.filter (fun item => item.1 != path)) loaded = .ok () consumed ∧
+      calls.sync handle consumed = .ok () reached := by
+  let syncer : RawSyncCalls heap :=
+    ⟨⟨calls.getDirectory, calls.getPending, calls.setPending, calls.getActive, calls.openRead⟩, calls.sync⟩
+  have selects {entries loaded} (read : syncer.readPending pending before = .ok entries loaded) :
+      entries.find? (fun item => item.1 == path) = some (path, handle) := by
+    rw [readsPending read, remembered]
+    simp [pushPending]
+  exact syncer.pendingGroupReturned separate selects returned
 
 /-- Local cache effects needed to carry the original keeper through
 the reached unlink pass and its directory barrier. -/
@@ -366,13 +449,9 @@ theorem alignedRepairSyncsWithSuffix {image : Type} (view : OpenCloseHeapView he
       rw [ite_eq_right empty]
       exact ⟨unlinked, suffixIssued, removed, loadedSuffix, syncedSuffix⟩
   obtain ⟨keeperEntry, pruned, pendingAtKeeper, keeperBarrier⟩ := tail
-  change syncer.group directory.path cached active pending #[path] keeperEntry = .ok () reached at keeperBarrier
-  have selects {entries loaded} (read : syncer.readPending pending keeperEntry = .ok entries loaded) :
-      entries.find? (fun item => item.1 == path) = some (path, keeper) := by
-    rw [readsPending read, pendingAtKeeper, recordsKeeper remembered]
-    simp [path, pushPending]
   obtain ⟨entries, loaded, consumed, got, chosen, cleared, synced⟩ :=
-    syncer.pendingGroupReturned (file_ne_directory directory (.walSegment plan.keeper)) selects keeperBarrier
+    calls.rememberedPendingReturned view (file_ne_directory directory (.walSegment plan.keeper))
+      (pendingAtKeeper.trans (recordsKeeper remembered)) readsPending keeperBarrier
   exact ⟨rootIssued, authorized, keeperEntry, entries, loaded, consumed, loadedRoot, syncedRoot, pruned, got, chosen,
     cleared, synced⟩
 

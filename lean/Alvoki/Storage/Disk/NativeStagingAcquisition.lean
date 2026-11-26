@@ -72,6 +72,41 @@ theorem withFreshStaging_acquireKeeps {handle : Type}
     exact keepsAfterBind frame compose _ _ before (createKeeps returned detached) (fun {_ final} _ => identity final)
   next => exact identity after
 
+/-- Recover the exact exclusive create and, if reached, the prior
+EEXIST and detachment calls from a successful staging acquisition. -/
+theorem withFreshStaging_acquireReached {handle : Type}
+    (tryCreate : FilePath → EStateM IO.Error heap (Except IO.Error handle))
+    (detach : FilePath → EStateM IO.Error heap Unit) (create : FilePath → EStateM IO.Error heap handle)
+    (path : FilePath)
+    {entry opened : heap} {file : handle}
+    (acquired : withFreshStaging tryCreate detach create path pure entry = .ok file opened) :
+    tryCreate path entry = .ok (.ok file) opened ∨
+    ∃ name details conflict before,
+      tryCreate path entry = .ok (.error (.alreadyExists name 17 details)) conflict ∧
+      detach path conflict = .ok () before ∧ create path before = .ok file opened := by
+  unfold withFreshStaging at acquired
+  cases tried : tryCreate path entry with
+  | error => simp [Bind.bind, EStateM.bind, tried] at acquired
+  | ok initial reached =>
+    simp only [Bind.bind, EStateM.bind, tried] at acquired
+    split at acquired
+    next selected =>
+      simp [Pure.pure] at acquired
+      obtain ⟨rfl, rfl⟩ := acquired
+      exact .inl rfl
+    next =>
+      cases detached : detach path reached with
+      | error => simp [EStateM.bind, detached] at acquired
+      | ok value atRetry =>
+        cases value
+        cases created : create path atRetry with
+        | error => simp [EStateM.bind, detached, created] at acquired
+        | ok selected atOpen =>
+          simp [EStateM.bind, detached, created, Pure.pure] at acquired
+          obtain ⟨rfl, rfl⟩ := acquired
+          exact .inr ⟨_, _, _, _, rfl, detached, created⟩
+    next => simp [EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at acquired
+
 /-- Invert a successful acquisition to the exclusive create that
 returned that handle. Only an EEXIST result can reach the retry. -/
 theorem withFreshStaging_acquireProvides {handle : Type}
@@ -85,28 +120,9 @@ theorem withFreshStaging_acquireProvides {handle : Type}
       observes file reached)
     (retry : ∀ {file before reached}, create path before = .ok file reached →
       observes file reached) : observes file opened := by
-  unfold withFreshStaging at acquired
-  cases tried : tryCreate path entry with
-  | error => simp [Bind.bind, EStateM.bind, tried] at acquired
-  | ok initial reached =>
-    simp only [Bind.bind, EStateM.bind, tried] at acquired
-    split at acquired
-    next selected =>
-      simp [Pure.pure] at acquired
-      obtain ⟨rfl, rfl⟩ := acquired
-      exact first tried
-    next =>
-      cases detached : detach path reached with
-      | error => simp [EStateM.bind, detached] at acquired
-      | ok value atRetry =>
-        cases value
-        cases created : create path atRetry with
-        | error => simp [EStateM.bind, detached, created] at acquired
-        | ok selected atOpen =>
-          simp [EStateM.bind, detached, created, Pure.pure] at acquired
-          obtain ⟨rfl, rfl⟩ := acquired
-          exact retry created
-    next => simp [EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at acquired
+  rcases withFreshStaging_acquireReached tryCreate detach create path acquired with tried | ⟨_, _, _, _, _, _, created⟩
+  · exact first tried
+  · exact retry created
 
 /-- Use the acquired description in the supplied continuation. -/
 theorem withFreshStaging_bind {handle α : Type}

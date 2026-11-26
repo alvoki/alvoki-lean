@@ -409,7 +409,7 @@ private theorem NativeReadPosition.reopensRotationSurvivor (current : NativeRead
   have bounded : ∀ read ∈ reads, read.BoundedBy (crash.writer valid).history.length :=
     Eq.mpr (congrArg (fun history : List WAL.Write => ∀ read ∈ reads, read.BoundedBy history.length) sameHistory) reached.bounded
   obtain ⟨next, seed, cache, census, owner, directorySlot, nextPair, durable, checkpoint, path, target, nextKept, _, _,
-    phaseFresh, sessionFresh⟩ := finish.startsNativeReadPrefix seen.chronology opening.markerFound plan.prepared
+    phaseFresh, sessionFresh⟩ := finish.startsNativeReadPrefix seen.chronology opening.markerFound plan.prepared.newer
       following accepted ready.resumed.ordered ready.layout ready.valid ready.spans
       (ready.walPair.trans (congrArg Target.pair plan.target).symm) (congrArg WalSegment.first plan.keeper) kept
       pending bounded

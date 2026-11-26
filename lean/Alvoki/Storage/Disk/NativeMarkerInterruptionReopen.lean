@@ -466,7 +466,7 @@ theorem NativeReadPosition.recoversInterruptedMarkerFrom (current : NativeReadPo
   obtain ⟨pending, bounded⟩ := replay.appendUncertain current.readPrefix.readsBounded allowed ordered
   obtain ⟨reached, seed, cache, census, owner, directorySlot, pair, durable, checkpointEq, path, _, _, _, _,
     phaseFresh, sessionFresh⟩ :=
-    seen.opening.finish.startsNativeReadPrefix seen.opening.chronology seen.opening.markerFound repair
+    seen.opening.finish.startsNativeReadPrefix seen.opening.chronology seen.opening.markerFound repair.newer
       (seen.opening.reads.walReads.selectedAfterWatermark offsets descriptors) accepted ordered walLayout walValid
       ready.spans repair.pair first kept pending bounded
   let retained := if crash.usesNewMarker then prepared.batch else []

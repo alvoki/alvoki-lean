@@ -4,6 +4,64 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
 
+/-- Project the literal longer-keeper success to the descriptor opened
+for staging, its actual pending-entry fsync, the rename, and the cached
+root's last barrier. Authorization and pruning retain their own heaps. -/
+theorem LongKeeperStageCallbacks.finishedReplacement {heap image : Type}
+    (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
+    (view : OpenCloseHeapView heap image)
+    (directory : DiskDirectory) (plan : Plan) (physicalSize : Nat)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    {entry reached : heap}
+    (longer : plan.keeperSize < physicalSize)
+    (records : ∀ {file before after},
+      calls.modifyPending pending (pushPending (directory.file .stagedWal) file) before = .ok () after →
+      view.pending after pending = pushPending (directory.file .stagedWal) file (view.pending before pending))
+    (readsPending : ∀ {before entries loaded}, calls.getPending pending before = .ok entries loaded →
+      entries = view.pending before pending)
+    (readsDirectory : ∀ {before result issued}, calls.getDirectory cached before = .ok result issued →
+      result = view.directory before cached)
+    (returned : finishBoundedMarkedOpen directory plan physicalSize remove
+      (stage.stage pending calls.modifyPending) (calls.syncPaths directory.path cached active pending) rename entry =
+      .ok () reached) :
+    let write := stage.stage pending calls.modifyPending
+    let sync := calls.syncPaths directory.path cached active pending
+    let path := directory.file .stagedWal
+    let bytes := plan.keeperBytes.extract 0 plan.keeperSize
+    ∃ (authorized unlinked pruned opened written flushed staged loaded consumed synced renamed rootIssued : heap)
+      (file root : IO.FS.Handle) (entries : List (FilePath × IO.FS.Handle)),
+      sync #[directory.path] entry = .ok () authorized ∧
+      ((plan.newer.map Step.unlink).forM (performPaths directory plan remove throw write sync rename)) authorized =
+        .ok () unlinked ∧
+      sync #[directory.path] unlinked = .ok () pruned ∧
+      stage.acquire path pruned = .ok file opened ∧
+      stage.write file bytes opened = .ok () written ∧ stage.flush file written = .ok () flushed ∧
+      calls.modifyPending pending (pushPending path file) flushed = .ok () staged ∧
+      calls.getPending pending staged = .ok entries loaded ∧
+      entries.find? (fun item => item.1 == path) = some (path, file) ∧
+      calls.setPending pending (entries.filter (fun item => item.1 != path)) loaded = .ok () consumed ∧
+      calls.sync file consumed = .ok () synced ∧
+      rename path (directory.file (.walSegment plan.keeper)) synced = .ok () renamed ∧
+      calls.getDirectory cached renamed = .ok (some root) rootIssued ∧
+      view.directory renamed cached = some root ∧ calls.sync root rootIssued = .ok () reached := by
+  intro write sync path bytes
+  obtain ⟨authorized, unlinked, pruned, staged, synced, renamed, firstRoot, unlinks, prunedRoot,
+    wroteStage, syncedStage, moved, finalRoot⟩ :=
+    finishBoundedMarkedOpen_replacementReached directory plan physicalSize remove write sync rename longer returned
+  obtain ⟨file, opened, written, flushed, acquired, wrote, didFlush, recorded⟩ := stage.reachedStage wroteStage
+  obtain ⟨entries, loaded, consumed, got, selected, cleared, syncedFile⟩ :=
+    calls.rememberedPendingReturned view (file_ne_directory directory .stagedWal)
+      (records recorded) readsPending syncedStage
+  let syncer : RawSyncCalls heap :=
+    ⟨⟨calls.getDirectory, calls.getPending, calls.setPending, calls.getActive, calls.openRead⟩, calls.sync⟩
+  obtain ⟨root, rootIssued, readRoot, syncedRoot⟩ := syncer.rootGroupReturned finalRoot
+  exact ⟨authorized, unlinked, pruned, opened, written, flushed, staged, loaded, consumed, synced, renamed,
+    rootIssued, file, root, entries, firstRoot, unlinks, prunedRoot, acquired, wrote, didFlush, recorded,
+    got, selected, cleared, syncedFile, moved, readRoot, (readsDirectory readRoot).symm, syncedRoot⟩
+
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout retry.image history} {published : CheckpointPublication.Image}

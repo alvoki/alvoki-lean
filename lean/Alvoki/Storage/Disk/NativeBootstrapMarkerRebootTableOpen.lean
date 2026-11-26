@@ -130,7 +130,7 @@ private theorem exactEmptyPhase (opening : OpenObservation (input := input) sele
     session.phase = .ready ⟨.empty, 0, 0, 0⟩ := by
   let report := selection.markedReport opening
   obtain ⟨installed, final, ran, _, _, _, normalized⟩ := opening.finish.installsFromCensus opening.chronology
-    opening.markerFound report.prepared report.following report.accepted report.ordered
+    opening.markerFound report.prepared.newer report.following report.accepted report.ordered
   obtain ⟨opened, checkpoint, _, result, reached, exactResult, _, _, phase,
     _, _, _, _, _, _, _, _, _, _, selected, replay, generation, bytes, keeperFirst, _⟩ := normalized
   have sameSession : session = result :=

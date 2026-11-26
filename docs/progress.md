@@ -38,6 +38,19 @@ and storage effects.
 [Window at reboot](../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean) ·
 [Literal returned table](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
+For a longer keeper, a successful bounded finish identifies the temporary
+descriptor used for writing, flushing and file fsync, followed by the
+rename and final cached directory fsync. The existing physical installer
+now uses a shared proof that these effects publish the replacement inode
+with the selected bytes and leave the temporary name absent in every
+joint crash map. Successful marked installation and its initial read
+state now require only the later-name bound from the old preparation
+evidence. The completed replacement supplies its own durable keeper.
+The remaining literal-open step is to derive the physical effects at
+those callback heaps and install that writer on the returned references.
+[Replacement callbacks](../lean/Alvoki/Storage/Disk/NativeLongKeeperSettlementHeap.lean) ·
+[Replacement storage](../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
+
 The grouped and late write proofs now derive the cache entry of their
 literal aligned reopen. The actual path and no-follow lookups supply
 their reached heaps. The selected retry already binds the existing

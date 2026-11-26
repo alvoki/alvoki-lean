@@ -216,7 +216,7 @@ theorem NativeReadPosition.recoversFirstAppendAfterExitFrom (current : NativeRea
   have pairWal := valid.retained.walPair.trans (congrArg Target.pair chosen.target).symm
   obtain ⟨after, seed, cache, census, owner, directorySlot, active, durable, checkpoint, path, target, kept, _, _,
     phaseFresh, sessionFresh⟩ := openReport.finish.startsNativeReadPrefix openReport.chronology
-      openReport.markerFound chosen.prepared
+      openReport.markerFound chosen.prepared.newer
       (openReport.reads.walReads.selectedAfterWatermark chosen.offsets chosen.descriptors)
       accepted valid.retained.resumed.ordered valid.retained.layout valid.retained.valid valid.retained.spans
       pairWal chosen.first (chosen.kept.trans valid.retained.sealedFiles) replay bounded

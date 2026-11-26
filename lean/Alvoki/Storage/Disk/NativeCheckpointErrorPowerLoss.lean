@@ -333,7 +333,7 @@ theorem NativeReadPosition.reopensCheckpointSurvivorWith (current : NativeReadPo
   have following := opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors
   obtain ⟨state, seeded, cache, census, owner, directorySlot, settled, runs, checkpoint, directory, target,
     seals, _, _, phaseFresh, sessionFresh⟩ :=
-    finish.startsNativeReadPrefix seen.chronology opening.markerFound plan.prepared following plan.accepted
+    finish.startsNativeReadPrefix seen.chronology opening.markerFound plan.prepared.newer following plan.accepted
       ready.resumed.ordered layout retained ready.spans pair (congrArg WalSegment.first plan.keeper) kept
       pending bounded
   have continued : NativeReadyReadPrefix seen.run state history log current.reads state :=

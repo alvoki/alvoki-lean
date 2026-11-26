@@ -387,7 +387,7 @@ theorem NativeReadPosition.reopensCheckpointManifestRenameWith (current : Native
   have following := opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors
   obtain ⟨state, seeded, cache, census, owner, directorySlot, settled, runs, checkpoint, directory, target,
     seals, _, _, phaseFresh, sessionFresh⟩ :=
-    finish.startsNativeReadPrefix seen.chronology opening.markerFound plan.prepared following plan.accepted
+    finish.startsNativeReadPrefix seen.chronology opening.markerFound plan.prepared.newer following plan.accepted
       valid.retained.resumed.ordered layout plan.walValid valid.retained.spans pair (congrArg WalSegment.first plan.keeper) kept
       pending bounded
   have continued : NativeReadyReadPrefix seen.run state history log current.reads state :=

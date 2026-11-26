@@ -160,7 +160,7 @@ theorem NativeReadyReadPrefix.reopensReleasedUncertainWriteFrom
   obtain ⟨pending, bounded⟩ := priorReplay.appendUncertain prior.readsBounded allowed plan.ordered
   obtain ⟨next, seed, cacheIdentity, census, owner, directorySlot, pair, durable, checkpoint, path, _, _, _, _,
     phaseFresh, sessionFresh⟩ :=
-    report.finish.startsNativeReadPrefix report.chronology report.markerFound plan.prepared
+    report.finish.startsNativeReadPrefix report.chronology report.markerFound plan.prepared.newer
       (report.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors) plan.accepted plan.ordered
       plan.walLayout plan.walValid valid.retained.spans plan.prepared.pair plan.first plan.kept pending bounded
   exact ⟨next, allowed, plan.marker, seed.frames.1, path, fun same => phaseFresh (same.symm ▸ oldPhaseRef),

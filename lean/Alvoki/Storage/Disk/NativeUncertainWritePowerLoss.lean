@@ -144,7 +144,7 @@ theorem NativeReadPosition.recoversUncertainWriteAfterPowerLoss (current : Nativ
   obtain ⟨pending, bounded⟩ := replay.appendUncertain current.readPrefix.readsBounded allowed plan.ordered
   obtain ⟨reached, seed, cacheEq, censusEq, owner, directorySlot, pair, durable, checkpoint, directory, _, _, _, _,
     phaseFresh, sessionFresh⟩ :=
-    seen.opening.finish.startsNativeReadPrefix seen.opening.chronology seen.opening.markerFound plan.prepared
+    seen.opening.finish.startsNativeReadPrefix seen.opening.chronology seen.opening.markerFound plan.prepared.newer
       (seen.opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors) plan.accepted plan.ordered
       plan.walLayout plan.walValid valid.retained.spans plan.prepared.pair plan.first plan.kept pending bounded
   obtain ⟨retained, whole, chosen⟩ : ∃ retained : List WAL.Write,

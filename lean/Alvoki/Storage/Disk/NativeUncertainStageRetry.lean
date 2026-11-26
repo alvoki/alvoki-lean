@@ -254,7 +254,7 @@ theorem NativePendingWrite.reopensAfterOldMarkerStageError
   have readBounds : ∀ read ∈ before.reads, read.BoundedBy before.state.writer.history.length :=
     Eq.mpr (congrArg (fun rows : List WAL.Write => ∀ read ∈ before.reads, read.BoundedBy rows.length) historyEq) bounded
   obtain ⟨state, started, cache, census, owner, slot, active, durable, checkpoint, directoryPath, _, _, _, _, _, _⟩ :=
-    next.opening.finish.startsNativeReadPrefix next.opening.chronology next.opening.markerFound (disposal.prepared seed.prepared)
+    next.opening.finish.startsNativeReadPrefix next.opening.chronology next.opening.markerFound (disposal.prepared seed.prepared).newer
       seed.following accepted seed.ordered seed.readLayout seed.valid seed.spans (disposal.target.symm ▸ seed.active)
       seed.keeper (disposal.events.preserves.2.symm ▸ seed.kept) replayed readBounds
   have exactPrefix : NativeReadyReadPrefix (next.opening.finish.run next.opening.chronology)

@@ -227,7 +227,7 @@ theorem NativeReadyReadPrefix.reopensCollectedWal
   have keeperStart := congrArg WalSegment.first (selection.keeper.trans selection.retained.keepsActive.symm)
   obtain ⟨next, seeded, nextCache, nextCensus, nextOwner, nextDirectory, nextPair, nextRuns, nextCheckpoint,
     nextPath, nextTarget, nextKept, _, _, phaseFresh, sessionFresh⟩ :=
-    keeper.startsNativeReadPrefix seen.chronology opening.markerFound selection.prepared following selection.accepted
+    keeper.startsNativeReadPrefix seen.chronology opening.markerFound selection.prepared.newer following selection.accepted
       ready.resumed.ordered (selection.retained.readLayout ready.layout) (selection.retained.valid ready.valid)
       (fun segment member => ready.spans segment (selection.retained.sealedSublist.subset member)) rfl keeperStart rfl
       (originalHistory.symm ▸ pending) (originalHistory.symm ▸ prior.readsBounded)

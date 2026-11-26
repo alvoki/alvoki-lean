@@ -71,7 +71,7 @@ theorem installsFromCensus (finish : CapturedKeeperFinish calls reads vacant sel
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
-    (prepared : Prepared retry.image layout.target layout.plan)
+    (laterValid : retry.image.later.Beyond layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
     (accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
@@ -85,16 +85,16 @@ theorem installsFromCensus (finish : CapturedKeeperFinish calls reads vacant sel
   cases finish with
   | aligned finish =>
     exact finish.installsFromCensus chronology.manifest chronology.runs chronology.marker chronology.beforeListing
-      chronology.seals chronology.offsets chronology.retained marker prepared.newer
+      chronology.seals chronology.offsets chronology.retained marker laterValid
       following accepted ordered
   | prunedAligned finish =>
     obtain ⟨session, returned, pair, _, owner, directory, _, installed⟩ :=
-      finish.installsFromCensus chronology marker prepared.newer following accepted ordered
+      finish.installsFromCensus chronology marker laterValid following accepted ordered
     exact ⟨session, finish.settled, returned, pair, owner, directory, installed⟩
   | longer finish =>
     obtain ⟨session, returned, pair, owner, directory, installed⟩ :=
       finish.installsFromCensus chronology.manifest chronology.runs chronology.marker chronology.beforeListing
-        chronology.seals chronology.offsets chronology.retained marker prepared.keeperPrefix prepared.newer
+        chronology.seals chronology.offsets chronology.retained marker laterValid
         following accepted ordered
     exact ⟨session, finish.settled, returned, pair, owner, directory, installed⟩
 

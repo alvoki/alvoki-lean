@@ -506,7 +506,6 @@ theorem installsAfterVacancy (finish : CapturedLongKeeperFinish calls report vac
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
-    (keeperValid : retry.image.keeper.Valid layout.target.Accepts)
     (laterValid : retry.image.later.Beyond layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
@@ -518,16 +517,20 @@ theorem installsAfterVacancy (finish : CapturedLongKeeperFinish calls report vac
       CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
         published calls.liveRefs (.ok session finish.settled) := by
   have effects := finish.settlement.toListedLongKeeperDirectoryIssue.stoppedEffects true
-  have prepared : Prepared retry.image layout.target layout.plan :=
-    ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
-  have safe := effects.valid prepared.pair prepared.keeperPrefix prepared.newer
-  have ready : finish.settled.image.Ready layout.target := by
-    refine ⟨safe.selected, safe.settled, rfl, rfl, ?_⟩
-    exact finish.suffixSettled
+  have directory : finish.prune.stageInput.image.directory = retry.image.syncDirectory.directory := by
+    cases pruning : finish.prune with
+    | empty _ => rfl
+    | listed _ _ _ => exact (ListedLaterWalPrune.settledImage retry.image).2.1
+  have chosen : finish.settled.image.directory.active = layout.target.pair := by
+    change finish.prune.stageInput.image.directory.active = retry.image.directory.active
+    rw [directory]
+    rfl
+  have ready : finish.settled.image.Ready layout.target :=
+    ⟨chosen, congrArg (fun pair => [pair]) chosen, rfl, rfl, finish.suffixSettled⟩
   obtain ⟨session, returned, installed⟩ :=
     CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := report) vacant marker laterValid
       following accepted ordered selected finish.finishAt finish.finishAt_returns ready effects
-  exact ⟨session, returned, safe.selected, installed⟩
+  exact ⟨session, returned, chosen, installed⟩
 
 /-- A chronology from the admitted files through the exact selected
 checkpoint and WAL supplies the same returned table and continues into
@@ -549,7 +552,6 @@ theorem installsFromCensus (finish : CapturedLongKeeperFinish calls report vacan
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
-    (keeperValid : retry.image.keeper.Valid layout.target.Accepts)
     (laterValid : retry.image.later.Beyond layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
@@ -569,7 +571,7 @@ theorem installsFromCensus (finish : CapturedLongKeeperFinish calls report vacan
     apply calls.runWithMarked_eq report _ finish.finishAt marker
     simp only [finish.finishFromCensus_returns reached, Bind.bind, EStateM.bind, projected, finish.finishAt_returns]
   rw [same]
-  obtain ⟨session, returned, pair, installed⟩ := finish.installsAfterVacancy marker keeperValid laterValid following accepted ordered
+  obtain ⟨session, returned, pair, installed⟩ := finish.installsAfterVacancy marker laterValid following accepted ordered
   exact ⟨session, returned, pair, finish.lockRetained, finish.directoryRetained, installed⟩
 
 /-- The actual selected read, staged replacement and successful final
@@ -587,7 +589,6 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
-    (keeperValid : retry.image.keeper.Valid layout.target.Accepts)
     (laterValid : retry.image.later.Beyond layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
@@ -613,7 +614,7 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
   obtain ⟨prefixReached, _, _, _, _, oldObject, _, _⟩ :=
     trace.capturesAfterAdmission earlier last admission distinct distinctCached lockObject (calls.recoverWithFinish report finish.finishAt)
   have sameLock := report.sameObjects.2.1.trans (congrArg some oldObject)
-  obtain ⟨session, returned, _, installed⟩ := finish.installsAfterVacancy marker keeperValid laterValid following accepted ordered
+  obtain ⟨session, returned, _, installed⟩ := finish.installsAfterVacancy marker laterValid following accepted ordered
   exact ⟨prefixReached, sameLock, finish.readAndClose.1, finish.readAndClose.2, finish.lockRetained,
     finish.directoryRetained, finish.sameCensusObjects, finish.settlement.settledInode.1,
     finish.settlement.toListedLongKeeperDirectoryIssue.projectsStoppedInodes true,

@@ -76,7 +76,7 @@ theorem SegmentedClientReadTrace.reopensInterruptedFirstAppend
     manifest.symm ▸ beforeReady.resumed.accepted
   obtain ⟨observations⟩ := observe layout prepared selected
   obtain ⟨session, final, returned, samePair, owner, cached, installed⟩ :=
-    observations.finish.installsFromCensus observations.chronology observations.markerFound prepared.prepared
+    observations.finish.installsFromCensus observations.chronology observations.markerFound prepared.prepared.newer
       (observations.reads.walReads.selectedAfterWatermark prepared.offsets prepared.descriptors)
       accepted beforeReady.resumed.ordered
   obtain ⟨actual, reached, ready, checkpoint, indexed, phase, loaded, recovered, refined⟩ :=
