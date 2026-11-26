@@ -21,15 +21,18 @@ fsync. Both paths sync the original keeper and carry the storage guarantee
 through the phase and token allocations of the actual returned table.
 Grouped-sync and late-publication recovery share this proof.
 
-A subsequent crash needs an additional namespace guarantee. The returned
-write entry protects the active keeper and checkpoint footprint. For a
-later batch crossing a removed segment boundary, recovery also needs
-agreement throughout the next write’s interval, including gaps, in every
-jointly selectable crash map. Fresh bootstrap supplies that exact contract
-(`SettledNamespaceWindow`), and grouped and late write recovery consume it.
-Derive this from the complete reached listing, the last directory barrier,
-and the frames through allocation. The older pruned installer already
-carries durable absence for the explicitly removed names.
+The exact table returned after aligned recovery now supplies the same
+WAL name guarantee as fresh bootstrap. From the carried lower offset to
+any prospective batch end, the live directory and every jointly selectable
+crash map name exactly the modeled segments. A complete listing identifies
+the later names to remove. The accepted unlinks preserve all other canonical
+bindings, including holes already absent. The final directory fsync settles
+the surviving names, and the pending cache calls, keeper fsync and both
+allocations carry that agreement to the returned table. The next grouped or
+late write can use this guarantee directly for its own reboot selection.
+The next write still needs its observed callbacks and storage effects.
+[Window at reboot](../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean) ·
+[Literal returned table](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
 The grouped and late write proofs now derive the cache entry of their
 literal aligned reopen. The actual path and no-follow lookups supply

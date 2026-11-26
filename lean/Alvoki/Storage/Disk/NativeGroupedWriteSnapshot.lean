@@ -104,6 +104,9 @@ theorem NativeOpenedPosition.groupedRetryAndReads
           (nextBatch : List WAL.Write) (events : List NativeExecutionEvent) (reference : SnapshotTable UInt64),
           let directory := start.current.ready.state.session.directory
           source.openTable input reached = .ok handle.table start.reached ∧
+          (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
+          (∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow directory firstOffset through
+            (storage start.reached)) ∧
           handle.table.UsesOpenWriteSchedules directory handle.files handle.phase ∧
           nextRequest.runOnRawOpenPhase directory lookup (appender.run nextCache.active)
             (stager.run nextCache.pending)
@@ -128,7 +131,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     have window := reboot.walNamespace nameFrame initialWindow
     have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
       simp only [List.length_append, (prepareBatch_spec prepared).1]
-    obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical⟩ :=
+    obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical, coversNext, nextWindow⟩ :=
       (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
         covers selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
         (reboot.laterNames selected.valid.selected.symm) (by simpa only [upper] using retryEffects) admission namespaceView root rootBinding (effects prepared) exactKeeper phaseIdentity tokenIdentity
@@ -145,7 +148,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
       start.acknowledgesAndReadsLatest appender stager syncer view nextCache inodes runs storage inode buffered
         nextRequest lookup rename recoveredLedger nextNonempty physical write read token
     rw [omitted] at wrote
-    exact ⟨handle, start, written, last, nextCache, nextBatch, events, reference, opened, schedules,
+    exact ⟨handle, start, written, last, nextCache, nextBatch, events, reference, opened, coversNext, nextWindow, schedules,
       writeReturn, reachedWrite, snapshots, wrote, old ▸ replay, agrees⟩
   · exact .inl elsewhere
 

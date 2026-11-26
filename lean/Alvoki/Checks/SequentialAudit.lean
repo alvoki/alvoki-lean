@@ -4095,6 +4095,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.ledgerAfterReopen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWriteRecovery.replaysOldTarget
 #check_axioms Alvoki.Storage.WalSegmentImage.NamespaceWindow.frame
+#check_axioms Alvoki.Storage.WalSegmentImage.NamespaceWindow.afterAcceptedUnlinks
+#check_axioms Alvoki.Storage.WalSegmentImage.appendSelectedView_starts
 #check_axioms Alvoki.Storage.WalSegmentImage.NamespaceWindow.restrict
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.walNamespace
 #check_axioms Alvoki.Storage.DiskSession.WalNamePresenceFrame.preservesNamespaceWindow
@@ -4161,6 +4163,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.opensLiteralAlignedAfterWriteRetries
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesDurableVisibleWriteRetry
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.walNamespaceAtPreparation
+#check_axioms Alvoki.Storage.DiskSession.AlignedRepairStorageEffects.walWindowAfterSyncs
+#check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.walWindowAfterAllocations
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.ScopeFrames.map
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.ScopeFrames.openRead
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.ScopeFrames.readChunk

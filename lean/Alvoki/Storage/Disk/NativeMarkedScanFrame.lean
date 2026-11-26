@@ -475,11 +475,61 @@ theorem NativeReadPosition.SelectedWritePlan.modeledWindow
     exact (Nat.not_le_of_gt after) below
 
 
-private theorem appendSelectedView_starts (wal : WalSegmentImage) (pair : DirectoryPublication.Bindings)
+theorem _root_.Alvoki.Storage.WalSegmentImage.appendSelectedView_starts (wal : WalSegmentImage) (pair : DirectoryPublication.Bindings)
     (history : List WAL.Write) :
     (wal.appendSelectedView pair history).segments.map WalSegment.first = wal.segments.map WalSegment.first := by
   rw [WalSegmentImage.segments, List.map_append, WalSegmentImage.segments, List.map_append]
   rfl
+
+/-- The actual marked scan identifies the later names independently of
+the retained catalog. Below the cutoff use the carried window, which
+can include older seals skipped by the checkpoint reader. Above it
+use the scan's complete canonical child projection. -/
+theorem NativeReadPosition.SelectedWritePlan.walNamespaceAtPreparation
+    {prior : List WAL.Write} {log : List DatabaseSubmissions}
+    {current : NativeReadPosition prior log} {batch : List WAL.Write} {target : Target} {image : FileImage}
+    (plan : current.SelectedWritePlan batch target image)
+    {entryNames preparedNames : FilePath → Option Nat} {first : Nat} {newer : List Nat}
+    (priorWindow : current.state.writer.wal.NamespaceWindow current.state.session.directory first
+      (prior ++ batch).length entryNames)
+    (framed : ∀ start, preparedNames (current.state.session.directory.file (.walSegment start)) =
+      entryNames (current.state.session.directory.file (.walSegment start)))
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (child : ∀ start, plan.layout.range.through < start →
+      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+        entryNames (current.state.session.directory.file (.walSegment start)))
+    (listed : ∀ start, start ∈ newer ↔ plan.layout.range.through < start ∧
+      ∃ object, namespaceView.child root (renderWalSegmentName start) = some object) :
+    let directory := current.state.session.directory
+    let wal := current.state.writer.wal.appendSelectedView image.directory.active plan.history
+    wal.NamespaceWindow directory first plan.layout.range.through preparedNames ∧
+    (∀ start ∈ wal.segments.map WalSegment.first, start ≤ plan.layout.range.through) ∧
+    (∀ start ∈ newer, plan.layout.range.through < start) ∧
+    ∀ start, plan.layout.range.through < start →
+      ((preparedNames (directory.file (.walSegment start))).isSome = true ↔ start ∈ newer) := by
+  intro directory wal
+  have through : plan.layout.range.through ≤ (prior ++ batch).length := by
+    rw [plan.layout.through]
+    rcases plan.allowed with old | complete
+    · simp [old]
+    · simp [complete]
+  refine ⟨?_, ?_, fun start member => (listed start).mp member |>.1, ?_⟩
+  · intro start lower upper
+    have alignedNames := priorWindow start lower (Nat.le_trans upper through)
+    rw [framed start, WalSegmentImage.appendSelectedView_starts]
+    exact alignedNames
+  · intro start member
+    obtain ⟨segment, present, rfl⟩ := List.mem_map.mp member
+    have active : wal.active.first ≤ plan.layout.range.through := by
+      simpa only [CanonicalKeeperLayout.target, plan.keeper] using plan.layout.target.firstCovered
+    rcases List.mem_append.mp present with sealed | keeper
+    · have before := (List.pairwise_append.mp plan.walLayout.ordered).2.2 _ sealed _ (List.mem_singleton_self _)
+      exact Nat.le_trans (plan.walLayout.forward _ present) (Nat.le_trans before.2 active)
+    · obtain rfl := List.mem_singleton.mp keeper
+      exact active
+  · intro start beyond
+    rw [framed start, ← child start beyond, Option.isSome_map, listed start]
+    cases found : namespaceView.child root (renderWalSegmentName start) <;> simp [beyond]
 
 /-- The selected append changes the active bytes and end, while leaving
 the segment starts used by the native reader fixed. -/
@@ -494,7 +544,7 @@ theorem NativeReadPosition.SelectedWritePlan.liveWalWindow
         start ∈ (plan.layout.sealed ++ [plan.layout.keeper]).map WalSegment.first) := by
   intro start lower upper
   have selected := plan.modeledWindow.1 start lower
-  rw [appendSelectedView_starts] at selected
+  rw [WalSegmentImage.appendSelectedView_starts] at selected
   exact (window start lower upper).trans selected
 
 /-- At a recovery boundary, the live name map agrees with the selected
@@ -562,7 +612,7 @@ private theorem NativeReadPosition.preparesVisibleWriteRetryFromEffects
   obtain ⟨rest, firstRead⟩ := chainStarts plan.layout.chain (by simp)
   have firstInWal := (plan.modeledWindow.1 plan.layout.first (Nat.le_refl _)).mpr
     (firstRead ▸ List.mem_cons_self (a := plan.layout.first) (l := rest))
-  rw [appendSelectedView_starts] at firstInWal
+  rw [WalSegmentImage.appendSelectedView_starts] at firstInWal
   have upper : plan.layout.range.through ≤ (prior ++ batch).length := by
     rw [plan.layout.through]
     rcases plan.allowed with old | complete
@@ -631,11 +681,13 @@ theorem NativeReadPosition.preparesDurableVisibleWriteRetry
     ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
       plan.layout.VisibleWal current.state.session.directory (storage reached).files.names (visible reached) ∧
       RawOpenRetryTrace.SelectedEntry view current.state target (fun heap => (storage heap).files.names) visible reached ∧
-      current.state.SelectedRetryDurability target (storage reached) ∧ keep reached := by
-  obtain ⟨plan, physical, selected, _, _, settled⟩ :=
+      current.state.SelectedRetryDurability target (storage reached) ∧ keep reached ∧
+      current.state.writer.wal.NamespaceWindow current.state.session.directory first
+        (prior ++ batch).length (storage reached).files.names := by
+  obtain ⟨plan, physical, selected, reachedWindow, _, settled, kept⟩ :=
     current.preparesVisibleWriteRetryFromEffects prepared fits admitted (fun heap => (storage heap).files.names) visible
       covers initial effects ⟨window, initial.keeper, durable, initialKeep⟩ (fun kept => ⟨kept.1, kept.2.1⟩)
-  exact ⟨plan, physical, selected, settled⟩
+  exact ⟨plan, physical, selected, settled, kept, reachedWindow⟩
 
 /-- Refine the actual WAL return using only the held recovery window
 and reached file effects. Both the canonical replay bytes and the

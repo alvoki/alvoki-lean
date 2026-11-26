@@ -224,7 +224,8 @@ private theorem AlignedRepairStorageEffects.atDirectoryBarrier
       names state.session.directory.path = (observe entry).files.names state.session.directory.path) :
     (observe entry).files.Frames state.crashPath (observe reached).files ∧
     (∀ names ∈ (observe reached).crashNames, ∀ path, state.crashPath path → names path = (observe reached).files.names path) ∧
-    visible reached keeperInode = visible entry keeperInode := by
+    visible reached keeperInode = visible entry keeperInode ∧
+    (observe entry).files.Frames state.crashPath (observe issued).files := by
   have keepsRoot : state.crashPath state.session.directory.path :=
     NativeReadyState.crashPath_iff_write.mpr (.inr (.inr (.inl rfl)))
   obtain ⟨rootLoadFrame, rootLoadKeeper⟩ := effects.readDirectory readRoot
@@ -234,7 +235,30 @@ private theorem AlignedRepairStorageEffects.atDirectoryBarrier
   obtain ⟨parentFrame, childFrame, childNames, rootSyncKeeper⟩ := effects.directorySync syncRoot rootIssued rootAtIssue
   obtain ⟨directoryFrame, settledDirectory⟩ := NativeReadyState.framesByDirectory rfl parentFrame childFrame
     (fun names member => settledRootAtIssue names member _ rfl) childNames
-  exact ⟨rootLoadFrame.visible.trans directoryFrame, settledDirectory, rootSyncKeeper.trans rootLoadKeeper⟩
+  exact ⟨rootLoadFrame.visible.trans directoryFrame, settledDirectory, rootSyncKeeper.trans rootLoadKeeper,
+    rootLoadFrame.visible⟩
+
+private theorem AlignedRepairStorageEffects.pendingKeeperAtIssue
+    {calls : AlignedKeeperCacheCallbacks heap} {view : OpenCloseHeapView heap image} {state : NativeReadyState}
+    {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray} {keeperInode : Nat}
+    (effects : AlignedRepairStorageEffects calls view state observe visible keeperInode)
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {entries : List (FilePath × IO.FS.Handle)}
+    {entry loaded consumed : heap}
+    (readPending : calls.getPending pending entry = .ok entries loaded)
+    (clearPending : calls.setPending pending
+      (entries.filter (fun item => item.1 != state.session.directory.file (.walSegment state.writer.wal.active.first))) loaded =
+      .ok () consumed)
+    (keeperBound : (observe entry).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
+      some keeperInode) :
+    (observe entry).Frames state.crashPath (observe consumed) ∧
+    (observe consumed).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some keeperInode ∧
+    visible consumed keeperInode = visible entry keeperInode := by
+  have keepsKeeper : state.crashPath (state.session.directory.file (.walSegment state.writer.wal.active.first)) :=
+    NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
+  obtain ⟨pendingFrame, pendingKeeper⟩ := effects.readPending readPending
+  obtain ⟨clearFrame, clearKeeper⟩ := effects.setPending clearPending
+  have pendingUpdate := pendingFrame.trans clearFrame
+  exact ⟨pendingUpdate, (pendingUpdate.visible _ keepsKeeper).1.trans keeperBound, clearKeeper.trans pendingKeeper⟩
 
 private theorem AlignedRepairStorageEffects.afterKeeperBarrier
     {calls : AlignedKeeperCacheCallbacks heap} {view : OpenCloseHeapView heap image} {state : NativeReadyState}
@@ -265,12 +289,10 @@ private theorem AlignedRepairStorageEffects.afterKeeperBarrier
       some inode → visible repaired inode = state.writer.wal.active.bytes := by
   let keeperPath := state.session.directory.file (.walSegment state.writer.wal.active.first)
   have keepsKeeper : state.crashPath keeperPath := NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
-  obtain ⟨pendingFrame, pendingKeeper⟩ := effects.readPending readPending
-  obtain ⟨clearFrame, clearKeeper⟩ := effects.setPending clearPending
-  have pendingUpdate := pendingFrame.trans clearFrame
-  have toIssue := directoryFrame.trans pendingUpdate.visible
-  have boundAtIssue := (toIssue keeperPath keepsKeeper).1.trans keeperBound
-  have bytesAtIssue := clearKeeper.trans (pendingKeeper.trans keeperBytes)
+  have keeperAtEntry := (directoryFrame keeperPath keepsKeeper).1.trans keeperBound
+  obtain ⟨pendingUpdate, boundAtIssue, pendingKeepsBytes⟩ :=
+    effects.pendingKeeperAtIssue readPending clearPending keeperAtEntry
+  have bytesAtIssue := pendingKeepsBytes.trans keeperBytes
   obtain ⟨synced, keeperUnchanged⟩ := effects.keeperSync syncKeeper keeperIssued boundAtIssue
   rw [bytesAtIssue] at synced
   refine ⟨NativeReadyStorage.afterAlignedBarriers directoryFrame directorySettled pendingUpdate
@@ -282,7 +304,7 @@ private theorem AlignedRepairStorageEffects.afterKeeperBarrier
 
 /-- The reached aligned callbacks settle the selected namespace and
 sync the bytes on its remembered keeper. The result supplies the repaired
-state for `OpenReferenceAllocations.framesReadyStorage`. -/
+state and the inode bindings when the directory fsync was issued. -/
 theorem AlignedRepairStorageEffects.readyAfterSyncs
     {calls : AlignedKeeperCacheCallbacks heap} {view : OpenCloseHeapView heap image} {state : NativeReadyState}
     {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray} {keeperInode : Nat}
@@ -310,17 +332,26 @@ theorem AlignedRepairStorageEffects.readyAfterSyncs
     (keeperBytes : visible entry keeperInode = state.writer.wal.active.bytes)
     (apart : ∀ path, path = state.session.directory.file .walBoundary ∨ state.writeFramePath path →
       (observe entry).files.names path ≠ some keeperInode) :
-    NativeReadyStorage state (observe repaired) ∧
-    ∀ inode, (observe repaired).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
-      some inode → visible repaired inode = state.writer.wal.active.bytes := by
-  obtain ⟨framed, settled, bytes⟩ :=
+    (NativeReadyStorage state (observe repaired) ∧
+      ∀ inode, (observe repaired).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
+        some inode → visible repaired inode = state.writer.wal.active.bytes) ∧
+    (observe rootIssued).files.names state.session.directory.path = some (state.census.inode state.directorySlot.description) ∧
+    (observe rootIssued).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
+      some keeperInode := by
+  obtain ⟨framed, settled, bytes, issued⟩ :=
     effects.atDirectoryBarrier readRoot syncRoot rootIssuedSlot protectedFiles.directoryBound rootSettled
-  exact effects.afterKeeperBarrier readPending clearPending syncKeeper keeperIssuedSlot framed settled protectedFiles marker
-    keeperBound (bytes.trans keeperBytes) apart
+  have rootPath : state.crashPath state.session.directory.path :=
+    NativeReadyState.crashPath_iff_write.mpr (.inr (.inr (.inl rfl)))
+  have keeperPath : state.crashPath (state.session.directory.file (.walSegment state.writer.wal.active.first)) :=
+    NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
+  exact ⟨effects.afterKeeperBarrier readPending clearPending syncKeeper keeperIssuedSlot framed settled protectedFiles marker
+    keeperBound (bytes.trans keeperBytes) apart, (issued _ rootPath).1.trans protectedFiles.directoryBound,
+    (issued _ keeperPath).1.trans keeperBound⟩
 
 /-- Use both actual rooted barriers, and frame the protected paths
 through each accepted later-name unlink. The selected keeper's bytes
-are made durable only by its own final fsync. -/
+are made durable only by its own final fsync. The root and keeper name
+bindings are retained at the issue of the suffix directory barrier. -/
 theorem AlignedRepairStorageEffects.readyAfterSyncsWithPrune
     {calls : AlignedKeeperCacheCallbacks heap} {view : OpenCloseHeapView heap image} {state : NativeReadyState}
     {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray} {keeperInode : Nat}
@@ -369,13 +400,17 @@ theorem AlignedRepairStorageEffects.readyAfterSyncsWithPrune
     (keeperBytes : visible entry keeperInode = state.writer.wal.active.bytes)
     (apart : ∀ path, path = state.session.directory.file .walBoundary ∨ state.writeFramePath path →
       (observe entry).files.names path ≠ some keeperInode) :
-    NativeReadyStorage state (observe repaired) ∧
-    ∀ inode, (observe repaired).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
-      some inode → visible repaired inode = state.writer.wal.active.bytes := by
+    (NativeReadyStorage state (observe repaired) ∧
+      ∀ inode, (observe repaired).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
+        some inode → visible repaired inode = state.writer.wal.active.bytes) ∧
+    (observe suffixIssued).files.names state.session.directory.path =
+      some (state.census.inode state.directorySlot.description) ∧
+    (observe suffixIssued).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
+      some keeperInode := by
   let directory := state.session.directory
   let keeperPath := directory.file (.walSegment state.writer.wal.active.first)
   have keepsKeeper : state.crashPath keeperPath := NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
-  obtain ⟨initialFrame, initialSettled, initialBytes⟩ :=
+  obtain ⟨initialFrame, initialSettled, initialBytes, _⟩ :=
     effects.atDirectoryBarrier readRoot syncRoot rootIssuedSlot protectedFiles.directoryBound rootSettled
   let keep atHeap := (observe authorized).Frames state.crashPath (observe atHeap) ∧
     visible atHeap keeperInode = visible authorized keeperInode
@@ -402,13 +437,83 @@ theorem AlignedRepairStorageEffects.readyAfterSyncsWithPrune
   have settledAfterUnlinks : ∀ names ∈ (observe unlinked).crashNames,
       names directory.path = (observe unlinked).files.names directory.path :=
     fun names allowed => unlinkFrame.settledFrom initialSettled names allowed _ keepsRoot
-  obtain ⟨suffixFrame, suffixSettledNames, suffixBytes⟩ :=
+  obtain ⟨suffixFrame, suffixSettledNames, suffixBytes, finalIssueFrame⟩ :=
     effects.atDirectoryBarrier readSuffixRoot syncSuffixRoot suffixIssuedSlot rootAfterUnlinks settledAfterUnlinks
-  exact effects.afterKeeperBarrier readPending clearPending syncKeeper keeperIssuedSlot (framedUnlinks.trans suffixFrame)
-    suffixSettledNames protectedFiles marker keeperBound (suffixBytes.trans (unlinkBytes.trans (initialBytes.trans keeperBytes))) apart
+  have toFinalIssue := framedUnlinks.trans finalIssueFrame
+  exact ⟨effects.afterKeeperBarrier readPending clearPending syncKeeper keeperIssuedSlot (framedUnlinks.trans suffixFrame)
+    suffixSettledNames protectedFiles marker keeperBound (suffixBytes.trans (unlinkBytes.trans (initialBytes.trans keeperBytes))) apart,
+    (toFinalIssue _ keepsRoot).1.trans protectedFiles.directoryBound, (toFinalIssue _ keepsKeeper).1.trans keeperBound⟩
 
+/-- The last rooted directory fsync settles all canonical names in the
+chosen interval, including holes beyond the committed marker. The same
+window survives the pending-cache updates and the actual keeper fsync. -/
+theorem AlignedRepairStorageEffects.walWindowAfterSyncs
+    {calls : AlignedKeeperCacheCallbacks heap} {view : OpenCloseHeapView heap image} {state : NativeReadyState}
+    {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray} {keeperInode : Nat}
+    (effects : AlignedRepairStorageEffects calls view state observe visible keeperInode)
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {entries : List (FilePath × IO.FS.Handle)}
+    {root keeper : IO.FS.Handle} {keeperSlot : DescriptorSlot} {first through : Nat}
+    {rootIssued keeperEntry loaded consumed repaired : heap}
+    (live : state.writer.wal.NamespaceWindow state.session.directory first through (observe rootIssued).files.names)
+    (syncRoot : calls.sync root rootIssued = .ok () keeperEntry)
+    (rootAttached : attachedReadSlot view root state.directorySlot
+      (state.census.inode state.directorySlot.description) rootIssued)
+    (rootBound : (observe rootIssued).files.names state.session.directory.path =
+      some (state.census.inode state.directorySlot.description))
+    (keeperBound : (observe rootIssued).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
+      some keeperInode)
+    (readPending : calls.getPending pending keeperEntry = .ok entries loaded)
+    (clearPending : calls.setPending pending
+      (entries.filter (fun item => item.1 != state.session.directory.file (.walSegment state.writer.wal.active.first))) loaded =
+      .ok () consumed)
+    (syncKeeper : calls.sync keeper consumed = .ok () repaired)
+    (keeperAttached : attachedReadSlot view keeper keeperSlot keeperInode consumed)
+    (readNames : calls.getPending pending keeperEntry = .ok entries loaded →
+      WalNamePresenceFrame state.session.directory first through (observe keeperEntry) (observe loaded))
+    (clearNames : calls.setPending pending
+      (entries.filter (fun item => item.1 != state.session.directory.file (.walSegment state.writer.wal.active.first))) loaded =
+      .ok () consumed → WalNamePresenceFrame state.session.directory first through (observe loaded) (observe consumed)) :
+    state.writer.wal.SettledNamespaceWindow state.session.directory first through (observe repaired) := by
+  let directory := state.session.directory
+  obtain ⟨_, children, settled, _⟩ := effects.directorySync syncRoot rootAttached rootBound
+  have liveAfterRoot := live.frame (fun start _ _ =>
+    congrArg Option.isSome (children (directory.file (.walSegment start)) ⟨.walSegment start, rfl⟩).1)
+  have keeperAfterRoot := (children _ ⟨.walSegment state.writer.wal.active.first, rfl⟩).1.trans keeperBound
+  obtain ⟨_, keeperAtIssue, _⟩ := effects.pendingKeeperAtIssue readPending clearPending keeperAfterRoot
+  obtain ⟨keeperSync, _⟩ := effects.keeperSync syncKeeper keeperAttached keeperAtIssue
+  have throughCache := (readNames readPending).trans (clearNames clearPending)
+  have throughKeeper := throughCache.trans (WalNamePresenceFrame.ofFileSync keeperSync)
+  exact throughKeeper.preservesNamespaceWindow ⟨liveAfterRoot,
+    (fun names survives => liveAfterRoot.frame (fun start _ _ =>
+      congrArg Option.isSome (settled names survives (.walSegment start))))⟩
 
 end LiteralRepair
+
+section AllocatedWalWindow
+
+variable {heap : Type}
+
+/-- The selected WAL catalog survives the two reached allocations of the
+returned table. Each final crash map inherits the whole window from one
+earlier map or from that heap's live namespace. -/
+theorem OpenReferenceAllocations.walWindowAfterAllocations
+    {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+    {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+    {phaseContents : heap → IO.Ref (Phase Installed) → Option (Phase Installed)}
+    {installed : Installed} {repaired : heap}
+    (allocation : OpenReferenceAllocations allocatePhase allocateToken phaseContents installed repaired)
+    (observe : heap → CheckpointStorageObservation) (wal : WalSegmentImage) (directory : DiskDirectory)
+    {first through : Nat}
+    (live : wal.NamespaceWindow directory first through (observe repaired).files.names)
+    (settled : ∀ names ∈ (observe repaired).crashNames, wal.NamespaceWindow directory first through names)
+    (phaseNames : allocatePhase (.ready installed) repaired = .ok allocation.phase allocation.afterPhase →
+      WalNamePresenceFrame directory first through (observe repaired) (observe allocation.afterPhase))
+    (tokenNames : allocateToken () allocation.afterPhase = .ok allocation.token allocation.afterToken →
+      WalNamePresenceFrame directory first through (observe allocation.afterPhase) (observe allocation.afterToken)) :
+    wal.SettledNamespaceWindow directory first through (observe allocation.afterToken) :=
+  ((phaseNames allocation.phaseAllocated).trans (tokenNames allocation.tokenAllocated)).preservesNamespaceWindow ⟨live, settled⟩
+
+end AllocatedWalWindow
 
 section CheckpointReturn
 

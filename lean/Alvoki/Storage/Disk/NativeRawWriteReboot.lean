@@ -46,6 +46,59 @@ theorem WalNamePresenceFrame.preservesNamespaceWindow
   · exact initial.1.frame (fromLive ▸ same)
   · exact (initial.2 prior fromCrash).frame same
 
+/-- After the accepted unlink loop, the selected catalog extends to any
+prospective marker. A later address is either in the actual scan's
+remove list or was already absent. The frame applies to canonical
+segment paths and preserves holes below and above the current cutoff. -/
+theorem _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow.afterAcceptedUnlinks
+    {heap : Type} {wal : WalSegmentImage} {directory : DiskDirectory} {first cutoff : Nat}
+    {plan : Plan} {names : heap → FilePath → Option Nat} {before after : heap}
+    (selected : wal.NamespaceWindow directory first cutoff (names before))
+    (bounded : ∀ start ∈ wal.segments.map WalSegment.first, start ≤ cutoff)
+    (later : ∀ start ∈ plan.newer, cutoff < start)
+    (listed : ∀ start, cutoff < start →
+      ((names before (directory.file (.walSegment start))).isSome = true ↔ start ∈ plan.newer))
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (unlink : ∀ {ordinal entry reached result}, ordinal ∈ plan.newer →
+      remove (directory.file (.walSegment ordinal)) entry = .ok result reached →
+      RunCollection.ownedUnlinkResult result = .ok () →
+      names reached (directory.file (.walSegment ordinal)) = none ∧
+      ∀ start, start ≠ ordinal → names reached (directory.file (.walSegment start)) =
+        names entry (directory.file (.walSegment start)))
+    (returned : ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) before = .ok () after) :
+    ∀ through, wal.NamespaceWindow directory first through (names after) := by
+  obtain ⟨removed, preserved⟩ := namesOfReturnedWalUnlinks directory plan remove write sync rename names
+    (fun path => ∃ start, path = directory.file (.walSegment start))
+    (fun start _ => ⟨start, rfl⟩) (fun member called accepted => by
+      obtain ⟨absent, frame⟩ := unlink member called accepted
+      refine ⟨absent, ?_⟩
+      rintro _ ⟨start, rfl⟩ apart
+      exact frame start fun equal => apart (congrArg (fun n => directory.file (.walSegment n)) equal)) returned
+  intro _ start lower _
+  let path := directory.file (.walSegment start)
+  have unchanged (notListed : start ∉ plan.newer) : names after path = names before path :=
+    preserved path ⟨start, rfl⟩ (fun ordinal member equal =>
+      notListed ((directory.walSegment_path_injective equal).symm ▸ member))
+  by_cases past : cutoff < start
+  · have absent : names after path = none := by
+      by_cases found : start ∈ plan.newer
+      · exact removed start found
+      · rw [unchanged found]
+        cases named : names before path with
+        | none => rfl
+        | some inode => exact (found ((listed start past).mp (by simp [path, named]))).elim
+    change (names after path).isSome = true ↔ start ∈ wal.segments.map WalSegment.first
+    simp only [absent, Option.isSome_none, Bool.false_eq_true, false_iff]
+    exact fun modeled => (Nat.not_le_of_gt past) (bounded start modeled)
+  · have notListed : start ∉ plan.newer := fun member => past (later start member)
+    change (names after path).isSome = true ↔ _
+    rw [unchanged notListed]
+    exact selected start lower (Nat.le_of_not_gt past)
+
 private def rebootBindings (directory : DiskDirectory) (names : FilePath → Option Nat)
     (visible : Nat → ByteArray) : DirectoryPublication.Bindings :=
   ⟨(names (directory.file .manifest)).map visible, (names (directory.file .walBoundary)).map visible⟩
