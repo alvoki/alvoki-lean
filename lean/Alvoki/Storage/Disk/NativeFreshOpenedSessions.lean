@@ -748,7 +748,8 @@ theorem replaysFirstAcknowledgedWrite {stream : Type} (wrote : observedFirstWrit
         (∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
           WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
             (storage preReady) (storage reached)) →
-        source.ReplaysWalBeforeCheckpointAtOpen clientView state storage visible rebooted namespaceView root batch := by
+        source.ReplaysWalBeforeCheckpointAtOpen clientView (state).session.directory (state).writer.wal.active.first
+          storage visible rebooted namespaceView root batch := by
   obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, dirRef, activeRef, pendingRef,
     exactHeap, _, _, ledger, physical, ⟨noManifest, _, history, cutoff⟩, carries⟩ :=
     opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
@@ -797,7 +798,7 @@ theorem readsAfterCreatedRotation {stream : Type} (wrote : observedFirstWrite)
               request.rows.length old.writer.wal.active.last (storage a) (storage b)))
             {rebooted : heap} (sample : RawWriteRebootEntry state reopenView storage names visible rotated.reached rebooted),
             sample.DurableReset →
-            source.ReadsClientHistoryAtOpen reopenView state storage visible rebooted
+            source.ReadsClientHistoryAtOpen reopenView (state).session.directory storage visible rebooted
               namespaceView root [.acknowledgedBatch batch] [] batch := by
   obtain ⟨cache, batch, preparedTable, next, _, atOpen, write, prepared, number, count, _, _, _,
     exactHeap, _, batchHistory, firstLedger, physical, ⟨noManifest, _, _, _⟩, carries⟩ :=
@@ -831,7 +832,8 @@ theorem readsAfterCreatedRotation {stream : Type} (wrote : observedFirstWrite)
     simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.submissions, List.append_nil] using log
   have noReads : next.current.ready.reads = [] := by
     simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.reads, List.append_nil] using reads
-  change source.ReadsClientHistoryAtOpen reopenView state storage visible rebooted namespaceView root
+  change source.ReadsClientHistoryAtOpen reopenView (state).session.directory
+    storage visible rebooted namespaceView root
     [.acknowledgedBatch batch] [] batch
   rw [← submitted, ← noReads, ← batchHistory]
   exact @readsAfterOpen stream source modeledFiles rebooted namespaceView root sample reset cutoff noManifest
@@ -876,7 +878,7 @@ theorem readsAfterInterruptedSecondBatch {stream : Type}
             history = firstBatch ++ retained ∧ (retained = [] ∨ retained = stop.batch) ∧
             opened.start.current.InterruptedWriteLedger next.current [.acknowledged request firstBatch]
               second stop.batch retained history ∧
-            source.ReadsClientHistoryAtOpen clientView next.current.ready.state observedStorage visible rebooted
+            source.ReadsClientHistoryAtOpen clientView next.current.ready.state.session.directory observedStorage visible rebooted
               namespaceView root [.acknowledgedBatch firstBatch, .uncertainBatch stop.batch] [] history := by
   obtain ⟨cache, firstBatch, firstTable, next, sameDirectory, atOpen, write, prepared, _, count, _, _, _,
     exactHeap, _, batchHistory, firstLedger, physical, ⟨noManifest, _, _, _⟩, carries⟩ :=

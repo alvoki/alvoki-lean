@@ -1771,42 +1771,42 @@ from a chosen reboot heap. The returned table and initialized phase
 implement the given history. -/
 abbrev RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen
     {heap stream : Type} (source : RawMarkedOpenInterpreter heap stream)
-    (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
+    (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory) (keeperFirst : Nat)
     (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     (rebooted : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (history : List WAL.Write) : Prop :=
-  source.AfterWalOpen view state.session.directory storage visible rebooted namespaceView root history.length fun table returnedAt =>
+  source.AfterWalOpen view directory storage visible rebooted namespaceView root history.length fun table returnedAt =>
     ∃ (logical : PackedTable) (count : UInt64) (held : HeldOpenCache heap)
       (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit) (repaired afterPhase : heap),
       recoverSelected .empty (WAL.encode history) = .ok logical ∧
       logical.committed.toNat = history.length ∧
-      source.allocatePhase (.ready (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩))
+      source.allocatePhase (.ready (Reopened.installed ⟨logical, 0, count, keeperFirst⟩))
         repaired = .ok phase afterPhase ∧
       source.allocateToken () afterPhase = .ok token returnedAt ∧
       view.phase returnedAt phase =
-        some (.ready (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩)) ∧
-      table = RawMarkedOpenInterpreter.assemble state.session.directory held.lock
-        (RawMarkedOpenInterpreter.makeCache state.session.directory held.directoryRef held.activeRef held.pendingRef) phase token ∧
+        some (.ready (Reopened.installed ⟨logical, 0, count, keeperFirst⟩)) ∧
+      table = RawMarkedOpenInterpreter.assemble directory held.lock
+        (RawMarkedOpenInterpreter.makeCache directory held.directoryRef held.activeRef held.pendingRef) phase token ∧
       ∀ {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
         {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
         (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool),
         OpenPhaseCellEffects view.phase get set →
         (∀ {pinned : PackedTable} {after},
-          set phase (.ready { (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩)
+          set phase (.ready { (Reopened.installed ⟨logical, 0, count, keeperFirst⟩)
             with table := pinned }) returnedAt = .ok () after → ptrEq token token after = .ok true after) →
         ∀ key, table.LatestWalLookup phase token get set ptrEq returnedAt history key
 
 /-- Every latest lookup through the returned session extends the same client ledger. -/
 abbrev RawMarkedOpenInterpreter.ReadsClientHistoryAtOpen
     {heap stream : Type} (source : RawMarkedOpenInterpreter heap stream)
-    (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
+    (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
     (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     (rebooted : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (log : List DatabaseSubmissions) (reads : List RecordedSnapshotRead) (history : List WAL.Write) : Prop :=
-  source.AfterWalOpen view state.session.directory storage visible rebooted namespaceView root history.length fun table returnedAt =>
+  source.AfterWalOpen view directory storage visible rebooted namespaceView root history.length fun table returnedAt =>
     ∃ (installed : Installed) (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit),
       view.phase returnedAt phase = some (.ready installed) ∧
-      (∃ lock files, table.UsesOpenReferences state.session.directory lock files phase token) ∧
+      (∃ lock files, table.UsesOpenReferences directory lock files phase token) ∧
       ∀ {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
         {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
         (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool),
@@ -1818,10 +1818,11 @@ abbrev RawMarkedOpenInterpreter.ReadsClientHistoryAtOpen
 
 /-- A successful literal open extends the selected client history with its actual lookup. -/
 theorem RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
-    {state : NativeReadyState} {storage visible rebooted namespaceView root history log reads}
-    (opened : source.ReplaysWalBeforeCheckpointAtOpen view state storage visible rebooted namespaceView root history)
+    {directory : DiskDirectory} {keeperFirst : Nat} {storage visible rebooted namespaceView root history log reads}
+    (opened : source.ReplaysWalBeforeCheckpointAtOpen view directory keeperFirst
+      storage visible rebooted namespaceView root history)
     (pending : PendingClientReplay log reads history) :
-    source.ReadsClientHistoryAtOpen view state storage visible rebooted namespaceView root log reads history := by
+    source.ReadsClientHistoryAtOpen view directory storage visible rebooted namespaceView root log reads history := by
   intro input returnedAt table admission effects child absent initializes keeps returned
   obtain ⟨logical, count, held, phase, token, repaired, afterPhase, _, _, _, _, stored, assembled, lookup⟩ :=
     opened admission effects child absent initializes keeps returned
@@ -1844,12 +1845,13 @@ local notation "names" => fun h => CheckpointSurvivingFiles.names (CheckpointSto
 local notation "samples" => fun h => CheckpointSurvivingFiles.mk (names h) (fun inode => [visible h inode])
 
 /-- The literal reader depends on the selected files and replay, whether
-the writer acknowledged its last batch or a crash selected an uncertain one. -/
-private theorem RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
+the writer acknowledged its last batch or a crash selected an uncertain one.
+Installation uses the keeper offset in that layout, including when rotation
+changes which segment the directory exposes after reboot. -/
+theorem RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
     {target : Target} {history : List WAL.Write}
     (selected : RawOpenRetryTrace.SelectedEntry view state target names visible rebooted)
     (layout : CanonicalKeeperLayout (view.files rebooted).image history)
-    (sameFirst : layout.keeper.first = state.writer.wal.active.first)
     (noManifest : state.writer.target.pair.manifest = none)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
@@ -1857,7 +1859,8 @@ private theorem RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
       (WAL.Boundary.CheckpointRepresentsPrefix history) (view.files rebooted).image.directory.active.manifest)
     (ordered : WAL.OrdinalsFrom 1 history)
     (wal : layout.VisibleWal directory (names rebooted) (visible rebooted)) :
-    source.ReplaysWalBeforeCheckpointAtOpen view state storage visible rebooted namespaceView root history := by
+    source.ReplaysWalBeforeCheckpointAtOpen view directory layout.keeper.first
+      storage visible rebooted namespaceView root history := by
   intro input returnedAt table admission effects child laterAbsent initializesPhase tokenKeepsPhase returned
   have missing : layout.target.pair.manifest = none :=
     (congrArg DirectoryPublication.Bindings.manifest selected.valid.selected).trans (selected.manifest.trans noManifest)
@@ -1894,11 +1897,11 @@ private theorem RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
       (by simp [List.map_append])
   have equal : logical = replayed := congrArg Prod.snd (Except.ok.inj (applied.symm.trans sameRows))
   subst replayed
-  let installed := Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩
+  let installed := Reopened.installed ⟨logical, 0, count, layout.keeper.first⟩
   have stored : view.phase returnedAt phase = some (.ready installed) :=
-    (tokenKeepsPhase tokenReturn phase).trans (initializesPhase (sameFirst ▸ allocation))
+    (tokenKeepsPhase tokenReturn phase).trans (initializesPhase allocation)
   refine ⟨logical, count, held, phase, token, repaired, afterPhase, full, committed,
-    sameFirst ▸ allocation, tokenReturn, stored, assembled, ?_⟩
+    allocation, tokenReturn, stored, assembled, ?_⟩
   intro get set ptrEq cells compare key
   have uses := (RawMarkedOpenInterpreter.assembles directory held.lock
     (RawMarkedOpenInterpreter.makeCache directory held.directoryRef held.activeRef held.pendingRef)).usesReferences phase token
@@ -1913,7 +1916,8 @@ theorem RawWriteRebootEntry.replaysWalBeforeCheckpointAtOpen
     (reset : seen.DurableReset)
     (catalog : state.writer.wal.SettledNamespaceWindow directory 0 state.writer.target.range.through (storage acknowledged))
     (noManifest : state.writer.target.pair.manifest = none) :
-    source.ReplaysWalBeforeCheckpointAtOpen view state storage visible rebooted namespaceView root state.writer.history := by
+    source.ReplaysWalBeforeCheckpointAtOpen view state.session.directory state.writer.wal.active.first
+      storage visible rebooted namespaceView root state.writer.history := by
   obtain ⟨selected, recovery, _, _, layout, target, sameKeeper, _, descriptors, offsets, _⟩ :=
     seen.startsReadyRecovery valid physical reset catalog
   have through := congrArg (fun t : Target => t.range.through) target
@@ -1921,9 +1925,11 @@ theorem RawWriteRebootEntry.replaysWalBeforeCheckpointAtOpen
   have wal := selected.visibleReadyWal layout target descriptors offsets window
   have accepted := valid.retained.resumed.accepted
   rw [← selected.valid.selected] at accepted
+  have sameFirst := congrArg WalSegment.first sameKeeper
+  rw [← sameFirst]
   exact @RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
     (source := source) (namespaceView := namespaceView) (root := root)
-    (selected := selected) (layout := layout) (sameFirst := congrArg WalSegment.first sameKeeper)
+    (selected := selected) (layout := layout)
     (noManifest := noManifest) (following := (layout.modeledWindow _ offsets).2)
     (accepted := accepted) (ordered := valid.retained.resumed.ordered) (wal := wal)
 
@@ -1940,11 +1946,14 @@ theorem NativeReadPosition.SelectedWritePlan.replaysWalBeforeCheckpointAtOpen
       target.range.through rebooted)
     (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
     (noManifest : current.state.writer.target.pair.manifest = none) :
-    source.ReplaysWalBeforeCheckpointAtOpen view current.state storage visible rebooted namespaceView root plan.history := by
+    source.ReplaysWalBeforeCheckpointAtOpen view current.state.session.directory current.state.writer.wal.active.first
+      storage visible rebooted namespaceView root plan.history := by
   have sameFirst := congrArg WalSegment.first plan.keeper
+  change plan.layout.keeper.first = current.state.writer.wal.active.first at sameFirst
+  rw [← sameFirst]
   exact @RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
     (source := source) (namespaceView := namespaceView) (root := root)
-    (selected := selected) (layout := plan.layout) (sameFirst := sameFirst)
+    (selected := selected) (layout := plan.layout)
     (noManifest := noManifest) (following := plan.modeledWindow.2)
     (accepted := plan.accepted) (ordered := plan.ordered)
     (wal := plan.visibleWal names visible covers recovery.1 selected.protectedFiles recovery.2.1)

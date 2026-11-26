@@ -375,7 +375,8 @@ theorem sampledPlan {current : NativeExecutionPosition}
     ∃ plan : current.ready.SelectedWritePlan batch target (view.files rebooted).image,
       ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
         current.ready.state.writer.target.pair.manifest = none →
-        opener.ReplaysWalBeforeCheckpointAtOpen view current.ready.state storage visible rebooted namespaceView root
+        opener.ReplaysWalBeforeCheckpointAtOpen view current.ready.state.session.directory current.ready.state.writer.wal.active.first
+          storage visible rebooted namespaceView root
           plan.history := by
   obtain ⟨plan⟩ := current.ready.preparesSelectedWrite handoff.prepared handoff.fits handoff.admitted
     handoff.selected.valid handoff.selected.manifest
@@ -555,7 +556,8 @@ theorem NativeReturnedCalls.selectsAfterLatePublicationError
               (∀ read ∈ reads, read.BoundedBy plan.history.length) ∧
               ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
                 state.writer.target.pair.manifest = none →
-                opener.ReplaysWalBeforeCheckpointAtOpen view state storage visible rebooted namespaceView root plan.history := by
+                opener.ReplaysWalBeforeCheckpointAtOpen view (state).session.directory (state).writer.wal.active.first
+                  storage visible rebooted namespaceView root plan.history := by
   obtain ⟨last, events, ran, length, records, through, write⟩ :=
     executed.refinesReadyBeforeCommitUnknown start prior view inodes runs observe inode buffered effects
       initial readyNames initialWindow

@@ -176,7 +176,8 @@ theorem NativeExecutionPosition.SelectedWriteReboot.interruptedPlan
         origin.LedgerSuffix events current → origin.InterruptedWriteLedger current events request batch retained plan.history) ∧
       ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
         current.ready.state.writer.target.pair.manifest = none →
-        opener.ReplaysWalBeforeCheckpointAtOpen view current.ready.state storage visible rebooted namespaceView root
+        opener.ReplaysWalBeforeCheckpointAtOpen view current.ready.state.session.directory current.ready.state.writer.wal.active.first
+          storage visible rebooted namespaceView root
           plan.history := by
   obtain ⟨plan, opens⟩ := handoff.sampledPlan
   obtain ⟨retained, whole, selected⟩ : ∃ retained : List WAL.Write,
@@ -301,7 +302,8 @@ theorem NativeOpenedPosition.stopsAtRootFsync
             origin.InterruptedWriteLedger current.current events request stop.batch retained plan.history) ∧
         ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
           (state).writer.target.pair.manifest = none →
-          opener.ReplaysWalBeforeCheckpointAtOpen view state storage (fun h => (inodes h).visible)
+          opener.ReplaysWalBeforeCheckpointAtOpen view (state).session.directory (state).writer.wal.active.first
+            storage (fun h => (inodes h).visible)
             rebooted namespaceView root plan.history := by
   obtain ⟨batch, table, guarded, poisoned, appended, staged, grouped, renamed, issued, reached, handle, effective,
     nonempty, prepared, fits, checked, assigned, preface, wrote, remembered, synced, groupEffects, moved, renameEffect,

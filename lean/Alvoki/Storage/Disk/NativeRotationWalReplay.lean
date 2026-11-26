@@ -34,7 +34,8 @@ def OpenRotationObservation.ContinuesWal
       let view := seen.view.withFileProjection (fun h => ⟨images h, (seen.view.files h).owners⟩)
       ∀ sample : RawWriteRebootEntry position.current.ready.state view storage (fun h => (storage h).files.names) visible position.reached rebooted,
         sample.DurableReset → position.current.ready.state.writer.target.range.through ≤ through → (old).writer.target.pair.manifest = none →
-        source.ReadsClientHistoryAtOpen view position.current.ready.state storage visible rebooted namespaceView heldRoot
+        source.ReadsClientHistoryAtOpen view position.current.ready.state.session.directory
+          storage visible rebooted namespaceView heldRoot
           current.current.submissions current.current.ready.reads current.current.history
 
 private theorem OpenRotationObservation.Reached.continuesWal
