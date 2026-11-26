@@ -2574,6 +2574,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.runsDirectoryUsesCachedHandle
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.runFileIssuesRawSync
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.runsDirectoryIssuesRawSync
+#check_axioms Alvoki.Storage.DiskSession.RawFsyncTarget.fileEffectFrames
 #check_axioms Alvoki.Storage.DiskSession.RawFsyncTarget.stoppedRunFrames
 #check_axioms Alvoki.Storage.DiskSession.RawFsyncTarget.stoppedDirectoryFrames
 #check_axioms Alvoki.Storage.DiskSession.successfulCheckpointStepsPreserve

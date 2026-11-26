@@ -269,7 +269,8 @@ theorem NativeCheckpointSourceStop.priorStorageBeforeStaging
 
 /-- The previous selected checkpoint and WAL remain durable at the
 staged-MANIFEST fsync stop. Carry the entry storage through the actual
-run prefix, directory barrier, stage write and stopped file sync. -/
+run prefix, directory barrier, stage write and stopped file sync.
+The scratch inode's surviving bytes are independent of this guarantee. -/
 theorem NativeCheckpointSourceStop.manifestSyncPreservesSelected
     {view : OpenCloseHeapView heap FileImage}
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncStaged) reason stoppedAt)
@@ -299,15 +300,13 @@ theorem NativeCheckpointSourceStop.manifestSyncPreservesSelected
         ∀ other, (observe before).visible other = some inode → other = stage)
     (consume : (observe stop.atIssue.2).storageObservation.Frames current.current.ready.state.crashPath
       (observe atFsync).storageObservation)
-    (effective : Bool)
+    (choices : List ByteArray)
     (effect : ∀ literal, calls.fsync literal atFsync = .error reason stoppedAt.2 →
       let inode := (view.descriptors atFsync).inode (view.handle atFsync literal).2.1.description
-      let path := current.current.ready.state.session.directory.file .stagedManifest
-      (observe atFsync).visible path = some inode ∧
-      (∀ other, (observe atFsync).visible other = some inode → other = path) ∧
-      inodes stoppedAt.2 = (if effective then (inodes atFsync).completeFileSync inode else inodes atFsync) ∧
-      (observe stoppedAt.2).visible = (observe atFsync).visible ∧
-      (observe stoppedAt.2).crashBindings = (observe atFsync).crashBindings) :
+      let state := current.current.ready.state
+      (observe atFsync).visible (state.session.directory.file .stagedManifest) = some inode ∧
+      (∀ path, state.crashPath path → (observe atFsync).visible path ≠ some inode) ∧
+      RegularFileSyncEffect inode choices (observe atFsync).storageObservation (observe stoppedAt.2).storageObservation) :
     NativeReadyStorage current.current.ready.state (observe stoppedAt.2).storageObservation := by
   let state := current.current.ready.state
   have separate : ∀ path, state.crashPath path → path ≠ state.session.directory.file .stagedManifest :=
@@ -318,7 +317,9 @@ theorem NativeCheckpointSourceStop.manifestSyncPreservesSelected
   obtain ⟨writeFrame, privateBinding⟩ := stageWrite beforeWrite.2 handle wrote
   have staging := writeFrame.preservesCheckpointFootprint (fun _ _ => rfl) privateBinding separate
   obtain ⟨literal, _, _, target, _, stopped, _⟩ := stop.manifestSyncIssuesRawSync calls cache projected pending
-  have frame := target.stoppedRunFrames calls stopped inodes runs observe _ effective (effect literal) separate
+  obtain ⟨named, outside, syncEffect⟩ := effect literal stopped
+  have frame := target.fileEffectFrames (observe atFsync).storageObservation (observe stoppedAt.2).storageObservation
+    (state.session.directory.file .stagedManifest) named outside syncEffect
   exact stable.frame (staging.trans (consume.trans frame.2))
 
 end RunDurability

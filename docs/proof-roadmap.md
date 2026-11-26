@@ -132,23 +132,21 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   The reset and reached syscall effects remain explicit.
   [Write after selected checkpoint recovery](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
-  The fresh bootstrap return also supplies this pilot's empty client
-  ledger. An existing opened-session trace on that handle leads to a
-  checkpoint on its current cache and a stop in the final directory fsync.
-  The sampled reboot,
-  read-only failed opens, successful reopen, confirmed write and snapshot
-  extend that ledger. The integrated execution theorem still needs to
-  construct this prefix and its recovery extensions for raw mixed calls.
+  Fresh bootstrap supplies the empty client ledger. A checkpoint can also extend
+  an incoming ledger on the current handle after a reopen of the same directory.
+  A final directory-fsync stop can end the execution at its reached poisoned phase.
+  To continue, the proof uses a sampled reboot and local reopen effects to extend
+  that ledger through the next confirmed write and snapshot.
   [Fresh final checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshFinalCheckpoint.lean)
 
 - [ ] **Derive an integrated execution proof from fresh state.** Start with the ordered primitive returns and interruptions of the production schedules under the filesystem contract. Derive coverage and invariant preservation for each admitted step, including the exact returned value or error for a completed call and the reached state for an interrupted or still-running call. Connect fresh admission and terminal prefixes with one induction that reuses the existing replay. Exercise an acknowledged batch followed by an uncertain batch and independent retry attempts. [Raw open return classifier](../lean/Alvoki/Storage/Disk/NativeRawRecoveryReturn.lean) · [Current opened-session induction](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
 
-  The grouped-error pilot joins the actual uncertain write, one admitted durable
-  reset, literal failed opens, and the aligned returned table with its next confirmed
-  write and snapshot. One physical observation supplies every heap. The pilot
-  starts at a ready writer and takes local filesystem effects and failed-call frames.
-  Fresh initialization, checkpoint stops and the remaining branches still need the
-  shared execution theorem.
+  A first acknowledged write on the fresh table carries the WAL namespace
+  through the finite offset needed by the next batch. For a late publication
+  error, one marker selected at reboot determines whether recovery retains the
+  old history or the whole batch. The retry proof can end at the last failed
+  open. A successful recovery can instead supply the next writer and snapshot.
+  These paths still require local storage effects at the calls that ran.
   [Grouped write pilot](../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean)
 
   The observed write prefix can now start on the table returned by fresh bootstrap and end at a source-derived checkpoint stop on its reached heap. The prefix derives client instruction matching from the actual requests, including preflight denials. The fresh-open type carries the empty ledger used by the common replay. The observed initial barriers now establish the ready storage invariant and the empty visible keeper at the actual phase and token allocation endpoint. The proof uses the held lock and directory identities, exact child and byte projections, and durable binding of the directory in its parent. [Fresh opened prefix](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)

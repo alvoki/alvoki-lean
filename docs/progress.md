@@ -58,9 +58,9 @@ batch or omits it. Both terminal proofs allow execution to end at that error.
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and
 first directory barrier establish storage for the previous checkpoint.
-The private staging inode protects the previously selected files through
-both modeled sync outcomes. This result assumes the local before- or
-after-effect sync contract and requires no manifest rename.
+The local file-sync contract allows arbitrary durable contents of the
+staging inode. Its separation from the protected checkpoint and WAL
+paths preserves their selected names and bytes at this stop.
 [Checkpoint run and stage effects](../lean/Alvoki/Storage/Disk/NativeCheckpointRunDurability.lean)
 
 A final checkpoint stop also accepts an incoming ledger and the actual

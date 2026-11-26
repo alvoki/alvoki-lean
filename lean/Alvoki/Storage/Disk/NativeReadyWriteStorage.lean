@@ -405,15 +405,14 @@ theorem NativeOpenedPosition.acknowledgesObservedWrite
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
         (observe next.reached) (inodes next.reached).visible ∧
-      ∀ {firstOffset : Nat},
+      ∀ {firstOffset through : Nat},
         (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) →
-        (∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
-          directory firstOffset through (observe start.reached)) →
-        (∀ through, start.WalNameEffects appender stager syncer cache request lookup rename observe firstOffset through) →
+        start.current.ready.state.writer.wal.SettledNamespaceWindow directory firstOffset through (observe start.reached) →
+        start.WalNameEffects appender stager syncer cache request lookup rename observe firstOffset through →
         (∀ {settled value}, opened.set opened.phase (.ready value) settled = .ok () reached →
-          ∀ through, WalNamePresenceFrame directory firstOffset through (observe settled) (observe reached)) →
+          WalNamePresenceFrame directory firstOffset through (observe settled) (observe reached)) →
         (∀ offset ∈ next.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
-        ∀ through, next.current.ready.state.writer.wal.SettledNamespaceWindow
+        next.current.ready.state.writer.wal.SettledNamespaceWindow
           next.current.ready.state.session.directory firstOffset through (observe next.reached) := by
   obtain ⟨files, sameStorage, returned, effects⟩ := seen
   have atWrite : start.WriteStorageEntry view cache
@@ -426,11 +425,11 @@ theorem NativeOpenedPosition.acknowledgesObservedWrite
       request lookup rename nonempty returned atWrite effects
   refine ⟨schedule, returned, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, ledger, ?_, ?_⟩
   · rwa [← sameStorage next.reached]
-  · intro firstOffset covers initial nameEffects restore
-    refine ⟨sameStarts.symm ▸ covers, fun through => ?_⟩
+  · intro firstOffset through covers initial nameEffects restore
+    refine ⟨sameStarts.symm ▸ covers, ?_⟩
     have framed := start.preservesWalNamesAfterAcknowledgement appender stager syncer cache request lookup rename
-      nonempty returned (nameEffects through) (fun installed => restore installed through)
-    obtain ⟨live, crash⟩ := framed.preservesNamespaceWindow (initial through)
+      nonempty returned nameEffects restore
+    obtain ⟨live, crash⟩ := framed.preservesNamespaceWindow initial
     rw [sameDirectory, nextHeap]
     exact ⟨fun offset low high => sameStarts.symm ▸ live offset low high,
       fun names survives offset low high => sameStarts.symm ▸ crash names survives offset low high⟩

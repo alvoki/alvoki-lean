@@ -375,7 +375,8 @@ theorem writeStorageEntry {input : FilePath} {directory : DiskDirectory}
   exact settled.1.bindsOpenCacheDirectory view cacheAt (by rw [captured, slot]; rfl) (congrFun sameObjects _) found
 
 /-- Start the first observed write at the actual returned heap of the
-fresh opener. Its local effects refer to the original cache references. -/
+fresh opener. Its local effects refer to the original cache references.
+The returned writer can carry the finite WAL window of the next request. -/
 theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
     {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
     (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
@@ -422,18 +423,26 @@ theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
       next.WriteStorageEntry view
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
-        (observe next.reached) (inodes next.reached).visible := by
+        (observe next.reached) (inodes next.reached).visible ∧
+      ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow dir 0 through (observe start.reached) →
+        start.WalNameEffects appender stager syncer cache request lookup rename observe 0 through →
+        (∀ {settled value}, handle.set handle.phase (.ready value) settled = .ok () reached →
+          WalNamePresenceFrame dir 0 through (observe settled) (observe reached)) →
+        next.current.ready.state.writer.wal.SettledNamespaceWindow
+          next.current.ready.state.session.directory 0 through (observe next.reached) := by
   obtain ⟨cache, sameDir, sameActive, samePending, writeEntry⟩ :=
     opened.writeStorageEntry used view resolved references atDirectory census cacheAt settled
-  obtain ⟨schedule, returned, batch, table, next, sameDirectory, prepared, number, atReturn, pins, ledger, physical, _⟩ :=
+  obtain ⟨schedule, returned, batch, table, next, sameDirectory, prepared, number, atReturn, pins, ledger, physical, keepsNames⟩ :=
     opened.start.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
       request lookup rename nonempty writeEntry (seen cache sameDir sameActive samePending)
   obtain ⟨history, submissions, reads, _⟩ := opened.refinesLedger ledger
   refine ⟨opened.opened, schedule, cache, batch, table, next, sameDirectory, sameDir, sameActive, samePending, returned,
-    number, prepared, atReturn, pins.trans opened.emptyPins, ledger, ?_, ?_, ?_, physical⟩
+    number, prepared, atReturn, pins.trans opened.emptyPins, ledger, ?_, ?_, ?_, physical, ?_⟩
   · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using history
   · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.submissions] using submissions
   · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.reads] using reads
+  · intro through initial names restore
+    exact (keepsNames (fun offset _ => Nat.zero_le offset) initial names restore).2
 
 /-- End at the checkpoint issued on the heap of the preceding returned
 call. Both the prior replay and the stop use the same opened position. -/

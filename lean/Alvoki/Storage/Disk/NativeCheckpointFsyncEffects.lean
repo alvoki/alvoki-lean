@@ -156,6 +156,24 @@ open WAL.Boundary (WalInodeImage)
 variable {heap image : Type} {view : OpenCloseHeapView heap image}
   {directory : DiskDirectory} {selected issued reached : heap} {handle : IO.FS.Handle} {reason : FilePath}
 
+/-- The reached descriptor identifies the staged inode. Its durable byte
+choices can vary independently of the protected paths, provided those
+paths did not name that inode at the syscall. -/
+theorem RawFsyncTarget.fileEffectFrames
+    (target : RawFsyncTarget view selected issued handle)
+    (entry after : CheckpointStorageObservation) (path : FilePath) {choices : List ByteArray}
+    {footprint : FilePath → Prop}
+    (named : entry.files.names path = some ((view.descriptors issued).inode (view.handle issued handle).2.1.description))
+    (outside : ∀ path, footprint path →
+      entry.files.names path ≠ some ((view.descriptors issued).inode (view.handle issued handle).2.1.description))
+    (effect : RegularFileSyncEffect ((view.descriptors issued).inode (view.handle issued handle).2.1.description)
+      choices entry after) :
+    entry.files.names path = some ((view.handle selected handle).1.inode (view.handle selected handle).2.1.description) ∧
+    entry.Frames footprint after := by
+  refine ⟨named.trans (congrArg some target.inode), effect.frames ?_⟩
+  intro other keep inode binding same
+  exact outside other keep (binding.trans (congrArg some same))
+
 /-- A literal stopped file sync acts on the inode still held at the
 issue heap. Before any effect it leaves durable bytes unchanged. After
 the reported effect it changes only that inode's durable choices. -/
@@ -178,23 +196,21 @@ theorem RawFsyncTarget.stoppedRunFrames
     (observe issued).storageObservation.Frames footprint (observe reached).storageObservation := by
   intro inode
   obtain ⟨bound, privateBinding, bytes, visible, surviving⟩ := effect stopped
-  rw [target.inode] at bound privateBinding bytes
-  refine ⟨bound, ?_⟩
-  let choices := if effective then [(inodes issued).visible inode] else (inodes issued).crashBytes inode
-  have reported : inodes reached = (inodes issued).reportFileSync inode choices := by
+  let issuedInode := (view.descriptors issued).inode (view.handle issued handle).2.1.description
+  let choices := if effective then [(inodes issued).visible issuedInode] else (inodes issued).crashBytes issuedInode
+  have reported : inodes reached = (inodes issued).reportFileSync issuedInode choices := by
     rw [bytes]
     cases effective with
     | true => rfl
     | false =>
       have unchanged : (inodes issued).crashBytes =
-          ((inodes issued).reportFileSync inode ((inodes issued).crashBytes inode)).crashBytes := by
+          ((inodes issued).reportFileSync issuedInode ((inodes issued).crashBytes issuedInode)).crashBytes := by
         funext other
-        by_cases same : other = inode <;> simp [WalInodeImage.reportFileSync, same]
+        by_cases same : other = issuedInode <;> simp [WalInodeImage.reportFileSync, same]
       exact congrArg (fun durable => { inodes issued with crashBytes := durable }) unchanged
-  apply ((observe issued).fileSyncEffect (observe reached) reported visible surviving).frames
-  intro other keep oldInode named same
-  have boundToTarget : (observe issued).visible other = some inode := named.trans (congrArg some same)
-  exact separate other keep (privateBinding other boundToTarget)
+  exact target.fileEffectFrames (observe issued).storageObservation (observe reached).storageObservation path
+    bound (fun other keep alias => separate other keep (privateBinding other alias))
+    ((observe issued).fileSyncEffect (observe reached) reported visible surviving)
 
 /-- Apply the successful regular-file law at the actual issued syscall.
 The descriptor's inode and the visible path must agree at issue. -/
