@@ -619,7 +619,7 @@ theorem NativeReadPosition.SelectedWritePlan.installsLiteralRepairedWriter
     sameHistory.symm ▸ plan.pending
   have bounded : ∀ read ∈ current.reads, read.BoundedBy (readyState).writer.history.length :=
     sameHistory.symm ▸ plan.bounded
-  obtain ⟨handle, start, nextCache, opened, reachedEq, _, _, history, submissions, stateEq, reads, _, writeEntry⟩ :=
+  obtain ⟨handle, start, nextCache, opened, reachedEq, _, _, history, submissions, stateEq, reads, _, writeEntry, _⟩ :=
     allocation.opensReadyWriter stateValid constructor cache returned phaseEffects tokenEqual init bounded observe visible settled live
       rfl ownsSlot rfl cachePhase cacheToken rootInode phaseFrame tokenFrame phaseKeeper tokenKeeper
   have selectedHistory := history.trans sameHistory
@@ -987,6 +987,167 @@ structure RawMarkedOpenInterpreter.LiteralAlignedFinishEffects
   readsPending : ∀ {before entries loaded}, (keeperCalls).getPending cache.pendingRef before = .ok entries loaded →
     entries = view.pending before cache.pendingRef
 
+variable (source) in
+/-- The aligned finisher additionally interprets physical survivors and
+descriptors needed by subsequent writes. -/
+structure RawMarkedOpenInterpreter.ObservedAlignedRepairEffects
+    (cache : HeldOpenCache heap) (directory : DiskDirectory) {image : FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout image history) (entry : heap)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) extends
+    source.LiteralAlignedFinishEffects (view := view) cache directory layout entry observe where
+  syncStorage : ∀ (state : NativeReadyState), state.session.directory = directory → ∀ inode,
+    AlignedRepairStorageEffects keeperCalls view state observe visible inode
+  syncHandles : ∀ {keeper slot inode readHeap prepared}, attachedReadSlot view keeper slot inode readHeap →
+    (observe entry).files.names (directory.file (.walSegment layout.keeper.first)) = some inode →
+    (keeperCalls).modifyPending cache.pendingRef (pushPending (directory.file (.walSegment layout.keeper.first)) keeper)
+      readHeap = .ok () prepared →
+    AlignedRepairHandleEffects keeperCalls view (directory.file (.walSegment layout.keeper.first)) cache.handle keeper
+  unlinkStorage : ∀ (state : NativeReadyState), state.session.directory = directory → ∀ (inode : Nat) {ordinal before after result},
+    layout.range.through < ordinal →
+    source.remove (directory.file (.walSegment ordinal)) before = .ok result after →
+    RunCollection.ownedUnlinkResult result = .ok () →
+    (observe before).files.names (directory.file (.walSegment layout.keeper.first)) = some inode →
+    (observe before).Frames (fun path => state.crashPath path ∧ path ≠ directory.file (.walSegment ordinal)) (observe after) ∧
+    visible after inode = visible before inode
+  unlinkHandles : ∀ {keeper slot inode readHeap prepared}, attachedReadSlot view keeper slot inode readHeap →
+    (observe entry).files.names (directory.file (.walSegment layout.keeper.first)) = some inode →
+    (keeperCalls).modifyPending cache.pendingRef (pushPending (directory.file (.walSegment layout.keeper.first)) keeper)
+      readHeap = .ok () prepared →
+    ∀ {ordinal before after result}, layout.range.through < ordinal →
+      source.remove (directory.file (.walSegment ordinal)) before = .ok result after →
+      RunCollection.ownedUnlinkResult result = .ok () →
+      ReadSlotDrops view cache.handle before after ∧ ReadSlotDrops view keeper before after
+  walNames : AlignedRepairWalNameEffects keeperCalls directory observe cache.directoryRef cache.pendingRef
+    source.remove layout.range.through
+
+abbrev RawMarkedOpenInterpreter.LiteralAlignedRepairEffects
+    (cache : HeldOpenCache heap) (plan : current.SelectedWritePlan batch target (view.files reached).image)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) :=
+  source.ObservedAlignedRepairEffects (view := view) cache dir plan.layout reached observe visible
+
+variable (source) in
+/-- The actual aligned repair, rooted at the held reader's prepared heap. -/
+structure RawMarkedOpenInterpreter.LiteralAlignedSyncs
+    (directory : DiskDirectory) {image : FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout image history) (cache : HeldOpenCache heap)
+    (view : OpenCloseHeapView heap FileImage) (observe : heap → CheckpointStorageObservation)
+    (visible : heap → Nat → ByteArray) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (entry repaired : heap) where
+  keeper : IO.FS.Handle
+  slot : DescriptorSlot
+  inode : Nat
+  readHeap : heap
+  prepared : heap
+  rootIssued : heap
+  authorized : heap
+  keeperEntry : heap
+  loaded : heap
+  consumed : heap
+  entries : List (FilePath × IO.FS.Handle)
+  newer : List Nat
+  named : (observe entry).files.names (directory.file (.walSegment layout.keeper.first)) = some inode
+  attached : attachedReadSlot view keeper slot inode readHeap
+  remembered : (keeperCalls).modifyPending cache.pendingRef
+    (pushPending (directory.file (.walSegment layout.keeper.first)) keeper) readHeap = .ok () prepared
+  holding : LiteralOpenAuthority view directory cache prepared
+  liveFrame : (⟨(observe entry).files.names, fun inode => [visible entry inode]⟩ : CheckpointSurvivingFiles).Frames
+    (managedPath directory) ⟨(observe prepared).files.names, fun inode => [visible prepared inode]⟩
+  privateKeeper : ∀ path, managedPath directory path →
+    (observe prepared).files.names path = some inode → path = directory.file (.walSegment layout.keeper.first)
+  scanned : ∀ start, start ∈ newer ↔ layout.range.through < start ∧
+    ∃ object, namespaceView.child root (renderWalSegmentName start) = some object
+  getRoot : (keeperCalls).getDirectory cache.directoryRef prepared = .ok (some cache.handle) rootIssued
+  syncRoot : (keeperCalls).sync cache.handle rootIssued = .ok () authorized
+  pruned :
+    let plan : Plan := ⟨layout.range.through, layout.keeper.first, newer, layout.keeper.bytes⟩
+    if newer = [] then keeperEntry = authorized else ∃ (unlinked suffixIssued : heap),
+      ((newer.map Step.unlink).forM (performPaths directory plan source.remove throw
+        (source.stage.stage cache.pendingRef (keeperCalls).modifyPending)
+        ((keeperCalls).syncPaths directory.path cache.directoryRef cache.activeRef cache.pendingRef) source.rename))
+        authorized = .ok () unlinked ∧
+      (keeperCalls).getDirectory cache.directoryRef unlinked = .ok (some cache.handle) suffixIssued ∧
+      (keeperCalls).sync cache.handle suffixIssued = .ok () keeperEntry
+  getPending : (keeperCalls).getPending cache.pendingRef keeperEntry = .ok entries loaded
+  found : entries.find? (fun item => item.1 == directory.file (.walSegment layout.keeper.first)) =
+    some (directory.file (.walSegment layout.keeper.first), keeper)
+  clear : (keeperCalls).setPending cache.pendingRef
+    (entries.filter (fun item => item.1 != directory.file (.walSegment layout.keeper.first))) loaded = .ok () consumed
+  syncKeeper : (keeperCalls).sync keeper consumed = .ok () repaired
+
+/-- Interpret storage at the repair already witnessed by the literal return.
+The complete directory scan accounts for later WAL names, while the bounded
+catalog and exact keeper bytes are carried from the same entry heap. -/
+theorem RawMarkedOpenInterpreter.LiteralAlignedSyncs.readyStorage
+    {directory : DiskDirectory} {image : FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout image history} {cache : HeldOpenCache heap}
+    {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+    {namespaceView : DirectoryReadNamespace} {root : DeviceInode} {entry repaired : heap}
+    (seen : source.LiteralAlignedSyncs directory layout cache view observe visible namespaceView root entry repaired)
+    {state : NativeReadyState} (valid : state.Valid)
+    (directoryEq : state.session.directory = directory) (slotEq : state.directorySlot = cache.rootSlot)
+    (censusEq : state.census = view.descriptors repaired)
+    (keeperStart : state.writer.wal.active.first = layout.keeper.first)
+    (after : LiteralOpenAuthority view directory cache repaired)
+    (effects : source.ObservedAlignedRepairEffects (view := view) cache directory layout entry observe visible)
+    (protectedFiles : NativeReadyProtectedStorage state (observe seen.prepared).files)
+    (marker : (observe seen.prepared).files.Stored (directory.file .walBoundary)
+      (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64))
+    (rootSettled : ∀ names ∈ (observe seen.prepared).crashNames,
+      names directory.path = (observe seen.prepared).files.names directory.path)
+    (keeperBytes : visible entry seen.inode = state.writer.wal.active.bytes)
+    {lower : Nat}
+    (window : state.writer.wal.NamespaceWindow directory lower layout.range.through (observe entry).files.names)
+    (bounded : ∀ start ∈ state.writer.wal.segments.map WalSegment.first, start ≤ layout.range.through)
+    (child : ∀ start, layout.range.through < start →
+      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+        (observe entry).files.names (directory.file (.walSegment start))) :
+    NativeReadyStorage state (observe repaired) ∧
+    (∀ inode, (observe repaired).files.names (directory.file (.walSegment state.writer.wal.active.first)) = some inode →
+      visible repaired inode = state.writer.wal.active.bytes) ∧
+    (observe repaired).files.names (directory.file (.walSegment state.writer.wal.active.first)) = some seen.inode ∧
+    ∀ through, state.writer.wal.SettledNamespaceWindow directory lower through (observe repaired) := by
+  subst directory
+  let directory := state.session.directory
+  let plan : Plan := ⟨layout.range.through, layout.keeper.first, seen.newer, layout.keeper.bytes⟩
+  have heldRoot : attachedReadSlot view cache.handle state.directorySlot (state.census.inode state.directorySlot.description)
+      seen.prepared := by
+    rw [slotEq, censusEq, after.rootAttached.2.2]
+    exact seen.holding.rootAttached
+  have noAlias (path : FilePath) (selected : state.selectedRetryPath path) :
+      (observe seen.prepared).files.names path ≠ some seen.inode := by
+    have inside := selectedRetryManagedPath selected
+    intro equal
+    have alias := seen.privateKeeper path inside equal
+    apply NativeReadyState.protectedPathNeWalFromActive valid selected (Nat.le_of_eq keeperStart)
+    exact alias
+  have received (start : Nat) :
+      (observe seen.prepared).files.names (directory.file (.walSegment start)) =
+        (observe entry).files.names (directory.file (.walSegment start)) :=
+    (seen.liveFrame _ (.inr ⟨.walSegment start, rfl⟩)).1
+  have bound := (received layout.keeper.first).trans seen.named
+  have bytes := (List.cons.inj ((seen.liveFrame _ (.inr ⟨.walSegment layout.keeper.first, rfl⟩)).2 _ seen.named)).1
+  have listed (start : Nat) (beyond : plan.through < start) :
+      ((observe seen.prepared).files.names (directory.file (.walSegment start))).isSome = true ↔ start ∈ plan.newer := by
+    rw [received, ← child start beyond, Option.isSome_map, Option.isSome_iff_exists, seen.scanned]
+    exact ⟨fun present => ⟨beyond, present⟩, And.right⟩
+  have later (ordinal : Nat) (member : ordinal ∈ plan.newer) := ((seen.scanned ordinal).mp member).1
+  have handles := effects.syncHandles seen.attached seen.named seen.remembered
+  have dropRoot {issued reached : heap} (synced : (keeperCalls).sync cache.handle issued = .ok () reached) :=
+    (effects.syncKeepsCache synced).2.2
+  exact (effects.syncStorage state rfl seen.inode).readyAfterAlignedRepair plan source.remove
+    (source.stage.stage cache.pendingRef (keeperCalls).modifyPending) source.rename valid
+    (by simpa only [keeperStart] using handles) heldRoot seen.attached (by simpa only [keeperStart] using seen.remembered)
+    dropRoot (fun member removed accepted =>
+      effects.unlinkHandles seen.attached seen.named seen.remembered (later _ member) removed accepted)
+    (fun member removed accepted name =>
+      effects.unlinkStorage state rfl seen.inode (later _ member) removed accepted (keeperStart ▸ name))
+    seen.getRoot seen.syncRoot seen.pruned seen.getPending (by simpa only [keeperStart] using seen.found)
+    (by simpa only [keeperStart] using seen.clear) seen.syncKeeper protectedFiles marker rootSettled
+    (by simpa only [keeperStart] using bound) (bytes.trans keeperBytes) noAlias
+    (window.frame (fun start _ _ => congrArg Option.isSome (received start))) bounded
+    (fun ordinal member => Nat.lt_of_le_of_lt (keeperStart.symm ▸ layout.target.firstCovered) (later ordinal member))
+    later listed effects.walNames
+
 /-- An aligned installation ties a valid writer and the live references
 and descriptor projections to the actual returned table. -/
 abbrev RawMarkedOpenInterpreter.LiteralAlignedReturn
@@ -995,22 +1156,22 @@ abbrev RawMarkedOpenInterpreter.LiteralAlignedReturn
     (published : CheckpointPublication.Image) (checkpoint : Option (PackedTable × UInt64))
     (wal : WalSegmentImage) (cache : HeldOpenCache heap) (view : OpenCloseHeapView heap FileImage)
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
+    {repaired : heap} (writer : SegmentedWriterState)
+    (allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase writer.installed repaired)
     (returnedAt : heap) (table : DiskTable) : Prop :=
     let files := RawMarkedOpenInterpreter.makeCache directory cache.directoryRef cache.activeRef cache.pendingRef
-    ∃ (repaired : heap) (writer : SegmentedWriterState)
-      (allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase writer.installed repaired),
-      let state := allocation.readyState writer directory cache.owner cache.rootSlot
-        cache.directoryRef cache.activeRef cache.pendingRef phaseIdentity tokenIdentity
-      state.Valid ∧ writer.history = history ∧ writer.checkpoint = checkpoint ∧
-      writer.target = layout.target ∧ writer.published.durable = published.durable ∧
-      writer.wal = {wal with directory := (view.files repaired).image.directory} ∧
-      table = RawMarkedOpenInterpreter.assemble directory cache.lock files allocation.phase allocation.token ∧
-      table.UsesOpenReferences directory cache.lock files allocation.phase allocation.token ∧
-      allocation.afterToken = returnedAt ∧ view.phase returnedAt allocation.phase = some (.ready writer.installed) ∧
-      view.files returnedAt = state.files ∧ view.descriptors returnedAt = state.census ∧
-      view.cacheAt returnedAt cache.directoryRef cache.activeRef cache.pendingRef = state.cache ∧
-      attachedReadSlot view cache.lock state.owner (state.census.inode state.owner.description) returnedAt ∧
-      recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok writer.installed.table
+    let state := allocation.readyState writer directory cache.owner cache.rootSlot
+      cache.directoryRef cache.activeRef cache.pendingRef phaseIdentity tokenIdentity
+    state.Valid ∧ LiteralOpenAuthority view directory cache repaired ∧ writer.history = history ∧ writer.checkpoint = checkpoint ∧
+    writer.target = layout.target ∧ writer.published.durable = published.durable ∧
+    writer.wal = {wal with directory := (view.files repaired).image.directory} ∧
+    table = RawMarkedOpenInterpreter.assemble directory cache.lock files allocation.phase allocation.token ∧
+    table.UsesOpenReferences directory cache.lock files allocation.phase allocation.token ∧
+    allocation.afterToken = returnedAt ∧ view.phase returnedAt allocation.phase = some (.ready writer.installed) ∧
+    view.files returnedAt = state.files ∧ view.descriptors returnedAt = state.census ∧
+    view.cacheAt returnedAt cache.directoryRef cache.activeRef cache.pendingRef = state.cache ∧
+    attachedReadSlot view cache.lock state.owner (state.census.inode state.owner.description) returnedAt ∧
+    recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok writer.installed.table
 
 /-- The same literal worker that supplies the selected replay runs the
 aligned repair and installs that writer into the returned table. The
@@ -1042,13 +1203,15 @@ theorem RawMarkedOpenInterpreter.retainsLiteralAlignedReturn
     (effects : source.LiteralAlignedFinishEffects (view := view) cache directory layout entry observe)
     (allocates : source.LiteralAllocationEffects view directory cache observe visible)
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat) :
-    source.LiteralAlignedReturn directory layout published checkpoint wal cache view
-      phaseIdentity tokenIdentity returnedAt table := by
-  unfold RawMarkedOpenInterpreter.LiteralAlignedReturn
-  intro files
+    ∃ (repaired : heap) (writer : SegmentedWriterState)
+      (allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase writer.installed repaired),
+      source.LiteralAlignedReturn directory layout published checkpoint wal cache view
+        phaseIdentity tokenIdentity writer allocation returnedAt table ∧
+      Nonempty (source.LiteralAlignedSyncs directory layout cache view observe visible namespaceView root entry repaired) := by
+  let files := RawMarkedOpenInterpreter.makeCache directory cache.directoryRef cache.activeRef cache.pendingRef
   obtain ⟨count, markerBytes, patched, logical, file, slot, inode, readHeap, prepared, repaired, extent, newer,
     phase, afterPhase, token, markerName, decoded, _, replayed, named, attached, route, extentEq, laterNames,
-    _, _, readFrame, cacheFrame, rawFinish, phaseReturn, tokenReturn, actualTable, _⟩ := opened
+    liveFrame, privateKeeper, readFrame, cacheFrame, rawFinish, phaseReturn, tokenReturn, actualTable, _⟩ := opened
   let calls := source.keeperCallbacks.withFileReads source.fileCalls
   let stage := source.stage.stage cache.pendingRef calls.modifyPending
   let plan : Plan := ⟨layout.range.through, layout.keeper.first, newer, layout.keeper.bytes⟩
@@ -1060,7 +1223,8 @@ theorem RawMarkedOpenInterpreter.retainsLiteralAlignedReturn
     ⟨effects.readsRoot, fun synced => (effects.syncKeepsCache synced).1,
       fun member removed accepted => (effects.unlink (later _ member) removed accepted).2⟩
   rw [extentExact] at rawFinish
-  obtain ⟨ready, sealed, repairFrame, _, _, _, _, _, _, _, _, _, _, _, _, _⟩ :=
+  obtain ⟨ready, sealed, repairFrame, rootIssued, authorized, keeperEntry, entries, loaded, consumed,
+    getRoot, syncRoot, pruned, getPending, found, clear, syncKeeper⟩ :=
     (effects.repairEffects attached named remembered.2).readyAfterReturn plan layout.target.trimmedSize calls
       cache.directoryRef cache.activeRef cache.pendingRef source.remove stage source.rename
       (before := entry)
@@ -1098,41 +1262,13 @@ theorem RawMarkedOpenInterpreter.retainsLiteralAlignedReturn
       ⟨tokenCache.files, tokenCache.census, tokenCache.cache, congrArg (fun handle => handle.2.1) (tokenCache.handles _)⟩
   have held : attachedReadSlot view cache.lock state.owner (state.census.inode state.owner.description) returnedAt :=
     ⟨owner, census.symm ▸ valid.ownerLive, congrFun (congrArg DescriptorInventory.inode census) _⟩
-  exact ⟨repaired, writer, allocation, valid, rfl, rfl, rfl, rfl, rfl, actualTable, actualTable.symm ▸ used, rfl,
-    initialized, sameFiles, census, sameCache, held, recovered⟩
-
-variable (source) in
-/-- The aligned finisher additionally interprets physical survivors and
-descriptors needed by subsequent writes. -/
-structure RawMarkedOpenInterpreter.LiteralAlignedRepairEffects
-    (cache : HeldOpenCache heap)
-    (plan : current.SelectedWritePlan batch target (view.files reached).image)
-    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) extends
-    source.LiteralAlignedFinishEffects (view := view) cache dir plan.layout reached observe where
-  syncStorage : ∀ (state : NativeReadyState), state.session.directory = dir → ∀ inode,
-    AlignedRepairStorageEffects keeperCalls view state observe visible inode
-  syncHandles : ∀ {keeper slot inode readHeap prepared}, attachedReadSlot view keeper slot inode readHeap →
-    (observe reached).files.names ((dir).file (.walSegment plan.layout.keeper.first)) = some inode →
-    (keeperCalls).modifyPending cache.pendingRef (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
-      readHeap = .ok () prepared →
-    AlignedRepairHandleEffects keeperCalls view ((dir).file (.walSegment plan.layout.keeper.first)) cache.handle keeper
-  unlinkStorage : ∀ (state : NativeReadyState), state.session.directory = dir → ∀ (inode : Nat) {ordinal before after result},
-    plan.layout.range.through < ordinal →
-    source.remove ((dir).file (.walSegment ordinal)) before = .ok result after →
-    RunCollection.ownedUnlinkResult result = .ok () →
-    (observe before).files.names ((dir).file (.walSegment plan.layout.keeper.first)) = some inode →
-    (observe before).Frames (fun path => state.crashPath path ∧ path ≠ (dir).file (.walSegment ordinal)) (observe after) ∧
-    visible after inode = visible before inode
-  unlinkHandles : ∀ {keeper slot inode readHeap prepared}, attachedReadSlot view keeper slot inode readHeap →
-    (observe reached).files.names ((dir).file (.walSegment plan.layout.keeper.first)) = some inode →
-    (keeperCalls).modifyPending cache.pendingRef (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
-      readHeap = .ok () prepared →
-    ∀ {ordinal before after result}, plan.layout.range.through < ordinal →
-      source.remove ((dir).file (.walSegment ordinal)) before = .ok result after →
-      RunCollection.ownedUnlinkResult result = .ok () →
-      ReadSlotDrops view cache.handle before after ∧ ReadSlotDrops view keeper before after
-  walNames : AlignedRepairWalNameEffects keeperCalls dir observe cache.directoryRef cache.pendingRef
-    source.remove plan.layout.range.through
+  exact ⟨repaired, writer, allocation,
+    ⟨valid, repairedAuthority, rfl, rfl, rfl, rfl, rfl, actualTable, actualTable.symm ▸ used, rfl,
+      initialized, sameFiles, census, sameCache, held, recovered⟩,
+    ⟨file, slot, inode, readHeap, prepared, rootIssued, authorized, keeperEntry, loaded, consumed, entries, newer,
+      named, attached, remembered.2, preparedAuthority, liveFrame,
+      (fun path inside => privateKeeper path inside inside), laterNames,
+      getRoot, syncRoot, pruned, getPending, found, clear, syncKeeper⟩⟩
 
 variable (source) in
 /-- Callback laws specific to the executed keeper replacement. Reads of

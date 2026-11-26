@@ -4,7 +4,7 @@ import Alvoki.Storage.Disk.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.NativeOpenSnapshotTrace
 import Alvoki.Storage.Disk.NativeAlignedMarkedReady
 import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
-import Alvoki.Storage.Disk.NativePublishedWriteSnapshot
+import Alvoki.Storage.Disk.NativeReadyCallRefinement
 
 namespace Alvoki.Storage.DiskSession
 
@@ -109,6 +109,8 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
       view.active cache.ready cache.activeRef = none ∧ view.pending cache.ready cache.pendingRef = [] ∧
       layout.keeper = wal.active ∧ layout.tail = .empty ∧
       SelectedIntegrityCheckpoint actual pair.manifest checkpoint ∧
+      wal.NamespaceWindow dir 0 layout.range.through (observe entry).files.names ∧
+      layout.VisibleWal dir (observe entry).files.names (visible entry) ∧
       source.LiteralMarkedReturn dir layout checkpoint cache.lock cache.directoryRef cache.activeRef cache.pendingRef
         cache.ready view (fun atHeap => (observe atHeap).files.names) visible namespaceView root (managedPath dir)
         (observedOpenReadFrame view dir selectedPath cache observe) entry returnedAt table ∧
@@ -120,8 +122,11 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
         (view.files entry).image.kept = retry.kept →
         (∀ ordinal ∈ (view.files entry).image.later.visible, writer.history.length < ordinal ∧
           ∃ object, namespaceView.child root (renderWalSegmentName ordinal) = some object) →
-        source.LiteralAlignedReturn dir layout { published with durable := actual } checkpoint wal cache view
-          phaseIdentity tokenIdentity returnedAt table) := by
+        ∃ (repaired : heap) (reopened : SegmentedWriterState)
+          (allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase reopened.installed repaired),
+          source.LiteralAlignedReturn dir layout { published with durable := actual } checkpoint wal cache view
+            phaseIdentity tokenIdentity reopened allocation returnedAt table ∧
+          Nonempty (source.LiteralAlignedSyncs dir layout cache view observe visible namespaceView root entry repaired)) := by
   intro dir writer pair wal actual retry selectedPath
   let live := fun atHeap => (observe atHeap).files.names
   let filesAt : heap → CheckpointSurvivingFiles := fun atHeap => ⟨live atHeap, fun inode => [visible atHeap inode]⟩
@@ -210,7 +215,7 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (.inr ⟨.walBoundary, rfl⟩) modeled.2 (fun start _ _ => .inr ⟨.walSegment start, rfl⟩)
     (fun start _ bound => child start (layout.through ▸ bound)) physical worker
   refine ⟨cache, published, layout, checkpoint, authority, heldRoot, heldLock, emptyActive, emptyPending,
-    keeper, aligned, selected, literal, ?_⟩
+    keeper, aligned, selected, (fun start lower upper => window start lower (layout.through ▸ upper)), physical, literal, ?_⟩
   intro repair allocate phaseId tokenId selectedPair selectedKeeper sealed suffix
   have retained := current.current.ready.readPrefix.refines.1.retained
   exact source.retainsLiteralAlignedReturn dir layout (published := { published with durable := actual })
@@ -219,6 +224,143 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (by simpa only [CanonicalKeeperLayout.target, keeper] using selectedKeeper) sealed
     (fun ordinal member => (suffix ordinal member).imp_left (fun after => layout.through.symm ▸ after))
     repair allocate phaseId tokenId
+
+/-- Start the common ready-call induction on the exact table returned by
+an aligned open. The previous client ledger survives the reopen, while
+its old pins do not enter the newly allocated handle. -/
+theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
+    {directory : DiskDirectory} {image : FileImage} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout image history} {published : CheckpointPublication.Image}
+    {checkpoint : Option (PackedTable × UInt64)} {wal : WalSegmentImage} {cache : HeldOpenCache heap}
+    {writer : SegmentedWriterState} {repaired returnedAt : heap} {table : DiskTable}
+    {allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase writer.installed repaired}
+    (installed : source.LiteralAlignedReturn directory layout published checkpoint wal cache view
+      phaseIdentity tokenIdentity writer allocation returnedAt table)
+    (returned : source.openTable input entry = .ok table returnedAt)
+    {previous origin : NativeExecutionPosition} {earlier : List NativeExecutionEvent}
+    (sameHistory : history = previous.history) (priorLedger : origin.LedgerSuffix earlier previous)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : heap → CheckpointStorageObservation)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (seen : source.LiteralAlignedSyncs directory layout cache view observe (fun atHeap => (inodes atHeap).visible)
+      namespaceView root entry repaired)
+    (physical : source.ObservedAlignedRepairEffects (view := view) cache directory layout entry observe
+      (fun atHeap => (inodes atHeap).visible))
+    (allocates : source.LiteralAllocationEffects view directory cache observe (fun atHeap => (inodes atHeap).visible))
+    (protectedFiles : NativeReadyProtectedStorage
+      (allocation.readyState writer directory cache.owner cache.rootSlot cache.directoryRef cache.activeRef cache.pendingRef
+        phaseIdentity tokenIdentity) (observe seen.prepared).files)
+    (marker : (observe seen.prepared).files.Stored (directory.file .walBoundary)
+      (WAL.Boundary.encode (WAL.encode writer.history).size.toUInt64))
+    (rootSettled : ∀ names ∈ (observe seen.prepared).crashNames,
+      names directory.path = (observe seen.prepared).files.names directory.path)
+    (aligned : layout.tail = .empty) (keeper : layout.keeper = wal.active)
+    (keeperAtEntry : ((observe entry).files.names (directory.file (.walSegment layout.keeper.first))).map
+      (inodes entry).visible = some (layout.keeper.bytes ++ layout.tail))
+    {lower : Nat}
+    (window : wal.NamespaceWindow directory lower layout.range.through (observe entry).files.names)
+    (boundedStarts : ∀ start ∈ wal.segments.map WalSegment.first, start ≤ layout.range.through)
+    (child : ∀ start, layout.range.through < start →
+      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+        (observe entry).files.names (directory.file (.walSegment start)))
+    (effects : OpenPhaseCellEffects view.phase get set) (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
+    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
+      (refs : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
+      source.openTable input entry = .ok handle.table start.reached ∧ handle.table = table ∧ start.reached = returnedAt ∧
+      (handle.phase, handle.token) = (allocation.phase, allocation.token) ∧ start.pins = [] ∧
+      (refs.directory, refs.active, refs.pending) = (cache.directoryRef, cache.activeRef, cache.pendingRef) ∧
+      start.current.ready.state = allocation.readyState writer directory cache.owner cache.rootSlot
+        cache.directoryRef cache.activeRef cache.pendingRef phaseIdentity tokenIdentity ∧
+      origin.LedgerSuffix earlier start.current ∧
+      start.WriteStorageEntry view refs (observe returnedAt) (inodes returnedAt).visible ∧
+      (∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow start.current.ready.state.session.directory
+        lower through (observe returnedAt)) ∧
+      ∀ (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+        (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+        (rename : FilePath → FilePath → EStateM IO.Error heap Unit),
+        let writes := start.readyWriteCalls refs appender stager syncer lookup rename
+        ∀ (issuer : handle.LatestIssuer) (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+          (_reported : writes.ReturnEffects view inodes runs observe inode buffered)
+          {calls : List (NativeReturnedCall handle)} {reached : heap},
+          NativeReturnedCalls writes issuer returnedAt [] calls reached →
+          NativeReturnedCalls.ReadyFrom writes issuer returnedAt [] calls →
+          ∃ (last : NativeOpenedPosition handle) (events : List NativeExecutionEvent),
+            last.reached = reached ∧
+            last.pins.map NativeOpenedPin.raw = calls.foldl (fun pins call => call.pinsAfter pins) [] ∧
+            writes.StorageAt view observe (fun atHeap => (inodes atHeap).visible) last ∧
+            events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
+            origin.LedgerSuffix (earlier ++ events) last.current ∧
+            InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
+              last.current.ready.state.writer.installed last.current.ready.state.session := by
+  let files := RawMarkedOpenInterpreter.makeCache directory cache.directoryRef cache.activeRef cache.pendingRef
+  let state := allocation.readyState writer directory cache.owner cache.rootSlot
+    cache.directoryRef cache.activeRef cache.pendingRef phaseIdentity tokenIdentity
+  obtain ⟨valid, authority, history, _, _, _, walEq, tableEq, _, tokenHeap, _, _, _, _, _, _⟩ := installed
+  have atRoot (captured : DescriptorInventory) (cached : state.cache.directory = some (captured, state.directorySlot, 0)) :
+      captured.inode state.directorySlot.description = state.census.inode state.directorySlot.description := by
+    have actual : state.cache.directory = some (cache.captured, cache.rootSlot, 0) := by
+      change (view.cacheAt repaired cache.directoryRef cache.activeRef cache.pendingRef).directory = _
+      simp only [OpenCloseHeapView.cacheAt, authority.directoryCell, Option.map_some, authority.rootHandle]
+    have same := congrArg Prod.fst (Option.some.inj (actual.symm.trans cached))
+    change cache.captured = captured at same
+    exact same ▸ authority.rootAttached.2.2.symm
+  have activeKeeper : writer.wal.active = layout.keeper :=
+    (congrArg WalSegmentImage.active walEq).trans keeper.symm
+  have keeperBytes : (inodes entry).visible seen.inode = writer.wal.active.bytes := by
+    rw [seen.named, Option.map_some, aligned, ByteArray.append_empty, ← activeKeeper] at keeperAtEntry
+    exact Option.some.inj keeperAtEntry
+  have exactWindow : writer.wal.NamespaceWindow directory lower layout.range.through (observe entry).files.names := by
+    rw [walEq]
+    exact window
+  have allBounded : ∀ start ∈ writer.wal.segments.map WalSegment.first, start ≤ layout.range.through := by
+    rw [walEq]
+    exact boundedStarts
+  obtain ⟨settled, live, _, repairedWindow⟩ := seen.readyStorage valid rfl rfl rfl
+    (congrArg WalSegment.first activeKeeper) authority physical protectedFiles marker rootSettled
+    keeperBytes exactWindow allBounded child
+  have carriedHistory : state.writer.history = previous.history := history.trans sameHistory
+  have replay : PendingClientReplay previous.submissions previous.ready.reads state.writer.history := by
+    rw [carriedHistory]
+    exact previous.ready.readPrefix.refines.2.2
+  have bounded : ∀ read ∈ previous.ready.reads, read.BoundedBy state.writer.history.length := by
+    rw [carriedHistory]
+    exact previous.ready.readPrefix.readsBounded
+  have exactReturn : source.openTable input entry =
+      .ok (RawMarkedOpenInterpreter.assemble directory cache.lock files allocation.phase allocation.token) allocation.afterToken := by
+    rw [returned, tableEq, tokenHeap]
+  obtain ⟨uses, atDirectory⟩ := RawMarkedOpenInterpreter.cacheReferences directory cache.directoryRef cache.activeRef cache.pendingRef
+  let refs : OpenSyncCacheRefs files directory.path :=
+    ⟨cache.directoryRef, cache.activeRef, cache.pendingRef, uses, atDirectory⟩
+  obtain ⟨_, phaseCache, phaseFiles, phaseVisible⟩ := allocates.allocatesPhase allocation.phaseAllocated
+  obtain ⟨_, tokenCache, tokenFiles, tokenVisible⟩ := allocates.allocatesToken allocation.tokenAllocated
+  obtain ⟨handle, start, nextCache, opened, reached, references, cacheRefs, startHistory, submissions, stateEq,
+    reads, _, writeEntry, emptyPins⟩ := allocation.opensReadyWriter valid
+      (RawMarkedOpenInterpreter.assembles directory cache.lock files) refs exactReturn effects ptrEq
+      replay bounded observe (fun atHeap => (inodes atHeap).visible) settled live rfl authority.ownerAttached.1 rfl
+      phaseCache tokenCache atRoot
+      (phaseFiles.weaken fun _ path => NativeReadyState.crashPath_rootOrChild (state := state) path)
+      (tokenFiles.weaken fun _ path => NativeReadyState.crashPath_rootOrChild (state := state) path)
+      (fun inode _ => congrFun phaseVisible inode) (fun inode _ => congrFun tokenVisible inode)
+  obtain ⟨sameTable, sameHeap⟩ := EStateM.Result.ok.inj (opened.symm.trans returned)
+  have unchanged : previous.LedgerSuffix [] start.current :=
+    ⟨by simpa using startHistory.trans carriedHistory, by simpa using submissions, by simpa using reads, by simp⟩
+  have across : origin.LedgerSuffix earlier start.current := by
+    simpa only [List.append_nil] using priorLedger.append unchanged
+  refine ⟨handle, start, nextCache, opened, sameTable, sameHeap, references, emptyPins, cacheRefs, stateEq,
+    across, ?_, ?_, ?_⟩
+  · simpa only [← sameHeap] using writeEntry
+  · intro through
+    have readyWindow := repairedWindow through
+    rw [stateEq, ← tokenHeap]
+    exact allocation.walWindowAfterAllocations observe writer.wal directory readyWindow.1 readyWindow.2
+      (fun _ => WalNamePresenceFrame.ofStorageFrame phaseFiles (fun start _ _ => .inr ⟨.walSegment start, rfl⟩))
+      (fun _ => WalNamePresenceFrame.ofStorageFrame tokenFiles (fun start _ _ => .inr ⟨.walSegment start, rfl⟩))
+  · intro appender stager syncer lookup rename writes issuer inode buffered reported calls reached executed covered
+    have initial : writes.StorageAt view observe (fun atHeap => (inodes atHeap).visible) start := writeEntry
+    obtain ⟨last, events, heap, pins, physical, length, records, ledger⟩ :=
+      executed.refinesReady covered view inodes runs observe inode buffered reported start sameHeap
+        (by rw [emptyPins]; rfl) initial
+    exact ⟨last, events, heap, pins, physical, length, records, across.append ledger, last.current.ready.readPrefix.guardedReplay⟩
 
 /-- A physical checkpoint selection and its subsequent calls share one
 client ledger across restart. The prefix can belong to a fresh caller or

@@ -120,8 +120,13 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   case now applies to every source stage, leaving physical survival to
   recovery. At the last directory-fsync stop, the chosen file sample is
   preserved through the reboot and actual read-only failed calls. The
-  aligned opener returns the exact replayed table, and its own token
-  supplies a later snapshot on the same ledger.
+  aligned opener supplies the exact replayed table, its keeper sync and any
+  suffix pruning. Given durable protected files and marker at the prepared
+  heap, the settled root binding and agreement of later names with the
+  complete scan, a consumer of installation and repair witnesses establishes
+  write-ready storage and a finite ready-call sequence with empty pins.
+  The end-to-end theorem must obtain both witnesses from that opener and
+  supply the ledger of its actual predecessor.
   [Early checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean) ·
   [Exact aligned reopen](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 

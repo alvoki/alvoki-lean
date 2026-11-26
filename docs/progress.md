@@ -135,16 +135,21 @@ dispatcher result at the heap reached by the prefix. The terminal recovery
 proof for a grouped write now consumes that result directly. The initial
 name coverage and local effects of the reached operations remain explicit.
 
-The physical aligned-repair theorem follows the opened keeper inode through
-the final file sync, including the branch that removes later WAL segments and
-syncs the directory again. Uncertain-write recovery uses this theorem for both
-branches. Its input includes a complete listing beyond the cutoff. The sampled
-checkpoint path still has to supply the callbacks from its own repair.
+The sampled checkpoint opener supplies the reached callbacks for the same
+aligned repair used by uncertain-write recovery. The keeper read, cache
+update, directory sync, any later-segment unlinks and final keeper sync
+refer to the same prepared and repaired heaps. The actual directory scan,
+together with name agreement at the successful attempt's entry, accounts
+for every later WAL name. The proof applies when either manifest survives.
 
-The successful aligned repair and its allocations now determine the installed
-writer, returned table, phase, token, cache and lock under local callback
-laws. The next write still needs the physical storage invariant, including
-the visible keeper bytes at the returned heap.
+A separate consumer takes the installation and the observed repair at the same
+repaired heap. Given the selected durable files and marker at the prepared
+heap, a settled root binding and local callback effects, it establishes the
+physical write entry and starts a finite ready-call sequence with empty pins.
+It transports a supplied client ledger. The remaining composition must take
+both witnesses directly from the checkpoint opener and connect the ledger
+to its actual predecessor. Heap equality alone cannot identify which repair
+produced it.
 [Sampled checkpoint reader](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and

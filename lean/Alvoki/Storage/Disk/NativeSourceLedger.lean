@@ -58,7 +58,7 @@ theorem OpenReferenceAllocations.opensReadyWriter
       start.current.history = state.writer.history ∧ start.current.submissions = log ∧
       start.current.ready.state = state ∧ start.current.ready.reads = reads ∧
       attachedReadSlot view handle.lock state.owner (state.census.inode state.owner.description) start.reached ∧
-      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) := by
+      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧ start.pins = [] := by
   obtain ⟨_, references, stored⟩ := allocation.installs constructor
   let next : NativeReadPosition state.writer.history log :=
     ⟨.ok state.session (state.census, state.files), state, state, reads, .installed rfl valid rfl replay bounded⟩
@@ -73,7 +73,8 @@ theorem OpenReferenceAllocations.opensReadyWriter
     ⟨(congrArg (fun handle => handle.2.1) ownerHandle).trans ownerAtRepair,
       census.symm ▸ valid.ownerLive, congrFun (congrArg DescriptorInventory.inode census) _⟩
   obtain ⟨physical, live⟩ := allocation.framesReadyStorage observe visible ready keeper phaseFrame tokenFrame phaseKeeper tokenKeeper
-  refine ⟨handle, start, cache, returned, rfl, rfl, rfl, rfl, rfl, rfl, rfl, owner, census, cacheAt, physical, live, ?_⟩
+  refine ⟨handle, start, cache, returned, rfl, rfl, rfl, rfl, rfl, rfl, rfl, owner,
+    ⟨census, cacheAt, physical, live, ?_⟩, rfl⟩
   intro literal found
   change view.directory allocation.afterToken cache.directory = some literal at found
   obtain ⟨captured, atOpen⟩ := valid.captured

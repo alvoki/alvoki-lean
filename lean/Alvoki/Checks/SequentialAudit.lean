@@ -2565,6 +2565,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.sampledFinalWalWindow
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceError.sampledRenameErrorWalWindow
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
+
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
+
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.LiteralAlignedSyncs.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.recoversFinalCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.rebootDirectoryBindings
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.samplesWal
