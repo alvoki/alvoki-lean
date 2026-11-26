@@ -11,8 +11,7 @@ Verus search have separate entry points and proof inventories. [Software archite
 The fresh marked bootstrap establishes ready storage once the exact returned phase reference,
 token and heap from `opensFromAdmission` identify the allocation endpoint. The observed keeper and marker barriers fix the empty
 keeper and zero marker. The selected manifest is absent and the original directory and lock
-have the captured identities. This uses the exact path and byte observations at the barrier,
-including durability of the directory's own name in its parent. [Fresh opened storage](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+have the captured identities. For a freshly created keeper, the observed root descriptor and its successful final fsync establish both ready storage and the bounded WAL catalog used by the first write. This uses a pre-sync association between physical names and the held root, durability of the root’s own name in its parent, the filesystem effect of fsync, and frames for phase and token allocation. [Fresh opened storage](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 
 ### Client history
 

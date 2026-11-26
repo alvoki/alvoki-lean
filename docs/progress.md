@@ -52,8 +52,12 @@ Under the local write effects, the marker and keeper from one reboot select
 a replay of that history with zero or all of the batch. Both grouped-error
 continuations now use the same prefix proof.
 
-**Next obligation.** Connect the rooted namespace observed at fresh bootstrap
-to the physical names used by the first write. Carry the late selection
+At fresh open, one successful fsync on the identified root descriptor settles
+the protected children and the WAL names through the write bound. Given the
+pre-sync association of those names with the held root, both facts survive
+phase and token allocation and feed the first uncertain-write prefix.
+
+**Next obligation.** Carry the late selection
 through the actual subsequent open attempts on that execution. Read, cache
 and installation effects still need to come from the reached callbacks.
 Further interruptions, mixed sessions and maintenance remain in the

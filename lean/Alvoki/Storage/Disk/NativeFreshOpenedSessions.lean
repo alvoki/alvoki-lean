@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 import Alvoki.Storage.Disk.NativeReadyCallRefinement
 import Alvoki.Storage.Disk.NativeRawWriteReboot
+import Alvoki.Storage.Disk.NativeCheckpointRunDurability
 
 namespace Alvoki.Storage.DiskSession
 
@@ -118,7 +119,7 @@ theorem walNamespace {input : FilePath} {directory : DiskDirectory}
     {seed : OpenSyncCacheAllocations report.captured.opened view init admitted} {calls : FreshBootstrapCacheCalls heap}
     {raw : FreshBootstrapCacheChronology seed calls} (seen : FreshBootstrapOpenHeap report raw)
     (resolved : opened.handle.directory = directory) (observe : heap → CheckpointStorageObservation) (through : Nat)
-    (createdKeeps : ∀ start, start ≠ 0 → seen.keeper.namespaceView.child report.captured.root (renderWalSegmentName start) =
+    (createdKeeps : ∀ start ≤ through, start ≠ 0 → seen.keeper.namespaceView.child report.captured.root (renderWalSegmentName start) =
       report.captured.view.child report.captured.root (renderWalSegmentName start))
     (children : ∀ start ≤ through,
       let stored := observe raw.markerDirectory.reached
@@ -165,7 +166,7 @@ theorem walNamespace {input : FilePath} {directory : DiskDirectory}
         (renderWalSegmentName_ne_marker start rfl),
         report.handoff.stageNames _ (renderWalSegmentName_ne_marker start rfl), seen.route]
       change (seen.keeper.namespaceView.child report.captured.root (renderWalSegmentName start)).isSome = true ↔ _
-      rw [createdKeeps start zero, missing]
+      rw [createdKeeps start upper zero, missing]
       simp [first, zero]
   have settled (names) (survives : names ∈ stored.crashNames) (start : Nat) (_ : 0 ≤ start) (upper : start ≤ through) :
       (names (directory.file (.walSegment start))).isSome =
@@ -397,6 +398,154 @@ theorem readyCallStorage {input : FilePath} {directory : DiskDirectory}
     opened.writeStorageEntry used view resolved writes.cache.references atRoot census cacheAt settled
   exact ⟨first.census, by rw [← directory, ← active, ← pending]; exact first.cacheAt,
     first.physical, first.keeper, fun literal named => first.root literal (directory ▸ named)⟩
+
+/-- The names checked to start a writer and bound its next WAL extent. -/
+def bootstrapWriteChild (through : Nat) (name : String) : Prop :=
+  name ∈ ["LOCK", "MANIFEST", "WAL.commit"] ∨ ∃ start ≤ through, name = renderWalSegmentName start
+
+section BootstrapWriteEntry
+
+variable {input : FilePath} {directory : DiskDirectory}
+    {report : EmptyOpenSuccessReports input directory}
+    {view : OpenCloseHeapView heap WalSegmentRotation.State} {init : OpenSyncCacheCallbacks heap} {admitted : heap}
+    {seed : OpenSyncCacheAllocations report.captured.opened view init admitted} {calls : FreshBootstrapCacheCalls heap}
+    {raw : FreshBootstrapCacheChronology seed calls} (seen : FreshBootstrapOpenHeap report raw)
+    (resolved : opened.handle.directory = directory)
+    {after : LockedFileState WalSegmentRotation.State}
+    (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
+    (runs : heap → RunUnlinkImage)
+    (files : ∀ h, RunDirectoryInodeView opened.handle.directory (seen.keeperPhysical.inodes h) (runs h))
+    (through : Nat)
+    (createdKeeps : ∀ name ∈ ["LOCK", "MANIFEST"],
+      seen.keeper.namespaceView.child report.captured.root name = report.captured.view.child report.captured.root name)
+    (createdWal : ∀ start ≤ through, start ≠ 0 → seen.keeper.namespaceView.child report.captured.root (renderWalSegmentName start) =
+      report.captured.view.child report.captured.root (renderWalSegmentName start))
+    (rootNames : let issued := (files raw.afterRename).storageObservation
+      issued.files.names directory.path = some (report.captured.view.modelObject report.captured.root) ∧
+      ∀ names ∈ issued.crashNames, names directory.path = issued.files.names directory.path)
+    (liveChildren : ∀ name, bootstrapWriteChild through name →
+      (files raw.afterRename).visible ⟨directory.path.toString ++ "/" ++ name⟩ =
+        (report.marker.renamedView.child report.captured.root name).map report.marker.renamedView.modelObject)
+    (directoryEffect :
+      (view.handle raw.afterRename seed.handle).1.inode (view.handle raw.afterRename seed.handle).2.1.description =
+        report.marker.renamedView.modelObject report.captured.root →
+      calls.fsync seed.handle raw.afterRename = .ok () raw.markerDirectory.reached →
+      CheckpointRunsDirectoryEffect directory.path
+        (fun path => ∃ name, bootstrapWriteChild through name ∧ path = ⟨directory.path.toString ++ "/" ++ name⟩)
+        (files raw.afterRename).storageObservation (files raw.markerDirectory.reached).storageObservation)
+    {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+    {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+    (allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase
+      (⟨.empty, 0, 0, 0⟩ : WalSegmentRepair.Reopened).installed raw.markerDirectory.reached)
+    (returnedAt : (opened.handle.phase, opened.handle.token, opened.start.reached) =
+      (allocation.phase, allocation.token, allocation.afterToken))
+    (phaseFrame : let scope := fun path => opened.start.current.ready.state.crashPath path ∨
+        ∃ start ≤ through, path = directory.file (.walSegment start)
+      (files raw.markerDirectory.reached).storageObservation.Frames scope (files allocation.afterPhase).storageObservation)
+    (tokenFrame : let scope := fun path => opened.start.current.ready.state.crashPath path ∨
+        ∃ start ≤ through, path = directory.file (.walSegment start)
+      (files allocation.afterPhase).storageObservation.Frames scope (files allocation.afterToken).storageObservation)
+    (phaseInodes : seen.keeperPhysical.inodes allocation.afterPhase =
+      seen.keeperPhysical.inodes raw.markerDirectory.reached)
+    (tokenInodes : seen.keeperPhysical.inodes allocation.afterToken = seen.keeperPhysical.inodes allocation.afterPhase)
+
+include resolved used createdKeeps createdWal rootNames liveChildren directoryEffect returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
+
+/-- The final bootstrap directory sync settles the protected children
+and every canonical WAL name in the prospective write's window. The
+directory itself was settled in its parent before this call. -/
+theorem readyStorageAndWindow :
+    let storage := fun h => (files h).storageObservation
+    let state := opened.start.current.ready.state
+    (NativeReadyStorage state (storage opened.start.reached) ∧
+      ∀ inode, (storage opened.start.reached).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
+        some inode → (seen.keeperPhysical.inodes opened.start.reached).visible inode = state.writer.wal.active.bytes) ∧
+      opened.start.WalWindowAt storage 0 through := by
+  intro storage state
+  have actual := raw.markerDirectory.selectsRoot
+  have rootObject : (view.handle raw.afterRename seed.handle).1.inode
+      (view.handle raw.afterRename seed.handle).2.1.description =
+        report.marker.renamedView.modelObject report.captured.root := by
+    rw [raw.markerDirectory.rawHandle, report.handoff.renameObjects]
+    exact actual.2.2.symm
+  have barrier := directoryEffect rootObject raw.markerDirectory.synced
+  have root : (storage raw.markerDirectory.reached).files.names directory.path =
+      some (report.captured.view.modelObject report.captured.root) ∧
+      ∀ names ∈ (storage raw.markerDirectory.reached).crashNames,
+        names directory.path = (storage raw.markerDirectory.reached).files.names directory.path := by
+    refine ⟨(congrFun barrier.visible _).trans rootNames.1, ?_⟩
+    intro names survives
+    obtain ⟨prior, priorAllowed, same, _⟩ := barrier.survivors names survives
+    exact same.trans ((rootNames.2 prior priorAllowed).trans (congrFun barrier.visible _).symm)
+  have children (name : String) (inScope : bootstrapWriteChild through name) :
+      let path : FilePath := ⟨directory.path.toString ++ "/" ++ name⟩
+      let object := report.marker.renamedView.modelObject
+      (storage raw.markerDirectory.reached).files.names path =
+        (report.marker.renamedView.child report.captured.root name).map object ∧
+      ∀ names ∈ (storage raw.markerDirectory.reached).crashNames,
+        names path ∈ (report.handoff.afterMarkerNames name).map (Option.map object) := by
+    refine ⟨(congrFun barrier.visible _).trans (liveChildren name inScope), ?_⟩
+    intro names survives
+    obtain ⟨_, _, _, settled⟩ := barrier.survivors names survives
+    have actual := (settled _ ⟨name, inScope, rfl⟩).trans (liveChildren name inScope)
+    simpa only [report.handoff.markerSettlement, List.map_singleton, List.mem_singleton] using actual
+  refine ⟨opened.readyStorage seen resolved used storage createdKeeps root ?_ rfl allocation returnedAt
+    (phaseFrame.weaken fun _ selected => Or.inl selected) (tokenFrame.weaken fun _ selected => Or.inl selected)
+    phaseInodes tokenInodes, opened.walNamespace seen resolved storage through createdWal ?_ allocation returnedAt
+    (WalNamePresenceFrame.ofStorageFrame phaseFrame fun start _ bound => Or.inr ⟨start, bound, rfl⟩)
+    (WalNamePresenceFrame.ofStorageFrame tokenFrame fun start _ bound => Or.inr ⟨start, bound, rfl⟩)⟩
+  · intro name member
+    apply children name
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at member
+    rcases member with rfl | rfl | rfl | rfl
+    · exact .inl (by simp)
+    · exact .inl (by simp)
+    · exact .inr ⟨0, Nat.zero_le _, rfl⟩
+    · exact .inl (by simp)
+  · intro start bound
+    rw [directory.walSegment_path]
+    exact children (renderWalSegmentName start) (.inr ⟨start, bound, rfl⟩)
+
+/-- The table and cache returned by fresh bootstrap start the actual
+public prefix ending in an uncertain write. Its ledger starts empty. -/
+theorem refinesReadyBeforeCommitUnknown
+    {image : Type} (observeImage : heap → image)
+    (writes : NativeReadyWriteCalls opened.handle) (issuer : opened.handle.LatestIssuer)
+    (census : view.descriptors opened.start.reached = opened.start.current.ready.state.census)
+    (cacheAt : view.cacheAt opened.start.reached writes.cache.directory writes.cache.active writes.cache.pending =
+      opened.start.current.ready.state.cache)
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (effects : writes.ReturnEffects (view.withFileProjection (fun h => ⟨observeImage h, (view.files h).owners⟩))
+      seen.keeperPhysical.inodes runs (fun h => (files h).storageObservation) inode buffered)
+    {failed : heap} {prefixCalls : List (NativeReturnedCall opened.handle)}
+    {request : WriteRequest} {cause : IO.Error}
+    (executed : NativeReturnedCalls writes issuer opened.start.reached []
+      (prefixCalls ++ [.write request (.error (.commitUnknown cause))]) failed)
+    (names : writes.WalWindowEffects (fun h => (files h).storageObservation) 0
+      (opened.start.current.history.length + (prefixCalls.map NativeReturnedCall.requestedRows).sum + request.rows.length))
+    (budget : opened.start.current.history.length + (prefixCalls.map NativeReturnedCall.requestedRows).sum +
+      request.rows.length ≤ through) :
+    call entry = .ok opened.handle.table opened.start.reached ∧
+    ∃ (current : NativeOpenedPosition opened.handle) (events : List NativeExecutionEvent),
+      NativeReturnedCalls writes issuer opened.start.reached [] prefixCalls current.reached ∧
+      events.length = prefixCalls.length ∧ (∀ pair ∈ prefixCalls.zip events, pair.1.Records pair.2) ∧
+      opened.start.current.LedgerSuffix events current.current ∧
+      writes.ReachedUncertainWrite issuer current files 0 request cause failed := by
+  let clientView := view.withFileProjection (fun h => ⟨observeImage h, (view.files h).owners⟩)
+  obtain ⟨settled, window⟩ := opened.readyStorageAndWindow seen resolved used runs files through
+    createdKeeps createdWal rootNames liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
+  have initial := opened.readyCallStorage used resolved writes clientView
+    (fun h => (files h).storageObservation) (fun h => (seen.keeperPhysical.inodes h).visible) census cacheAt settled
+  have actual : NativeReturnedCalls writes issuer opened.start.reached (opened.start.pins.map NativeOpenedPin.raw)
+      (prefixCalls ++ [.write request (.error (.commitUnknown cause))]) failed := by
+    simpa only [opened.emptyPins, List.map_nil] using executed
+  obtain ⟨current, events, ran, length, records, ledger, uncertain⟩ :=
+    actual.refinesReadyBeforeCommitUnknown opened.start (.empty _) clientView
+      seen.keeperPhysical.inodes runs files inode buffered effects initial names (window.restrictUpper budget)
+  refine ⟨opened.opened, current, events, ?_, length, records, ledger, uncertain⟩
+  simpa only [opened.emptyPins, List.map_nil] using ran
+
+end BootstrapWriteEntry
 
 /-- Consume a fixed sequence of observed public calls directly on the
 fresh returned table. The actual bootstrap cache supplies the first
