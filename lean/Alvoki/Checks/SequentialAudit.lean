@@ -2581,6 +2581,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
 
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.LiteralAlignedSyncs.readyStorage
+#check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReadyBeforeCheckpointStop
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.recoversFinalCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.rebootDirectoryBindings
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.samplesWal

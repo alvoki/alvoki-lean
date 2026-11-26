@@ -6,57 +6,121 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting WalSegmentRepair
 open WAL.Boundary (WalInodeImage)
 
-/-- Continue the client ledger from the actual fresh return at a final
-checkpoint stop. The call uses the reached handle, which may have
-come from a reopen. The selected recovery extends that ledger. -/
+/-- Follow a returned ready prefix with an interrupted checkpoint on
+the same public handle. The next call starts with the observed cache
+at that exact heap. The checkpoint schedule supplies the stop witness. -/
+theorem NativeReturnedCalls.refinesReadyBeforeCheckpointStop
+    {heap image : Type} {opened : NativeOpenedHandle heap}
+    {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
+    {entry checkpointEntry : heap} {known : List DiskSnapshotPin} {calls : List (NativeReturnedCall opened)}
+    (executed : NativeReturnedCalls writes issuer entry known calls checkpointEntry)
+    (covered : NativeReturnedCalls.ReadyFrom writes issuer entry known calls)
+    (view : OpenCloseHeapView heap image) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (storage : heap → CheckpointStorageObservation) (inode : IO.FS.Handle → Nat)
+    (buffered : heap → IO.FS.Handle → ByteArray)
+    (effects : writes.ReturnEffects view inodes runs storage inode buffered)
+    (start : NativeOpenedPosition opened) (sameEntry : start.reached = entry)
+    (samePins : start.pins.map NativeOpenedPin.raw = known)
+    (initial : writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) start)
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    {stage : CheckpointPublication.Step} {reason : FilePath} {reached : CheckpointWorld heap}
+    (stopped : (runCheckpointOnOpenPhaseUntilSyncStop opened.directory opened.phase opened.get opened.set
+      primitives fsync).run
+        (view.cacheAt checkpointEntry writes.cache.directory writes.cache.active writes.cache.pending, checkpointEntry) =
+          .error (stage, reason) reached) :
+    ∃ (last : NativeOpenedPosition opened) (events : List NativeExecutionEvent),
+      last.reached = checkpointEntry ∧
+      last.pins.map NativeOpenedPin.raw = calls.foldl (fun pins call => call.pinsAfter pins) known ∧
+      writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) last ∧
+      events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
+      start.current.LedgerSuffix events last.current ∧
+      (∀ {first}, writes.WalWindowEffects storage first
+          (start.current.history.length + (calls.map NativeReturnedCall.requestedRows).sum) →
+        start.WalWindowAt storage first (start.current.history.length + (calls.map NativeReturnedCall.requestedRows).sum) →
+        last.WalWindowAt storage first last.current.history.length) ∧
+      Nonempty (NativeCheckpointSourceStop last primitives fsync stage reason reached) := by
+  obtain ⟨last, events, atCheckpoint, pins, physical, length, records, ledger, budget, frames⟩ :=
+    executed.refinesReadyFramed covered view inodes runs storage inode buffered effects start sameEntry samePins initial
+  have cacheAt : view.cacheAt checkpointEntry writes.cache.directory writes.cache.active writes.cache.pending =
+      last.current.ready.state.cache := atCheckpoint ▸ physical.cacheAt
+  exact ⟨last, events, atCheckpoint, pins, physical, length, records, ledger,
+    fun names window => (frames names window).restrictUpper budget,
+    last.checkpointStopsAtReachedCache primitives fsync last.directory cacheAt atCheckpoint stopped⟩
+
+/-- Extend the fresh ledger with the returned calls on the current
+handle, which may itself have come from a reopen. The actual checkpoint
+call derives its source stop at the last returned heap. Its local
+publication and recovery effects can be supplied at that stop. -/
 theorem FreshBootstrapOpenHeap.Returned.recoversFinalCheckpoint
     {heap stream : Type} {call : EStateM IO.Error heap DiskTable} {initial : heap}
     (fresh : FreshBootstrapOpenHeap.Returned call initial)
     {earlier : List NativeExecutionEvent} {opened : NativeOpenedHandle heap}
-    {current : NativeOpenedPosition opened}
-    (ledger : fresh.start.current.LedgerSuffix earlier current.current)
+    (start : NativeOpenedPosition opened)
+    (ledger : fresh.start.current.LedgerSuffix earlier start.current)
     (sameDirectory : opened.directory = fresh.handle.directory)
     (view : OpenCloseHeapView heap FileImage)
-    (refs : OpenSyncCacheRefs opened.files opened.directory.path)
-    (cacheAt : view.cacheAt current.reached refs.directory refs.active refs.pending = current.current.ready.state.cache)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView opened.directory (inodes atHeap) (runs atHeap))
+    (writes : NativeReadyWriteCalls opened) (issuer : opened.LatestIssuer)
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (readyEffects : writes.ReturnEffects view inodes runs (fun atHeap => (observe atHeap).storageObservation) inode buffered)
+    (readyEntry : writes.StorageAt view (fun atHeap => (observe atHeap).storageObservation)
+      (fun atHeap => (inodes atHeap).visible) start)
+    {calls : List (NativeReturnedCall opened)} {atCheckpoint : heap}
+    (executed : NativeReturnedCalls writes issuer start.reached (start.pins.map NativeOpenedPin.raw) calls atCheckpoint)
+    (covered : NativeReturnedCalls.ReadyFrom writes issuer start.reached (start.pins.map NativeOpenedPin.raw) calls)
     (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
     {reason : FilePath} {reached : CheckpointWorld heap}
     (stopped : (runCheckpointOnOpenPhaseUntilSyncStop opened.directory opened.phase
       opened.get opened.set primitives fsync).run
-      (view.cacheAt current.reached refs.directory refs.active refs.pending, current.reached) =
+      (view.cacheAt atCheckpoint writes.cache.directory writes.cache.active writes.cache.pending, atCheckpoint) =
         .error (.manifest .syncDirectory, reason) reached)
-    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
-    (observe : ∀ atHeap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes atHeap) (runs atHeap))
-    (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings) (contents : Nat → ByteArray)
-    (storage : ∀ stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached,
-      ∃ effect : FinalCheckpointStorageEffects stop inodes runs observe,
-        ∀ path, path = current.current.ready.state.session.directory.file .manifest ∨ effect.scope path →
-          ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode)
     {rebooted entry : heap} {input : FilePath} {source : RawMarkedOpenInterpreter heap stream}
-    (resetCensus : (view.descriptors rebooted).slots = [])
-    (resetLock : (view.files rebooted).owners (current.current.ready.state.session.directory.file .lock) = none)
-    {errors : List (FilePath × IO.Error)} (attempts : source.FailedCalls rebooted errors entry)
     {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
     {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
-    {ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool}
-    (effects : OpenPhaseCellEffects view.phase get set) :
-    ∃ stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached,
-      call initial = .ok fresh.handle.table fresh.start.reached ∧
-      fresh.start.current.history = [] ∧ fresh.start.current.submissions = [] ∧ fresh.start.current.ready.reads = [] ∧
+    {ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool} :
+    call initial = .ok fresh.handle.table fresh.start.reached ∧
+    fresh.start.current.history = [] ∧ fresh.start.current.submissions = [] ∧ fresh.start.current.ready.reads = [] ∧
+    ∃ (current : NativeOpenedPosition opened) (events : List NativeExecutionEvent)
+      (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached),
+      current.reached = atCheckpoint ∧
+      current.pins.map NativeOpenedPin.raw = calls.foldl (fun pins request => request.pinsAfter pins)
+        (start.pins.map NativeOpenedPin.raw) ∧
+      writes.StorageAt view (fun atHeap => (observe atHeap).storageObservation)
+        (fun atHeap => (inodes atHeap).visible) current ∧
+      events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
       current.current.ready.state.session.directory = fresh.handle.directory ∧
       opened.contents stop.poisoned opened.phase = some .poisoned ∧
-      fresh.start.current.LedgerSuffix earlier current.current ∧
-      NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
-        (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
-        (write := write) (get := get) (set := set) (ptrEq := ptrEq)
-        current inodes observe stop.manifest names contents fresh.start.current earlier errors := by
-  obtain ⟨stop⟩ := current.checkpointStopsAtReachedCache primitives fsync current.directory cacheAt rfl stopped
-  obtain ⟨effect, sampled⟩ := storage stop
-  exact ⟨stop, fresh.opened, fresh.emptyHistory, fresh.emptySubmissions, fresh.emptyReads,
-    current.directory.trans sameDirectory, stop.poisonStored, ledger,
-    stop.reopensSampledFinalCheckpoint inodes runs observe effect names chosen contents sampled
-      resetCensus resetLock attempts effects ledger⟩
+      fresh.start.current.LedgerSuffix (earlier ++ events) current.current ∧
+      (let storage := fun atHeap => (observe atHeap).storageObservation
+       let through := start.current.history.length + (calls.map NativeReturnedCall.requestedRows).sum
+       ∀ {first}, writes.WalWindowEffects storage first through →
+         start.WalWindowAt storage first through → current.WalWindowAt storage first current.current.history.length) ∧
+      let files := fun atHeap => current.directory.symm ▸ observe atHeap
+      ∀ (names : FilePath → Option Nat), names ∈ (files reached.2).crashBindings → ∀ (contents : Nat → ByteArray),
+        ∀ publication : FinalCheckpointStorageEffects stop inodes runs files,
+          (∀ path, path = current.current.ready.state.session.directory.file .manifest ∨ publication.scope path →
+            ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode) →
+          (view.descriptors rebooted).slots = [] →
+          (view.files rebooted).owners (opened.directory.file .lock) = none →
+          ∀ {errors : List (FilePath × IO.Error)}, source.FailedCalls rebooted errors entry →
+            OpenPhaseCellEffects view.phase get set →
+            NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
+              (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
+              (write := write) (get := get) (set := set) (ptrEq := ptrEq)
+              current inodes files stop.manifest names contents fresh.start.current (earlier ++ events) errors := by
+  obtain ⟨current, events, atStop, pins, physical, length, records, suffix, wal, ⟨stop⟩⟩ :=
+    executed.refinesReadyBeforeCheckpointStop covered view inodes runs
+      (fun atHeap => (observe atHeap).storageObservation) inode buffered readyEffects start rfl rfl readyEntry
+      primitives fsync stopped
+  have together := ledger.append suffix
+  refine ⟨fresh.opened, fresh.emptyHistory, fresh.emptySubmissions, fresh.emptyReads,
+    current, events, stop, atStop, pins, physical, length, records, current.directory.trans sameDirectory,
+    stop.poisonStored, together, wal, ?_⟩
+  intro files names chosen contents publication sampled resetCensus resetLock errors attempts effects
+  exact stop.reopensSampledFinalCheckpoint inodes runs files publication names chosen contents sampled
+    resetCensus (current.directory.symm ▸ resetLock) attempts effects together
 
 end Alvoki.Storage.DiskSession

@@ -8,7 +8,9 @@ owns the full list of obligations.
 
 **What composes today.** On the covered aligned checkpoint path, a successful
 open installs the literal returned table. Its next supported writes and snapshot
-calls extend the incoming client ledger. Failed opens before the file lock,
+calls extend the incoming client ledger. The supported calls also determine the
+heap, cache and ledger at the next observed checkpoint interruption. The
+final manifest-directory sync recovery consumes that position. Failed opens before the file lock,
 a refused lock, an observed strict checkpoint read error, and partial pruning of later WAL segments have local proofs
 that carry protected storage to the heap reached by the public error. Thus a
 retry can start after an earlier unlink took effect. The canonical keeper
@@ -21,6 +23,6 @@ failed-call induction. A successful reopen needs the held scan to cover all
 physical later WAL names. This remains a local filesystem enumeration law.
 Mixed sessions and interruptions outside the covered paths remain open.
 
-**Verification baseline.** At `a758f0ad`, 779 kernel checks, the axiom audit
+**Verification baseline.** At `c167c9b3`, 779 kernel checks, the axiom audit
 and its negative control, native fault tests and reproduction passed. For
 commands see [local verification](../README.md#reproduce-on-linux-x86-64).
