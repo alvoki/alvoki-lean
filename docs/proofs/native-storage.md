@@ -367,6 +367,13 @@ WAL interval to the names on disk, the live keeper binding to its bytes, the sel
 immutable files to their durable contents, and later WAL names to the physical suffix.
 The selected marker bounds replay. Above it, the successful directory scan must enumerate
 every later canonical WAL name, including any restored by power loss before pruning was durable.
+When all unlinks return and the prune barrier fails before taking effect, a frame keeps
+the selected files and the names through the marker together in one surviving map.
+The reboot reader uses that map for the later suffix as well. This requires settled
+protected names, an accepted keeper and the bounded catalog at authorization, plus
+selected checkpoint durability at the failed return.
+[Prune scope and reboot consumer](../../lean/Alvoki/Storage/Disk/NativeMarkedFirstUnlinkError.lean)
+
 An independent failure before flock also exposes its local file frame, including the keeper
 binding in place when the call began. For a second power loss after a replacement, one surviving
 directory map can still name the old inode. Its live bytes before the rename and the synced

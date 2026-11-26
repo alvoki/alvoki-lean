@@ -36,8 +36,13 @@ successful and terminal open proofs.
 The first reboot also supplies the old keeper’s accepted bytes at repair entry,
 under a frame on that file through earlier failed attempts and the current reads.
 
-**Next obligation.** For an interruption before the post-prune barrier succeeds, determine which later
-WAL names can return on the next reboot. The
-remaining mixed sessions and maintenance cases are listed in the roadmap.
+If all unlinks return and the following directory fsync reports an error before
+taking effect, the next reboot may restore a later WAL name. The retry uses one
+surviving directory map for both the bounded replay window and the later names.
 
-**Verification baseline.** See commit `c38806cd` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
+**Next obligation.** Derive the settled protected names, accepted keeper and WAL
+window at prune authorization from the preceding execution, and derive the
+selected checkpoint durability at the failed return. These are premises of the
+second-reboot result. Mixed sessions and maintenance remain on the roadmap.
+
+**Verification baseline.** See commit `f5bb038a` and the [verification commands](../README.md#reproduce-on-linux-x86-64).

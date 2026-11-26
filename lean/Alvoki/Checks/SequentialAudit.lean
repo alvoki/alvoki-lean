@@ -2222,6 +2222,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.selectsRepairedKeeper
 #check_axioms Alvoki.Storage.DiskSession.foldReturnedWalUnlinks
 #check_axioms Alvoki.Storage.DiskSession.framesWalUnlinks
+#check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.CrashFileFrame.afterReturnedWalUnlinks
+#check_axioms Alvoki.Storage.DiskSession.WalRootSyncEffect.crashFilesBeforeEffect
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsRecoveryAfterFramedPrune
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_errorDuringUnlinks
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_errorDuringPrune
 #check_axioms Alvoki.Storage.DiskSession.SampledCheckpointRetryFrame.afterWalUnlinks

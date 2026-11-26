@@ -2,11 +2,114 @@ import Alvoki.Storage.Disk.NativeMarkedFirstBarrierWork
 import Alvoki.Storage.Disk.HeldLaterWalPrune
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
 import Alvoki.Storage.Disk.NativeDurableWriteReboot
+import Alvoki.Storage.Disk.NativeOpenReadyStorage
 
 namespace Alvoki.Storage.DiskSession
 
 open System Manifest SyncHandleRouting WalSegmentRepair
 open WAL.Boundary (CheckpointRepresentsPrefix)
+
+/-- The post-prune retry retains the selected children and the complete
+canonical WAL inventory through the selected marker, including gaps. -/
+def NativeReadyState.pruneRecoveryScope (state : NativeReadyState) (through : Nat) (path : FilePath) : Prop :=
+  (state.selectedRetryPath path ∧ path ≠ state.session.directory.path) ∨
+    ∃ start ≤ through, path = state.session.directory.file (.walSegment start)
+
+theorem NativeReadyState.pruneRecoveryScope_child {state : NativeReadyState} {through : Nat} {path : FilePath}
+    (inScope : state.pruneRecoveryScope through path) : ∃ file, path = state.session.directory.file file := by
+  rcases inScope with ⟨selected, notRoot⟩ | ⟨start, _, rfl⟩
+  · have protectedPath : state.crashPath path :=
+      NativeReadyState.crashPath_iff_write.mpr (selected.imp id Or.inr)
+    exact (NativeReadyState.crashPath_rootOrChild protectedPath).resolve_left notRoot
+  · exact ⟨.walSegment start, rfl⟩
+
+/-- A directory fsync that reports an error before settlement retains
+one earlier crash namespace for all these children. The live map at
+issuance can already lack the names removed by the accepted suffix. -/
+theorem WalRootSyncEffect.crashFilesBeforeEffect
+    {directory : DiskDirectory} {scope : FilePath → Prop} {before reached : CheckpointStorageObservation}
+    (effect : WalRootSyncEffect directory false before reached)
+    (managed : ∀ path, scope path → ∃ file, path = directory.file file) :
+    before.CrashFileFrame scope reached := by
+  constructor
+  · constructor
+    · intro path inside
+      obtain ⟨file, rfl⟩ := managed path inside
+      have visible := effect.visible file
+      exact ⟨visible, fun inode bound => effect.bytes _ (.inl rfl) file inode (visible.trans bound)⟩
+    · intro names possible
+      obtain ⟨prior, earlier, same⟩ := effect.unchanged rfl names possible
+      refine ⟨prior, earlier, fun path inside => ?_⟩
+      obtain ⟨file, rfl⟩ := managed path inside
+      exact same file
+  · intro names possible path inside inode bound payload sampled
+    obtain ⟨file, rfl⟩ := managed path inside
+    exact effect.bytes names (.inr possible) file inode bound ▸ sampled
+
+/-- Fold the same primitive frame over the literal accepted unlinks.
+The frame covers only unaffected paths, with byte choices of crash
+inodes included even when those inodes are not live. -/
+theorem CheckpointStorageObservation.CrashFileFrame.afterReturnedWalUnlinks
+    {heap : Type} {directory : DiskDirectory} {plan : Plan}
+    {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
+    {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
+    {sync : Array FilePath → EStateM IO.Error heap Unit}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    {observe : heap → CheckpointStorageObservation} {scope : FilePath → Prop}
+    {authorized unlinked : heap}
+    (offTarget : ∀ ordinal ∈ plan.newer, ¬ scope (directory.file (.walSegment ordinal)))
+    (unlink : ∀ {ordinal issued after result}, ¬ scope (directory.file (.walSegment ordinal)) →
+      remove (directory.file (.walSegment ordinal)) issued = .ok result after →
+      RunCollection.ownedUnlinkResult result = .ok () →
+      (observe issued).CrashFileFrame scope (observe after))
+    (unlinks : ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) authorized = .ok () unlinked) :
+    (observe authorized).CrashFileFrame scope (observe unlinked) := by
+  exact foldReturnedWalUnlinks directory plan remove write sync rename
+    (fun (_ : Unit) atHeap => (observe authorized).CrashFileFrame scope (observe atHeap))
+    (fun _ _ => ()) (initial := ()) (.refl _ _)
+    (fun listed called accepted framed => framed.trans (unlink (offTarget _ listed) called accepted)) unlinks
+
+/-- The second reboot uses its sampled protected files to select the same
+target and its sampled namespace to discover any later WAL names. Only
+the inventory through the selected marker is preserved across pruning. -/
+theorem RawWriteRebootEntry.startsRecoveryAfterFramedPrune
+    {heap : Type} {state : NativeReadyState} {view : OpenCloseHeapView heap FileImage}
+    {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+    {authorized failed rebooted : heap} {target : Target} {firstOffset : Nat}
+    (seen : RawWriteRebootEntry state view observe (fun atHeap => (observe atHeap).files.names)
+      visible failed rebooted)
+    (reset : seen.DurableReset)
+    (first : target.first = state.writer.wal.active.first)
+    (sameManifest : target.pair.manifest = state.writer.target.pair.manifest)
+    (durable : state.SelectedRetryDurability target (observe failed))
+    (settled : ∀ names ∈ (observe authorized).crashNames, ∀ path,
+      state.pruneRecoveryScope target.range.through path → names path = (observe authorized).files.names path)
+    (keeper : RawOpenRetryTrace.LiveKeeperCrashChoices state.session.directory target (observe authorized))
+    (window : state.writer.wal.NamespaceWindow state.session.directory firstOffset target.range.through
+      (observe authorized).files.names)
+    (frame : (observe authorized).CrashFileFrame (state.pruneRecoveryScope target.range.through) (observe failed)) :
+    RawOpenRetryTrace.SelectedEntry view state target (fun atHeap => (observe atHeap).files.names) visible rebooted ∧
+      TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
+      (view.descriptors rebooted).slots = [] ∧
+      RawOpenRetryTrace.RecoveryObservations view state target observe visible firstOffset target.range.through rebooted := by
+  let directory := state.session.directory
+  have kept := frame.toFrames.settledFrom settled
+  obtain ⟨inode, bound, accepted⟩ := keeper
+  have keeperChoices : RawOpenRetryTrace.KeeperCrashChoices directory target (observe failed) := by
+    intro names survives
+    let path := directory.file (.walSegment target.first)
+    have inside : state.pruneRecoveryScope target.range.through path := .inr ⟨_, target.firstCovered, rfl⟩
+    have named := (kept names survives path inside).trans ((frame.toFrames.visible path inside).1.trans bound)
+    exact ⟨inode, named, fun payload member => accepted payload (frame.bytes names survives path inside inode named payload member)⟩
+  obtain ⟨selected, vacant, empty⟩ := seen.selectsRetryAfterRepair first sameManifest durable
+    (fun path protectedPath notRoot => kept _ seen.chosen path (.inl ⟨protectedPath, notRoot⟩)) keeperChoices
+  have chosenWindow := window.frame (by
+    intro start _ within
+    let path := directory.file (.walSegment start)
+    have inside : state.pruneRecoveryScope target.range.through path := .inr ⟨start, within, rfl⟩
+    exact congrArg Option.isSome ((kept _ seen.chosen path inside).trans (frame.toFrames.visible path inside).1))
+  exact ⟨selected, vacant, empty, seen.startsRecoveryObservations reset selected chosenWindow⟩
 
 section SuffixRetryFrame
 
@@ -68,6 +171,26 @@ theorem SampledCheckpointRetryFrame.afterWalUnlinks
   exact framesWalUnlinks (plan := plan) (write := write) (sync := sync) (rename := rename)
     frame SampledCheckpointRetryFrame.refl SampledCheckpointRetryFrame.trans each entry
 
+/-- Once all removals returned, the only operation left in the
+prune block is the root fsync. -/
+theorem failedPruneDirectoryOfReturnedUnlinks
+    {plan : Plan} {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
+    {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
+    {sync : Array FilePath → EStateM IO.Error heap Unit}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    {authorized unlinked reached : heap} {cause : IO.Error}
+    (unlinks : ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) authorized = .ok () unlinked)
+    (stopped : ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM
+      (performPaths directory plan remove throw write sync rename)) authorized = .error cause reached) :
+    sync #[directory.path] unlinked = .error cause reached := by
+  rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM] at stopped
+  simp only [Bind.bind, EStateM.bind, unlinks, List.forM_eq_forM, List.forM_cons, List.forM_nil,
+    performPaths, Pure.pure, EStateM.pure] at stopped
+  cases returned : sync #[directory.path] unlinked with
+  | error => simpa only [returned] using stopped
+  | ok value => cases value; simp [returned] at stopped
+
 /-- The literal prune block carries the selected files across ordinary
 errors. A barrier effect is used only after every unlink has returned. -/
 theorem SampledCheckpointRetryFrame.afterFailedWalPruneBlock
@@ -96,6 +219,7 @@ theorem SampledCheckpointRetryFrame.afterFailedWalPruneBlock
   let perform := performPaths directory plan remove throw write sync rename
   have frame := rootFrame.trans (SampledCheckpointRetryFrame.afterWalUnlinks write sync rename valid cutoff outside
     unlink authorized)
+  have stoppedPrune := stopped
   change ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM perform) authorized = _ at stopped
   rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM] at stopped
   cases unlinks : ((plan.newer.map Step.unlink).forM perform) authorized with
@@ -106,15 +230,9 @@ theorem SampledCheckpointRetryFrame.afterFailedWalPruneBlock
     simpa only [perform, unlinks, NativeFileEffectProjection.reached] using frame
   | ok value unlinked =>
     cases value
-    have failed : sync #[directory.path] unlinked = .error cause reached := by
-      simp only [Bind.bind, EStateM.bind, unlinks, List.forM_eq_forM, List.forM_cons, List.forM_nil,
-        perform, performPaths, Pure.pure, EStateM.pure] at stopped
-      cases returned : sync #[directory.path] unlinked with
-      | error => simpa only [returned] using stopped
-      | ok value => cases value; simp [returned] at stopped
     have throughUnlinks : SampledCheckpointRetryFrame directory scope through observe readBytes entry unlinked := by
       simpa only [perform, unlinks, NativeFileEffectProjection.reached] using frame
-    exact throughUnlinks.trans (barrier unlinks failed)
+    exact throughUnlinks.trans (barrier unlinks (failedPruneDirectoryOfReturnedUnlinks unlinks stoppedPrune))
 
 end SuffixRetryFrame
 

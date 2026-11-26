@@ -167,6 +167,35 @@ variable {heap : Type} {directory : DiskDirectory} {view : OpenCloseHeapView hea
   {scope : FilePath → Prop} {through : Nat} {storage : heap → CheckpointStorageObservation}
   {visible : heap → Nat → ByteArray}
 
+private theorem NativeReadyState.pruneRecoveryScope_excludesLater {state : NativeReadyState} {target : Target}
+    (valid : state.Valid) (first : target.first = state.writer.wal.active.first)
+    {ordinal : Nat} (later : target.range.through < ordinal) :
+    ¬ state.pruneRecoveryScope target.range.through (state.session.directory.file (.walSegment ordinal)) := by
+  rintro (⟨selected, _⟩ | ⟨start, within, same⟩)
+  · have afterKeeper := first ▸ Nat.le_trans target.firstCovered (Nat.le_of_lt later)
+    exact state.protectedPathNeWalFromActive valid selected afterKeeper rfl
+  · have sameStart := state.session.directory.walSegment_path_injective same
+    exact (Nat.not_le_of_gt later) (sameStart.symm ▸ within)
+
+private theorem AlignedKeeperCacheCallbacks.rawPruneDirectoryError
+    (calls : AlignedKeeperCacheCallbacks heap)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    {before issued reached : heap} {handle : IO.FS.Handle} {cause : IO.Error}
+    (loaded : calls.getDirectory cached before = .ok (some handle) issued)
+    (returned : calls.syncPaths directory.path cached active pending #[directory.path] before = .error cause reached) :
+    ∃ diagnostic, calls.sync handle issued = .error diagnostic reached ∧
+      cause = IO.userError s!"sync failed for '{directory.path}': {diagnostic}" := by
+  rw [AlignedKeeperCacheCallbacks.syncPaths, SyncPathGroup.run_single] at returned
+  cases raw : calls.sync handle issued with
+  | ok value after =>
+    cases value
+    simp [syncWithHandles, Bind.bind, EStateM.bind, loaded, raw, Pure.pure, EStateM.pure] at returned
+  | error diagnostic after =>
+    simp [syncWithHandles, Bind.bind, EStateM.bind, loaded, raw, Pure.pure, EStateM.pure] at returned
+    obtain ⟨sameCause, rfl⟩ := returned
+    exact ⟨diagnostic, rfl, sameCause.symm⟩
+
 /-- A reported root fsync error frames the selected files even if the
 directory's child bindings have settled. The literal cached handle
 identifies that root independently of the report's effect. -/
@@ -194,17 +223,7 @@ theorem AlignedKeeperCacheCallbacks.framesPruneDirectoryError
       cause = IO.userError s!"sync failed for '{directory.path}': {diagnostic}" ∧
       SampledCheckpointRetryFrame directory scope through storage visible before reached ∧
       WalRootSyncEffect directory effective (storage issued) (storage reached) := by
-  obtain ⟨diagnostic, failed, reported⟩ : ∃ diagnostic, calls.sync handle issued = .error diagnostic reached ∧
-      cause = IO.userError s!"sync failed for '{directory.path}': {diagnostic}" := by
-    rw [AlignedKeeperCacheCallbacks.syncPaths, SyncPathGroup.run_single] at returned
-    cases raw : calls.sync handle issued with
-    | ok value after =>
-      cases value
-      simp [syncWithHandles, Bind.bind, EStateM.bind, loaded, raw, Pure.pure, EStateM.pure] at returned
-    | error diagnostic after =>
-      simp [syncWithHandles, Bind.bind, EStateM.bind, loaded, raw, Pure.pure, EStateM.pure] at returned
-      obtain ⟨sameCause, rfl⟩ := returned
-      exact ⟨diagnostic, rfl, sameCause.symm⟩
+  obtain ⟨diagnostic, failed, reported⟩ := calls.rawPruneDirectoryError cached active pending loaded returned
   obtain ⟨children, parent, live⟩ := observation diagnostic failed target.live bound
   have durable := children.framesScopedFiles parent managed
   have atSync : SampledCheckpointRetryFrame directory scope through storage visible issued reached :=
@@ -482,7 +501,8 @@ local notation "sampledFrame" => SampledCheckpointRetryFrame directory scope thr
 
 /-- Both a failed suffix removal and an error at the following root
 barrier extend the same failed-open chronology. Accepted removals
-retain their effects at the error heap. -/
+retain their live effects at the error heap. A barrier error before
+settlement can also preserve earlier crash bindings beyond the cutoff. -/
 theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
     {first : heap} {earlier : List (FilePath × IO.Error)} (prior : source.FailedCalls first earlier entry)
     (readerFrames : source.fileCalls.ScopeFrames sampledFrame)
@@ -521,7 +541,32 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
     (cleanup : dispose.ScopeFrames finalized sampledFrame) :
     source.openTable input entry = .error (dispose.diagnostic cause) finalized.reached ∧
       source.FailedCalls first (earlier ++ [(input, dispose.diagnostic cause)]) finalized.reached ∧
-      sampledFrame entry finalized.reached := by
+      sampledFrame entry finalized.reached ∧
+      (∀ {state : NativeReadyState} {unlinked issued : heap} {handle : IO.FS.Handle},
+        state.session.directory = directory → state.Valid →
+        layout.target.first = state.writer.wal.active.first →
+        ((layout.boundedPlan.newer.map Step.unlink).forM
+          (performPaths directory layout.boundedPlan source.remove throw stageWrite groupSync source.rename))
+          authorized = .ok () unlinked →
+        (callbacks).getDirectory seed.directoryRef unlinked = .ok (some handle) issued →
+        RawFsyncTarget view unlinked issued handle →
+        (observe issued).files.names directory.path =
+          some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
+        (∀ diagnostic, (callbacks).sync handle issued = .error diagnostic reached →
+          (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
+          (observe issued).files.names directory.path =
+            some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
+          WalRootSyncEffect directory false (observe issued) (observe reached)) →
+        (∀ {ordinal before after result},
+          ¬ state.pruneRecoveryScope layout.target.range.through (directory.file (.walSegment ordinal)) →
+          source.remove (directory.file (.walSegment ordinal)) before = .ok result after →
+          RunCollection.ownedUnlinkResult result = .ok () →
+          (observe before).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through) (observe after)) →
+        (observe unlinked).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through) (observe issued) →
+        dispose.ScopeFrames finalized (fun before after =>
+          (observe before).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through) (observe after)) →
+        (observe authorized).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through)
+          (observe finalized.reached)) := by
   have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have checked := layout.boundedPlan_valid ((Plan.valid_iff layout.plan).mp valid.valid).2.2
   have extent : reads.wal.keeper.calls.metadata.byteSize.toNat = (layout.keeper.bytes ++ layout.tail).size :=
@@ -543,7 +588,24 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
     (frame := sampledFrame)
     sameStat flat marked keeperRead SampledCheckpointRetryFrame.refl SampledCheckpointRetryFrame.trans readerFrames
     listingFrames keeperFrame repair repairFrame dispose sameDisposal owner finalized cleanup
-  exact ⟨returned, .next prior input returned, framed⟩
+  refine ⟨returned, .next prior input returned, framed, ?_⟩
+  intro state unlinked issued handle sameDirectory ready targetFirst unlinks loaded
+    target bound physical unlinkCrash loadCrash cleanupCrash
+  let selectedScope := state.pruneRecoveryScope layout.target.range.through
+  have managed (path : FilePath) (inside : selectedScope path) : ∃ file, path = directory.file file := by
+    obtain ⟨file, named⟩ := NativeReadyState.pruneRecoveryScope_child inside
+    exact ⟨file, named.trans (congrArg (fun current => current.file file) sameDirectory)⟩
+  have offTarget (ordinal : Nat) (member : ordinal ∈ layout.boundedPlan.newer) :
+      ¬ selectedScope (directory.file (.walSegment ordinal)) := by
+    have later := (Plan.valid_iff layout.boundedPlan).mp checked |>.2.2 ordinal member
+    rw [← sameDirectory]
+    exact state.pruneRecoveryScope_excludesLater ready targetFirst later
+  have throughUnlinks := CheckpointStorageObservation.CrashFileFrame.afterReturnedWalUnlinks offTarget unlinkCrash unlinks
+  have returnedBarrier := failedPruneDirectoryOfReturnedUnlinks unlinks stopped
+  obtain ⟨diagnostic, failedSync, _⟩ := (callbacks).rawPruneDirectoryError seed.directoryRef seed.activeRef seed.pendingRef
+    loaded returnedBarrier
+  have atError := (physical diagnostic failedSync target.live bound).crashFilesBeforeEffect managed
+  exact throughUnlinks.trans (loadCrash.trans (atError.trans (cleanupCrash.afterWorker (fun earlier later => earlier.trans later))))
 
 end FailedMarkedRepair
 
