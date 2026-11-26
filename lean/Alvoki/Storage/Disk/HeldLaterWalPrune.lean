@@ -299,8 +299,7 @@ theorem finishAfterPrune (prune : ListedLaterWalPrune authorization)
       pure () : EStateM IO.Error FileImage Unit) (before.image.unlinkVisibleSuffix).syncDirectory := by
   intro run
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff layout.boundedPlan).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, later⟩
+  have valid := layout.boundedPlan_valid later
   have longer : layout.boundedPlan.keeperSize < authorization.keeper.metadata.byteSize.toNat := size ▸ long
   have unlinks :
       ((layout.boundedPlan.newer.map Step.unlink).forM run) before.image.syncDirectory =
@@ -348,8 +347,7 @@ theorem ListedDirectoryAuthorization.finishAfterPruneError (authorization : List
   let plan := layout.boundedPlan
   let physicalSize := authorization.keeper.metadata.byteSize.toNat
   have size : plan.keeperBytes.size = plan.keeperSize := layout.target.trimmedSize
-  have valid : plan.valid = true :=
-    (Plan.valid_iff plan).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, later⟩
+  have valid : plan.valid = true := layout.boundedPlan_valid later
   have fits : plan.keeperSize ≤ physicalSize := by
     rw [show physicalSize = layout.plan.keeperBytes.size from authorization.keeper.extent, ← size]
     change layout.keeper.bytes.size ≤ (layout.keeper.bytes ++ layout.tail).size

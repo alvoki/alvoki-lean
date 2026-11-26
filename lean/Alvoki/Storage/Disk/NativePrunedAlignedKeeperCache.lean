@@ -204,8 +204,7 @@ theorem repairsAfterRead (seen : PrunedAlignedKeeperCacheReport finish view init
     (seen.unlinks.returns admission.held seen.authorizedFiles layout.boundedPlan write sync rename).1
   have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have sizeEq := (alignedExtent finish).symm.trans bytes
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq bytes.symm, later⟩
+  have valid := layout.boundedPlan_valid later
   have suffix : layout.boundedPlan.newer.isEmpty = false := List.isEmpty_eq_false_iff.mpr finish.repair.nonempty
   change finishBoundedMarkedOpen directory layout.boundedPlan reads.wal.keeper.calls.metadata.byteSize.toNat
       remove write sync rename seen.remembered = _

@@ -79,6 +79,21 @@ def CanonicalKeeperLayout.boundedPlan {image : FileImage} {history : List WAL.Wr
     (layout : CanonicalKeeperLayout image history) : Plan :=
   { layout.plan with keeperBytes := layout.keeper.bytes }
 
+/-- The canonical keeper prefix satisfies the byte bound. The bounded plan
+is valid when every listed suffix offset lies beyond the marker. -/
+theorem CanonicalKeeperLayout.boundedPlan_valid {image : FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout image history)
+    (later : ∀ ordinal ∈ layout.boundedPlan.newer, layout.range.through < ordinal) :
+    layout.boundedPlan.valid = true :=
+  (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq layout.target.trimmedSize.symm, later⟩
+
+theorem CanonicalKeeperLayout.boundedPlan_extractKeeper {image : FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout image history) :
+    layout.boundedPlan.keeperBytes.extract 0 layout.boundedPlan.keeperSize = layout.keeper.bytes := by
+  have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
+  rw [← size]
+  exact ByteArray.extract_zero_size
+
 theorem CanonicalKeeperLayout.boundedPlan_eq_extract {image : FileImage} {history : List WAL.Write}
     (layout : CanonicalKeeperLayout image history) :
     layout.boundedPlan = { layout.plan with keeperBytes := layout.plan.keeperBytes.extract 0 layout.plan.keeperSize } := by

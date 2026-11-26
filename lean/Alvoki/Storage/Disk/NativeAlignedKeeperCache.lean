@@ -673,8 +673,7 @@ theorem AlignedKeeperCacheReport.repairsAfterRead
   have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have sizeEq := (alignedExtent finish).symm.trans bytes
   have noLater : layout.boundedPlan.newer = [] := finish.repair.noLater
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq bytes.symm, by simp [noLater]⟩
+  have valid := layout.boundedPlan_valid (by simp [noLater])
   have separate := file_ne_directory directory (.walSegment layout.keeper.first)
   have directorySelected : sync #[directory.path] seen.remembered = .ok () seen.authorized :=
     callbacks.syncsDirectory seen.directoryLoad seen.directorySync

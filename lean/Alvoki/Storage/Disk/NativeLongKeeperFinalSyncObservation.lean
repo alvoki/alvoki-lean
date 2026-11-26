@@ -355,9 +355,8 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPrune
     source.openTable input entry = .error (dispose.diagnostic cause) finalized.reached ∧
       source.FailedCalls first (earlier ++ [(input, dispose.diagnostic cause)]) finalized.reached ∧
       sampledFrame entry finalized.reached := by
-  obtain ⟨covered, _, later⟩ := (Plan.valid_iff layout.plan).mp valid.valid
   have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have checked := (Plan.valid_iff layout.boundedPlan).mpr ⟨covered, Nat.le_of_eq bytes.symm, later⟩
+  have checked := layout.boundedPlan_valid ((Plan.valid_iff layout.plan).mp valid.valid).2.2
   have extent : reads.wal.keeper.calls.metadata.byteSize.toNat = (layout.keeper.bytes ++ layout.tail).size :=
     reads.wal.keeper.observesFile.extent
   have bounded : layout.boundedPlan.keeperSize ≤ reads.wal.keeper.calls.metadata.byteSize.toNat := by
@@ -818,8 +817,8 @@ theorem MarkedWalExtentReports.extendsLongRenameError
   have payload : layout.keeper.bytes = target.trimmed := congrArg Target.trimmed sameTarget
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have checked : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm,
-      fun ordinal member => (show layout.target.range.through < ordinal from sameTarget.symm ▸ later ordinal member)⟩
+    layout.boundedPlan_valid fun ordinal member =>
+      show layout.target.range.through < ordinal from sameTarget.symm ▸ later ordinal member
   have actualWrite : stageWrite ((dir).file .stagedWal) target.trimmed pruned = .ok () recorded := payload ▸ written
   obtain ⟨prunedTrace, prunedEmpty, syncedImage, keeperActive⟩ :=
     longKeeperSyncPrefix (fun atHeap => (view.files atHeap).image) dir target layout.boundedPlan
@@ -838,7 +837,7 @@ theorem MarkedWalExtentReports.extendsLongRenameError
     · exact state.protectedPathNeWalFromActive currentReady (.inr protectedPath) (Nat.le_of_lt past) rfl
   have writtenPrefix : stageWrite ((dir).file .stagedWal)
       (layout.boundedPlan.keeperBytes.extract 0 layout.boundedPlan.keeperSize) pruned = .ok () recorded := by
-    rw [← size, ByteArray.extract_zero_size]
+    rw [layout.boundedPlan_extractKeeper]
     exact written
   obtain ⟨durableFrame, rootFrame, _, authorizedScope, stageScope, oldAtRename, oldSettled,
     issued, file, slot, replacement, _, _, apart, stageAtIssue, bytesAtIssue, fileSync, liveAtSync, protects⟩ :=
@@ -854,7 +853,7 @@ theorem MarkedWalExtentReports.extendsLongRenameError
     simpa only [repairRootScope, path] using oldSettled
   have stagedNamed := (congrFun fileSync.names ((dir).file .stagedWal)).trans stageAtIssue
   have atIssueBytes : visible issued replacement = target.trimmed := by
-    rw [bytesAtIssue, ← size, ByteArray.extract_zero_size]
+    rw [bytesAtIssue, layout.boundedPlan_extractKeeper]
     exact payload
   have stagedLive := liveAtSync.trans atIssueBytes
   have stagedDurable : (storage synced).files.bytes replacement = [target.trimmed] := by

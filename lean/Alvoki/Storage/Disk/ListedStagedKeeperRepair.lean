@@ -182,8 +182,7 @@ theorem finishAfterPrune (pruning : LongKeeperPruning authorization) :
     have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
     have long : layout.boundedPlan.keeperSize < authorization.keeper.metadata.byteSize.toNat :=
       size ▸ reported.longer
-    have valid : layout.boundedPlan.valid = true :=
-      (Plan.valid_iff layout.boundedPlan).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, by simp [newer]⟩
+    have valid := layout.boundedPlan_valid (by simp [newer])
     have suffix := reported.barriers.2.2
     change operations.sync operations.cache #[directory.path] before.image.syncDirectory =
       .ok () before.image.syncDirectory at suffix
@@ -362,10 +361,7 @@ theorem finishFromStage (reported : ListedLongKeeperStageAt pruning) :
         operations.sync operations.cache #[directory.path]
         pure () : EStateM IO.Error FileImage Unit) reached := by
   intro written path keeper
-  have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have bytes : layout.boundedPlan.keeperBytes.extract 0 layout.boundedPlan.keeperSize = layout.keeper.bytes := by
-    rw [← size, ByteArray.extract_zero_size]
-    rfl
+  have bytes := layout.boundedPlan_extractKeeper
   have wrote : operations.write operations.cache (directory.file .stagedWal) layout.keeper.bytes pruning.stageInput.image =
       .ok () written := reported.stageCallbacks.1
   rw [pruning.finishAfterPrune]

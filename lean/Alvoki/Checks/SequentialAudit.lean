@@ -1719,6 +1719,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.emptyLater
 #check_axioms Alvoki.Storage.WalSegmentRepair.EffectTrace.canonicalRetryLayout
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.boundedPlan_eq_extract
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.boundedPlan_valid
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.boundedPlan_extractKeeper
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.prepareBoundedFromReplay
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.prepareBoundedReports
 #check_axioms Alvoki.Storage.DiskSession.BoundedReopenAttempt.errorFiles

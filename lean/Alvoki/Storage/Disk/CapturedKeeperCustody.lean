@@ -192,8 +192,7 @@ theorem syncFromRead (captured : CapturedKeeperOpenReports report)
     aligned.symm.trans layout.target.trimmedSize
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have empty : layout.boundedPlan.newer = [] := noLater
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, by simp [empty]⟩
+  have valid := layout.boundedPlan_valid (by simp [empty])
   simp only [Bind.bind, EStateM.bind, readResult, finishBoundedMarkedOpen, measured, valid, size, beq_self_eq_true,
     decide_eq_true (Nat.le_refl _), Bool.and_self, ↓reduceIte, empty, List.isEmpty_nil, directorySync]
   change grouped #[path] (remembered, authorized) = _

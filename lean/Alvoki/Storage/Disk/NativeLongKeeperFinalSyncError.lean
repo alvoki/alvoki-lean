@@ -117,8 +117,7 @@ theorem ListedLongKeeperDirectoryIssue.rawFinalSyncError
   have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have longer : layout.boundedPlan.keeperSize < physical :=
     bytes ▸ measured.symm ▸ pruning.longer
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq bytes.symm, pruning.later⟩
+  have valid := layout.boundedPlan_valid pruning.later
   obtain ⟨dirLive, ownerLive, _, _, noStage, keeperBound⟩ := issue.custody
   obtain ⟨liveHandle, boundHandle⟩ := issue.rawDirectoryTarget view names atIssue census root
   have files := effect failed liveHandle boundHandle issuedFiles

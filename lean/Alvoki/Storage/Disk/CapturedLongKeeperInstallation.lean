@@ -338,11 +338,8 @@ theorem repairAt_returns (finish : CapturedLongKeeperFinish calls report vacant 
     simpa only [movedCensus, openedCensus, afterSync, DescriptorInventory.afterDrops_append, census,
       ListedLongKeeperDirectoryIssue.inventory, settled, List.append_assoc] using output
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, finish.prune.later⟩
-  have bytes : layout.boundedPlan.keeperBytes.extract 0 layout.boundedPlan.keeperSize = layout.keeper.bytes := by
-    rw [← size, ByteArray.extract_zero_size]
-    rfl
+  have valid := layout.boundedPlan_valid finish.prune.later
+  have bytes := layout.boundedPlan_extractKeeper
   have measured : report.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
     report.wal.keeper.observesFile.extent
   have long : layout.boundedPlan.keeperSize < layout.plan.keeperBytes.size := by

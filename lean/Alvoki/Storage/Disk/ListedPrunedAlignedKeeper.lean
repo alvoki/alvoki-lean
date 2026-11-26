@@ -231,8 +231,7 @@ theorem finishResult (repair : ListedPrunedAlignedKeeper prune)
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have physical : authorization.keeper.metadata.byteSize.toNat = layout.boundedPlan.keeperSize :=
     repair.aligned.symm.trans size
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff layout.boundedPlan).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, later⟩
+  have valid := layout.boundedPlan_valid later
   have newer : layout.boundedPlan.newer.isEmpty = false := List.isEmpty_eq_false_iff.mpr repair.nonempty
   let run := performPaths directory layout.boundedPlan operations.removeFile throw
     (operations.write operations.cache) (operations.sync operations.cache) operations.renameFile

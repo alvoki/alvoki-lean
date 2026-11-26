@@ -140,10 +140,9 @@ theorem repairWork_exact (prepared : Prepared retry.image layout.target layout.p
           if layout.boundedPlan.keeperSize < reported.reads.wal.keeper.calls.metadata.byteSize.toNat then 6 else 3) := by
   have names : layout.boundedPlan.newer = retry.image.later.visible := prepared.names
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq size.symm, by
-      rw [names]
-      exact prepared.newer _ List.mem_cons_self⟩
+  have valid := layout.boundedPlan_valid (by
+    rw [names]
+    exact prepared.newer _ List.mem_cons_self)
   have measured : reported.reads.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
     reported.reads.wal.keeper.observesFile.extent
   have fits : layout.boundedPlan.keeperSize ≤ reported.reads.wal.keeper.calls.metadata.byteSize.toNat := by

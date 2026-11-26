@@ -186,10 +186,7 @@ theorem finishError (failure : ListedStagedWriteFailure pruning) :
     finishBoundedMarkedOpen directory layout.boundedPlan authorization.keeper.metadata.byteSize.toNat
       operations.removeFile (operations.write operations.cache) (operations.sync operations.cache)
       operations.renameFile before.image = .error failure.cause failure.reached.image := by
-  have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have bytes : layout.boundedPlan.keeperBytes.extract 0 layout.boundedPlan.keeperSize = layout.keeper.bytes := by
-    rw [← size, ByteArray.extract_zero_size]
-    rfl
+  have bytes := layout.boundedPlan_extractKeeper
   rw [pruning.finishAfterPrune]
   simp only [performPaths, Publication.performReplacement, Bind.bind, EStateM.bind, bytes, failure.stageError.2]
 

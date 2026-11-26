@@ -386,11 +386,8 @@ theorem reachesStageSync (seen : NativeLongKeeperFreshStageHeap suffix stage)
   have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have longer : layout.boundedPlan.keeperSize < reads.wal.keeper.calls.metadata.byteSize.toNat :=
     bytes ▸ finish.longer
-  have valid : layout.boundedPlan.valid = true :=
-    (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq bytes.symm, finish.prune.later⟩
-  have exactBytes : layout.boundedPlan.keeperBytes.extract 0 layout.boundedPlan.keeperSize = layout.keeper.bytes := by
-    rw [← bytes, ByteArray.extract_zero_size]
-    rfl
+  have valid := layout.boundedPlan_valid finish.prune.later
+  have exactBytes := layout.boundedPlan_extractKeeper
   rw [finishBoundedMarkedOpen_long _ _ _ _ _ _ _ valid bytes longer]
   change (do
     grouped #[directory.path]
