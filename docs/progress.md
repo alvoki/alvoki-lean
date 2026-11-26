@@ -2,11 +2,12 @@
 
 At the final MANIFEST directory-fsync stop, the successful run writes, file syncs and first
 directory barrier establish both the prior selected footprint and the new run bytes. One
-admitted crash name map then supplies the manifest, WAL marker and every run named by that
-manifest. `replaysSampledFinalCheckpoint` derives the selected checkpoint and replay through
-the last acknowledged write. It covers the prior generation, including an absent prior
-manifest, and the new generation. The proof uses local filesystem effect assumptions at
-the reached calls. The concrete reopen still needs to read these same inodes under the
+admitted crash name map supplies the manifest, the WAL marker, keeper and sealed segment
+bytes, and every run named by the manifest. It also preserves the directory and LOCK inode
+identities. `replaysSampledFinalCheckpoint` derives the exact aligned recovery layout and
+replay through the last acknowledged write. The same layout and replay proofs serve the
+existing MANIFEST rename-error recovery. The filesystem effect assumptions apply at the
+reached calls. The concrete reopen still needs to read the selected inodes under the
 reacquired lock.
 [Sampled checkpoint replay](../lean/Alvoki/Storage/Disk/NativeCheckpointFinalManifest.lean)
 

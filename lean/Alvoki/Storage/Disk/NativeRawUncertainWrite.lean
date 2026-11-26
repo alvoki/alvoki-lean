@@ -218,10 +218,9 @@ are sampled for those paths. -/
 theorem NativeReadyStorage.chosenWriteBinding {state : NativeReadyState} {entry reached : CheckpointStorageObservation}
     (old : NativeReadyStorage state entry) (frame : entry.Frames state.writeFramePath reached)
     (names : FilePath → Option Nat) (chosen : names ∈ reached.crashNames)
-    {path : FilePath} (protectedPath : state.writeFramePath path) : names path = entry.files.names path := by
-  obtain ⟨prior, survives, keeps⟩ := frame.survivors names chosen
-  exact (keeps path protectedPath).trans
-    (old.settled prior survives path (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr protectedPath))))
+    {path : FilePath} (protectedPath : state.writeFramePath path) : names path = entry.files.names path :=
+  old.chosenBinding frame names chosen protectedPath
+    (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr protectedPath)))
 
 /-- A selected regular file retains its original bound inode and the
 settled bytes when sampled in a joint survivor of the write. -/
@@ -231,12 +230,9 @@ theorem NativeReadyStorage.sampleWriteFile {state : NativeReadyState} {entry rea
     (stored : entry.files.Stored path payload)
     (names : FilePath → Option Nat) (chosen : names ∈ reached.crashNames) (contents : Nat → ByteArray)
     (sample : ∀ inode, names path = some inode → contents inode ∈ reached.files.bytes inode) :
-    ∃ inode, entry.files.names path = some inode ∧ names path = some inode ∧ contents inode = payload := by
-  obtain ⟨inode, entryBound, initialBytes⟩ := stored
-  have bound := (old.chosenWriteBinding frame names chosen protectedPath).trans entryBound
-  have storedAt := ((frame.visible path protectedPath).2 inode entryBound).trans initialBytes
-  have exactBytes := List.mem_singleton.mp (storedAt ▸ sample inode bound)
-  exact ⟨inode, entryBound, bound, exactBytes⟩
+    ∃ inode, entry.files.names path = some inode ∧ names path = some inode ∧ contents inode = payload :=
+  old.sampleFile frame protectedPath (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr protectedPath)))
+    stored names chosen contents sample
 
 /-- The write's protected-file frame keeps the selected checkpoint
 binding and bytes in each reached joint map, independently of the WAL

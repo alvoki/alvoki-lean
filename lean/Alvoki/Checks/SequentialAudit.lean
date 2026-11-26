@@ -2486,6 +2486,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.preparedManifestEncoding
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.publicationReplays
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.rebootDirectoryBindings
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.samplesWal
+#check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.checkpointCrashReopen
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedCheckpointReopenEffects.ReturnedAt.allocation
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncUsesWrittenHandle
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncIssuesRawSync

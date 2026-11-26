@@ -94,6 +94,37 @@ theorem WalSegmentImage.ReadLayout.checkpointReopenLayout
     exact ⟨ByteArray.empty, by simpa [selected] using exactBytes⟩
   · simp [files, WalSegmentImage.checkpointReopenFiles, LaterNames.settled, LaterNames.Beyond]
 
+/-- Settle exactly the surviving metadata pair for an aligned checkpoint
+reopen. The selected range still uses the original segment chain. -/
+theorem WalSegmentImage.ReadLayout.checkpointCrashReopen
+    {wal : WalSegmentImage} {history : List WAL.Write} (layout : wal.ReadLayout history)
+    (valid : wal.Valid history) {pair : DirectoryPublication.Bindings} {range : MarkedWalRange}
+    (survives : pair ∈ wal.directory.crashImages)
+    (decoded : pair.walRange = some range) (through : range.through = history.length) :
+    let selectedWal : WalSegmentImage := { wal with directory := .settled pair }
+    let files := selectedWal.checkpointReopenFiles selectedWal.directory none
+    selectedWal.ReadLayout history ∧ selectedWal.Valid history ∧
+      ∃ selected : CanonicalKeeperLayout files history,
+        selected.range = range ∧ selected.keeper = wal.active ∧ selected.tail = ByteArray.empty ∧
+        selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark ∧
+        selectWalSegmentReads (wal.segments.map (·.first)) selected.range.watermark =
+          some (selected.first, (wal.readDescriptors selected.range.watermark).map (·.first)) ∧
+        Prepared files selected.target selected.plan := by
+  intro selectedWal files
+  have retained : selectedWal.ReadLayout history :=
+    ⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩
+  have accepted : selectedWal.Valid history := by
+    intro chosen admitted
+    have same : chosen = pair := by
+      simpa [selectedWal, WalSegmentImage.Selects, DirectoryPublication.Image.settled] using admitted
+    subst chosen
+    exact valid pair (List.mem_cons_of_mem _ survives)
+  obtain ⟨selected, exactRange, keeper, aligned, descriptors, offsets, _, choices, prefixBytes, later⟩ :=
+    layout.checkpointReopenLayout valid (.crash survives) decoded through none
+  rw [← exactRange] at descriptors offsets later
+  exact ⟨retained, accepted, selected, exactRange, keeper, aligned, descriptors, offsets,
+    selected.prepared choices prefixBytes later⟩
+
 /-- The manifest selected by the repair image has exactly the acceptance
 and ordered durable files certified by the checkpoint cut. An absent
 manifest uses the same zero watermark as marked recovery. -/

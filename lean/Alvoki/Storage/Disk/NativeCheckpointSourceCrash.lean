@@ -42,6 +42,11 @@ structure NativeReadyStorage (state : NativeReadyState) (storage : CheckpointSto
   keeper : storage.files.Stored (state.session.directory.file (.walSegment state.writer.wal.active.first)) state.writer.wal.active.bytes
   settled : ∀ names ∈ storage.crashNames, ∀ path, state.crashPath path → names path = storage.files.names path
 
+/-- The two names used to acquire the directory and lock on the next open. -/
+structure RebootDirectoryBindings (state : NativeReadyState) (names : FilePath → Option Nat) : Prop where
+  directory : names state.session.directory.path = some (state.census.inode state.directorySlot.description)
+  lock : names (state.session.directory.file .lock) = some (state.census.inode state.owner.description)
+
 theorem NativeReadyProtectedStorage.frame {state : NativeReadyState} {first last : CheckpointSurvivingFiles}
     (initial : NativeReadyProtectedStorage state first) (frame : first.Frames state.writeFramePath last) :
     NativeReadyProtectedStorage state last := by
@@ -75,6 +80,59 @@ theorem frame (initial : NativeReadyStorage state first) (frame : first.Frames s
     frame.visible.stored (NativeReadyState.crashPath_iff_write.mpr (.inl rfl)) initial.marker,
     frame.visible.stored (NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))) initial.keeper,
     frame.settledFrom initial.settled⟩
+
+/-- One chosen map retains every previously settled path in the frame. -/
+theorem chosenBinding (initial : NativeReadyStorage state first) {scope : FilePath → Prop}
+    (frame : first.Frames scope last) (names : FilePath → Option Nat) (chosen : names ∈ last.crashNames)
+    {path : FilePath} (kept : scope path) (settled : state.crashPath path) :
+    names path = first.files.names path := by
+  have retained := frame.weaken (scope := fun path => scope path ∧ state.crashPath path) (fun _ both => both.1)
+  exact (retained.settledFrom (fun prior possible path both => initial.settled prior possible path both.2)
+    names chosen path ⟨kept, settled⟩).trans (frame.visible path kept).1
+
+/-- Sampling a retained regular file picks the same inode and its exact
+settled payload. No assumption about other names or files is needed. -/
+theorem sampleFile (initial : NativeReadyStorage state first) {scope : FilePath → Prop}
+    (frame : first.Frames scope last) {path : FilePath} (kept : scope path) (settled : state.crashPath path)
+    {payload : ByteArray} (stored : first.files.Stored path payload)
+    (names : FilePath → Option Nat) (chosen : names ∈ last.crashNames) (contents : Nat → ByteArray)
+    (sampled : ∀ inode, names path = some inode → contents inode ∈ last.files.bytes inode) :
+    ∃ inode, first.files.names path = some inode ∧ names path = some inode ∧ contents inode = payload := by
+  obtain ⟨inode, reached, bytes⟩ := frame.visible.stored kept stored
+  have before := (frame.visible path kept).1.symm.trans reached
+  have survives := (initial.chosenBinding frame names chosen kept settled).trans before
+  exact ⟨inode, before, survives, List.mem_singleton.mp (bytes ▸ sampled inode survives)⟩
+
+theorem rebootDirectoryBindings (initial : NativeReadyStorage state first) {scope : FilePath → Prop}
+    (frame : first.Frames scope last) (names : FilePath → Option Nat) (chosen : names ∈ last.crashNames)
+    (directory : scope state.session.directory.path) (lock : scope (state.session.directory.file .lock)) :
+    RebootDirectoryBindings state names :=
+  ⟨(initial.chosenBinding frame names chosen directory (.inl rfl)).trans initial.directoryBound,
+    (initial.chosenBinding frame names chosen lock (.inr (.inl rfl))).trans initial.lockBound⟩
+
+/-- The same chosen map supplies the marker, active keeper and each seal
+even if the selected manifest has changed. -/
+theorem samplesWal (initial : NativeReadyStorage state first) {scope : FilePath → Prop}
+    (frame : first.Frames scope last)
+    (kept : ∀ path, checkpointWalPath state.session.directory state.writer path → scope path)
+    (names : FilePath → Option Nat) (chosen : names ∈ last.crashNames) (contents : Nat → ByteArray)
+    (sampled : ∀ path, checkpointWalPath state.session.directory state.writer path →
+      ∀ inode, names path = some inode → contents inode ∈ last.files.bytes inode) :
+    let files : CheckpointSurvivingFiles := ⟨names, fun inode => [contents inode]⟩
+    files.Stored (state.session.directory.file .walBoundary)
+        (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) ∧
+    files.Stored (state.session.directory.file (.walSegment state.writer.wal.active.first))
+        state.writer.wal.active.bytes ∧
+    ∀ segment ∈ state.writer.wal.sealed,
+      files.Stored (state.session.directory.file (.walSegment segment.first)) segment.bytes := by
+  intro files
+  have sample {path payload} (wal : checkpointWalPath state.session.directory state.writer path)
+      (stored : first.files.Stored path payload) : files.Stored path payload := by
+    obtain ⟨inode, _, named, bytes⟩ := initial.sampleFile frame (kept path wal) (.inr (.inr (.inr (.inl wal))))
+      stored names chosen contents (sampled path wal)
+    exact ⟨inode, named, congrArg (fun payload => [payload]) bytes⟩
+  exact ⟨sample (.inl rfl) initial.marker, sample (.inr (.inl rfl)) initial.keeper,
+    fun segment member => sample (.inr (.inr ⟨segment, member, rfl⟩)) (initial.sealedFiles segment member)⟩
 
 /-- Sample durable bytes at the bound inodes of one reached survivor. -/
 def observeCrash (stable : NativeReadyStorage state first)

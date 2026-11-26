@@ -4,30 +4,30 @@ import Alvoki.Storage.Disk.Checkpoint.Reopen.HeldInstallation
 
 namespace Alvoki.Storage.DiskSession
 
-open System CheckpointPublication
+open System CheckpointPublication SyncHandleRouting
 open WAL.Boundary (CheckpointRepresentsPrefix WalInodeImage)
 
 variable {heap : Type} {opened : NativeOpenedHandle heap} {current : NativeOpenedPosition opened}
   {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
   {reason : FilePath} {reached : CheckpointWorld heap}
 
-local notation "directory" => current.current.ready.state.session.directory
+local notation "dbDir" => current.current.ready.state.session.directory
 
 /-- Staging changes a private inode. The returned file sync settles that
 inode's bytes while framing all paths other than the staged name. -/
 structure CheckpointManifestStageEffects
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
-    (observe : ∀ atHeap, RunDirectoryInodeView (directory) (inodes atHeap) (runs atHeap)) : Prop where
+    (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap)) : Prop where
   wrote : ∀ before after handle,
-    let path := (directory).file .stagedManifest
+    let path := (dbDir).file .stagedManifest
     primitives.cached.writeStaged path stop.manifest before = .ok handle after →
     let inode := handle.1.inode handle.2.1.description
     RunWriteInodeFrame path inode (inodes after) (observe before) (observe after) ∧
     (∀ other, (observe before).visible other = some inode → other = path) ∧
     (inodes after).visible inode = stop.manifest
   synced : ∀ handle beforeWrite before after,
-    let path := (directory).file .stagedManifest
+    let path := (dbDir).file .stagedManifest
     primitives.cached.writeStaged path stop.manifest beforeWrite = .ok handle before →
     fsync handle before = .ok (.ok ()) after →
     let inode := handle.1.inode handle.2.1.description
@@ -42,9 +42,9 @@ The same storage frame carries any scoped old and new run names. -/
 theorem NativeCheckpointSourceStop.stagedManifestPreservesFiles
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
-    (observe : ∀ atHeap, RunDirectoryInodeView (directory) (inodes atHeap) (runs atHeap))
+    (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
     (effects : CheckpointManifestStageEffects stop inodes runs observe) :
-    let dir := directory
+    let dir := dbDir
     let stage := dir.file .stagedManifest
     let perform := primitives.checkpointStepUntilStop dir fsync stop.next stop.manifest
     ∃ (beforeWrite beforeRename : CheckpointWorld heap) (inode : Nat)
@@ -103,31 +103,31 @@ scoped paths from before the staged write. -/
 theorem NativeCheckpointSourceStop.selectsFinalManifest
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
-    (observe : ∀ atHeap, RunDirectoryInodeView (directory) (inodes atHeap) (runs atHeap))
+    (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
     (stageEffects : CheckpointManifestStageEffects stop inodes runs observe)
     (oldStorage : ∀ beforeWrite : CheckpointWorld heap,
       ((runSteps stop.next.table.runs.length ++ [Step.syncRunsDirectory]).forM
-        (primitives.checkpointStepUntilStop (directory) fsync stop.next stop.manifest)).run
+        (primitives.checkpointStepUntilStop dbDir fsync stop.next stop.manifest)).run
         (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) beforeWrite →
       NativeReadyStorage current.current.ready.state (observe beforeWrite.2).storageObservation)
-    (scope : FilePath → Prop) (outsideStage : ∀ path, scope path → path ≠ (directory).file .stagedManifest)
+    (scope : FilePath → Prop) (outsideStage : ∀ path, scope path → path ≠ (dbDir).file .stagedManifest)
     (renameEffect : ∀ (before : heap) staged,
-      (observe before).visible ((directory).file .stagedManifest) = some staged →
-      primitives.rename ((directory).file .stagedManifest) ((directory).file .manifest) before = .ok () stop.atIssue.2 →
-      CheckpointManifestRenameEffect (directory) staged scope
+      (observe before).visible ((dbDir).file .stagedManifest) = some staged →
+      primitives.rename ((dbDir).file .stagedManifest) ((dbDir).file .manifest) before = .ok () stop.atIssue.2 →
+      CheckpointManifestRenameEffect dbDir staged scope
         (observe before).storageObservation (observe stop.atIssue.2).storageObservation)
     (effective : Bool)
     (directoryEffect : ∀ (handle : CheckpointOpenHandle) atSync,
-      stop.atIssue.1.resolve (directory).path (directory).path primitives.openRead stop.atIssue.2 =
+      stop.atIssue.1.resolve (dbDir).path (dbDir).path primitives.openRead stop.atIssue.2 =
         .ok handle (reached.1, atSync) →
       fsync handle atSync = .error reason reached.2 →
-      CheckpointManifestDirectoryEffect (directory) effective scope
+      CheckpointManifestDirectoryEffect dbDir effective scope
         (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation)
     (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings)
     (contents : Nat → ByteArray)
-    (sampled : ∀ path, path = (directory).file .manifest ∨ scope path →
+    (sampled : ∀ path, path = (dbDir).file .manifest ∨ scope path →
       ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode) :
-    let dir := directory
+    let dir := dbDir
     let perform := primitives.checkpointStepUntilStop dir fsync stop.next stop.manifest
     let writer := current.current.ready.state.writer
     let plan := VersionedRunSet.integrity
@@ -336,55 +336,81 @@ theorem CheckpointPreflight.sampledSettledRunsAgree
         ⟨bytes, metadata, index, selected, decoded, within, rfl⟩)))))
     exact sampled.trans exactPayload.symm
 
+private theorem walPath_ne_manifest {state : NativeReadyState} {path : FilePath}
+    (wal : checkpointWalPath state.session.directory state.writer path) :
+    path ≠ state.session.directory.file .manifest := by
+  let dir := state.session.directory
+  have segment (start : Nat) : dir.file (.walSegment start) ≠ dir.file .manifest := by
+    intro same
+    obtain ⟨_, impossible⟩ := DiskDirectory.walSegment_exclusive same.symm
+    cases impossible
+  rcases wal with rfl | rfl | ⟨saved, _, rfl⟩
+  · intro same
+    have basenames := (String.append_right_inj (dir.path.toString ++ "/")).mp (congrArg FilePath.toString same)
+    exact (by decide : "WAL.commit" ≠ "MANIFEST") basenames
+  · exact segment _
+  · exact segment saved.first
+
 /-- Read the marker and selected run bytes from the very same crash map as
 the final manifest. Checked replay applies to this physical run map. -/
 theorem NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
-    (observe : ∀ atHeap, RunDirectoryInodeView directory (inodes atHeap) (runs atHeap))
+    (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
     (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
     (phaseStorage : (observe current.reached).storageObservation.Frames current.current.ready.state.crashPath
       (observe stop.poisoned).storageObservation)
     (runEffects : ReturnedCheckpointRunEffects stop stop.next.table.runs.length inodes runs observe)
     (writtenPayload : ∀ index < stop.next.table.runs.length, ∀ before after payload handle,
-      primitives.cached.writeRun ((directory).file (.run stop.next.generation index))
+      primitives.cached.writeRun ((dbDir).file (.run stop.next.generation index))
         payload before = .ok handle after →
       (inodes after).visible (handle.1.inode handle.2.1.description) = payload)
     (runBarrier : ∀ handle (atIssue after : CheckpointWorld heap),
       atIssue.1.directory = some handle → fsync handle atIssue.2 = .ok (.ok ()) after.2 →
       let state := current.current.ready.state
-      CheckpointRunsDirectoryEffect (directory).path
-        (fun path => (state.crashPath path ∧ path ≠ (directory).path) ∨
-          ∃ index < stop.next.table.runs.length, path = (directory).file (.run stop.next.generation index))
+      CheckpointRunsDirectoryEffect (dbDir).path
+        (fun path => (state.crashPath path ∧ path ≠ (dbDir).path) ∨
+          ∃ index < stop.next.table.runs.length, path = (dbDir).file (.run stop.next.generation index))
         (observe atIssue.2).storageObservation (observe after.2).storageObservation)
     (stageEffects : CheckpointManifestStageEffects stop inodes runs observe)
-    (scope : FilePath → Prop) (outsideStage : ∀ path, scope path → path ≠ (directory).file .stagedManifest)
-    (retained : ∀ path, current.current.ready.state.crashPath path → path ≠ (directory).file .manifest → scope path)
-    (newRuns : ∀ index < stop.next.table.runs.length, scope ((directory).file (.run stop.next.generation index)))
+    (scope : FilePath → Prop) (outsideStage : ∀ path, scope path → path ≠ (dbDir).file .stagedManifest)
+    (retained : ∀ path, current.current.ready.state.crashPath path → path ≠ (dbDir).file .manifest → scope path)
+    (newRuns : ∀ index < stop.next.table.runs.length, scope ((dbDir).file (.run stop.next.generation index)))
     (renameEffect : ∀ (before : heap) staged,
-      (observe before).visible ((directory).file .stagedManifest) = some staged →
-      primitives.rename ((directory).file .stagedManifest) ((directory).file .manifest) before = .ok () stop.atIssue.2 →
-      CheckpointManifestRenameEffect directory staged scope
+      (observe before).visible ((dbDir).file .stagedManifest) = some staged →
+      primitives.rename ((dbDir).file .stagedManifest) ((dbDir).file .manifest) before = .ok () stop.atIssue.2 →
+      CheckpointManifestRenameEffect dbDir staged scope
         (observe before).storageObservation (observe stop.atIssue.2).storageObservation)
     (effective : Bool)
     (directoryEffect : ∀ (handle : CheckpointOpenHandle) atSync,
-      stop.atIssue.1.resolve (directory).path (directory).path primitives.openRead stop.atIssue.2 =
+      stop.atIssue.1.resolve (dbDir).path (dbDir).path primitives.openRead stop.atIssue.2 =
         .ok handle (reached.1, atSync) →
       fsync handle atSync = .error reason reached.2 →
-      CheckpointManifestDirectoryEffect directory effective scope
+      CheckpointManifestDirectoryEffect dbDir effective scope
         (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation)
     (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings)
     (contents : Nat → ByteArray)
-    (sampled : ∀ path, path = (directory).file .manifest ∨ scope path →
+    (sampled : ∀ path, path = (dbDir).file .manifest ∨ scope path →
       ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode) :
-    let dir := directory
+    let dir := dbDir
     let writer := current.current.ready.state.writer
     let pair : DirectoryPublication.Bindings :=
       ⟨(names (dir.file .manifest)).map contents, (names (dir.file .walBoundary)).map contents⟩
     let actual : RunFiles := fun generation index => (names (dir.file (.run generation index))).map contents
-    ∃ published : Image,
-      let wal := published.segmentedCheckpointView writer.wal
-      pair ∈ wal.directory.crashImages ∧ wal.ReadLayout writer.history ∧ wal.Valid writer.history ∧
+    let files : CheckpointSurvivingFiles := ⟨names, fun inode => [contents inode]⟩
+    let wal : WalSegmentImage := { writer.wal with directory := .settled pair }
+    let retry := wal.checkpointReopenFiles wal.directory none
+    RebootDirectoryBindings current.current.ready.state names ∧
+    files.Stored (dir.file .walBoundary) (WAL.Boundary.encode (WAL.encode writer.history).size.toUInt64) ∧
+    (∀ segment ∈ writer.wal.segments, files.Stored (dir.file (.walSegment segment.first)) segment.bytes) ∧
+    ∃ (published : Image) (layout : CanonicalKeeperLayout retry writer.history),
+      pair ∈ (published.segmentedCheckpointView writer.wal).directory.crashImages ∧
+      wal.ReadLayout writer.history ∧ wal.Valid writer.history ∧ layout.keeper = wal.active ∧
+      layout.tail = ByteArray.empty ∧
+      layout.sealed ++ [layout.keeper] = wal.readDescriptors layout.range.watermark ∧
+      selectWalSegmentReads (wal.segments.map (·.first)) layout.range.watermark =
+        some (layout.first, (wal.readDescriptors layout.range.watermark).map (·.first)) ∧
+      WalSegmentRepair.Prepared retry layout.target layout.plan ∧
       SelectedRunsAgree pair.manifest actual published.durable ∧
       ({ published with durable := actual } : Image).AcceptsVersioned writer.history.length.toUInt64
         (CheckpointRepresentsPrefix writer.history) pair.manifest ∧
@@ -396,14 +422,14 @@ theorem NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
           recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode writer.history) = .ok table ∧
           table.committed.toNat = writer.history.length ∧ table.Refines model ∧
           RepresentsWalHistory writer.history model := by
-  intro dir writer pair actual
+  intro dir writer pair actual files wal retry
   let state := current.current.ready.state
   have valid := current.current.ready.readPrefix.refines.1
   have prepared : CheckpointPreflight (.ready writer.installed) (.ok (stop.next, stop.manifest)) :=
     valid.phase ▸ stop.prepared
   have oldStorage := stop.priorStorageBeforeStaging inodes runs observe initial phaseStorage runEffects
     (fun handle entry after cached synced => (runBarrier handle entry after cached synced).weaken (fun _ => .inl))
-  obtain ⟨beforeWrite, published, through, _, executed, manifest, choice, sample, newModel, oldModel⟩ :=
+  obtain ⟨beforeWrite, published, through, frame, executed, manifest, choice, sample, newModel, oldModel⟩ :=
     stop.selectsFinalManifest inodes runs observe stageEffects oldStorage scope outsideStage renameEffect
       effective directoryEffect names chosen contents sampled
   obtain ⟨barrier, throughBarrier, runStorage⟩ := stop.newRunsSettledBeforeManifest inodes runs observe runEffects
@@ -412,12 +438,30 @@ theorem NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
   have same := (EStateM.Result.ok.inj (throughBarrier.symm.trans through)).2
   subst barrier
   have stable := oldStorage beforeWrite through
-  have markerPath : state.crashPath (dir.file .walBoundary) := NativeReadyState.crashPath_iff_write.mpr (.inl rfl)
-  have marker := sample (dir.file .walBoundary) (retained _ markerPath (by
-      intro same
-      have conflict := congrArg FilePath.toString same
-      exact (by decide : "WAL.commit" ≠ "MANIFEST") ((String.append_right_inj (dir.path.toString ++ "/")).mp conflict)))
-    _ stable.marker (fun map allowed => stable.settled map allowed _ markerPath)
+  have includeWal : ∀ path, checkpointWalPath dir writer path → scope path :=
+    fun path walPath => retained path (.inr (.inr (.inr (.inl walPath)))) (walPath_ne_manifest walPath)
+  have rootInScope : scope dir.path :=
+    retained _ (.inl rfl) (file_ne_directory dir .manifest).symm
+  have lockInScope : scope (dir.file .lock) := retained _ (.inr (.inl rfl)) (by
+    intro same
+    have basenames := (String.append_right_inj (dir.path.toString ++ "/")).mp (congrArg FilePath.toString same)
+    exact (by decide : "LOCK" ≠ "MANIFEST") basenames)
+  have bindings := stable.rebootDirectoryBindings frame names chosen rootInScope lockInScope
+  obtain ⟨markerStored, keeperStored, sealsStored⟩ :=
+    stable.samplesWal frame includeWal names chosen contents (fun path kept => sampled path (.inr (includeWal path kept)))
+  have segmentStored : ∀ segment ∈ writer.wal.segments, files.Stored (dir.file (.walSegment segment.first)) segment.bytes := by
+    intro segment appears
+    rcases List.mem_append.mp appears with sealed | last
+    · exact sealsStored segment sealed
+    · obtain rfl := List.mem_singleton.mp last
+      exact keeperStored
+  have marker : pair.walBoundary =
+      some (WAL.Boundary.encode (WAL.encode writer.history).size.toUInt64) := by
+    obtain ⟨inode, bound, bytes⟩ := markerStored
+    change names (dir.file .walBoundary) = some inode at bound
+    change [contents inode] = _ at bytes
+    change (names (dir.file .walBoundary)).map contents = _
+    rw [bound, Option.map_some, (List.cons.inj bytes).1]
   have markerModel := congrArg Publication.Image.active valid.retained.resumed.markerImage
   change writer.files.directory.active.walBoundary =
     some (WAL.Boundary.encode (WAL.encode writer.history).size.toUInt64) at markerModel
@@ -445,7 +489,10 @@ theorem NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
   obtain ⟨layout, wellFormed, replay⟩ := prepared.publicationReplays valid.retained executed
   obtain ⟨_, accepted, range, decoded, upto, checkpoint, table, model, selected, generation, recovered,
     clock, refines, history⟩ := replay pair (List.mem_cons_of_mem _ survives)
-  refine ⟨published, survives, layout, wellFormed, agrees, ?_, range, decoded, upto, checkpoint, table, model,
+  obtain ⟨walLayout, walValid, alignedLayout, _, keeper, aligned, descriptors, offsets, openPlan⟩ :=
+    layout.checkpointCrashReopen wellFormed survives decoded upto
+  refine ⟨bindings, markerStored, segmentStored, published, alignedLayout, survives, walLayout, walValid, keeper,
+    aligned, descriptors, offsets, openPlan, agrees, ?_, range, decoded, upto, checkpoint, table, model,
     SelectedIntegrityCheckpoint.withRunMap selected agrees.symm, generation, recovered, clock, refines, history⟩
   exact agrees.acceptsVersioned decoded accepted
 

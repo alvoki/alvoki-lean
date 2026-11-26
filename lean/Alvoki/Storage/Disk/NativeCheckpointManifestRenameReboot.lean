@@ -201,14 +201,11 @@ structure Plan (crash : NativeCheckpointManifestRenameCrash report) where
     (CheckpointRepresentsPrefix state.writer.history) crash.pair.manifest
   walValid : crash.rebootWal.Valid state.writer.history
 
-theorem plans (crash : NativeCheckpointManifestRenameCrash report) (valid : state.Valid)
-    (pending : PendingClientReplay log reads state.writer.history) : Nonempty crash.Plan := by
+theorem plans (crash : NativeCheckpointManifestRenameCrash report) (valid : state.Valid) : Nonempty crash.Plan := by
   have marker := (report.crashSelection valid crash.chosen).1
   have origin := crash.oldOrNew valid
   obtain ⟨modeled, executed, choices, newRuns, oldRuns⟩ := report.modeledPublication valid
-  obtain ⟨logical, exactExecution, _, logicalValid, acceptable, _⟩ := cut.selectsAcknowledgedHistory valid.retained
-  have same := Option.some.inj (exactExecution.symm.trans executed)
-  subst logical
+  obtain ⟨logicalLayout, logicalValid, replay⟩ := cut.preflight.publicationReplays valid.retained executed
   have choice : crash.pair.manifest ∈ modeled.manifest.crashImages := by
     rw [choices]
     rcases origin with prior | ⟨effect, replacement⟩
@@ -221,7 +218,8 @@ theorem plans (crash : NativeCheckpointManifestRenameCrash report) (valid : stat
     simp only [DirectoryPublication.Bindings.mk.injEq, true_and]
     exact marker.symm
   have selected : (modeled.segmentedCheckpointView state.writer.wal).Selects crash.pair := List.mem_cons_of_mem _ pair
-  obtain ⟨accepted, range, decoded, through⟩ := acceptable crash.pair selected
+  obtain ⟨_, accepted, range, decoded, through, checkpoint, _, _, selection, generations, _⟩ :=
+    replay crash.pair selected
   have old : SelectedRunsAgree state.writer.wal.directory.active.manifest crash.publication.durable modeled.durable := by
     intro bytes metadata present decoded index within
     have different := (cut.priorSelectedGeneration valid.retained present decoded).2
@@ -234,24 +232,13 @@ theorem plans (crash : NativeCheckpointManifestRenameCrash report) (valid : stat
   have exactRuns := cut.selectedRunAgreement valid.retained modeled crash.pair.manifest (origin.imp id And.right)
     crash.publication.durable new old
   have acceptedPhysical := exactRuns.acceptsVersioned decoded accepted
-  have walValid : crash.rebootWal.Valid state.writer.history := by
-    intro pair included
-    have same : pair = crash.pair := by
-      simpa [WalSegmentImage.Selects, rebootWal, DirectoryPublication.Image.settled] using included
-    subst pair
-    exact logicalValid _ selected
-  let prior := valid.retained.layout
-  let oldLayout : crash.rebootWal.ReadLayout state.writer.history :=
-    ⟨prior.ordered, prior.forward, prior.activeEnd, prior.activeBytes⟩
   have exactFiles := crash.reachedFiles valid
-  have chosen := oldLayout.checkpointReopenLayout walValid .visible decoded through none
-  dsimp only at chosen
+  have chosen := logicalLayout.checkpointCrashReopen logicalValid pair decoded through
+  simp only [Image.segmentedCheckpointView, rebootWal] at chosen exactFiles
   rw [← exactFiles] at chosen
-  obtain ⟨layout, rangeExact, keeper, aligned, descriptors, offsets, _, choices, keeperPrefix, laterValid⟩ := chosen
-  rw [← rangeExact] at descriptors offsets laterValid
-  obtain ⟨checkpoint, _, _, chosen, generations, _⟩ := report.replaysChoice valid pending origin
-  exact ⟨⟨layout, keeper, aligned, descriptors, offsets, layout.prepared choices keeperPrefix laterValid,
-    checkpoint, chosen, generations, acceptedPhysical, walValid⟩⟩
+  obtain ⟨_, walValid, layout, _, keeper, aligned, descriptors, offsets, prepared⟩ := chosen
+  exact ⟨⟨layout, keeper, aligned, descriptors, offsets, prepared, checkpoint,
+    SelectedIntegrityCheckpoint.withRunMap selection exactRuns.symm, generations, acceptedPhysical, walValid⟩⟩
 
 end NativeCheckpointManifestRenameCrash
 
@@ -452,9 +439,7 @@ theorem NativeReadPosition.reopensCheckpointManifestRenameAt (current : NativeRe
     (crash : NativeCheckpointManifestRenameCrash report) {input : FilePath} {inventory : DescriptorInventory}
     (observe : ∀ plan : crash.Plan, Nonempty (NativeCheckpointManifestRenameReads crash input plan inventory)) :
     ∃ next, NativeCheckpointManifestRenameReopened current crash input next inventory := by
-  obtain ⟨valid, sameHistory, replay⟩ := current.readPrefix.refines
-  have pending : PendingClientReplay log current.reads current.state.writer.history := sameHistory.symm ▸ replay
-  obtain ⟨plan⟩ := crash.plans valid pending
+  obtain ⟨plan⟩ := crash.plans current.readPrefix.refines.1
   obtain ⟨seen⟩ := observe plan
   obtain ⟨next, reopened, _⟩ := current.reopensCheckpointManifestRenameWith crash seen
   exact ⟨next, reopened⟩
