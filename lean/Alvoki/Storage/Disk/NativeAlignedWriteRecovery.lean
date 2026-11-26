@@ -578,28 +578,6 @@ variable {calls : AlignedKeeperCacheCallbacks heap} {readHeap prepared repaired 
 local notation "readyState" => allocation.readyState writer dir owner directorySlot
   cache.directory cache.active cache.pending phaseIdentity tokenIdentity
 
-/-- Name effects on the canonical WAL namespace of the literal repair.
-A cache read does not move bindings. Unlink effects are scoped to
-canonical paths, and subsequent cache operations preserve one joint
-crash map across the whole requested window. -/
-structure AlignedRepairWalNameEffects (calls : AlignedKeeperCacheCallbacks heap)
-    (directory : DiskDirectory) (observe : heap → CheckpointStorageObservation)
-    (cached : IO.Ref (Option IO.FS.Handle)) (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
-    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)) (cutoff : Nat) where
-  readRoot : ∀ {before after handle}, calls.getDirectory cached before = .ok (some handle) after →
-    ∀ start, (observe after).files.names (directory.file (.walSegment start)) =
-      (observe before).files.names (directory.file (.walSegment start))
-  unlink : ∀ {ordinal before after result}, cutoff < ordinal →
-    remove (directory.file (.walSegment ordinal)) before = .ok result after →
-    RunCollection.ownedUnlinkResult result = .ok () →
-    (observe after).files.names (directory.file (.walSegment ordinal)) = none ∧
-    ∀ start, start ≠ ordinal → (observe after).files.names (directory.file (.walSegment start)) =
-      (observe before).files.names (directory.file (.walSegment start))
-  readPending : ∀ {before after entries}, calls.getPending pending before = .ok entries after →
-    ∀ first through, WalNamePresenceFrame directory first through (observe before) (observe after)
-  clearPending : ∀ {before after entries}, calls.setPending pending entries before = .ok () after →
-    ∀ first through, WalNamePresenceFrame directory first through (observe before) (observe after)
-
 /-- Install an exact repaired writer through the literal phase and token
 allocations. The recovery mode has already supplied the ready storage. -/
 theorem NativeReadPosition.SelectedWritePlan.installsLiteralRepairedWriter
@@ -752,63 +730,11 @@ theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
   have stateValid : (readyState).Valid := ⟨rfl, rfl, ownerLive, directoryLive, directoryCached, retained⟩
   obtain ⟨protectedFiles, marker, rootSettled⟩ := physical.forReopenedWriter current.readPrefix.refines.1 stateValid rfl
     selected manifest published kept rootBound lockBound
-  have interpretUnlinks {before after : heap}
-      (fromPrepared : ∀ start, (observe before).files.names ((dir).file (.walSegment start)) =
-        (observe prepared).files.names ((dir).file (.walSegment start)))
-      (removed : ((repairPlan.newer.map Step.unlink).forM (performPaths dir repairPlan remove throw write
-        (calls.syncPaths (dir).path cache.directory cache.active cache.pending) rename)) before = .ok () after) :
-      ∀ through, writer.wal.NamespaceWindow dir firstOffset through (observe after).files.names :=
-    (selectedWindow.frame (fun start _ _ => congrArg Option.isSome (fromPrepared start))).afterAcceptedUnlinks
-      (plan := repairPlan) (names := fun atHeap => (observe atHeap).files.names) boundedStarts
-      beyond
-      (fun start beyond => by rw [fromPrepared start]; exact listed start beyond)
-      remove write _ rename
-      (fun member called accepted => walEffects.unlink (beyond _ member) called accepted) removed
-  have physicalReady :
-      (NativeReadyStorage (readyState) (observe repaired) ∧
-        ∀ inode, (observe repaired).files.names ((dir).file (.walSegment writer.wal.active.first)) = some inode →
-          visible repaired inode = writer.wal.active.bytes) ∧
-      ∀ through, writer.wal.SettledNamespaceWindow dir firstOffset through (observe repaired) := by
-    by_cases empty : repairPlan.newer = []
-    · have same : keeperEntry = afterDirectory := by simpa only [empty, ite_true] using pruned
-      subst keeperEntry
-      obtain ⟨rootAttached, keeperAttached⟩ := handleEffects.issuedAttachments rootAtPrepared keeperAtRead remembered getRoot
-        syncRoot getPending findKeeper clear
-      obtain ⟨ready, rootNamed, keeperNamed⟩ := physicalSyncs.readyAfterSyncs getRoot syncRoot getPending clear syncKeeper
-        rootAttached keeperAttached protectedFiles marker rootSettled keeperBound keeperBytes apart
-      have emptyPass : ((repairPlan.newer.map Step.unlink).forM (performPaths dir repairPlan remove throw write
-          (calls.syncPaths (dir).path cache.directory cache.active cache.pending) rename)) rootIssued = .ok () rootIssued := by
-        rw [empty]; rfl
-      refine ⟨ready, fun through => ?_⟩
-      exact physicalSyncs.walWindowAfterSyncs (interpretUnlinks (walEffects.readRoot getRoot) emptyPass through)
-        syncRoot rootAttached rootNamed keeperNamed getPending clear syncKeeper keeperAttached
-        (fun read => walEffects.readPending read _ _) (fun set => walEffects.clearPending set _ _)
-    · obtain ⟨unlinked, suffixIssued, removed, getSuffix, syncSuffix⟩ := by
-        simpa only [ite_eq_right empty] using pruned
-      obtain ⟨rootAttached, suffixAttached, keeperAttached⟩ :=
-        handleEffects.issuedAttachmentsWithPrune dir repairPlan remove write rename (active := cache.active)
-          rootAtPrepared keeperAtRead remembered getRoot syncRoot (keepRootOnSync syncRoot) unlinkSlots
-          removed getSuffix syncSuffix getPending findKeeper clear
-      obtain ⟨ready, suffixNamed, keeperNamed⟩ :=
-        physicalSyncs.readyAfterSyncsWithPrune repairPlan remove write rename stateValid later unlinkStorage
-          (active := cache.active)
-          getRoot syncRoot removed getSuffix syncSuffix getPending clear syncKeeper rootAttached suffixAttached
-          keeperAttached protectedFiles marker rootSettled keeperBound keeperBytes apart
-      have rootPath : (readyState).crashPath (dir).path :=
-        NativeReadyState.crashPath_iff_write.mpr (.inr (.inr (.inl rfl)))
-      have rootNamed := ((physicalSyncs.readDirectory getRoot).1.visible _ rootPath).1.trans rootBound
-      obtain ⟨_, children, _, _⟩ := physicalSyncs.directorySync syncRoot rootAttached rootNamed
-      have fromPrepared (start : Nat) :
-          (observe afterDirectory).files.names ((dir).file (.walSegment start)) =
-            (observe prepared).files.names ((dir).file (.walSegment start)) :=
-        (children _ ⟨.walSegment start, rfl⟩).1.trans (walEffects.readRoot getRoot start)
-      refine ⟨ready, fun through => ?_⟩
-      have suffixWindow := (interpretUnlinks fromPrepared removed through).frame
-        (fun start _ _ => congrArg Option.isSome (walEffects.readRoot getSuffix start))
-      exact physicalSyncs.walWindowAfterSyncs suffixWindow syncSuffix suffixAttached suffixNamed keeperNamed
-        getPending clear syncKeeper keeperAttached
-        (fun read => walEffects.readPending read _ _) (fun set => walEffects.clearPending set _ _)
-  obtain ⟨⟨settled, live⟩, repairedNames⟩ := physicalReady
+  obtain ⟨settled, live, _, repairedNames⟩ := physicalSyncs.readyAfterAlignedRepair
+    repairPlan remove write rename stateValid handleEffects rootAtPrepared keeperAtRead remembered
+    keepRootOnSync unlinkSlots unlinkStorage getRoot syncRoot pruned getPending findKeeper clear syncKeeper
+    protectedFiles marker rootSettled keeperBound keeperBytes apart selectedWindow boundedStarts
+    later beyond listed walEffects
   obtain ⟨handle, start, nextCache, keptBatch, opened, history, ledger, replay, writeEntry, stateEq, reachedEq⟩ :=
     plan.installsLiteralRepairedWriter request cause constructor stateValid sameHistory ownsSlot cachePhase cacheToken
       rootInode phaseEffects tokenEqual returned observe visible settled live phaseFrame tokenFrame phaseKeeper tokenKeeper

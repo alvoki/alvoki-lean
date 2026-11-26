@@ -125,6 +125,12 @@ window to that image under local namespace effects. A later open carries
 both present and absent names through reboot and failed attempts using
 per-call frames. This matters because an extra canonical WAL segment can
 change the replay start even when the expected files have the correct bytes.
+The physical aligned-repair theorem follows the opened keeper inode through
+the final file sync, including the branch that removes later WAL segments and
+syncs the directory again. Uncertain-write recovery uses this theorem for both
+branches. Its input includes a complete listing beyond the cutoff. The sampled
+checkpoint path still has to supply the callbacks from its own repair.
+
 The successful aligned repair and its allocations now determine the installed
 writer, returned table, phase, token, cache and lock under local callback
 laws. The next write still needs the physical storage invariant, including

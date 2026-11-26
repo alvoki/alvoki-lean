@@ -4225,7 +4225,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.opensLiteralRepairedAfterWriteRetries
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesDurableVisibleWriteRetry
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.walNamespaceAtPreparation
-#check_axioms Alvoki.Storage.DiskSession.AlignedRepairStorageEffects.walWindowAfterSyncs
+#check_axioms Alvoki.Storage.DiskSession.AlignedRepairStorageEffects.readyAfterAlignedRepair
 #check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.walWindowAfterAllocations
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.ScopeFrames.map
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.ScopeFrames.openRead
