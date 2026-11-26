@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeWalAppend
 import Alvoki.Storage.Disk.NativeRawSync
+import Alvoki.Storage.Disk.NativeStagingAcquisition
 
 namespace Alvoki.Storage.DiskSession
 
@@ -49,87 +50,6 @@ noncomputable def run (calls : RawWalStageCalls heap) (pending : IO.Ref (List (F
   let file ← calls.fresh path bytes
   calls.remember pending (pushPending path file)
 
-private theorem keepsAfterBind {α β : Type} (frame : heap → heap → Prop)
-    (compose : ∀ {a b c}, frame a b → frame b c → frame a c)
-    (first : EStateM IO.Error heap α) (next : α → EStateM IO.Error heap β) (entry : heap)
-    (firstKeeps : frame entry (reachedState (first entry)))
-    (nextKeeps : ∀ {value after}, first entry = .ok value after → frame after (reachedState (next value after))) :
-    frame entry (reachedState ((first >>= next) entry)) := by
-  cases returned : first entry with
-  | error cause after => simpa [Bind.bind, EStateM.bind, returned, reachedState] using firstKeeps
-  | ok value after =>
-    have kept := nextKeeps returned
-    rw [returned] at firstKeeps
-    simpa [Bind.bind, EStateM.bind, returned] using compose firstKeeps kept
-
-/-- Compose the local frame through exclusive create, no-follow stat,
-private unlink and exclusive retry, including their reached errors. -/
-theorem acquireKeeps (calls : RawWalStageCalls heap) (path : FilePath)
-    (frame : heap → heap → Prop) (identity : ∀ heap, frame heap heap)
-    (compose : ∀ {a b c}, frame a b → frame b c → frame a c) (entry : heap)
-    (tryKeeps : frame entry (reachedState (calls.tryCreate path entry)))
-    (statKeeps : ∀ before, frame before (reachedState (calls.stat path before)))
-    (unlinkKeeps : ∀ before, frame before (reachedState (calls.unlink path before)))
-    (createKeeps : ∀ before, frame before (reachedState (calls.create path before))) :
-    frame entry (reachedState (calls.acquire path entry)) := by
-  have detachKeeps : ∀ before, frame before (reachedState (removeStaleStagingWith calls.stat calls.unlink path before)) := by
-    intro before
-    unfold removeStaleStagingWith
-    refine keepsAfterBind frame compose _ _ before (statKeeps before) ?_
-    intro metadata after returned
-    split
-    · rename_i info
-      by_cases regular : info.type == .file
-      · simp only [regular, ite_true]
-        refine keepsAfterBind frame compose _ _ after (unlinkKeeps after) ?_
-        intro result reached _
-        cases RunCollection.ownedUnlinkResult result <;> exact identity reached
-      · simpa [regular, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reachedState]
-          using identity after
-    next => exact identity after
-    next => exact identity after
-  unfold acquire withFreshStaging
-  refine keepsAfterBind frame compose _ _ entry tryKeeps ?_
-  intro result after _
-  split
-  next => exact identity after
-  next =>
-    refine keepsAfterBind frame compose _ _ after (detachKeeps after) ?_
-    intro _ atCreate _
-    exact keepsAfterBind frame compose _ _ atCreate (createKeeps atCreate) (fun {_ after} _ => identity after)
-  next => exact identity after
-
-private theorem acquireProvides (calls : RawWalStageCalls heap) (path : FilePath)
-    (observes : IO.FS.Handle → heap → Prop)
-    {entry opened : heap} {file : IO.FS.Handle}
-    (acquired : calls.acquire path entry = .ok file opened)
-    (first : ∀ {file reached}, calls.tryCreate path entry = .ok (.ok file) reached →
-      observes file reached)
-    (retry : ∀ {file before reached}, calls.create path before = .ok file reached →
-      observes file reached) : observes file opened := by
-  unfold acquire withFreshStaging at acquired
-  cases tried : calls.tryCreate path entry with
-  | error => simp [Bind.bind, EStateM.bind, tried] at acquired
-  | ok initial reached =>
-    simp only [Bind.bind, EStateM.bind, tried] at acquired
-    split at acquired
-    next selected =>
-      simp [Pure.pure] at acquired
-      obtain ⟨rfl, rfl⟩ := acquired
-      exact first tried
-    next =>
-      cases detached : removeStaleStagingWith calls.stat calls.unlink path reached with
-      | error => simp [EStateM.bind, detached] at acquired
-      | ok value atRetry =>
-        cases value
-        cases created : calls.create path atRetry with
-        | error => simp [EStateM.bind, detached, created] at acquired
-        | ok selected atOpen =>
-          simp [EStateM.bind, detached, created, Pure.pure] at acquired
-          obtain ⟨rfl, rfl⟩ := acquired
-          exact retry created
-    next => simp [EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at acquired
-
 /-- The named scratch binding comes from the exclusive create that
 actually returned the selected handle, including a retry after EEXIST. -/
 theorem acquireBinds (calls : RawWalStageCalls heap) (path : FilePath)
@@ -141,18 +61,7 @@ theorem acquireBinds (calls : RawWalStageCalls heap) (path : FilePath)
     (retry : ∀ {file before reached}, calls.create path before = .ok file reached →
       binding reached path = some (inode file)) :
     binding opened path = some (inode file) :=
-  calls.acquireProvides path (fun file state => binding state path = some (inode file)) acquired first retry
-
-private theorem freshStagingThen {handle α : Type}
-    (tryCreate : FilePath → EStateM IO.Error heap (Except IO.Error handle))
-    (detach : FilePath → EStateM IO.Error heap Unit) (create : FilePath → EStateM IO.Error heap handle)
-    (path : FilePath) (use : handle → EStateM IO.Error heap α) :
-    withFreshStaging tryCreate detach create path use =
-      (withFreshStaging tryCreate detach create path pure >>= use) := by
-  simp only [withFreshStaging, bind_assoc, pure_bind]
-  congr 1
-  funext outcome
-  split <;> simp [bind_assoc]
+  withFreshStaging_acquireProvides calls.tryCreate (removeStaleStagingWith calls.stat calls.unlink) calls.create path (fun file state => binding state path = some (inode file)) acquired first retry
 
 /-- Derive the reached error from the failed acquisition or data action.
 Release can change the file image and leaves the original diagnostic. -/
@@ -166,7 +75,7 @@ theorem fresh_effect (calls : RawWalStageCalls heap) (path : FilePath) (bytes : 
           | .error cause reached => .error cause (dataErrorDropState calls.drop file reached)
           | .ok () flushed => .ok file flushed := by
   unfold fresh writeFreshStagedWith
-  rw [freshStagingThen]
+  rw [withFreshStaging_bind]
   change (calls.acquire path >>= fun file => do
     withDataErrorDrop calls.drop file (calls.write file bytes)
     withDataErrorDrop calls.drop file (calls.flush file)
@@ -228,7 +137,7 @@ theorem stagesVisible (calls : RawWalStageCalls heap)
       binding reached path = binding before path ∧ visible reached (inode file) = visible before (inode file)) :
     ∃ selected, binding reached path = some selected ∧ visible reached selected = bytes := by
   obtain ⟨file, _, _, _, acquired, wrote, didFlush, remembered⟩ := calls.returned staged
-  obtain ⟨named, empty, clean⟩ := calls.acquireProvides path (fun stream state =>
+  obtain ⟨named, empty, clean⟩ := withFreshStaging_acquireProvides calls.tryCreate (removeStaleStagingWith calls.stat calls.unlink) calls.create path (fun stream state =>
     binding state path = some (inode stream) ∧
     visible state (inode stream) = ByteArray.empty ∧ buffered state stream = ByteArray.empty) acquired first retry
   obtain ⟨writeName, writtenBytes⟩ := written wrote

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeLongKeeperReadHeap
-import Alvoki.Storage.Disk.StagingFile
+import Alvoki.Storage.Disk.NativeStagingAcquisition
 
 namespace Alvoki.Storage.DiskSession
 
@@ -106,6 +106,10 @@ structure LongKeeperStageCallbacks (heap : Type) where
   write : IO.FS.Handle → ByteArray → EStateM IO.Error heap Unit
   flush : IO.FS.Handle → EStateM IO.Error heap Unit
 
+noncomputable def LongKeeperStageCallbacks.acquire (calls : LongKeeperStageCallbacks heap)
+    (path : FilePath) : EStateM IO.Error heap IO.FS.Handle :=
+  withFreshStaging calls.tryCreate calls.detachStale calls.create path pure
+
 noncomputable def LongKeeperStageCallbacks.stage (calls : LongKeeperStageCallbacks heap)
     (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
     (modifyPending : IO.Ref (List (FilePath × IO.FS.Handle)) →
@@ -116,7 +120,67 @@ noncomputable def LongKeeperStageCallbacks.stage (calls : LongKeeperStageCallbac
 
 variable {remove : @Remove heap} {suffix : NativeLongKeeperSuffixHeap authorization remove}
 
-/-- A successful first exclusive create returns the descriptor subsequently
+/-- The staging continuation uses the description from the successful
+exclusive create, whether it succeeded directly or after detachment. -/
+theorem LongKeeperStageCallbacks.stageReturns (calls : LongKeeperStageCallbacks heap)
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
+    {modifyPending : IO.Ref (List (FilePath × IO.FS.Handle)) →
+      (List (FilePath × IO.FS.Handle) → List (FilePath × IO.FS.Handle)) → EStateM IO.Error heap Unit}
+    {path : FilePath} {bytes : ByteArray} {atEntry atOpen atWrite atFlush reached : heap} {file : IO.FS.Handle}
+    (acquired : calls.acquire path atEntry = .ok file atOpen)
+    (written : calls.write file bytes atOpen = .ok () atWrite)
+    (flushed : calls.flush file atWrite = .ok () atFlush)
+    (recorded : modifyPending pending (pushPending path file) atFlush = .ok () reached) :
+    calls.stage pending modifyPending path bytes atEntry = .ok () reached := by
+  unfold stage writeFreshStagedWith
+  rw [withFreshStaging_bind]
+  change ((calls.acquire path >>= fun file => do
+    calls.write file bytes
+    calls.flush file
+    pure file) >>= fun file => modifyPending pending (pushPending path file)) atEntry = _
+  simp only [Bind.bind, EStateM.bind, acquired, written, flushed, Pure.pure, EStateM.pure]
+  exact recorded
+
+open NativeFileEffectProjection (reached) in
+/-- The actual stage preserves any frame established by its reached
+callbacks, including an error during detach, creation or data staging. -/
+theorem LongKeeperStageCallbacks.stageKeeps (calls : LongKeeperStageCallbacks heap)
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (modifyPending : IO.Ref (List (FilePath × IO.FS.Handle)) →
+      (List (FilePath × IO.FS.Handle) → List (FilePath × IO.FS.Handle)) → EStateM IO.Error heap Unit)
+    (path : FilePath) (bytes : ByteArray) (atEntry : heap)
+    (stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    (unlink : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (frame : heap → heap → Prop) (identity : ∀ atHeap, frame atHeap atHeap)
+    (compose : ∀ {a b c}, frame a b → frame b c → frame a c)
+    (tried : frame atEntry (reached (calls.tryCreate path atEntry)))
+    (detach : ∀ {name details conflict}, calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
+      calls.detachStale path conflict = removeStaleStagingWith stat unlink path conflict)
+    (lookedUp : ∀ {name details conflict}, calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
+      frame conflict (reached (stat path conflict)))
+    (unlinked : ∀ {name details conflict metadata before},
+      calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
+      stat path conflict = .ok (.ok metadata) before → (metadata.type == .file) = true →
+      frame before (reached (unlink path before)))
+    (created : ∀ {name details conflict before}, calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
+      calls.detachStale path conflict = .ok () before → frame before (reached (calls.create path before)))
+    (written : ∀ {file atOpen}, calls.acquire path atEntry = .ok file atOpen →
+      frame atOpen (reached (calls.write file bytes atOpen)))
+    (flushed : ∀ {file atOpen atWrite}, calls.acquire path atEntry = .ok file atOpen →
+      calls.write file bytes atOpen = .ok () atWrite → frame atWrite (reached (calls.flush file atWrite)))
+    (recorded : ∀ {file atOpen atWrite atFlush}, calls.acquire path atEntry = .ok file atOpen →
+      calls.write file bytes atOpen = .ok () atWrite → calls.flush file atWrite = .ok () atFlush →
+      frame atFlush (reached (modifyPending pending (pushPending path file) atFlush))) :
+    frame atEntry (reached (calls.stage pending modifyPending path bytes atEntry)) := by
+  have opened := withFreshStaging_acquireKeeps calls.tryCreate calls.detachStale calls.create path frame
+    identity compose atEntry tried (fun {name details conflict} conflictAt => by
+      rw [detach conflictAt]
+      exact removeStaleStagingWith_keeps stat unlink path frame identity compose conflict
+        (lookedUp conflictAt) (unlinked conflictAt)) created
+  exact writeFreshStagedWith_keeps calls.tryCreate calls.detachStale calls.create calls.write calls.flush path bytes
+    (fun file => modifyPending pending (pushPending path file)) frame compose atEntry opened written flushed recorded
+
+/-- A successful exclusive create supplies the descriptor subsequently
 written, flushed and inserted into the original pending cell. -/
 structure NativeLongKeeperFreshStageHeap (suffix : NativeLongKeeperSuffixHeap authorization remove)
     (stage : LongKeeperStageCallbacks heap) where
@@ -125,7 +189,7 @@ structure NativeLongKeeperFreshStageHeap (suffix : NativeLongKeeperSuffixHeap au
   written : heap
   flushed : heap
   recorded : heap
-  fresh : stage.tryCreate (directory.file .stagedWal) suffix.reached = .ok (.ok descriptor) created
+  acquired : stage.acquire (directory.file .stagedWal) suffix.reached = .ok descriptor created
   openedSlot : (view.handle created descriptor).2.1 = finish.stage.slot
   openedCensus : view.descriptors created = finish.stage.inventory
   wrote : stage.write descriptor layout.keeper.bytes created = .ok () written
@@ -160,8 +224,7 @@ theorem returns (seen : NativeLongKeeperFreshStageHeap suffix stage)
   obtain ⟨_, _, _, cells, directoryHandle⟩ := suffix.returns (stage.stage seed.pendingRef sync.modifyPending) rename
   have released := read.readsAndReleases
   refine ⟨?_, ?_, seen.atSync, seen.fileFrame.trans seen.fileEffect⟩
-  · simp only [LongKeeperStageCallbacks.stage, writeFreshStagedWith, withFreshStaging, Bind.bind, EStateM.bind,
-      seen.fresh, Pure.pure, EStateM.pure, seen.wrote, seen.flush, seen.record]
+  · exact stage.stageReturns seen.acquired seen.wrote seen.flush seen.record
   · simp only [OpenCloseHeapView.cacheAt, seen.directory, cells.directory, released.frame.directoryCell,
       read.entryFrame.directoryCell, seed.directoryKept, seed.directorySet,
       seen.active, cells.active, released.frame.activeCell, read.entryFrame.activeCell, seed.activeKept, seed.activeSet,

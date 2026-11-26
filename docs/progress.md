@@ -1,5 +1,14 @@
 # Current handoff
 
+Keeper staging now follows the same acquisition for a direct exclusive
+create and a create retried after `EEXIST`. The collided name must pass
+the no-follow stat and guarded detach before retry. The common proof
+follows the returned descriptor through write, flush and the pending
+store, including reached errors. The healthy keeper and staged-fsync
+error proofs use that acquisition. Physical inode and byte effects of
+the reached callbacks remain explicit.
+[Staging acquisition](../lean/Alvoki/Storage/Disk/NativeStagingAcquisition.lean)
+
 A failed marked open can extend the same retry prefix after changing its
 keeper. The bounded finisher carries the selected files through its
 callbacks. The fixed worker and its cache disposal, unlock and lock

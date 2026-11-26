@@ -39,7 +39,7 @@ theorem AlignedKeeperCacheCallbacks.longRepairStageSyncFails
     (authorizedCall : grouped #[directory.path] entry = .ok () authorized)
     (prune : ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM
       (performPaths directory plan remove throw writeStage grouped rename)) authorized = .ok () pruned)
-    (fresh : stage.tryCreate scratch pruned = .ok (.ok descriptor) created)
+    (acquired : stage.acquire scratch pruned = .ok descriptor created)
     (wrote : stage.write descriptor plan.keeperBytes created = .ok () written)
     (flushedBytes : stage.flush descriptor written = .ok () flushed)
     (remembered : callbacks.modifyPending pendingRef (pushPending scratch descriptor) flushed = .ok () recorded)
@@ -68,9 +68,7 @@ theorem AlignedKeeperCacheCallbacks.longRepairStageSyncFails
     (inodes reached).crashBytes inode =
       if effective then [plan.keeperBytes] else (inodes consumed).crashBytes inode := by
   intro inode
-  have stagedCall : writeStage scratch plan.keeperBytes pruned = .ok () recorded := by
-    simp only [LongKeeperStageCallbacks.stage, writeFreshStagedWith, withFreshStaging, Bind.bind, EStateM.bind,
-      fresh, Pure.pure, EStateM.pure, wrote, flushedBytes, remembered]
+  have stagedCall := stage.stageReturns acquired wrote flushedBytes remembered
   have groupError : grouped #[scratch] recorded =
       .error (IO.userError s!"sync failed for '{scratch}': {cause}") reached := by
     rw [AlignedKeeperCacheCallbacks.syncPaths, SyncPathGroup.run_single]

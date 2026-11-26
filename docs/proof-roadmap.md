@@ -181,6 +181,14 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   remain explicit.
   [Failed repair and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
+  The raw longer-keeper schedule consumes the same successful acquisition
+  in both the direct and guarded collision branches. Its stage frame
+  follows only the reached stat, unlink, retry, write, flush and pending
+  store. The staged-fsync error proof uses the same returned descriptor.
+  The physical inode and byte effects still need to be carried through
+  replacement into the selected retry.
+  [Long-keeper stage](../lean/Alvoki/Storage/Disk/NativeLongKeeperSuffixStageHeap.lean)
+
   The same marked worker exposes its actual error heap after the measured repair. Finalization carries that image through the cache drop and unlock, including when it differs from the admitted image. One mixed retry fold preserves the selected repair target and the unaffected file footprint across read-only errors and repair effects. It derives the next read plan using the reached keeper and later names. Local stage and final sync proofs derive those repair effects directly from their reached callbacks. The healthy reader now consumes the changed live keeper and its replay plan at that exact heap. The fold carries the keeper observation independently of the unchanged checkpoint frame. A projected final fsync can expose a replacement while retaining the old name as a crash alternative. The fixed interpreter's failed-call sequence is the retry trace. One proof fold applies the local read-only and repair effects at those exact endpoints. The same interpreter returns the successful installation. The grouped file-sync route supplies one preceding write and reboot. Full integration still needs the fixed primitive schedules to supply the local recovery effects for the remaining routes. [Mutating repair retries](../lean/Alvoki/Storage/Disk/NativeMutatingOpenRetries.lean) · [Live keeper after final sync error](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 - [ ] **Connect remaining mutation cuts to the next session.** Extend the common cross-session trace to the remaining append, marker stage and sync cuts, early rotation create and file-sync cuts, other early checkpoint run cuts and staged manifest cuts. Use the same poisoned phase and jointly surviving file image through intermediate failed opens and the exact next returned table. Preserve every acknowledged write, existing reads, and the old-or-whole result for each uncertain batch. [Write and checkpoint execution](../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean) · [Stopped marker and raw reopen](../lean/Alvoki/Storage/Disk/NativeStoppedMarkerTableOpen.lean) · [Stopped checkpoint and raw reopen](../lean/Alvoki/Storage/Disk/NativeStoppedCheckpointTableOpen.lean)

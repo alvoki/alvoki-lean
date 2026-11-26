@@ -434,6 +434,15 @@ files and parent settlement at each returned heap, so grouped recovery
 can consume one prefix through the fixed interpreter.
 [Retry frames](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
 
+The raw longer-keeper proof uses the descriptor returned by the staging
+acquisition. A direct create proceeds to write and flush, and a retry
+first follows the no-follow check and guarded detach after `EEXIST`.
+The frame composes the effects of the callbacks that ran, including any
+reached error. The first write and flush after a collision follow the new
+description. The Linux proof still needs the namespace and inode
+effects of those callbacks to establish the selected physical footprint.
+[Staging proof](../../lean/Alvoki/Storage/Disk/NativeLongKeeperSuffixStageHeap.lean)
+
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached
 publication outcome. The grouped failure producer follows both literal fsyncs and preserves
 the old marker and keeper prefix. After a successful file group, the local rename and

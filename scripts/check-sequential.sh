@@ -761,6 +761,7 @@ lake env leanchecker Alvoki.Storage.Disk.AppendHandleCustody
 lake env leanchecker Alvoki.Storage.Disk.NativeWalAppend
 lake env leanchecker Alvoki.Storage.Disk.NativeRawSync
 lake env leanchecker Alvoki.Storage.Disk.NativeWalStage
+lake env leanchecker Alvoki.Storage.Disk.NativeStagingAcquisition
 lake env leanchecker Alvoki.Storage.Disk.NativeWalFileFsyncEffects
 lake env leanchecker Alvoki.Storage.Disk.KeeperReadCustody
 lake env leanchecker Alvoki.Storage.Disk.CapturedKeeperCustody

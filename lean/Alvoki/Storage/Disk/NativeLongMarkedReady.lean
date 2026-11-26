@@ -59,7 +59,7 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterLongerRetry
     (filesFrame : (observe entry).files.Frames prior.selectedRetryPath (observe renamed.reached).files)
     (parentFrame : (observe entry).Frames (· = (dir).path) (observe renamed.reached)) :
     let replacement := finish.stage.inventory.inode finish.stage.slot.description
-    (stage.tryCreate ((dir).file .stagedWal) suffix.reached = .ok (.ok staged.descriptor) staged.created →
+    (stage.acquire ((dir).file .stagedWal) suffix.reached = .ok staged.descriptor staged.created →
       stage.write staged.descriptor layout.keeper.bytes staged.created = .ok () staged.written →
       stage.flush staged.descriptor staged.written = .ok () staged.flushed →
       visible staged.flushed ((view.handle staged.flushed staged.descriptor).1.inode
@@ -95,7 +95,7 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterLongerRetry
       (observe before).Frames state.crashPath (observe reached) ∧ visible reached = visible before) →
     raw.ReadyWriterReturn log reads execute get set observe visible := by
   intro replacement written recorded consumed stageSync renameEffect directoryEffect phaseFrames tokenFrames
-  have flushed := written staged.fresh staged.wrote staged.flush
+  have flushed := written staged.acquired staged.wrote staged.flush
   rw [staged.captured] at flushed
   have stageLive : visible synced.consumed replacement = layout.keeper.bytes :=
     (consumed synced.cleared).trans ((recorded staged.record).trans flushed)

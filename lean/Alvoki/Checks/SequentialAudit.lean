@@ -57,6 +57,7 @@ import Alvoki.Storage.Disk.AppendHandleCustody
 import Alvoki.Storage.Disk.NativeWalAppend
 import Alvoki.Storage.Disk.NativeRawSync
 import Alvoki.Storage.Disk.NativeWalStage
+import Alvoki.Storage.Disk.NativeStagingAcquisition
 import Alvoki.Storage.Disk.NativeWalFileFsyncEffects
 import Alvoki.Storage.Disk.KeeperReadCustody
 import Alvoki.Storage.Disk.CapturedKeeperCustody
@@ -1985,6 +1986,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperAuthorizationHeap.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperSuffixHeap.returns
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperFreshStageHeap.returns
+#check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.stageReturns
+#check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.stageKeeps
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperFreshStageHeap.reachesStageSync
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperStagedSyncHeap.syncs
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperRenameHeap.movesStagedInode
@@ -3890,7 +3893,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.projects
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.syncPending
 #check_axioms Alvoki.Storage.DiskSession.freshStageCacheSchedule
-#check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.acquireKeeps
+#check_axioms Alvoki.Storage.removeStaleStagingWith_keeps
+#check_axioms Alvoki.Storage.withFreshStaging_acquireKeeps
+#check_axioms Alvoki.Storage.withFreshStaging_acquireProvides
+#check_axioms Alvoki.Storage.writeFreshStagedWith_keeps
 #check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.acquireBinds
 #check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.fresh_effect
 #check_axioms Alvoki.Storage.DiskSession.RawWalStageCalls.returned
