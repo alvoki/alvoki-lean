@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.NativeCheckpointFsyncEffects
+import Alvoki.Storage.Disk.RetainedWriterReopen
 
 namespace Alvoki.Storage.DiskSession
 
@@ -564,5 +565,51 @@ theorem CanonicalKeeperLayout.replaysSelected {image : FileImage} {history : Lis
   obtain ⟨_, _, applied, _⟩ := recoverSelected_success full
   refine ⟨table, model, ?_, full, absolute, committed, bounded, refined, represents, replay_pins applied, fresh⟩
   simpa only [payloads, ByteArray.append_empty] using replay
+
+/-- Assemble the ordinary retained writer from the actual replay return
+and the held files at the actual repaired heap. The replay supplies the
+table and marker count; the repair supplies readiness and lock ownership. -/
+theorem CanonicalKeeperLayout.retainedFromActualReplay
+    {image : FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout image history) {published : CheckpointPublication.Image}
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable image.directory.active.manifest checkpoint)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+      image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    {marker : ByteArray} {count : UInt64}
+    (markerName : image.directory.active.walBoundary = some marker)
+    (markerRead : WAL.Boundary.decode marker = .ok count)
+    {files : List (Nat × ByteArray)} {patched : ByteArray} {table : PackedTable}
+    (payloads : files = (layout.sealed ++ [layout.keeper]).map (fun segment => (segment.first, segment.bytes)))
+    (replayed : recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1 count files = .ok (patched, table))
+    {wal : WalSegmentImage} {final : LockedFileState FileImage}
+    {directory : DiskDirectory} {descriptor : Nat}
+    (walLayout : wal.ReadLayout history) (valid : wal.Valid history)
+    (spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize)
+    (walPair : wal.directory.active = layout.target.pair)
+    (keeper : layout.keeper.first = wal.active.first)
+    (ready : final.image.Ready layout.target)
+    (sealed : final.image.kept = (wal.checkpointReopenFiles wal.directory none).kept)
+    (held : final.owners.Owns directory descriptor) :
+    let installed := Reopened.installed ⟨table, (checkpoint.getD (.empty, 0)).2, count, layout.keeper.first⟩
+    let writer := SegmentedWriterState.ofReopen installed wal history published layout.target checkpoint final
+    writer.RetainedReady directory descriptor ∧
+      recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok writer.installed.table ∧
+      writer.installed.table.pins = (checkpoint.getD (.empty, 0)).1.pins ∧
+      writer.installed.table.pins.active = [] := by
+  obtain ⟨recovered, model, returned, replay, absolute, _, rowBounds, refines, historyModel, pins, inactive⟩ :=
+    layout.replaysSelected selected accepted ordered markerName markerRead (by simpa [List.map_append] using payloads)
+  have same := (Prod.mk.inj (Except.ok.inj (returned.symm.trans replayed))).2
+  subst recovered
+  intro installed writer
+  have byteCount : count.toNat = (WAL.encode history).size := by
+    rw [absolute, WAL.encode_size, Nat.mul_comm]
+  have resumed : ResumedAppendReady writer.installed writer.files writer.target writer.history
+      writer.published writer.checkpoint :=
+    ⟨ready, layout.through, rfl, byteCount, layout.chain.keeperBytes, rfl, selected, accepted, ordered,
+      rowBounds, ⟨model, refines, historyModel⟩⟩
+  exact ⟨SegmentedWriterState.ofReopenRetained walLayout valid spans walPair keeper sealed held resumed,
+    replay, pins, inactive⟩
 
 end Alvoki.Storage.DiskSession

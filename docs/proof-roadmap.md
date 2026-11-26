@@ -201,11 +201,17 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   The checked selection and marker give the recovered table and
   checkpoint pin floor by a pure replay theorem. The literal open
   exposes the same read, repair and table allocations from one
-  inversion. For an aligned keeper with no later WAL files, worker
-  success gives the original directory and pending-keeper fsync callbacks. The next
-  obligation is to derive the held window and corresponding storage
-  effects from an admitted retry, and transport the exact returned
-  cache and durable state into the next writer.
+  inversion. The actual replay result supplies the ordinary retained
+  writer through the same constructor as the reported append reopen.
+  For an aligned keeper with no later WAL files, the exact cache
+  getters, pending update and two fsyncs establish ready storage under
+  local descriptor, namespace and visible-byte effects. The reported
+  aligned route shares the proof that the two barriers settle storage.
+  Derive the held WAL window and both attached descriptors from an
+  admitted retry, then frame the ready storage through the actual
+  phase and token allocations into the next write entry.
+  [Writer from replay](../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean) ·
+  [Storage at the repair return](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
   [Fixed open result](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
   [Checkpoint runs](../lean/Alvoki/Storage/Disk/NativeCheckpointReadReturn.lean) ·
   [Selected WAL](../lean/Alvoki/Storage/Disk/NativeWalSelectionReturn.lean)

@@ -1968,6 +1968,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.replaysVersionedRuns
 #check_axioms Alvoki.Storage.selectedCheckpoint_replays
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.replaysSelected
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.retainedFromActualReplay
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_alignedSyncsReached
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.rootGroupReturned
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.pendingGroupReturned
@@ -4085,6 +4086,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.keeperIssueInode
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.keeperAtIssue
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.readyStorage
+#check_axioms Alvoki.Storage.DiskSession.AlignedRepairStorageEffects.readyAfterSyncs
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.afterAlignedBarriers
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperSettlementHeap.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperStagedSyncHeap.preservesSelectedStage
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperRenameHeap.preservesSelectedReplacement

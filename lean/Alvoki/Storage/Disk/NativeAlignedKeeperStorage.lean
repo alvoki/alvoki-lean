@@ -100,6 +100,29 @@ theorem CapturedAlignedFinish.sameCensusObjects (finish : CapturedAlignedFinish 
   rw [finish.readCustody.opened]
   rfl
 
+/-- Once the directory barrier settles the protected names, frame them
+through cache effects and settle the selected keeper on its own inode. -/
+theorem NativeReadyStorage.afterAlignedBarriers {state : NativeReadyState}
+    {entry authorized consumed repaired : CheckpointStorageObservation} {inode : Nat}
+    (directoryFrame : entry.files.Frames state.crashPath authorized.files)
+    (settled : ∀ names ∈ authorized.crashNames, ∀ path, state.crashPath path → names path = authorized.files.names path)
+    (consumeFrame : authorized.Frames state.crashPath consumed)
+    (protectedFiles : NativeReadyProtectedStorage state entry.files)
+    (marker : entry.files.Stored (state.session.directory.file .walBoundary)
+      (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64))
+    (apart : ∀ path, path = state.session.directory.file .walBoundary ∨ state.writeFramePath path →
+      entry.files.names path ≠ some inode)
+    (bound : consumed.files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode)
+    (sync : RegularFileSyncEffect inode [state.writer.wal.active.bytes] consumed repaired) :
+    NativeReadyStorage state repaired := by
+  have frame := directoryFrame.trans consumeFrame.visible
+  refine NativeReadyStorage.afterKeeperSync sync bound
+    (protectedFiles.frame (fun path kept => frame path (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept)))))
+    (frame.stored (NativeReadyState.crashPath_iff_write.mpr (.inl rfl)) marker) ?_ (consumeFrame.settledFrom settled)
+  intro path kept named
+  have same := (frame path (NativeReadyState.crashPath_iff_write.mpr (kept.imp id Or.inr))).1
+  exact apart path kept (same.symm.trans named)
+
 /-- With no later WAL to remove, the actual directory barrier settles the
 selected child names. Consuming the remembered keeper reference frames
 those names. Its subsequent fsync establishes the committed bytes at
@@ -140,11 +163,6 @@ theorem AlignedKeeperCacheReport.readyStorage
     exact root)
   obtain ⟨directoryFrame, settled⟩ :=
     NativeReadyState.framesByDirectory sameDirectory parentFrame childFrame rootSettled children
-  have consumedFrame := effects.consume seen.consume
-  have toKeeperSync := directoryFrame.trans consumedFrame.visible
-  have protectedAtIssue := protectedFiles.frame (fun path inside => toKeeperSync path
-    (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr inside))))
-  have markerAtIssue := toKeeperSync.stored (NativeReadyState.crashPath_iff_write.mpr (.inl rfl)) marker
   have keeperHandle := seen.sameKeeper.trans seen.rawKeeper
   have keeperCensus := seen.consumeFrame.2.trans seen.authorizedCensus
   have keeperRetained := finish.repair.barrierCensus.2.2.2.1
@@ -163,16 +181,9 @@ theorem AlignedKeeperCacheReport.readyStorage
       (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some keeperInode := by
     rw [sameDirectory, sameFirst]
     exact bound
-  have apartAtIssue : ∀ path, path = state.session.directory.file .walBoundary ∨ state.writeFramePath path →
-      (observe seen.consumed).files.names path ≠ some keeperInode := by
-    intro path kept atIssue
-    have inScope : state.crashPath path := NativeReadyState.crashPath_iff_write.mpr (kept.imp id Or.inr)
-    have sameName := (toKeeperSync path inScope).1
-    exact apart path kept (sameName.symm.trans atIssue)
-  refine ⟨seen.reachedCensus.trans sameCensus.symm, NativeReadyStorage.afterKeeperSync synced initialKeeper
-    protectedAtIssue markerAtIssue apartAtIssue
-      (consumedFrame.settledFrom settled),
-    ?_⟩
+  refine ⟨seen.reachedCensus.trans sameCensus.symm,
+    NativeReadyStorage.afterAlignedBarriers directoryFrame settled (effects.consume seen.consume)
+      protectedFiles marker apart initialKeeper synced, ?_⟩
   intro inode after
   rw [synced.names, initialKeeper] at after
   obtain rfl := Option.some.inj after

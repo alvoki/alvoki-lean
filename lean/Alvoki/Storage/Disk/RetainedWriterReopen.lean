@@ -5,6 +5,34 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+/-- Assemble the retained writer from the replay and the reached held
+file image. Only the live directory pair remains after settlement. -/
+theorem SegmentedWriterState.ofReopenRetained
+    {directory : DiskDirectory} {descriptor : Nat} {installed : Installed}
+    {wal : WalSegmentImage} {history : List WAL.Write} {published : CheckpointPublication.Image}
+    {target : Target} {checkpoint : Option (PackedTable × UInt64)} {final : LockedFileState FileImage}
+    (layout : wal.ReadLayout history) (valid : wal.Valid history)
+    (spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize)
+    (visible : wal.directory.active = target.pair) (keeper : target.first = wal.active.first)
+    (sealed : final.image.kept = (wal.checkpointReopenFiles wal.directory none).kept)
+    (held : final.owners.Owns directory descriptor) :
+    let writer := SegmentedWriterState.ofReopen installed wal history published target checkpoint final
+    ResumedAppendReady writer.installed writer.files writer.target writer.history writer.published writer.checkpoint →
+      writer.RetainedReady directory descriptor := by
+  intro writer resumed
+  have retained : writer.wal.Valid writer.history := by
+    intro pair chosen
+    change pair ∈ final.image.directory.active :: final.image.directory.crashImages at chosen
+    have directoryReady : final.image.Ready target := resumed.ready
+    have same : pair = target.pair := by
+      simpa [directoryReady.selected, directoryReady.settled] using chosen
+    subst pair
+    apply valid target.pair
+    rw [← visible]
+    exact List.mem_cons_self ..
+  exact ⟨resumed, ⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩,
+    retained, spans, rfl, sealed, keeper, rfl, held⟩
+
 /-- A held reopen installs the ordinary writer state from the retained
 layout. Settling the directory keeps the selected validated WAL suffix. -/
 theorem AppendCutReady.writerRetained {directory descriptor liveRefs history published initial target generation result}
@@ -24,21 +52,11 @@ theorem AppendCutReady.writerRetained {directory descriptor liveRefs history pub
     gen, _, path, lock, phase, durable, kept, held, _, bounds, refines, represents, _, _, _, _⟩ := opened
   let installed : Installed := ⟨table, generation, (WAL.encode history).size, target.first⟩
   let writer := SegmentedWriterState.ofReopen installed wal history published target checkpoint final
-  have retained : writer.wal.Valid writer.history := by
-    intro pair chosen
-    change pair ∈ final.image.directory.active :: final.image.directory.crashImages at chosen
-    have same : pair = target.pair := by
-      simpa [durable.selected, durable.settled] using chosen
-    subst pair
-    apply valid target.pair
-    rw [← visible]
-    exact List.mem_cons_self ..
   have resumed : ResumedAppendReady writer.installed writer.files writer.target writer.history
       writer.published writer.checkpoint :=
     ⟨durable, through, rfl, rfl, trimmed, gen, selected, accepted, ordered, bounds, ⟨model, refines, represents⟩⟩
   exact ⟨session, final, writer, returned, path, lock, phase, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-    ⟨resumed, ⟨layout.ordered, layout.forward, layout.activeEnd, layout.activeBytes⟩,
-      retained, spans, rfl, kept.trans sealed, keeper, rfl, held⟩⟩
+    SegmentedWriterState.ofReopenRetained layout valid spans visible keeper (kept.trans sealed) held resumed⟩
 
 /-- After covered collection, the healthy locked inventory feeds the
 native bounded reader. The keeper is still aligned, so only the directory

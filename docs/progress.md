@@ -1,5 +1,18 @@
 # Current handoff
 
+The table returned by the marked WAL replay now supplies the ordinary
+retained writer, including its checkpoint pin floor. This uses the same
+writer construction as the existing reported append reopen. For the
+aligned keeper, the actual directory fsync settles the protected names.
+The subsequent pending-cache update frames them, and the fsync of the
+attached keeper settles its visible bytes. The reported aligned route
+and the actual callback sequence now share that storage argument. The
+remaining step is to derive the reached footprint and both attached
+slots from an admitted retry and carry the storage through the phase
+and token allocations of the returned table.
+[Writer from replay](../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean) ·
+[Storage at the repair return](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
+
 The reached WAL inventory and payload loop now give the canonical
 replay bytes when the held namespace matches the chosen recovery
 window. Only offsets inside that window need match. The later set
