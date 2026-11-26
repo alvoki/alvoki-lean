@@ -4267,6 +4267,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointSurvivingFiles.Frames.privateBindingOn
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.protectedPathNeWalFromActive
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsDurableRetry
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsRecoveryObservations
 #check_axioms Alvoki.Storage.DiskSession.CheckpointSurvivingFiles.Stored.samplesAtBinding
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.samplesRebootFiles
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.selectsSampledRetry

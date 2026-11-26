@@ -192,9 +192,8 @@ theorem NativeOpenedPosition.selectsDurableAfterPublicationError :
     ∃ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target ∧
       target.pair = (view.files rebooted).image.directory.active ∧
       RawOpenRetryTrace.SelectedEntry view state target storageNames visible rebooted ∧
-      (state).writer.wal.NamespaceWindow dir firstOffset (current.current.history ++ batch).length (storageNames rebooted) ∧
-      (state).SelectedRetryDurability target (storage rebooted) ∧
-      RawOpenRetryTrace.LaterWalAt view dir target storageNames rebooted := by
+      RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset
+        (current.current.history ++ batch).length rebooted := by
   obtain ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected⟩ :=
     current.selectsAfterPublicationError view cache appender stager syncer storage request lookup rename
       nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reboot
@@ -203,8 +202,7 @@ theorem NativeOpenedPosition.selectsDurableAfterPublicationError :
   have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
     simp only [List.length_append, (prepareBatch_spec prepared).1]
   exact ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected,
-    by simpa only [upper] using reboot.walNamespace nameFrame initialWindow.2,
-    (reboot.startsDurableRetry reset selected).2, reboot.laterNames active⟩
+    reboot.startsRecoveryObservations reset selected (by simpa only [upper] using reboot.walNamespace nameFrame initialWindow.2)⟩
 
 /-- A late publication error and its joint reboot reach the ready table
 through the same interpreter's failed opens. The recovery event uses
@@ -289,14 +287,14 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
             last.current ∧
           SnapshotWalReplay .empty (plan.history ++ nextBatch) reference ∧
           (∀ observed ∈ last.current.ready.reads, observed.agrees reference) := by
-  obtain ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected, window, durable, suffix⟩ :=
+  obtain ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected, recovery⟩ :=
     current.selectsDurableAfterPublicationError view cache appender stager syncer storage request lookup rename
       nonempty prepared fits guard assigned initial prefixFrame publishFrame publication visible reboot reset
       nameEffects initialWindow
   obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical, sameDirectory, coversNext,
     _, nextWindow⟩ :=
     (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
-      initialWindow.1 selected window durable suffix (retryEffects target admitted active)
+      initialWindow.1 selected recovery (retryEffects target admitted active)
       admission namespaceView root rootBinding (openEffects target admitted active)
       (alignedEffects target admitted active) (replacementEffects target admitted active)
       phaseIdentity tokenIdentity phase ptrEq openedTable
@@ -343,14 +341,14 @@ theorem NativeOpenedPosition.stopsAfterPublicationErrorRetries
         let reads := origin.ready.reads ++ events.flatMap NativeExecutionEvent.reads
         (plan.history = history ∨ plan.history = history ++ batch) ∧
         PendingClientReplay submissions reads plan.history ∧ ∀ read ∈ reads, read.BoundedBy plan.history.length := by
-  obtain ⟨schedules, returned, _, _, target, admitted, active, selected, window, durable, suffix⟩ :=
+  obtain ⟨schedules, returned, _, _, target, admitted, active, selected, recovery⟩ :=
     current.selectsDurableAfterPublicationError view cache appender stager syncer storage request lookup rename
       nonempty prepared fits guard assigned initial prefixFrame publishFrame publication visible reboot reset
       nameEffects initialWindow
   obtain ⟨whole, earlier, lastInput, diagnostic, issued, reported, previous, call, plan, physical, last, settled,
     later, allowed, replay, bounds⟩ :=
     NativeExecutionPosition.refinesFailedOpenTerminalLedger (current := current.current) prior prepared fits admitted
-      storage visible initialWindow.1 selected window durable suffix attempts retried (retryEffects target admitted active)
+      storage visible initialWindow.1 selected recovery attempts retried (retryEffects target admitted active)
   have through := (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through
   exact ⟨schedules, returned, whole, target, earlier, lastInput, diagnostic, issued, active, reported, previous, call,
     plan, physical, last, settled, later, through, allowed, replay, bounds⟩

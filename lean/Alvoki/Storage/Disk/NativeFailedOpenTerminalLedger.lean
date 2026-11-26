@@ -38,20 +38,15 @@ theorem NativeExecutionPosition.refinesFailedOpenTerminalLedger
       firstOffset ≤ offset)
     (initial : RawOpenRetryTrace.SelectedEntry view current.ready.state target
       (fun atHeap => (storage atHeap).files.names) visible first)
-    (window : current.ready.state.writer.wal.NamespaceWindow current.ready.state.session.directory firstOffset
-      (current.history ++ batch).length (storage first).files.names)
-    (durable : current.ready.state.SelectedRetryDurability target (storage first))
-    {keep : heap → Prop} (initialKeep : keep first)
+    (entry : RawOpenRetryTrace.RecoveryObservations view current.ready.state target storage visible firstOffset
+      (current.history ++ batch).length first)
     {returns : List (FilePath × IO.Error)} (attempts : source.FailedCalls first returns reached)
     (nonempty : returns ≠ [])
     (effects : RawOpenRetryTrace.SelectedEffects view source first target
       (fun atHeap => ⟨(storage atHeap).files.names, fun inode => [visible atHeap inode]⟩)
       current.ready.state.selectedRetryPath
-      (fun atHeap => current.ready.state.writer.wal.NamespaceWindow current.ready.state.session.directory firstOffset
-        (current.history ++ batch).length (storage atHeap).files.names ∧
-        RawOpenRetryTrace.KeeperAt view current.ready.state.session.directory target
-          (fun atHeap => (storage atHeap).files.names) visible atHeap ∧
-        current.ready.state.SelectedRetryDurability target (storage atHeap) ∧ keep atHeap) attempts) :
+      (RawOpenRetryTrace.RecoveryObservations view current.ready.state target storage visible firstOffset
+        (current.history ++ batch).length) attempts) :
     (∀ event ∈ events, event.uncertainBatchWhole) ∧
     ∃ earlier input diagnostic issued,
       returns = earlier ++ [(input, diagnostic)] ∧ source.FailedCalls first earlier issued ∧
@@ -60,7 +55,9 @@ theorem NativeExecutionPosition.refinesFailedOpenTerminalLedger
         plan.layout.VisibleWal current.ready.state.session.directory (storage reached).files.names (visible reached) ∧
         RawOpenRetryTrace.SelectedEntry view current.ready.state target
           (fun atHeap => (storage atHeap).files.names) visible reached ∧
-        current.ready.state.SelectedRetryDurability target (storage reached) ∧ keep reached ∧
+        current.ready.state.SelectedRetryDurability target (storage reached) ∧
+        RawOpenRetryTrace.LaterWalAt view current.ready.state.session.directory target
+          (fun atHeap => (storage atHeap).files.names) reached ∧
         let priorHistory := origin.history ++ events.flatMap NativeExecutionEvent.writes
         let submissions := (origin.submissions ++ events.flatMap NativeExecutionEvent.submissions) ++ [.uncertainBatch batch]
         let reads := origin.ready.reads ++ events.flatMap NativeExecutionEvent.reads
@@ -68,11 +65,10 @@ theorem NativeExecutionPosition.refinesFailedOpenTerminalLedger
         PendingClientReplay submissions reads plan.history ∧
         ∀ read ∈ reads, read.BoundedBy plan.history.length := by
   obtain ⟨earlier, input, diagnostic, issued, reported, previous, returned⟩ := attempts.lastError nonempty
-  obtain ⟨plan, physical, selected, reachedDurable, retained, _⟩ :=
-    current.ready.preparesDurableVisibleWriteRetry prepared fits admitted storage visible covers initial window durable
-      initialKeep effects
+  obtain ⟨plan, physical, selected, _, _, reachedDurable, suffix⟩ :=
+    current.ready.preparesDurableVisibleWriteRetry prepared fits admitted storage visible covers initial entry effects
   refine ⟨prior.whole, earlier, input, diagnostic, issued, reported, previous, returned, plan,
-    physical, selected, reachedDurable, retained, ?_, ?_, ?_⟩
+    physical, selected, reachedDurable, suffix, ?_, ?_, ?_⟩
   · simpa only [← prior.history] using plan.allowed
   · simpa only [← prior.submissions, ← prior.reads] using plan.pending
   · simpa only [← prior.reads] using plan.bounded

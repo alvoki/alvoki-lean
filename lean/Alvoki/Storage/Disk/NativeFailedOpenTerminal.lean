@@ -118,8 +118,8 @@ theorem NativeOpenedPosition.stopsAfterGroupedWriteRetries
     obtain ⟨_, previous, input, diagnostic, issued, reported, earlierCalls, call, plan, _, last, durable, _, _, replay, bounded⟩ :=
       NativeExecutionPosition.refinesFailedOpenTerminalLedger (current := current.current)
         through prepared fits admitted storage visible readyWindow.1 selected
-        (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
-        (reboot.laterNames selected.valid.selected.symm) attempts retried (by simpa only [upper] using retryEffects)
+        (reboot.startsRecoveryObservations reset selected (by simpa only [upper] using window))
+        attempts retried (by simpa only [upper] using retryEffects)
     have old : plan.history = origin.history ++ (earlier ++ events).flatMap NativeExecutionEvent.writes :=
       plan.oldHistory.trans through.history
     exact ⟨previous, input, diagnostic, issued, reported, earlierCalls, call, last, durable, old ▸ replay, old ▸ bounded⟩

@@ -133,6 +133,19 @@ theorem RawWriteRebootEntry.keeperCrashChoices
   exact ⟨⟨inode, (reset.bindings path inCrash).trans bound, accepted⟩,
     fun names survives => ⟨inode, (reset.crashBindings names survives path inCrash).trans bound, accepted⟩⟩
 
+/-- Storage observations needed at the next marked open. The immutable
+files retain their durable contents. The keeper is read through the
+current live binding, which a previous repair may have replaced. -/
+abbrev RawOpenRetryTrace.RecoveryObservations (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
+    (target : Target) (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (firstOffset through : Nat) (atHeap : heap) : Prop :=
+  let names := fun atHeap => (storage atHeap).files.names
+  let directory := state.session.directory
+  state.writer.wal.NamespaceWindow directory firstOffset through (names atHeap) ∧
+  RawOpenRetryTrace.KeeperAt view directory target names visible atHeap ∧
+  state.SelectedRetryDurability target (storage atHeap) ∧
+  RawOpenRetryTrace.LaterWalAt view directory target names atHeap
+
 /-- Project the already selected reboot into the actual physical
 observation. This also retains sealed files older than the replay window. -/
 theorem RawWriteRebootEntry.startsDurableRetry
@@ -165,6 +178,18 @@ theorem RawWriteRebootEntry.startsDurableRetry
   · intro surviving possible
     exact (reset.crashBindings surviving possible directory.path (.inl rfl)).trans
       (reset.bindings directory.path (.inl rfl)).symm
+
+/-- Start the failed-call fold on the actual reset heap. The bounded
+catalog and the later list use the same namespace as the sampled files. -/
+theorem RawWriteRebootEntry.startsRecoveryObservations
+    (seen : RawWriteRebootEntry state view storage (fun atHeap => (storage atHeap).files.names) visible failed rebooted)
+    (reset : seen.DurableReset) {target : Target}
+    (selected : RawOpenRetryTrace.SelectedEntry view state target
+      (fun atHeap => (storage atHeap).files.names) visible rebooted)
+    {firstOffset through : Nat}
+    (window : state.writer.wal.NamespaceWindow state.session.directory firstOffset through (storage rebooted).files.names) :
+    RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset through rebooted :=
+  ⟨window, selected.keeper, (seen.startsDurableRetry reset selected).2, seen.laterNames selected.valid.selected.symm⟩
 
 /-- After a repair, the next power loss selects a single directory map.
 The immutable files and marker keep their selected bindings on that map.
@@ -363,19 +388,6 @@ variable {stream : Type} {source : RawMarkedOpenInterpreter heap stream} {target
 private abbrev retryLiveFiles (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     (atHeap : heap) : CheckpointSurvivingFiles :=
   ⟨(storage atHeap).files.names, fun inode => [visible atHeap inode]⟩
-
-/-- Storage observations needed at the next marked open. The immutable
-files retain their durable contents. The keeper is read through the
-current live binding, which a previous repair may have replaced. -/
-abbrev RawOpenRetryTrace.RecoveryObservations (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
-    (target : Target) (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (firstOffset through : Nat) (atHeap : heap) : Prop :=
-  let names := fun atHeap => (storage atHeap).files.names
-  let directory := state.session.directory
-  state.writer.wal.NamespaceWindow directory firstOffset through (names atHeap) ∧
-  RawOpenRetryTrace.KeeperAt view directory target names visible atHeap ∧
-  state.SelectedRetryDurability target (storage atHeap) ∧
-  RawOpenRetryTrace.LaterWalAt view directory target names atHeap
 
 /-- Local read-only projections at the callbacks reached by an open
 before flock. The extra WAL paths include absent names and the live

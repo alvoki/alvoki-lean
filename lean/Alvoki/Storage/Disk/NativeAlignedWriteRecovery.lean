@@ -1637,9 +1637,8 @@ theorem NativeReadPosition.opensLiteralRepairedAfterWriteRetries
     (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
     {firstOffset : Nat} (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
     (initial : RawOpenRetryTrace.SelectedEntry view current.state target (fun atHeap => (observe atHeap).files.names) visible first)
-    (window : current.state.writer.wal.NamespaceWindow dir firstOffset (prior ++ batch).length (observe first).files.names)
-    (durable : current.state.SelectedRetryDurability target (observe first))
-    (initialSuffix : RawOpenRetryTrace.LaterWalAt view dir target (fun atHeap => (observe atHeap).files.names) first)
+    (recovery : RawOpenRetryTrace.RecoveryObservations view current.state target observe visible firstOffset
+      (prior ++ batch).length first)
     {attempts : source.FailedCalls first returns reached}
     (retryEffects : RawOpenRetryTrace.SelectedEffects view source first target
       (fun atHeap => ⟨(observe atHeap).files.names, fun inode => [visible atHeap inode]⟩)
@@ -1688,8 +1687,8 @@ theorem NativeReadPosition.opensLiteralRepairedAfterWriteRetries
           visible start.reached inode = target.trimmed) ∧
       ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
         start.current.ready.state.session.directory firstOffset through (observe start.reached) := by
-  obtain ⟨plan, physical, entry, settled, suffix, namesAtReached⟩ := current.preparesDurableVisibleWriteRetry prepared fits admitted
-    observe visible covers initial window durable initialSuffix retryEffects
+  obtain ⟨plan, physical, entry, namesAtReached, _, settled, suffix⟩ :=
+    current.preparesDurableVisibleWriteRetry prepared fits admitted observe visible covers initial recovery retryEffects
   obtain ⟨held, framed, authority, rootNamed, lockNamed, _, _, worker⟩ :=
     RawMarkedOpenInterpreter.reachesAlignedCache admission settled.protectedFiles.lockBound returned
   have rootObject := Option.some.inj (rootBinding.symm.trans rootNamed)

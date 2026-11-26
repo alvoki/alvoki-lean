@@ -151,8 +151,8 @@ theorem NativeOpenedPosition.reopensAfterGroupedError
     obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical, sameDirectory, coversNext,
       retainedKeeper, nextWindow⟩ :=
       (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
-        initialWindow.1 selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
-        (reboot.laterNames selected.valid.selected.symm) (by simpa only [upper] using retryEffects)
+        initialWindow.1 selected (reboot.startsRecoveryObservations reset selected (by simpa only [upper] using window))
+        (by simpa only [upper] using retryEffects)
         admission namespaceView root rootBinding (openEffects prepared) (alignedEffects prepared)
         (replacementEffects prepared) phaseIdentity tokenIdentity phase ptrEq openedTable
     have old := history.trans plan.oldHistory

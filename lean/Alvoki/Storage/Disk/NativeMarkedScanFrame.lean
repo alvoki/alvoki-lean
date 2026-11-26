@@ -825,29 +825,20 @@ theorem NativeReadPosition.preparesDurableVisibleWriteRetry
     (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     {first : Nat} (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, first ≤ offset)
     (initial : RawOpenRetryTrace.SelectedEntry view current.state target (fun heap => (storage heap).files.names) visible start)
-    (window : current.state.writer.wal.NamespaceWindow current.state.session.directory first
-      (prior ++ batch).length (storage start).files.names)
-    (durable : current.state.SelectedRetryDurability target (storage start))
-    {keep : heap → Prop} (initialKeep : keep start)
+    (entry : RawOpenRetryTrace.RecoveryObservations view current.state target storage visible first
+      (prior ++ batch).length start)
     {returns : List (FilePath × IO.Error)} {attempts : source.FailedCalls start returns reached}
     (effects : RawOpenRetryTrace.SelectedEffects view source start target
       (visibleImage (fun heap => (storage heap).files.names) visible) current.state.selectedRetryPath
-      (fun atHeap =>
-        current.state.writer.wal.NamespaceWindow current.state.session.directory first (prior ++ batch).length
-          (storage atHeap).files.names ∧
-        RawOpenRetryTrace.KeeperAt view current.state.session.directory target
-          (fun heap => (storage heap).files.names) visible atHeap ∧
-        current.state.SelectedRetryDurability target (storage atHeap) ∧ keep atHeap) attempts) :
+      (RawOpenRetryTrace.RecoveryObservations view current.state target storage visible first
+        (prior ++ batch).length) attempts) :
     ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
       plan.layout.VisibleWal current.state.session.directory (storage reached).files.names (visible reached) ∧
       RawOpenRetryTrace.SelectedEntry view current.state target (fun heap => (storage heap).files.names) visible reached ∧
-      current.state.SelectedRetryDurability target (storage reached) ∧ keep reached ∧
-      current.state.writer.wal.NamespaceWindow current.state.session.directory first
-        (prior ++ batch).length (storage reached).files.names := by
-  obtain ⟨plan, physical, selected, reachedWindow, _, settled, kept⟩ :=
-    current.preparesVisibleWriteRetryFromEffects prepared fits admitted (fun heap => (storage heap).files.names) visible
-      covers initial effects ⟨window, initial.keeper, durable, initialKeep⟩ (fun kept => ⟨kept.1, kept.2.1⟩)
-  exact ⟨plan, physical, selected, settled, kept, reachedWindow⟩
+      RawOpenRetryTrace.RecoveryObservations view current.state target storage visible first
+        (prior ++ batch).length reached :=
+  current.preparesVisibleWriteRetryFromEffects prepared fits admitted (fun heap => (storage heap).files.names) visible
+    covers initial effects entry (fun kept => ⟨kept.1, kept.2.1⟩)
 
 /-- Refine the actual WAL return using only the held recovery window
 and reached file effects. Both the canonical replay bytes and the
