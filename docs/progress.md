@@ -1,5 +1,15 @@
 # Current handoff
 
+With reached admission and cache observations, a literal successful
+return of the fixed opener now determines its successful worker
+return and both allocation receipts. The second allocation starts
+at the first one's actual return heap. The same two references and
+original cache and lock assemble the exact returned table. The proof
+uses the fixed callbacks and remains independent of a healthy
+marked-read report. The next step is to derive the selected reader
+and repair from the reached recovery callback.
+[Fixed open result](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
+
 A returned marker rename or final directory-fsync error now supplies
 the exact public write error and its reached reboot entry in one
 proof. The selected marker determines the old history or the whole

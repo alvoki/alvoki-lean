@@ -169,6 +169,13 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
 
 - [ ] **Complete open and repair dispatch.** Extend the exact admission, read, repair and cleanup proofs to the remaining reached failures and stops, including other survivors of a stopped initial marker directory barrier, other selected read failures and later keeper repair steps. Cover the guarded collision route for longer-keeper staging in the raw installer. Carry finite rejected attempts into the exact next raw open, with the same canonical directory, surviving file bytes and reached census. [Healthy raw marked dispatch](../lean/Alvoki/Storage/Disk/NativeHealthyMarkedTableOpen.lean) · [Initial marker flush error and retry](../lean/Alvoki/Storage/Disk/NativeInitialMarkerFlushSessions.lean)
 
+  A literal successful fixed open, with its reached admission and
+  cache observations, yields the exact raw recovery return and the two
+  reference allocations that build its table. The selected read and
+  repair witness still needs to come from that recovery callback and
+  its primitive observations.
+  [Fixed open result](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
+
   The actual marker rename and final directory sync errors now supply
   the matching `commitUnknown` request and diagnostic to the selected
   reboot and aligned ready-writer proof. The proof derives the old or

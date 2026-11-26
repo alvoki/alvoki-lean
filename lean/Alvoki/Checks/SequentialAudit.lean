@@ -3975,6 +3975,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.cacheAction
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.assembles
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsHealthyMarkedInterpreter
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.reachesMarkedInstallation
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.append
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsFixedAfterWorkerAgreement

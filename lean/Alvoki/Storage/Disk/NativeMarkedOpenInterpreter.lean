@@ -141,19 +141,70 @@ private theorem RawOpenAdmissionReport.markedInterpreterStarts
     seed.activeAllocated, seed.pendingAllocated, Pure.pure, EStateM.pure]
 
 /-- A healthy return transfers the original lock and cache to the
-table. No error cleanup runs after this worker result. -/
+table. The fixed worker is the only source of a successful result. -/
 theorem RawOpenAdmissionReport.returnsHealthyMarkedInterpreter
     (source : RawMarkedOpenInterpreter heap stream)
     (raw : RawOpenAdmissionReport admission view source.calls entry)
     (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
-    {table : DiskTable} {reached : heap}
-    (worker : source.worker seed.directoryRef seed.activeRef seed.pendingRef directory raw.lock
-      (RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef)
-      seed.afterPending =
-      .ok table reached) :
-    source.openTable input entry = .ok table reached := by
+    {table : DiskTable} {reached : heap} :
+    source.openTable input entry = .ok table reached ↔
+      source.worker seed.directoryRef seed.activeRef seed.pendingRef directory raw.lock
+        (RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef)
+        seed.afterPending = .ok table reached := by
   rw [raw.markedInterpreterStarts source seed]
-  simp only [finishFailedOpen, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, worker]
+  cases worker : source.worker seed.directoryRef seed.activeRef seed.pendingRef directory raw.lock
+      (RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef) seed.afterPending with
+  | ok value atWorker =>
+    simp only [finishFailedOpen, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, worker]
+  | error cause atWorker =>
+    simp only [finishFailedOpen, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, worker,
+      EStateM.Backtrackable.restore, EStateM.dummyRestore, Bind.bind, EStateM.bind, throw, throwThe,
+      MonadExceptOf.throw, EStateM.throw]
+    cases source.dispose
+        (RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef) atWorker with
+    | ok _ afterDisposal | error _ afterDisposal =>
+      cases unlocked : source.calls.unlock raw.lock afterDisposal <;> simp [unlocked]
+
+/-- Recover the actual worker return and both allocation receipts from
+one literal open result. The second allocation uses the first heap and
+the assembled table uses those same references. -/
+theorem RawOpenAdmissionReport.reachesMarkedInstallation
+    (source : RawMarkedOpenInterpreter heap stream)
+    (raw : RawOpenAdmissionReport admission view source.calls entry)
+    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    {table : DiskTable} {reached : heap}
+    (returned : source.openTable input entry = .ok table reached) :
+    let cache := RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef
+    ∃ (opened : Reopened) (repaired : heap) (phase : IO.Ref (Phase Installed)) (afterPhase : heap) (token : IO.Ref Unit),
+      recoverHealthyMarkedWithRefs source.fileCalls source.directoryCalls source.keeperCallbacks
+        seed.directoryRef seed.activeRef seed.pendingRef source.remove source.stage source.rename source.calls.lookup
+        directory (source.bootstrap directory cache) seed.afterPending = .ok opened repaired ∧
+      source.allocatePhase (.ready opened.installed) repaired = .ok phase afterPhase ∧
+      source.allocateToken () afterPhase = .ok token reached ∧
+      table = RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token := by
+  intro cache
+  have worker := (raw.returnsHealthyMarkedInterpreter source seed).1 returned
+  let recover := recoverHealthyMarkedWithRefs source.fileCalls source.directoryCalls source.keeperCallbacks
+    seed.directoryRef seed.activeRef seed.pendingRef source.remove source.stage source.rename source.calls.lookup
+    directory (source.bootstrap directory cache)
+  change ((do
+    let opened ← recover
+    installReady opened.installed source.allocatePhase source.allocateToken fun phase token =>
+      pure (RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token)) seed.afterPending) = _ at worker
+  simp only [installReady, Bind.bind, EStateM.bind] at worker
+  cases prepared : recover seed.afterPending with
+  | error cause repaired => simp [prepared] at worker
+  | ok opened repaired =>
+    simp only [prepared] at worker
+    cases phaseReturn : source.allocatePhase (.ready opened.installed) repaired with
+    | error cause afterPhase => simp [phaseReturn] at worker
+    | ok phase afterPhase =>
+      simp only [phaseReturn] at worker
+      cases tokenReturn : source.allocateToken () afterPhase with
+      | error cause heap => simp [tokenReturn] at worker
+      | ok token afterToken =>
+        simp only [tokenReturn, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at worker
+        exact ⟨opened, repaired, phase, afterPhase, token, prepared, phaseReturn, worker.2 ▸ tokenReturn, worker.1.symm⟩
 
 variable {admission : CensusOpenAdmissionReports input directory inventory retry}
 
@@ -228,7 +279,7 @@ theorem RawOpenAdmissionReport.returnsFixedAfterWorkerAgreement
     simp only [openSyncFilesWith, Bind.bind, EStateM.bind, seed.rawOpened, seed.directoryAllocated,
       seed.activeAllocated, seed.pendingAllocated, Pure.pure, EStateM.pure, cache]
   rw [raw.startsHeldWorker source.init seed initialized recover, sameCache] at returned
-  apply raw.returnsHealthyMarkedInterpreter source seed
+  apply (raw.returnsHealthyMarkedInterpreter source seed).2
   change recover directory raw.lock fixed seed.afterPending = _ at agrees
   cases ran : recover directory raw.lock fixed seed.afterPending with
   | ok value after =>
