@@ -197,7 +197,9 @@ structure NativeOpenedPosition.PublicationCallbackFrames
     (request : WriteRequest)
     (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (frame : heap → heap → Prop) : Prop where
+    (frame : heap → heap → Prop)
+    (afterRename : heap → Prop := fun renamed => frame renamed (reachedState (sync #[(dir).path] renamed))) :
+    Prop where
   atPoison : ∀ {batch table guarded poisoned},
     prepareBatch (oldInstalled).table request.rows = some (batch, table) →
     checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded →
@@ -216,8 +218,7 @@ structure NativeOpenedPosition.PublicationCallbackFrames
         frame staged (reachedState (syncFiles staged)) ∧
         ∀ {grouped}, syncFiles staged = .ok () grouped →
           frame grouped (reachedState (renameMarker grouped)) ∧
-          ∀ {renamed}, renameMarker grouped = .ok () renamed →
-            frame renamed (reachedState (sync #[(dir).path] renamed))
+          ∀ {renamed}, renameMarker grouped = .ok () renamed → afterRename renamed
 
 /-- The guard and poison callback frame joins the publication schedule
 to the reached ready position. -/
@@ -225,8 +226,9 @@ structure NativeOpenedPosition.WriteCallbackFrames
     (request : WriteRequest)
     (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (frame : heap → heap → Prop) : Prop
-    extends current.PublicationCallbackFrames appender stager syncer cache request lookup rename frame where
+    (frame : heap → heap → Prop)
+    (afterRename : heap → Prop := fun renamed => frame renamed (reachedState (sync #[(dir).path] renamed))) :
+    Prop extends current.PublicationCallbackFrames appender stager syncer cache request lookup rename frame afterRename where
   guard : ∀ {guarded}, checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded →
     frame current.reached guarded
   poison : ∀ {guarded poisoned}, checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded →
@@ -241,6 +243,38 @@ abbrev NativeOpenedPosition.WalNameEffects
     (storage : heap → CheckpointStorageObservation) (first through : Nat) : Prop :=
   current.WriteCallbackFrames appender stager syncer cache request lookup rename
     (fun entry after => WalNamePresenceFrame dir first through (storage entry) (storage after))
+
+variable {current appender stager syncer cache} in
+/-- Follow the same successful file prefix up to the renamed marker,
+before the directory callback has to return or be interrupted. -/
+theorem NativeOpenedPosition.PublicationCallbackFrames.throughRename
+    {request : WriteRequest}
+    {lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    {frame : heap → heap → Prop} {afterRename : heap → Prop}
+    (effects : current.PublicationCallbackFrames appender stager syncer cache request lookup rename frame afterRename)
+    (trans : ∀ {entry middle after}, frame entry middle → frame middle after → frame entry after)
+    {batch : List WAL.Write} {table : PackedTable} {guarded poisoned appended staged grouped renamed : heap}
+    (prepared : prepareBatch (oldInstalled).table request.rows = some (batch, table))
+    (checked : checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded)
+    (assigned : opened.set opened.phase .poisoned guarded = .ok () poisoned)
+    (wrote : append ((dir).file (.walSegment (oldInstalled).activeFirst)) (WAL.encodeBatch batch) poisoned = .ok () appended)
+    (remembered : stage ((dir).file .stagedWalBoundary)
+      (WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64)
+      appended = .ok () staged)
+    (synced : sync #[(dir).file (.walSegment (oldInstalled).activeFirst), (dir).file .stagedWalBoundary]
+      staged = .ok () grouped)
+    (moved : rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) grouped = .ok () renamed) :
+    frame poisoned renamed ∧ afterRename renamed := by
+  obtain ⟨appendFrame, next⟩ := effects.atPoison prepared checked assigned
+  obtain ⟨stageFrame, next⟩ := next wrote
+  obtain ⟨groupFrame, next⟩ := next remembered
+  obtain ⟨renameFrame, finish⟩ := next synced
+  have first : frame poisoned appended := by simpa only [wrote, reachedState] using appendFrame
+  have second : frame appended staged := by simpa only [remembered, reachedState] using stageFrame
+  have third : frame staged grouped := by simpa only [synced, reachedState] using groupFrame
+  have fourth : frame grouped renamed := by simpa only [moved, reachedState] using renameFrame
+  exact ⟨trans (trans first second) (trans third fourth), finish moved⟩
 
 variable {current appender stager syncer cache} in
 /-- Compose the file callbacks in issue order to the actual result. -/
@@ -277,10 +311,8 @@ theorem NativeOpenedPosition.PublicationCallbackFrames.throughCommit
     exact trans (reached (throughStage wrote) staged)
       (trans (reached group.1 grouped) (by simpa only [failed] using (group.2 grouped).1))
   | directory wrote staged grouped moved returned =>
-    have group := (frames.2 wrote).2 staged
-    have rename := group.2 grouped
-    exact trans (reached (throughStage wrote) staged)
-      (trans (reached group.1 grouped) (trans (reached rename.1 moved) (by simpa only [returned] using rename.2 moved)))
+    obtain ⟨throughRename, root⟩ := effects.throughRename trans prepared checked assigned wrote staged grouped moved
+    exact trans throughRename (by simpa only [returned] using root)
 
 variable {current appender stager syncer cache} in
 /-- The same reached callback fold carries any preserved relation from

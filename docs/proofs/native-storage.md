@@ -215,11 +215,15 @@ both have sequence number equal to the batch length.
 
 For a later write returning `commitUnknown` after the file-sync group
 succeeds, the sampled marker selects the earlier history or the earlier history
-plus the whole prepared batch. Before rotation or checkpoint, the same opener
-and latest lookup use that selected history. An interruption during the outstanding final directory
+plus the whole prepared batch. Before the first checkpoint, the same opener
+and latest lookup also work with sealed WAL segments. The offset selector
+orders the reads, and the sampled file bindings supply each sealed payload
+and the active keeper bytes. Connecting an actual rotation to those storage
+premises is a separate publication obligation. An interruption during the outstanding final directory
 fsync reaches the same recovery boundary through the cached root descriptor,
-without a write response. This path still takes a protected-file frame and a
-bounded WAL-name frame over the write prefix. [Interrupted root sync](../../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean) [Late publication](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+without a write response. The file callbacks each preserve the protected paths and
+the bounded WAL names. The proof composes those local facts up to the marker
+rename, then through the actual cache read and outstanding sync. [Interrupted root sync](../../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean) [Late publication](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the

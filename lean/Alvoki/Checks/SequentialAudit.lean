@@ -4240,6 +4240,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentImage.NamespaceWindow.restrict
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.walNamespace
 #check_axioms Alvoki.Storage.DiskSession.WalNamePresenceFrame.preservesNamespaceWindow
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.PublicationCallbackFrames.throughRename
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.PublicationCallbackFrames.throughCommit
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.WriteCallbackFrames.throughPublication
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.preservesWalNamesAfterAcknowledgement
@@ -4325,8 +4326,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheCallbacks.reachedSuccess
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.reachesHeldCache
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.readsLiteralMarkedOpen
-#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.replaysSingleSegmentAtOpen
-#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.replaysSingleSegmentAtOpen
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.replaysWalBeforeCheckpointAtOpen
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.replaysWalBeforeCheckpointAtOpen
 #check_axioms Alvoki.Storage.DiskSession.AlignedRepairImageEffects.readyAfterReturn
 
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.retainsLiteralAlignedReturn

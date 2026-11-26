@@ -683,12 +683,12 @@ theorem replaysFirstAcknowledgedWrite {stream : Type}
         (∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
           WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
             (storage preReady) (storage reached)) →
-        source.ReplaysSingleSegmentAtOpen clientView state storage visible rebooted namespaceView root batch := by
+        source.ReplaysWalBeforeCheckpointAtOpen clientView state storage visible rebooted namespaceView root batch := by
   obtain ⟨settled, freshWindow⟩ := opened.readyStorageAndWindow seen resolved used runs files through
     createdKeeps createdWal rootNames liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame
     phaseInodes tokenInodes
   obtain ⟨initial, _, cache, batch, preparedTable, next, _, dirRef, activeRef, pendingRef, write, number, prepared, exactHeap, _,
-    ledger, _, _, _, physical, ⟨noManifest, noSeals, history, cutoff⟩, carries⟩ :=
+    ledger, _, _, _, physical, ⟨noManifest, _, history, cutoff⟩, carries⟩ :=
     opened.acknowledgesFirstWrite used clientView resolved references atDirectory census cacheAt
       seen.keeperPhysical.inodes runs storage settled appender stager syncer inode buffered request lookup rename nonempty wrote
   rw [dirRef, activeRef, pendingRef, opened.start.directory.trans resolved] at write
@@ -707,8 +707,8 @@ theorem replaysFirstAcknowledgedWrite {stream : Type}
   have readyPhysical := physical.physical
   rw [exactHeap] at readyPhysical
   rw [← history]
-  exact @RawWriteRebootEntry.replaysSingleSegmentAtOpen _ _ _ _ source _ _ _ _ namespaceView root
-    sampled next.current.ready.readPrefix.refines.1 readyPhysical reset finalWindow noManifest noSeals
+  exact @RawWriteRebootEntry.replaysWalBeforeCheckpointAtOpen _ _ _ _ source _ _ _ _ namespaceView root
+    sampled next.current.ready.readPrefix.refines.1 readyPhysical reset finalWindow noManifest
 
 end BootstrapWriteEntry
 

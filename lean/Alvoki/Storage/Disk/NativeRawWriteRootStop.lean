@@ -211,11 +211,21 @@ theorem NativeOpenedPosition.stopsAtRootFsync
       current.reached = .error handle reached ∧
     WalPublicationPayloads.ReachedWrite state batch request.rows (storage reached) true
       (fun published => effective = true → published = true) ∧
-    ∀ {rebooted} (sample : RawWriteRebootEntry state view storage (fun h => (storage h).files.names)
+    ∀ (_frames :
+      let frame := fun before after =>
+        (storage before).Frames (state).writeFramePath (storage after) ∧
+        WalNamePresenceFrame dir 0 (current.current.history.length + request.rows.length)
+          (storage before) (storage after)
+      current.WriteCallbackFrames append stage calls cache request lookup rename frame (fun fromRename =>
+        ∀ {atIssue atStop : heap} {directoryHandle : IO.FS.Handle},
+          calls.readDirectory cache.directory fromRename = .ok (some directoryHandle) atIssue →
+          RawFsyncTarget view fromRename atIssue directoryHandle →
+          (storage atIssue).files.names (dir).path =
+            some ((view.descriptors atIssue).inode (view.handle atIssue directoryHandle).2.1.description) →
+          stopped directoryHandle atIssue = .error directoryHandle atStop →
+          frame fromRename atIssue ∧ frame atIssue atStop))
+      {rebooted} (sample : RawWriteRebootEntry state view storage (fun h => (storage h).files.names)
         (fun h => (inodes h).visible) reached rebooted), sample.DurableReset →
-      (storage current.reached).Frames (state).writeFramePath (storage reached) →
-      WalNamePresenceFrame dir 0 (current.current.history.length + request.rows.length)
-        (storage current.reached) (storage reached) →
       current.WalWindowAt storage 0 (current.current.history.length + request.rows.length) →
       ∃ target : Target, current.current.SelectedWriteReboot view storage (fun h => (inodes h).visible) 0
         request batch table target reached rebooted := by
@@ -241,9 +251,20 @@ theorem NativeOpenedPosition.stopsAtRootFsync
     obtain ⟨published, allowed, selected⟩ := physical.2 names included
     exact ⟨published, (fun settled => by simpa only [settled, ↓reduceIte] using allowed), selected⟩
   refine ⟨current.uses.writeSchedules, stopWrite, published, ?_⟩
-  intro rebooted sample reset frame names window
-  exact current.selectsDurableReachedWrite view storage prepared fits old frame published
-    (fun h => (inodes h).visible) sample reset names window
+  intro frames rebooted sample reset window
+  let frame := fun before after =>
+    (storage before).Frames (state).writeFramePath (storage after) ∧
+    WalNamePresenceFrame dir 0 (current.current.history.length + request.rows.length)
+      (storage before) (storage after)
+  have trans {before middle after : heap} (earlier : frame before middle) (later : frame middle after) :
+      frame before after := ⟨earlier.1.trans later.1, earlier.2.trans later.2⟩
+  obtain ⟨renameFrame, finish⟩ :=
+    frames.toPublicationCallbackFrames.throughRename trans prepared checked assigned wrote remembered synced moved
+  obtain ⟨cacheFrame, stopFrame⟩ := finish loaded target root noResponse
+  have beforeWrite := trans (frames.guard checked) (frames.poison checked assigned)
+  have throughStop := trans (trans beforeWrite renameFrame) (trans cacheFrame stopFrame)
+  exact current.selectsDurableReachedWrite view storage prepared fits old throughStop.1 published
+    (fun h => (inodes h).visible) sample reset throughStop.2 window
 
 end PhysicalStop
 

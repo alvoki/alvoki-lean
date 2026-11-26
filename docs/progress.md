@@ -15,7 +15,7 @@ prefix. A failed keeper/marker sync group joins this ledger to a sampled reboot
 and either a final failed reopen or a successful reopen followed by an acknowledged
 write and a snapshot read on the returned handle, under local storage effects.
 
-**WAL before the first checkpoint.** For a settled writer with one segment,
+**WAL before the first checkpoint.** For a settled writer,
 one sampled crash namespace determines the keeper, marker and repair plan.
 Under the local filesystem laws, every successful fixed `open` installs the
 replay of the writer’s entire history in the phase used by the returned
@@ -86,13 +86,20 @@ uses the reopened table’s actual phase and token and returns the value obtaine
 by replaying the prepared batch. Its pin carries the sequence returned by the write.
 For a subsequent late publication error after the file group succeeded, the
 selected old-or-whole history also feeds that same open and snapshot proof.
+Both reader paths accept retained sealed segments under the derived offset
+selection and the bounded directory observation.
 
 If the write stops during the final directory fsync, the cached handle and its
 actual reached heap feed the same crash selection under scoped filesystem frames.
 A barrier that took effect rules out the old marker in the physical result.
+The guard, phase update and file calls preserve the protected paths and
+bounded WAL names locally. After rename the frame uses the actual cached
+root read and the outstanding sync.
 
-**Next obligation.** Derive the protected-file and bounded WAL-name frames
-across the stopped write from the effects of its individual callbacks. On the
+**Next obligation.** Carry the fresh writer’s storage entry and directory
+window across the first acknowledgement to an interrupted second batch.
+The initial window must cover the combined row count. For rotation, establish
+the sealed files and the new active binding at the rotation’s actual return. On the
 failed-barrier path, the surviving namespace and cleanup inventory still need
 to feed the next admission.
 Further interruptions, mixed sessions and maintenance remain in the

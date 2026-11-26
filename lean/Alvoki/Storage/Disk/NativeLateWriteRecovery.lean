@@ -374,17 +374,17 @@ theorem sampledPlan {current : NativeExecutionPosition}
     (handoff : current.SelectedWriteReboot view storage visible firstOffset request batch table target failed rebooted) :
     ∃ plan : current.ready.SelectedWritePlan batch target (view.files rebooted).image,
       ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
-        current.ready.state.writer.target.pair.manifest = none → current.ready.state.writer.wal.sealed = [] →
-        opener.ReplaysSingleSegmentAtOpen view current.ready.state storage visible rebooted namespaceView root
+        current.ready.state.writer.target.pair.manifest = none →
+        opener.ReplaysWalBeforeCheckpointAtOpen view current.ready.state storage visible rebooted namespaceView root
           plan.history := by
   obtain ⟨plan⟩ := current.ready.preparesSelectedWrite handoff.prepared handoff.fits handoff.admitted
     handoff.selected.valid handoff.selected.manifest
   refine ⟨plan, ?_⟩
-  intro stream opener namespaceView root absent single
-  exact @NativeReadPosition.SelectedWritePlan.replaysSingleSegmentAtOpen
+  intro stream opener namespaceView root absent
+  exact @NativeReadPosition.SelectedWritePlan.replaysWalBeforeCheckpointAtOpen
     (source := opener) (namespaceView := namespaceView) (root := root) (plan := plan)
     (selected := handoff.selected) (recovery := handoff.recovery) (covers := handoff.covers)
-    (noManifest := absent) (single := single)
+    (noManifest := absent)
 
 /-- End at a literal failed open on the selected reboot's retry prefix. -/
 theorem stopsAfterRetries
@@ -554,8 +554,8 @@ theorem NativeReturnedCalls.selectsAfterLatePublicationError
               PendingClientReplay submissions reads plan.history ∧
               (∀ read ∈ reads, read.BoundedBy plan.history.length) ∧
               ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
-                state.writer.target.pair.manifest = none → state.writer.wal.sealed = [] →
-                opener.ReplaysSingleSegmentAtOpen view state storage visible rebooted namespaceView root plan.history := by
+                state.writer.target.pair.manifest = none →
+                opener.ReplaysWalBeforeCheckpointAtOpen view state storage visible rebooted namespaceView root plan.history := by
   obtain ⟨last, events, ran, length, records, through, write⟩ :=
     executed.refinesReadyBeforeCommitUnknown start prior view inodes runs observe inode buffered effects
       initial readyNames initialWindow
