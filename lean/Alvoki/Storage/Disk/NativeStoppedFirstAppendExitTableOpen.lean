@@ -292,7 +292,7 @@ theorem NativeStoppedFirstAppendExitTableOpen.reaches
   obtain ⟨valid, history, _⟩ := current.current.ready.readPrefix.refines
   let marked := seen.plan.markedReport (log := current.current.submissions ++ [.uncertainBatch seen.prepared.batch])
     (reads := current.current.ready.reads) seen.reader.opening valid (history.symm ▸ pending.replay) (history.symm ▸ pending.bounded)
-  obtain ⟨measured, installed, cacheOpen, makeCache, cacheAction, cacheSource, ran⟩ :=
+  obtain ⟨measured, installed, cacheOpen, makeCache, cacheAction, cacheSource, _, ran⟩ :=
     marked.opensHealthyFromAdmission seen.physical.raw seen.physical.seed seen.physical.checkpoint seen.physical.listing
       seen.physical.extents seen.physical.seals seen.physical.keeper seen.physical.sameLookup seen.physical.flat
       seen.physical.marked seen.bootstrap seen.assemble seen.constructs seen.physical.allocations

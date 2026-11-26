@@ -269,6 +269,9 @@ theorem MarkedOpenSuccessReports.opensHealthyFromAdmission
       cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
         (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
         (fun value => liftM (IO.mkRef value)) makeCache ∧
+      (let cache := makeCache seed.directoryRef seed.activeRef seed.pendingRef;
+        cache.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef ∧
+          cache.AtDirectory directory.path) ∧
       calls.runOpen input init makeCache (fun resolved lock cache => do
         let opened ← recovery resolved cache
         installReady opened.installed allocatePhase allocateToken
@@ -288,8 +291,8 @@ theorem MarkedOpenSuccessReports.opensHealthyFromAdmission
     rw [← sameLookup]
     simpa only [recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind, flat, marker,
       Option.isSome_none, Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure] using rawRecovered
-  obtain ⟨cacheOpen, makeCache, action, source, native⟩ :=
+  obtain ⟨cacheOpen, makeCache, action, source, useCache, native⟩ :=
     installed.opensFromAdmission recovery assemble constructs returned normalized
-  exact ⟨guard, installed, cacheOpen, makeCache, action, source, native⟩
+  exact ⟨guard, installed, cacheOpen, makeCache, action, source, useCache, native⟩
 
 end Alvoki.Storage.DiskSession

@@ -1,5 +1,21 @@
 # Current handoff
 
+The selected write retry proof now follows one fixed marked open interpreter from the first failed
+call to the successful installation. Each failure retains its exact diagnostic and returned heap.
+The file-effect proof is indexed by those endpoints and carries the valid selected plan, protected
+files and current keeper. The successful attempt reuses the same callbacks and the cache it
+actually allocated, and returns the exact table with the selected history and snapshot ledger.
+[Fixed marked interpreter](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
+· [Selected retry return](../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
+
+Early prefix failures, flock errors and a contender with an existing alias now have adapters to
+the fixed interpreter. A held `MANIFEST` stat error and a failed marked repair expose their actual
+worker results for the same cache disposal, unlock and final descriptor drop. The local primitive reports still
+carry file effects and ownership. The main execution still needs to derive those reports from its
+fixed write, crash and open schedules, including the remaining held read-only failure and contention paths.
+[Early admission](../lean/Alvoki/Storage/Disk/NativeMarkedAdmissionRejections.lean)
+· [Mutating retries](../lean/Alvoki/Storage/Disk/NativeMutatingOpenRetries.lean)
+
 The chosen reboot now initializes the same selected retry state used after live repair failures.
 The proof samples one durable name map and its inode bytes at the actual reboot heap. It carries
 forward the protected checkpoint files, derives the live keeper and selected marker at that heap,
@@ -19,9 +35,7 @@ compound uncertain-write events. [Exact entry identities](../lean/Alvoki/Storage
 
 The marked interpreter now fixes the callbacks for admission, cache allocation, repair and cleanup
 before the attempt. It passes the references allocated by this admission into the worker. The
-healthy result and finalized worker error are two results of that same interpreter. The current
-retry certificates must still export their exact worker results to use this boundary in the common
-execution. [Fixed marked open](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
+healthy result and finalized worker error are two results of that same interpreter. The selected write retry proof above uses these exact returns. [Fixed marked open](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
 
 A single marked installation proof now serves both the reboot path and a live open after failed
 repairs. The next admission uses the last reached heap and its descriptor inventory. For an

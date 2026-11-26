@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
 import Alvoki.Storage.Disk.NativeRawWriteReboot
 import Alvoki.Storage.Disk.NativeMarkedEntryObservations
+import Alvoki.Storage.Disk.NativeMarkedOpenInterpreter
 import Alvoki.Storage.Disk.NativeWriteCrashReads
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 
@@ -51,8 +52,8 @@ def RawHealthyMarkedOpenEffects.SelectedReturn
     (raw : RawHealthyMarkedOpenEffects opening view calls init entry phaseIdentity tokenIdentity
       allocatePhase allocateToken stream remove stage rename)
     (log : List DatabaseSubmissions) (reads : List RecordedSnapshotRead)
-    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
-    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    (execute : (IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles) → EStateM.Result IO.Error heap DiskTable)
     (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
     (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) : Prop :=
@@ -65,7 +66,9 @@ def RawHealthyMarkedOpenEffects.SelectedReturn
         action = openSyncFilesWith (m := IO) (IO.FS.Handle.mk (dir).path .read)
           (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
           (fun value => liftM (IO.mkRef value)) makeCache) ∧
-      raw.openTable bootstrap assemble makeCache = .ok handle.table start.reached ∧
+      (let cache := makeCache raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef
+       cache.UsesCacheReferences raw.seed.activeRef raw.seed.pendingRef raw.seed.directoryRef ∧ cache.AtDirectory (dir).path) ∧
+      execute makeCache = .ok handle.table start.reached ∧
       start.current = ⟨history, log, next⟩ ∧ next.reads = reads ∧ next.initial = next.state ∧
       next.state.writer.target = layout.target ∧ next.state.files.image.Ready layout.target ∧
       next.state.writer.checkpoint = state.writer.checkpoint ∧
@@ -109,7 +112,7 @@ theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (phase : OpenPhaseCellEffects view.phase get set)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
-    raw.SelectedReturn log reads bootstrap assemble get set ptrEq := by
+    raw.SelectedReturn log reads (raw.openTable bootstrap assemble) get set ptrEq := by
   have following := opening.reads.walReads.selectedAfterWatermark offsets descriptors
   let marked : MarkedOpenSuccessReports input dir history log reads := {
     inventory := inventory
@@ -139,7 +142,7 @@ theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
       prepared following accepted ordered walLayout walValid spans active keeper kept pending bounded
   let position : NativeReadPosition history log :=
     ⟨opening.finish.run opening.chronology, next, next, reads, seeded⟩
-  obtain ⟨measured, installed, cacheOpen, makeCache, action, source, ran⟩ :=
+  obtain ⟨measured, installed, cacheOpen, makeCache, action, source, cacheUses, ran⟩ :=
     marked.opensHealthyFromAdmission raw.raw raw.seed raw.checkpoint raw.listing raw.extents raw.seals raw.keeper
       raw.sameLookup raw.flat raw.marked bootstrap assemble constructs raw.allocations
   obtain ⟨handle, start, table, _, sameLock, sameCache, _, _, contents, sameGet, sameSet, sameCompare,
@@ -149,7 +152,7 @@ theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
     fun same => freshRefs.1 ((phaseId.symm.trans same).symm ▸ previousTokens.1)
   have freshToken : tokenIdentity handle.token ≠ state.session.sessionRef :=
     fun same => freshRefs.2 ((tokenId.symm.trans same).symm ▸ previousTokens.2)
-  refine ⟨measured, position, makeCache, handle, start, ⟨cacheOpen, action, source⟩, ?_, positionEq, rfl, rfl, target,
+  refine ⟨measured, position, makeCache, handle, start, ⟨cacheOpen, action, source⟩, cacheUses, ?_, positionEq, rfl, rfl, target,
     target ▸ seeded.refines.1.retained.resumed.ready, checkpoint, durable, sameLock,
     sameCache.symm ▸ installed.cacheReferences, sameCache.symm ▸ installed.cacheDirectory,
     contents, sameGet, sameSet, sameCompare, phaseId, tokenId, freshPhase, freshToken, pins, sameFiles, sameCensus, cached⟩
@@ -204,7 +207,7 @@ theorem NativeWriteCrashReads.reopensAfterReadOnlyAttempts
     (∀ path payload, selection path → reader.ReadsSurvivor path payload →
       ∃ read : reader.opening.reads.reads.ObservesFile path payload,
         (files entry).names path = some read.object ∧ (files entry).bytes read.object = [payload]) ∧
-    raw.SelectedReturn log reads bootstrap assemble get set ptrEq := by
+    raw.SelectedReturn log reads (raw.openTable bootstrap assemble) get set ptrEq := by
   have frame := attempts.frames (frame := fun a b => (files a).Frames footprint (files b))
     (fun _ _ _ => ⟨rfl, fun _ _ => rfl⟩) CheckpointSurvivingFiles.Frames.trans
     beforeFlockFrame flockErrorFrame heldFrame
@@ -235,14 +238,8 @@ end
 section Retry
 
 variable {heap stream : Type} {input : FilePath}
-  {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
-  {init : OpenSyncCacheCallbacks heap} {returns : List (FilePath × IO.Error)}
-  {release : IO.FS.Handle → heap → heap}
+  {view : OpenCloseHeapView heap FileImage} {returns : List (FilePath × IO.Error)}
   {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
-  {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
-  {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
-  {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)} {stage : LongKeeperStageCallbacks heap}
-  {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
 
 variable {prior : List WAL.Write} {log : List DatabaseSubmissions} {batch : List WAL.Write}
   (current : NativeReadPosition prior log) {target : Target} {reached : heap}
@@ -255,13 +252,14 @@ local notation "census" => (view.descriptors reached)
 stat and open identify the live keeper, while the derived bounded plan
 carries the selected checkpoint and earlier client reads into the table. -/
 theorem NativeReadPosition.opensAfterWriteRetries
+    (source : RawMarkedOpenInterpreter heap stream)
     {rows : List (UInt64 × Option UInt64)} {table : PackedTable}
     (prepared : prepareBatch current.state.writer.installed.table rows = some (batch, table))
     (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
     (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
     {first : heap} (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
-    {attempts : RawOpenRetryTrace view dir calls init release first returns reached}
-    (effects : RawOpenRetryTrace.SelectedEffects view dir calls init release first target
+    {attempts : RawOpenRetryTrace view dir source.calls source.init source.release first returns reached}
+    (effects : RawOpenRetryTrace.SelectedEffects view dir source first target
       (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) current.state.selectedRetryPath
       (RawOpenRetryTrace.KeeperAt view dir target names visible) attempts)
     (initial : RawOpenRetryTrace.SelectedEntry view current.state target names visible first)
@@ -269,28 +267,27 @@ theorem NativeReadPosition.opensAfterWriteRetries
     (observe : ∀ plan : current.SelectedWritePlan batch target (retryFiles).image,
       ∃ (opening : MarkedReadyOpenObservations input dir census retryFiles plan.layout
           current.state.writer.published vacant plan.selected)
-        (_ : RawHealthyMarkedOpenEffects opening view calls init reached phaseIdentity tokenIdentity
-          allocatePhase allocateToken stream remove stage rename),
+        (raw : RawHealthyMarkedOpenEffects opening view source.calls source.init reached phaseIdentity tokenIdentity
+          source.allocatePhase source.allocateToken stream source.remove source.stage source.rename),
+        raw.fileCalls = source.fileCalls ∧ raw.directoryCalls = source.directoryCalls ∧
+        raw.callbacks = source.keeperCallbacks ∧
         (current.state.session.phaseRef ∈ opening.callbacks.liveRefs ∧
           current.state.session.sessionRef ∈ opening.callbacks.liveRefs) ∧
         names reached (dir).path = opening.reads.bindings (dir).path ∧
         names reached ((dir).file .lock) = opening.reads.bindings ((dir).file .lock) ∧
         ∀ path metadata inode, plan.layout.selectedFilePath dir path →
           opening.reads.reads.stat path = .ok (metadata, inode) → names reached path = some inode)
-    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
-    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
-    (constructs : ∀ resolved lock cache, DiskTable.OpenReferenceAssembly resolved lock cache
-      (assemble resolved lock cache))
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (phase : OpenPhaseCellEffects view.phase get set)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
+    source.FailedCalls first returns reached ∧
     NativeReadyProtectedStorage current.state ⟨names reached, fun inode => [visible reached inode]⟩ ∧
     ∃ (plan : current.SelectedWritePlan batch target (retryFiles).image)
       (opening : MarkedReadyOpenObservations input dir census retryFiles plan.layout
         current.state.writer.published vacant plan.selected)
-      (raw : RawHealthyMarkedOpenEffects opening view calls init reached phaseIdentity tokenIdentity
-        allocatePhase allocateToken stream remove stage rename),
+      (raw : RawHealthyMarkedOpenEffects opening view source.calls source.init reached phaseIdentity tokenIdentity
+        source.allocatePhase source.allocateToken stream source.remove source.stage source.rename),
       names reached (dir).path = some ((view.handle raw.seed.afterPending raw.seed.handle).1.inode
         (view.handle raw.seed.afterPending raw.seed.handle).2.1.description) ∧
       names reached ((dir).file .lock) = some ((view.handle raw.raw.afterFlock raw.raw.lock).1.inode
@@ -313,9 +310,9 @@ theorem NativeReadPosition.opensAfterWriteRetries
         ∀ payload, current.state.writer.published.durable metadata.header.generation index = some payload →
         ∃ run : opening.reads.reads.ObservesFile ((dir).file (.run metadata.header.generation index)) payload,
           names reached ((dir).file (.run metadata.header.generation index)) = some run.object ∧ visible reached run.object = payload) ∧
-      raw.SelectedReturn (log ++ [.uncertainBatch batch]) current.reads bootstrap assemble get set ptrEq := by
-  obtain ⟨⟨plan⟩, kept, frame, carries⟩ := current.preparesWriteRetry prepared fits admitted initial.manifest effects initial.valid
-  obtain ⟨opening, raw, refs, root, lock, actualStat⟩ := observe plan
+      raw.SelectedReturn (log ++ [.uncertainBatch batch]) current.reads (fun _ => source.openTable input reached) get set ptrEq := by
+  obtain ⟨⟨plan⟩, kept, frame, carries, failures⟩ := current.preparesWriteRetry prepared fits admitted initial.manifest effects initial.valid
+  obtain ⟨opening, raw, fileCalls, directoryCalls, keeperCallbacks, refs, root, lock, actualStat⟩ := observe plan
   let files (heap : heap) : CheckpointSurvivingFiles := ⟨names heap, fun inode => [visible heap inode]⟩
   obtain ⟨rootObject, lockObject⟩ := raw.entryAuthority files root lock
   let file := opening.reads.wal.keeper
@@ -332,7 +329,7 @@ theorem NativeReadPosition.opensAfterWriteRetries
   have keptFiles := initial.protectedFiles.frame (fun path keep => frame path (.inr keep))
   have reachedManifest : (retryFiles).image.directory.active.manifest = current.state.writer.target.pair.manifest :=
     (congrArg (fun (target : Target) => target.pair.manifest) plan.targetEq).trans initial.manifest
-  refine ⟨keptFiles, plan, opening, raw, rootObject, lockObject, ?_, ?_, ⟨read, keeperName, contents⟩, ?_, ?_, ?_⟩
+  refine ⟨failures, keptFiles, plan, opening, raw, rootObject, lockObject, ?_, ?_, ⟨read, keeperName, contents⟩, ?_, ?_, ?_⟩
   · intro bytes selectedMarker
     have sameMarker : (retryFiles).image.directory.active.walBoundary = target.pair.walBoundary :=
       congrArg (fun (t : Target) => t.pair.walBoundary) plan.targetEq
@@ -368,9 +365,14 @@ theorem NativeReadPosition.opensAfterWriteRetries
     exact ⟨run, bound, (List.cons.inj content).1⟩
   ·
     obtain ⟨ready, _, _⟩ := current.readPrefix.refines
-    exact raw.opensWithSelectedReplay refs plan.prepared plan.accepted plan.ordered plan.walLayout plan.walValid
+    have selected := raw.opensWithSelectedReplay refs plan.prepared plan.accepted plan.ordered plan.walLayout plan.walValid
       ready.retained.spans rfl (congrArg WalSegment.first plan.keeper) plan.descriptors plan.offsets
-      (kept.trans (initial.kept.trans ready.retained.sealedFiles)) plan.pending plan.bounded bootstrap assemble constructs phase ptrEq
+      (kept.trans (initial.kept.trans ready.retained.sealedFiles)) plan.pending plan.bounded source.bootstrap RawMarkedOpenInterpreter.assemble RawMarkedOpenInterpreter.assembles
+      phase ptrEq
+    obtain ⟨measured, next, makeCache, handle, start, action, cacheUses, returned, ready⟩ := selected
+    exact ⟨measured, next, makeCache, handle, start, action, cacheUses,
+      raw.returnsFixedInterpreterOfRun source fileCalls directoryCalls keeperCallbacks
+        RawMarkedOpenInterpreter.assemble RawMarkedOpenInterpreter.assembles makeCache cacheUses returned, ready⟩
 
 end Retry
 

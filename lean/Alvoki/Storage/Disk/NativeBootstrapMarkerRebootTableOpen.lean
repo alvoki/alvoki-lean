@@ -229,7 +229,7 @@ theorem opensEmptyTable (opening : OpenObservation (input := input) selection)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
     Nonempty (selection.Returned opening raw bootstrap assemble get set ptrEq) := by
   let report := selection.markedReport opening
-  obtain ⟨_, installed, cacheOpen, makeCache, cacheAction, cacheSource, returned⟩ :=
+  obtain ⟨_, installed, cacheOpen, makeCache, cacheAction, cacheSource, _, returned⟩ :=
     report.opensHealthyFromAdmission raw.raw raw.seed raw.checkpoint raw.listing raw.extents raw.seals raw.keeper
       raw.sameLookup raw.flat raw.marked bootstrap assemble constructs raw.allocations
   have exactPhase := selection.exactEmptyPhase opening installed.nativeReturned

@@ -95,6 +95,25 @@ noncomputable def openTable (input : FilePath) : EStateM IO.Error heap DiskTable
             throw cause)
       source.release lock
 
+/-- Record only actual failed calls of this interpreter. Each caller
+starts at the heap returned by the preceding call. -/
+inductive FailedCalls (source : RawMarkedOpenInterpreter heap stream) (first : heap) :
+    List (FilePath × IO.Error) → heap → Prop where
+  | empty : FailedCalls source first [] first
+  | next {earlier : List (FilePath × IO.Error)} {entry reached : heap} {diagnostic : IO.Error}
+      (prior : FailedCalls source first earlier entry) (input : FilePath)
+      (returned : source.openTable input entry = .error diagnostic reached) :
+      FailedCalls source first (earlier ++ [(input, diagnostic)]) reached
+
+theorem FailedCalls.append {source : RawMarkedOpenInterpreter heap stream} {first middle last : heap}
+    {earlier later : List (FilePath × IO.Error)} (before : FailedCalls source first earlier middle)
+    (after : FailedCalls source middle later last) : FailedCalls source first (earlier ++ later) last := by
+  induction after with
+  | empty => simpa using before
+  | next _ input returned ih =>
+    rw [← List.append_assoc]
+    exact .next ih input returned
+
 end RawMarkedOpenInterpreter
 
 variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
@@ -163,5 +182,79 @@ theorem RawOpenCacheDisposal.returnsMarkedInterpreter
   | ok value =>
     cases value
     simp only [reported, RawOpenCacheDisposal.diagnostic, finalized.finalized]
+
+/-- The canonical path and three allocated references identify the cache. -/
+private theorem sameCacheAtReferences {left right : DiskTable.OpenSyncFiles}
+    {active : IO.Ref (Option (FilePath × IO.FS.Handle))} {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
+    {directory : IO.Ref (Option IO.FS.Handle)} {path : FilePath}
+    (leftUses : left.UsesCacheReferences active pending directory) (leftPath : left.AtDirectory path)
+    (rightUses : right.UsesCacheReferences active pending directory) (rightPath : right.AtDirectory path) : left = right := by
+  cases left
+  cases right
+  simp_all [DiskTable.OpenSyncFiles.UsesCacheReferences, DiskTable.OpenSyncFiles.AtDirectory]
+
+section
+
+variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
+  {retry : LockedFileState FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
+  {published : CheckpointPublication.Image} {vacant : TryLockObserves retry.owners directory (.ok true)}
+  {checkpoint : Option (PackedTable × UInt64)}
+  {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
+  {opening : MarkedReadyOpenObservations input directory inventory retry layout published vacant selected}
+  {view : OpenCloseHeapView heap FileImage} {entry : heap}
+  {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+
+/-- A returned healthy open whose callbacks and cache are the fixed
+interpreter's runs through that interpreter at exactly the same heap. -/
+theorem RawHealthyMarkedOpenEffects.returnsFixedInterpreterOfRun
+    (source : RawMarkedOpenInterpreter heap stream)
+    (raw : RawHealthyMarkedOpenEffects opening view source.calls source.init entry phaseIdentity tokenIdentity
+      source.allocatePhase source.allocateToken stream source.remove source.stage source.rename)
+    (files : raw.fileCalls = source.fileCalls) (directoryReads : raw.directoryCalls = source.directoryCalls)
+    (keeper : raw.callbacks = source.keeperCallbacks)
+    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    (constructs : ∀ dir lock cache, DiskTable.OpenReferenceAssembly dir lock cache (assemble dir lock cache))
+    (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
+    (cacheUses : let cache := makeCache raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef
+      cache.UsesCacheReferences raw.seed.activeRef raw.seed.pendingRef raw.seed.directoryRef ∧ cache.AtDirectory directory.path)
+    {table : DiskTable} {reached : heap}
+    (returned : raw.openTable source.bootstrap assemble makeCache = .ok table reached) :
+    source.openTable input entry = .ok table reached := by
+  let cache := makeCache raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef
+  let fixed := RawMarkedOpenInterpreter.makeCache directory raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef
+  have uses := RawMarkedOpenInterpreter.cacheReferences directory raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef
+  have sameCache : cache = fixed := sameCacheAtReferences cacheUses.1 cacheUses.2 uses.1 uses.2
+  have sameTable : assemble directory raw.raw.lock fixed = RawMarkedOpenInterpreter.assemble directory raw.raw.lock fixed :=
+    (constructs directory raw.raw.lock fixed).trans (RawMarkedOpenInterpreter.assembles directory raw.raw.lock fixed).symm
+  have initialized : openSyncFilesWith (source.init.openDirectory directory.path)
+      source.init.newRef source.init.newRef source.init.newRef makeCache raw.raw.afterFlock =
+      .ok cache raw.seed.afterPending := by
+    simp only [openSyncFilesWith, Bind.bind, EStateM.bind, raw.seed.rawOpened, raw.seed.directoryAllocated,
+      raw.seed.activeAllocated, raw.seed.pendingAllocated, Pure.pure, EStateM.pure, cache]
+  let recover := fun resolved lock cache => do
+    let opened ← recoverHealthyMarkedWithRefs raw.fileCalls raw.directoryCalls raw.callbacks raw.seed.directoryRef
+      raw.seed.activeRef raw.seed.pendingRef source.remove source.stage source.rename source.calls.lookup resolved
+      (source.bootstrap resolved cache)
+    installReady opened.installed source.allocatePhase source.allocateToken
+      (fun phase token => pure (assemble resolved lock cache phase token))
+  change source.calls.runOpen input source.init makeCache recover entry = .ok table reached at returned
+  rw [raw.raw.startsHeldWorker source.init raw.seed initialized recover, sameCache] at returned
+  apply raw.raw.returnsHealthyMarkedInterpreter source raw.seed
+  have fixedWorker : recover directory raw.raw.lock fixed =
+      source.worker raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef directory raw.raw.lock fixed := by
+    unfold RawMarkedOpenInterpreter.worker
+    simp only [recover, files, directoryReads, keeper, sameTable]
+  rw [fixedWorker] at returned
+  cases worker : source.worker raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef directory raw.raw.lock fixed
+      raw.seed.afterPending with
+  | ok table heap =>
+    simpa only [tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, worker] using returned
+  | error diagnostic heap =>
+    simp only [tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, worker, EStateM.Backtrackable.restore,
+      EStateM.dummyRestore, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+    cases unlocked : source.calls.unlock raw.raw.lock heap <;> simp [unlocked] at returned
+
+end
 
 end Alvoki.Storage.DiskSession

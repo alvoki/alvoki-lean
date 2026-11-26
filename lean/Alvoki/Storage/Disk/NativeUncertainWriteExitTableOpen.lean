@@ -262,7 +262,7 @@ theorem NativeUncertainWriteExitTableOpen.reaches
   have bounded := next.readPrefix.readsBounded
   rw [reopened.reads, ← chosen] at replay bounded
   let marked := seen.markedReport valid replay bounded
-  obtain ⟨measured, installed, cacheOpen, makeCache, cacheAction, cacheSource, ran⟩ :=
+  obtain ⟨measured, installed, cacheOpen, makeCache, cacheAction, cacheSource, _, ran⟩ :=
     marked.opensHealthyFromAdmission seen.physical.raw seen.physical.seed seen.physical.checkpoint seen.physical.listing
       seen.physical.extents seen.physical.seals seen.physical.keeper seen.physical.sameLookup seen.physical.flat
       seen.physical.marked seen.bootstrap seen.assemble seen.constructs seen.physical.allocations

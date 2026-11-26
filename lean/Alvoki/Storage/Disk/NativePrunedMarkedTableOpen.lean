@@ -127,7 +127,7 @@ theorem MarkedOpenSuccessReports.opensPrunedAlignedFromAdmission
     rw [← sameLookup]
     simpa only [recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind, flat, marker,
       Option.isSome_none, Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure] using rawRecovered
-  obtain ⟨cacheOpen, makeCache, action, source, native⟩ :=
+  obtain ⟨cacheOpen, makeCache, action, source, _, native⟩ :=
     installed.opensFromAdmission recovery assemble constructs returned matched
   exact ⟨installed, cacheOpen, makeCache, action, source, native⟩
 

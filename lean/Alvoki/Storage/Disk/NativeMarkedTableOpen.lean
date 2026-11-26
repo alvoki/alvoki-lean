@@ -40,12 +40,25 @@ theorem MarkedHeapInstallation.opensFromAdmission
       cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
         (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
         (fun value => liftM (IO.mkRef value)) makeCache ∧
+      (let cache := makeCache seed.directoryRef seed.activeRef seed.pendingRef;
+        cache.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef ∧
+          cache.AtDirectory directory.path) ∧
       calls.runOpen input init makeCache (fun resolved lock cache => do
         let opened ← recovery resolved cache
         installReady opened.installed allocatePhase allocateToken
           (fun phase token => pure (assemble resolved lock cache phase token))) entry =
         .ok installed.table installed.allocation.afterToken := by
   obtain ⟨cacheOpen, makeCache, isOpen, source, initialized⟩ := installed.cacheOpened
+  have allocated : openSyncFilesWith (init.openDirectory directory.path) init.newRef init.newRef init.newRef
+      makeCache raw.afterFlock = .ok (makeCache seed.directoryRef seed.activeRef seed.pendingRef) seed.afterPending := by
+    simp only [openSyncFilesWith, Bind.bind, EStateM.bind, seed.rawOpened, seed.directoryAllocated, seed.activeAllocated,
+      seed.pendingAllocated, Pure.pure, EStateM.pure]
+  have cacheIdentity := (EStateM.Result.ok.inj (allocated.symm.trans initialized)).1
+  have useCache : (let cache := makeCache seed.directoryRef seed.activeRef seed.pendingRef;
+      cache.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef ∧ cache.AtDirectory directory.path) := by
+    dsimp only
+    rw [cacheIdentity]
+    exact ⟨installed.cacheReferences, installed.cacheDirectory⟩
   have sameConstructor : assemble directory raw.lock installed.files = installed.assemble :=
     (constructs directory raw.lock installed.files).trans installed.constructor.symm
   have held := installed.installsAfterRawRecovery (recovery directory installed.files) returned corresponds
@@ -53,7 +66,7 @@ theorem MarkedHeapInstallation.opensFromAdmission
     let opened ← recovery resolved cache
     installReady opened.installed allocatePhase allocateToken
       (fun phase token => pure (assemble resolved lock cache phase token)))
-  refine ⟨cacheOpen, makeCache, isOpen, source, admitted.trans ?_⟩
+  refine ⟨cacheOpen, makeCache, isOpen, source, useCache, admitted.trans ?_⟩
   rw [sameConstructor]
   simp only [MonadExceptOf.tryCatch, tryCatchThe, EStateM.tryCatch, held]
 
@@ -184,7 +197,7 @@ theorem MarkedOpenSuccessReports.opensAlignedFromAdmission
     rw [← sameLookup]
     simpa only [recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind, flat, marker,
       Option.isSome_none, Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure] using rawRecovered
-  obtain ⟨cacheOpen, makeCache, action, source, native⟩ :=
+  obtain ⟨cacheOpen, makeCache, action, source, _, native⟩ :=
     installed.opensFromAdmission recovery assemble constructs returned matched
   exact ⟨installed, cacheOpen, makeCache, action, source, native⟩
 

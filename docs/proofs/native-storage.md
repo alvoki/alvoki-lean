@@ -440,9 +440,11 @@ Linux effects and distinguishes a returned error from whether its syscall took e
 
 One held marked interpreter now fixes primitive callbacks before admission and passes the actual
 new cache references to the worker. A successful worker result or a finalized worker error
-establishes an exact return of that same call. The worker result remains a local obligation of
-its read and repair evidence. The retry trace still needs to require this interpreter at each
-endpoint before replacing the legacy compound reports.
+establishes an exact return of that same call. The selected write retry fold now records the exact failure returns of this fixed interpreter.
+The healthy installation uses the identical callback bundle and the precise cache from its own
+admission. The worker result remains a local obligation of its read and repair evidence. The
+main execution must derive the individual reports from the primitive schedules to replace the
+legacy compound reports.
 [Fixed marked interpreter](../../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
 
 ## Migration test

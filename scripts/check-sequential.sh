@@ -250,6 +250,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeMutatingOpenRetries
 lake env leanchecker Alvoki.Storage.Disk.NativeRawWriteReboot
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedEntryObservations
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedOpenInterpreter
+lake env leanchecker Alvoki.Storage.Disk.NativeMarkedAdmissionRejections
 lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
 lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperStageSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperFinalSyncError

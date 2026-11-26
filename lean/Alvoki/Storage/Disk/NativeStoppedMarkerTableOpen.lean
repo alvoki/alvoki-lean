@@ -175,7 +175,7 @@ theorem RawStoppedMarkerReopenEffects.returns
   have bounded := next.readPrefix.readsBounded
   rw [reopened.reads, ← chosen] at pendingReplay bounded
   let marked := reader.markedReport current.current.ready.readPrefix.refines.1 pendingReplay bounded
-  obtain ⟨_, installed, cacheOpen, makeCache, cacheAction, cacheSource, ran⟩ :=
+  obtain ⟨_, installed, cacheOpen, makeCache, cacheAction, cacheSource, _, ran⟩ :=
     marked.opensHealthyFromAdmission seen.raw seen.seed seen.checkpoint seen.listing seen.extents seen.seals seen.keeper
       seen.sameLookup seen.flat seen.marked bootstrap assemble constructs seen.allocations
   have phaseEffects : OpenPhaseCellEffects view.phase opened.get opened.set := samePhase.symm ▸ opened.phaseEffects

@@ -135,7 +135,7 @@ theorem NativeOpenedPosition.opensAfterStoppedFirstAppend
   have bounded : ∀ read ∈ reads, read.BoundedBy state.writer.history.length :=
     Eq.mpr (congrArg (fun rows : List WAL.Write => ∀ read ∈ reads, read.BoundedBy rows.length) history) pending.bounded
   let marked := reader.markedReport (plan := plan) valid pendingReplay bounded
-  obtain ⟨measured, installed, cacheOpen, makeCache, cacheAction, cacheSource, ran⟩ :=
+  obtain ⟨measured, installed, cacheOpen, makeCache, cacheAction, cacheSource, _, ran⟩ :=
     marked.opensHealthyFromAdmission seen.raw seen.seed seen.checkpoint seen.listing seen.extents seen.seals seen.keeper
       seen.sameLookup seen.flat seen.marked bootstrap assemble constructs seen.allocations
   have phaseEffects : OpenPhaseCellEffects view.phase opened.get opened.set := samePhase.symm ▸ opened.phaseEffects

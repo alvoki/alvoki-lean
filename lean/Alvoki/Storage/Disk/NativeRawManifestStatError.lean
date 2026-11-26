@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeRawManifestChunkError
+import Alvoki.Storage.Disk.NativeMarkedOpenInterpreter
 
 namespace Alvoki.Storage.DiskSession
 
@@ -74,5 +75,51 @@ noncomputable def finalizedAttempt
       remove write rename bootstrap) finalized
 
 end RawManifestStatError
+
+section FixedInterpreter
+
+variable (source : RawMarkedOpenInterpreter heap stream)
+  {admission : CensusOpenAdmissionReports input directory (view.descriptors entry) (view.files entry)}
+  {raw : RawOpenAdmissionReport admission view source.calls entry}
+  {allocation : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
+  (seen : RawManifestStatError (admitted := raw) allocation source.fileCalls)
+
+private theorem RawManifestStatError.rejectsFixedWorker (cache : DiskTable.OpenSyncFiles) :
+    source.worker allocation.directoryRef allocation.activeRef allocation.pendingRef directory raw.lock cache
+      allocation.afterPending = .error seen.cause seen.reached := by
+  simp only [RawMarkedOpenInterpreter.worker, recoverHealthyMarkedWithRefs, recoverSegmentedWalWith,
+    rejectFlatWalWith, reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind,
+    EStateM.bind, seen.flat, seen.marked, Option.isSome_none, Option.isSome_some, Bool.false_eq_true,
+    ↓reduceIte, Pure.pure, EStateM.pure, seen.rejectsCheckpoint]
+
+/-- The fixed opener returns a held MANIFEST lookup error through the
+same finalizers as a failed repair. The image seen by the next attempt
+is unchanged. -/
+theorem RawManifestStatError.finalizesWithInterpreter
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation seen.reached)
+    (sameDisposal : source.dispose = disposal.dispose)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached) :
+    ∃ failed : RawFinalizedOpenAttempt view directory source.calls source.init source.release input entry,
+      source.openTable input entry = .error failed.diagnostic failed.reached ∧
+      failed.diagnostic = disposal.diagnostic seen.cause ∧ failed.reached = finalized.reached := by
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, held, _⟩ := allocation.installs
+  have stopped := seen.rejectsFixedWorker source
+  have inodes : (view.descriptors seen.reached).inode = (view.descriptors entry).inode := by
+    rw [seen.census, allocation.pendingSlots, allocation.activeSlots, allocation.directorySlots, allocation.openedSlots]
+    rfl
+  let failed : RawFinalizedOpenAttempt view directory source.calls source.init source.release input entry :=
+    { admission := admission
+      admitted := raw
+      seed := allocation
+      beforeCleanup := seen.reached
+      disposed := disposal
+      recover := source.worker allocation.directoryRef allocation.activeRef allocation.pendingRef
+      cause := seen.cause
+      rejected := disposal.returns _ _ stopped (seen.frame.files.trans held)
+      workerInodes := inodes
+      finalized := finalized }
+  exact ⟨failed, disposal.returnsMarkedInterpreter source sameDisposal (stopped _) finalized, rfl, rfl⟩
+
+end FixedInterpreter
 
 end Alvoki.Storage.DiskSession
