@@ -1,5 +1,21 @@
 # Current handoff
 
+A scoped physical reboot reset now establishes the durable selected marker, checkpoint,
+runs, retained WAL seals and parent binding. The write recovery edges can carry those
+facts through the same exact failed calls as the live keeper. A shared reindexing proof
+matches every retained seal by its first ordinal and bytes, including seals covered by
+the checkpoint. It uses the actual reopened root and lock bindings.
+[Durable retry files](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
+· [Reopened footprint](../lean/Alvoki/Storage/Disk/NativeRetainedOpenStorage.lean)
+
+Pruned aligned recovery now establishes physical readiness at the actual repair heap.
+The ordered unlinks remove later names, the directory fsync settles those removals, and
+the keeper fsync persists the selected prefix. Removed paths are absent from the live names
+and every admitted crash map there. The three repair paths can use the same allocation
+transport once their local readiness facts apply to the selected returned writer.
+[Pruned keeper](../lean/Alvoki/Storage/Disk/NativePrunedKeeperStorage.lean)
+· [Shared returned writer](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
+
 A returned WAL append or marker-staging error now leads to the exact reopened table through
 the same old-target recovery path. The reached callbacks supply separate frames for protected
 files, the canonical marker and the committed keeper prefix. Durable choices may extend that

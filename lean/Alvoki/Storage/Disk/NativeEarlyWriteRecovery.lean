@@ -105,10 +105,12 @@ theorem NativeOpenedPosition.recoversEarlyWriteError
     (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
     (later : ∀ ordinal ∈ (view.files rebooted).image.later.visible, (state).writer.target.range.through < ordinal)
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
-    {attempts : source.FailedCalls rebooted returns reached}
+    {keep : heap → Prop} {attempts : source.FailedCalls rebooted returns reached}
     (retryEffects : RawOpenRetryTrace.SelectedEffects view source rebooted (state).writer.target
       (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) (state).selectedRetryPath
-      (RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible) attempts)
+      keep attempts)
+    (starts : RawOpenRetryTrace.SelectedEntry view state (state).writer.target names visible rebooted → keep rebooted)
+    (liveKeeper : keep reached → RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible reached)
     (vacant : TryLockObserves (view.files reached).owners dir (.ok true))
     {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
     (healthy : (ready).ObservesHealthyWriteRetry (input := input) (view := view) (batch := batch)
@@ -123,6 +125,7 @@ theorem NativeOpenedPosition.recoversEarlyWriteError
       .error (.commitUnknown cause) failed ∧
     TryLockObserves (view.files rebooted).owners dir (.ok true) ∧
     (view.descriptors rebooted).slots = [] ∧
+    keep reached ∧
     (ready).SelectedWriteRecovery (returns := returns) (input := input) (view := view) (batch := batch)
       (target := (state).writer.target) (reached := reached) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
       source names visible rebooted vacant get set ptrEq ∧
@@ -150,8 +153,10 @@ theorem NativeOpenedPosition.recoversEarlyWriteError
   · rw [request.runOnRawOpenPhase_afterPreparation dir lookup append stage sync rename opened.phase opened.get opened.set
       loaded nonempty prepared fits]
     simp only [guard, assigned, committed]
-  · have recovered := (ready).opensAfterWriteRetries source prepared fits admitted names visible retryEffects selected vacant healthy phase ptrEq
-    exact ⟨recovered, recovered.replaysOldTarget request cause⟩
+  · obtain ⟨carried, recovered⟩ :=
+      (ready).opensAfterWriteRetries source prepared fits admitted names visible retryEffects selected
+        (starts selected) liveKeeper vacant healthy phase ptrEq
+    exact ⟨carried, recovered, recovered.replaysOldTarget request cause⟩
 
 end
 end Alvoki.Storage.DiskSession

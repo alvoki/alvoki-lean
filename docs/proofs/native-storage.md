@@ -459,6 +459,22 @@ consume the remaining repair paths.
 · [Aligned returned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
 · [Long keeper repair](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
+The scoped reboot law records agreement with the sampled bindings and singleton durable
+bytes for selected regular files. The root's name in the parent remains independently
+settled. The failed-call induction can carry the immutable physical footprint alongside
+the live keeper, which may change during a repair. For the reopened writer, equal
+manifest and run payloads and the retained seal map transport the durable files to
+the new ledger. The root and lock are tied to the actual reopened descriptors.
+[Durable reboot and retries](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
+· [Reopened footprint](../../lean/Alvoki/Storage/Disk/NativeRetainedOpenStorage.lean)
+
+The pruned aligned path derives readiness at the actual repair heap from the reached
+ordered unlinks, directory and keeper fsyncs, and protected file frames. It derives
+absence of the removed suffix names in each crash map at that heap. Carrying absence
+through allocation also requires frames on those suffix paths. All repair branches
+share one transport of readiness through the actual reference allocations.
+[Pruned keeper repair](../../lean/Alvoki/Storage/Disk/NativePrunedKeeperStorage.lean)
+
 A returned append or marker-staging error uses the same prior-marker selector as a
 grouped file-sync error. Only the append and any reached staging callbacks contribute to
 the error heap. Local effect laws preserve the canonical marker and protected names

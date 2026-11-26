@@ -333,7 +333,8 @@ def NativeReadPosition.SelectedWriteRecovery
 
 /-- The next successful open uses the actual last retry heap. Its native
 stat and open identify the live keeper, while the derived bounded plan
-carries the selected checkpoint and earlier client reads into the table. -/
+carries the selected checkpoint and earlier client reads into the table.
+The retry fold also carries any independently framed observation. -/
 theorem NativeReadPosition.opensAfterWriteRetries
     (source : RawMarkedOpenInterpreter heap stream)
     {rows : List (UInt64 × Option UInt64)} {table : PackedTable}
@@ -341,11 +342,13 @@ theorem NativeReadPosition.opensAfterWriteRetries
     (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
     (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
     {first : heap} (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
-    {attempts : source.FailedCalls first returns reached}
+    {keep : heap → Prop} {attempts : source.FailedCalls first returns reached}
     (effects : RawOpenRetryTrace.SelectedEffects view source first target
       (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) current.state.selectedRetryPath
-      (RawOpenRetryTrace.KeeperAt view dir target names visible) attempts)
+      keep attempts)
     (initial : RawOpenRetryTrace.SelectedEntry view current.state target names visible first)
+    (atEntry : keep first)
+    (liveKeeper : keep reached → RawOpenRetryTrace.KeeperAt view dir target names visible reached)
     (vacant : TryLockObserves (retryFiles).owners dir (.ok true))
     (observe : current.ObservesHealthyWriteRetry
         (input := input) (view := view) (batch := batch) (target := target) (reached := reached)
@@ -354,7 +357,7 @@ theorem NativeReadPosition.opensAfterWriteRetries
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (phase : OpenPhaseCellEffects view.phase get set)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
-    current.SelectedWriteRecovery (returns := returns)
+    keep reached ∧ current.SelectedWriteRecovery (returns := returns)
     (input := input) (view := view) (batch := batch) (target := target) (reached := reached)
       (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) source names visible first vacant get set ptrEq := by
   obtain ⟨⟨plan⟩, kept, frame, carries⟩ := current.preparesWriteRetry prepared fits admitted initial.manifest effects initial.valid
@@ -367,7 +370,8 @@ theorem NativeReadPosition.opensAfterWriteRetries
   have samePath := congrArg (fun (target : Target) => (dir).file (.walSegment target.first)) plan.targetEq
   change (dir).file (.walSegment plan.layout.keeper.first) = _ at samePath
   have keeperName := (congrArg (names reached) samePath).symm.trans named
-  have keeperAt := carries initial.keeper
+  have atReached := carries atEntry
+  have keeperAt := liveKeeper atReached
   unfold RawOpenRetryTrace.KeeperAt at keeperAt
   have contents : visible reached read.object = plan.layout.keeper.bytes ++ plan.layout.tail := by
     rw [keeperName, Option.map_some, plan.layout.visible] at keeperAt
@@ -375,7 +379,7 @@ theorem NativeReadPosition.opensAfterWriteRetries
   have keptFiles := initial.protectedFiles.frame (fun path keep => frame path (.inr keep))
   have reachedManifest : (retryFiles).image.directory.active.manifest = current.state.writer.target.pair.manifest :=
     (congrArg (fun (target : Target) => target.pair.manifest) plan.targetEq).trans initial.manifest
-  refine ⟨attempts, keptFiles, plan, opening, raw, rootObject, lockObject, ?_, ?_, ⟨read, keeperName, contents⟩, ?_, ?_, ?_⟩
+  refine ⟨atReached, attempts, keptFiles, plan, opening, raw, rootObject, lockObject, ?_, ?_, ⟨read, keeperName, contents⟩, ?_, ?_, ?_⟩
   · intro bytes selectedMarker
     have sameMarker : (retryFiles).image.directory.active.walBoundary = target.pair.walBoundary :=
       congrArg (fun (t : Target) => t.pair.walBoundary) plan.targetEq

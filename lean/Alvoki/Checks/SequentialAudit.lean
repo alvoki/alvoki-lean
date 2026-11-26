@@ -488,6 +488,9 @@ import Alvoki.Storage.Disk.NativeLateWriteRecovery
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeAlignedKeeperStorage
 import Alvoki.Storage.Disk.NativeLongKeeperStorage
+import Alvoki.Storage.Disk.NativeDurableWriteReboot
+import Alvoki.Storage.Disk.NativeRetainedOpenStorage
+import Alvoki.Storage.Disk.NativePrunedKeeperStorage
 import Alvoki.Storage.Disk.NativeAlignedMarkedReady
 import Alvoki.Storage.Disk.NativeRawWriteCustody
 import Alvoki.Storage.Disk.NativeClassifiedUncertainWrite
@@ -3945,6 +3948,16 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperSettlementHeap.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRepair
+#check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterRepair
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsDurableRetry
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.SelectedRetryDurability.frame
+#check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preservesDurability
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.keptSeal
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.forReopenedWriter
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.SelectedRetryDurability.forReopenedWriter
+#check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.sameCensusObjects
+#check_axioms Alvoki.Storage.DiskSession.PrunedAlignedKeeperCacheReport.readyStorage
+#check_axioms Alvoki.Storage.WalSegment.findSealedStart
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.selectedFilePath
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.reopenPath
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteCrashReads.reopensAfterReadOnlyAttempts

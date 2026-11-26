@@ -409,6 +409,9 @@ lake env leanchecker Alvoki.Storage.Disk.NativeLateWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenReadyStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedKeeperStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperStorage
+lake env leanchecker Alvoki.Storage.Disk.NativeDurableWriteReboot
+lake env leanchecker Alvoki.Storage.Disk.NativeRetainedOpenStorage
+lake env leanchecker Alvoki.Storage.Disk.NativePrunedKeeperStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedMarkedReady
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedUncertainWrite
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay

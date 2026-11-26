@@ -49,7 +49,7 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
     {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray}
     (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
-    {attempts : source.FailedCalls rebooted returns reached}
+    {keep : Target → heap → Prop} {attempts : source.FailedCalls rebooted returns reached}
     (vacant : TryLockObserves (view.files reached).owners dir (.ok true))
     {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
     (observes : ∀ target : Target,
@@ -58,7 +58,9 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
       (∀ ordinal ∈ (view.files rebooted).image.later.visible, target.range.through < ordinal) ∧
       RawOpenRetryTrace.SelectedEffects view source rebooted target
         (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) (state).selectedRetryPath
-        (RawOpenRetryTrace.KeeperAt view dir target names visible) attempts ∧
+        (keep target) attempts ∧
+      (RawOpenRetryTrace.SelectedEntry view state target names visible rebooted → keep target rebooted) ∧
+      (keep target reached → RawOpenRetryTrace.KeeperAt view dir target names visible reached) ∧
       (ready).ObservesHealthyWriteRetry (input := input) (view := view) (batch := batch)
         (target := target) (reached := reached) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
         source names vacant)
@@ -72,6 +74,7 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
     TryLockObserves (view.files rebooted).owners dir (.ok true) ∧
     (view.descriptors rebooted).slots = [] ∧
     ∃ target : Target, target.pair = (view.files rebooted).image.directory.active ∧
+      keep target reached ∧
       (ready).SelectedWriteRecovery (returns := returns) (input := input) (view := view) (batch := batch)
         (target := target) (reached := reached) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
         source names visible rebooted vacant get set ptrEq ∧
@@ -87,14 +90,16 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
   have active : target.pair = (view.files rebooted).image.directory.active := by
     rw [reboot.image]
     exact pair
-  obtain ⟨later, retries, healthy⟩ := observes target admitted active
+  obtain ⟨later, retries, starts, liveKeeper, healthy⟩ := observes target admitted active
   obtain ⟨selected, rebootVacant, slots⟩ := reboot.selectsRetry initial frame admitted pair keeper later
   refine ⟨current.uses.writeSchedules, ?_, rebootVacant, slots, target, active, ?_⟩
   · rw [request.runOnRawOpenPhase_afterPreparation dir lookup append stage sync rename opened.phase opened.get opened.set
       loaded nonempty prepared fits]
     simp only [guard, assigned, failedCommit]
-  · have recovered := (ready).opensAfterWriteRetries source prepared fits admitted names visible retries selected vacant healthy phase ptrEq
-    exact ⟨recovered, recovered.replaysSelectedLedger request cause⟩
+  · obtain ⟨carried, recovered⟩ :=
+      (ready).opensAfterWriteRetries source prepared fits admitted names visible retries selected
+        (starts selected) liveKeeper vacant healthy phase ptrEq
+    exact ⟨carried, recovered, recovered.replaysSelectedLedger request cause⟩
 
 end
 

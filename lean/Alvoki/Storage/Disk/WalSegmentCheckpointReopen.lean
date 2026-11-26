@@ -30,7 +30,7 @@ def WalSegmentImage.checkpointReopenFiles (wal : WalSegmentImage)
   ⟨directory, fun first => (wal.sealed.find? (fun segment => segment.first == first)).map (·.bytes),
     { Publication.Image.settled (some wal.active.bytes) with staged := scratch }, .settled []⟩
 
-private theorem findSealedStart {sealed : List WalSegment} {segment : WalSegment}
+theorem WalSegment.findSealedStart {sealed : List WalSegment} {segment : WalSegment}
     (ordered : sealed.Pairwise (fun left right => left.first < right.first)) (present : segment ∈ sealed) :
     sealed.find? (fun item => item.first == segment.first) = some segment := by
   induction sealed with
@@ -85,7 +85,7 @@ theorem WalSegmentImage.ReadLayout.checkpointReopenLayout
       · simp [selected, sealed, prefixNeeded] at referenced
     have ordered := ((List.pairwise_append.mp layout.ordered).1).imp (fun relation => relation.1)
     change (wal.sealed.find? (fun item => item.first == segment.first)).map (·.bytes) = _
-    rw [findSealedStart ordered inSealed]
+    rw [WalSegment.findSealedStart ordered inSealed]
     rfl
   · simp [files, WalSegmentImage.checkpointReopenFiles, Publication.Image.settled]
   · intro bytes candidate
