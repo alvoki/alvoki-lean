@@ -13,11 +13,6 @@ section SuffixRetryFrame
 variable {heap : Type} {directory : DiskDirectory} {scope : FilePath → Prop} {through : Nat}
   {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
 
-theorem SampledCheckpointRetryFrame.refl (atHeap : heap) :
-    SampledCheckpointRetryFrame directory scope through observe readBytes atHeap atHeap :=
-  ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, fun _ _ => rfl,
-    fun _ _ => ⟨rfl, fun _ _ => rfl⟩, .refl _ _⟩
-
 variable (directory scope through observe readBytes) in
 /-- The remove's reached state preserves the selected files, the
 bounded catalog, and the root's name in its parent. -/

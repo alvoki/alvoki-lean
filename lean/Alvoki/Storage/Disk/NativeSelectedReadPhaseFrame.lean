@@ -127,23 +127,98 @@ theorem readsIntegrityCheckpoint (directory : DiskDirectory)
     exact (fromExcept refl ((loadIntegrityRunSet decoded runs).mapError IO.userError)).bind trans
       fun table => .pure refl (some (table, decoded.header.generation))
 
+/-- Each accepted seal carries the same frame to the next payload.
+The traversal stops at the actual keeper, seal, or length failure. -/
+theorem readsCachedWalPayloads (directory : DiskDirectory) (through : Nat)
+    {readSeal : FilePath → Nat → EStateM IO.Error heap ByteArray}
+    {readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray}
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (seals : ∀ path length, KeepsReadFrame frame (readSeal path length))
+    (keepers : ∀ path length size, KeepsReadFrame frame (readKeeper path length size))
+    (required : List (Nat × IO.FS.Metadata)) :
+    KeepsReadFrame frame (readCachedWalPayloads directory through readSeal readKeeper required) := by
+  intro entry
+  have outcome := CachedWalPayloadReturn.classifies directory through readSeal readKeeper required entry
+  have atResult {run : EStateM IO.Error heap ByteArray} {before : heap} {result : EStateM.Result IO.Error heap ByteArray}
+      (keeps : KeepsReadFrame frame run) (returned : run before = result) : frame before (reachedState result) :=
+    returned ▸ keeps before
+  generalize readCachedWalPayloads directory through readSeal readKeeper required entry = result at outcome ⊢
+  induction outcome with
+  | noKeeper _ | invalidOrder _ => exact refl _
+  | keeperError failed => exact atResult (keepers _ _ _) failed
+  | invalidKeeper read _ | kept read _ => exact atResult (keepers _ _ _) read
+  | sealError _ failed => exact checkedFileOutcome (frame := frame) trans failed (.pure refl _) (seals _ _)
+  | sealedThenError _ read _ remaining | sealed _ read _ remaining =>
+    exact trans (checkedFileOutcome (frame := frame) trans read (.pure refl _) (seals _ _)) remaining
+
+private theorem filters (items : List α) {action : α → EStateM IO.Error heap (Option β)}
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (keeps : ∀ item, KeepsReadFrame frame (action item)) : KeepsReadFrame frame (items.filterMapM action) := by
+  induction items with
+  | nil => exact .pure refl []
+  | cons item rest earlier =>
+    simp only [List.filterMapM_cons]
+    apply (keeps item).bind trans
+    intro found
+    cases found with
+    | none => exact earlier
+    | some value => exact earlier.bind trans fun values => .pure refl (value :: values)
+
+theorem readsWalExtents (directory : DiskDirectory) (names : List String)
+    {stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)}
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (stats : ∀ path, KeepsReadFrame frame (stat path)) :
+    KeepsReadFrame frame (readWalSegmentExtentsWith directory stat names) := by
+  have readExtent (name : String) : KeepsReadFrame frame (readWalSegmentExtentWith directory stat name) := by
+    unfold readWalSegmentExtentWith
+    split
+    · apply (stats _).bind trans
+      intro reported
+      split
+      · exact .throw refl _
+      · exact .pure refl _
+      · exact .pure refl _
+    · exact .pure refl _
+  unfold readWalSegmentExtentsWith
+  exact (filters names refl trans readExtent).bind trans fun _ => .pure refl _
+
+/-- The actual selected WAL reader carries the scope through the checked
+listing, extent probes and each reached payload callback. -/
+theorem readsSelectedWal (directory : DiskDirectory) (watermark : Nat) (length : UInt64)
+    {list : FilePath → EStateM IO.Error heap (Array IO.FS.DirEntry)}
+    {stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)}
+    {readSeal : FilePath → Nat → EStateM IO.Error heap ByteArray}
+    {readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray}
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (lists : KeepsReadFrame frame (list directory.path)) (stats : ∀ path, KeepsReadFrame frame (stat path))
+    (seals : ∀ path count, KeepsReadFrame frame (readSeal path count))
+    (keepers : ∀ path count size, KeepsReadFrame frame (readKeeper path count size)) :
+    KeepsReadFrame frame (readSelectedWithCachedExtents directory watermark length list stat readSeal readKeeper) := by
+  unfold readSelectedWithCachedExtents
+  by_cases valid : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize
+  · simp only [valid]
+    apply lists.bind trans
+    intro entries
+    apply (readsWalExtents directory (entries.toList.map (·.fileName)) refl trans stats).bind trans
+    intro extents
+    split
+    · apply (readsCachedWalPayloads directory _ refl trans seals keepers _).bind trans
+      rintro ⟨files, size⟩
+      exact .pure refl _
+    · exact .throw refl _
+  · intro before
+    simpa [valid, Bind.bind, EStateM.bind, MonadExcept.throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+      reachedState] using refl before
+
 end KeepsReadFrame
 
 namespace KeepsPhase
 
 variable {heap α β : Type} {observe : heap → Option (Phase Installed)}
-
-private theorem onSuccess {run : EStateM IO.Error heap α} (frame : KeepsPhase observe run)
-    {before after : heap} {value : α} (returned : run before = .ok value after) : observe after = observe before := by
-  simpa only [returned] using frame before
-
-private theorem onError {run : EStateM IO.Error heap α} (frame : KeepsPhase observe run)
-    {before after : heap} {cause : IO.Error} (returned : run before = .error cause after) : observe after = observe before := by
-  simpa only [returned] using frame before
-
-private def phaseAtResult (observe : heap → Option (Phase Installed)) (entry : heap)
-    (result : EStateM.Result IO.Error heap α) : Prop :=
-  match result with | .ok _ after | .error _ after => observe after = observe entry
 
 private theorem asReadFrame {run : EStateM IO.Error heap α} (kept : KeepsPhase observe run) :
     KeepsReadFrame (fun before after => observe after = observe before) run := by
@@ -154,17 +229,6 @@ private theorem fromReadFrame {run : EStateM IO.Error heap α}
     (kept : KeepsReadFrame (fun before after => observe after = observe before) run) : KeepsPhase observe run := by
   intro before
   cases returned : run before <;> simpa only [returned, reachedState] using kept before
-
-private theorem checkedFileOutcome {path : FilePath} {expected : Nat} {mismatch : IO.Error}
-    {readSize : FilePath → EStateM IO.Error heap Nat}
-    {readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray}
-    {entry : heap} {result : EStateM.Result IO.Error heap ByteArray}
-    (outcome : ExactRecoveryFileReturn path expected mismatch readSize readPrefix entry result)
-    (sized : KeepsPhase observe (readSize path)) (payload : KeepsPhase observe (readPrefix path expected)) :
-    phaseAtResult observe entry result := by
-  have kept := KeepsReadFrame.checkedFileOutcome (fun left right => right.trans left)
-    outcome sized.asReadFrame payload.asReadFrame
-  cases result <;> exact kept
 
 theorem readsExactFile (path : FilePath) (expected : Nat) (mismatch : IO.Error)
     {readSize : FilePath → EStateM IO.Error heap Nat}
@@ -194,59 +258,26 @@ theorem readsIntegrityCheckpoint (directory : DiskDirectory)
   fromReadFrame (KeepsReadFrame.readsIntegrityCheckpoint directory (fun _ => rfl) (fun a b => b.trans a)
     manifest.asReadFrame (fun path => (sizes path).asReadFrame) (fun path count => (prefixes path count).asReadFrame))
 
-/-- Each actual seal and keeper outcome of the selected WAL reader
-preserves the original phase. The phase frame for an accepted seal
-links its reached heap to that of the subsequent selected file. -/
 theorem readsCachedWalPayloads (directory : DiskDirectory) (through : Nat)
     {readSeal : FilePath → Nat → EStateM IO.Error heap ByteArray}
     {readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray}
     (seals : ∀ path length, KeepsPhase observe (readSeal path length))
     (keepers : ∀ path length size, KeepsPhase observe (readKeeper path length size))
     (required : List (Nat × IO.FS.Metadata)) :
-    KeepsPhase observe (readCachedWalPayloads directory through readSeal readKeeper required) := by
-  intro entry
-  change phaseAtResult observe entry _
-  have outcome := CachedWalPayloadReturn.classifies directory through readSeal readKeeper required entry
-  generalize readCachedWalPayloads directory through readSeal readKeeper required entry = result at outcome ⊢
-  induction outcome with
-  | noKeeper _ | invalidOrder _ => rfl
-  | keeperError failed => exact (keepers _ _ _).onError failed
-  | invalidKeeper read _ | kept read _ => exact (keepers _ _ _).onSuccess read
-  | sealError _ failed => exact checkedFileOutcome failed (.pure _) (seals _ _)
-  | sealedThenError _ read _ remaining | sealed _ read _ remaining =>
-    exact remaining.trans (checkedFileOutcome read (.pure _) (seals _ _))
-
-private theorem filters (items : List α) {action : α → EStateM IO.Error heap (Option β)}
-    (frame : ∀ item, KeepsPhase observe (action item)) : KeepsPhase observe (items.filterMapM action) := by
-  induction items with
-  | nil => exact .pure []
-  | cons item rest earlier =>
-    simp only [List.filterMapM_cons]
-    apply (frame item).bind
-    intro found
-    cases found with
-    | none => exact earlier
-    | some value => exact earlier.bind fun values => .pure (value :: values)
+    KeepsPhase observe (readCachedWalPayloads directory through readSeal readKeeper required) :=
+  fromReadFrame (KeepsReadFrame.readsCachedWalPayloads (frame := fun before after => observe after = observe before)
+    directory through (fun _ => rfl) (fun a b => b.trans a)
+    (fun path count => (seals path count).asReadFrame)
+    (fun path count size => (keepers path count size).asReadFrame) required)
 
 theorem readsWalExtents (directory : DiskDirectory) (names : List String)
     {stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)}
     (stats : ∀ path, KeepsPhase observe (stat path)) :
-    KeepsPhase observe (readWalSegmentExtentsWith directory stat names) := by
-  have readExtent (name : String) : KeepsPhase observe (readWalSegmentExtentWith directory stat name) := by
-    unfold readWalSegmentExtentWith
-    split
-    · apply (stats _).bind
-      intro reported
-      split
-      · exact .throw _
-      · exact .pure _
-      · exact .pure _
-    · exact .pure _
-  unfold readWalSegmentExtentsWith
-  exact (filters names readExtent).bind fun _ => .pure _
+    KeepsPhase observe (readWalSegmentExtentsWith directory stat names) :=
+  fromReadFrame (KeepsReadFrame.readsWalExtents (frame := fun before after => observe after = observe before)
+    directory names (fun _ => rfl) (fun a b => b.trans a)
+    (fun path => (stats path).asReadFrame))
 
-/-- The actual selected WAL reading program preserves the original phase
-from checked listing and lstat through every selected payload callback. -/
 theorem readsSelectedWal (directory : DiskDirectory) (watermark : Nat) (length : UInt64)
     {list : FilePath → EStateM IO.Error heap (Array IO.FS.DirEntry)}
     {stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)}
@@ -255,21 +286,11 @@ theorem readsSelectedWal (directory : DiskDirectory) (watermark : Nat) (length :
     (lists : KeepsPhase observe (list directory.path)) (stats : ∀ path, KeepsPhase observe (stat path))
     (seals : ∀ path count, KeepsPhase observe (readSeal path count))
     (keepers : ∀ path count size, KeepsPhase observe (readKeeper path count size)) :
-    KeepsPhase observe (readSelectedWithCachedExtents directory watermark length list stat readSeal readKeeper) := by
-  unfold readSelectedWithCachedExtents
-  by_cases valid : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize
-  · simp only [valid]
-    apply lists.bind
-    intro entries
-    apply (readsWalExtents directory (entries.toList.map (·.fileName)) stats).bind
-    intro extents
-    split
-    · apply (readsCachedWalPayloads directory _ seals keepers _).bind
-      rintro ⟨files, size⟩
-      exact .pure _
-    · exact .throw _
-  · intro before
-    simp [valid, Bind.bind, EStateM.bind, MonadExcept.throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+    KeepsPhase observe (readSelectedWithCachedExtents directory watermark length list stat readSeal readKeeper) :=
+  fromReadFrame (KeepsReadFrame.readsSelectedWal (frame := fun before after => observe after = observe before)
+    directory watermark length (fun _ => rfl) (fun a b => b.trans a)
+    lists.asReadFrame (fun path => (stats path).asReadFrame)
+    (fun path count => (seals path count).asReadFrame) (fun path count size => (keepers path count size).asReadFrame))
 
 end KeepsPhase
 

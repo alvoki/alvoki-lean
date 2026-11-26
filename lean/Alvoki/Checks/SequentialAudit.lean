@@ -2170,6 +2170,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsExactFile
 #check_axioms Alvoki.Storage.DiskSession.KeepsPhase.readsIntegrityRunBytes
 #check_axioms Alvoki.Storage.DiskSession.KeepsReadFrame.readsIntegrityCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.KeepsReadFrame.readsSelectedWal
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.keeperFrames
+#check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadCalls.framesRun
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.framesSelectedWal
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesSelectedWalReadError
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.framesCheckpointRead
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.workerRejectsCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesCheckpointReadError
@@ -4133,6 +4138,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.returnsRefusedFlock
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesRefusedFlock
 #check_axioms Alvoki.Storage.DiskSession.SampledCheckpointRetryFrame.trans
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.framesSampledCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesSampledCheckpointBeforeFlock
 #check_axioms Alvoki.Storage.DiskSession.RawBeforeFlockRejection.returnsMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawFlockRejection.returnsMarkedInterpreter

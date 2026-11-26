@@ -223,8 +223,9 @@ open acquires the sampled directory and LOCK. The same sample fixes the
 manifest, runs and WAL bytes. The live catalog also fixes which canonical
 WAL names are absent through the cutoff. The actual aligned repair and
 reference allocations can then supply the retained writer of that table.
-For an error before flock, `framesSampledCheckpointBeforeFlock` supplies
-both the live read projections and the later durable continuation. -/
+Use the cumulative failed-call frame at the entry heap. The reader uses
+its live projections. `FailedCalls.framesSampledCheckpoint` can also
+supply the durable files and parent settlement for the ready continuation. -/
 theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (prior : NativeCheckpointSourcePrefix current primitives fsync stage)
     (names : FilePath → Option Nat) (contents : Nat → ByteArray)
@@ -234,7 +235,6 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (rootObject : namespaceView.modelObject root =
       current.current.ready.state.census.inode current.current.ready.state.directorySlot.description)
-    {errors : List (FilePath × IO.Error)} (attempts : source.FailedCalls rebooted errors entry)
     (resetFiles : (⟨names, fun inode => [contents inode]⟩ : CheckpointSurvivingFiles).Frames
       (fun path => path = (dbDir).path ∨ path = (dbDir).file .lock ∨
         checkpointSurvivorPath dbDir current.current.ready.state.writer
@@ -245,17 +245,15 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (resetWindow : ∀ start ≤ current.current.ready.state.writer.history.length,
       ((observe rebooted).files.names ((dbDir).file (.walSegment start))).isSome =
         (names ((dbDir).file (.walSegment start))).isSome)
-    (failureEffects : ∀ {prior : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {cause : IO.Error},
-      source.FailedCalls rebooted prior before → List.IsPrefix (prior ++ [(path, cause)]) errors →
-      source.openTable path before = .error cause after →
-      (⟨(observe before).files.names, fun inode => [readBytes before inode]⟩ : CheckpointSurvivingFiles).Frames
+    (retryFiles :
+      (⟨(observe rebooted).files.names, fun inode => [readBytes rebooted inode]⟩ : CheckpointSurvivingFiles).Frames
         (fun path => path = (dbDir).path ∨ path = (dbDir).file .lock ∨
           checkpointSurvivorPath dbDir current.current.ready.state.writer
             ((names ((dbDir).file .manifest)).map contents) path)
-        ⟨(observe after).files.names, fun inode => [readBytes after inode]⟩ ∧
-      ∀ start ≤ current.current.ready.state.writer.history.length,
-        ((observe after).files.names ((dbDir).file (.walSegment start))).isSome =
-          ((observe before).files.names ((dbDir).file (.walSegment start))).isSome)
+        ⟨(observe entry).files.names, fun inode => [readBytes entry inode]⟩)
+    (retryWindow : ∀ start ≤ current.current.ready.state.writer.history.length,
+      ((observe entry).files.names ((dbDir).file (.walSegment start))).isSome =
+        ((observe rebooted).files.names ((dbDir).file (.walSegment start))).isSome)
     (readScope : FilePath → Prop)
     (admission : source.ObservedAdmissionEffects view dbDir readScope input entry observe readBytes)
     (effects : ∀ cache : HeldOpenCache heap, LiteralOpenAuthority view dbDir cache cache.ready →
@@ -308,11 +306,8 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
               (∀ path, footprint path → readScope path) →
               sampleFiles.Frames footprint (observe rebooted).files →
               (∀ surviving ∈ (observe rebooted).crashNames, surviving dir.path = names dir.path) →
-              (∀ {prior : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {cause : IO.Error},
-                source.FailedCalls rebooted prior before → List.IsPrefix (prior ++ [(path, cause)]) errors →
-                source.openTable path before = .error cause after →
-                (observe before).files.Frames footprint (observe after).files ∧
-                (observe before).Frames (· = dir.path) (observe after)) →
+              (observe rebooted).files.Frames footprint (observe entry).files →
+              (observe rebooted).Frames (· = dir.path) (observe entry) →
               (∀ start, layout.range.through < start →
                 (∃ inode, (observe entry).files.names (dir.file (.walSegment start)) = some inode) →
                 ∃ object, namespaceView.child root (renderWalSegmentName start) = some object) →
@@ -324,16 +319,8 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
   intro dir writer pair wal actual retry selectedPath footprint sampleFiles
   let live := fun atHeap => (observe atHeap).files.names
   let filesAt : heap → CheckpointSurvivingFiles := fun atHeap => ⟨live atHeap, fun inode => [readBytes atHeap inode]⟩
-  obtain ⟨afterFiles, afterWindow⟩ := attempts.framesAfter .empty
-    (fun before after => (filesAt before).Frames footprint (filesAt after) ∧
-      ∀ start ≤ writer.history.length,
-        (live after (dir.file (.walSegment start))).isSome = (live before (dir.file (.walSegment start))).isSome)
-    (fun atHeap => ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, fun _ _ => rfl⟩)
-    (fun before after => ⟨before.1.trans after.1, fun start bound =>
-      (after.2 start bound).trans (before.2 start bound)⟩)
-    (fun preceding inside failed => failureEffects preceding (by simpa only [List.nil_append] using inside) failed)
-  have sampled := resetFiles.trans afterFiles
-  have window := sampledWindow.frame (fun start _ bound => (afterWindow start bound).trans (resetWindow start bound))
+  have sampled := resetFiles.trans retryFiles
+  have window := sampledWindow.frame (fun start _ bound => (retryWindow start bound).trans (resetWindow start bound))
   obtain ⟨sampledAuthority, marker, segments, published, layout, _, walLayout, walValid, keeper, aligned, descriptors, offsets,
     _, _, accepted, _, _, _, checkpoint, _, _, selected, _, _, _, _, _⟩ := selectedSample
   have liveRoot := (sampled _ (.inl rfl)).1.trans sampledAuthority.directory
@@ -419,15 +406,14 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (fun ordinal member => (suffix ordinal member).imp_left (fun after => layout.through.symm ▸ after))
     repair allocate phaseId tokenId
   refine ⟨repaired, reopened, allocation, installed, ?_⟩
-  intro observed included restored rootReset failedDurable laterComplete origin earlier carried phaseEffects ptrEq
-  obtain ⟨durableAtEntry, rootAtEntry⟩ := attempts.carriesCheckpointReset observe footprint dir.path sampleFiles
-    (.inl rfl) restored rootReset failedDurable
+  intro observed included restored rootReset retryDurable retryParent laterComplete origin earlier carried phaseEffects ptrEq
   have readDurable := seen.storageFrame.weaken included
-  have durableAtPrepare := durableAtEntry.trans readDurable.visible
-  have rootFrame : (observe entry).Frames (· = dir.path) (observe seen.prepared) :=
-    readDurable.weaken (fun _ same => .inl same)
+  have durableAtPrepare := restored.trans (retryDurable.trans readDurable.visible)
+  have rootFrame : (observe rebooted).Frames (· = dir.path) (observe seen.prepared) :=
+    retryParent.trans (readDurable.weaken (fun _ same => .inl same))
+  have rootAtReset := (restored dir.path (.inl rfl)).1
   have rootSettled := rootFrame.settledFrom
-    (fun surviving possible path same => same.symm ▸ rootAtEntry surviving possible)
+    (fun surviving possible path same => same.symm ▸ (rootReset surviving possible).trans rootAtReset.symm)
   let next := allocation.readyState reopened dir cache.owner cache.rootSlot
     cache.directoryRef cache.activeRef cache.pendingRef phaseId tokenId
   have fromInstall := installed

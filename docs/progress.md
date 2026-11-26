@@ -11,15 +11,18 @@ open installs the literal returned table. Its next supported writes and snapshot
 calls extend the incoming client ledger. The supported calls also determine the
 heap, cache and ledger at the next observed checkpoint interruption. The
 final manifest-directory sync recovery consumes that position. Failed opens before the file lock,
-a refused lock, an observed strict checkpoint read error, and partial pruning of later WAL segments have local proofs
-that carry protected storage to the heap reached by the public error. Thus a
+a refused lock, observed checkpoint and selected WAL read errors, and partial
+pruning of later WAL segments each supply a retry frame under local callback
+and cleanup laws. Given such a frame for each failed call, one induction
+carries the live files, bounded WAL names, durable files and root binding
+to the next open. Thus a
 retry can start after an earlier unlink took effect. The canonical keeper
 layout supplies the same byte-prefix and cutoff facts to repair, installation
 and work accounting. [Failed repair](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean) · [Keeper facts](../lean/Alvoki/Storage/Disk/WalSegmentBoundedRetry.lean)
 
-**Next obligation.** Derive the retry frame for remaining failed WAL reads and
-repairs through their actual cleanup, then feed that frame to the existing
-failed-call induction. A successful reopen needs the held scan to cover all
+**Next obligation.** Derive the retry frame for the remaining failed guards, marker reads and
+mutating repairs from their actual callbacks. Extend coverage to interrupted
+calls, whose handles and durable effects can differ from ordinary errors. A successful reopen needs the held scan to cover all
 physical later WAL names. This remains a local filesystem enumeration law.
 Mixed sessions and interruptions outside the covered paths remain open.
 

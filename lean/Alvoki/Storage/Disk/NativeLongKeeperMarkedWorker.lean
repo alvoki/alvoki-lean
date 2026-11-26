@@ -92,18 +92,68 @@ section WalPayloadFrames
 
 variable {heap : Type} {frame : heap → heap → Prop}
 
-/-- A seal's open, bounded chunk loop and release compose in the same
-frame relation as the other selected WAL reads. -/
+/-- A seal's open, bounded chunk loop and release frame its actual return. -/
+theorem MarkedTemporaryReadCalls.sealFrames (calls : MarkedTemporaryReadCalls heap)
+    (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (path : FilePath) (count : Nat) (entry : heap) : frame entry (reachedState (calls.seal path count entry)) :=
+  calls.readWithFrames laws trans path
+    (fun file => readExactPrefixWith selectedWalSpanError (calls.readChunk file) count .empty)
+    (calls.exactPrefixFrames refl trans selectedWalSpanError count) entry
+
 theorem MarkedTemporaryReadCalls.readSealKeepsFrame (calls : MarkedTemporaryReadCalls heap)
     (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)
     (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
     (path : FilePath) (count : Nat) {entry reached : heap} {bytes : ByteArray}
     (returned : calls.seal path count entry = .ok bytes reached) : frame entry reached := by
-  have kept := calls.readWithFrames laws trans path
-    (fun file => readExactPrefixWith selectedWalSpanError (calls.readChunk file) count .empty)
-    (calls.exactPrefixFrames refl trans selectedWalSpanError count) entry
-  change frame entry (reachedState (calls.seal path count entry)) at kept
-  simpa only [returned, reachedState] using kept
+  simpa only [returned, reachedState] using calls.sealFrames laws refl trans path count entry
+
+/-- Follow each reached keeper operation. The full prefix can lead to
+an explicit release or a cache update. A returned callback error ends
+the modeled read at that callback's reached heap. -/
+theorem MarkedTemporaryReadCalls.keeperFrames (calls : MarkedTemporaryReadCalls heap)
+    (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
+    (remembers : ∀ path file before, frame before (reachedState (remember path file before)))
+    (path : FilePath) (count physical : Nat) (entry : heap) :
+    frame entry (reachedState (calls.readKeeperWithRelease remember path count physical entry)) := by
+  unfold readKeeperWithRelease readKeeperWith
+  by_cases admitted : count ≤ physical ∧ count < USize.size
+  · simp only [ite_eq_left admitted, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+    obtain ⟨temporary, guarded⟩ := laws
+    have opened := guarded.openRead path entry
+    cases acquired : calls.openRead path entry with
+    | error cause after => simpa only [acquired, reachedState] using opened
+    | ok file openedAt =>
+      simp only [acquired]
+      have openFrame : frame entry openedAt := by simpa only [acquired, reachedState] using opened
+      have readFrame := calls.exactPrefixFrames refl trans (IO.userError "short or oversized WAL keeper read")
+        count temporary file (guarded.readChunk file) openedAt
+      change GuardedReadFrame frame temporary file openedAt (reachedState (readExactPrefixWith
+        (IO.userError "short or oversized WAL keeper read") (calls.readChunk file) count .empty openedAt)) at readFrame
+      cases read : readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
+          (calls.readChunk file) count .empty openedAt with
+      | error cause after =>
+        rw [read, reachedState] at readFrame
+        simpa only [read, reachedState] using trans openFrame readFrame.1
+      | ok bytes after =>
+        rw [read, reachedState] at readFrame
+        have prefixFrame := trans openFrame readFrame.1
+        by_cases aligned : count = physical
+        · subst physical
+          have kept := trans prefixFrame (remembers path file after)
+          cases recorded : remember path file after <;>
+            simpa only [read, Nat.lt_irrefl, ↓reduceIte, beq_self_eq_true, EStateM.bind, EStateM.pure,
+              recorded, reachedState] using kept
+        · have longer := Nat.lt_of_le_of_ne admitted.1 aligned
+          have live := readFrame.2 (guarded.opensTemporary acquired)
+          have kept := trans prefixFrame (guarded.release file after live)
+          cases released : calls.release file after <;>
+            simpa only [read, longer, ↓reduceIte, beq_iff_eq, aligned, EStateM.bind, EStateM.pure,
+              released, dataErrorDropState, reachedState] using kept
+  · simpa [admitted, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+      reachedState] using refl entry
 
 /-- The keeper carries the frame through the same bounded chunk loop and
 then through the callback that was actually reached, remember or release. -/

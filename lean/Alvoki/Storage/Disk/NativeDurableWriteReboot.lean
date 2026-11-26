@@ -150,6 +150,12 @@ structure SampledCheckpointRetryFrame (directory : DiskDirectory) (scope : FileP
   durable : (observe before).files.Frames scope (observe after).files
   parent : (observe before).Frames (· = directory.path) (observe after)
 
+theorem SampledCheckpointRetryFrame.refl {directory : DiskDirectory} {scope : FilePath → Prop}
+    {through : Nat} {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
+    (atHeap : heap) : SampledCheckpointRetryFrame directory scope through observe readBytes atHeap atHeap :=
+  ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, fun _ _ => rfl,
+    fun _ _ => ⟨rfl, fun _ _ => rfl⟩, .refl _ _⟩
+
 theorem SampledCheckpointRetryFrame.trans {directory : DiskDirectory} {scope : FilePath → Prop}
     {through : Nat} {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
     {before middle after : heap}
@@ -158,6 +164,20 @@ theorem SampledCheckpointRetryFrame.trans {directory : DiskDirectory} {scope : F
     SampledCheckpointRetryFrame directory scope through observe readBytes before after :=
   ⟨left.live.trans right.live, fun start bound => (right.walNames start bound).trans (left.walNames start bound),
     left.durable.trans right.durable, left.parent.trans right.parent⟩
+
+/-- One fold over the actual failed occurrences carries both the live
+reader input and the durable retry input to the next attempt. -/
+theorem RawMarkedOpenInterpreter.FailedCalls.framesSampledCheckpoint
+    (attempts : source.FailedCalls rebooted errors reached)
+    {directory : DiskDirectory} {scope : FilePath → Prop} {through : Nat}
+    {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
+    (each : ∀ {prior : List (FilePath × IO.Error)} {before after : heap} {input : FilePath} {cause : IO.Error},
+      source.FailedCalls rebooted prior before → List.IsPrefix (prior ++ [(input, cause)]) errors →
+      source.openTable input before = .error cause after →
+      SampledCheckpointRetryFrame directory scope through observe readBytes before after) :
+    SampledCheckpointRetryFrame directory scope through observe readBytes rebooted reached :=
+  attempts.framesAfter .empty _ SampledCheckpointRetryFrame.refl SampledCheckpointRetryFrame.trans
+    (fun prior inside returned => each prior (by simpa only [List.nil_append] using inside) returned)
 
 variable (source) in
 /-- At an observed failed occurrence, local resolver, stat, and

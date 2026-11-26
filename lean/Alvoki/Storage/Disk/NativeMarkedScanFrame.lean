@@ -2,6 +2,8 @@ import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.NativeCheckpointFsyncEffects
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.NativeDurableWriteReboot
+import Alvoki.Storage.Disk.NativeCheckpointOpenChronology
+import Alvoki.Storage.Disk.NativeSelectedReadPhaseFrame
 
 namespace Alvoki.Storage.DiskSession
 
@@ -136,6 +138,138 @@ end Healthy
 section ActualWalStat
 
 variable {heap : Type} {frame : heap → heap → Prop}
+
+/-- Follow the actual open, scan and close even when one reports an
+error. A scan error still reaches the close of the same stream. -/
+theorem MarkedDirectoryReadCalls.framesRun {stream : Type} (calls : MarkedDirectoryReadCalls heap stream)
+    (directory : DiskDirectory) (laws : calls.ScopeFrames directory frame)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (openFailed : ∀ {before after cause}, calls.openDir directory.path before = .error cause after → frame before after)
+    (closeFailed : ∀ {before opened scanned after handle report cause},
+      calls.openDir directory.path before = .ok handle opened → calls.readDir handle opened = (report, scanned) →
+      calls.closeDir handle scanned = .error cause after → frame scanned after) :
+    KeepsReadFrame frame (calls.run directory.path) := by
+  intro before
+  unfold MarkedDirectoryReadCalls.run
+  cases acquired : calls.openDir directory.path before with
+  | error cause after => exact openFailed acquired
+  | ok handle opened =>
+    cases scan : calls.readDir handle opened with
+    | mk report scanned =>
+      have readFrame := laws.readDir acquired
+      rw [scan] at readFrame
+      have first := trans (laws.openDir acquired) readFrame
+      obtain ⟨names, terminal⟩ := report
+      have finish (value : Except IO.Error (Array IO.FS.DirEntry)) (atHeap : heap) :
+          reachedState ((liftExcept value : EStateM IO.Error heap (Array IO.FS.DirEntry)) atHeap) = atHeap := by
+        cases value <;> rfl
+      cases closed : calls.closeDir handle scanned with
+      | error cause after =>
+        simpa only [finish, scan, closed] using trans first (closeFailed acquired scan closed)
+      | ok value after =>
+        cases value
+        simpa only [finish, scan, closed] using trans first (laws.closeDir acquired scan closed)
+
+private theorem MarkedWalExtentReports.inspectFrames
+    (calls : MarkedTemporaryReadCalls heap) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (stat : ∀ path, KeepsReadFrame frame (calls.stat path)) (path : FilePath) :
+    KeepsReadFrame frame (inspect calls path) := by
+  unfold inspect inspectWalSegmentWith
+  apply (stat path).bind trans
+  intro report
+  cases report with
+  | error => exact .pure refl _
+  | ok metadata =>
+    have checked : KeepsReadFrame frame (checkPrivateRegularWith path metadata) := by
+      unfold checkPrivateRegularWith
+      split
+      · exact .pure refl _
+      · exact .throw refl _
+    exact checked.bind trans fun _ => .pure refl (Except.ok metadata)
+
+/-- The selected WAL read frames the actual heap after every reached
+listing, lstat and payload operation, for success and error alike. -/
+theorem MarkedTemporaryReadCalls.framesSelectedWal {stream : Type}
+    (calls : MarkedTemporaryReadCalls heap) (directoryCalls : MarkedDirectoryReadCalls heap stream)
+    (directory : DiskDirectory) (watermark : Nat) (length : UInt64)
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (reads : calls.ScopeFrames frame) (listing : KeepsReadFrame frame (directoryCalls.run directory.path))
+    (stat : ∀ path, KeepsReadFrame frame (calls.stat path))
+    (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
+    (remembers : ∀ path file, KeepsReadFrame frame (remember path file)) :
+    KeepsReadFrame frame (readSelectedWithCachedExtents directory watermark length directoryCalls.run
+      (MarkedWalExtentReports.inspect calls) calls.seal (calls.readKeeperWithRelease remember)) :=
+  KeepsReadFrame.readsSelectedWal (frame := frame) directory watermark length refl trans listing
+    (MarkedWalExtentReports.inspectFrames calls refl trans stat) (calls.sealFrames reads refl trans)
+    (calls.keeperFrames reads refl trans remember remembers)
+
+section FailedOpen
+
+variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
+  {view : OpenCloseHeapView heap FileImage} {entry : heap}
+  {admission : CensusOpenAdmissionReports input directory (view.descriptors entry) (view.files entry)}
+  (source : RawMarkedOpenInterpreter heap stream)
+  {raw : RawOpenAdmissionReport admission view source.calls entry}
+  {allocation : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
+
+local notation "remember" => fun path handle =>
+  AlignedKeeperCacheCallbacks.modifyPending (source.keeperCallbacks.withFileReads source.fileCalls)
+    allocation.pendingRef (pushPending path handle)
+
+/-- The reached WAL read error stops before repair and installation.
+The public diagnostic and scoped frame come from the cache disposal,
+unlock and lock release of that same failed worker. -/
+theorem RawMarkedOpenInterpreter.framesSelectedWalReadError
+    {checked atCheckpoint afterCheckpoint afterMarker workerReached : heap}
+    {cause : IO.Error} {metadata : IO.FS.Metadata} {checkpoint : Option (PackedTable × UInt64)}
+    {markerBytes : ByteArray} {length : UInt64}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      allocation.afterPending = .ok () checked)
+    (marked : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
+      .ok (some metadata) atCheckpoint)
+    (checkpointRead : readIntegrityCheckpointSized directory
+      (source.fileCalls.readOptional directory (directory.file .manifest))
+      source.fileCalls.runSize source.fileCalls.runPrefix atCheckpoint = .ok checkpoint afterCheckpoint)
+    (markerRead : source.fileCalls.readOptional directory (directory.file .walBoundary) afterCheckpoint =
+      .ok (some markerBytes) afterMarker)
+    (decoded : WAL.Boundary.decode markerBytes = .ok length)
+    (failed : readSelectedWithCachedExtents directory (checkpoint.getD (.empty, 0)).1.committed.toNat length
+      source.directoryCalls.run (MarkedWalExtentReports.inspect source.fileCalls) source.fileCalls.seal
+      (source.fileCalls.readKeeperWithRelease remember) afterMarker = .error cause workerReached)
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation workerReached)
+    (sameDisposal : source.dispose = disposal.dispose)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached)
+    {frame : heap → heap → Prop} (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (guards : ∀ path, KeepsReadFrame frame (source.calls.lookup path))
+    (stat : ∀ path, KeepsReadFrame frame (source.fileCalls.stat path))
+    (reads : source.fileCalls.ScopeFrames frame)
+    (listing : KeepsReadFrame frame (source.directoryCalls.run directory.path))
+    (remembers : ∀ path file, KeepsReadFrame frame (remember path file))
+    (cleanup : disposal.ScopeFrames finalized frame) :
+    source.openTable input entry = .error (disposal.diagnostic cause) finalized.reached ∧
+      frame entry finalized.reached := by
+  let cache := RawMarkedOpenInterpreter.makeCache directory allocation.directoryRef allocation.activeRef allocation.pendingRef
+  have stopped : source.worker allocation.directoryRef allocation.activeRef allocation.pendingRef directory raw.lock cache
+      allocation.afterPending = .error cause workerReached := by
+    simp only [RawMarkedOpenInterpreter.worker, recoverHealthyMarkedWithRefs, recoverSegmentedWalWith,
+      reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind,
+      flat, marked, Option.isSome_some, ↓reduceIte, checkpointRead, markerRead, decoded, Except.mapError,
+      liftExcept, Pure.pure, EStateM.pure, failed]
+  have guarded := markedGuards_keepFrame (frame := frame) directory source.calls.lookup trans guards flat marked
+  have restored := source.fileCalls.framesCheckpointSuccess directory refl trans reads stat checkpointRead
+  have marker := source.fileCalls.readOptionalFrames reads refl trans stat directory (directory.file .walBoundary)
+    afterCheckpoint
+  rw [markerRead, reachedState] at marker
+  have wal := source.fileCalls.framesSelectedWal source.directoryCalls directory
+    (checkpoint.getD (.empty, 0)).1.committed.toNat length refl trans reads listing stat remember remembers afterMarker
+  rw [failed, reachedState] at wal
+  exact ⟨disposal.returnsMarkedInterpreter source sameDisposal stopped finalized,
+    cleanup.preserves trans (trans guarded (trans restored (trans marker wal)))⟩
+
+end FailedOpen
 
 theorem MarkedDirectoryReadCalls.successKeepsFrame {stream : Type} (calls : MarkedDirectoryReadCalls heap stream)
     (directory : DiskDirectory) (laws : calls.ScopeFrames directory frame)
