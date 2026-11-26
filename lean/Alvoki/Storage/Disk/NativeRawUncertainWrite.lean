@@ -5,7 +5,7 @@ import Alvoki.Storage.Disk.NativeWalPublicationTail
 
 namespace Alvoki.Storage.DiskSession
 
-open System SyncHandleRouting WalSegmentCommit WalSegmentRepair
+open System SyncHandleRouting WalSegmentCommit WalSegmentRepair CheckpointPublication
 
 /-- File callbacks preserve the original phase cell independently of
 their WAL effects. Keep authority and the protected files through the
@@ -186,6 +186,32 @@ theorem WalPublicationPayloads.Selection.retryTarget {state : NativeReadyState} 
   · exact .inl ⟨markerBytes.trans oldMarker, WAL.encode batch, keeperBytes.trans sameKeeper⟩
   · exact .inr ⟨markerBytes.trans newMarker, keeperBytes.trans sameKeeper⟩
 
+/-- One chosen namespace keeps the original bindings of the protected
+paths across the write, including the root and lock when no file bytes
+are sampled for those paths. -/
+theorem NativeReadyStorage.chosenWriteBinding {state : NativeReadyState} {entry reached : CheckpointStorageObservation}
+    (old : NativeReadyStorage state entry) (frame : entry.Frames state.writeFramePath reached)
+    (names : FilePath → Option Nat) (chosen : names ∈ reached.crashNames)
+    {path : FilePath} (protectedPath : state.writeFramePath path) : names path = entry.files.names path := by
+  obtain ⟨prior, survives, keeps⟩ := frame.survivors names chosen
+  exact (keeps path protectedPath).trans
+    (old.settled prior survives path (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr protectedPath))))
+
+/-- A selected regular file retains its original bound inode and the
+settled bytes when sampled in a joint survivor of the write. -/
+theorem NativeReadyStorage.sampleWriteFile {state : NativeReadyState} {entry reached : CheckpointStorageObservation}
+    (old : NativeReadyStorage state entry) (frame : entry.Frames state.writeFramePath reached)
+    {path : FilePath} (protectedPath : state.writeFramePath path) {payload : ByteArray}
+    (stored : entry.files.Stored path payload)
+    (names : FilePath → Option Nat) (chosen : names ∈ reached.crashNames) (contents : Nat → ByteArray)
+    (sample : ∀ inode, names path = some inode → contents inode ∈ reached.files.bytes inode) :
+    ∃ inode, entry.files.names path = some inode ∧ names path = some inode ∧ contents inode = payload := by
+  obtain ⟨inode, entryBound, initialBytes⟩ := stored
+  have bound := (old.chosenWriteBinding frame names chosen protectedPath).trans entryBound
+  have storedAt := ((frame.visible path protectedPath).2 inode entryBound).trans initialBytes
+  have exactBytes := List.mem_singleton.mp (storedAt ▸ sample inode bound)
+  exact ⟨inode, entryBound, bound, exactBytes⟩
+
 /-- The write's protected-file frame keeps the selected checkpoint
 binding and bytes in each reached joint map, independently of the WAL
 marker selected in that map. -/
@@ -195,21 +221,49 @@ theorem NativeReadyStorage.selectedWriteManifest {state : NativeReadyState} {ent
     (sample : ∀ inode, names (state.session.directory.file .manifest) = some inode →
       contents inode ∈ reached.files.bytes inode) :
     (names (state.session.directory.file .manifest)).map contents = state.writer.target.pair.manifest := by
-  have held := frame.settledFrom (fun names possible path kept =>
-    old.settled names possible path (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept))))
-    names chosen (state.session.directory.file .manifest) (.inr (.inr (.inl rfl)))
-  have manifest := (old.toNativeReadyProtectedStorage.frame frame.visible).manifest
+  let path := state.session.directory.file .manifest
+  have protectedPath : state.writeFramePath path := .inr (.inr (.inl rfl))
+  have manifest := old.manifest
   cases present : state.writer.target.pair.manifest with
   | none =>
     rw [present] at manifest
-    rw [held, manifest]
+    rw [old.chosenWriteBinding frame names chosen protectedPath, manifest]
     rfl
   | some bytes =>
     rw [present] at manifest
-    obtain ⟨inode, named, durable⟩ := manifest
-    have bound := held.trans named
-    have exactBytes := List.mem_singleton.mp (durable ▸ sample _ bound)
+    obtain ⟨_, _, bound, exactBytes⟩ := old.sampleWriteFile frame protectedPath manifest names chosen contents sample
     rw [bound, Option.map_some, exactBytes]
+
+/-- On the same chosen reboot map, the root and lock keep their inode
+identities and the selected runs and immutable seals keep both their names
+and bytes. The byte sampling law is scoped to the regular files used by
+recovery. -/
+theorem NativeReadyStorage.retainsWriteRebootFiles {state : NativeReadyState} {entry reached : CheckpointStorageObservation}
+    (old : NativeReadyStorage state entry) (frame : entry.Frames state.writeFramePath reached)
+    (names : FilePath → Option Nat) (chosen : names ∈ reached.crashNames) (contents : Nat → ByteArray)
+    (sample : ∀ path,
+      checkpointSurvivorPath state.session.directory state.writer state.writer.target.pair.manifest path →
+      ∀ inode, names path = some inode → contents inode ∈ reached.files.bytes inode) :
+    names state.session.directory.path = some (state.census.inode state.directorySlot.description) ∧
+    names (state.session.directory.file .lock) = some (state.census.inode state.owner.description) ∧
+    (∀ segment ∈ state.writer.wal.sealed,
+      let path := state.session.directory.file (.walSegment segment.first)
+      ∃ inode, entry.files.names path = some inode ∧ names path = some inode ∧ contents inode = segment.bytes) ∧
+    ∀ bytes metadata, state.writer.target.pair.manifest = some bytes →
+      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata → ∀ index < metadata.header.runCount.toNat,
+      ∀ payload, state.writer.published.durable metadata.header.generation index = some payload →
+        let path := state.session.directory.file (.run metadata.header.generation index)
+        ∃ inode, entry.files.names path = some inode ∧ names path = some inode ∧ contents inode = payload := by
+  refine ⟨(old.chosenWriteBinding frame names chosen (.inl rfl)).trans old.directoryBound,
+    (old.chosenWriteBinding frame names chosen (.inr (.inl rfl))).trans old.lockBound, ?_, ?_⟩
+  · intro segment member path
+    exact old.sampleWriteFile frame (.inr (.inr (.inr (.inl ⟨segment, member, rfl⟩))))
+      (old.sealedFiles segment member) names chosen contents
+      (sample path (.inr (.inl (.inr (.inr ⟨segment, member, rfl⟩)))))
+  · intro bytes metadata binding decoded index within payload durable path
+    exact old.sampleWriteFile frame (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, binding, decoded, within, rfl⟩))))
+      (old.runs bytes metadata binding decoded index within payload durable) names chosen contents
+      (sample path (.inr (.inr ⟨bytes, metadata, index, binding, decoded, within, rfl⟩)))
 
 /-- A recovery step chooses one joint map and samples its durable
 payloads. The returned write can use either of the publication-tail
@@ -240,5 +294,87 @@ theorem WalPublicationPayloads.Selections.retryTargets {state : NativeReadyState
   rw [manifest]
   exact survivor.retryTarget valid prepared fits contents (sample _ _ (.inr (.inr rfl)) survivor.keeperNamed)
     (sample _ _ (.inr (.inl rfl)) survivor.markerNamed) sameKeeper oldMarker newMarker
+
+section
+
+variable {prior : List WAL.Write} {log : List DatabaseSubmissions} (current : NativeReadPosition prior log)
+
+local notation "state" => current.state
+
+/-- Project the chosen durable manifest, marker and keeper into the
+bounded reader's file image. The logical image keeps the immutable
+sealed files, and the raw reader separately checks their names and
+payloads. The observed later names remain available to repair. -/
+theorem NativeReadPosition.preparesWriteReboot
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch (state).writer.installed.table rows = some (batch, table))
+    (fits : (state).writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {entry reached : CheckpointStorageObservation}
+    (old : NativeReadyStorage state entry) (frame : entry.Frames (state).writeFramePath reached)
+    (names : FilePath → Option Nat) (chosen : names ∈ reached.crashNames) (contents : Nat → ByteArray)
+    (manifestBytes : ∀ inode, names ((state).session.directory.file .manifest) = some inode →
+      contents inode ∈ reached.files.bytes inode)
+    {target : Target} (admitted : BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target)
+    (selectedPair : target.pair = ⟨(names ((state).session.directory.file .manifest)).map contents,
+      (names ((state).session.directory.file .walBoundary)).map contents⟩)
+    (keeper : target.Accepts ((names ((state).session.directory.file (.walSegment (state).writer.wal.active.first))).map contents))
+    (later : List Nat) (beyond : ∀ first ∈ later, target.range.through < first) :
+    let directory := (state).session.directory
+    let image := (state).writer.files.crash
+      ⟨(names (directory.file .manifest)).map contents, (names (directory.file .walBoundary)).map contents⟩
+      ((names (directory.file (.walSegment (state).writer.wal.active.first))).map contents) later
+    ∃ history, (history = prior ∨ history = prior ++ batch) ∧
+      let wal := (state).writer.wal.appendSelectedView image.directory.active history
+      wal.ReadLayout history ∧ wal.Valid history ∧
+      ∃ layout : CanonicalKeeperLayout image history,
+        layout.target = target ∧ layout.target.first = (state).writer.wal.active.first ∧ layout.keeper = wal.active ∧
+        layout.sealed ++ [layout.keeper] = wal.readDescriptors layout.range.watermark ∧
+        selectWalSegmentReads (wal.segments.map WalSegment.first) layout.range.watermark =
+          some (layout.first, (wal.readDescriptors layout.range.watermark).map WalSegment.first) ∧
+        Prepared image layout.target layout.plan ∧
+        SelectedIntegrityCheckpoint (state).writer.published.durable image.directory.active.manifest (state).writer.checkpoint ∧
+        (state).writer.published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+          image.directory.active.manifest ∧ WAL.OrdinalsFrom 1 history ∧
+        PendingClientReplay (log ++ [.uncertainBatch batch]) current.reads history ∧
+        ∀ read ∈ current.reads, read.BoundedBy history.length := by
+  intro directory image
+  have pair : image.directory.active = target.pair := selectedPair.symm
+  have manifest := old.selectedWriteManifest frame names chosen contents manifestBytes
+  have imageManifest : image.directory.active.manifest = (state).writer.target.pair.manifest := manifest
+  obtain ⟨valid, priorHistory, replay⟩ := current.readPrefix.refines
+  let ready := valid.retained
+  have oldRange : (state).writer.wal.directory.active.walRange =
+      some ⟨(state).writer.target.range.watermark, (state).writer.history.length⟩ := by
+    rw [ready.walPair, (state).writer.target.decoded, ← ready.resumed.through]
+  have sameManifest : target.pair.manifest = (state).writer.wal.directory.active.manifest := by
+    rw [ready.walPair, ← pair]
+    exact imageManifest
+  have checkpoint : (state).writer.published.AcceptsVersioned (state).writer.history.length.toUInt64
+      (WAL.Boundary.CheckpointRepresentsPrefix (state).writer.history) (state).writer.wal.directory.active.manifest := by
+    rw [ready.walPair]
+    exact ready.resumed.accepted
+  obtain ⟨_, refined, represented⟩ := ready.resumed.canonical
+  have committed : (state).writer.history.length = (state).writer.installed.table.committed.toNat :=
+    represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
+  have keeperValid : image.keeper.Valid target.Accepts := by
+    refine ⟨by simp [image, FileImage.crash, Publication.Image.settled], keeper, ?_⟩
+    intro bytes member
+    have same := List.mem_singleton.mp member
+    exact same.symm ▸ keeper
+  have laterValid : image.later.Beyond target.range.through := by
+    intro listed member first present
+    have same : listed = later := by simpa [image, FileImage.crash, LaterNames.settled] using member
+    exact beyond first (same ▸ present)
+  have count := NativeReadyState.preparedWalCount valid prepared
+  obtain ⟨history, allowed, _, layoutValid, walValid, layout, targetEq, _, first, exactKeeper,
+    descriptors, offsets, plan, accepted, ordered, _⟩ :=
+    selectedBatchReopenLayout ready.layout ready.valid oldRange ready.resumed.ordered committed prepared
+      (count.symm ▸ fits) checkpoint admitted sameManifest pair keeperValid laterValid
+  have selectedHistory := allowed.imp (·.trans priorHistory) (·.trans (congrArg (· ++ batch) priorHistory))
+  obtain ⟨pending, bounded⟩ := replay.appendUncertain current.readPrefix.readsBounded selectedHistory ordered
+  exact ⟨history, selectedHistory, layoutValid, walValid, layout, targetEq, first, exactKeeper, descriptors, offsets, plan,
+    imageManifest.symm ▸ ready.resumed.selected, accepted, ordered, pending, bounded⟩
+
+end
 
 end Alvoki.Storage.DiskSession

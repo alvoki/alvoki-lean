@@ -468,6 +468,123 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentCommit WalSegmentRepair WAL.Boundary
 
+/-- The selected batch target and the reached keeper's admissible bytes
+supply a canonical reader layout and exact repair plan. The layout only
+needs the selected files and is independent of how the write stopped. -/
+theorem selectedBatchReopenLayout
+    {oldWal : WalSegmentImage} {before batch : List WAL.Write} {watermark : Nat}
+    (layout : oldWal.ReadLayout before) (valid : oldWal.Valid before)
+    (oldRange : oldWal.directory.active.walRange = some ⟨watermark, before.length⟩)
+    (ordered : WAL.OrdinalsFrom 1 before) {live next : PackedTable} {rows : List (UInt64 × Option UInt64)}
+    (committed : before.length = live.committed.toNat) (prepared : prepareBatch live rows = some (batch, next))
+    (fits : (WAL.encode (before ++ batch)).size < UInt64.size)
+    {published : CheckpointPublication.Image}
+    (checkpoint : published.AcceptsVersioned before.length.toUInt64 (CheckpointRepresentsPrefix before)
+      oldWal.directory.active.manifest)
+    {target : Target} {image : FileImage} (admitted : BatchRetryTarget before batch oldWal.active.first target)
+    (sameManifest : target.pair.manifest = oldWal.directory.active.manifest)
+    (pair : image.directory.active = target.pair) (keeper : image.keeper.Valid target.Accepts)
+    (later : image.later.Beyond target.range.through) :
+    ∃ history, (history = before ∨ history = before ++ batch) ∧
+      image.directory.active.walBoundary = some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) ∧
+      let wal := oldWal.appendSelectedView image.directory.active history
+      wal.ReadLayout history ∧ wal.Valid history ∧
+      ∃ selected : CanonicalKeeperLayout image history,
+        selected.target = target ∧ selected.range.watermark = watermark ∧ selected.target.first = oldWal.active.first ∧
+        selected.keeper = wal.active ∧
+        selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark ∧
+        selectWalSegmentReads (wal.segments.map WalSegment.first) selected.range.watermark =
+          some (selected.first, (wal.readDescriptors selected.range.watermark).map WalSegment.first) ∧
+        Prepared image selected.target selected.plan ∧
+        published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+          image.directory.active.manifest ∧
+        WAL.OrdinalsFrom 1 history ∧
+        ∃ generation : UInt64,
+          ((image.directory.active.manifest.mapM fun bytes =>
+              (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) :
+              Except String UInt64) = .ok generation := by
+  obtain ⟨watermarkRead, covered, _⟩ := DirectoryPublication.Bindings.walRange_accounting oldRange
+  obtain ⟨start, history, allowed, marker, through, trimmed⟩ := admitted
+  have count : (WAL.encode history).size.toUInt64.toNat = history.length * WAL.frameSize := by
+    rw [UInt64.toNat_ofNat_of_lt' (batchHistoryFits allowed fits), WAL.encode_size, Nat.mul_comm]
+  have newCovered := Nat.le_trans covered (batchLengthMonotone allowed)
+  have decoded : image.directory.active.walRange = some ⟨watermark, history.length⟩ := by
+    rw [pair]
+    exact DirectoryPublication.Bindings.walRange_of_counts (sameManifest ▸ watermarkRead)
+      marker (decode_encode _) count newCovered
+  let wal := oldWal.appendSelectedView image.directory.active history
+  have layoutValid : wal.ReadLayout history ∧ wal.Valid history := by
+    rcases allowed with rfl | rfl
+    · have same := layout.afterRetainedSuffix valid oldRange image.directory.active []
+        (by simpa only [List.append_nil] using decoded)
+      exact ⟨by simpa only [List.append_nil] using same.1, by simpa only [List.append_nil] using same.2.1⟩
+    · have same := layout.afterRetainedSuffix valid oldRange image.directory.active batch decoded
+      exact ⟨same.1, same.2.1⟩
+  obtain ⟨ideal, range, sameKeeper, _, descriptors, offsets, _, _, _, _⟩ :=
+    layoutValid.1.checkpointReopenLayout layoutValid.2 .visible decoded rfl none
+  have trimmedKeeper : target.trimmed = ideal.keeper.bytes := by
+    rw [trimmed, sameKeeper] <;> rfl
+  obtain ⟨tail, visible⟩ := keeper.activeValid
+  let selected : CanonicalKeeperLayout image history :=
+    ⟨ideal.range, range.symm ▸ decoded, ideal.through, ideal.first, ideal.sealed, ideal.keeper,
+      ideal.chain, ideal.covers, tail, trimmedKeeper ▸ visible⟩
+  have selectedFirst : selected.target.first = oldWal.active.first := by
+    change ideal.keeper.first = oldWal.active.first
+    rw [sameKeeper] <;> rfl
+  have selectedTrimmed : selected.target.trimmed = WAL.encode (history.drop oldWal.active.first) := by
+    rw [← selectedFirst]
+    exact selected.chain.keeperBytes
+  have selectedMarker : selected.target.pair.walBoundary =
+      some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) := by
+    change image.directory.active.walBoundary = _
+    rw [pair]
+    exact marker
+  have actual : selected.target = target :=
+    BatchRetryTarget.unique
+      ⟨selectedFirst, history, allowed, selectedMarker, selected.through, selectedTrimmed⟩
+      ⟨start, history, allowed, marker, through, trimmed⟩ pair
+  have plan : Prepared image selected.target selected.plan := by
+    apply selected.prepared keeper.hasCrashImage
+    · intro payload survives
+      obtain ⟨extra, exactPayload⟩ := keeper.crashValid payload survives
+      exact ⟨extra, trimmedKeeper ▸ exactPayload⟩
+    · rw [← actual] at later
+      exact later
+  have accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
+      image.directory.active.manifest := by
+    rw [pair, sameManifest]
+    rcases allowed with rfl | rfl
+    · exact checkpoint
+    · exact published.acceptsVersioned_extend_history checkpoint fits
+  have consecutive : WAL.OrdinalsFrom 1 history :=
+    allowed.elim (fun old => old.symm ▸ ordered) fun whole =>
+      whole.symm ▸ (prepareBatch_extends_history ordered committed prepared).2.1
+  have generationRead : ∃ generation : UInt64,
+      ((image.directory.active.manifest.mapM fun bytes =>
+        (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) :
+          Except String UInt64) = .ok generation := by
+    cases visible : image.directory.active.manifest with
+    | none => exact ⟨0, rfl⟩
+    | some bytes =>
+      have selectedWatermark := (DirectoryPublication.Bindings.walRange_accounting decoded).1
+      rw [visible] at selectedWatermark
+      obtain ⟨parsed, parsedOk, _⟩ := selectedCheckpointWatermark_present_iff.mp selectedWatermark
+      exact ⟨parsed.header.generation, by rw [Option.mapM, parsedOk]; rfl⟩
+  obtain ⟨generation, generationRead⟩ := generationRead
+  have exactDescriptors : selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark := by
+    change ideal.sealed ++ [ideal.keeper] = wal.readDescriptors ideal.range.watermark
+    rw [range]
+    exact descriptors
+  have exactOffsets : selectWalSegmentReads (wal.segments.map WalSegment.first) selected.range.watermark =
+      some (selected.first, (wal.readDescriptors selected.range.watermark).map WalSegment.first) := by
+    change selectWalSegmentReads (wal.segments.map WalSegment.first) ideal.range.watermark =
+      some (ideal.first, (wal.readDescriptors ideal.range.watermark).map WalSegment.first)
+    rw [range]
+    exact offsets
+  exact ⟨history, allowed, selectedMarker, layoutValid.1, layoutValid.2,
+    selected, actual, congrArg MarkedWalRange.watermark range, selectedFirst, sameKeeper, exactDescriptors,
+    exactOffsets, plan, accepted, consecutive, generation, generationRead⟩
+
 /-- A bounded retry lineage from an interrupted batch selects one actual
 marked layout before any new opener reads the files. -/
 theorem BoundedReopenTrace.selectsAfterBatchCut {directory : DiskDirectory}
@@ -509,89 +626,16 @@ theorem BoundedReopenTrace.selectsAfterBatchCut {directory : DiskDirectory}
   have starts : oldWal.active.first ≤ before.length := by
     rw [← layout.activeEnd]
     exact layout.forward oldWal.active (List.mem_append_right _ (by simp))
-  obtain ⟨sealed, target, ⟨start, history, allowed, marker, through, trimmed⟩, sameManifest, pair, keeper,
+  obtain ⟨sealed, target, admitted, sameManifest, pair, keeper,
       later, noLater⟩ :=
     boundedBatchRetry_layoutInputs starts covered fits effects oldWal.directory.active.manifest
       (oldWal.directory.staged .walBoundary) watermarkRead attempts observed
-  have count : (WAL.encode history).size.toUInt64.toNat = history.length * WAL.frameSize := by
-    rw [UInt64.toNat_ofNat_of_lt' (batchHistoryFits allowed fits), WAL.encode_size, Nat.mul_comm]
-  have newCovered := Nat.le_trans covered (batchLengthMonotone allowed)
-  have decoded : retry.image.directory.active.walRange = some ⟨watermark, history.length⟩ := by
-    rw [pair]
-    exact DirectoryPublication.Bindings.walRange_of_counts (sameManifest ▸ watermarkRead)
-      marker (decode_encode _) count newCovered
-  let wal := oldWal.appendSelectedView retry.image.directory.active history
-  have layoutValid : wal.ReadLayout history ∧ wal.Valid history := by
-    rcases allowed with rfl | rfl
-    · have same := layout.afterRetainedSuffix valid oldRange retry.image.directory.active []
-        (by simpa only [List.append_nil] using decoded)
-      exact ⟨by simpa only [List.append_nil] using same.1, by simpa only [List.append_nil] using same.2.1⟩
-    · have same := layout.afterRetainedSuffix valid oldRange retry.image.directory.active batch decoded
-      exact ⟨same.1, same.2.1⟩
-  obtain ⟨ideal, range, sameKeeper, _, descriptors, offsets, _, _, _, _⟩ :=
-    layoutValid.1.checkpointReopenLayout layoutValid.2 .visible decoded rfl none
-  have trimmedKeeper : target.trimmed = ideal.keeper.bytes := by
-    rw [trimmed, sameKeeper] <;> rfl
-  obtain ⟨tail, visible⟩ := keeper.activeValid
-  let selected : CanonicalKeeperLayout retry.image history :=
-    ⟨ideal.range, range.symm ▸ decoded, ideal.through, ideal.first, ideal.sealed, ideal.keeper,
-      ideal.chain, ideal.covers, tail, trimmedKeeper ▸ visible⟩
-  have selectedFirst : selected.target.first = oldWal.active.first := by
-    change ideal.keeper.first = oldWal.active.first
-    rw [sameKeeper] <;> rfl
-  have selectedTrimmed : selected.target.trimmed = WAL.encode (history.drop oldWal.active.first) := by
-    rw [← selectedFirst]
-    exact selected.chain.keeperBytes
-  have selectedMarker : selected.target.pair.walBoundary =
-      some (WAL.Boundary.encode (WAL.encode history).size.toUInt64) := by
-    change retry.image.directory.active.walBoundary = _
-    rw [pair]
-    exact marker
-  have actual : selected.target = target :=
-    BatchRetryTarget.unique
-      ⟨selectedFirst, history, allowed, selectedMarker, selected.through, selectedTrimmed⟩
-      ⟨start, history, allowed, marker, through, trimmed⟩ pair
-  have plan : Prepared retry.image selected.target selected.plan := by
-    apply selected.prepared keeper.hasCrashImage
-    · intro payload survives
-      obtain ⟨extra, exactPayload⟩ := keeper.crashValid payload survives
-      exact ⟨extra, trimmedKeeper ▸ exactPayload⟩
-    · rw [← actual] at later
-      exact later
-  have accepted : published.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history)
-      retry.image.directory.active.manifest := by
-    rw [pair, sameManifest]
-    rcases allowed with rfl | rfl
-    · exact checkpoint
-    · exact published.acceptsVersioned_extend_history checkpoint fits
-  have consecutive : WAL.OrdinalsFrom 1 history :=
-    allowed.elim (fun old => old.symm ▸ ordered) fun whole =>
-      whole.symm ▸ (prepareBatch_extends_history ordered committed prepared).2.1
-  have generationRead : ∃ generation : UInt64,
-      ((retry.image.directory.active.manifest.mapM fun bytes =>
-        (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) :
-          Except String UInt64) = .ok generation := by
-    cases visible : retry.image.directory.active.manifest with
-    | none => exact ⟨0, rfl⟩
-    | some bytes =>
-      have selectedWatermark := (DirectoryPublication.Bindings.walRange_accounting decoded).1
-      rw [visible] at selectedWatermark
-      obtain ⟨parsed, parsedOk, _⟩ := selectedCheckpointWatermark_present_iff.mp selectedWatermark
-      exact ⟨parsed.header.generation, by rw [Option.mapM, parsedOk]; rfl⟩
-  obtain ⟨generation, generationRead⟩ := generationRead
-  have exactDescriptors : selected.sealed ++ [selected.keeper] = wal.readDescriptors selected.range.watermark := by
-    change ideal.sealed ++ [ideal.keeper] = wal.readDescriptors ideal.range.watermark
-    rw [range]
-    exact descriptors
-  have exactOffsets : selectWalSegmentReads (wal.segments.map WalSegment.first) selected.range.watermark =
-      some (selected.first, (wal.readDescriptors selected.range.watermark).map WalSegment.first) := by
-    change selectWalSegmentReads (wal.segments.map WalSegment.first) ideal.range.watermark =
-      some (ideal.first, (wal.readDescriptors ideal.range.watermark).map WalSegment.first)
-    rw [range]
-    exact offsets
-  exact ⟨sealed, pair ▸ sameManifest, history, allowed, selectedMarker, layoutValid.1, layoutValid.2,
-    selected, congrArg MarkedWalRange.watermark range, selectedFirst, sameKeeper, exactDescriptors,
-    exactOffsets, plan, noLater, accepted, consecutive, generation, generationRead⟩
+  obtain ⟨history, allowed, marker, layout, valid, selected, _, watermark, first, keeper, descriptors,
+    offsets, plan, accepted, consecutive, generation, generationRead⟩ :=
+    selectedBatchReopenLayout layout valid oldRange ordered committed prepared fits checkpoint
+      admitted sameManifest pair keeper later
+  exact ⟨sealed, pair ▸ sameManifest, history, allowed, marker, layout, valid, selected, watermark, first,
+    keeper, descriptors, offsets, plan, noLater, accepted, consecutive, generation, generationRead⟩
 
 /-- After a physical batch cut and any admitted finite retry trace, the
 selected directory pair determines exact WAL descriptors and keeper bytes.
