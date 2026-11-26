@@ -1,5 +1,18 @@
 # Current handoff
 
+The literal aligned open now identifies the actual checkpoint and
+marker reads, the canonical WAL payload and the remembered keeper on
+one execution. Its repair and exact table allocation follow the same
+return, with the table reconstructed from those bytes installed in the phase cell. The
+grouped error selects its reboot state independently of the next open
+and shares the existing ledger path with later publication errors.
+Acknowledged and uncertain writes also share the WAL-name frame
+through the reached publication callbacks. The acknowledged branch
+adds only the final ready-cell frame.
+[Literal aligned read](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·
+[Grouped reboot selection](../lean/Alvoki/Storage/Disk/NativeGroupedWriteRecovery.lean) ·
+[Write name frame](../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean)
+
 At the final rotation directory barrier, the same WAL window now
 reindexes to the writer chosen by the sampled successor. The local
 directory effect and exclusive create account for the other names.

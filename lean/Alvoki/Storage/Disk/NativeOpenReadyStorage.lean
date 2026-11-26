@@ -5,6 +5,92 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+/-- Project the two aligned barriers onto the ordinary recovery file
+image. Exact visible keeper bytes and an empty suffix suffice for this
+route. The resulting keeper bytes are durable only after its own sync. -/
+theorem CanonicalKeeperLayout.readyAfterAlignedEffects {initial authorized repaired : FileImage}
+    {history : List WAL.Write} (layout : CanonicalKeeperLayout initial history)
+    (tail : layout.tail = ByteArray.empty) (emptyLater : initial.later.visible = [])
+    (directoryEffect : authorized = initial.syncDirectory) (keeperEffect : repaired = authorized.syncKeeper) :
+    repaired.Ready layout.target := by
+  subst repaired
+  subst authorized
+  have bytes : initial.keeper.active = some layout.target.trimmed := by
+    simpa only [tail, ByteArray.append_empty, CanonicalKeeperLayout.target] using layout.visible
+  exact ⟨rfl, rfl, bytes, congrArg (fun value => [value]) bytes, by
+    simp [FileImage.syncDirectory, FileImage.syncKeeper, LaterNames.syncDirectory, LaterNames.settled,
+      LaterNames.DurablyEmpty, emptyLater]⟩
+
+section OpenInstallation
+
+variable {heap : Type} {view : OpenCloseHeapView heap FileImage}
+  {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+  {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+  {installed : Installed} {repaired : heap}
+
+/-- These are the heap projections a reference allocation leaves in
+place. Phase-cell contents and the newly allocated token are separate. -/
+structure OpenInstallHeapFrame (view : OpenCloseHeapView heap FileImage) (lock : IO.FS.Handle)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (before reached : heap) : Prop where
+  files : view.files reached = view.files before
+  census : view.descriptors reached = view.descriptors before
+  cache : view.cacheAt reached cached active pending = view.cacheAt before cached active pending
+  lock : (view.handle reached lock).2.1 = (view.handle before lock).2.1
+
+/-- Use the repaired census and cache and the identities of the actual
+phase and token cells. The writer value comes from the completed replay. -/
+def OpenReferenceAllocations.readyState
+    (allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase installed repaired)
+    (writer : SegmentedWriterState) (directory : DiskDirectory) (owner directorySlot : DescriptorSlot)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat) : NativeReadyState :=
+  ⟨⟨directory, owner.description, .ready installed, phaseIdentity allocation.phase, tokenIdentity allocation.token⟩,
+    writer, view.descriptors repaired, view.cacheAt repaired cached active pending, owner, directorySlot⟩
+
+/-- Assemble a valid writer and the literal table from the same two
+successful allocations. The local frames identify the caller-visible
+descriptor census, files, lock slot, and cache with their repair state. -/
+theorem OpenReferenceAllocations.installsReadyState
+    (allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase installed repaired)
+    (writer : SegmentedWriterState) (directory : DiskDirectory) (owner directorySlot : DescriptorSlot)
+    {lock : IO.FS.Handle} {syncFiles : DiskTable.OpenSyncFiles}
+    {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+    (constructor : DiskTable.OpenReferenceAssembly directory lock syncFiles assemble)
+    (cache : OpenSyncCacheRefs syncFiles directory.path)
+    (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
+    (sameInstalled : installed = writer.installed)
+    (retained : writer.RetainedReady directory owner.description)
+    (files : view.files repaired = ⟨writer.files, writer.owners⟩)
+    (ownsSlot : (view.handle repaired lock).2.1 = owner)
+    (ownerLive : owner ∈ (view.descriptors repaired).slots)
+    (directoryLive : directorySlot ∈ (view.descriptors repaired).slots)
+    (directoryCached : ∃ captured, (view.cacheAt repaired cache.directory cache.active cache.pending).directory =
+      some (captured, directorySlot, 0))
+    (phaseFrame : OpenInstallHeapFrame view lock cache.directory cache.active cache.pending repaired allocation.afterPhase)
+    (tokenFrame : OpenInstallHeapFrame view lock cache.directory cache.active cache.pending allocation.afterPhase allocation.afterToken) :
+    let state := allocation.readyState writer directory owner directorySlot cache.directory cache.active cache.pending
+      phaseIdentity tokenIdentity
+    let db := assemble allocation.phase allocation.token
+    state.Valid ∧
+    installReady installed allocatePhase allocateToken (fun phase token => pure (assemble phase token)) repaired =
+      .ok db allocation.afterToken ∧
+    db.UsesOpenReferences directory lock syncFiles allocation.phase allocation.token ∧
+    view.phase allocation.afterToken allocation.phase = some state.session.phase ∧
+    view.files allocation.afterToken = state.files ∧
+    view.descriptors allocation.afterToken = state.census ∧
+    view.cacheAt allocation.afterToken cache.directory cache.active cache.pending = state.cache ∧
+    (view.handle allocation.afterToken lock).2.1 = state.owner := by
+  intro state db
+  obtain ⟨returned, references, phase⟩ := allocation.installs constructor
+  have ready : state.Valid := ⟨congrArg Phase.ready sameInstalled, rfl, ownerLive, directoryLive, directoryCached, retained⟩
+  exact ⟨ready, returned, references, phase, tokenFrame.files.trans (phaseFrame.files.trans files),
+    tokenFrame.census.trans phaseFrame.census, tokenFrame.cache.trans phaseFrame.cache,
+    tokenFrame.lock.trans (phaseFrame.lock.trans ownsSlot)⟩
+
+end OpenInstallation
+
 theorem NativeReadyState.crashPath_rootOrChild {state : NativeReadyState} {path : FilePath}
     (selected : state.crashPath path) :
     path = state.session.directory.path ∨ ∃ file, path = state.session.directory.file file := by

@@ -110,18 +110,16 @@ theorem NativeOpenedPosition.groupedRetryAndReads
           SnapshotWalReplay .empty (current.current.history ++ nextBatch) reference ∧
           (∀ observation ∈ last.current.ready.reads, observation.agrees reference)) := by
   obtain ⟨attempts, retried, retryEffects⟩ := retry
-  obtain ⟨schedules, batch, table, guarded, poisoned, prepared, _, guard, assigned, classified⟩ :=
-    current.recoversGroupedWriteError view cache appender stager syncer inodes observe inode buffered request lookup rename
-      nonempty returned initial groupEffects reboot later source retryEffects (reboot.startsDurableRetry reset)
-      And.left vacant healthy phase ptrEq
+  obtain ⟨schedules, batch, table, guarded, poisoned, prepared, fits, guard, assigned, classified⟩ :=
+    current.selectsAfterGroupedError view cache appender stager syncer inodes observe inode buffered request lookup rename
+      nonempty returned initial groupEffects reboot later
   refine ⟨schedules, attempts, retried, batch, table, guarded, poisoned, prepared, guard, assigned, ?_⟩
-  rcases classified with ⟨group, _, _, footprint, recovered, _⟩ | elsewhere
+  rcases classified with ⟨group, admitted, selected, _, _⟩ | elsewhere
   · refine .inr ⟨group, ?_⟩
-    obtain ⟨plan, _, _, writer⟩ :=
-      recovered.readyAlignedWriter storage visible footprint.2 exactKeeper noLater (aligned prepared)
-    obtain ⟨handle, start, nextCache, retained, opened, selected, recoveredLedger, _, physical⟩ :=
-      plan.ledgerAtReadyWriter writer request cause
-    have old := selected.trans plan.oldHistory
+    obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical⟩ :=
+      (ready).opensReadyAfterAlignedRetries storage visible request cause prepared fits admitted retryEffects selected
+        (reboot.startsDurableRetry reset selected).2 exactKeeper noLater (healthy prepared) phase ptrEq (aligned prepared)
+    have old := history.trans plan.oldHistory
     have appended : start.current.history = current.current.history ++ retained := by
       simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using
         recoveredLedger.history

@@ -223,8 +223,13 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   it through the reachable operations. At the final rotation directory
   barrier the chosen survivor reindexes the window by the actual
   successor, and the local barrier effect accounts for all other names.
-  Use those facts and both installer rules in the literal aligned retry
-  to replace its successful-open report premise.
+  The literal aligned open now identifies the selected checkpoint,
+  canonical WAL bytes, remembered keeper and actual table allocations
+  from one return. Grouped and late publication errors can select the
+  reboot before requesting a successful reopen. Connect the exact
+  repair calls to both the file-image and physical storage projections
+  on that call and use the next writer on the returned references.
+  [Literal aligned retry](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
   [Rotation WAL names](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
   [Fresh WAL names](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
   [WAL name window](../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean) ·

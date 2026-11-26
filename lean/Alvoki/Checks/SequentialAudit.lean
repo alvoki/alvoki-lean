@@ -4066,6 +4066,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.BeforeMarkerWriteFrame.refl
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.BeforeMarkerWriteFrame.trans
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversEarlyWriteError
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.selectsAfterGroupedError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversGroupedWriteError
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.LedgerSuffix.empty
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.LedgerSuffix.append
@@ -4077,6 +4078,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentImage.NamespaceWindow.restrict
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.walNamespace
 #check_axioms Alvoki.Storage.DiskSession.WalNamePresenceFrame.chosen
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.WalNameEffects.throughPublication
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.preservesWalNamesAfterAcknowledgement
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.preservesWalNamesAfterCommitUnknown
 #check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.opensReadyWriter
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.samplesWal
@@ -4088,6 +4091,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.ledgerAtReadyWriter
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.oldHistory
 #check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.framesReadyStorage
+#check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.installsReadyState
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.readyAfterAlignedEffects
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.bindsOpenCacheDirectory
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_rootOrChild
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.settledByDirectory
@@ -4124,6 +4129,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.readOnlyWithDurability
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWriteRecovery.readyAlignedWriter
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.alignedOfExactKeeper
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.opensReadyAfterAlignedRetries
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.keptSeal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.forReopenedWriter
