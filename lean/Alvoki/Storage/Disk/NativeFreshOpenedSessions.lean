@@ -138,8 +138,7 @@ theorem walNamespace {input : FilePath} {directory : DiskDirectory}
       (observe allocation.afterPhase))
     (tokenFrame : WalNamePresenceFrame directory 0 through (observe allocation.afterPhase)
       (observe allocation.afterToken)) :
-    let state := opened.start.current.ready.state
-    state.writer.wal.SettledNamespaceWindow state.session.directory 0 through (observe opened.start.reached) := by
+    opened.start.WalWindowAt observe 0 through := by
   let state := opened.start.current.ready.state
   let stored := observe raw.markerDirectory.reached
   have directoryEq : state.session.directory = directory := opened.start.directory.trans resolved
@@ -175,6 +174,7 @@ theorem walNamespace {input : FilePath} {directory : DiskDirectory}
     have same := chosen names survives
     rw [report.handoff.markerSettlement, List.map_singleton, List.mem_singleton, ← binding] at same
     exact congrArg Option.isSome same
+  refine ⟨fun offset _ => Nat.zero_le offset, ?_⟩
   change state.writer.wal.NamespaceWindow state.session.directory 0 through (observe opened.start.reached).files.names ∧
     ∀ names ∈ (observe opened.start.reached).crashNames,
       state.writer.wal.NamespaceWindow state.session.directory 0 through names
@@ -377,6 +377,58 @@ theorem writeStorageEntry {input : FilePath} {directory : DiskDirectory}
 /-- Consume a fixed sequence of observed public calls directly on the
 fresh returned table. The actual bootstrap cache supplies the first
 physical write entry and its empty ledgers supply the replay origin. -/
+theorem refinesReadyCallsFramed {input : FilePath} {directory : DiskDirectory}
+    {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
+    (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
+    (resolved : opened.handle.directory = directory)
+    (writes : NativeReadyWriteCalls opened.handle) (issuer : opened.handle.LatestIssuer)
+    {image : Type} (view : OpenCloseHeapView heap image)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (storage : heap → CheckpointStorageObservation) (inode : IO.FS.Handle → Nat)
+    (buffered : heap → IO.FS.Handle → ByteArray)
+    (census : view.descriptors opened.start.reached = opened.start.current.ready.state.census)
+    (cacheAt : view.cacheAt opened.start.reached writes.cache.directory writes.cache.active writes.cache.pending =
+      opened.start.current.ready.state.cache)
+    (settled : let state := opened.start.current.ready.state
+      NativeReadyStorage state (storage opened.start.reached) ∧
+      ∀ inode, (storage opened.start.reached).files.names
+        (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode →
+        (inodes opened.start.reached).visible inode = state.writer.wal.active.bytes)
+    (effects : writes.ReturnEffects view inodes runs storage inode buffered)
+    {calls : List (NativeReturnedCall opened.handle)} {reached : heap}
+    (executed : NativeReturnedCalls writes issuer opened.start.reached [] calls reached)
+    (covered : NativeReturnedCalls.ReadyFrom writes issuer opened.start.reached [] calls) :
+    call entry = .ok opened.handle.table opened.start.reached ∧
+    ∃ (last : NativeOpenedPosition opened.handle) (events : List NativeExecutionEvent),
+      last.reached = reached ∧
+      last.pins.map NativeOpenedPin.raw = calls.foldl (fun pins request => request.pinsAfter pins) [] ∧
+      writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) last ∧
+      events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
+      last.current.history = events.flatMap NativeExecutionEvent.writes ∧
+      last.current.submissions = events.flatMap NativeExecutionEvent.submissions ∧
+      last.current.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
+      InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
+        last.current.ready.state.writer.installed last.current.ready.state.session ∧
+      opened.start.current.LedgerSuffix events last.current ∧
+      last.current.history.length ≤ (calls.map NativeReturnedCall.requestedRows).sum ∧
+      (∀ {first through}, writes.WalWindowEffects storage first through →
+        opened.start.WalWindowAt storage first through → last.WalWindowAt storage first through) := by
+  have atRoot := (congrArg DiskDirectory.path resolved) ▸ writes.cache.atRoot
+  obtain ⟨cache, directory, active, pending, first⟩ :=
+    opened.writeStorageEntry used view resolved writes.cache.references atRoot census cacheAt settled
+  have physical : writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) opened.start := by
+    exact ⟨first.census, by rw [← directory, ← active, ← pending]; exact first.cacheAt,
+      first.physical, first.keeper, fun literal named => first.root literal (directory ▸ named)⟩
+  obtain ⟨last, events, heap, pins, stored, length, records, ledger, budget, names⟩ :=
+    executed.refinesReadyFramed covered view inodes runs storage inode buffered effects opened.start rfl
+      (by rw [opened.emptyPins]; rfl) physical
+  obtain ⟨history, submissions, reads, replay⟩ := opened.refinesLedger ledger
+  refine ⟨opened.opened, last, events, heap, pins, stored, length, records, history, submissions, reads, replay,
+    ledger, ?_, names⟩
+  simpa only [opened.emptyHistory, List.length_nil, Nat.zero_add] using budget
+
+/-- The fresh ready-call ledger is independent of any WAL name window
+needed by a later pending operation. -/
 theorem refinesReadyCalls {input : FilePath} {directory : DiskDirectory}
     {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
     (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
@@ -409,16 +461,10 @@ theorem refinesReadyCalls {input : FilePath} {directory : DiskDirectory}
       last.current.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
       InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
         last.current.ready.state.writer.installed last.current.ready.state.session := by
-  have atRoot := (congrArg DiskDirectory.path resolved) ▸ writes.cache.atRoot
-  obtain ⟨cache, directory, active, pending, first⟩ :=
-    opened.writeStorageEntry used view resolved writes.cache.references atRoot census cacheAt settled
-  have physical : writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) opened.start := by
-    exact ⟨first.census, by rw [← directory, ← active, ← pending]; exact first.cacheAt,
-      first.physical, first.keeper, fun literal named => first.root literal (directory ▸ named)⟩
-  obtain ⟨last, events, heap, pins, stored, length, records, ledger⟩ :=
-    executed.refinesReady covered view inodes runs storage inode buffered effects opened.start rfl
-      (by rw [opened.emptyPins]; rfl) physical
-  exact ⟨opened.opened, last, events, heap, pins, stored, length, records, opened.refinesLedger ledger⟩
+  obtain ⟨atOpen, last, events, heap, pins, stored, length, records, history, submissions, reads, replay, _⟩ :=
+    opened.refinesReadyCallsFramed used resolved writes issuer view inodes runs storage inode buffered
+      census cacheAt settled effects executed covered
+  exact ⟨atOpen, last, events, heap, pins, stored, length, records, history, submissions, reads, replay⟩
 
 /-- Start the first observed write at the actual returned heap of the
 fresh opener. Its local effects refer to the original cache references.

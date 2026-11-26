@@ -174,12 +174,9 @@ variable
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
     {attempts : source.FailedCalls rebooted returns reached}
     {firstOffset : Nat}
-    (covers : ∀ offset ∈ current.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
     (nameEffects : current.WalNameEffects appender stager syncer cache request lookup rename storage firstOffset
-      ((current.current.history ++ batch).length))
-    (initialWindow : current.current.ready.state.writer.wal.SettledNamespaceWindow
-      current.current.ready.state.session.directory firstOffset
-      ((current.current.history ++ batch).length) (storage current.reached))
+      (current.current.history.length + request.rows.length))
+    (initialWindow : current.WalWindowAt storage firstOffset (current.current.history.length + request.rows.length))
 
 include nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reset nameEffects initialWindow
 
@@ -203,10 +200,11 @@ theorem NativeOpenedPosition.selectsDurableAfterPublicationError :
       nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reboot
   have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
     nonempty returned nameEffects
-  exact ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected, reboot.walNamespace nameFrame initialWindow,
+  have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
+    simp only [List.length_append, (prepareBatch_spec prepared).1]
+  exact ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected,
+    by simpa only [upper] using reboot.walNamespace nameFrame initialWindow.2,
     (reboot.startsDurableRetry reset selected).2, reboot.laterNames active⟩
-
-include covers
 
 /-- A late publication error and its joint reboot reach the ready table
 through the same interpreter's failed opens. The recovery event uses
@@ -300,7 +298,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
       nameEffects initialWindow
   obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical, sameDirectory, coversNext, nextWindow⟩ :=
     (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
-      covers selected window durable suffix (retryEffects target admitted active)
+      initialWindow.1 selected window durable suffix (retryEffects target admitted active)
       admission namespaceView root rootBinding (openEffects target admitted active)
       (alignedEffects target admitted active) (replacementEffects target admitted active)
       phaseIdentity tokenIdentity phase ptrEq openedTable
@@ -357,7 +355,7 @@ theorem NativeOpenedPosition.stopsAfterPublicationErrorRetries
   obtain ⟨whole, earlier, lastInput, diagnostic, issued, reported, previous, call, plan, physical, last, settled,
     later, allowed, replay, bounds⟩ :=
     NativeExecutionPosition.refinesFailedOpenTerminalLedger (current := current.current) prior prepared fits admitted
-      storage visible covers selected window durable suffix attempts retried (retryEffects target admitted active)
+      storage visible initialWindow.1 selected window durable suffix attempts retried (retryEffects target admitted active)
   have through := (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through
   exact ⟨schedules, returned, whole, target, earlier, lastInput, diagnostic, issued, active, reported, previous, call,
     plan, physical, last, settled, later, through, allowed, replay, bounds⟩

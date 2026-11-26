@@ -43,12 +43,11 @@ variable
       (fun atHeap => (inodes atHeap).visible) failed rebooted)
     (reset : reboot.DurableReset)
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
-    {firstOffset : Nat} (covers : ∀ offset ∈ current.current.ready.state.writer.wal.segments.map WalSegment.first,
-      firstOffset ≤ offset)
+    {firstOffset : Nat}
     (nameEffects : current.WalNameEffects appender stager syncer cache request lookup rename
       (fun atHeap => (observe atHeap).storageObservation) firstOffset (current.current.history.length + request.rows.length))
-    (initialWindow : current.current.ready.state.writer.wal.SettledNamespaceWindow current.current.ready.state.session.directory
-      firstOffset (current.current.history.length + request.rows.length) (observe current.reached).storageObservation)
+    (initialWindow : current.WalWindowAt (fun atHeap => (observe atHeap).storageObservation)
+      firstOffset (current.current.history.length + request.rows.length))
     {reached : heap} (admission : source.AlignedAdmissionEffects view current.current.ready.state input reached
       (fun atHeap => (observe atHeap).storageObservation) (fun atHeap => (inodes atHeap).visible))
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
@@ -108,7 +107,7 @@ private abbrev groupedFailure (batch : List WAL.Write) (poisoned : heap) : Prop 
     syncer.group (dir).path cache.directory cache.active cache.pending #[keeperPath, staging] staged =
       .error cause failed
 
-include nonempty returned initial groupEffects reset covers nameEffects initialWindow admission
+include nonempty returned initial groupEffects reset nameEffects initialWindow admission
   rootBinding openedTable phaseIdentity tokenIdentity openEffects alignedEffects replacementEffects phase ptrEq
 
 /-- Classify the returned write at the grouped fsync boundary and
@@ -147,12 +146,12 @@ theorem NativeOpenedPosition.reopensAfterGroupedError
   · refine .inr ⟨group, ?_⟩
     have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
       nonempty returned nameEffects
-    have window := reboot.walNamespace nameFrame initialWindow
+    have window := reboot.walNamespace nameFrame initialWindow.2
     have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
       simp only [List.length_append, (prepareBatch_spec prepared).1]
     obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical, sameDirectory, coversNext, nextWindow⟩ :=
       (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
-        covers selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
+        initialWindow.1 selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
         (reboot.laterNames selected.valid.selected.symm) (by simpa only [upper] using retryEffects)
         admission namespaceView root rootBinding (openEffects prepared) (alignedEffects prepared)
         (replacementEffects prepared) phaseIdentity tokenIdentity phase ptrEq openedTable
@@ -217,7 +216,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
   obtain ⟨attempts, retried, retryEffects⟩ := retry
   obtain ⟨schedules, batch, table, guarded, poisoned, prepared, guard, assigned, classified⟩ :=
     current.reopensAfterGroupedError view cache appender stager syncer inodes runs observe inode buffered request lookup rename
-      nonempty returned initial groupEffects reboot reset source covers nameEffects initialWindow admission namespaceView root
+      nonempty returned initial groupEffects reboot reset source nameEffects initialWindow admission namespaceView root
       rootBinding openedTable phaseIdentity tokenIdentity openEffects alignedEffects replacementEffects phase ptrEq
       attempts retryEffects
   refine ⟨schedules, attempts, retried, batch, table, guarded, poisoned, prepared, guard, assigned, ?_⟩

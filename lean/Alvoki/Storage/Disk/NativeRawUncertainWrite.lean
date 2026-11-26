@@ -118,6 +118,21 @@ theorem WalNamePresenceFrame.preservesNamespaceWindow
   · exact initial.1.frame (fromLive ▸ same)
   · exact (initial.2 prior fromCrash).frame same
 
+/-- The selected WAL segment starts and the live and joint-crash
+catalogs within the finite interval needed by a subsequent request. -/
+abbrev NativeOpenedPosition.WalWindowAt {heap : Type} {opened : NativeOpenedHandle heap} (position : NativeOpenedPosition opened)
+    (storage : heap → CheckpointStorageObservation) (first through : Nat) : Prop :=
+  let state := position.current.ready.state
+  (∀ offset ∈ state.writer.wal.segments.map WalSegment.first, first ≤ offset) ∧
+  state.writer.wal.SettledNamespaceWindow state.session.directory first through (storage position.reached)
+
+theorem NativeOpenedPosition.WalWindowAt.restrictUpper {heap : Type} {opened : NativeOpenedHandle heap}
+    {position : NativeOpenedPosition opened} {storage : heap → CheckpointStorageObservation}
+    {first through upper : Nat} (window : position.WalWindowAt storage first through)
+    (within : upper ≤ through) : position.WalWindowAt storage first upper :=
+  ⟨window.1, window.2.1.restrict (Nat.le_refl _) within,
+    fun names survives => (window.2.2 names survives).restrict (Nat.le_refl _) within⟩
+
 /-- File callbacks preserve the original phase cell independently of
 their WAL effects. Keep authority and the protected files through the
 same reached-state frame as for an acknowledged write. -/

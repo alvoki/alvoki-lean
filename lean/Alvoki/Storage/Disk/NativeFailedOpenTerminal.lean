@@ -40,11 +40,10 @@ theorem NativeOpenedPosition.stopsAfterGroupedWriteRetries
       request lookup failed cause)
     (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
     (reset : reboot.DurableReset)
-    {firstOffset : Nat} (covers : ∀ offset ∈ (state).writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
+    {firstOffset : Nat}
     (nameEffects : current.WalNameEffects appender stager syncer cache request lookup rename storage
       firstOffset (current.current.history.length + request.rows.length))
-    (initialWindow : (state).writer.wal.SettledNamespaceWindow dir firstOffset
-      (current.current.history.length + request.rows.length) (storage current.reached))
+    (initialWindow : current.WalWindowAt storage firstOffset (current.current.history.length + request.rows.length))
     (source : RawMarkedOpenInterpreter heap stream) {returns : List (FilePath × IO.Error)}
     (attempts : source.FailedCalls rebooted returns reached) (retried : returns ≠ [])
     (retryEffects : RawOpenRetryTrace.SelectedEffects view source rebooted (state).writer.target
@@ -83,12 +82,12 @@ theorem NativeOpenedPosition.stopsAfterGroupedWriteRetries
   · refine .inr ⟨grouped, ?_⟩
     have framed := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
       nonempty returned nameEffects
-    have window := reboot.walNamespace framed initialWindow
+    have window := reboot.walNamespace framed initialWindow.2
     have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
       simp only [List.length_append, (prepareBatch_spec prepared).1]
     obtain ⟨_, earlier, input, diagnostic, issued, reported, previous, call, plan, _, last, physical, _, _, replay, bounded⟩ :=
       NativeExecutionPosition.refinesFailedOpenTerminalLedger (current := current.current)
-        prior prepared fits admitted storage visible covers selected
+        prior prepared fits admitted storage visible initialWindow.1 selected
         (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
         (reboot.laterNames selected.valid.selected.symm) attempts retried (by simpa only [upper] using retryEffects)
     have old : plan.history = origin.history ++ events.flatMap NativeExecutionEvent.writes :=

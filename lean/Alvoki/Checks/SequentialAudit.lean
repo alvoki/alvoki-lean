@@ -4018,6 +4018,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.ledgerSuffix
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.reopenedWatermark
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.refinesReturnedPin
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.WalWindowAt.restrictUpper
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteCalls.returnedWriteAt
+#check_axioms Alvoki.Storage.DiskSession.NativeReturnedCall.Records.writesBound
+#check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReadyFramed
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesReadyCallsFramed
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReady
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesReadyCalls
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.append

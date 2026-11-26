@@ -125,6 +125,14 @@ window to that image under local namespace effects. A later open carries
 both present and absent names through reboot and failed attempts using
 per-call frames. This matters because an extra canonical WAL segment can
 change the replay start even when the expected files have the correct bytes.
+A fresh handle can carry a bounded WAL name inventory through the same
+finite sequence of supported writes, snapshot acquisitions and reads as its
+client history. The sum of submitted row counts bounds history growth even
+when a request is rejected. This lets a caller choose the range needed by a
+later write before its outcome is known. Grouped and late uncertain-write
+recovery use the same inventory at their entry. Its initial coverage and the
+local effects of the reached operations remain explicit premises.
+
 The physical aligned-repair theorem follows the opened keeper inode through
 the final file sync, including the branch that removes later WAL segments and
 syncs the directory again. Uncertain-write recovery uses this theorem for both
