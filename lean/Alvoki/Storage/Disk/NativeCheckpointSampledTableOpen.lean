@@ -222,7 +222,9 @@ local notation "readBytes" => (fun atHeap => WalInodeImage.visible (inodes atHea
 open acquires the sampled directory and LOCK. The same sample fixes the
 manifest, runs and WAL bytes. The live catalog also fixes which canonical
 WAL names are absent through the cutoff. The actual aligned repair and
-reference allocations can then supply the retained writer of that table. -/
+reference allocations can then supply the retained writer of that table.
+For an error before flock, `framesSampledCheckpointBeforeFlock` supplies
+both the live read projections and the later durable continuation. -/
 theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (prior : NativeCheckpointSourcePrefix current primitives fsync stage)
     (names : FilePath → Option Nat) (contents : Nat → ByteArray)

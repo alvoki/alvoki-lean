@@ -137,6 +137,45 @@ section CheckpointRetry
 variable {rebooted reached : heap} {stream : Type} {source : RawMarkedOpenInterpreter heap stream}
   {errors : List (FilePath × IO.Error)}
 
+/-- A frame for failed opens that preserve the sampled checkpoint.
+The selected live bytes, durable bytes, and root binding in the parent
+directory survive. WAL name presence also records gaps in the catalog. -/
+structure SampledCheckpointRetryFrame (directory : DiskDirectory) (scope : FilePath → Prop)
+    (through : Nat) (observe : heap → CheckpointStorageObservation) (readBytes : heap → Nat → ByteArray)
+    (before after : heap) : Prop where
+  live : (⟨(observe before).files.names, fun inode => [readBytes before inode]⟩ : CheckpointSurvivingFiles).Frames
+    scope ⟨(observe after).files.names, fun inode => [readBytes after inode]⟩
+  walNames : ∀ start ≤ through, ((observe after).files.names (directory.file (.walSegment start))).isSome =
+    ((observe before).files.names (directory.file (.walSegment start))).isSome
+  durable : (observe before).files.Frames scope (observe after).files
+  parent : (observe before).Frames (· = directory.path) (observe after)
+
+theorem SampledCheckpointRetryFrame.trans {directory : DiskDirectory} {scope : FilePath → Prop}
+    {through : Nat} {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
+    {before middle after : heap}
+    (left : SampledCheckpointRetryFrame directory scope through observe readBytes before middle)
+    (right : SampledCheckpointRetryFrame directory scope through observe readBytes middle after) :
+    SampledCheckpointRetryFrame directory scope through observe readBytes before after :=
+  ⟨left.live.trans right.live, fun start bound => (right.walNames start bound).trans (left.walNames start bound),
+    left.durable.trans right.durable, left.parent.trans right.parent⟩
+
+variable (source) in
+/-- At an observed failed occurrence, local resolver, stat, and
+append-error frames supply both the literal reader's live facts and
+the ready continuation's durable facts. The public return identifies
+the same heap even when a callback advances it. -/
+theorem RawMarkedOpenInterpreter.framesSampledCheckpointBeforeFlock
+    {input : FilePath} {before after atFailure : heap} {cause prefixCause : IO.Error}
+    (returned : source.openTable input before = .error cause after)
+    (failed : source.calls.beforeFlock input before = .error prefixCause atFailure)
+    {directory : DiskDirectory} {scope : FilePath → Prop} {through : Nat}
+    {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
+    (callbacks : source.calls.BeforeFlockErrorFrames input before prefixCause atFailure
+      (SampledCheckpointRetryFrame directory scope through observe readBytes)) :
+    SampledCheckpointRetryFrame directory scope through observe readBytes before after := by
+  obtain ⟨actual, framed⟩ := source.framesBeforeFlock failed SampledCheckpointRetryFrame.trans callbacks
+  exact (EStateM.Result.error.inj (actual.symm.trans returned)).2 ▸ framed
+
 /-- Carry actual durable payloads of the sampled files and settlement
 of the root's name in its parent through the same failed calls. -/
 theorem RawMarkedOpenInterpreter.FailedCalls.carriesCheckpointReset
@@ -219,8 +258,7 @@ theorem RawOpenRetryTrace.SelectedEffects.beforeFlock
       RawOpenRetryTrace.SelectedEffects view source first target (retryLiveFiles storage visible)
         state.selectedRetryPath (retryObservations view state target storage visible firstOffset through)
         (prior.next input returned) := by
-  obtain ⟨returned, rejected⟩ := source.returnsBeforeFlock failed
-  have framed := rejected.framesRejected RawOpenRetryTrace.BeforeFlockFrame.trans effects
+  obtain ⟨returned, framed⟩ := source.framesBeforeFlock failed RawOpenRetryTrace.BeforeFlockFrame.trans effects
   refine ⟨returned, .append (calls := .next .empty input returned) before (.inl framed.image)
     (fun path selected => framed.live path (.inl selected)) ?_⟩
   intro carried

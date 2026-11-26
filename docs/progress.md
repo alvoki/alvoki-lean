@@ -156,7 +156,10 @@ the successful reader's preparation. It also preserves the root binding in
 each allowed crash namespace. It assumes that the reboot restores the sampled
 files, each failed open preserves the selected files and root, and the later
 WAL names at the successful entry agree with the complete directory scan.
-Deriving those frames for every reachable failed open remains open.
+For an open that fails before flock, the resolver, metadata checks and
+LOCK append-open now supply both the live and durable frames at the exact
+public error heap. A failed append-open needs its own local effect. Failed
+repairs after lock acquisition still require their corresponding frames.
 [Sampled checkpoint reader](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and

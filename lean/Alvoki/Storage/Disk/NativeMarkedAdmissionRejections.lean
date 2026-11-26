@@ -146,6 +146,17 @@ theorem RawOpenPrefixReturn.framesRejected {calls : RawOpenAdmissionCallbacks he
         (trans (by simpa only [checked, reachedState] using lockFrame resolvedDirectory afterFlat)
           (effects.appendError resolved flat checked appended)))
 
+/-- The same callback chain supplies the actual public error and
+frames any observation carried by the later retry. -/
+theorem RawMarkedOpenInterpreter.framesBeforeFlock (source : RawMarkedOpenInterpreter heap stream)
+    {cause : IO.Error} {reached : heap} (failed : source.calls.beforeFlock input entry = .error cause reached)
+    {frame : heap → heap → Prop}
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (effects : source.calls.BeforeFlockErrorFrames input entry cause reached frame) :
+    source.openTable input entry = .error cause reached ∧ frame entry reached := by
+  obtain ⟨returned, rejected⟩ := source.returnsBeforeFlock failed
+  exact ⟨returned, rejected.framesRejected trans effects⟩
+
 /-- A flock error on the actual append handle bypasses the held worker.
 The error reaches the caller after the interpreter releases that handle. -/
 theorem RawFlockRejection.returnsMarkedInterpreter (source : RawMarkedOpenInterpreter heap stream)
