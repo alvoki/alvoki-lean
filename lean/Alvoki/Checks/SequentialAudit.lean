@@ -3989,6 +3989,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesPublishedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesObservedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesAndReadsLatest
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.reopensAfterGroupedError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.groupedRetryAndReads
 #check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.finalizesWithFrames
 #check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.selectedRetry

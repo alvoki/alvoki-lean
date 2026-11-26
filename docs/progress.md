@@ -30,7 +30,11 @@ bindings, including holes already absent. The final directory fsync settles
 the surviving names, and the pending cache calls, keeper fsync and both
 allocations carry that agreement to the returned table. The next grouped or
 late write can use this guarantee directly for its own reboot selection.
-The next write still needs its observed callbacks and storage effects.
+The grouped-error proof exposes the recovered table, its directory identity
+and its ledger before assuming any outcome for the next call. It accepts
+zero or more failed opens before success. The write-and-snapshot proof
+uses that same return. The next write still needs its observed callbacks
+and storage effects.
 [Window at reboot](../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean) ·
 [Literal returned table](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 

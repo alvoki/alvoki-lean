@@ -511,6 +511,7 @@ theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
       start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧
+      start.current.ready.state.session.directory = dir ∧
       (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
       ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
         start.current.ready.state.session.directory firstOffset through (observe start.reached) := by
@@ -584,7 +585,9 @@ theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
   have selectedHistory := history.trans sameHistory
   obtain ⟨keptBatch, ledger⟩ := plan.ledgerAfterReopen start.current selectedHistory submissions reads request input cause
   refine ⟨handle, start, nextCache, keptBatch, opened, selectedHistory, ledger,
-    start.current.ready.readPrefix.guardedReplay, writeEntry, ?_, ?_⟩
+    start.current.ready.readPrefix.guardedReplay, writeEntry, ?_, ?_, ?_⟩
+  · rw [stateEq]
+    rfl
   · rw [stateEq]
     exact covers
   · intro through
@@ -846,6 +849,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
       start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧
+      start.current.ready.state.session.directory = dir ∧
       (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
       ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
         start.current.ready.state.session.directory firstOffset through (observe start.reached) := by
@@ -1045,6 +1049,7 @@ theorem NativeReadPosition.opensLiteralAlignedAfterWriteRetries
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
       start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧
+      start.current.ready.state.session.directory = dir ∧
       (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
       ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
         start.current.ready.state.session.directory firstOffset through (observe start.reached) := by
@@ -1053,11 +1058,11 @@ theorem NativeReadPosition.opensLiteralAlignedAfterWriteRetries
   obtain ⟨held, framed, authority, rootNamed, lockNamed, _, _, worker⟩ :=
     RawMarkedOpenInterpreter.reachesAlignedCache admission settled.protectedFiles returned
   have rootObject := Option.some.inj (rootBinding.symm.trans rootNamed)
-  obtain ⟨handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry, covered, settledNames⟩ :=
+  obtain ⟨handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry, sameDirectory, covered, settledNames⟩ :=
     plan.returnsLiteralAlignedWriter held namespaceView root request cause observe visible
       (effects held plan authority rootObject) framed authority rootNamed lockNamed entry physical covers namesAtReached exactKeeper
       suffix settled phaseIdentity tokenIdentity phaseEffects tokenEqual returned worker
-  exact ⟨plan, handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry, covered, settledNames⟩
+  exact ⟨plan, handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry, sameDirectory, covered, settledNames⟩
 
 end LiteralContinuation
 

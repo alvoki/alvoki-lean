@@ -220,6 +220,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
       start.WriteStorageEntry view nextCache (storage start.reached) (visible start.reached) ∧
+      start.current.ready.state.session.directory = dir ∧
       (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
       (∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
         start.current.ready.state.session.directory firstOffset through (storage start.reached)) ∧
@@ -250,7 +251,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
   have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
     nonempty returned nameEffects
   have window := reboot.walNamespace nameFrame initialWindow
-  obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical, coversNext, nextWindow⟩ :=
+  obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical, sameDirectory, coversNext, nextWindow⟩ :=
     (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
       covers selected window (reboot.startsDurableRetry reset selected).2
       (reboot.laterNames active) (retryEffects target admitted active)
@@ -258,7 +259,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
       phaseIdentity tokenIdentity phase ptrEq openedTable
   have whole : retained = [] ∨ retained = batch := ledger.whole _ (List.mem_singleton_self _)
   refine ⟨schedules, returned, rebootVacant, slots, target, plan, handle, start, nextCache, retained,
-    active, opened, history, whole, ledger, replay, physical, coversNext, nextWindow, ?_⟩
+    active, opened, history, whole, ledger, replay, physical, sameDirectory, coversNext, nextWindow, ?_⟩
   intro α inodes runs inode buffered nextRequest sequence writeHeap sameVisible nextNonempty seen read token
   obtain ⟨_, writeReturn, nextBatch, _, written, last, reference, events, _, _, writtenAt, snapshots, ledger,
     nextReplay, agrees⟩ :=
