@@ -369,10 +369,12 @@ The selected marker bounds replay. Above it, the successful directory scan must 
 every later canonical WAL name, including any restored by power loss before pruning was durable.
 When all unlinks return and the prune barrier fails before taking effect, a frame keeps
 the selected files and the names through the marker together in one surviving map.
-The reboot reader uses that map for the later suffix as well. This requires settled
-protected names, an accepted keeper and the bounded catalog at authorization, plus
-selected checkpoint durability at the failed return.
-[Prune scope and reboot consumer](../../lean/Alvoki/Storage/Disk/NativeMarkedFirstUnlinkError.lean)
+The reboot reader uses that map for the later suffix as well. The successful authorization
+fsync on the held directory settles the protected names. The first reboot selects the keeper. Given the bounded catalog at that sample,
+the failed-attempt and read frames carry both to authorization. The frame
+through the public error carries checkpoint durability to the next sample.
+`startsRecoveryAfterFailedPrune` composes those facts under the local file effects.
+[Prune scope](../../lean/Alvoki/Storage/Disk/NativeMarkedFirstUnlinkError.lean) · [Two-reboot theorem](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 An independent failure before flock also exposes its local file frame, including the keeper
 binding in place when the call began. For a second power loss after a replacement, one surviving

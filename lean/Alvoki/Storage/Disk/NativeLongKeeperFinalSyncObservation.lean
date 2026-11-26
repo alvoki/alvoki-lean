@@ -421,6 +421,12 @@ theorem longKeeperSyncPrefix {heap : Type} (files : heap → FileImage) (directo
 
 end ReplacementPrefix
 
+/-- During repair, the directory slot belongs to the census of the
+actual open attempt. -/
+abbrev NativeReadyState.repairDirectoryScope (state : NativeReadyState) (current : DescriptorInventory)
+    (cached : DescriptorSlot) : NativeReadyState :=
+  { state with census := current, directorySlot := cached }
+
 section FailedMarkedRepair
 
 variable {heap stream : Type} {view : OpenCloseHeapView heap FileImage} {directory : DiskDirectory}
@@ -467,7 +473,8 @@ include extents seals selected valid following accepted ordered sameStat flat ma
 
 /-- Carry a scoped frame from the checked reader through the actual
 failed repair, cache disposal, unlock and lock release. The unlock can
-replace the worker's error in the public diagnostic. -/
+replace the worker's error in the public diagnostic. The reading
+prefix is also available to the repair and restart proofs. -/
 theorem MarkedWalExtentReports.finalizesFailedRepairWithFrame
     {frame : heap → heap → Prop} (refl : ∀ atHeap, frame atHeap atHeap)
     (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
@@ -484,25 +491,97 @@ theorem MarkedWalExtentReports.finalizesFailedRepairWithFrame
     (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner dispose.reached)
     (scope : dispose.ScopeFrames finalized frame) :
     source.openTable input entry = .error (dispose.diagnostic cause) finalized.reached ∧
-      frame entry finalized.reached ∧ (view.files finalized.reached).image = (view.files reached).image := by
+      frame entry finalized.reached ∧ (view.files finalized.reached).image = (view.files reached).image ∧
+      frame entry afterKeeper := by
   let worker := source.worker seed.directoryRef seed.activeRef seed.pendingRef
   have rejected := extents.workerReturnsFailedRepair source (raw := raw) seals selected valid following accepted ordered
     sameStat flat marked keeperRead repair
   have disposed := dispose.returnsAt worker cause rejected rfl owner
   obtain ⟨_, _, _, _, _, _, _, _, _, image, _⟩ := dispose.returnsAfterLockFinalizationAt worker cause disposed finalized
   obtain ⟨toListing, toKeeper⟩ := listing.framesThroughSeals selected seals frame refl trans readerFrames listingFrames
+  have admitted := raw.framesThroughCache seed (frame := frame) trans scope.admission
+  have beforeRepair := trans admitted (trans toListing (trans toKeeper keeperFrame))
   exact ⟨dispose.returnsMarkedInterpreter source sameDisposal (rejected _) finalized,
-    scope.preserves trans (trans (trans toListing toKeeper) (trans keeperFrame repairFrame)), image⟩
+    trans beforeRepair (trans repairFrame (scope.afterWorker trans)), image, beforeRepair⟩
 
 variable {scope : FilePath → Prop} {through : Nat}
   {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
 
 local notation "sampledFrame" => SampledCheckpointRetryFrame directory scope through observe readBytes
 
+omit extents seals selected valid following accepted ordered sameStat flat marked keeperRead in
+/-- The failed-prune producer supplies the frames to authorization and
+public return. The actual cached authorization fsync supplies settlement
+for the second reboot, whose new namespace may contain later WAL names. -/
+theorem RawWriteRebootEntry.startsRecoveryAfterFailedPrune
+    {state : NativeReadyState} {target : Target} {firstFailed first authorized failed rebooted : heap}
+    {firstOffset : Nat} {earlier : List (FilePath × IO.Error)} {diagnostic : IO.Error}
+    (firstBoot : RawWriteRebootEntry state view observe (fun atHeap => (observe atHeap).files.names)
+      readBytes firstFailed first)
+    (firstReset : firstBoot.DurableReset)
+    (atBoot : RawOpenRetryTrace.SelectedEntry view state target
+      (fun atHeap => (observe atHeap).files.names) readBytes first)
+    (initialWindow : state.writer.wal.NamespaceWindow state.session.directory firstOffset target.range.through
+      (observe first).files.names)
+    (sameDirectory : state.session.directory = directory)
+    (sameFirst : target.first = state.writer.wal.active.first)
+    (covered : target.range.through ≤ through)
+    (protectedPaths : ∀ path, state.selectedRetryPath path → scope path)
+    (keeperPath : scope (state.session.directory.file (.walSegment target.first)))
+    (prior : source.FailedCalls first earlier entry)
+    (returned : source.openTable input entry = .error diagnostic failed)
+    (firstToEntry : sampledFrame first entry)
+    (toAuthorization : sampledFrame entry authorized)
+    (toFailedReturn : sampledFrame entry failed)
+    (authorization : groupSync #[directory.path] afterKeeper = .ok () authorized)
+    (authEffects : (callbacks).CachedRootEffects (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached)
+      view observe readBytes seed.directoryRef seed.handle)
+    (heldRoot : CachedKeeperReplacementRoot (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached)
+      view seed.directoryRef seed.handle afterKeeper)
+    (rootAtRepair : (observe afterKeeper).files.names state.session.directory.path =
+      some ((view.descriptors afterKeeper).inode admission.cached.description))
+    (readsRoot : ∀ {before result issued}, (callbacks).getDirectory seed.directoryRef before = .ok result issued →
+      result = view.directory before seed.directoryRef)
+    (crashFrame : (observe authorized).CrashFileFrame (state.pruneRecoveryScope target.range.through) (observe failed))
+    (secondBoot : RawWriteRebootEntry state view observe (fun atHeap => (observe atHeap).files.names)
+      readBytes failed rebooted)
+    (secondReset : secondBoot.DurableReset) :
+    source.FailedCalls first (earlier ++ [(input, diagnostic)]) failed ∧
+      RawOpenRetryTrace.SelectedEntry view state target (fun atHeap => (observe atHeap).files.names) readBytes rebooted ∧
+      TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
+      (view.descriptors rebooted).slots = [] ∧
+      RawOpenRetryTrace.RecoveryObservations view state target observe readBytes firstOffset target.range.through rebooted := by
+  have firstToAuthorization := firstToEntry.trans toAuthorization
+  have firstToFailedReturn := firstToEntry.trans toFailedReturn
+  have authKeeper := (firstBoot.keeperCrashChoices firstReset atBoot sameFirst).1.frame firstToAuthorization.durable keeperPath
+  have authWindow :
+      state.writer.wal.NamespaceWindow state.session.directory firstOffset target.range.through
+        (observe authorized).files.names :=
+    initialWindow.frame (fun start _ within => by
+      simpa only [sameDirectory] using firstToAuthorization.walNames start (Nat.le_trans within covered))
+  have parent : (observe first).Frames (· = state.session.directory.path) (observe failed) := by
+    rw [sameDirectory]
+    exact firstToFailedReturn.parent
+  have durable := (firstBoot.startsDurableRetry firstReset atBoot).2.frame
+    (fun path selected => firstToFailedReturn.durable path (protectedPaths path selected)) parent
+  have authorizedAtDirectory :
+      (callbacks).syncPaths state.session.directory.path seed.directoryRef seed.activeRef seed.pendingRef
+        #[state.session.directory.path] afterKeeper = .ok () authorized := by
+    rw [sameDirectory]
+    exact authorization
+  obtain ⟨_, _, _, _, settled, _⟩ := authEffects.framesRootSync rootAtRepair heldRoot readsRoot authorizedAtDirectory
+  refine ⟨.next prior input returned, ?_⟩
+  exact secondBoot.startsRecoveryAfterFramedPrune secondReset sameFirst atBoot.manifest durable
+    (fun names possible path inside => by
+      obtain ⟨file, rfl⟩ := NativeReadyState.pruneRecoveryScope_child inside
+      exact settled names possible file)
+    authKeeper authWindow crashFrame
+
 /-- Both a failed suffix removal and an error at the following root
 barrier extend the same failed-open chronology. Accepted removals
 retain their live effects at the error heap. A barrier error before
-settlement can also preserve earlier crash bindings beyond the cutoff. -/
+settlement can also preserve earlier crash bindings beyond the cutoff.
+The shared authorization and public-return frames feed a later reboot. -/
 theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
     {first : heap} {earlier : List (FilePath × IO.Error)} (prior : source.FailedCalls first earlier entry)
     (readerFrames : source.fileCalls.ScopeFrames sampledFrame)
@@ -542,6 +621,7 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
     source.openTable input entry = .error (dispose.diagnostic cause) finalized.reached ∧
       source.FailedCalls first (earlier ++ [(input, dispose.diagnostic cause)]) finalized.reached ∧
       sampledFrame entry finalized.reached ∧
+      sampledFrame entry authorized ∧
       (∀ {state : NativeReadyState} {unlinked issued : heap} {handle : IO.FS.Handle},
         state.session.directory = directory → state.Valid →
         layout.target.first = state.writer.wal.active.first →
@@ -584,11 +664,11 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
       exact framed)
   have keeperFrame := source.fileCalls.readKeeperKeepsFrame readerFrames SampledCheckpointRetryFrame.refl
     SampledCheckpointRetryFrame.trans remember remembered _ _ _ keeperRead
-  obtain ⟨returned, framed, _⟩ := extents.finalizesFailedRepairWithFrame seals selected valid following accepted ordered
+  obtain ⟨returned, framed, _, beforeRepair⟩ := extents.finalizesFailedRepairWithFrame seals selected valid following accepted ordered
     (frame := sampledFrame)
     sameStat flat marked keeperRead SampledCheckpointRetryFrame.refl SampledCheckpointRetryFrame.trans readerFrames
     listingFrames keeperFrame repair repairFrame dispose sameDisposal owner finalized cleanup
-  refine ⟨returned, .next prior input returned, framed, ?_⟩
+  refine ⟨returned, .next prior input returned, framed, beforeRepair.trans authorizedFrame, ?_⟩
   intro state unlinked issued handle sameDirectory ready targetFirst unlinks loaded
     target bound physical unlinkCrash loadCrash cleanupCrash
   let selectedScope := state.pruneRecoveryScope layout.target.range.through
@@ -605,7 +685,8 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
   obtain ⟨diagnostic, failedSync, _⟩ := (callbacks).rawPruneDirectoryError seed.directoryRef seed.activeRef seed.pendingRef
     loaded returnedBarrier
   have atError := (physical diagnostic failedSync target.live bound).crashFilesBeforeEffect managed
-  exact throughUnlinks.trans (loadCrash.trans (atError.trans (cleanupCrash.afterWorker (fun earlier later => earlier.trans later))))
+  exact throughUnlinks.trans
+    (loadCrash.trans (atError.trans (cleanupCrash.afterWorker (fun earlier later => earlier.trans later))))
 
 end FailedMarkedRepair
 
@@ -697,7 +778,7 @@ theorem MarkedWalExtentReports.extendsFailedRepair
     ∃ returned : source.openTable input entry = .error (dispose.diagnostic cause) finalized.reached,
       RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath keep
         (prior.next input returned) ∧ (view.files finalized.reached).image = (view.files reached).image := by
-  obtain ⟨returned, kept, image⟩ := extents.finalizesFailedRepairWithFrame seals selected valid following accepted ordered
+  obtain ⟨returned, kept, image, _⟩ := extents.finalizesFailedRepairWithFrame seals selected valid following accepted ordered
     (frame := retryFrame)
     sameStat flat marked keeperRead (fun atHeap => NativeReadyState.SelectedRetryFrame.refl state (storage atHeap) (visible atHeap))
     NativeReadyState.SelectedRetryFrame.trans readerFrames listingFrames keeperFrame repair repairFrame dispose sameDisposal
@@ -773,12 +854,6 @@ private theorem settlesPrunedWindow {unlinked pruned : heap}
   have reached := live.frame (fun start _ _ => congrArg Option.isSome (namesKept start))
   exact ⟨reached, fun names allowed =>
     reached.frame (fun start _ _ => congrArg Option.isSome (settled names allowed (.walSegment start)))⟩
-
-/-- During repair, the directory slot belongs to the census of the
-actual open attempt. -/
-abbrev NativeReadyState.repairDirectoryScope (state : NativeReadyState) (current : DescriptorInventory)
-    (cached : DescriptorSlot) : NativeReadyState :=
-  { state with census := current, directorySlot := cached }
 
 omit extents in
 /-- Read and prune the live catalog once. The same accepted unlink loop

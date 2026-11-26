@@ -2215,6 +2215,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.finalizesFailedRepairWithFrame
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsRecoveryAfterFailedPrune
 #check_axioms Alvoki.Storage.DiskSession.SampledCheckpointRetryFrame.refl
 #check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadReport.keepsLiveKeeperBeforeRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFinalSyncError

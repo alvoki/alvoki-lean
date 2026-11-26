@@ -40,9 +40,13 @@ If all unlinks return and the following directory fsync reports an error before
 taking effect, the next reboot may restore a later WAL name. The retry uses one
 surviving directory map for both the bounded replay window and the later names.
 
-**Next obligation.** Derive the settled protected names, accepted keeper and WAL
-window at prune authorization from the preceding execution, and derive the
-selected checkpoint durability at the failed return. These are premises of the
-second-reboot result. Mixed sessions and maintenance remain on the roadmap.
+The authorization fsync settles the protected names. Under the local file effects,
+the first sample supplies the keeper and selected window through the actual reads.
+The failed return supplies the frame used to carry checkpoint durability into the retry.
+
+**Next obligation.** When pruning stops at an unlink after some earlier removals,
+derive the same scoped crash frame through the failed unlink and cleanup. Also
+connect an effective prune barrier that reports an error to the sampled retry.
+Mixed sessions and maintenance remain on the roadmap.
 
 **Verification baseline.** See commit `f5bb038a` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
