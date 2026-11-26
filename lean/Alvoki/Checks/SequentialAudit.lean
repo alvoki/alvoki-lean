@@ -2673,6 +2673,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.physicalKeeper
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.retryExact
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.choosesKeeper
+#check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.walNamespace
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.alternatives
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.keeperBinding
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationErrorCrash.prepares

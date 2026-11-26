@@ -1,5 +1,12 @@
 # Current handoff
 
+At the final rotation directory barrier, the same WAL window now
+reindexes to the writer chosen by the sampled successor. The local
+directory effect and exclusive create account for the other names.
+The selected writer has the old offsets plus the empty successor
+exactly when that successor is present at reboot.
+[Rotation namespace at reboot](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
+
 Fresh bootstrap now establishes the live and crash-selectable WAL
 name window at its actual returned heap. The checked listing rejects
 every canonical segment except zero. Exclusive creation, the marker

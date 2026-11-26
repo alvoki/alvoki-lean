@@ -220,9 +220,12 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   common rule for starting the exact next writer. The fresh bootstrap
   listing and local effects establish the initial window across both
   reference allocations, including absence at future offsets. Carry
-  it through the reachable operations and retain the crash-selected
-  successor at rotation. Use those facts and both installer rules in
-  the literal aligned retry to replace its successful-open report premise.
+  it through the reachable operations. At the final rotation directory
+  barrier the chosen survivor reindexes the window by the actual
+  successor, and the local barrier effect accounts for all other names.
+  Use those facts and both installer rules in the literal aligned retry
+  to replace its successful-open report premise.
+  [Rotation WAL names](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
   [Fresh WAL names](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
   [WAL name window](../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean) ·
   [Exact returned writer](../lean/Alvoki/Storage/Disk/NativeSourceLedger.lean)

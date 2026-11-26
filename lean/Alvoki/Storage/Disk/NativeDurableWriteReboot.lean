@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeRawWriteReboot
+import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 
@@ -207,5 +208,91 @@ theorem RawOpenRetryTrace.SelectedEffects.preservesDurability
     RawOpenRetryTrace.KeeperAt view state.session.directory target names visible reached ∧
       state.SelectedRetryDurability target (storage reached) :=
   (effects.preserves initial.valid).2.2.2.2 physical
+
+open WAL (frameSize)
+
+/-- Reindex the namespace at the actual successor sampled by this
+rotation reboot. Only that slot can add a canonical segment. -/
+theorem NativeRotationErrorCrash.walNamespace {state : NativeReadyState}
+    {diagnostic : Option IO.Error} {failure : NativeRotationDirectoryFailure state diagnostic}
+    (crash : NativeRotationErrorCrash failure) (valid : state.Valid) {first through : Nat}
+    {names : FilePath → Option Nat}
+    (initial : state.writer.wal.NamespaceWindow state.session.directory first through names)
+    (parentNames : ∀ start, first ≤ start → start ≤ through →
+      names (state.session.directory.file (.walSegment start)) =
+        (failure.parent.files.view.child failure.parent.root (renderWalSegmentName start)).map
+          failure.parent.files.view.modelObject)
+    (parentSettled : ∀ start, first ≤ start → start ≤ through →
+      ∀ child ∈ failure.parent.files.crashNames (renderWalSegmentName start),
+        child.isSome = (failure.parent.files.view.child failure.parent.root (renderWalSegmentName start)).isSome)
+    (directoryChoices : ∀ start, first ≤ start → start ≤ through → start ≠ state.writer.installed.walBytes / frameSize →
+      failure.reported.after.crashNames (renderWalSegmentName start) =
+        if failure.reported.effective then
+          [failure.created.files.view.child failure.parent.root (renderWalSegmentName start)]
+        else failure.created.files.crashNames (renderWalSegmentName start)) :
+    (crash.writer valid).wal.NamespaceWindow state.session.directory first through crash.names := by
+  let wal := state.writer.wal
+  let successor := state.writer.installed.walBytes / frameSize
+  have sameEnd : wal.active.last = successor := valid.retained.layout.activeEnd.trans valid.retained.rotationAtEnd.symm
+  have rotated : state.writer.wal.rotated.segments.map WalSegment.first = state.writer.wal.segments.map WalSegment.first ++ [successor] := by
+    change (wal.segments ++ [(⟨wal.active.last, wal.active.last, ByteArray.empty⟩ : WalSegment)]).map WalSegment.first = _
+    rw [List.map_append, List.map_cons, List.map_nil, sameEnd]
+  have absent : successor ∉ wal.segments.map WalSegment.first := by
+    intro listed
+    obtain ⟨segment, present, eq⟩ := List.mem_map.mp listed
+    have rotation := valid.retained.rotationInput failure.parent.nonempty
+    rcases List.mem_append.mp present with sealed | active
+    · exact Nat.ne_of_lt (Nat.lt_trans (rotation.sealedBefore segment sealed) rotation.nonempty)
+        (eq.trans sameEnd.symm)
+    · obtain rfl := List.mem_singleton.mp active
+      exact Nat.ne_of_lt rotation.nonempty (eq.trans sameEnd.symm)
+  have selected : (crash.names (state.session.directory.file (.walSegment successor))).isSome =
+      crash.successor.isSome := by
+    rw [state.session.directory.walSegment_path, crash.child, Option.isSome_map]
+    rfl
+  have frame (start : Nat) (lower : first ≤ start) (upper : start ≤ through) (other : start ≠ successor) :
+      (crash.names (state.session.directory.file (.walSegment start))).isSome =
+        (names (state.session.directory.file (.walSegment start))).isSome := by
+    let name := renderWalSegmentName start
+    change (crash.names (state.session.directory.file (.walSegment start))).isSome =
+      (names (state.session.directory.file (.walSegment start))).isSome
+    have separate : name ≠ renderWalSegmentName successor := by
+      intro equal
+      exact other (Option.some.inj (by simpa only [name, parseWalSegmentName_render] using congrArg parseWalSegmentName equal))
+    have survived := crash.chosen name
+    change crash.view.child failure.parent.root name ∈ failure.reported.after.crashNames name at survived
+    rw [directoryChoices start lower upper other] at survived
+    have sampled : crash.names (state.session.directory.file (.walSegment start)) =
+        (crash.view.child failure.parent.root name).map crash.view.modelObject :=
+      (congrArg crash.names (state.session.directory.walSegment_path start)).trans (crash.child name)
+    rw [sampled, parentNames start lower upper, Option.isSome_map, Option.isSome_map]
+    change (crash.view.child failure.parent.root name).isSome = (failure.parent.files.view.child failure.parent.root name).isSome
+    dsimp only [name] at separate survived ⊢
+    cases effective : failure.reported.effective with
+    | false =>
+      simp only [effective, Bool.false_eq_true, ↓reduceIte, failure.created.crashFrame _ separate] at survived
+      exact parentSettled start lower upper _ survived
+    | true =>
+      simp only [effective, ↓reduceIte, List.mem_singleton, failure.created.names _ separate] at survived
+      rw [survived]
+  intro start lower upper
+  by_cases atSuccessor : start = successor
+  · subst start
+    rw [selected]
+    cases choice : crash.successor with
+    | none => simpa only [NativeRotationErrorCrash.writer, choice, Option.isSome_none, Bool.false_eq_true,
+        ↓reduceIte, false_iff] using absent
+    | some object =>
+      simp only [NativeRotationErrorCrash.writer, choice, Option.isSome_some, ↓reduceIte,
+        SegmentedWriterState.rotated, rotated, List.mem_append, List.mem_singleton, or_true]
+  · rw [frame start lower upper atSuccessor]
+    have original := initial start lower upper
+    cases choice : crash.successor with
+    | none => simpa only [NativeRotationErrorCrash.writer, choice, Option.isSome_none, Bool.false_eq_true,
+        ↓reduceIte] using original
+    | some object =>
+      simpa only [NativeRotationErrorCrash.writer, choice, Option.isSome_some, ↓reduceIte,
+        SegmentedWriterState.rotated, rotated, List.mem_append, List.mem_singleton, atSuccessor, or_false] using original
+
 
 end Alvoki.Storage.DiskSession
