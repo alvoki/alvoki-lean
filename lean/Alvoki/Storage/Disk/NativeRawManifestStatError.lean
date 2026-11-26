@@ -76,6 +76,26 @@ noncomputable def finalizedAttempt
 
 end RawManifestStatError
 
+/-- The actual marked checkpoint error stops the worker at the read's
+return. Marker payload, WAL selection and installation have not run. -/
+theorem RawMarkedOpenInterpreter.workerRejectsCheckpoint
+    (source : RawMarkedOpenInterpreter heap stream)
+    (directory : DiskDirectory) (lock : IO.FS.Handle) (cache : DiskTable.OpenSyncFiles)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    {before checked atCheckpoint reached : heap} {metadata : IO.FS.Metadata} {cause : IO.Error}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      before = .ok () checked)
+    (marked : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
+      .ok (some metadata) atCheckpoint)
+    (rejected : readIntegrityCheckpointSized directory
+      (source.fileCalls.readOptional directory (directory.file .manifest))
+      source.fileCalls.runSize source.fileCalls.runPrefix atCheckpoint = .error cause reached) :
+    source.worker cached active pending directory lock cache before = .error cause reached := by
+  simp only [RawMarkedOpenInterpreter.worker, recoverHealthyMarkedWithRefs, recoverSegmentedWalWith,
+    reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind,
+    flat, marked, Option.isSome_some, ↓reduceIte, rejected]
+
 section FixedInterpreter
 
 variable (source : RawMarkedOpenInterpreter heap stream)
@@ -87,10 +107,11 @@ variable (source : RawMarkedOpenInterpreter heap stream)
 private theorem RawManifestStatError.rejectsFixedWorker (cache : DiskTable.OpenSyncFiles) :
     source.worker allocation.directoryRef allocation.activeRef allocation.pendingRef directory raw.lock cache
       allocation.afterPending = .error seen.cause seen.reached := by
-  simp only [RawMarkedOpenInterpreter.worker, recoverHealthyMarkedWithRefs, recoverSegmentedWalWith,
-    rejectFlatWalWith, reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind,
-    EStateM.bind, seen.flat, seen.marked, Option.isSome_none, Option.isSome_some, Bool.false_eq_true,
-    ↓reduceIte, Pure.pure, EStateM.pure, seen.rejectsCheckpoint]
+  have flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      allocation.afterPending = .ok () allocation.afterPending := by
+    simp [rejectFlatWalWith, seen.flat, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  exact source.workerRejectsCheckpoint directory raw.lock cache allocation.directoryRef allocation.activeRef
+    allocation.pendingRef flat seen.marked seen.rejectsCheckpoint
 
 /-- The fixed opener returns a held MANIFEST lookup error through the
 same finalizers as a failed repair. The image seen by the next attempt

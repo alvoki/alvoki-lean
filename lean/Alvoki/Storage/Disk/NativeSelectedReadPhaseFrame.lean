@@ -2,9 +2,134 @@ import Alvoki.Storage.Disk.NativeMarkedOpenPhaseFrame
 import Alvoki.Storage.Disk.NativeCheckpointReadReturn
 import Alvoki.Storage.Disk.NativeWalPayloadReturn
 
-namespace Alvoki.Storage.DiskSession.KeepsPhase
+namespace Alvoki.Storage.DiskSession
 
-open System Manifest WalSegmentRepair
+open System Manifest WalSegmentRepair SyncHandleRouting
+
+/-- A read's return retains a scoped observation from its entry heap,
+including when one of its callbacks reports an error. -/
+def KeepsReadFrame {heap α : Type} (frame : heap → heap → Prop) (run : EStateM IO.Error heap α) : Prop :=
+  ∀ before, frame before (reachedState (run before))
+
+namespace KeepsReadFrame
+
+variable {heap α β : Type} {frame : heap → heap → Prop}
+
+theorem bind {run : EStateM IO.Error heap α} {next : α → EStateM IO.Error heap β}
+    (first : KeepsReadFrame frame run)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (rest : ∀ value, KeepsReadFrame frame (next value)) :
+    KeepsReadFrame frame (run >>= next) := by
+  intro before
+  have kept := first before
+  cases returned : run before with
+  | error cause after => simpa only [Bind.bind, EStateM.bind, returned, reachedState] using kept
+  | ok value after =>
+    rw [returned] at kept
+    simpa only [Bind.bind, EStateM.bind, returned] using trans kept (rest value after)
+
+theorem pure (refl : ∀ atHeap, frame atHeap atHeap) (value : α) :
+    KeepsReadFrame frame (Pure.pure value) := refl
+
+theorem throw (refl : ∀ atHeap, frame atHeap atHeap) (cause : IO.Error) :
+    KeepsReadFrame frame (MonadExceptOf.throw cause : EStateM IO.Error heap α) := refl
+
+theorem fromExcept (refl : ∀ atHeap, frame atHeap atHeap) (result : Except IO.Error α) :
+    KeepsReadFrame frame (liftExcept result : EStateM IO.Error heap α) := by
+  cases result with
+  | ok value => exact .pure refl value
+  | error cause => exact .throw refl cause
+
+private theorem traverses (items : List α) {action : α → EStateM IO.Error heap β}
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (keeps : ∀ item, KeepsReadFrame frame (action item)) : KeepsReadFrame frame (items.mapM action) := by
+  induction items with
+  | nil => exact .pure refl []
+  | cons item rest earlier =>
+    simp only [List.mapM_cons]
+    exact (keeps item).bind trans fun value => earlier.bind trans fun values => .pure refl (value :: values)
+
+private theorem checkedFileOutcome {path : FilePath} {expected : Nat} {mismatch : IO.Error}
+    {readSize : FilePath → EStateM IO.Error heap Nat}
+    {readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray}
+    {entry : heap} {result : EStateM.Result IO.Error heap ByteArray}
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (outcome : ExactRecoveryFileReturn path expected mismatch readSize readPrefix entry result)
+    (sized : KeepsReadFrame frame (readSize path)) (payload : KeepsReadFrame frame (readPrefix path expected)) :
+    frame entry (reachedState result) := by
+  cases outcome with
+  | sizeError failed => simpa only [failed, reachedState] using sized entry
+  | wrongSize measured _ => simpa only [measured, reachedState] using sized entry
+  | @prefixError afterSize _ _ measured _ returned
+  | @wrongPrefix afterSize _ _ measured _ returned _
+  | @accepted afterSize _ _ measured _ returned _ =>
+    have measuredFrame : frame entry afterSize := by simpa only [measured, reachedState] using sized entry
+    exact trans measuredFrame (by simpa only [returned, reachedState] using payload afterSize)
+
+/-- The size guard preserves the reached state. A reached payload read
+continues from the heap returned by the size callback. -/
+theorem readsExactFile (path : FilePath) (expected : Nat) (mismatch : IO.Error)
+    {readSize : FilePath → EStateM IO.Error heap Nat}
+    {readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray}
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (sized : KeepsReadFrame frame (readSize path)) (payload : KeepsReadFrame frame (readPrefix path expected)) :
+    KeepsReadFrame frame (readExactRecoveryFileWith path expected mismatch readSize readPrefix) := by
+  intro entry
+  exact checkedFileOutcome trans (ExactRecoveryFileReturn.classifies path expected mismatch readSize readPrefix entry)
+    sized payload
+
+/-- Follow each reached run in manifest order, including the first
+returned failure. -/
+theorem readsIntegrityRunBytes (directory : DiskDirectory) (manifest : IntegrityCheckpoint)
+    {readSize : FilePath → EStateM IO.Error heap Nat}
+    {readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray}
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (sizes : ∀ path, KeepsReadFrame frame (readSize path))
+    (prefixes : ∀ path count, KeepsReadFrame frame (readPrefix path count)) :
+    KeepsReadFrame frame (readIntegrityRunBytesSized directory manifest readSize readPrefix) := by
+  simp only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM]
+  apply traverses _ refl trans
+  intro index
+  change KeepsReadFrame frame ((do
+    let some stamp := manifest.runs.toArray[index]? | MonadExcept.throw (IO.userError checkpointIntegrityMismatch)
+    readExactRecoveryFileWith (directory.file (.run manifest.header.generation index))
+      stamp.byteCount.toNat (IO.userError checkpointIntegrityMismatch) readSize readPrefix) :
+    EStateM IO.Error heap ByteArray)
+  split
+  · exact readsExactFile _ _ _ trans (sizes _) (prefixes _ _)
+  · simpa only [MonadExcept.throw, throwThe] using
+      (KeepsReadFrame.throw (α := ByteArray) refl (IO.userError checkpointIntegrityMismatch))
+
+/-- The actual strict reader carries the same frame through manifest
+admission, each reached run and restoration or error. -/
+theorem readsIntegrityCheckpoint (directory : DiskDirectory)
+    {readManifest : EStateM IO.Error heap (Option ByteArray)}
+    {readSize : FilePath → EStateM IO.Error heap Nat}
+    {readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray}
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (manifest : KeepsReadFrame frame readManifest)
+    (sizes : ∀ path, KeepsReadFrame frame (readSize path))
+    (prefixes : ∀ path count, KeepsReadFrame frame (readPrefix path count)) :
+    KeepsReadFrame frame (readIntegrityCheckpointSized directory readManifest readSize readPrefix) := by
+  unfold readIntegrityCheckpointSized
+  apply manifest.bind trans
+  intro found
+  cases found with
+  | none => exact .pure refl none
+  | some bytes =>
+    apply (fromExcept refl ((IntegrityCheckpoint.decode bytes).mapError IO.userError)).bind trans
+    intro decoded
+    apply (readsIntegrityRunBytes directory decoded refl trans sizes prefixes).bind trans
+    intro runs
+    exact (fromExcept refl ((loadIntegrityRunSet decoded runs).mapError IO.userError)).bind trans
+      fun table => .pure refl (some (table, decoded.header.generation))
+
+end KeepsReadFrame
+
+namespace KeepsPhase
 
 variable {heap α β : Type} {observe : heap → Option (Phase Installed)}
 
@@ -20,6 +145,16 @@ private def phaseAtResult (observe : heap → Option (Phase Installed)) (entry :
     (result : EStateM.Result IO.Error heap α) : Prop :=
   match result with | .ok _ after | .error _ after => observe after = observe entry
 
+private theorem asReadFrame {run : EStateM IO.Error heap α} (kept : KeepsPhase observe run) :
+    KeepsReadFrame (fun before after => observe after = observe before) run := by
+  intro before
+  cases returned : run before <;> simpa only [returned, reachedState] using kept before
+
+private theorem fromReadFrame {run : EStateM IO.Error heap α}
+    (kept : KeepsReadFrame (fun before after => observe after = observe before) run) : KeepsPhase observe run := by
+  intro before
+  cases returned : run before <;> simpa only [returned, reachedState] using kept before
+
 private theorem checkedFileOutcome {path : FilePath} {expected : Nat} {mismatch : IO.Error}
     {readSize : FilePath → EStateM IO.Error heap Nat}
     {readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray}
@@ -27,59 +162,26 @@ private theorem checkedFileOutcome {path : FilePath} {expected : Nat} {mismatch 
     (outcome : ExactRecoveryFileReturn path expected mismatch readSize readPrefix entry result)
     (sized : KeepsPhase observe (readSize path)) (payload : KeepsPhase observe (readPrefix path expected)) :
     phaseAtResult observe entry result := by
-  cases outcome with
-  | sizeError failed => exact sized.onError failed
-  | wrongSize measured _ => exact sized.onSuccess measured
-  | prefixError measured _ failed => exact (payload.onError failed).trans (sized.onSuccess measured)
-  | wrongPrefix measured _ returned | accepted measured _ returned _ =>
-    exact (payload.onSuccess returned).trans (sized.onSuccess measured)
+  have kept := KeepsReadFrame.checkedFileOutcome (fun left right => right.trans left)
+    outcome sized.asReadFrame payload.asReadFrame
+  cases result <;> exact kept
 
-/-- The actual reported size guard cannot modify the original phase.
-If the bounded prefix is reached, its phase guarantee starts at the
-precise heap returned by the size callback. -/
 theorem readsExactFile (path : FilePath) (expected : Nat) (mismatch : IO.Error)
     {readSize : FilePath → EStateM IO.Error heap Nat}
     {readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray}
     (sized : KeepsPhase observe (readSize path)) (payload : KeepsPhase observe (readPrefix path expected)) :
-    KeepsPhase observe (readExactRecoveryFileWith path expected mismatch readSize readPrefix) := by
-  intro entry
-  change phaseAtResult observe entry _
-  exact checkedFileOutcome (ExactRecoveryFileReturn.classifies path expected mismatch readSize readPrefix entry) sized payload
+    KeepsPhase observe (readExactRecoveryFileWith path expected mismatch readSize readPrefix) :=
+  fromReadFrame (KeepsReadFrame.readsExactFile path expected mismatch (fun a b => b.trans a)
+    sized.asReadFrame payload.asReadFrame)
 
-private theorem traverses (items : List α) {action : α → EStateM IO.Error heap β}
-    (frame : ∀ item, KeepsPhase observe (action item)) : KeepsPhase observe (items.mapM action) := by
-  induction items with
-  | nil => exact .pure []
-  | cons item rest earlier =>
-    simp only [List.mapM_cons]
-    exact (frame item).bind fun value => earlier.bind fun values => .pure (value :: values)
-
-/-- Read stamped runs in manifest order, retaining the old phase at the
-success or first failure of the actual checkpoint loop. -/
 theorem readsIntegrityRunBytes (directory : DiskDirectory) (manifest : IntegrityCheckpoint)
     {readSize : FilePath → EStateM IO.Error heap Nat}
     {readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray}
     (sizes : ∀ path, KeepsPhase observe (readSize path))
     (prefixes : ∀ path count, KeepsPhase observe (readPrefix path count)) :
-    KeepsPhase observe (readIntegrityRunBytesSized directory manifest readSize readPrefix) := by
-  simp only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM]
-  apply traverses
-  intro index
-  change KeepsPhase observe ((do
-    let some stamp := manifest.runs.toArray[index]? | MonadExcept.throw (IO.userError checkpointIntegrityMismatch)
-    readExactRecoveryFileWith (directory.file (.run manifest.header.generation index))
-      stamp.byteCount.toNat (IO.userError checkpointIntegrityMismatch) readSize readPrefix) :
-    EStateM IO.Error heap ByteArray)
-  split
-  · exact readsExactFile _ _ _ (sizes _) (prefixes _ _)
-  · simpa only [MonadExcept.throw, throwThe] using
-      (KeepsPhase.throw (observe := observe) (α := ByteArray) (IO.userError checkpointIntegrityMismatch))
-
-private theorem readingExcept (result : Except IO.Error α) :
-    KeepsPhase observe (liftExcept result : EStateM IO.Error heap α) := by
-  cases result with
-  | ok value => exact .pure value
-  | error cause => exact .throw cause
+    KeepsPhase observe (readIntegrityRunBytesSized directory manifest readSize readPrefix) :=
+  fromReadFrame (KeepsReadFrame.readsIntegrityRunBytes directory manifest (fun _ => rfl) (fun a b => b.trans a)
+    (fun path => (sizes path).asReadFrame) (fun path count => (prefixes path count).asReadFrame))
 
 theorem readsIntegrityCheckpoint (directory : DiskDirectory)
     {readManifest : EStateM IO.Error heap (Option ByteArray)}
@@ -88,19 +190,9 @@ theorem readsIntegrityCheckpoint (directory : DiskDirectory)
     (manifest : KeepsPhase observe readManifest)
     (sizes : ∀ path, KeepsPhase observe (readSize path))
     (prefixes : ∀ path count, KeepsPhase observe (readPrefix path count)) :
-    KeepsPhase observe (readIntegrityCheckpointSized directory readManifest readSize readPrefix) := by
-  unfold readIntegrityCheckpointSized
-  apply manifest.bind
-  intro found
-  cases found with
-  | none => exact .pure none
-  | some bytes =>
-    apply (readingExcept ((IntegrityCheckpoint.decode bytes).mapError IO.userError)).bind
-    intro decoded
-    apply (readsIntegrityRunBytes directory decoded sizes prefixes).bind
-    intro runs
-    exact (readingExcept ((loadIntegrityRunSet decoded runs).mapError IO.userError)).bind
-      fun table => .pure (some (table, decoded.header.generation))
+    KeepsPhase observe (readIntegrityCheckpointSized directory readManifest readSize readPrefix) :=
+  fromReadFrame (KeepsReadFrame.readsIntegrityCheckpoint directory (fun _ => rfl) (fun a b => b.trans a)
+    manifest.asReadFrame (fun path => (sizes path).asReadFrame) (fun path count => (prefixes path count).asReadFrame))
 
 /-- Each actual seal and keeper outcome of the selected WAL reader
 preserves the original phase. The phase frame for an accepted seal
@@ -179,4 +271,6 @@ theorem readsSelectedWal (directory : DiskDirectory) (watermark : Nat) (length :
   · intro before
     simp [valid, Bind.bind, EStateM.bind, MonadExcept.throw, throwThe, MonadExceptOf.throw, EStateM.throw]
 
-end Alvoki.Storage.DiskSession.KeepsPhase
+end KeepsPhase
+
+end Alvoki.Storage.DiskSession

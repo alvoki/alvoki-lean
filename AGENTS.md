@@ -1,6 +1,6 @@
 # Alvoki development
 
-- Read `docs/progress.md` before resuming. Keep it readable in one sitting. Replace superseded status with what now composes, the next open premise and the last verified baseline. Link to the roadmap for priorities and to Git history for earlier deliveries.
+- Read `docs/progress.md` before resuming. Keep it readable in one sitting. Replace superseded status with what now composes, the next open premise and the last verified baseline. Before replacing a note, carry forward any still-open obligation to the roadmap, an enduring assumption to its contract, or a counterexample to the relevant proof or regression test. Git history retains the delivery narrative.
 - Run `bash scripts/reproduce.sh` from the repository root. Pin compatible toolchains and regenerate benchmark artifacts when measurement code changes.
 - Keep the binary format and behavioral specification consistent across implementations. Add differential coverage when changing observable behavior.
 - Preserve benchmark workload equivalence, release compilation, deterministic data, and the original raw timings. Record platform, commands, and benchmark changes.

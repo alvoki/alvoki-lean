@@ -233,6 +233,8 @@ induction must cover these outcomes from the actual source execution.
 | Internal and discharged | An executable guard establishes the phase or preparation result, a particular step preserves a world invariant, and an admitted reader plus actual effects establish its installation. Cite the producing theorem when passing such a fact to a consumer. |
 | Internal and open | Justify each `Reports` producer from the ordered production input and effects. Establish admission coverage and scope for exact first and later returns, errors and stops. A local healthy dispatch report establishes a selected route only. |
 
+Checkpoint publication also relies on a runtime lifetime observation. When the temporary run handle leaves scope after a successful file sync, the model records the drop of that exact descriptor. The sync and the scope exit supply separate guarantees. [Temporary-file custody](../../lean/Alvoki/Storage/Disk/NativeCheckpointRunDurability.lean#L405)
+
 For the same-directory rename of `WAL.next` onto the keeper, the crash
 contract allows one prior managed-name map or that map with the whole rename
 applied. In the latter case the canonical name binds the staged inode, its

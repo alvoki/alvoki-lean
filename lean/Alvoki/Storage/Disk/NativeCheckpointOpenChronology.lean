@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.NativeRawManifestStatError
 import Alvoki.Storage.Disk.NativeRawCheckpointChunkError
 import Alvoki.Storage.Disk.NativeOpenAdmissionStorage
 import Alvoki.Storage.Disk.NativeMutatingOpenRetries
+import Alvoki.Storage.Disk.NativeSelectedReadPhaseFrame
 
 namespace Alvoki.Storage.DiskSession
 
@@ -145,9 +146,32 @@ private theorem MarkedTemporaryReadCalls.runSize_stat (calls : MarkedTemporaryRe
         exact ⟨metadata, rfl, rfl⟩
       · simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw, EStateM.bind] at returned
 
-/-- Carry an independent local frame through the actual successful
-checkpoint read. The manifest selects the run traversal. Each measured
-extent and bounded prefix supplies the next heap in that traversal. -/
+/-- Carry an independent frame to the actual returned heap of the
+checkpoint reader. The stat, prefix and temporary release callbacks retain
+it even when the read stops early. -/
+theorem MarkedTemporaryReadCalls.framesCheckpointRead
+    (calls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
+    {frame : heap → heap → Prop} (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (reads : calls.ScopeFrames frame)
+    (stat : ∀ path, KeepsReadFrame frame (calls.stat path)) :
+    KeepsReadFrame frame (readIntegrityCheckpointSized directory (calls.readOptional directory (directory.file .manifest))
+      calls.runSize calls.runPrefix) := by
+  have sizes (path : FilePath) : KeepsReadFrame frame (calls.runSize path) := by
+    unfold MarkedTemporaryReadCalls.runSize
+    apply (stat path).bind trans
+    intro result
+    apply (KeepsReadFrame.fromExcept refl result).bind trans
+    intro metadata
+    split
+    · exact .pure refl metadata.byteSize.toNat
+    · exact .throw refl _
+  exact KeepsReadFrame.readsIntegrityCheckpoint directory refl trans
+    (calls.readOptionalFrames reads refl trans stat directory (directory.file .manifest)) sizes
+    (fun path count => calls.runPrefixFrames reads refl trans path count)
+
+/-- The successful checkpoint returns the shared read frame at its
+reached heap. -/
 theorem MarkedTemporaryReadCalls.framesCheckpointSuccess
     (calls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
     {frame : heap → heap → Prop} (refl : ∀ atHeap, frame atHeap atHeap)
@@ -157,34 +181,7 @@ theorem MarkedTemporaryReadCalls.framesCheckpointSuccess
     {entry reached : heap} {checkpoint : Option (PackedTable × UInt64)}
     (returned : readIntegrityCheckpointSized directory (calls.readOptional directory (directory.file .manifest))
       calls.runSize calls.runPrefix entry = .ok checkpoint reached) : frame entry reached := by
-  have outcome := SizedCheckpointReadReturn.classifies directory
-    (calls.readOptional directory (directory.file .manifest)) calls.runSize calls.runPrefix entry
-  rw [returned] at outcome
-  have manifestFrame := calls.readOptionalFrames reads refl trans stat directory (directory.file .manifest) entry
-  cases outcome with
-  | absent read =>
-    simpa only [read, reachedState] using manifestFrame
-  | @restored raw manifest files table afterManifest _ read decoded runs loaded =>
-    have first : frame entry afterManifest := by simpa only [read, reachedState] using manifestFrame
-    have step (index : Nat) (_ : index < manifest.header.runCount.toNat) (stamp : Manifest.RunIntegrity)
-        (_ : manifest.runs[index]? = some stamp) {before after : heap} {payload : ByteArray}
-        (held : frame entry before)
-        (receipt : ExactRecoveryFileReturn (directory.file (.run manifest.header.generation index))
-          stamp.byteCount.toNat (IO.userError checkpointIntegrityMismatch) calls.runSize calls.runPrefix before
-          (.ok payload after)) : True ∧ frame entry after := by
-      let path := directory.file (.run manifest.header.generation index)
-      cases receipt with
-      | @accepted afterSize _ _ measured _ prefixRead _ =>
-        obtain ⟨_, sized, _⟩ := calls.runSize_stat path measured
-        have sizeFrame : frame before afterSize := by
-          simpa only [sized, reachedState] using stat path before
-        change calls.runPrefix path stamp.byteCount.toNat afterSize = .ok payload after at prefixRead
-        have prefixFrame : frame afterSize after := by
-          simpa only [prefixRead, reachedState] using
-            calls.runPrefixFrames reads refl trans path stamp.byteCount.toNat afterSize
-        exact ⟨trivial, trans held (trans sizeFrame prefixFrame)⟩
-    exact (readIntegrityRunBytesSized_inductSuccess directory calls.runSize calls.runPrefix
-      (outputsMatch := fun _ _ => True) trivial (fun _ _ => trivial) step first runs).2
+  simpa only [returned, reachedState] using calls.framesCheckpointRead directory refl trans reads stat entry
 
 /-- The current open restores the checkpoint from the protected files,
 using the actual optional metadata result and each reached run callback.
@@ -591,6 +588,39 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
   {source : RawMarkedOpenInterpreter heap stream}
   {raw : RawOpenAdmissionReport admission view source.calls entry}
   {allocation : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
+
+variable (source) in
+/-- A returned checkpoint read error follows the reached marked guards,
+then closes the cache and the owning lock. The same local effects frame
+any selected observation, at the heap returned to the caller. -/
+theorem RawMarkedOpenInterpreter.framesCheckpointReadError
+    {checked atCheckpoint workerReached : heap} {cause : IO.Error} {metadata : IO.FS.Metadata}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      allocation.afterPending = .ok () checked)
+    (marked : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
+      .ok (some metadata) atCheckpoint)
+    (rejected : readIntegrityCheckpointSized directory
+      (source.fileCalls.readOptional directory (directory.file .manifest))
+      source.fileCalls.runSize source.fileCalls.runPrefix atCheckpoint = .error cause workerReached)
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation workerReached)
+    (sameDisposal : source.dispose = disposal.dispose)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached)
+    {frame : heap → heap → Prop} (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (guards : ∀ path, KeepsReadFrame frame (source.calls.lookup path))
+    (stat : ∀ path, KeepsReadFrame frame (source.fileCalls.stat path))
+    (reads : source.fileCalls.ScopeFrames frame)
+    (cleanup : disposal.ScopeFrames finalized frame) :
+    source.openTable input entry = .error (disposal.diagnostic cause) finalized.reached ∧
+      frame entry finalized.reached := by
+  have stopped := source.workerRejectsCheckpoint directory raw.lock
+    (RawMarkedOpenInterpreter.makeCache directory allocation.directoryRef allocation.activeRef allocation.pendingRef)
+    allocation.directoryRef allocation.activeRef allocation.pendingRef flat marked rejected
+  have guarded := markedGuards_keepFrame (frame := frame) directory source.calls.lookup trans guards flat marked
+  have readFrame := source.fileCalls.framesCheckpointRead directory refl trans reads stat atCheckpoint
+  rw [rejected, reachedState] at readFrame
+  exact ⟨disposal.returnsMarkedInterpreter source sameDisposal stopped finalized,
+    cleanup.preserves trans (trans guarded readFrame)⟩
 
 /-- Scoped laws at the actual primitive callbacks of a rejected MANIFEST lookup. -/
 structure RawManifestStatError.CallbackFrames
