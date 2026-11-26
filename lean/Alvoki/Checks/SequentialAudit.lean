@@ -4068,6 +4068,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.stopsAtRootFsync
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.stopsAtRootFsync
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsAtRootFsync
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.SelectedWriteReboot.interruptedPlan
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage
 #check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.Frames.settledFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_iff_write

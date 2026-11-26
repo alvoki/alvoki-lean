@@ -1738,6 +1738,34 @@ theorem NativeReadPosition.opensLiteralRepairedAfterWriteRetries
 
 end LiteralContinuation
 
+/-- Interpret the local effects of a successful checkpoint-free open on its literal returned handle and heap. -/
+abbrev RawMarkedOpenInterpreter.AfterWalOpen
+    {heap stream : Type} (source : RawMarkedOpenInterpreter heap stream)
+    (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
+    (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (rebooted : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (through : Nat) (post : DiskTable → heap → Prop) : Prop :=
+  let names := fun h => (storage h).files.names
+  let samples := fun h => CheckpointSurvivingFiles.mk (names h) (fun inode => [visible h inode])
+  ∀ {input : FilePath} {returnedAt : heap} {table : DiskTable}
+    (_admission : source.ObservedAdmissionEffects view directory (fun _ => False) input rebooted storage visible)
+    (_reads : ∀ held : HeldOpenCache heap, LiteralOpenAuthority view directory held held.ready →
+      source.AlignedReadEffects view directory held.pendingRef names visible namespaceView root
+        (managedPath directory) (fun _ _ => True))
+    (_child : ∀ start ≤ through,
+      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+        names rebooted (directory.file (.walSegment start)))
+    (_laterAbsent : ∀ {before entries listed}, source.directoryCalls.run directory.path before = .ok entries listed →
+      (samples rebooted).Frames (managedPath directory) (samples listed) →
+      MarkedWalExtentReports.TruthfulAbsenceOn (through < ·) source.fileCalls directory
+        namespaceView root (entries.toList.map (·.fileName)) listed)
+    (_initializesPhase : ∀ {value before ref after}, source.allocatePhase (.ready value) before = .ok ref after →
+      view.phase after ref = some (.ready value))
+    (_tokenKeepsPhase : ∀ {before token after}, source.allocateToken () before = .ok token after →
+      ∀ ref, view.phase after ref = view.phase before ref)
+    (_returned : source.openTable input rebooted = .ok table returnedAt),
+    post table returnedAt
+
 /-- Local effects needed to interpret a successful checkpoint-free open
 from a chosen reboot heap. The returned table and initialized phase
 implement the given history. -/
@@ -1747,26 +1775,7 @@ abbrev RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen
     (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     (rebooted : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (history : List WAL.Write) : Prop :=
-  let directory := state.session.directory
-  let names := fun h => (storage h).files.names
-  let samples := fun h => CheckpointSurvivingFiles.mk (names h) (fun inode => [visible h inode])
-  ∀ {input : FilePath} {returnedAt : heap} {table : DiskTable}
-    (_admission : source.ObservedAdmissionEffects view directory (fun _ => False) input rebooted storage visible)
-    (_reads : ∀ held : HeldOpenCache heap, LiteralOpenAuthority view directory held held.ready →
-      source.AlignedReadEffects view directory held.pendingRef names visible namespaceView root
-        (managedPath directory) (fun _ _ => True))
-    (_child : ∀ start ≤ history.length,
-      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
-        names rebooted (directory.file (.walSegment start)))
-    (_laterAbsent : ∀ {before entries listed}, source.directoryCalls.run directory.path before = .ok entries listed →
-      (samples rebooted).Frames (managedPath directory) (samples listed) →
-      MarkedWalExtentReports.TruthfulAbsenceOn (history.length < ·) source.fileCalls directory
-        namespaceView root (entries.toList.map (·.fileName)) listed)
-    (_initializesPhase : ∀ {value before ref after}, source.allocatePhase (.ready value) before = .ok ref after →
-      view.phase after ref = some (.ready value))
-    (_tokenKeepsPhase : ∀ {before token after}, source.allocateToken () before = .ok token after →
-      ∀ ref, view.phase after ref = view.phase before ref)
-    (_returned : source.openTable input rebooted = .ok table returnedAt),
+  source.AfterWalOpen view state.session.directory storage visible rebooted namespaceView root history.length fun table returnedAt =>
     ∃ (logical : PackedTable) (count : UInt64) (held : HeldOpenCache heap)
       (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit) (repaired afterPhase : heap),
       recoverSelected .empty (WAL.encode history) = .ok logical ∧
@@ -1776,8 +1785,8 @@ abbrev RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen
       source.allocateToken () afterPhase = .ok token returnedAt ∧
       view.phase returnedAt phase =
         some (.ready (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩)) ∧
-      table = RawMarkedOpenInterpreter.assemble directory held.lock
-        (RawMarkedOpenInterpreter.makeCache directory held.directoryRef held.activeRef held.pendingRef) phase token ∧
+      table = RawMarkedOpenInterpreter.assemble state.session.directory held.lock
+        (RawMarkedOpenInterpreter.makeCache state.session.directory held.directoryRef held.activeRef held.pendingRef) phase token ∧
       ∀ {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
         {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
         (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool),
@@ -1786,6 +1795,38 @@ abbrev RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen
           set phase (.ready { (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩)
             with table := pinned }) returnedAt = .ok () after → ptrEq token token after = .ok true after) →
         ∀ key, table.LatestWalLookup phase token get set ptrEq returnedAt history key
+
+/-- Every latest lookup through the returned session extends the same client ledger. -/
+abbrev RawMarkedOpenInterpreter.ReadsClientHistoryAtOpen
+    {heap stream : Type} (source : RawMarkedOpenInterpreter heap stream)
+    (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
+    (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (rebooted : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (log : List DatabaseSubmissions) (reads : List RecordedSnapshotRead) (history : List WAL.Write) : Prop :=
+  source.AfterWalOpen view state.session.directory storage visible rebooted namespaceView root history.length fun table returnedAt =>
+    ∃ (installed : Installed) (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit),
+      view.phase returnedAt phase = some (.ready installed) ∧
+      ∀ {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+        {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+        (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool),
+        OpenPhaseCellEffects view.phase get set →
+        (∀ {pinned : PackedTable} {after}, set phase (.ready { installed with table := pinned }) returnedAt = .ok () after →
+          ptrEq token token after = .ok true after) →
+        ∀ key, ∃ sequence value, table.ReadsLatest phase token get set ptrEq returnedAt key sequence value ∧
+          sequence.toNat = history.length ∧ PendingClientReplay log (reads ++ [.lookup sequence key value]) history
+
+/-- A successful literal open extends the selected client history with its actual lookup. -/
+theorem RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
+    {state : NativeReadyState} {storage visible rebooted namespaceView root history log reads}
+    (opened : source.ReplaysWalBeforeCheckpointAtOpen view state storage visible rebooted namespaceView root history)
+    (pending : PendingClientReplay log reads history) :
+    source.ReadsClientHistoryAtOpen view state storage visible rebooted namespaceView root log reads history := by
+  intro input returnedAt table admission effects child absent initializes keeps returned
+  obtain ⟨logical, count, held, phase, token, repaired, afterPhase, _, _, _, _, stored, _, lookup⟩ :=
+    opened admission effects child absent initializes keeps returned
+  refine ⟨_, phase, token, stored, ?_⟩
+  intro get set ptrEq cells compare key
+  exact (lookup ptrEq cells compare key).recordsRead pending
 
 section WalOnly
 

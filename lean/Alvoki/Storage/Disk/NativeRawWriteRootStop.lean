@@ -147,6 +147,51 @@ theorem WriteRequest.stopsAtRootFsync {heap : Type} (request : WriteRequest) (di
       liftExcept, Except.pure, Except.mapError, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
       EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure]
 
+/-- The selected history adds zero or all of one unanswered request to
+the incoming client prefix. Recovery adds one uncertain submission and
+does not add a read or an acknowledgement. -/
+structure NativeExecutionPosition.InterruptedWriteLedger
+    (origin current : NativeExecutionPosition) (events : List NativeExecutionEvent)
+    (request : WriteRequest) (batch retained history : List WAL.Write) : Prop where
+  prepared : ∃ table, prepareBatch current.ready.state.writer.installed.table request.rows = some (batch, table)
+  whole : retained = [] ∨ retained = batch
+  history_eq : history = (origin.history ++ events.flatMap NativeExecutionEvent.writes) ++ retained
+  pending : PendingClientReplay
+    ((origin.submissions ++ events.flatMap NativeExecutionEvent.submissions) ++ [.uncertainBatch batch])
+    (origin.ready.reads ++ events.flatMap NativeExecutionEvent.reads) history
+  bounded : ∀ read ∈ origin.ready.reads ++ events.flatMap NativeExecutionEvent.reads,
+    read.BoundedBy history.length
+
+/-- Recover the ledger at the sampled target before the next opener is
+chosen. The literal open and its snapshot lookup use that same history. -/
+theorem NativeExecutionPosition.SelectedWriteReboot.interruptedPlan
+    {heap : Type} {view : OpenCloseHeapView heap FileImage}
+    {storage : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+    {firstOffset : Nat} {request : WriteRequest} {batch : List WAL.Write} {table : PackedTable} {target : Target}
+    {stopped rebooted : heap} {current : NativeExecutionPosition}
+    (handoff : current.SelectedWriteReboot view storage visible firstOffset request batch table target stopped rebooted) :
+    ∃ (plan : current.ready.SelectedWritePlan batch target (view.files rebooted).image) (retained : List WAL.Write),
+      target.range.through = plan.history.length ∧
+      (∀ {origin : NativeExecutionPosition} {events : List NativeExecutionEvent},
+        origin.LedgerSuffix events current → origin.InterruptedWriteLedger current events request batch retained plan.history) ∧
+      ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
+        current.ready.state.writer.target.pair.manifest = none →
+        opener.ReplaysWalBeforeCheckpointAtOpen view current.ready.state storage visible rebooted namespaceView root
+          plan.history := by
+  obtain ⟨plan, opens⟩ := handoff.sampledPlan
+  obtain ⟨retained, whole, selected⟩ : ∃ retained : List WAL.Write,
+      (retained = [] ∨ retained = batch) ∧ plan.history = current.history ++ retained := by
+    rcases plan.allowed with old | complete
+    · exact ⟨[], .inl rfl, by simpa only [List.append_nil] using old⟩
+    · exact ⟨batch, .inr rfl, complete⟩
+  have cutoff := (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through
+  refine ⟨plan, retained, cutoff, ?_, @opens⟩
+  intro origin events prior
+  refine ⟨⟨table, handoff.prepared⟩, whole, ?_, ?_, ?_⟩
+  · simpa only [← prior.history] using selected
+  · simpa only [← prior.submissions, ← prior.reads] using plan.pending
+  · simpa only [← prior.reads] using plan.bounded
+
 section PhysicalStop
 
 variable {heap : Type} {opened : NativeOpenedHandle heap}
@@ -227,8 +272,18 @@ theorem NativeOpenedPosition.stopsAtRootFsync
       {rebooted} (sample : RawWriteRebootEntry state view storage (fun h => (storage h).files.names)
         (fun h => (inodes h).visible) reached rebooted), sample.DurableReset →
       current.WalWindowAt storage 0 (current.current.history.length + request.rows.length) →
-      ∃ target : Target, current.current.SelectedWriteReboot view storage (fun h => (inodes h).visible) 0
-        request batch table target reached rebooted := by
+      ∃ (target : Target) (plan : current.current.ready.SelectedWritePlan batch target (view.files rebooted).image)
+        (retained : List WAL.Write),
+        current.current.SelectedWriteReboot view storage (fun h => (inodes h).visible) 0 request batch table target
+          reached rebooted ∧
+        target.range.through = plan.history.length ∧
+        (∀ {origin : NativeExecutionPosition} {events : List NativeExecutionEvent},
+          origin.LedgerSuffix events current.current →
+            origin.InterruptedWriteLedger current.current events request batch retained plan.history) ∧
+        ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
+          (state).writer.target.pair.manifest = none →
+          opener.ReplaysWalBeforeCheckpointAtOpen view state storage (fun h => (inodes h).visible)
+            rebooted namespaceView root plan.history := by
   have valid := current.current.ready.readPrefix.refines.1
   have stored := current.stored.trans (congrArg some valid.phase)
   have loadedPhase := opened.phaseEffects.reads current.reached opened.phase _ stored
@@ -263,8 +318,10 @@ theorem NativeOpenedPosition.stopsAtRootFsync
   obtain ⟨cacheFrame, stopFrame⟩ := finish loaded target root noResponse
   have beforeWrite := trans (frames.guard checked) (frames.poison checked assigned)
   have throughStop := trans (trans beforeWrite renameFrame) (trans cacheFrame stopFrame)
-  exact current.selectsDurableReachedWrite view storage prepared fits old throughStop.1 published
+  obtain ⟨target, handoff⟩ := current.selectsDurableReachedWrite view storage prepared fits old throughStop.1 published
     (fun h => (inodes h).visible) sample reset throughStop.2 window
+  obtain ⟨plan, retained, cutoff, ledger, opens⟩ := handoff.interruptedPlan
+  exact ⟨target, plan, retained, handoff, cutoff, @ledger, @opens⟩
 
 end PhysicalStop
 
