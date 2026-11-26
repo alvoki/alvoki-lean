@@ -240,14 +240,6 @@ theorem crashSelection (report : NativeCheckpointManifestRenameError (image := i
   · rw [replacement, manifestCrashBytes, report.synced.stagedBytes.2] at payload
     exact .inr ⟨effect, List.mem_singleton.mp payload⟩
 
-private theorem runNeManifest (directory : DiskDirectory) (generation : UInt64) (index : Nat) :
-    directory.file (.run generation index) ≠ directory.file .manifest := by
-  intro equal
-  have names := (String.append_right_inj (directory.path.toString ++ "/")).mp (congrArg FilePath.toString equal)
-  have samePrefix := congrArg (fun name : String => name.toList.take 4) names
-  change ("run-" ++ generation.toNat.repr ++ "-" ++ index.repr ++ ".v3").toList.take 4 = "MANIFEST".toList.take 4 at samePrefix
-  simp [String.toList_append] at samePrefix
-
 /-- The rename changes only its two names. Protected run inodes keep
 their exact bindings and payloads in the same reached crash views. -/
 theorem retainsPath (report : NativeCheckpointManifestRenameError (image := image) state cut)
@@ -267,7 +259,7 @@ theorem freshRunAtReturn (report : NativeCheckpointManifestRenameError (image :=
       report.view.Stable (state.session.directory.file (.run cut.checkpoint.prepared.generation index)) inode run.run.bytes := by
   obtain ⟨run, inode, found, binding, visible, durable⟩ := report.synced.settled.runs.freshRunAtEnd within
   have stable := report.synced.retainsPath (runFile_ne_stagedManifest _ _ _) (report.synced.settled.stableAfter binding visible durable)
-  exact ⟨run, inode, found, report.retainsPath (runFile_ne_stagedManifest _ _ _) (runNeManifest _ _ _) stable⟩
+  exact ⟨run, inode, found, report.retainsPath (runFile_ne_stagedManifest _ _ _) (runFile_ne_manifest _ _ _) stable⟩
 
 theorem freshRunMap (report : NativeCheckpointManifestRenameError (image := image) state cut)
     {index : Nat} (within : index < cut.checkpoint.table.runs.length) :
@@ -290,7 +282,7 @@ theorem priorRunAtReturn (report : NativeCheckpointManifestRenameError (image :=
   obtain ⟨inode, initial, kept⟩ := report.synced.settled.runs.priorRunAtEnd valid binding decoded within stored
   have stable := report.synced.retainsPath (runFile_ne_stagedManifest _ _ _)
     (report.synced.settled.stableAfter kept.visibleBinding kept.visibleBytes kept.crashBytes)
-  exact ⟨inode, initial, report.retainsPath (runFile_ne_stagedManifest _ _ _) (runNeManifest _ _ _) stable⟩
+  exact ⟨inode, initial, report.retainsPath (runFile_ne_stagedManifest _ _ _) (runFile_ne_manifest _ _ _) stable⟩
 
 theorem retainsRunMap (report : NativeCheckpointManifestRenameError (image := image) state cut) (valid : state.Valid) :
     SelectedRunsAgree state.writer.wal.directory.active.manifest

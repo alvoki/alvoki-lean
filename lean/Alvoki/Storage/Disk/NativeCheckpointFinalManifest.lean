@@ -1,10 +1,11 @@
 import Alvoki.Storage.Disk.NativeCheckpointRunDurability
 import Alvoki.Storage.Disk.CheckpointManifestDirectoryCut
+import Alvoki.Storage.Disk.Checkpoint.Reopen.HeldInstallation
 
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication
-open WAL.Boundary (WalInodeImage)
+open WAL.Boundary (CheckpointRepresentsPrefix WalInodeImage)
 
 variable {heap : Type} {opened : NativeOpenedHandle heap} {current : NativeOpenedPosition opened}
   {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
@@ -138,6 +139,8 @@ theorem NativeCheckpointSourceStop.selectsFinalManifest
       writer.published.executeVersioned plan
         ((runSteps stop.next.table.runs.length).length + 4 + (if effective then 1 else 0)) = some published ∧
       (names (dir.file .manifest)).map contents ∈ published.manifest.crashImages ∧
+      ((names (dir.file .manifest)).map contents = some stop.manifest ∨
+        (effective = false ∧ (names (dir.file .manifest)).map contents = writer.target.pair.manifest)) ∧
       (∀ path, scope path → ∀ payload,
         (observe beforeWrite.2).storageObservation.files.Stored path payload →
         (∀ prior ∈ (observe beforeWrite.2).crashBindings, prior path = (observe beforeWrite.2).visible path) →
@@ -215,7 +218,7 @@ theorem NativeCheckpointSourceStop.selectsFinalManifest
   obtain ⟨published, executed, _, choices, written, prior⟩ :=
     prepared.finalDirectoryPublication valid.retained effective
   have frame := (staging.weaken outsideStage).trans (renamedFrame.trans syncedFrame)
-  refine ⟨beforeWrite, published, through, frame, executed, ?_, ?_, written, prior⟩
+  refine ⟨beforeWrite, published, through, frame, executed, ?_, choice, ?_, written, prior⟩
   · rw [choices]
     rcases choice with new | ⟨notEffective, old⟩
     · rw [new]
@@ -233,5 +236,217 @@ theorem NativeCheckpointSourceStop.selectsFinalManifest
     have sampledBytes := sampled path (.inr selected) inode selectedName
     rw [selectedBytes] at sampledBytes
     rw [selectedName, Option.map_some, List.mem_singleton.mp sampledBytes]
+
+/-- Compare the sampled run map only at the indices selected by the
+one sampled manifest. Each generation uses its own exact bytes. -/
+theorem CheckpointPreflight.sampledRunsAgree {dir : DiskDirectory} {before : SegmentedWriterState}
+    {writer : Nat} {next : Installed} {manifest : ByteArray} {binding : Option ByteArray}
+    {published : Image} {actual : RunFiles}
+    (prepared : CheckpointPreflight (.ready before.installed) (.ok (next, manifest)))
+    (ready : before.RetainedReady dir writer)
+    (chosen : binding = some manifest ∨ binding = before.target.pair.manifest)
+    (newModel : ∀ index,
+      published.durable next.generation index = (next.table.runs.map (·.run.bytes))[index]?)
+    (oldModel : ∀ generation, generation ≠ next.generation → ∀ index,
+      published.durable generation index = before.published.durable generation index)
+    (newReads : ∀ index < next.table.runs.length,
+      actual next.generation index = (next.table.runs.map (·.run.bytes))[index]?)
+    (oldReads : ∀ bytes metadata, before.target.pair.manifest = some bytes →
+      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata → ∀ index < metadata.header.runCount.toNat,
+      actual metadata.header.generation index = before.published.durable metadata.header.generation index) :
+    SelectedRunsAgree binding actual published.durable := by
+  intro bytes metadata selected decoded index inside
+  have generation : next.generation.toNat = before.installed.generation.toNat + 1 := by
+    cases prepared with
+    | prepared _ fits _ => exact UInt64.toNat_ofNat_of_lt' fits.1
+  rcases chosen with new | old
+  · have payload := Option.some.inj (selected.symm.trans new)
+    subst bytes
+    obtain ⟨_, _, fitsCount, _⟩ := prepared.preparedFacts
+    obtain ⟨_, refined, _⟩ := ready.resumed.canonical
+    obtain ⟨_, _, decodedChecked⟩ := prepared.preparedManifestEncoding refined ready.resumed.bounds
+    let checked := Manifest.IntegrityCheckpoint.fromRuns
+      (checkpointHeader next.table next.generation) (next.table.runs.map (·.run.bytes))
+    have same := Except.ok.inj (decoded.symm.trans decodedChecked)
+    subst metadata
+    have runCount : checked.header.runCount.toNat = next.table.runs.length :=
+      UInt64.toNat_ofNat_of_lt' fitsCount
+    change index < checked.header.runCount.toNat at inside
+    have inRuns : index < next.table.runs.length := by simpa only [runCount] using inside
+    change actual next.generation index = published.durable next.generation index
+    exact (newReads index inRuns).trans (newModel index).symm
+  · have priorSelected := old.symm.trans selected
+    have prior := CheckpointPowerCut.selectedGeneration ready.resumed.selected
+    rw [← ready.resumed.generation, priorSelected, Option.mapM, decoded] at prior
+    have oldGeneration : metadata.header.generation = before.installed.generation := Except.ok.inj prior
+    have different : metadata.header.generation ≠ next.generation := by
+      intro same
+      have equal := congrArg UInt64.toNat (same.symm.trans oldGeneration)
+      omega
+    exact (oldReads bytes metadata priorSelected decoded index inside).trans (oldModel _ different index).symm
+
+/-- Instantiate both run-map branches with the same scoped sampler.
+The prior and new runs come from one returned directory-barrier heap. -/
+theorem CheckpointPreflight.sampledSettledRunsAgree
+    {state : NativeReadyState} {next : Installed} {manifest : ByteArray} {binding : Option ByteArray}
+    {published : Image} {barrier : CheckpointStorageObservation}
+    (prepared : CheckpointPreflight (.ready state.writer.installed) (.ok (next, manifest)))
+    (ready : state.Valid) (oldStorage : NativeReadyStorage state barrier)
+    (chosen : binding = some manifest ∨ binding = state.writer.target.pair.manifest)
+    (newModel : ∀ index,
+      published.durable next.generation index = (next.table.runs.map (·.run.bytes))[index]?)
+    (oldModel : ∀ generation, generation ≠ next.generation → ∀ index,
+      published.durable generation index = state.writer.published.durable generation index)
+    (newStorage : ∀ index < next.table.runs.length, ∀ run : Compaction.CheckedRun,
+      next.table.runs.toArray[index]? = some run →
+      let path := state.session.directory.file (.run next.generation index)
+      barrier.files.Stored path run.run.bytes ∧
+      ∀ names ∈ barrier.crashNames, names path = barrier.files.names path)
+    (scope : FilePath → Prop)
+    (includesNew : ∀ index < next.table.runs.length, scope (state.session.directory.file (.run next.generation index)))
+    (includesOld : ∀ bytes metadata, state.writer.target.pair.manifest = some bytes →
+      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata → ∀ index < metadata.header.runCount.toNat,
+      scope (state.session.directory.file (.run metadata.header.generation index)))
+    (names : FilePath → Option Nat) (contents : Nat → ByteArray)
+    (sample : ∀ path, scope path → ∀ payload, barrier.files.Stored path payload →
+      (∀ prior ∈ barrier.crashNames, prior path = barrier.files.names path) →
+      (names path).map contents = some payload) :
+    SelectedRunsAgree binding
+      (fun generation index => (names (state.session.directory.file (.run generation index))).map contents)
+      published.durable := by
+  let dir := state.session.directory
+  let actual : RunFiles := fun generation index => (names (dir.file (.run generation index))).map contents
+  apply prepared.sampledRunsAgree (actual := actual) ready.retained chosen newModel oldModel
+  · intro index within
+    let run := next.table.runs[index]
+    have selected : next.table.runs.toArray[index]? = some run := by
+      simp [List.getElem?_eq_getElem within, run]
+    obtain ⟨stored, named⟩ := newStorage index within run selected
+    have observed := sample _ (includesNew index within) _ stored named
+    change (names (dir.file (.run next.generation index))).map contents =
+      (next.table.runs.map (·.run.bytes))[index]?
+    rw [List.getElem?_map, ← List.getElem?_toArray, selected]
+    exact observed
+  · intro bytes metadata selected decoded index within
+    obtain ⟨payload, exactPayload⟩ := ready.retained.resumed.selected.runExists selected decoded within
+    have stored := oldStorage.runs bytes metadata selected decoded index within payload exactPayload
+    have sampled := sample _ (includesOld bytes metadata selected decoded index within) _ stored (by
+      intro prior admitted
+      exact oldStorage.settled prior admitted _ (.inr (.inr (.inr (.inr
+        ⟨bytes, metadata, index, selected, decoded, within, rfl⟩)))))
+    exact sampled.trans exactPayload.symm
+
+/-- Read the marker and selected run bytes from the very same crash map as
+the final manifest. Checked replay applies to this physical run map. -/
+theorem NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView directory (inodes atHeap) (runs atHeap))
+    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
+    (phaseStorage : (observe current.reached).storageObservation.Frames current.current.ready.state.crashPath
+      (observe stop.poisoned).storageObservation)
+    (runEffects : ReturnedCheckpointRunEffects stop stop.next.table.runs.length inodes runs observe)
+    (writtenPayload : ∀ index < stop.next.table.runs.length, ∀ before after payload handle,
+      primitives.cached.writeRun ((directory).file (.run stop.next.generation index))
+        payload before = .ok handle after →
+      (inodes after).visible (handle.1.inode handle.2.1.description) = payload)
+    (runBarrier : ∀ handle (atIssue after : CheckpointWorld heap),
+      atIssue.1.directory = some handle → fsync handle atIssue.2 = .ok (.ok ()) after.2 →
+      let state := current.current.ready.state
+      CheckpointRunsDirectoryEffect (directory).path
+        (fun path => (state.crashPath path ∧ path ≠ (directory).path) ∨
+          ∃ index < stop.next.table.runs.length, path = (directory).file (.run stop.next.generation index))
+        (observe atIssue.2).storageObservation (observe after.2).storageObservation)
+    (stageEffects : CheckpointManifestStageEffects stop inodes runs observe)
+    (scope : FilePath → Prop) (outsideStage : ∀ path, scope path → path ≠ (directory).file .stagedManifest)
+    (retained : ∀ path, current.current.ready.state.crashPath path → path ≠ (directory).file .manifest → scope path)
+    (newRuns : ∀ index < stop.next.table.runs.length, scope ((directory).file (.run stop.next.generation index)))
+    (renameEffect : ∀ (before : heap) staged,
+      (observe before).visible ((directory).file .stagedManifest) = some staged →
+      primitives.rename ((directory).file .stagedManifest) ((directory).file .manifest) before = .ok () stop.atIssue.2 →
+      CheckpointManifestRenameEffect directory staged scope
+        (observe before).storageObservation (observe stop.atIssue.2).storageObservation)
+    (effective : Bool)
+    (directoryEffect : ∀ (handle : CheckpointOpenHandle) atSync,
+      stop.atIssue.1.resolve (directory).path (directory).path primitives.openRead stop.atIssue.2 =
+        .ok handle (reached.1, atSync) →
+      fsync handle atSync = .error reason reached.2 →
+      CheckpointManifestDirectoryEffect directory effective scope
+        (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation)
+    (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings)
+    (contents : Nat → ByteArray)
+    (sampled : ∀ path, path = (directory).file .manifest ∨ scope path →
+      ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode) :
+    let dir := directory
+    let writer := current.current.ready.state.writer
+    let pair : DirectoryPublication.Bindings :=
+      ⟨(names (dir.file .manifest)).map contents, (names (dir.file .walBoundary)).map contents⟩
+    let actual : RunFiles := fun generation index => (names (dir.file (.run generation index))).map contents
+    ∃ published : Image,
+      let wal := published.segmentedCheckpointView writer.wal
+      pair ∈ wal.directory.crashImages ∧ wal.ReadLayout writer.history ∧ wal.Valid writer.history ∧
+      SelectedRunsAgree pair.manifest actual published.durable ∧
+      ({ published with durable := actual } : Image).AcceptsVersioned writer.history.length.toUInt64
+        (CheckpointRepresentsPrefix writer.history) pair.manifest ∧
+      ∃ range, pair.walRange = some range ∧ range.through = writer.history.length ∧
+        ∃ checkpoint table model, SelectedIntegrityCheckpoint actual pair.manifest checkpoint ∧
+          (((checkpoint.getD (.empty, 0)).2 = writer.installed.generation ∧
+              pair.manifest = writer.wal.directory.active.manifest) ∨
+            ((checkpoint.getD (.empty, 0)).2 = stop.next.generation ∧ pair.manifest = some stop.manifest)) ∧
+          recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode writer.history) = .ok table ∧
+          table.committed.toNat = writer.history.length ∧ table.Refines model ∧
+          RepresentsWalHistory writer.history model := by
+  intro dir writer pair actual
+  let state := current.current.ready.state
+  have valid := current.current.ready.readPrefix.refines.1
+  have prepared : CheckpointPreflight (.ready writer.installed) (.ok (stop.next, stop.manifest)) :=
+    valid.phase ▸ stop.prepared
+  have oldStorage := stop.priorStorageBeforeStaging inodes runs observe initial phaseStorage runEffects
+    (fun handle entry after cached synced => (runBarrier handle entry after cached synced).weaken (fun _ => .inl))
+  obtain ⟨beforeWrite, published, through, _, executed, manifest, choice, sample, newModel, oldModel⟩ :=
+    stop.selectsFinalManifest inodes runs observe stageEffects oldStorage scope outsideStage renameEffect
+      effective directoryEffect names chosen contents sampled
+  obtain ⟨barrier, throughBarrier, runStorage⟩ := stop.newRunsSettledBeforeManifest inodes runs observe runEffects
+    writtenPayload
+    (fun handle entry after cached synced => (runBarrier handle entry after cached synced).weaken (fun _ => .inr))
+  have same := (EStateM.Result.ok.inj (throughBarrier.symm.trans through)).2
+  subst barrier
+  have stable := oldStorage beforeWrite through
+  have markerPath : state.crashPath (dir.file .walBoundary) := NativeReadyState.crashPath_iff_write.mpr (.inl rfl)
+  have marker := sample (dir.file .walBoundary) (retained _ markerPath (by
+      intro same
+      have conflict := congrArg FilePath.toString same
+      exact (by decide : "WAL.commit" ≠ "MANIFEST") ((String.append_right_inj (dir.path.toString ++ "/")).mp conflict)))
+    _ stable.marker (fun map allowed => stable.settled map allowed _ markerPath)
+  have markerModel := congrArg Publication.Image.active valid.retained.resumed.markerImage
+  change writer.files.directory.active.walBoundary =
+    some (WAL.Boundary.encode (WAL.encode writer.history).size.toUInt64) at markerModel
+  rw [valid.retained.directoryFiles] at markerModel
+  have markerMatches : pair.walBoundary = writer.wal.directory.active.walBoundary :=
+    marker.trans markerModel.symm
+  have survives : pair ∈ (published.segmentedCheckpointView writer.wal).directory.crashImages := by
+    apply List.mem_map.mpr
+    refine ⟨pair.manifest, manifest, ?_⟩
+    change (⟨pair.manifest, writer.wal.directory.active.walBoundary⟩ : DirectoryPublication.Bindings) = pair
+    rw [← markerMatches]
+  have oldRuns (bytes : ByteArray) (metadata : Manifest.IntegrityCheckpoint)
+      (selected : writer.target.pair.manifest = some bytes)
+      (decoded : Manifest.IntegrityCheckpoint.decode bytes = .ok metadata)
+      (index : Nat) (within : index < metadata.header.runCount.toNat) :
+      scope (dir.file (.run metadata.header.generation index)) :=
+    retained _ (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, selected, decoded, within, rfl⟩))))
+      (runFile_ne_manifest dir metadata.header.generation index)
+  have agrees : SelectedRunsAgree pair.manifest actual published.durable :=
+    prepared.sampledSettledRunsAgree valid stable (choice.imp_right fun old => old.2) newModel oldModel
+      (fun index within run found => by
+        obtain ⟨inode, bound, stored, settled⟩ := runStorage index within run found
+        exact ⟨⟨inode, bound, stored⟩, fun map allowed => (settled map allowed).trans bound.symm⟩)
+      scope newRuns oldRuns names contents sample
+  obtain ⟨layout, wellFormed, replay⟩ := prepared.publicationReplays valid.retained executed
+  obtain ⟨_, accepted, range, decoded, upto, checkpoint, table, model, selected, generation, recovered,
+    clock, refines, history⟩ := replay pair (List.mem_cons_of_mem _ survives)
+  refine ⟨published, survives, layout, wellFormed, agrees, ?_, range, decoded, upto, checkpoint, table, model,
+    SelectedIntegrityCheckpoint.withRunMap selected agrees.symm, generation, recovered, clock, refines, history⟩
+  exact agrees.acceptsVersioned decoded accepted
 
 end Alvoki.Storage.DiskSession

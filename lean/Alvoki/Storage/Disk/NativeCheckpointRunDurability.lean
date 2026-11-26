@@ -137,6 +137,37 @@ theorem NativeCheckpointSourceStop.manifestDirectoryReturnedRunsBarrier
   obtain ⟨handle, atSync, picked, returnedFsync⟩ := primitives.returnedFsync fsync directory.path directory.path actual
   exact ⟨afterRuns, afterBarrier, handle, atSync, runCalls, picked, returnedFsync, throughBarrier⟩
 
+/-- The cached directory selection cannot open a different description
+or change the raw syscall heap on a successful resolution. -/
+private theorem resolveDirectoryReceipt {directory : FilePath} {before selected : CheckpointWorld heap}
+    {handle : CheckpointOpenHandle} {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap}
+    (resolved : before.1.resolve directory directory primitives.openRead before.2 = .ok handle selected) :
+    before.1.directory = some handle ∧ selected = before := by
+  simp only [Cache.resolve, beq_self_eq_true, ↓reduceIte] at resolved
+  cases cached : before.1.directory with
+  | none => rw [cached] at resolved; cases resolved
+  | some original =>
+    rw [cached] at resolved
+    obtain ⟨rfl, same⟩ := EStateM.Result.ok.inj resolved
+    exact ⟨rfl, same.symm⟩
+
+/-- At the successful runs barrier, child names in scope settle together.
+Settlement of the directory's own name comes from a predecessor map. -/
+structure CheckpointRunsDirectoryEffect (root : FilePath) (children : FilePath → Prop)
+    (entry after : CheckpointStorageObservation) : Prop where
+  bytes : after.files.bytes = entry.files.bytes
+  visible : after.files.names = entry.files.names
+  survivors : ∀ names ∈ after.crashNames, ∃ prior ∈ entry.crashNames,
+    names root = prior root ∧ ∀ path, children path → names path = entry.files.names path
+
+theorem CheckpointRunsDirectoryEffect.weaken {root : FilePath} {wide scope : FilePath → Prop}
+    {entry after : CheckpointStorageObservation} (effect : CheckpointRunsDirectoryEffect root wide entry after)
+    (included : ∀ path, scope path → wide path) : CheckpointRunsDirectoryEffect root scope entry after := by
+  refine ⟨effect.bytes, effect.visible, ?_⟩
+  intro names survives
+  obtain ⟨prior, previous, root, children⟩ := effect.survivors names survives
+  exact ⟨prior, previous, root, fun path kept => children path (included path kept)⟩
+
 /-- The completed first directory barrier settles the new run names.
 Their bytes already survived the preceding successful file syncs.
 The directory's own name is governed by its parent's durability law. -/
@@ -149,22 +180,12 @@ theorem NativeCheckpointSourceStop.newRunsSettledBeforeManifest
       primitives.cached.writeRun (current.current.ready.state.session.directory.file (.run stop.next.generation index))
         payload before = .ok handle after →
       (inodes after).visible (handle.1.inode handle.2.1.description) = payload)
-    (resolveFrames : ∀ (afterRuns : CheckpointWorld heap) cache handle atSync,
-      let directory := current.current.ready.state.session.directory
-      afterRuns.1.resolve directory.path directory.path primitives.openRead afterRuns.2 = .ok handle (cache, atSync) →
-      (observe afterRuns.2).storageObservation.files.Frames
-        (fun name => ∃ index < stop.next.table.runs.length, directory.file (.run stop.next.generation index) = name)
-        (observe atSync).storageObservation.files)
-    (directoryEffect : ∀ (afterRuns afterBarrier : CheckpointWorld heap) handle atSync,
-      let directory := current.current.ready.state.session.directory
-      afterRuns.1.resolve directory.path directory.path primitives.openRead afterRuns.2 =
-        .ok handle (afterBarrier.1, atSync) →
-      fsync handle atSync = .ok (.ok ()) afterBarrier.2 →
-      inodes afterBarrier.2 = inodes atSync ∧
-      (observe afterBarrier.2).visible = (observe atSync).visible ∧
-      ∀ names ∈ (observe afterBarrier.2).crashBindings, ∀ index < stop.next.table.runs.length,
-        let path := directory.file (.run stop.next.generation index)
-        names path = (observe afterBarrier.2).visible path) :
+    (directoryEffect : ∀ handle (atIssue after : CheckpointWorld heap),
+      atIssue.1.directory = some handle → fsync handle atIssue.2 = .ok (.ok ()) after.2 →
+      let dir := current.current.ready.state.session.directory
+      CheckpointRunsDirectoryEffect dir.path
+        (fun path => ∃ index < stop.next.table.runs.length, path = dir.file (.run stop.next.generation index))
+        (observe atIssue.2).storageObservation (observe after.2).storageObservation) :
     let directory := current.current.ready.state.session.directory
     let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
     ∃ afterBarrier : CheckpointWorld heap,
@@ -180,17 +201,62 @@ theorem NativeCheckpointSourceStop.newRunsSettledBeforeManifest
   obtain ⟨afterRuns, afterBarrier, handle, atSync, runCalls, resolved, synced, through⟩ :=
     stop.manifestDirectoryReturnedRunsBarrier
   have stored := stop.returnedRunsStoreBytes inodes runs observe _ effects writtenPayload runCalls
-  have framed := resolveFrames afterRuns afterBarrier.1 handle atSync resolved
-  obtain ⟨bytes, visible, settled⟩ := directoryEffect afterRuns afterBarrier handle atSync resolved synced
+  obtain ⟨cached, sameWorld⟩ := resolveDirectoryReceipt resolved
+  have sameHeap : atSync = afterRuns.2 := congrArg Prod.snd sameWorld
+  have effect := directoryEffect handle afterRuns afterBarrier cached (sameHeap ▸ synced)
   refine ⟨afterBarrier, through, ?_⟩
   intro index within run expected path
-  obtain ⟨inode, bound, durable⟩ := framed.stored ⟨index, within, rfl⟩ (stored index within run expected)
+  obtain ⟨inode, bound, durable⟩ := stored index within run expected
   have named : (observe afterBarrier.2).visible path = some inode := by
-    rw [visible]
-    exact bound
-  refine ⟨inode, named, ?_, fun names admitted => (settled names admitted index within).trans named⟩
-  rw [bytes]
-  exact durable
+    exact (congrFun effect.visible path).trans bound
+  refine ⟨inode, named, ?_, ?_⟩
+  · exact (congrFun effect.bytes inode).trans durable
+  · intro names admitted
+    obtain ⟨_, _, _, settled⟩ := effect.survivors names admitted
+    exact (settled path ⟨index, within, rfl⟩).trans bound
+
+/-- The previous selected files remain settled at the successful
+runs-directory barrier in the final checkpoint's returned prefix. -/
+theorem NativeCheckpointSourceStop.priorStorageBeforeStaging
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason stoppedAt)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView current.current.ready.state.session.directory
+      (inodes atHeap) (runs atHeap))
+    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
+    (phaseStorage : (observe current.reached).storageObservation.Frames current.current.ready.state.crashPath
+      (observe stop.poisoned).storageObservation)
+    (effects : ReturnedCheckpointRunEffects stop stop.next.table.runs.length inodes runs observe)
+    (directoryEffect : ∀ handle (atIssue after : CheckpointWorld heap),
+      atIssue.1.directory = some handle → fsync handle atIssue.2 = .ok (.ok ()) after.2 →
+      let state := current.current.ready.state
+      let root := state.session.directory.path
+      CheckpointRunsDirectoryEffect root (fun path => state.crashPath path ∧ path ≠ root)
+        (observe atIssue.2).storageObservation (observe after.2).storageObservation) :
+    let dir := current.current.ready.state.session.directory
+    let perform := primitives.checkpointStepUntilStop dir fsync stop.next stop.manifest
+    ∀ beforeWrite : CheckpointWorld heap,
+      ((runSteps stop.next.table.runs.length ++ [Step.syncRunsDirectory]).forM perform).run
+        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) beforeWrite →
+      NativeReadyStorage current.current.ready.state (observe beforeWrite.2).storageObservation := by
+  intro dir perform beforeWrite through
+  obtain ⟨afterRuns, afterBarrier, handle, atSync, runCalls, resolved, synced, returned⟩ :=
+    stop.manifestDirectoryReturnedRunsBarrier
+  have same := (EStateM.Result.ok.inj (returned.symm.trans through)).2
+  subst beforeWrite
+  obtain ⟨cached, reached⟩ := resolveDirectoryReceipt resolved
+  have rawHeap := congrArg Prod.snd reached
+  have atRuns := initial.frame (phaseStorage.trans (stop.returnedRunFramesAt inodes runs observe effects runCalls))
+  obtain ⟨bytes, visible, names⟩ := directoryEffect handle afterRuns afterBarrier cached (rawHeap ▸ synced)
+  apply atRuns.frame
+  constructor
+  · intro path _
+    exact ⟨congrFun visible path, fun inode _ => congrFun bytes inode⟩
+  · intro bindings survives
+    obtain ⟨prior, earlier, root, children⟩ := names bindings survives
+    refine ⟨prior, earlier, fun path selected => ?_⟩
+    by_cases sameRoot : path = dir.path
+    · simpa only [sameRoot] using root
+    · exact (children path ⟨selected, sameRoot⟩).trans (atRuns.settled prior earlier path selected).symm
 
 end RunDurability
 

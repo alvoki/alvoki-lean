@@ -1,14 +1,14 @@
 # Current handoff
 
-At the final directory-fsync stop, one admitted crash map now supplies
-the manifest sample to the versioned publication model. The new binding
-uses the exact staged inode and its synced bytes. A before-effect stop
-can also sample the previous settled binding, including an absent
-manifest. The same correlated map supplies the bytes for each scoped
-file already settled at the first directory barrier. The filesystem
-effects and the old settled storage at that barrier are explicit.
-The final cut still needs the concrete reopen and ledger proof.
-[Final manifest selection](../lean/Alvoki/Storage/Disk/NativeCheckpointFinalManifest.lean)
+At the final MANIFEST directory-fsync stop, the successful run writes, file syncs and first
+directory barrier establish both the prior selected footprint and the new run bytes. One
+admitted crash name map then supplies the manifest, WAL marker and every run named by that
+manifest. `replaysSampledFinalCheckpoint` derives the selected checkpoint and replay through
+the last acknowledged write. It covers the prior generation, including an absent prior
+manifest, and the new generation. The proof uses local filesystem effect assumptions at
+the reached calls. The concrete reopen still needs to read these same inodes under the
+reacquired lock.
+[Sampled checkpoint replay](../lean/Alvoki/Storage/Disk/NativeCheckpointFinalManifest.lean)
 
 At a final manifest-directory stop, the source prefix now identifies each
 new run write and the returned file fsync on its remembered handle. Local

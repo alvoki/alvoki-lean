@@ -473,16 +473,15 @@ returned table and heap. The chosen reboot and each call's primitive
 effects are explicit.
 [Fixed source reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
 
-At the final directory-fsync stop, the staged write and returned file sync
-give the new manifest bytes on their actual inode. Scoped rename and
-directory-fsync effects link the chosen crash map to a joint predecessor.
-An effective final barrier selects the new manifest. A before-effect stop
-can select the new manifest or the prior settled value, including absence.
-The same map samples each scoped file settled at the earlier directory
-barrier. Preflight supplies the exact published run plan and manifest set.
-The filesystem observations and prior settled storage are explicit, and
-the final-cut reader and replay still need to consume this selection.
-[Final manifest selection](../../lean/Alvoki/Storage/Disk/NativeCheckpointFinalManifest.lean)
+At the final MANIFEST directory-fsync stop, the successful run writes, file syncs and first
+directory barrier establish both the prior selected footprint and the new run bytes. One
+admitted crash name map then supplies the manifest, WAL marker and every run named by that
+manifest. `replaysSampledFinalCheckpoint` derives the selected checkpoint and replay through
+the last acknowledged write. It covers the prior generation, including an absent prior
+manifest, and the new generation. The proof uses local filesystem effect assumptions at
+the reached calls. The concrete reopen still needs to read these same inodes under the
+reacquired lock.
+[Sampled checkpoint replay](../../lean/Alvoki/Storage/Disk/NativeCheckpointFinalManifest.lean)
 
 The late source prefix identifies each new run write and its returned
 file fsync on the same remembered descriptor. The file effects give

@@ -291,23 +291,25 @@ structure ReturnedCheckpointRunEffects
 /-- Fold the prior checkpoint and WAL frame over the actual returned run
 prefix. The write, handle selection and successful file sync each retain
 their own reached heap. -/
-theorem NativeCheckpointSourceStop.returnedRunFrames
+theorem NativeCheckpointSourceStop.returnedRunFramesAt
     (stop : NativeCheckpointSourceStop current primitives fsync stage reason reached)
-    {count : Nat} (completedRuns : stop.completed = runSteps count)
+    {count : Nat} {afterRuns : CheckpointWorld heap}
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
-    (effects : ReturnedCheckpointRunEffects stop count inodes runs observe) :
+    (effects : ReturnedCheckpointRunEffects stop count inodes runs observe)
+    (returned : ((runSteps count).forM (primitives.checkpointStepUntilStop
+      current.current.ready.state.session.directory fsync stop.next stop.manifest)).run
+        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) afterRuns) :
     (observe stop.poisoned).storageObservation.Frames current.current.ready.state.crashPath
-      (observe stop.atIssue.2).storageObservation := by
+      (observe afterRuns.2).storageObservation := by
   let state := current.current.ready.state
   let directory := state.session.directory
   let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
   have valid := current.current.ready.readPrefix.refines.1
   refine successfulCheckpointStepsPreserve perform (fun world => (observe world.2).storageObservation)
     (CheckpointStorageObservation.Frames state.crashPath) (CheckpointStorageObservation.Frames.refl _)
-    CheckpointStorageObservation.Frames.trans stop.completed ?_ stop.returnedPrefix
+    CheckpointStorageObservation.Frames.trans (runSteps count) ?_ returned
   intro step member before after returned
-  rw [completedRuns] at member
   simp only [runSteps, List.mem_flatMap, List.mem_range, List.mem_cons, List.not_mem_nil, or_false] at member
   obtain ⟨index, within, write | sync⟩ := member
   · subst step
@@ -325,6 +327,17 @@ theorem NativeCheckpointSourceStop.returnedRunFrames
     refine selection.trans (effect.frames ?_)
     intro path selected inode bound same
     exact newRunOffSelected valid stop.prepared index selected (privateBinding path (same ▸ bound))
+
+
+theorem NativeCheckpointSourceStop.returnedRunFrames
+    (stop : NativeCheckpointSourceStop current primitives fsync stage reason reached)
+    {count : Nat} (completedRuns : stop.completed = runSteps count)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
+    (effects : ReturnedCheckpointRunEffects stop count inodes runs observe) :
+    (observe stop.poisoned).storageObservation.Frames current.current.ready.state.crashPath
+      (observe stop.atIssue.2).storageObservation := by
+  exact stop.returnedRunFramesAt inodes runs observe effects (completedRuns ▸ stop.returnedPrefix)
 
 /-- Cache routing and physical effects at the literal first directory
 sync reached by the source checkpoint. -/
